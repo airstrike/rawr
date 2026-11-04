@@ -146,6 +146,9 @@ pub struct Engine {
     /// What the programs this engine runs may reach outside it: none until
     /// the embedder grants it (D683.4).
     pub(crate) access: crate::Access,
+    /// Whether programs build as `rustc --test` builds them: `cfg(test)`
+    /// holds.
+    pub(crate) test: bool,
     /// Native implementations of the app's exported items, which every
     /// evaluation this engine starts can call.
     pub(crate) host_runtime: Option<crate::Shared<crate::host::runtime::Registry>>,
@@ -235,7 +238,8 @@ impl fmt::Debug for Engine {
             &self.registered_enums.keys().collect::<Vec<_>>(),
         )
         .field("host_registry", &self.host_registry)
-        .field("access", &self.access);
+        .field("access", &self.access)
+        .field("test", &self.test);
 
         f.field("custom_keywords", &self.custom_keywords).field(
             "custom_syntax",
@@ -315,6 +319,7 @@ impl Engine {
         registered_enums: std::collections::BTreeMap::new(),
         host_registry: crate::host::Registry::new(),
         access: crate::Access::none(),
+        test: false,
         host_runtime: None,
         exports_frozen: core::sync::atomic::AtomicBool::new(false),
         #[cfg(feature = "rust-import")]
@@ -527,5 +532,18 @@ impl Engine {
     #[must_use]
     pub const fn access(&self) -> &crate::Access {
         &self.access
+    }
+
+    /// Build programs as `rustc --test` builds them, `cfg(test)` holding,
+    /// as `rawr test` does. An engine starts without it, as `rustc` does.
+    pub fn set_test(&mut self, test: bool) -> &mut Self {
+        self.test = test;
+        self
+    }
+
+    /// Whether programs build as `rustc --test` builds them.
+    #[must_use]
+    pub const fn test(&self) -> bool {
+        self.test
     }
 }

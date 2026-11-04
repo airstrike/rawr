@@ -318,6 +318,9 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
     let resolve::Error::UnknownMember { owner, member, .. } = error else {
         return resolution_builder(error);
     };
+    // `print` as the source writes it, not Rawr's spelling of it.
+    let member = crate::tokenizer::demangle_names(member);
+    let member = member.as_ref();
     let Some(kind) = member_kind(source, primary, member) else {
         return resolution_builder(error);
     };
@@ -410,7 +413,7 @@ fn member_span(error: &resolve::Error) -> Span {
     match (
         start.line(),
         start.position(),
-        u16::try_from(member.chars().count()),
+        u16::try_from(crate::tokenizer::demangle_names(member).chars().count()),
     ) {
         (Some(line), Some(column), Ok(length)) if primary.end() == start && length > 0 => {
             let line = u16::try_from(line).unwrap_or(u16::MAX);
@@ -479,15 +482,32 @@ fn resolution_report_with_sources(
         resolve::Error::ImmutableBinding { binding, .. } => {
             format!("first assignment to `{binding}`").into()
         }
-        resolve::Error::Private { kind, name, .. } => {
-            format!("the {kind} `{name}` is defined here").into()
-        }
+        resolve::Error::PrivateItem { item, .. } => item.defined_here().into(),
         _ => crate::ImmutableString::from("first declaration or related definition is here"),
     });
     let mut builder = builder.source(source.clone());
     if !error.primary_span().is_none() {
         let label = primary_label(error, &source, error.primary_span());
         builder = builder.primary(source.clone(), member_span(error), label)?;
+    }
+    if let resolve::Error::MovedValue {
+        name,
+        cause: Some(cause),
+        ..
+    } = error
+    {
+        builder = builder.secondary(
+            source.clone(),
+            cause.declaration,
+            Some(
+                format!(
+                    "move occurs because `{name}` has type `{}`, which does not implement the \
+                     `Copy` trait",
+                    cause.ty
+                )
+                .into(),
+            ),
+        )?;
     }
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
         builder = builder.secondary(
@@ -518,6 +538,7 @@ fn primary_label(
             Some(format!("no implementation for `{lhs} == {rhs}`").into())
         }
         resolve::Error::ArgumentSignature { .. } => Some("found signature defined here".into()),
+        resolve::Error::PrivateItem { item, .. } => Some(format!("private {}", item.noun()).into()),
         resolve::Error::NotInModule { module, .. } => {
             Some(format!("not found in `{}`", written_module(source, primary, module)).into())
         }
@@ -547,7 +568,6 @@ fn primary_label(
         resolve::Error::ReturnWithoutValue { .. } => Some("return type is not `()`".into()),
         resolve::Error::WrongKind { expected, .. } => Some(format!("not a {expected}").into()),
         resolve::Error::Unimplemented { label, .. } => Some(label.clone()),
-        resolve::Error::Private { kind, .. } => Some(format!("private {kind}").into()),
         resolve::Error::ImmutableBinding { .. } => {
             Some("cannot assign twice to immutable variable".into())
         }
@@ -555,6 +575,10 @@ fn primary_label(
             previous_iteration: true,
             ..
         } => Some("value moved here, in previous iteration of loop".into()),
+        resolve::Error::MovedValue { borrowed: true, .. } => {
+            Some("value borrowed here after move".into())
+        }
+        resolve::Error::MovedValue { .. } => Some("value used here after move".into()),
         _ => None,
     }
 }
@@ -604,7 +628,6 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         },
         resolve::Category::UnknownImport => code::RESOLVE_UNKNOWN_IMPORT,
         resolve::Category::InvalidImport => code::RESOLVE_INVALID_IMPORT,
-        resolve::Category::Private => code::RESOLVE_PRIVATE,
         resolve::Category::InvalidTypeArguments => code::RESOLVE_TYPE_ARGUMENTS,
         resolve::Category::LoweringUnavailable => code::RESOLVE_LOWERING,
         resolve::Category::InvalidDerive => code::RESOLVE_DERIVE,
@@ -660,8 +683,17 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             } => code::RESOLVE_CLOSURE_ARGUMENT_COUNT,
             _ => code::RESOLVE_ARGUMENT_COUNT,
         },
+        resolve::Category::PrivateItem => match error {
+            resolve::Error::PrivateItem { item, .. } => code::private(*item),
+            _ => unreachable!("a private item's category"),
+        },
     };
-    let builder = Report::error(stable_code, resolution_message(error));
+    // Names Rawr keeps under another spelling read as Rust's.
+    let message = resolution_message(error);
+    let builder = Report::error(
+        stable_code,
+        crate::tokenizer::demangle_names(&message).into_owned(),
+    );
     match error {
         resolve::Error::Syntax {
             help: Some(help), ..
@@ -856,7 +888,6 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::InvalidImport { path, reason, .. } => {
             format!("invalid import `{path}`: {reason}")
         }
-        resolve::Error::Private { kind, name, .. } => format!("{kind} `{name}` is private"),
         resolve::Error::InvalidTypeArguments {
             ty,
             expected,
@@ -884,6 +915,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::NotInModule { module, item, .. } => {
             format!("cannot find `{item}` in module `{module}`")
         }
+        resolve::Error::PrivateItem { item, name, .. } => {
+            format!("{} `{name}` is private", item.noun())
+        }
         resolve::Error::MemberKind { owner, member, .. } => {
             format!("member `{owner}::{member}` used as the other kind")
         }
@@ -899,6 +933,11 @@ fn resolution_message(error: &resolve::Error) -> String {
             ..
         } => format!("expected {expected}, found {found} `{name}`"),
         resolve::Error::Unimplemented { message, .. } => message.to_string(),
+        resolve::Error::MovedValue {
+            name,
+            borrowed: true,
+            ..
+        } => format!("borrow of moved value: `{name}`"),
         resolve::Error::MovedValue { name, .. } => format!("use of moved value: `{name}`"),
         resolve::Error::BorrowConflict { message, .. } => message.to_string(),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {

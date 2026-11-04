@@ -186,6 +186,18 @@ where
     crate::widgets::text::<Theme>(format!("logo{}", size.into()))
 }
 
+/// A count behind the trait `map` is a method of, as iced's widgets give
+/// `impl Widget<..>`: nothing at the call fixes its message, theme or
+/// renderer, only a later use does.
+pub fn badge<'a, Message, Theme, Renderer>(
+    count: u8,
+) -> impl crate::widgets::Framed<Message, Theme, Renderer> + 'a
+where
+    Theme: 'a,
+{
+    crate::widgets::text::<Theme>(format!("badge{count}"))
+}
+
 /// A value in a range, as iced's `slider(range, value, on_change)`.
 pub struct Slider<T, Message> {
     range: std::ops::RangeInclusive<T>,
@@ -250,6 +262,14 @@ impl Turn {
 impl From<u8> for Turn {
     fn from(value: u8) -> Self {
         Self(f32::from(value))
+    }
+}
+
+/// A turn in degrees, as iced's `impl From<Degrees> for f32`: the crate's
+/// impl of a std trait for a std type.
+impl From<Turn> for f32 {
+    fn from(turn: Turn) -> f32 {
+        turn.0 * 360.0
     }
 }
 

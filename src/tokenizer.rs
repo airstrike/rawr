@@ -1410,12 +1410,17 @@ pub fn parse_raw_string_literal(
 /// Returns the parsed string and a boolean indicating whether the string is
 /// terminated by an interpolation `${`.
 ///
+/// A `multi_line` string spans lines as Rust's `"…"` does: a line break is
+/// part of it, and `\` before one continues the line past the next line's
+/// leading whitespace.
+///
 /// # Returns
 ///
 /// | Type                            | Return Value                                        |`state.is_within_text_terminated_by`|
 /// |---------------------------------|:---------------------------------------------------:|:----------------------------------:|
 /// |`"hello"`                        |[`StringConstant("hello")`][Token::StringConstant]   |`None`                              |
-/// |`"hello`_{LF}_ or _{EOF}_        |[`LexError`]                                         |`None`                              |
+/// |`"hello`_{EOF}_                  |[`LexError`]                                         |`None`                              |
+/// |`"hello`_{LF}_`world"`           |[`StringConstant("hello\nworld")`][Token::StringConstant]|`None`                         |
 /// |`"hello\`_{EOF}_ or _{LF}{EOF}_  |[`StringConstant("hello")`][Token::StringConstant]   |`Some('"')`                         |
 /// |`` `hello``_{EOF}_               |[`StringConstant("hello")`][Token::StringConstant]   |``Some('`')``                       |
 /// |`` `hello``_{LF}{EOF}_           |[`StringConstant("hello\n")`][Token::StringConstant] |``Some('`')``                       |
@@ -1440,7 +1445,7 @@ pub fn parse_string_literal(
     pos: &mut Position,
     termination_char: char,
     verbatim: bool,
-    allow_line_continuation: bool,
+    multi_line: bool,
     allow_interpolation: bool,
 ) -> Result<(SmartString, bool, Position), (LexError, Position)> {
     let mut result = SmartString::new_const();
@@ -1449,7 +1454,9 @@ pub fn parse_string_literal(
     let start = *pos;
     let mut first_char = Position::NONE;
     let mut interpolated = false;
-    let mut skip_space_until = 0;
+    // After a line continuation, Rust skips the whitespace up to the next
+    // character that isn't a space, a tab or a line break.
+    let mut continued = false;
 
     state.is_within_text_terminated_by = Some(termination_char.to_string().into());
     if let Some(ref mut last) = state.last_token {
@@ -1473,7 +1480,7 @@ pub fn parse_string_literal(
                 pos.advance();
                 break;
             }
-            None if allow_line_continuation && !escape.is_empty() => {
+            None if multi_line && !escape.is_empty() => {
                 debug_assert_eq!(escape, "\\", "unexpected escape {escape} at end of line");
                 pos.advance();
                 break;
@@ -1534,6 +1541,17 @@ pub fn parse_string_literal(
 
         if first_char.is_none() {
             first_char = *pos;
+        }
+
+        if continued {
+            match next_char {
+                '\n' => {
+                    pos.new_line();
+                    continue;
+                }
+                ' ' | '\t' | '\r' => continue,
+                _ => continued = false,
+            }
         }
 
         match next_char {
@@ -1638,15 +1656,17 @@ pub fn parse_string_literal(
             }
 
             // LF - Line continuation
-            '\n' if allow_line_continuation && !escape.is_empty() => {
+            '\n' if multi_line && !escape.is_empty() => {
                 debug_assert_eq!(escape, "\\", "unexpected escape {escape} at end of line");
                 escape.clear();
                 pos.new_line();
+                continued = true;
+            }
 
-                // Rust skips all the whitespace that starts the next line.
-                {
-                    skip_space_until = usize::MAX;
-                }
+            // LF - A line break in a string that spans lines, as Rust's do
+            '\n' if multi_line => {
+                pos.new_line();
+                result.push('\n');
             }
 
             // LF - Unterminated string
@@ -1669,17 +1689,10 @@ pub fn parse_string_literal(
                 return Err((LERR::MalformedEscapeSequence(escape.to_string()), *pos));
             }
 
-            // Whitespace to skip
-            ch if ch.is_whitespace() && pos.position().unwrap() < skip_space_until => (),
-
             // All other characters
             ch => {
                 escape.clear();
                 result.push(ch);
-
-                {
-                    skip_space_until = 0;
-                }
             }
         }
     }

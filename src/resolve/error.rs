@@ -14,9 +14,6 @@ pub enum Category {
     UnknownImport,
     /// A compile-time import targets a non-namespace entry.
     InvalidImport,
-    /// A path reaches an item or a module private to another module, as
-    /// rustc's E0603.
-    Private,
     /// A registered host type has the wrong number of structural arguments.
     InvalidTypeArguments,
     /// A resolved item body has no executable lowering yet.
@@ -105,6 +102,9 @@ pub enum Category {
     /// A closure or function whose parameters differ from the ones its
     /// callable's signature gives, as rustc's E0631.
     ArgumentSignature,
+    /// An item private to a module the use is outside of, as rustc's E0603
+    /// or E0624.
+    PrivateItem,
 }
 
 impl fmt::Display for Category {
@@ -114,7 +114,6 @@ impl fmt::Display for Category {
             Self::UnknownType => formatter.write_str("unknown type"),
             Self::UnknownImport => formatter.write_str("unknown import"),
             Self::InvalidImport => formatter.write_str("invalid import"),
-            Self::Private => formatter.write_str("private item"),
             Self::InvalidTypeArguments => formatter.write_str("invalid type arguments"),
             Self::LoweringUnavailable => formatter.write_str("lowering unavailable"),
             Self::InvalidDerive => formatter.write_str("invalid derive"),
@@ -155,6 +154,7 @@ impl fmt::Display for Category {
             Self::ArgumentCount => formatter.write_str("wrong number of arguments"),
             Self::CannotCompare => formatter.write_str("can't compare"),
             Self::ArgumentSignature => formatter.write_str("type mismatch in arguments"),
+            Self::PrivateItem => formatter.write_str("private item"),
         }
     }
 }
@@ -210,6 +210,74 @@ impl Callee {
     }
 }
 
+/// What a private item is, as rustc names it in E0603 and E0624.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Private {
+    /// A free function.
+    Function,
+    /// A struct.
+    Struct,
+    /// An enum.
+    Enum,
+    /// A module.
+    Module,
+    /// A trait.
+    Trait,
+    /// A type alias.
+    TypeAlias,
+    /// A `use` binding, which a path reaches only from inside its module.
+    Import,
+    /// A method of an inherent impl.
+    Method,
+    /// An associated function of an inherent impl, which takes no `self`.
+    AssociatedFunction,
+}
+
+impl Private {
+    /// rustc's code: E0624 for an inherent impl's function, E0603 for an
+    /// item a path names.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Method | Self::AssociatedFunction => "E0624",
+            _ => "E0603",
+        }
+    }
+
+    /// rustc's label at the item's definition: "private method defined
+    /// here".
+    #[must_use]
+    pub const fn defined_here(self) -> &'static str {
+        match self {
+            Self::Function => "private function defined here",
+            Self::Struct => "private struct defined here",
+            Self::Enum => "private enum defined here",
+            Self::Module => "private module defined here",
+            Self::Trait => "private trait defined here",
+            Self::TypeAlias => "private type alias defined here",
+            Self::Import => "private import defined here",
+            Self::Method => "private method defined here",
+            Self::AssociatedFunction => "private associated function defined here",
+        }
+    }
+
+    /// The noun rustc's message names the item by.
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Struct => "struct",
+            Self::Enum => "enum",
+            Self::Module => "module",
+            Self::Trait => "trait",
+            Self::TypeAlias => "type alias",
+            Self::Import => "import",
+            Self::Method => "method",
+            Self::AssociatedFunction => "associated function",
+        }
+    }
+}
+
 /// rustc's E0061 and E0057 message: "this function takes 2 arguments but 1
 /// argument was supplied".
 pub(crate) struct ArgumentCount {
@@ -232,6 +300,17 @@ impl fmt::Display for ArgumentCount {
             if self.found == 1 { "was" } else { "were" },
         )
     }
+}
+
+/// Why a use after a move is one: the moved local's type isn't `Copy`.
+/// rustc labels its declaration "move occurs because `x` has type `T`,
+/// which does not implement the `Copy` trait".
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MoveCause {
+    /// The local's name where it is declared.
+    pub declaration: Span,
+    /// The local's type, as rustc writes it.
+    pub ty: ImmutableString,
 }
 
 /// Failure to promote a parsed unit into an opaque resolved program.
@@ -273,19 +352,6 @@ pub enum Error {
         reference: Span,
         /// Related declaration that makes this path invalid, when any.
         declaration: Option<Span>,
-    },
-    /// A path reaches an item or a module private to another module, which
-    /// rustc refuses (E0603).
-    Private {
-        /// What the item is, as rustc names it: `function`, `struct`,
-        /// `module`.
-        kind: &'static str,
-        /// The item's name.
-        name: ImmutableString,
-        /// The path's segment naming it.
-        reference: Span,
-        /// The item's declaration.
-        declaration: Span,
     },
     /// A registered facade type is applied with the wrong structural arity.
     InvalidTypeArguments {
@@ -390,6 +456,11 @@ pub enum Error {
         moved: Span,
         /// The use after the move.
         reference: Span,
+        /// The use borrows the value, as `format!` and `&self` calls do:
+        /// rustc's "borrow of moved value" rather than "use of".
+        borrowed: bool,
+        /// Why the value moves, where the lowering knows the local's type.
+        cause: Option<MoveCause>,
         /// The move is in a loop's body, which goes on to its next
         /// iteration and moves the value again: rustc's "value moved here,
         /// in previous iteration of loop". `moved` and `reference` are both
@@ -429,6 +500,19 @@ pub enum Error {
         item: ImmutableString,
         /// Exact source reference of the item's name.
         reference: Span,
+    },
+    /// An item private to a module the use is outside of: rustc's E0603
+    /// "function `f` is private" for a path, E0624 "method `get` is
+    /// private" for an inherent impl's function.
+    PrivateItem {
+        /// What the item is.
+        item: Private,
+        /// The item's name.
+        name: ImmutableString,
+        /// Exact source reference of the item's name.
+        reference: Span,
+        /// The item's declaration, when it is in the same source.
+        declaration: Option<Span>,
     },
     /// A member used as the other kind: a field called like a method
     /// (rustc's E0599), or a method read like a field (rustc's E0615).
@@ -776,7 +860,6 @@ impl Error {
             Self::UnknownType { .. } => Category::UnknownType,
             Self::UnknownImport { .. } => Category::UnknownImport,
             Self::InvalidImport { .. } => Category::InvalidImport,
-            Self::Private { .. } => Category::Private,
             Self::InvalidTypeArguments { .. } => Category::InvalidTypeArguments,
             Self::LoweringUnavailable { .. } => Category::LoweringUnavailable,
             Self::InvalidDerive { .. } => Category::InvalidDerive,
@@ -817,6 +900,7 @@ impl Error {
             Self::ArgumentCount { .. } => Category::ArgumentCount,
             Self::CannotCompare { .. } => Category::CannotCompare,
             Self::ArgumentSignature { .. } => Category::ArgumentSignature,
+            Self::PrivateItem { .. } => Category::PrivateItem,
         }
     }
 
@@ -833,13 +917,13 @@ impl Error {
             | Self::MovedValue { name, .. } => name.as_str(),
             Self::BorrowConflict { message, .. } => message.as_str(),
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
-            Self::Private { name, .. } => name.as_str(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
             Self::LoweringUnavailable { item, .. } => item.as_str(),
             Self::InvalidDerive { owner, .. } | Self::DuplicateMember { owner, .. } => {
                 owner.as_str()
             }
             Self::NotInModule { module, .. } => module.as_str(),
+            Self::PrivateItem { name, .. } => name.as_str(),
             Self::UnknownMember { owner, .. }
             | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
@@ -880,14 +964,14 @@ impl Error {
             Self::UnknownType { reference, .. } => *reference,
             Self::UnknownImport { reference, .. }
             | Self::InvalidImport { reference, .. }
-            | Self::Private { reference, .. }
             | Self::InvalidTypeArguments { reference, .. } => *reference,
             Self::LoweringUnavailable { body, .. } => *body,
             Self::InvalidDerive { attribute, .. } => *attribute,
             Self::DuplicateMember { declaration, .. } => *declaration,
             Self::UnknownMember { reference, .. }
             | Self::MemberKind { reference, .. }
-            | Self::NotInModule { reference, .. } => *reference,
+            | Self::NotInModule { reference, .. }
+            | Self::PrivateItem { reference, .. } => *reference,
             Self::UnknownFunction { reference, .. } => *reference,
             Self::UnknownVariable { reference, .. }
             | Self::UnknownMacro { reference, .. }
@@ -949,8 +1033,9 @@ impl Error {
                 ..
             } => Some(*previous_declaration),
             Self::ImmutableReceiver { receiver, .. } => Some(*receiver),
-            Self::InvalidImport { declaration, .. } => *declaration,
-            Self::Private { declaration, .. } => Some(*declaration),
+            Self::InvalidImport { declaration, .. } | Self::PrivateItem { declaration, .. } => {
+                *declaration
+            }
             Self::ArgumentCount { definition, .. } => *definition,
             Self::UnknownType { .. }
             | Self::UnknownImport { .. }
@@ -1130,12 +1215,6 @@ impl fmt::Display for Written<'_> {
                 reference,
                 ..
             } => write!(formatter, "invalid import `{path}` at {reference}: {reason}"),
-            Error::Private {
-                kind,
-                name,
-                reference,
-                ..
-            } => write!(formatter, "{kind} `{name}` is private at {reference} (E0603)"),
             Error::InvalidTypeArguments {
                 ty,
                 expected,
@@ -1190,6 +1269,17 @@ impl fmt::Display for Written<'_> {
                 item,
                 reference,
             } => write!(formatter, "cannot find `{item}` in module `{module}` at {reference}"),
+            Error::PrivateItem {
+                item,
+                name,
+                reference,
+                ..
+            } => write!(
+                formatter,
+                "{} `{name}` is private at {reference} ({})",
+                item.noun(),
+                item.code()
+            ),
             Error::MemberKind {
                 owner,
                 member,
@@ -1235,10 +1325,12 @@ impl fmt::Display for Written<'_> {
                 name,
                 moved,
                 reference,
+                borrowed,
                 ..
             } => write!(
                 formatter,
-                "use of moved value `{name}` at {reference}; it was already moved at {moved}"
+                "{} of moved value `{name}` at {reference}; it was already moved at {moved}",
+                if *borrowed { "borrow" } else { "use" }
             ),
             Error::BorrowConflict {
                 code,

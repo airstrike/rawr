@@ -10,6 +10,15 @@ pub const BACKTRACE_NOTE: &str =
 /// `report`, a run-time failure, as a program built by Cargo prints its
 /// panic on stderr: `thread 'main' panicked at <file>:<line>:<column>:`,
 /// the message, and Rust's note on backtraces.
+#[must_use]
+pub fn panic(report: &Report) -> String {
+    format!("{}{BACKTRACE_NOTE}\n", panicked(report, "main"))
+}
+
+/// `report`, a run-time failure in the thread named `thread`, as Rust's
+/// panic hook prints it before its note on backtraces, which a process
+/// prints after its first panic only: `thread 'name' panicked at
+/// <file>:<line>:<column>:` and the message.
 ///
 /// The file is the source identity of the report's primary label. The line
 /// and column are where rustc places a panic: the name of a method call, the
@@ -17,7 +26,7 @@ pub const BACKTRACE_NOTE: &str =
 /// labelled at its start alone, where rustc places its panic. A report
 /// without a position names its source alone.
 #[must_use]
-pub fn panic(report: &Report) -> String {
+pub fn panicked(report: &Report, thread: &str) -> String {
     let location = report
         .labels()
         .iter()
@@ -34,14 +43,15 @@ pub fn panic(report: &Report) -> String {
         });
     let at = location.map_or_else(String::new, |location| format!(" at {location}"));
     format!(
-        "thread 'main' panicked{at}:\n{}\n{BACKTRACE_NOTE}\n",
-        message(report)
+        "thread '{thread}' panicked{at}:\n{}\n",
+        panic_message(report)
     )
 }
 
 /// The panic's message: a `panic!`'s text, or an evaluation error's text
 /// without its position in the lowered program.
-fn message(report: &Report) -> String {
+#[must_use]
+pub fn panic_message(report: &Report) -> String {
     let text = report.message();
     if report.code() == code::RUNTIME_THROW {
         return match text.strip_prefix("runtime error: ") {

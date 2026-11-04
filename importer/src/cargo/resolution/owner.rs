@@ -1270,10 +1270,28 @@ impl SharedReady {
                 Err(memo),
             ),
         };
+        // The API is kept under everything its header names: the request,
+        // the document, and the context it was read under. A shared
+        // context names the Cargo metadata and unit graph it was resolved
+        // from, whose harness lies in the attempt's own directory, so a run
+        // that resolves again names another; the API kept for the earlier
+        // one is not its own, and its header would not match (#893).
+        let context = match &materials {
+            Ok(materials) => &materials.context,
+            Err(memo) => memo.context(),
+        };
+        let semantic =
+            serde_json::to_vec(&crate::api::semantic::Context(context)).map_err(|error| {
+                crate::Error::Extraction {
+                    code: "semantic-api-context",
+                    reason: error.to_string().into_boxed_str(),
+                }
+            })?;
         let mut request = Sha256::new();
-        request.update(b"rawr.bindings.api/v1");
+        request.update(b"rawr.bindings.api/v2");
         request.update(evaluation.identity.as_bytes());
         request.update(identity);
+        request.update(Sha256::digest(&semantic));
         let request: [u8; 32] = request.finalize().into();
         let owned_limits = *limits;
         let source = Arc::clone(&evaluation);

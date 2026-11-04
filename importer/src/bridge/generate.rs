@@ -10045,17 +10045,15 @@ fn render_adapter_body(
                             parameter.is_argument_impl()
                                 && output_names(signature.output(), parameter.index())
                         });
-                        let annotation = if inferred {
-                            concrete_type(&substituted(
-                                signature.output(),
-                                signature,
-                                substitutions,
-                            )?)
+                        // So is a concrete output, as that of `into` of
+                        // core's `impl<T, U: From<T>> Into<U> for T`
+                        // applied to a crate type through one of the
+                        // crate's `From` impls, which rustc can't pick by
+                        // the receiver alone.
+                        let annotation = concrete_type(&returned)
+                            .filter(|ty| inferred || !names_inferred(ty))
                             .map(|ty| format!(": {ty}"))
-                            .unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
+                            .unwrap_or_default();
                         // The arena is lent while the method runs, as for a
                         // function (D551.6). A proof-backed application
                         // calls its isolated helper (`render_applications`).
@@ -10068,11 +10066,7 @@ fn render_adapter_body(
                             )
                             .map_err(request::unwritable)?;
                         } else {
-                            write!(
-                                output,
-                                "    let output{annotation} = lend(arguments.arena, || "
-                            )
-                            .map_err(request::unwritable)?;
+                            let mut call = Vec::new();
                             render_method_head(
                                 plan.name(),
                                 *receiver,
@@ -10080,11 +10074,34 @@ fn render_adapter_body(
                                 substitutions,
                                 constants,
                                 *container_parameters,
-                                output,
+                                &mut call,
                             )?;
+                            argument_list(signature.inputs().len(), 1, &mut call)?;
+                            call.write_all(b")").map_err(request::unwritable)?;
+                            let call = String::from_utf8(call).map_err(request::unwritable)?;
+                            // A value that carries a lifetime, made while a
+                            // slot's region is open from an opaque value its
+                            // table takes, stays in that region, as a
+                            // function's does: `Widget::boxed` of an opaque
+                            // widget gives the view's element. A receiver
+                            // of a type that names its own lifetime keeps
+                            // the one it was made at.
+                            if OPAQUE_WITNESSED.with_borrow(Option::is_some)
+                                && future_output(&returned).is_none()
+                                && !lifetime_inputs(signature, substitutions)?
+                            {
+                                render_anchored_output(&returned, &call, output)?;
+                            }
+                            writeln!(
+                                output,
+                                "    let output{annotation} = lend(arguments.arena, || {call});"
+                            )
+                            .map_err(request::unwritable)?;
                         }
-                        argument_list(signature.inputs().len(), 1, output)?;
-                        output.write_all(b"));\n").map_err(request::unwritable)?;
+                        if plan.application_invocation().is_some() {
+                            argument_list(signature.inputs().len(), 1, output)?;
+                            output.write_all(b"));\n").map_err(request::unwritable)?;
+                        }
                     }
                     Receiver::Shared | Receiver::Mutable => {
                         render_borrowed_receiver(

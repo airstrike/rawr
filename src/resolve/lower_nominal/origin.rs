@@ -159,12 +159,14 @@ impl Fragment {
     }
 
     /// Replace each `from` with `to`, which has the same length, so every
-    /// origin keeps its offsets.
-    pub(super) fn replace_same_length(&mut self, from: &str, to: &str) {
+    /// origin keeps its offsets. Whether `from` was there.
+    pub(super) fn replace_same_length(&mut self, from: &str, to: &str) -> bool {
         debug_assert_eq!(from.len(), to.len());
-        if self.0.text.contains(from) {
+        let found = self.0.text.contains(from);
+        if found {
             self.0.text = self.0.text.replace(from, to);
         }
+        found
     }
 
     pub(super) fn len(&self) -> usize {

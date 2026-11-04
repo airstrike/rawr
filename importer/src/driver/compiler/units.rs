@@ -959,42 +959,72 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 let ty::ClauseKind::Trait(predicate) = clause.kind().skip_binder() else {
                     continue;
                 };
-                if predicate.polarity != crate::compat::ClausePolarity::Positive
-                    || !matches!(predicate.self_ty().kind(), ty::Param(bounded) if bounded.index == blanket.index)
-                {
+                if predicate.polarity != crate::compat::ClausePolarity::Positive {
                     continue;
                 }
+                // Where the where-clause names the blanket's self type: as
+                // the bounded type, as palette's `U: FromColorUnclamped<T>`
+                // for `impl FromColor<T> for U`, or as one of the base
+                // trait's arguments, as core's `U: From<T>` for `impl
+                // Into<U> for T`.
+                let Some(position) = predicate.trait_ref.args.iter().position(|written| {
+                    written.as_type().is_some_and(
+                        |written| matches!(written.kind(), ty::Param(bounded) if bounded.index == blanket.index),
+                    )
+                }) else {
+                    continue;
+                };
                 let base_trait = predicate.def_id();
-                let mut own = Vec::new();
-                tcx.for_each_relevant_impl(base_trait, self_ty, |base| own.push(base));
-                own.retain(|base| {
+                let names_adt = |base: &DefId| {
                     tcx.impl_opt_trait_ref(*base).is_some_and(|base| {
-                        matches!(
-                            base.instantiate_identity().skip_norm_wip().self_ty().kind(),
-                            ty::Adt(definition, _) if definition.did() == adt
-                        )
+                        base.instantiate_identity()
+                            .skip_norm_wip()
+                            .args
+                            .get(position)
+                            .and_then(|argument| argument.as_type())
+                            .is_some_and(|argument| {
+                                matches!(
+                                    argument.kind(),
+                                    ty::Adt(definition, _) if definition.did() == adt
+                                )
+                            })
                     })
-                });
-                // Each of the type's own implementations of the base trait,
-                // as palette's `Hsl` is `FromColorUnclamped` of `Rgb`, of
-                // `Hsv` and of itself.
+                };
+                let mut own = Vec::new();
+                if position == 0 {
+                    tcx.for_each_relevant_impl(base_trait, self_ty, |base| own.push(base));
+                } else {
+                    // The implementations of the base trait for any type
+                    // that take the type as that argument, as a crate's
+                    // `impl From<Degrees> for f32` makes `Degrees` an
+                    // `Into<f32>`.
+                    for base in tcx.all_impls(base_trait).filter(&names_adt) {
+                        self.edge(1)?;
+                        if self.reaches(base.krate)? {
+                            own.push(base);
+                        }
+                    }
+                }
+                own.retain(&names_adt);
+                // Each implementation of the base trait that names the
+                // type there, as palette's `Hsl` is `FromColorUnclamped` of
+                // `Rgb`, of `Hsv` and of itself.
                 for base in own {
                     let base_reference = tcx
                         .impl_opt_trait_ref(base)
                         .ok_or_else(|| "base implementation lost its trait".to_owned())?
                         .instantiate_identity()
                         .skip_norm_wip();
-                    // Each parameter of the blanket implementation: its
-                    // self type is the base's, and each other is the base's
-                    // trait argument where the where-clause names it.
+                    // Each parameter of the blanket implementation is the
+                    // base's type where the where-clause names it: its self
+                    // type is the type, and each other is the base's self
+                    // type or trait argument.
                     let mut fixed = vec![None; generics.count()];
-                    fixed[blanket.index as usize] = Some(base_reference.self_ty().into());
                     for (written, argument) in predicate
                         .trait_ref
                         .args
                         .iter()
                         .zip(base_reference.args.iter())
-                        .skip(1)
                     {
                         if let Some(written) = written.as_type()
                             && let ty::Param(parameter) = written.kind()

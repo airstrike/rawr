@@ -4,8 +4,8 @@
 // `impl Widget` and wraps what its `explain` gives, the opaque type the
 // trait's own default body gives, so the program's impl runs at that type.
 
-use events::Theme;
 use events::widgets::{button, column, text, Framed, Renderer, Widget};
+use events::Theme;
 
 #[derive(Default)]
 struct Counter {

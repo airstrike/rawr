@@ -180,7 +180,7 @@ fn aggregate_compile_rejects_private_import_hops_with_both_sources() {
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resolution);
-    assert_eq!(report.code(), code::RESOLVE_PRIVATE);
+    assert_eq!(report.code(), code::RESOLVE_PRIVATE_ITEM);
     assert_eq!(report.message(), "module `inner` is private");
     assert_eq!(report.labels().len(), 2);
     assert!(report.labels()[0].source().identity().ends_with("src/other.rs"));
@@ -368,7 +368,7 @@ fn a_private_function_of_another_module_is_rustcs_e0603() {
     let error = Engine::new().compile_package_executable(&target).unwrap_err();
     let report = error.report().unwrap();
 
-    assert_eq!(report.code(), code::RESOLVE_PRIVATE);
+    assert_eq!(report.code(), code::RESOLVE_PRIVATE_ITEM);
     assert_eq!(report.message(), "function `make` is private");
     assert_eq!(report.labels()[0].message(), Some("private function"));
     assert_eq!(report.labels()[0].span().start().position(), Some(14));
@@ -387,7 +387,7 @@ fn relative_header_types_preserve_private_module_boundaries() {
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resolution);
-    assert_eq!(report.code(), code::RESOLVE_PRIVATE);
+    assert_eq!(report.code(), code::RESOLVE_PRIVATE_ITEM);
     assert_eq!(report.message(), "module `inner` is private");
     assert_eq!(report.labels().len(), 2);
 }

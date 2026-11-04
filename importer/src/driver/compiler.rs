@@ -97,7 +97,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // method gives from its default body as the trait's opaque type.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 48;
+const PROTOCOL_SCHEMA: u32 = 49;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3176,9 +3176,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         // `PartialOrd`'s provided `lt`, `le`, `gt` and `ge`, which a crate's
         // impl that writes only `partial_cmp` gives its type, as clock's
         // `rotation < 180.0` of iced's `Degrees` calls (T412): its
-        // signature, which the impl's trait reference instantiates. Any
-        // other standard definition stays opaque.
-        let shape = if self.comparison_provided(def_id) {
+        // signature, which the impl's trait reference instantiates. So is
+        // `Into::into`, which a crate's `impl From<Degrees> for f32` gives
+        // `Degrees` through core's blanket `impl<T, U: From<T>> Into<U> for
+        // T`, as ferris's `f32::from(degrees)` calls. Any other standard
+        // definition stays opaque.
+        let shape = if self.comparison_provided(def_id) || self.conversion_member(def_id) {
             self.local_shape(def_id)?
         } else {
             Shape::Sysroot {
@@ -3214,6 +3217,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 self.tcx.item_name(def_id).as_str(),
                 "lt" | "le" | "gt" | "ge"
             )
+    }
+
+    /// `def_id` is `Into::into`, whose signature names nothing but the
+    /// trait's own parameters.
+    fn conversion_member(&self, def_id: DefId) -> bool {
+        self.tcx.def_kind(def_id) == DefKind::AssocFn
+            && self.tcx.get_diagnostic_item(rustc_span::sym::Into) == Some(self.tcx.parent(def_id))
+            && self.tcx.item_name(def_id).as_str() == "into"
     }
 
     /// A `macro_rules!` macro's definition, read from its crate's source

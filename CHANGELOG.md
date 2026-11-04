@@ -5,6 +5,29 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `rawr test` runs a file's or a crate's `#[test]` functions as `cargo test` does: `cfg(test)` holds under it, `#[should_panic]` (with `expected`) and `#[ignore]` behave as in cargo, it takes cargo's name filters and libtest's options, reports in libtest's format and exits with 101 when a test fails. A syntax error in an item a `#[cfg]` leaves out stops `rawr run` and `rawr check`, as rustc parses every item. (#898)
+- Modules see what Rust lets them see: a module's private methods and associated functions are visible to its descendants (`mod tests { use super::*; }`), `use super::*;` brings in the parent's own imports, and a glob-imported name can start another `use`. From any other module a private method is E0624 and a private item E0603. Unknown functions and values are rustc's E0425. `{self:?}` in a method reads the receiver. (#899, #900, #903)
+- More of std runs: `SystemTime` (`now`, `UNIX_EPOCH`, `duration_since`, `elapsed`), `ParseIntError::kind` with `IntErrorKind`, `char::to_uppercase`/`to_lowercase` and `Result::as_deref`. A type holding `ParseIntError`, another std error or a `Duration` derives each trait std implements for it. String literals span lines, and a `\` at a line's end skips the next line's leading whitespace. (#902, #904, #905)
+
+## 0.3.132 (2026-11-04)
+
+- A `parse()` whose target a later call in its chain gives, followed by a closure that formats (`.map(Command::Push).map_err(|e| format!(..))`), runs as in Rust. The playground's "Enums, match and ?" example runs again. (#918)
+- A use after a move reads as rustc's E0382: `borrow of moved value` when the use borrows (as `println!("{x}")` does), pointing at the name inside the format string, with the moved value's type at its declaration. (#919)
+- Every playground example is tested against rustc's output, so an example that stops matching fails the build. (#920)
+
+## 0.3.131 (2026-11-04)
+
+- A crate's opaque value whose type arguments only a later use fixes now runs: `widget.map(..)` inside `column!` takes its message, theme and renderer from the later use, as rustc infers them. An opaque type has its bounds' supertraits too. A column of opaque widgets alone, as `column![opaque(slider(..))]`, is the view's widget. (#886)
+- A crate's implementation of a std trait for a std type is callable: with iced's `impl From<Degrees> for f32`, `f32::from(degrees)` and `degrees.into()` convert through it, and a missing one is rustc's E0277. (#887)
+
+## 0.3.130 (2026-11-04)
+
+- A program runs in a project as it would in a fresh one after other programs ran there. A crate's types reached through its macros' `$crate` are named at their public paths, as rustc names them, and they are one type to the checker at every path. (#893)
+
+## 0.3.129 (2026-11-03)
+
+- A trait's method whose `impl Trait` the trait's own default body gives, as iced's `Widget::explain`, now runs: its result goes in `column!` as it is, and its trait's methods and the methods a blanket impl over that trait gives, as `.explain(color).boxed()`, run on it. (#885)
+- `rawr check` now refuses your own impl of a crate's trait used at a type that holds the crate's `impl Trait` value, as iced's loupe uses `impl Widget for Loupe<W>` at `Loupe<impl Widget>`, instead of passing a program the runner can't build. (#885)
 
 ## 0.3.128 (2026-11-03)
 

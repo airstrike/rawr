@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
-  "updated": "2026-11-03",
-  "version": "0.3.128",
+  "updated": "2026-11-04",
+  "version": "0.3.132",
   "examples": {
     "running": 37,
     "total": 56,
@@ -64,7 +64,7 @@
         {"id":"removal-by-last-use","name":"Removal by last use","start":45,"size":2,"state":"done","note":"Unused entries are pruned safely","issues":[272],"milestone":"0.3"},
         {"id":"drift-loudly","name":"Loud drift checks","start":49,"size":2,"state":"done","note":"Inputs are checked before any reuse","issues":[275],"milestone":"0.3"},
         {"id":"macro-crate-roots","name":"Macro $crate roots","start":37,"size":2,"state":"done","note":"column! without demand","issues":[281,404],"milestone":"0.4"},
-        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[],"milestone":"0.4"},
+        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"done","note":"Extract once per crate","issues":[],"milestone":"0.4"},
         {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Classification and facade reuse remain","issues":[271,367,369,370,372],"milestone":"0.4"},
         {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"now","note":"Facade-plan invalidation remains","issues":[252,254,276],"milestone":"0.4"},
         {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"done","note":"Saves read whole crates with no nightly","issues":[398,402,281],"milestone":"0.4"},
@@ -86,7 +86,7 @@
         {"id":"widget-extension-trait","name":"Widget extension trait","start":37,"size":3,"state":"done","note":"`.boxed()` and `impl Widget` work","issues":[311],"milestone":"0.3"},
         {"id":"time-types","name":"Time types","start":40,"size":2,"state":"done","note":"Eight examples get past it","issues":[312,338],"milestone":"0.3"},
         {"id":"boot-returning-a-task","name":"Boot returning a task","start":40,"size":3,"state":"done","note":"system_information runs","issues":[300],"milestone":"0.3"},
-        {"id":"boundary-conversions","name":"Boundary conversions","start":41,"size":3,"state":"done","note":"exit runs","issues":[336,340,345],"milestone":"0.3"},
+        {"id":"boundary-conversions","name":"Boundary conversions","start":41,"size":3,"state":"done","note":"exit runs","issues":[336,340],"milestone":"0.3"},
         {"id":"custom-widgets","name":"Custom widgets","start":43,"size":4,"state":"done","note":"custom_widget runs and hot-reloads","issues":[359,360,364],"milestone":"0.3"},
         {"id":"generic-script-impls","name":"Generic script impls","start":43,"size":4,"state":"done","note":"Generic impls compile per use","issues":[322,323,324,341],"milestone":"0.3"},
         {"id":"callback-return-types","name":"Callback return types","start":47,"size":2,"state":"done","note":"Callbacks keep their Rust signatures","issues":[371],"milestone":"0.3"},
@@ -94,7 +94,8 @@
         {"id":"struct-literals-live-edits","name":"Struct literals and live edits","start":44,"size":2,"state":"next","note":"Not started","issues":[325,326],"milestone":"0.4"},
         {"id":"projections-function-values","name":"Projections and function values","start":44,"size":3,"state":"now","note":"#317 and #319 remain","issues":[317,318,319,327],"milestone":"0.4"},
         {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"Events, exit, theme and modal runners","issues":[335,336,337,339,340,338],"milestone":"0.4"},
-        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"Gaps in about 18 examples","issues":[283,314,328,334,345],"milestone":"0.4"}
+        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"Gaps in about 18 examples","issues":[283,314,328,334,345],"milestone":"0.4"},
+        {"id":"opaque-values","name":"A crate's `impl Trait` values","start":47,"size":3,"state":"now","note":"loupe's return type, `explain`, later-fixed types and From impls run. #912 and #913 next","issues":[845,885,886,887,912,913,916,917]}
       ]
     },
     {
@@ -110,14 +111,15 @@
     {
       "id": "parity",
       "title": "Rust as rustc has it",
-      "subtitle": "0.3.6x–0.3.125: std, types, borrows and errors",
+      "subtitle": "0.3.6x–0.3.132: std, types, borrows, errors and rustlings",
       "open": true,
       "rows": [
         {"id":"std-from-std","name":"Std from std's own table","start":66,"size":4,"state":"done","note":"Paths, traits, impls, methods, iterators and the facade from std's declarations","issues":[745,746,747,768],"milestone":"0.3"},
         {"id":"rustc-types","name":"rustc's own types","start":67,"size":3,"state":"done","note":"String and &str, Vec, [T] and VecDeque, Cow, Rc and Arc","issues":[706,769,701,775,777],"milestone":"0.3"},
         {"id":"borrowed-values","name":"Borrowed values","start":69,"size":4,"state":"done","note":"Variant fields move or lend; opaque results borrow their inputs for their whole life","issues":[678,783,782,846,849],"milestone":"0.3"},
         {"id":"rustc-errors","name":"rustc's errors","start":68,"size":3,"state":"done","note":"E0107, E0283, E0369, E0425, E0433, E0596, E0658 and more, worded as rustc words them","issues":[772,774,733,736,752,771,751,858,859,860,861,862,896],"milestone":"0.3"},
-        {"id":"any-nightly","name":"Any nightly","start":72,"size":2,"state":"done","note":"The project's nightly reads crate APIs; a daily job moves the window","issues":[692,864],"milestone":"0.3"}
+        {"id":"any-nightly","name":"Any nightly","start":72,"size":2,"state":"done","note":"The project's nightly reads crate APIs; a daily job moves the window","issues":[692,864],"milestone":"0.3"},
+        {"id":"rustlings","name":"rustlings: 74 of 95","start":74,"size":4,"state":"now","note":"Solutions whose main and every test match rustc (scripts/rustlings.sh, rustlings v6.5.0). Was 59 before `rawr test` (#898)","issues":[898,899,900,901,902,903,904,905,906,907,908,909,910,911,921,922,923,924,925,926,927,928,929]}
       ]
     },
     {
@@ -128,7 +130,7 @@
       "rows": [
         {"id":"one-command-install","name":"One-command install","start":70,"size":2,"state":"done","note":"Prebuilt binaries and a self-installed nightly; binaries wait on patch tags","issues":[797],"milestone":"0.3"},
         {"id":"staged-release","name":"Staged, cached release","start":72,"size":2,"state":"done","note":"Playground, bot and site each gated; the image rebuilds only when its inputs change","issues":[881],"milestone":"0.3"},
-        {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"done","note":"Shared builds and parallel tests: the import suite from 40 min to 5, the crossing sweep from an hour to 14 min","issues":[891,892],"milestone":"0.3"}
+        {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"now","note":"Suites share builds and run in parallel; #930: rawr-cli's integration suite drifted unrun","issues":[891,892,893,930],"milestone":"0.3"}
       ]
     },
     {
@@ -138,9 +140,9 @@
       "open": true,
       "rows": [
         {"id":"deploy-gate","name":"Deploy gate","start":36,"size":1,"state":"done","note":"Waits for Cloudflare's rollout","issues":[321],"milestone":"0.3"},
-        {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"now","note":"iced snippets render a frame and tokio runs; GIFs and a shared engine remain","issues":[434,436,465,507,515]},
+        {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"done","note":"iced snippets render frames, tokio runs, and GIFs play at the program's pace","issues":[434,436,465,507,515]},
         {"id":"browser-wasm-bindings","name":"wasm bindings for the browser","start":58,"size":5,"state":"next","note":"rawr-web","issues":[435]},
-        {"id":"play-universe-limits","name":"?play on a small CPU","start":71,"size":3,"state":"done","note":"Check-time errors, a wider universe, no deadline while idle, every frame drawn at the program's pace","issues":[863,872,880,888,889,890],"milestone":"0.3"}
+        {"id":"play-universe-limits","name":"?play on a small CPU","start":71,"size":3,"state":"done","note":"Check-time errors, a wider universe, no deadline while idle, every frame drawn at the program's pace","issues":[863,872,880,888,889,890,918,919,920],"milestone":"0.3"}
       ]
     },
     {

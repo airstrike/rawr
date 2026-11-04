@@ -37,11 +37,15 @@ fn lane(variant: Option<&str>) -> Lease {
 /// `variants/` as its `main.rs` when given: its stdout without the process
 /// id, which `cargo run` of the same crate prints too.
 fn printed(variant: Option<&str>) -> String {
-    let root = lane(variant);
+    printed_in(&lane(variant))
+}
+
+/// `rawr-import run` on the project at `root`, as `printed` gives it.
+fn printed_in(root: &std::path::Path) -> String {
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&*root)
+        .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -385,6 +389,45 @@ fn a_slider_beside_an_opaque_widget_runs() {
         rawr.contains("1 view pad 0 1..=100@50/Some(50) \"50\" logo50@16")
             && rawr.contains("1 message SliderChanged(100)")
             && rawr.contains("last view pad 0 1..=100@100/Some(50) \"100\" logo100@16"),
+        "{rawr}"
+    );
+}
+
+/// #886: `badge(..)` gives an opaque `impl Framed<Message, Theme,
+/// Renderer>` that nothing at the call fixes, and `opaque(slider(..))` one
+/// whose theme and renderer it doesn't fix. `.map(..)` fixes the message,
+/// and `column!`'s boxing of the `Map` fixes the theme and renderer through
+/// `Map`'s impl, whose where-clause asks the opaque type for `Widget`, a
+/// supertrait of `Framed`. The call that made the value takes the types
+/// that later use fixes, held in a local or not, as rustc infers them. Each
+/// opaque widget's boxed element stays in the view's region, so a column of
+/// them alone is the view's widget. The output is `cargo run`'s.
+#[test]
+fn an_opaque_widget_takes_the_types_a_later_use_fixes() {
+    let (rawr, cargo) = both_printed("deferred.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains(
+            "1 view pad 0 opaque 1..=100@50/None map badge50@16 map badge50@16 badge50@16"
+        ) && rawr.contains(
+            "last view pad 0 opaque 1..=100@100/None map badge100@16 map badge100@16 badge100@16"
+        ),
+        "{rawr}"
+    );
+}
+
+/// iced's ferris (#887): `f32::from(self.angle)` and `angle.into()` call
+/// the crate's `impl From<Turn> for f32`, its impl of a std trait for a std
+/// type. The output is `cargo run`'s.
+#[test]
+fn a_crates_impl_of_a_std_trait_for_a_std_type_is_callable() {
+    let (rawr, cargo) = both_printed("degrees.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 Turn(0.0)..=Turn(1.0)@Turn(0.25)/None \"90\" \"45\" \"0\"")
+            && rawr.contains(
+                "last view pad 0 Turn(0.0)..=Turn(1.0)@Turn(1.0)/None \"360\" \"180\" \"360\""
+            ),
         "{rawr}"
     );
 }
@@ -1332,7 +1375,7 @@ fn an_option_of_a_late_bound_reference_is_lent_for_the_call() {
 /// value of each item, while `update` changes the rest of the state. The
 /// output is `cargo run`'s.
 #[test]
-#[ignore = "blocked: the checker leaves the renderer of an opaque `impl Framed` unknown (E0282), and `&self.items` of a crate-value Vec field fails attestation as `&[T]`"]
+#[ignore = "blocked: the renderer of a borrowing opaque `impl Framed` stays unknown, so the lent cell's proxy bound names it `_` (E0121), and `&self.items` of a crate-value Vec field fails attestation as `&[T]`"]
 fn an_opaque_widget_borrows_a_slice_of_crate_values_for_the_views_lifetime() {
     let (rawr, cargo) = both_printed("notes.rs", "first,Reset");
     assert_eq!(rawr, cargo);
@@ -1474,11 +1517,15 @@ fn a_function_in_a_module_nested_under_an_imported_module_runs() {
 /// `rawr-import check` of a lane of the fixture with `variant` as its
 /// `main.rs`, which fails: its stderr.
 fn checked(variant: &str) -> String {
-    let root = lane(Some(variant));
+    checked_in(&lane(Some(variant)))
+}
+
+/// `rawr-import check` of the project at `root`, as `checked` gives it.
+fn checked_in(root: &std::path::Path) -> String {
     let directory = crate::support::scratch();
     let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
-        .arg(&*root)
+        .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -1556,16 +1603,50 @@ fn a_crate_function_returning_never_is_a_value_of_any_type() {
 fn a_match_moves_or_lends_variant_fields_without_clone() {
     let (rawr, cargo) = both_printed("matched.rs", "");
     assert_eq!(rawr, cargo);
+    assert_eq!(rawr, MATCHED);
+}
+
+/// What `matched.rs` prints, as `cargo run` does.
+const MATCHED: &str = "ok 4\nclosed vent\nfailed\n\
+                       door door door open\nclosed door\nfailed\n3 consumed refused\n\
+                       gate closed gate\nclosed hatch\nidle\n\
+                       below closed cellar\ntried 4 attempts\nquiet\n2 counted\n\
+                       above door attic\nagain failed\nbarn 5\n6\n7 by value\n\
+                       deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3\n\
+                       kept true\ndoor kept open\nloft door loft\n\
+                       Tag { label: \"blue\" } blue true\nblue true\nblue true false\ntrue";
+
+/// #893: a program runs in a project as it would in a fresh one after
+/// another program ran there. The first program's `column!` reaches the
+/// crate through its macros' `$crate`, so the project's remembered demand
+/// keeps the crate's types at their hidden paths too. The next program's
+/// values of those types are the types a crate signature or adapter names
+/// at their public paths, as rustc has them, and a crate method that gives
+/// an opaque receiver's own type keeps what the receiver keeps.
+#[test]
+fn a_program_runs_as_it_would_fresh_after_another_ran_in_its_project() {
+    let root = lane(None);
     assert_eq!(
-        rawr,
-        "ok 4\nclosed vent\nfailed\n\
-         door door door open\nclosed door\nfailed\n3 consumed refused\n\
-         gate closed gate\nclosed hatch\nidle\n\
-         below closed cellar\ntried 4 attempts\nquiet\n2 counted\n\
-         above door attic\nagain failed\nbarn 5\n6\n7 by value\n\
-         deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3\n\
-         kept true\ndoor kept open\nloft door loft\n\
-         Tag { label: \"blue\" } blue true\nblue true\nblue true false\ntrue"
+        printed_in(&root),
+        format!("title crossing::Counter\n{EVENTS}")
+    );
+    let replace = |variant: &str| {
+        fs::write(
+            root.join("src/main.rs"),
+            CROSSING.read(&format!("variants/{variant}")),
+        )
+        .unwrap();
+    };
+    replace("matched.rs");
+    assert_eq!(printed_in(&root), MATCHED);
+    replace("stock_again.rs");
+    let stderr = checked_in(&root);
+    let own = stderr.split("cargo check found").next().unwrap_or_default();
+    assert!(
+        own.contains(
+            "error[E0502]: cannot borrow `items` as mutable because it is also borrowed as immutable"
+        ),
+        "{stderr}"
     );
 }
 

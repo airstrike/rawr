@@ -9,6 +9,7 @@
 <p>A closure passed to a std method has the parameter types std declares for it. In <code>v.sort_by_key(|x| -*x)</code>, <code>x</code> is a <code>&amp;T</code>, as <code>F: FnMut(&amp;T) -&gt; K</code> says. This holds for a method rawr doesn&rsquo;t run yet too. <code>v.dedup_by_key(|x| *x / 2)</code> gives &ldquo;rawr doesn&rsquo;t run `Vec::dedup_by_key` yet&rdquo; and no error inside the closure.</p>
 <h2 id="string"><code>String</code> and <code>&amp;str</code></h2>
 <p><code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>retain</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>rsplitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes.</p>
+<p>A string literal spans lines as in Rust. A line break inside it is part of the string, and a <code>\</code> at the end of a line skips the next line&rsquo;s leading whitespace. A <code>char</code>&rsquo;s <code>to_uppercase</code> and <code>to_lowercase</code> give std&rsquo;s own <code>ToUppercase</code> and <code>ToLowercase</code>, which print as their text and give their chars by <code>next</code>.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="strings.rs" id="src-strings">let line = "  id=7, name=rawr ";
 let fields: Vec&lt;&amp;str&gt; = line.trim().split(", ").collect();
@@ -81,8 +82,9 @@ let wrapped = f32::rem_euclid(-0.25, 1.0); // 0.75
 println!("{angle:?} {wrapped:?}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-floats" data-out="out-floats" aria-label="Run floats.rs" hidden></button><b>rawr run floats.rs</b><span id="out-floats" aria-live="polite">45.0 0.75</span></div>
 </div>
-<h2 id="time"><code>Duration</code> and <code>Instant</code></h2>
+<h2 id="time"><code>Duration</code>, <code>Instant</code> and <code>SystemTime</code></h2>
 <p><code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code> and <code>duration_since</code> work. So do <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>std::thread::sleep(duration)</code> pauses the program. In an iced app, these are <code>iced::time</code>&rsquo;s, which are std&rsquo;s own.</p>
+<p><code>SystemTime</code> is Rust&rsquo;s own, read from the system clock. <code>SystemTime::now</code>, <code>UNIX_EPOCH</code>, <code>duration_since</code>, <code>elapsed</code>, <code>checked_add</code> and <code>checked_sub</code> work, and a <code>SystemTimeError</code> has its <code>duration</code>.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="time.rs" id="src-time">use std::time::{Duration, Instant};
 
@@ -220,6 +222,7 @@ println!("{names:?} {parsed:?} {} {degrees}", byte.is_err());</code></pre>
 <p>A <code>Debug</code> impl can use the formatter&rsquo;s builders: <code>f.debug_struct("Life").field("cells", &amp;n).finish()</code>, <code>debug_tuple</code> with <code>field</code>, <code>debug_list</code> with <code>entry</code>, and <code>finish_non_exhaustive</code>. They write what std&rsquo;s builders write, and <code>{:#?}</code> lays the text out as it does a derived <code>Debug</code>.</p>
 <h2 id="errors"><code>std::error::Error</code></h2>
 <p>Your own error type implements <code>Error</code> with an empty <code>impl Error for MyErr {}</code> beside its <code>Display</code> and <code>Debug</code>. <code>Box&lt;dyn Error&gt;</code> holds your error, a std error such as <code>ParseIntError</code>, or a message. <code>Box&lt;dyn Error + Send + Sync&gt;</code> works the same way.</p>
+<p>A <code>ParseIntError</code>&rsquo;s <code>kind</code> is std&rsquo;s own <code>IntErrorKind</code>, which compares and matches by its variants. A type that holds a std error or a <code>Duration</code> derives each trait std implements for it.</p>
 <p><code>?</code> boxes the error in a function that returns <code>Result&lt;T, Box&lt;dyn Error&gt;&gt;</code>. So do <code>Err(Box::new(e))</code> and <code>Err("text".into())</code>. <code>{e}</code>, <code>{e:?}</code> and <code>e.to_string()</code> print what Rust prints, and <code>e.source()</code> is <code>None</code>. A <code>main</code> that returns <code>Err</code> prints <code>Error: </code> and the error&rsquo;s <code>Debug</code> to stderr and exits with status 1.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="errors.rs" id="src-errors">use std::error::Error;

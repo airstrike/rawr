@@ -1298,24 +1298,33 @@ impl Registry {
         // gives one run per identity and facade, its aliases in type order.
         // Inserting each type in place shifted every later range: quadratic
         // in the types, and run at each facade's install.
+        // A path through a crate's hidden segment goes after the type's
+        // public ones, so a type's first alias, the one its signatures
+        // name it by, is the path rustc gives it whichever macros some
+        // program reached the crate through (#893).
         let mut keyed = self
             .types
             .iter()
             .enumerate()
             .filter_map(|(type_index, definition)| {
                 let identity = definition.identity().imported()?;
-                let root = definition.path_ref().segments().first()?;
+                let path = definition.path_ref();
+                let root = path.segments().first()?;
                 let facade = self
                     .facades
                     .binary_search_by(|candidate| candidate.root().cmp(root))
                     .expect("imported types retain their owner root");
-                Some((identity, facade, type_index))
+                let hidden = path
+                    .segments()
+                    .iter()
+                    .any(|segment| path::is_hidden(segment));
+                Some((identity, facade, hidden, type_index))
             })
             .collect::<Vec<_>>();
         keyed.sort_unstable();
         self.imported.clear();
         self.imported_aliases.clear();
-        for (identity, facade, type_index) in keyed {
+        for (identity, facade, _, type_index) in keyed {
             let alias = self.imported_aliases.len();
             self.imported_aliases.push(type_index);
             match self.imported.last_mut() {

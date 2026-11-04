@@ -234,6 +234,9 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                 "Duration" => value.is::<std::time::Duration>(),
                 "Instant" => value.is::<std::time::Instant>(),
                 "String" => value.is_string(),
+                // `ParseIntError` and its kin are their messages at runtime.
+                "ParseIntError" | "ParseFloatError" | "ParseBoolError" | "ParseCharError"
+                | "TryFromIntError" => value.is_string(),
                 "f64" => value.is_float(),
                 "RangeInclusive" => {
                     value.is::<std::ops::RangeInclusive<crate::INT>>() || {

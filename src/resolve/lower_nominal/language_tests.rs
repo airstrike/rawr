@@ -6447,6 +6447,38 @@ fn language_str_parse_and_methods() {
     }
 }
 
+/// A `parse` whose target a later call in its chain gives (`.map(C::P)`),
+/// followed by a closure whose body is a statement (`format!`), settles
+/// while the chain is still being read: its call is written once the
+/// chain is (the playground's enums example, a match arm continued on
+/// the next lines).
+#[test]
+fn language_str_parse_settled_inside_its_own_chain() {
+    let value = run_string(
+        r#"
+        #[derive(Debug)]
+        enum Command { Push(i64), Add }
+        fn parse(word: &str) -> Result<Command, String> {
+            match word {
+                "+" => Ok(Command::Add),
+                _ => word
+                    .parse()
+                    .map(Command::Push)
+                    .map_err(|e| format!("not a command: {word:?} ({e})")),
+            }
+        }
+        pub fn run() -> String {
+            format!("{:?} {:?} {:?}", parse("+"), parse("7"), parse("x"))
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "Ok(Add) Ok(Push(7)) Err(\"not a command: \\\"x\\\" (invalid digit found in string)\")"
+    );
+}
+
 #[test]
 fn language_rust_names_the_legacy_lexer_reserves() {
     let value = run_string(
@@ -9408,6 +9440,48 @@ fn language_moves_loop_patterns_bind_fresh_values_each_iteration() {
         run()
     "#);
     assert_eq!(value, (1 + 2 + 3 + 4 + 5 + 5) * 10 + 5);
+}
+
+/// A moved local `format!` names is a borrow of it, as rustc words it, at
+/// the name in the string; one used by value is a use. Either names the
+/// local's type, which isn't `Copy`, at its declaration.
+#[test]
+fn language_a_use_after_a_move_is_worded_and_placed_as_rustc_does() {
+    let source = "fn consume(words: Vec<String>) -> usize {\n    words.len()\n}\n\
+                  pub fn run() -> i64 {\n    let words = vec![String::from(\"a\")];\n    \
+                  let n = consume(words);\n    println!(\"{n} {words:?}\");\n    0\n}";
+    let error = Engine::new()
+        .compile(source)
+        .expect_err("rustc rejects this program");
+    let position = error.position();
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("borrow of moved value: `words`"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("value borrowed here after move"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "move occurs because `words` has type `Vec<String>`, which does not implement the \
+             `Copy` trait"
+        ),
+        "{rendered}"
+    );
+    assert_eq!((position.line(), position.position()), (Some(7), Some(20)));
+
+    let error = Engine::new()
+        .compile("pub fn run() -> i64 { let s = String::new(); let t = s; let u = s; 0 }")
+        .expect_err("rustc rejects this program")
+        .to_string();
+    assert!(error.contains("use of moved value: `s`"), "{error}");
+    assert!(error.contains("value used here after move"), "{error}");
+    assert!(
+        error.contains("move occurs because `s` has type `String`"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -13477,4 +13551,14 @@ main();
     // `exit` takes std's `i32`, as a typed variable or a literal.
     let error = rejected("fn main() { let code: i64 = 1; std::process::exit(code) } main(); 0");
     assert!(error.contains("expected `i32`, found `i64`"), "{error}");
+}
+
+/// A Rust string literal holds the line breaks written in it, in a `const`
+/// item and in a body.
+#[test]
+fn language_string_literals_span_lines() {
+    let value = run(
+        "const RESULTS: &str = \"a,b\nc,d\";\npub fn run() -> i64 {\n    let more = \"e\nf\";\n    (RESULTS.lines().count() + more.len()) as i64\n}\nrun()",
+    );
+    assert_eq!(value, 5);
 }

@@ -1701,6 +1701,8 @@ impl Parser<'_> {
                 name: moved.name.into(),
                 moved: moved.moved,
                 reference: moved.access,
+                borrowed: moved.borrowed,
+                cause: None,
                 // A move in a loop's body, made again on its next iteration.
                 previous_iteration: moved.moved == moved.access,
             });
