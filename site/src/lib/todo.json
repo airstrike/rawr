@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-03",
-  "version": "0.3.126",
+  "version": "0.3.127",
   "examples": {
     "running": 37,
     "total": 56,
@@ -9,13 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"?play snippets can tick with `iced::time::every`, as iced's stopwatch and clock do.","issues":[890]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.127",
+        "date": "2026-11-03",
+        "entries": [
+          {"text":"?play snippets can tick with `iced::time::every`, as iced's stopwatch and clock do.","issues":[890]},
+          {"text":"A function's return type can hold `impl Trait` inside a generic type of a crate's or the program's own, as iced's loupe gives `Loupe<impl Widget<Message> + 'a>`; the hidden type is the body's, as rustc infers it.","issues":[845]}
+        ]
+      },
       {
         "version": "0.3.126",
         "date": "2026-11-03",
@@ -2091,7 +2094,7 @@
     {"issue":842,"title":"gradient: `Radians::RANGE` is refused for its generic argument","state":"closed","category":"No glue (D593)","release":"0.3.118"},
     {"issue":843,"title":"scrollable: `Color::into` is not found","state":"closed","category":"No glue (D593)","release":"0.3.118"},
     {"issue":844,"title":"delineate: `selector::find` is not found, with no reason","state":"closed","category":"No glue (D593)","release":"0.3.118"},
-    {"issue":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"open","category":"No glue (D593)"},
+    {"issue":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"closed","category":"No glue (D593)","release":"0.3.127"},
     {"issue":846,"title":"An opaque result that borrows its inputs lives as long as Rust says","state":"closed","category":"No glue (D593)","release":"0.3.120"},
     {"issue":847,"title":"An opaque `impl Sub<..>` leaves a type parameter unknown when Sub has a blanket impl over its supertrait","state":"open","category":"Divergences from rustc"},
     {"issue":848,"title":"`&self.field` of a Vec of crate values fails exact type attestation as `&[T]`","state":"open","category":"Divergences from rustc"},
@@ -2136,7 +2139,12 @@
     {"issue":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"open","category":"Divergences from rustc"},
     {"issue":888,"title":"?play's iced shell stops an animation after its first frame on a slow CPU","state":"closed","category":"Health","release":"0.3.125"},
     {"issue":889,"title":"?play GIF delays follow the bot's draw time","state":"closed","category":"Health","release":"0.3.126"},
-    {"issue":890,"title":"?play binds iced's time::every (tokio executor in the universe)","state":"closed","category":"No glue (D593)"}
+    {"issue":890,"title":"?play binds iced's time::every (tokio executor in the universe)","state":"closed","category":"No glue (D593)","release":"0.3.127"},
+    {"issue":891,"title":"rawr-import's integration suite shares its builds and runs in parallel","state":"closed","category":"Health"},
+    {"issue":892,"title":"rawr-import-cli's crossing suite shares prepared fixtures and runs in parallel","state":"closed","category":"Health"},
+    {"issue":893,"title":"rawr's state from one program breaks the next program in the same project","state":"open","category":"Divergences from rustc"},
+    {"issue":894,"title":"rawr's workspace observation reads ancestor manifests outside the project's own workspace","state":"open","category":"Health"},
+    {"issue":895,"title":"islands' restarted program ends with a failing status in the parallel suite","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -2767,7 +2775,19 @@
           ],
           "milestone": "0.3"
         },
-        {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"now","note":"Shared fixture builds and parallel tests: the import suite went from 40 min to under 5","issues":[],"milestone":"0.3"}
+        {
+          "id": "fast-suites",
+          "name": "Fast test suites",
+          "start": 74,
+          "size": 2,
+          "state": "done",
+          "note": "Shared builds and parallel tests: the import suite from 40 min to 5, the crossing sweep from an hour to 14 min",
+          "issues": [
+            {"number":891,"title":"rawr-import's integration suite shares its builds and runs in parallel","state":"closed"},
+            {"number":892,"title":"rawr-import-cli's crossing suite shares prepared fixtures and runs in parallel","state":"closed"}
+          ],
+          "milestone": "0.3"
+        }
       ]
     },
     {

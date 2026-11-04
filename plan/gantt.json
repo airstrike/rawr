@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-03",
-  "version": "0.3.126",
+  "version": "0.3.127",
   "examples": {
     "running": 37,
     "total": 56,
@@ -128,7 +128,7 @@
       "rows": [
         {"id":"one-command-install","name":"One-command install","start":70,"size":2,"state":"done","note":"Prebuilt binaries and a self-installed nightly; binaries wait on patch tags","issues":[797],"milestone":"0.3"},
         {"id":"staged-release","name":"Staged, cached release","start":72,"size":2,"state":"done","note":"Playground, bot and site each gated; the image rebuilds only when its inputs change","issues":[881],"milestone":"0.3"},
-        {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"now","note":"Shared fixture builds and parallel tests: the import suite went from 40 min to under 5","issues":[],"milestone":"0.3"}
+        {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"done","note":"Shared builds and parallel tests: the import suite from 40 min to 5, the crossing sweep from an hour to 14 min","issues":[891,892],"milestone":"0.3"}
       ]
     },
     {

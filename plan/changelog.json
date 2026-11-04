@@ -4,11 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"?play snippets can tick with `iced::time::every`, as iced's stopwatch and clock do.","issues":[890]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.127",
+      "date": "2026-11-03",
+      "entries": [
+        {"text":"?play snippets can tick with `iced::time::every`, as iced's stopwatch and clock do.","issues":[890]},
+        {"text":"A function's return type can hold `impl Trait` inside a generic type of a crate's or the program's own, as iced's loupe gives `Loupe<impl Widget<Message> + 'a>`; the hidden type is the body's, as rustc infers it.","issues":[845]}
+      ]
+    },
     {
       "version": "0.3.126",
       "date": "2026-11-03",

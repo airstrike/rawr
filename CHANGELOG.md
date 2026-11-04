@@ -5,7 +5,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.127 (2026-11-03)
+
 - ?play snippets can tick with `iced::time::every`, as iced's stopwatch and clock do. (#890)
+- A function's return type can hold `impl Trait` inside a generic type of a crate's or the program's own, as iced's loupe gives `Loupe<impl Widget<Message> + 'a>`; the hidden type is the body's, as rustc infers it. (#845)
 
 ## 0.3.126 (2026-11-03)
 
