@@ -455,6 +455,10 @@ fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it(
     let before = terminal.stty();
 
     terminal.shows(Duration::from_secs(900), "tui-one");
+    // From here it times the live program: a repaint within a minute of a
+    // save, and nothing on the screen in the 15 s after a failing one.
+    // Beside the suite's builds those windows measure the load, not rawr.
+    crate::support::alone();
     assert_ne!(terminal.stty(), before, "ratatui holds the terminal raw");
     terminal.keys(b"\x1b[B");
     terminal.keys(b"x");

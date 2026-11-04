@@ -1,10 +1,13 @@
 //! A fixture project that several tests run programs in, prepared in a few
 //! lanes that the tests borrow one at a time. A lane is a copy of the
-//! fixture that keeps its `target/` between tests and between suite runs,
-//! as a user's project does, so the fixture's crates, its bindings and its
-//! runner's dependencies build once per lane, and a test builds only what
-//! its own program changes. Lanes are made as tests ask for them, up to one
-//! per test thread, so tests of one fixture run in parallel.
+//! fixture that keeps Cargo's build units between tests and between suite
+//! runs, so the fixture's crates and its runner's dependencies compile once
+//! per lane, and a test compiles only what its own program changes. Rawr's
+//! own products for the project, `target/rawr`, go at each lease: each test
+//! starts from what a fresh checkout of its program would, whichever
+//! programs ran in the lane before, so no test depends on the order the
+//! suite ran them in. Lanes are made as tests ask for them, up to one per
+//! test thread, so tests of one fixture run in parallel.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -81,6 +84,8 @@ impl Fixture {
             "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
             driver.display()
         );
+        // Before the lanes' lock: the test may wait here for its turn.
+        let scratch = crate::support::scratch();
         let root = {
             let mut lanes = self.lanes();
             loop {
@@ -89,7 +94,7 @@ impl Fixture {
                 }
                 if lanes.made < limit() {
                     lanes.made += 1;
-                    break crate::support::scratch()
+                    break scratch
                         .join("lanes")
                         .join(self.name)
                         .join(lanes.made.to_string());
@@ -116,6 +121,7 @@ impl Fixture {
             wanted.insert(PathBuf::from(path), text.as_bytes().to_vec());
         }
         settle(&lease.root, &wanted);
+        let _ = fs::remove_dir_all(lease.root.join("target/rawr"));
         lease
     }
 

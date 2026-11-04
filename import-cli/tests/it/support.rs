@@ -11,8 +11,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+pub mod alone;
 pub mod fixture;
 
+pub use alone::alone;
 pub use fixture::Fixture;
 
 pub fn copy(from: &Path, to: &Path) {
@@ -69,8 +71,10 @@ impl Drop for Run {
 
 /// The directory a test's projects and `RAWR_HOME` live in: `RAWR_TEST_TMPDIR`
 /// when set, so concurrent runs from different checkouts keep apart, and
-/// cargo's target tmp directory otherwise.
+/// cargo's target tmp directory otherwise. A test that asks for it runs
+/// beside others from then on, unless it runs [`alone`].
 pub fn scratch() -> PathBuf {
+    alone::share();
     std::env::var_os("RAWR_TEST_TMPDIR")
         .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
 }
