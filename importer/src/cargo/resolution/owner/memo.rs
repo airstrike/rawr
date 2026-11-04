@@ -152,6 +152,11 @@ impl Memo {
         ))
     }
 
+    /// The API context the resolution was read under.
+    pub(super) const fn context(&self) -> &crate::api::Context {
+        &self.context
+    }
+
     /// What the API is built from, read from disk alone.
     pub(super) fn materials(self, rawr: &Path) -> Option<super::Materials> {
         let document = fs::read(rawr.join(DOCUMENT)).ok()?;
