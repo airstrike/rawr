@@ -993,11 +993,11 @@ fn evidence_matches_graph(
     digest == Some(evidence.digest)
 }
 
-/// Copying a facade site fails only for want of memory.
+/// Copying a bindings site fails only for want of memory.
 fn surface_error(error: crate::surface::Error) -> Error {
     match error {
         crate::surface::Error::Allocation => Error::Allocation,
-        error => panic!("copying a facade site fails only for want of memory: {error}"),
+        error => panic!("copying a bindings site fails only for want of memory: {error}"),
     }
 }
 

@@ -1657,7 +1657,7 @@ impl Definition {
             .binary_search_by(|definition| definition.path_ref().cmp(&path))
             .ok()
             .map(|index| &self.types[index])
-            .unwrap_or_else(|| panic!("a facade exports only a type it declares, not `{path}`"));
+            .unwrap_or_else(|| panic!("bindings export only a type they declare, not `{path}`"));
         Ok(host::type_def::Export::new(
             self.root.clone(),
             self.fingerprint.clone(),

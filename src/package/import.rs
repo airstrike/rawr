@@ -1875,7 +1875,9 @@ fn install(
     let mut facades = facades.into_iter().map(Some).collect::<Vec<_>>();
     let mut built = vec![None; facades.len()];
     for &index in resolution.order() {
-        let facade = facades[index].take().expect("each facade is built once");
+        let facade = facades[index]
+            .take()
+            .expect("each crate's bindings are built once");
         let through = resolution.through(index);
         let resolved = declared[index]
             .iter()
@@ -1900,7 +1902,7 @@ fn install(
                     .and_then(|provider: &host::facade::Definition| {
                         provider.export_imported(&identity)
                     })
-                    .expect("a facade is built after those it resolves through");
+                    .expect("bindings are built after those they resolve through");
                 (identity, export)
             })
             .collect();
