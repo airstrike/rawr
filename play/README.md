@@ -51,9 +51,12 @@ drawing a frame every 50 ms, as iced_winit would redraw: each redraw goes to
 the program's subscriptions (`window::frames()`), and a widget's redraw
 request is honoured. It stops once nothing is left to change the program:
 no update, no pending task, no redraw request, and no subscription that
-changed the frame in the last second. It also stops at 100 frames, at 6 MiB
-of GIF, or before the deadline `PLAY_DEADLINE` names (the snippet's time
-budget). A program whose frame never changed is written as a PNG, and one
+changed the frame in the last second. That second counts from the end of
+the frame's drawing, and a message that arrived while it was drawn is
+performed first, so a slow machine draws the same frames as a fast one,
+later. It also stops at 100 frames, at 6 MiB of GIF, or before the
+deadline `PLAY_DEADLINE` names (the snippet's time budget) or the sooner
+one the file `PLAY_DEADLINE_FILE` names gives. A program whose frame never changed is written as a PNG, and one
 that changed as a GIF of each change, with no loop extension, so it plays
 once and holds its last frame. Either goes to the file `PLAY_FRAME` names,
 and `run` returns, as iced's `run` returns when its window closes. A run
