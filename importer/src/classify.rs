@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 106;
+const CLASSIFIER_VERSION: u32 = 107;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -5000,11 +5000,15 @@ impl<P: api::Phase> Context<'_, P> {
         if opaques.is_empty() {
             return Ok(Box::default());
         }
-        // `Self` is the trait's parameter 0, a parameter of its own here.
+        // `Self` is the trait's parameter 0, a parameter of its own here,
+        // named as the self member's signature names it, where the call's
+        // receiver fills it (`classify_self_member`): the opaque type's
+        // parameters take the names of that signature (`surface::facade`),
+        // and a member's parameter is its owner's by name.
         let parameters = std::iter::once(model::Parameter::new(
             trait_id.clone(),
             0,
-            "This".into(),
+            representability::signature::argument_impl_name(0),
             model::ParameterKind::Type {
                 bounds: Box::default(),
                 default: model::Default::Absent,
