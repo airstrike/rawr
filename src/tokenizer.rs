@@ -1669,12 +1669,6 @@ pub fn parse_string_literal(
                 result.push('\n');
             }
 
-            // LF - Rust's string literal holds a line break as written.
-            '\n' if termination_char == '"' && state.tokenizer_control.borrow().rust => {
-                pos.new_line();
-                result.push('\n');
-            }
-
             // LF - Unterminated string
             '\n' => {
                 pos.rewind();
