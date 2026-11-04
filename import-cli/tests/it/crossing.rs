@@ -37,11 +37,15 @@ fn lane(variant: Option<&str>) -> Lease {
 /// `variants/` as its `main.rs` when given: its stdout without the process
 /// id, which `cargo run` of the same crate prints too.
 fn printed(variant: Option<&str>) -> String {
-    let root = lane(variant);
+    printed_in(&lane(variant))
+}
+
+/// `rawr-import run` on the project at `root`, as `printed` gives it.
+fn printed_in(root: &std::path::Path) -> String {
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&*root)
+        .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -1508,17 +1512,38 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
 fn a_match_moves_or_lends_variant_fields_without_clone() {
     let (rawr, cargo) = both_printed("matched.rs", "");
     assert_eq!(rawr, cargo);
+    assert_eq!(rawr, MATCHED);
+}
+
+/// What `matched.rs` prints, as `cargo run` does.
+const MATCHED: &str = "ok 4\nclosed vent\nfailed\n\
+                       door door door open\nclosed door\nfailed\n3 consumed refused\n\
+                       gate closed gate\nclosed hatch\nidle\n\
+                       below closed cellar\ntried 4 attempts\nquiet\n2 counted\n\
+                       above door attic\nagain failed\nbarn 5\n6\n7 by value\n\
+                       deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3\n\
+                       kept true\ndoor kept open\nloft door loft\n\
+                       Tag { label: \"blue\" } blue true\nblue true\nblue true false\ntrue";
+
+/// #893: a program runs in a project as it would in a fresh one after
+/// another program ran there. The first program's `column!` reaches the
+/// crate through its macros' `$crate`, so the project's remembered demand
+/// keeps the crate's types at their hidden paths too; the second program's
+/// values of those types are still named at their public paths, as rustc
+/// names them, wherever a crate signature or adapter takes them.
+#[test]
+fn a_program_runs_as_it_would_fresh_after_another_ran_in_its_project() {
+    let root = lane(None);
     assert_eq!(
-        rawr,
-        "ok 4\nclosed vent\nfailed\n\
-         door door door open\nclosed door\nfailed\n3 consumed refused\n\
-         gate closed gate\nclosed hatch\nidle\n\
-         below closed cellar\ntried 4 attempts\nquiet\n2 counted\n\
-         above door attic\nagain failed\nbarn 5\n6\n7 by value\n\
-         deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3\n\
-         kept true\ndoor kept open\nloft door loft\n\
-         Tag { label: \"blue\" } blue true\nblue true\nblue true false\ntrue"
+        printed_in(&root),
+        format!("title crossing::Counter\n{EVENTS}")
     );
+    fs::write(
+        root.join("src/main.rs"),
+        CROSSING.read("variants/matched.rs"),
+    )
+    .unwrap();
+    assert_eq!(printed_in(&root), MATCHED);
 }
 
 /// iced's `keyboard::Key<C = SmolStr>`: an enum whose every type parameter
