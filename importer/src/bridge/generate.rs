@@ -10082,10 +10082,14 @@ fn render_adapter_body(
                             call.write_all(b")").map_err(request::unwritable)?;
                             let call = String::from_utf8(call).map_err(request::unwritable)?;
                             // A value that carries a lifetime, made while a
-                            // slot's region is open, stays in that region,
-                            // as a function's does: `Widget::boxed` of an
-                            // opaque widget gives the view's element.
-                            if future_output(&returned).is_none()
+                            // slot's region is open from an opaque value its
+                            // table takes, stays in that region, as a
+                            // function's does: `Widget::boxed` of an opaque
+                            // widget gives the view's element. A receiver
+                            // of a type that names its own lifetime keeps
+                            // the one it was made at.
+                            if OPAQUE_WITNESSED.with_borrow(Option::is_some)
+                                && future_output(&returned).is_none()
                                 && !lifetime_inputs(signature, substitutions)?
                             {
                                 render_anchored_output(&returned, &call, output)?;
