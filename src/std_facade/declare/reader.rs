@@ -111,7 +111,8 @@ impl<'a> Reader<'a> {
                 let (_, bound) = self.names.iter().find(|(name, _)| name == text)?;
                 self.host(bound)
             }
-            Written::Array(..) | Written::Never => None,
+            Written::Never => Some(Type::builtin(Builtin::Never)),
+            Written::Array(..) => None,
         }
     }
 

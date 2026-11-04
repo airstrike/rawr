@@ -18021,7 +18021,9 @@ impl<'a> Parser<'a> {
     fn proven_type(&self, ty: &Ty, operation: &str, span: Span) -> Result<intrinsic::Type, Error> {
         let ty = self.inference.resolve(ty);
         Ok(match ty {
-            Ty::Unit => intrinsic::Type::unit(),
+            // A `-> !` item gives no value, so its output's witness is
+            // never checked against one.
+            Ty::Unit | Ty::Never => intrinsic::Type::unit(),
             Ty::Callable {
                 inputs,
                 output,
@@ -18244,7 +18246,7 @@ impl<'a> Parser<'a> {
                     operation: span,
                 });
             }
-            Ty::Never | Ty::Param(_) | Ty::Projection(..) | Ty::Weak(..) | Ty::Dyn(..) => {
+            Ty::Param(_) | Ty::Projection(..) | Ty::Weak(..) | Ty::Dyn(..) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }
         })
@@ -18777,6 +18779,24 @@ impl<'a> Parser<'a> {
                     })
             })
         };
+        // A number std's own signature types, as `process::exit`'s `i32`:
+        // the argument keeps its type.
+        let typed = |index: usize| {
+            items.iter().any(|item| {
+                item.signature()
+                    .parameters()
+                    .get(index)
+                    .is_some_and(|parameter| {
+                        matches!(
+                            parameter.shape(),
+                            crate::host::type_ref::Shape::Builtin(builtin)
+                                if builtin.name().is_some_and(|name| {
+                                    numeric_type(name).is_some() && !matches!(name, "i64" | "f64")
+                                })
+                        )
+                    })
+            })
+        };
         // A facade takes `&str`, slices and borrowed facade values, such as
         // iced's `&Theme`, as their owned types. Its `f64` and `i64` inputs stand
         // for iced's `f32` and `u16`/`u32` (`impl Into<Pixels>`, `Padding`):
@@ -18814,8 +18834,14 @@ impl<'a> Parser<'a> {
                 {
                     argument.ty = Ty::Option(target.clone());
                 }
-                Ty::Float(Float::F32) if !generic(index) => argument.ty = Ty::Float(Float::F64),
-                Ty::Int(kind) if !matches!(kind, Int::I64 | Int::Var(_)) && !generic(index) => {
+                Ty::Float(Float::F32) if !generic(index) && !typed(index) => {
+                    argument.ty = Ty::Float(Float::F64);
+                }
+                Ty::Int(kind)
+                    if !matches!(kind, Int::I64 | Int::Var(_))
+                        && !generic(index)
+                        && !typed(index) =>
+                {
                     argument.ty = Ty::Int(Int::I64);
                 }
                 _ => {}
@@ -19682,6 +19708,7 @@ impl<'a> Parser<'a> {
             Shape::Builtin(Builtin::F32) => Ty::Float(Float::F32),
             Shape::Builtin(Builtin::Duration) => Ty::Time(Time::Duration),
             Shape::Builtin(Builtin::Instant) => Ty::Time(Time::Instant),
+            Shape::Builtin(Builtin::Never) => Ty::Never,
             Shape::Builtin(Builtin::String) => Ty::String,
             Shape::Builtin(Builtin::InclusiveRange) => Ty::InclusiveRange,
             Shape::Builtin(Builtin::FloatInclusiveRange) => Ty::FloatRange,
@@ -43979,7 +44006,7 @@ impl<'a> Parser<'a> {
         }
         let annotated = if matches!(self.peek(), Token::ThinArrow) {
             self.next();
-            let ty = self.parse_local_type()?;
+            let ty = self.parse_local_output_type()?;
             if !matches!(self.peek(), Token::LeftBrace) {
                 return Err(self.unsupported("a closure return type without a block body"));
             }
@@ -48485,6 +48512,16 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// A closure's or `fn` type's output after its `->`: a type, or the
+    /// never type `!`, which stable Rust names only there.
+    fn parse_local_output_type(&mut self) -> Result<Ty, Error> {
+        if matches!(self.peek(), Token::Bang) {
+            self.next();
+            return Ok(Ty::Never);
+        }
+        self.parse_local_type()
+    }
+
     fn parse_local_type(&mut self) -> Result<Ty, Error> {
         // `::image::ImageError`: a leading `::` names an outside crate,
         // which no `use` or generic parameter shadows.
@@ -48515,9 +48552,10 @@ impl<'a> Parser<'a> {
                 self.next();
                 return Ok(Ty::Unit);
             }
+            // `!` outside a function's output is unstable in Rust.
             Token::Bang => {
-                self.next();
-                return Ok(Ty::Never);
+                let at = self.position();
+                return Err(crate::resolve::std_path::experimental_never(point_span(at)));
             }
             Token::LeftParen => {
                 self.next();
@@ -48554,7 +48592,7 @@ impl<'a> Parser<'a> {
             }
             Token::Fn => {
                 self.next();
-                return self.parse_local_fn_type();
+                return self.parse_local_fn_type(true);
             }
             // `for<'a> fn(&'a T)`: a function pointer for every `'a`,
             // whose lifetimes are elided ones.
@@ -48565,7 +48603,7 @@ impl<'a> Parser<'a> {
                     return Err(self.unsupported("a higher-ranked type other than `fn(..)`"));
                 }
                 self.next();
-                let ty = self.parse_local_fn_type();
+                let ty = self.parse_local_fn_type(true);
                 self.bound_lifetimes.truncate(outer);
                 return ty;
             }
@@ -48646,7 +48684,7 @@ impl<'a> Parser<'a> {
                 && matches!(trait_name.as_str(), "Fn" | "FnMut" | "FnOnce")
             {
                 self.next();
-                return self.parse_local_fn_type();
+                return self.parse_local_fn_type(false);
             }
             // `dyn std::error::Error`: traits are crate-wide by name, as in
             // item headers.
@@ -49074,7 +49112,10 @@ impl<'a> Parser<'a> {
     }
 
     /// `(A, ..) -> B` after `fn` or `dyn Fn` in a local type.
-    fn parse_local_fn_type(&mut self) -> Result<Ty, Error> {
+    /// `(A, ..) -> B` after `fn`, or after an `Fn` trait of `dyn`, as
+    /// `pointer` says: a `fn` pointer's output may be `!`, and an `Fn`
+    /// trait's, its `Output` type, may not.
+    fn parse_local_fn_type(&mut self, pointer: bool) -> Result<Ty, Error> {
         let mut inputs = Vec::new();
         if matches!(self.peek(), Token::Unit) {
             self.next();
@@ -49090,11 +49131,16 @@ impl<'a> Parser<'a> {
             }
             self.next();
         }
-        let output = if matches!(self.peek(), Token::ThinArrow) {
-            self.next();
-            self.parse_local_type()?
-        } else {
-            Ty::Unit
+        let output = match self.peek() {
+            Token::ThinArrow if pointer => {
+                self.next();
+                self.parse_local_output_type()?
+            }
+            Token::ThinArrow => {
+                self.next();
+                self.parse_local_type()?
+            }
+            _ => Ty::Unit,
         };
         Ok(Ty::Fn {
             inputs: inputs.into_boxed_slice(),

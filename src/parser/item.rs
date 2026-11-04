@@ -2409,7 +2409,7 @@ fn parse_function_rest(
 
     let mut output = if matches!(input.peek(), Some((Token::ThinArrow, _))) {
         input.next();
-        Some(parse_type(input)?)
+        Some(parse_output_type(input)?)
     } else {
         None
     };
@@ -2614,7 +2614,7 @@ fn parse_bounds_with(
             let start = *position;
             let mutable = name.as_str() != "Fn";
             input.next();
-            bounds.push(parse_fn_signature(input, start, mutable)?);
+            bounds.push(parse_fn_signature(input, start, mutable, false)?);
         } else {
             let mut split = None;
             let mut bindings = Vec::new();
@@ -3174,6 +3174,28 @@ fn malformed_receiver<T>(input: &mut TokenStream) -> ParseResult<T> {
     }
 }
 
+/// A function's output after its `->`: a type, or the never type `!`,
+/// the builtin path `!`, which stable Rust names only there.
+fn parse_output_type(input: &mut TokenStream) -> ParseResult<type_ref::Type> {
+    let Some((Token::Bang, position)) = input.peek() else {
+        return parse_type(input);
+    };
+    let span = token_span(*position, "!");
+    input.next();
+    Ok(type_ref::Type::Path(type_ref::Path {
+        segments: Box::new([type_ref::Segment {
+            name: crate::item::Name {
+                text: type_ref::NEVER_TYPE.into(),
+                span,
+            },
+            arguments: Box::default(),
+            span,
+        }]),
+        span,
+        global: false,
+    }))
+}
+
 fn parse_type(input: &mut TokenStream) -> ParseResult<type_ref::Type> {
     let mut split = None;
     let ty = parse_type_split(input, &mut split)?;
@@ -3344,22 +3366,11 @@ fn parse_type_split(
         return Ok(type_ref::Type::Unit(token_span(position, "()")));
     }
 
-    // `!`, the never type: the builtin path `!`.
+    // `!` outside a function's output is unstable in Rust.
     if let Some((Token::Bang, position)) = input.peek() {
-        let span = token_span(*position, "!");
-        input.next();
-        return Ok(type_ref::Type::Path(type_ref::Path {
-            segments: Box::new([type_ref::Segment {
-                name: crate::item::Name {
-                    text: type_ref::NEVER_TYPE.into(),
-                    span,
-                },
-                arguments: Box::default(),
-                span,
-            }]),
-            span,
-            global: false,
-        }));
+        return Err(
+            crate::resolve::std_path::experimental_never(token_span(*position, "!")).into(),
+        );
     }
 
     if let Some((Token::LeftParen, position)) = input.peek() {
@@ -3463,7 +3474,7 @@ fn parse_type_split(
         {
             let mutable = name.as_str() != "Fn";
             input.next();
-            let mut path = parse_fn_signature(input, start, mutable)?;
+            let mut path = parse_fn_signature(input, start, mutable, false)?;
             erase_path_lifetimes(&mut path, &binder);
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
@@ -3594,8 +3605,8 @@ fn parse_type_split(
     // `fn(A) -> B`, `impl Fn(A) -> B` and `dyn Fn(A) -> B`: Rawr's one
     // function type; `impl Iterator<Item = T>`.
     match fn_type_start(input)? {
-        Some(ImplStart::Fn(start, mutable, binder)) => {
-            let mut path = parse_fn_signature(input, start, mutable)?;
+        Some(ImplStart::Fn(start, mutable, binder, pointer)) => {
+            let mut path = parse_fn_signature(input, start, mutable, pointer)?;
             erase_path_lifetimes(&mut path, &binder);
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
@@ -3685,9 +3696,9 @@ fn hashes_as_rust(functions: &[crate::item::Function]) -> bool {
 /// What a type starting with `fn` or `impl` is.
 enum ImplStart {
     /// `fn(..)` or `impl Fn*(..)`, its head consumed, whether its call
-    /// takes it `&mut` (`FnMut`, `FnOnce`), and the lifetimes a `for<'a>`
-    /// after `impl` binds.
-    Fn(Position, bool, Vec<crate::item::Name>),
+    /// takes it `&mut` (`FnMut`, `FnOnce`), the lifetimes a `for<'a>`
+    /// after `impl` binds, and whether it is a `fn` pointer.
+    Fn(Position, bool, Vec<crate::item::Name>, bool),
     /// `impl Iterator` (or another iterator trait), its builtin name.
     Iterator(&'static str, Position),
     /// `impl Bound + Bound` of other traits, after `impl`, and the
@@ -3702,7 +3713,7 @@ fn fn_type_start(input: &mut TokenStream) -> ParseResult<Option<ImplStart>> {
         Some((Token::Fn, position)) => {
             let position = *position;
             input.next();
-            return Ok(Some(ImplStart::Fn(position, false, Vec::new())));
+            return Ok(Some(ImplStart::Fn(position, false, Vec::new(), true)));
         }
         Some((Token::Impl, position)) => *position,
         _ => return Ok(None),
@@ -3714,7 +3725,7 @@ fn fn_type_start(input: &mut TokenStream) -> ParseResult<Option<ImplStart>> {
         Some((Token::Identifier(name) | Token::Reserved(name), _)) if is_fn_trait(name) => {
             let mutable = name.as_str() != "Fn";
             input.next();
-            return Ok(Some(ImplStart::Fn(start, mutable, binder)));
+            return Ok(Some(ImplStart::Fn(start, mutable, binder, false)));
         }
         Some((Token::Identifier(name), _)) if binder.is_empty() => iterator_trait(name),
         _ => None,
@@ -3979,11 +3990,14 @@ fn is_fn_trait(name: &str) -> bool {
 }
 
 /// `(A, B) -> C` after a function type's head: the builtin path `fn` whose
-/// arguments are the inputs, then the output (`()` when omitted).
+/// arguments are the inputs, then the output (`()` when omitted). A `fn`
+/// pointer's output may be `!`; an `Fn` trait's is its `Output` type,
+/// where `!` is unstable.
 fn parse_fn_signature(
     input: &mut TokenStream,
     start: Position,
     mutable: bool,
+    pointer: bool,
 ) -> ParseResult<type_ref::Path> {
     let mut arguments = Vec::new();
     let mut end = if let Some((Token::Unit, position)) = input.peek() {
@@ -4003,7 +4017,11 @@ fn parse_fn_signature(
     };
     let output = if matches!(input.peek(), Some((Token::ThinArrow, _))) {
         input.next();
-        let output = parse_type(input)?;
+        let output = if pointer {
+            parse_output_type(input)?
+        } else {
+            parse_type(input)?
+        };
         end = output.span().end();
         output
     } else {
