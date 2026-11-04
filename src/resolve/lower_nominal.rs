@@ -8802,6 +8802,7 @@ impl Ty {
             type_ref::Type::Path(_) if ty.is_str() => Self::Str,
             type_ref::Type::Path(path) => match &path.target {
                 type_ref::Target::Builtin => match path.name.as_str() {
+                    crate::item::type_ref::NEVER_TYPE => Self::Never,
                     "bool" => Self::Bool,
                     "char" => Self::Char,
                     "String" => Self::String,
@@ -48513,6 +48514,10 @@ impl<'a> Parser<'a> {
             Token::Unit => {
                 self.next();
                 return Ok(Ty::Unit);
+            }
+            Token::Bang => {
+                self.next();
+                return Ok(Ty::Never);
             }
             Token::LeftParen => {
                 self.next();

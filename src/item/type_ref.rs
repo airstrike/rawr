@@ -17,6 +17,11 @@ pub(crate) fn is_fn_type(name: &str) -> bool {
     name == FN_TYPE || name == FN_MUT_TYPE
 }
 
+/// The builtin path name of the never type `!`, the type of an expression
+/// that never finishes (`panic!()`, `return`, a call of a `-> !`
+/// function): one segment without arguments.
+pub(crate) const NEVER_TYPE: &str = "!";
+
 /// The builtin path names of `impl Iterator<Item = T>` (also written
 /// `impl DoubleEndedIterator` or `impl ExactSizeIterator`) and `impl
 /// IntoIterator<Item = T>`, and of a generic parameter bounded by one with

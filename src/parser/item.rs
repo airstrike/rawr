@@ -3344,6 +3344,24 @@ fn parse_type_split(
         return Ok(type_ref::Type::Unit(token_span(position, "()")));
     }
 
+    // `!`, the never type: the builtin path `!`.
+    if let Some((Token::Bang, position)) = input.peek() {
+        let span = token_span(*position, "!");
+        input.next();
+        return Ok(type_ref::Type::Path(type_ref::Path {
+            segments: Box::new([type_ref::Segment {
+                name: crate::item::Name {
+                    text: type_ref::NEVER_TYPE.into(),
+                    span,
+                },
+                arguments: Box::default(),
+                span,
+            }]),
+            span,
+            global: false,
+        }));
+    }
+
     if let Some((Token::LeftParen, position)) = input.peek() {
         let start = *position;
         input.next();
