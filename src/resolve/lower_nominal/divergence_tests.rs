@@ -485,3 +485,255 @@ fn language_never_type_errors_are_rustcs() {
         );
     }
 }
+
+#[test]
+fn language_let_else_parse_into_a_field_type_runs() {
+    // rustlings from_into: `parse`'s target comes from the struct field the
+    // binding fills (#906).
+    let output = printed(
+        r#"
+#[derive(Debug)]
+struct Person {
+    name: String,
+    age: u8,
+}
+
+impl Default for Person {
+    fn default() -> Self {
+        Self { name: String::from("John"), age: 30 }
+    }
+}
+
+impl From<&str> for Person {
+    fn from(s: &str) -> Self {
+        let mut split = s.split(',');
+        let (Some(name), Some(age), None) = (split.next(), split.next(), split.next()) else {
+            return Self::default();
+        };
+        if name.is_empty() {
+            return Self::default();
+        }
+        let Ok(age) = age.parse() else {
+            return Self::default();
+        };
+        Self { name: name.into(), age }
+    }
+}
+
+fn main() {
+    let p1 = Person::from("Mark,20");
+    println!("{p1:?}");
+    let p2: Person = "Gerald,70".into();
+    println!("{p2:?}");
+    println!("{:?}", Person::from("Mark,twenty"));
+    println!("{:?}", Person::from("Mark,300"));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Person { name: \"Mark\", age: 20 }\nPerson { name: \"Gerald\", age: 70 }\n\
+         Person { name: \"John\", age: 30 }\nPerson { name: \"John\", age: 30 }\n"
+    );
+}
+
+#[test]
+fn language_collect_into_a_result_from_the_return_type_runs() {
+    // rustlings iterators3: the `Result` target is known only from the
+    // function's return type (#906).
+    let output = printed(
+        r#"
+#[derive(Debug, PartialEq, Eq)]
+enum DivisionError {
+    DivideByZero,
+    NotDivisible,
+}
+
+fn divide(a: i64, b: i64) -> Result<i64, DivisionError> {
+    if b == 0 {
+        return Err(DivisionError::DivideByZero);
+    }
+    if a % b != 0 {
+        return Err(DivisionError::NotDivisible);
+    }
+    Ok(a / b)
+}
+
+fn result_with_list() -> Result<Vec<i64>, DivisionError> {
+    let numbers = [27, 297, 38502, 81];
+    let division_results = numbers.into_iter().map(|n| divide(n, 27));
+    division_results.collect()
+}
+
+fn failing_list() -> Result<Vec<i64>, DivisionError> {
+    let numbers = [27, 28, 0];
+    numbers.into_iter().map(|n| divide(n, 27)).collect()
+}
+
+fn list_of_results() -> Vec<Result<i64, DivisionError>> {
+    let numbers = [27, 297, 38502, 81];
+    let division_results = numbers.into_iter().map(|n| divide(n, 27));
+    division_results.collect()
+}
+
+fn main() {
+    println!("{:?}", result_with_list());
+    println!("{:?}", failing_list());
+    println!("{:?}", list_of_results());
+    assert_eq!(result_with_list(), Ok(vec![1, 11, 1426, 3]));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Ok([1, 11, 1426, 3])\nErr(NotDivisible)\n[Ok(1), Ok(11), Ok(1426), Ok(3)]\n"
+    );
+}
+
+#[test]
+fn language_a_mut_self_trait_method_on_a_vec_changes_it() {
+    // rustlings traits2: `mut self` is a local the method may change (#907).
+    let output = printed(
+        r#"
+trait AppendBar {
+    fn append_bar(self) -> Self;
+}
+
+impl AppendBar for Vec<String> {
+    fn append_bar(mut self) -> Self {
+        self.push(String::from("Bar"));
+        self
+    }
+}
+
+fn main() {
+    let mut foo = vec![String::from("Foo")].append_bar();
+    println!("{:?}", foo);
+    assert_eq!(foo.pop().unwrap(), "Bar");
+    assert_eq!(foo.pop().unwrap(), "Foo");
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[\"Foo\", \"Bar\"]\n");
+}
+
+#[test]
+fn language_a_mutating_method_on_a_temporary_vec_runs() {
+    // rustlings clippy3: rustc changes the temporary and drops it (#907).
+    let output = printed(
+        r#"
+fn main() {
+    let my_empty_vec = vec![1, 2, 3, 4, 5].resize(0, 5);
+    println!("This Vec is empty, see? {my_empty_vec:?}");
+    let mut n = vec![3, 1, 2];
+    n.clone().push(4);
+    println!("{n:?}");
+    n.push(5);
+    println!("{n:?}");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "This Vec is empty, see? ()\n[3, 1, 2]\n[3, 1, 2, 5]\n"
+    );
+}
+
+#[test]
+fn language_a_recursive_type_without_indirection_is_e0072() {
+    // rustlings box1 (#911).
+    let report = refused(
+        r#"
+#[derive(PartialEq, Debug)]
+enum List {
+    Cons(i32, List),
+    Nil,
+}
+
+fn create_empty_list() -> List {
+    todo!()
+}
+
+fn main() {
+    println!("{:?}", create_empty_list());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0072]: recursive type `List` has infinite size\n"),
+        "{report}"
+    );
+    for source in [
+        "struct Node { value: i32, next: Node }\nfn main() {}",
+        "struct A { b: B }\nstruct B { a: Option<A> }\nfn main() {}",
+        "struct P(i32, (u8, P));\nfn main() {}",
+    ] {
+        let report = refused(&format!("{source}\nmain();\n"));
+        assert!(
+            report.starts_with("error[E0072]: recursive type"),
+            "{source}: {report}"
+        );
+    }
+    printed(
+        r#"
+enum List {
+    Cons(i32, Box<List>),
+    Nil,
+}
+struct Tree { children: Vec<Tree>, parent: Option<Box<Tree>> }
+fn main() {
+    let _ = List::Cons(1, Box::new(List::Nil));
+    let _ = Tree { children: Vec::new(), parent: None };
+}
+main();
+"#,
+    );
+}
+
+#[test]
+fn language_collecting_unit_items_into_a_vec_of_i32_is_e0277() {
+    // rustlings vecs2: refused even in a function nothing calls (#911).
+    let report = refused(
+        r#"
+fn vec_map(input: &[i32]) -> Vec<i32> {
+    input
+        .iter()
+        .map(|element| {
+            // ???
+        })
+        .collect()
+}
+
+fn main() {}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0277]: a value of type `Vec<i32>` cannot be built from an iterator \
+             over elements of type `()`\n"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn scratch_probe() {
+    let Ok(dir) = std::env::var("RAWR_SCRATCH") else { return };
+    let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+    paths.sort();
+    for path in paths {
+        let source = std::fs::read_to_string(&path).unwrap();
+        let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let mut engine = Engine::new();
+        let sink = lines.clone();
+        engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+        let result = engine.run(&format!("{source}\nmain();\n"));
+        eprintln!("=== {}\n{}{:?}", path.display(), lines.lock().unwrap(), result.err().map(|e| e.to_string()));
+    }
+}

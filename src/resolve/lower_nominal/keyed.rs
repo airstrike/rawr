@@ -329,6 +329,26 @@ impl Parser<'_> {
                 let nested = (**nested).clone();
                 Ok(self.nested_place(&nested))
             }
+            // `self` in a method, owned (`mut self`) or `&mut self`, is the
+            // receiver `this`.
+            None if value.source.as_str() == "this"
+                && self.closures.is_empty()
+                && self
+                    .bindings
+                    .get("this")
+                    .is_some_and(|binding| matches!(binding.kind, BindingKind::Receiver { .. })) =>
+            {
+                self.require_mutable_binding(&"this".into(), value.span)?;
+                Ok(origin::Fragment::plain("this"))
+            }
+            // An owned temporary (`vec![1, 2].resize(0, 5)`) is changed where
+            // it is and dropped, as in Rust.
+            None if !matches!(self.inference.resolve(&value.ty), Ty::Reference { .. }) => {
+                let mut source = origin::Fragment::plain("(");
+                source.push(value.rendered_source());
+                source.push_text(")");
+                Ok(source)
+            }
             None => Err(self
                 .unsupported("changing a collection that is not a local, an element or a field")),
         }

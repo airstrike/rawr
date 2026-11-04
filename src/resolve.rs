@@ -3,6 +3,7 @@
 pub(crate) mod borrowck;
 mod error;
 mod forward;
+mod infinite;
 mod intrinsic;
 pub(crate) mod item;
 pub(crate) mod lower_nominal;
@@ -571,6 +572,9 @@ fn resolve_with_evidence_and_namespace(
         lexical,
     };
     validate_invocation_storage(&program).map_err(LocatedError::into_error)?;
+    infinite::Layouts::of(&program)
+        .reject()
+        .map_err(LocatedError::into_error)?;
     Ok(program)
 }
 

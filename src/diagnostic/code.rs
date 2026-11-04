@@ -121,6 +121,7 @@ codes!(Resolve;
     (RESOLVE_BINARY_OPERATOR, "E0369", "A binary operator whose left operand's type has no impl of its trait, as rustc reports it."),
     (RESOLVE_GENERIC_ARGUMENT_COUNT, "E0107", "A path with more or fewer generic arguments than its type takes, as rustc reports it."),
     (RESOLVE_AMBIGUOUS_IMPL, "E0283", "A trait call whose type more than one impl could give, as rustc reports it."),
+    (RESOLVE_INFINITE_SIZE, "E0072", "A struct or enum that holds itself by value, so has no size, as rustc reports it."),
     (RESOLVE_NOT_YET, "RAWR-NOT-YET", "A std item rawr resolves but doesn't run yet."),
     (RESOLVE_TYPE_ANNOTATIONS, "E0282", "A generic parameter whose type nothing gives, as rustc reports it."),
     (RESOLVE_DUPLICATE_GENERIC, "E0403", "A generic parameter name used twice in one item's generics, as rustc reports it."),
@@ -209,6 +210,7 @@ pub(crate) fn std_path(rustc: &str) -> Code {
         "E0405" => RESOLVE_UNKNOWN_TRAIT,
         "E0369" => RESOLVE_BINARY_OPERATOR,
         "E0283" => RESOLVE_AMBIGUOUS_IMPL,
+        "E0072" => RESOLVE_INFINITE_SIZE,
         "E0107" => RESOLVE_GENERIC_ARGUMENT_COUNT,
         _ => RESOLVE_UNSTABLE,
     }
