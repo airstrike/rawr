@@ -15,6 +15,7 @@ pub mod cargo;
 pub mod cells;
 pub mod diagnostic;
 pub mod events;
+pub mod harness;
 pub mod init;
 pub mod layer;
 pub mod mcp;
@@ -53,6 +54,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             path,
             program,
         }) => self::program(check, path.as_ref(), &arguments, &program),
+        Ok(Request::Test { path, options }) => test(path.as_ref(), &arguments, &options),
         Ok(Request::Doctor { path }) => doctor(path.as_ref(), &arguments),
         Ok(Request::New(New::Help)) => {
             println!("{}", new_help(&layer::installed()));
@@ -75,14 +77,14 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     }
 }
 
-/// `rawr run -p <name>` and `rawr check -p <name>` (or `--package`), as
-/// under `cargo run -p`: the arguments with the directory of the
+/// `rawr run -p <name>`, `rawr check -p <name>` and `rawr test -p <name>`
+/// (or `--package`), as under `cargo run -p`: the arguments with the directory of the
 /// workspace's package `name` in place of the option, so every binary that
 /// is handed the program reads a path.
 fn package_arguments(mut arguments: Vec<OsString>) -> Result<Vec<OsString>, String> {
     if !arguments
         .first()
-        .is_some_and(|command| command == "run" || command == "check")
+        .is_some_and(|command| command == "run" || command == "check" || command == "test")
     {
         return Ok(arguments);
     }
@@ -118,6 +120,12 @@ enum Request {
         path: Option<PathBuf>,
         /// What follows `--`, for the program.
         program: Vec<OsString>,
+    },
+    /// `rawr test [path] [filter] [-- options]`: run the program's tests,
+    /// with libtest's filter and options.
+    Test {
+        path: Option<PathBuf>,
+        options: harness::Options,
     },
     Doctor {
         path: Option<PathBuf>,
@@ -169,6 +177,29 @@ fn parse_new(arguments: &[OsString]) -> Result<New, String> {
     }
     let path = path.ok_or("`rawr new` needs the path of the crate to create")?;
     Ok(New::Create { path, template })
+}
+
+/// `rawr test`'s arguments: the program's path, then a test name filter,
+/// and libtest's own after `--`, as `cargo test` takes them.
+fn parse_test(arguments: &[OsString]) -> Result<Request, String> {
+    let (ours, libtest) = split_program_arguments(arguments);
+    let mut path = None;
+    let mut filter = None;
+    for argument in ours {
+        match argument.to_string_lossy().as_ref() {
+            "-h" | "--help" => return Ok(Request::Help),
+            option if option.starts_with('-') => {
+                return Err(format!("unknown argument `{option}`"));
+            }
+            _ if path.is_none() && filter.is_none() && is_path(argument) => {
+                path = Some(PathBuf::from(argument));
+            }
+            other if filter.is_some() => return Err(format!("unexpected argument `{other}`")),
+            _ => filter = Some(argument.clone()),
+        }
+    }
+    let options = harness::Options::parse(filter.iter().chain(&libtest))?;
+    Ok(Request::Test { path, options })
 }
 
 fn parse_init(arguments: &[OsString]) -> Result<Request, String> {
@@ -265,6 +296,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
             path,
             program: Vec::new(),
         }),
+        Some("test") => parse_test(&arguments[1..]),
         Some("doctor") => path(&arguments[1..]).map(|path| Request::Doctor { path }),
         Some("new") => parse_new(&arguments[1..]).map(Request::New),
         Some("mcp") => path(&arguments[1..]).map(|path| Request::Mcp { path }),
@@ -302,6 +334,8 @@ fn help(installed: &[layer::Installed]) -> String {
          program to the extension that serves it.\n\n\
          Usage:\n  rawr [run] [path] [-- args]   Run a program, with its arguments after `--`\n  \
          rawr check [path]             Check a program without running it\n  \
+         rawr test [path] [filter] [-- options]\n                                \
+         Run the program's `#[test]` functions, as `cargo test`\n  \
          rawr run -p <package>         Run a package of this workspace, as `cargo run -p`\n  \
          rawr new <path>               Create a crate with a marked `src/main.rs`\n  \
          rawr doctor [path]            Report on the environment and the project\n  \
@@ -358,14 +392,41 @@ fn program(
     arguments: &[OsString],
     program: &[OsString],
 ) -> ExitCode {
-    let loaded = match base::load(path) {
-        Ok(loaded) => loaded,
-        Err(report) => return failure(&report),
-    };
+    match base::load(path, base::Build::Program).and_then(|loaded| served(loaded, arguments)) {
+        Ok(Served::Base(loaded)) => on_base(*loaded, check, program),
+        Ok(Served::Handed(code)) => code,
+        Err(report) => failure(&report),
+    }
+}
+
+/// `rawr test`: load the program for its tests once, then run them here
+/// or hand it to the binary that serves it.
+fn test(path: Option<&PathBuf>, arguments: &[OsString], options: &harness::Options) -> ExitCode {
+    match base::load(path, base::Build::Test).and_then(|loaded| served(loaded, arguments)) {
+        Ok(Served::Base(loaded)) => harness::run(*loaded, options),
+        Ok(Served::Handed(code)) => code,
+        Err(report) => failure(&report),
+    }
+}
+
+/// Who serves a loaded program.
+enum Served {
+    /// The base language, here.
+    Base(Box<base::Loaded>),
+    /// The installed binary it was handed to, which ended with this status.
+    Handed(ExitCode),
+}
+
+/// Hand the loaded program, with the same `arguments`, to the installed
+/// binary that serves it, or keep it here on the base language.
+fn served(
+    loaded: base::Loaded,
+    arguments: &[OsString],
+) -> Result<Served, rawr::diagnostic::Report> {
     let installed = layer::installed();
     let facts = loaded.sheet.facts();
     match layer::claimed(&installed, facts) {
-        Err(report) => return failure(&report),
+        Err(report) => return Err(report),
         Ok(Some(binary)) => {
             cells::keep("rawr", &loaded.cells, &loaded.graph);
             if cells::verbose() {
@@ -374,7 +435,7 @@ fn program(
                     binary.path.display()
                 );
             }
-            return hand_off(&binary.path, arguments);
+            return Ok(Served::Handed(hand_off(&binary.path, arguments)));
         }
         Ok(None) => {}
     }
@@ -394,9 +455,9 @@ fn program(
             layer::install_lines(&known)
         ))
         .finish();
-        return failure(&report);
+        return Err(report);
     }
-    on_base(loaded, check, program)
+    Ok(Served::Base(Box::new(loaded)))
 }
 
 /// Run or check a loaded program on the base language: its top level,

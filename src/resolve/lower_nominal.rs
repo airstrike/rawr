@@ -117,7 +117,7 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     let compiler_host = host
         .clone_for_import(allocation)
         .map_err(super::ImportedFailure::Surface)?;
-    let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+    let models = Models::new(program, runtime, compiler_host, engine);
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
     let mut allocation_failure = None;
@@ -387,7 +387,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+        let models = Models::new(program, runtime, compiler_host, engine);
         let mut revealed = Vec::new();
         let mut waiting = Vec::new();
         let mut first_failure = None;
@@ -1012,7 +1012,7 @@ fn body_templates<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+        let models = Models::new(program, runtime, compiler_host, engine);
         let mut promoted = Vec::new();
         for (key, candidate) in &candidates {
             let mut uses = Vec::new();
@@ -1128,7 +1128,7 @@ fn instance_round<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+        let models = Models::new(program, runtime, compiler_host, engine);
         let mut found = Vec::<(crate::item::Key, Vec<Ty>)>::new();
         let mut impl_uses = Vec::new();
         for shell in program.items.iter() {
@@ -2708,7 +2708,7 @@ pub(super) fn lower(
         program,
         runtime_model.clone(),
         engine.host_registry.clone(),
-        engine.access().clone(),
+        engine,
     );
     lower_with_context(
         engine,
@@ -2735,12 +2735,7 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
         .host_registry
         .clone_for_import(allocation)
         .map_err(super::ImportedFailure::Surface)?;
-    let mut models = Models::new(
-        program,
-        runtime_model.clone(),
-        compiler_host,
-        engine.access().clone(),
-    );
+    let mut models = Models::new(program, runtime_model.clone(), compiler_host, engine);
     models._imported_owner = allocation.support_owner();
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
@@ -4389,6 +4384,9 @@ struct Tables {
     /// What the program may reach while it compiles: the files
     /// `include_str!` reads and the variables `env!` reads (D683.4).
     access: crate::Access,
+    /// Whether the program builds as `rustc --test` builds it: `cfg(test)`
+    /// holds.
+    test: bool,
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
     #[cfg(feature = "rust-import")]
@@ -4536,7 +4534,7 @@ impl Models {
         program: &Program,
         runtime: crate::program::model::Model,
         host: crate::host::Registry,
-        access: crate::Access,
+        engine: &Engine,
     ) -> Self {
         let definitions: BTreeMap<_, _> = program
             .types
@@ -5012,7 +5010,8 @@ impl Models {
         let tables = Tables {
             runtime,
             host,
-            access,
+            access: engine.access().clone(),
+            test: engine.test(),
             imports,
             #[cfg(feature = "rust-import")]
             lexical: program.lexical.clone(),
@@ -24525,7 +24524,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The predicate of `cfg(..)` or `cfg!(..)` for the target Rawr runs
-    /// on. No feature is on.
+    /// on, `test` holding as the engine builds. No feature is on.
     fn cfg_predicate(&mut self) -> Result<bool, Error> {
         let (name, at) = match self.next() {
             (Token::Identifier(name), position) => (name.to_string(), position),
@@ -24570,6 +24569,7 @@ impl<'a> Parser<'a> {
                 };
                 Ok(cfg_value(&name, &value))
             }
+            "test" => Ok(self.models.test),
             _ => Ok(cfg_flag(&name)),
         }
     }
@@ -52146,6 +52146,7 @@ fn opaque_impl_use(ty: &str, opaque: &str, span: Span) -> Error {
     }
 }
 
+#[cfg(feature = "rust-import")]
 fn mentions_script(ty: &Ty) -> bool {
     match ty {
         Ty::Script(..) => true,
@@ -57255,18 +57256,8 @@ pub fn run() -> i64 {
         let new_generation = crate::program::GenerationId::issue();
         let old_runtime = crate::program::model::Model::new(old_generation, &old);
         let new_runtime = crate::program::model::Model::new(new_generation, &new);
-        let old_models = Models::new(
-            &old,
-            old_runtime,
-            host::Registry::new(),
-            crate::Access::none(),
-        );
-        let new_models = Models::new(
-            &new,
-            new_runtime,
-            host::Registry::new(),
-            crate::Access::none(),
-        );
+        let old_models = Models::new(&old, old_runtime, host::Registry::new(), &Engine::new_raw());
+        let new_models = Models::new(&new, new_runtime, host::Registry::new(), &Engine::new_raw());
         let old_outer = old_models.get("Outer").unwrap();
         let new_outer = new_models.get("Outer").unwrap();
         let retained = default_value(old_outer, &old_models, &mut Vec::new()).unwrap();

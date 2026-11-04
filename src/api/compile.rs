@@ -71,6 +71,35 @@ impl Engine {
         Ok((ast, main, positions))
     }
 
+    /// Compile one loaded package graph for its tests, as `rustc --test`
+    /// builds a crate: its [`AST`] (the top level), its `#[test]`
+    /// functions sorted by name, as libtest runs them, and the
+    /// [`program::Positions`] that map a runtime error's position back to
+    /// its source. The engine builds with `cfg(test)` holding when it was
+    /// [set to](Engine::set_test) and loaded the graph so.
+    #[doc(hidden)]
+    pub fn compile_package_tests(
+        &self,
+        graph: crate::package::Graph,
+    ) -> Result<(AST, Box<[crate::package::Test]>, program::Positions), crate::package::Error> {
+        let declared = crate::package::test::Declared::of(&graph);
+        let (executable, ..) =
+            crate::package::compile::executable_from_graph(self, graph, None, false)?;
+        let mut tests = declared
+            .into_iter()
+            .filter_map(|test| {
+                let item = executable.items().find(|item| {
+                    item.key().package() == executable.package() && test.is(item.key())
+                })?;
+                let function = crate::resolve::lower_nominal::private_function_name(item.key());
+                Some(test.compiled(function))
+            })
+            .collect::<Vec<_>>();
+        tests.sort_by(|left, right| left.name().cmp(right.name()));
+        let (ast, positions) = executable.into_ast_with_positions();
+        Ok((ast, tests.into_boxed_slice(), positions))
+    }
+
     /// Compile one in-memory source this Engine already parsed (with
     /// [`Engine::parse_unit`]), naming its diagnostics by `source`: a host
     /// that judged the program from that parse (its
