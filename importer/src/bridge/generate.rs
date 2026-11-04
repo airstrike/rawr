@@ -10045,17 +10045,15 @@ fn render_adapter_body(
                             parameter.is_argument_impl()
                                 && output_names(signature.output(), parameter.index())
                         });
-                        let annotation = if inferred {
-                            concrete_type(&substituted(
-                                signature.output(),
-                                signature,
-                                substitutions,
-                            )?)
+                        // So is a concrete output, as that of `into` of
+                        // core's `impl<T, U: From<T>> Into<U> for T`
+                        // applied to a crate type through one of the
+                        // crate's `From` impls, which rustc can't pick by
+                        // the receiver alone.
+                        let annotation = concrete_type(&returned)
+                            .filter(|ty| inferred || !names_inferred(ty))
                             .map(|ty| format!(": {ty}"))
-                            .unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
+                            .unwrap_or_default();
                         // The arena is lent while the method runs, as for a
                         // function (D551.6). A proof-backed application
                         // calls its isolated helper (`render_applications`).
