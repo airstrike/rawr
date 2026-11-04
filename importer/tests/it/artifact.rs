@@ -4,7 +4,6 @@ use std::fs;
 
 #[test]
 fn supervisor_artifact_proof_detects_post_link_tampering() {
-    let _turn = rawr_import::store::test_turn();
     let project = rawr_import::store::TestProject::new("rawr-p3-artifact");
     let root = project.path();
     let generated = p3::generated_at(root);
@@ -12,6 +11,7 @@ fn supervisor_artifact_proof_detects_post_link_tampering() {
     let missing = p3::generated_at(root);
     let wrong_record = p3::generated_at(root);
     let cache = rawr_import::cache::Writer::new(root).expect("the fixed cache writer binds");
+    let lane = crate::shared::lane();
     let cargo = rawr_import::cargo::Owner::acquire().expect("the sole Cargo owner is available");
     let built = generated
         .build(&cargo, &cache)
@@ -67,4 +67,5 @@ fn supervisor_artifact_proof_detects_post_link_tampering() {
     assert!(built.artifact().revalidate().is_err());
     drop(built);
     drop(cargo);
+    drop(lane);
 }

@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use rawr_import::cargo::config::{Dependency, Environment};
 use rawr_import::classify::representability::Representability;
@@ -13,9 +14,15 @@ use rawr_import::surface::{Origin, Snapshot};
 const SNAPSHOT_ENTRY: &str = "application.rs";
 const SNAPSHOT_SOURCE: &[u8] = b"exact p3 surface";
 
-pub fn generated() -> rawr_import::runner::Manifest<rawr_import::runner::Generated, ()> {
-    let project = rawr_import::store::TestProject::new("rawr-p3-generate");
-    generated_at(project.path())
+/// The symbolic fixture's generated runner, generated once per process for
+/// tests that only read it.
+pub fn generated() -> &'static rawr_import::runner::Manifest<rawr_import::runner::Generated, ()> {
+    static MANIFEST: OnceLock<rawr_import::runner::Manifest<rawr_import::runner::Generated, ()>> =
+        OnceLock::new();
+    MANIFEST.get_or_init(|| {
+        let project = rawr_import::store::TestProject::new("rawr-p3-generate");
+        generated_at(project.path())
+    })
 }
 
 pub fn generated_at(
@@ -99,9 +106,16 @@ pub fn dag_request_at(
 /// The shared node context for `root`, in the isolated test store.
 pub fn dag_chain(root: &Path) -> rawr_import::node::Chain {
     rawr_import::store::isolate_for_tests();
+    // The runner builds in the suite's build directory, as a project whose
+    // Cargo config names a shared `build-dir` builds in it.
+    let build = crate::shared::build_directory()
+        .to_str()
+        .expect("the shared build directory is Unicode");
     let context = rawr_import::context::Context::capture(
         root,
-        Environment::capture().expect("the P3 DAG environment captures"),
+        Environment::capture()
+            .and_then(|environment| environment.setting("CARGO_BUILD_BUILD_DIR", build))
+            .expect("the P3 DAG environment captures"),
         "aarch64-apple-darwin",
         &rawr_import::cargo::Limits::standard(),
     )
@@ -125,10 +139,12 @@ where
 {
     let limits = rawr_import::cargo::Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
+    let lane = crate::shared::lane();
     let graph = request(root, &limits)
         .resolve(&native, &limits)
         .and_then(|resolution| extract::from_resolution(resolution, &native, &limits))
         .expect("real facade evidence canonicalizes");
+    drop(lane);
     let contract = graph
         .classify(&Policy::standard(), &limits)
         .expect("real facade evidence classifies");
@@ -319,7 +335,7 @@ fn has_unresolved_structural_parameters(representability: &Representability) -> 
 }
 
 fn request(root: &Path, limits: &rawr_import::cargo::Limits) -> rawr_import::cargo::Request {
-    rawr_import::store::isolate_for_tests();
+    crate::shared::build_directory();
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the P3 environment is sealable");

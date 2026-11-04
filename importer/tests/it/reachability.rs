@@ -41,7 +41,7 @@ impl Project {
 
 #[test]
 fn reexports_keep_alias_evidence_while_sysroot_support_stays_leaf_only() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");

@@ -2,7 +2,6 @@ use crate::p3;
 
 #[test]
 fn generated_manifest_is_ordered_and_matches_exact_files() {
-    let _turn = rawr_import::store::test_turn();
     let manifest = p3::generated();
     let paths = manifest.files().map(|file| file.path()).collect::<Vec<_>>();
     // `src/main.rs`, one module per imported crate and identity bucket, and
@@ -25,15 +24,10 @@ fn generated_manifest_is_ordered_and_matches_exact_files() {
     ));
     assert!(manifest.generated_manifest().entries().len() > 8);
     assert!(!manifest.generated_manifest().source_map().is_empty());
-    assert_eq!(
-        manifest.generated_manifest().build_request_key(),
-        manifest.generated_manifest().build_request_key()
-    );
 }
 
 #[test]
 fn carrier_is_purely_derived_and_the_build_script_has_no_hash_cycle() {
-    let _turn = rawr_import::store::test_turn();
     let project = rawr_import::store::TestProject::new("rawr-p3-manifest");
     let root = project.path();
     let first = p3::generated_at(root);

@@ -1,16 +1,12 @@
 use crate::p2;
 
-use rawr_import::classify::Policy;
 use rawr_import::surface::{Origin, Snapshot};
 
 #[test]
 fn demand_is_snapshot_bound_but_surface_is_position_and_multiplicity_neutral() {
-    let _turn = rawr_import::store::test_turn();
     let limits = rawr_import::cargo::Limits::standard();
-    let contract = p2::graph()
-        .classify(&Policy::standard(), &limits)
-        .expect("the real extracted graph classifies");
-    let identity = p2::outcome(&contract, "facade_a", &["integer_only"])
+    let contract = p2::contract();
+    let identity = p2::outcome(contract, "facade_a", &["integer_only"])
         .identity()
         .clone();
     let first_snapshot = snapshot("/app/Cargo.toml", b"integer_only()", &limits);
@@ -22,7 +18,7 @@ fn demand_is_snapshot_bound_but_surface_is_position_and_multiplicity_neutral() {
     let moved_origin =
         Origin::checked("/app/main.rs", 1, 13).expect("the moved use position is bounded");
     let first = demand(
-        &contract,
+        contract,
         first_snapshot,
         identity.clone(),
         first_origin.clone(),
@@ -30,7 +26,7 @@ fn demand_is_snapshot_bound_but_surface_is_position_and_multiplicity_neutral() {
         &limits,
     );
     let duplicate = demand(
-        &contract,
+        contract,
         first_snapshot,
         identity.clone(),
         first_origin,
@@ -38,7 +34,7 @@ fn demand_is_snapshot_bound_but_surface_is_position_and_multiplicity_neutral() {
         &limits,
     );
     let moved = demand(
-        &contract,
+        contract,
         first_snapshot,
         identity.clone(),
         moved_origin.clone(),
@@ -46,7 +42,7 @@ fn demand_is_snapshot_bound_but_surface_is_position_and_multiplicity_neutral() {
         &limits,
     );
     let changed_body = demand(
-        &contract,
+        contract,
         second_snapshot,
         identity,
         moved_origin,
@@ -66,7 +62,6 @@ fn demand_is_snapshot_bound_but_surface_is_position_and_multiplicity_neutral() {
 
 #[test]
 fn snapshot_identity_includes_the_exact_entry_target() {
-    let _turn = rawr_import::store::test_turn();
     let limits = rawr_import::cargo::Limits::standard();
     assert_ne!(
         snapshot("/app/first.rs", b"same", &limits),

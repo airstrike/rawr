@@ -4,13 +4,13 @@ use std::fs;
 
 #[test]
 fn sealed_warm_entry_is_reused_pinned_and_explicitly_deletable() {
-    let _turn = rawr_import::store::test_turn();
     let project = rawr_import::store::TestProject::new("rawr-p3-cache");
     let root = project.path();
     let first = p3::generated_at(root);
     let warm = p3::generated_at(root);
     let key = first.generated_manifest().build_request_key();
     let cache = rawr_import::cache::Writer::new(root).expect("the fixed cache writer binds");
+    let lane = crate::shared::lane();
     let cargo = rawr_import::cargo::Owner::acquire().expect("the sole Cargo owner is available");
     let cold = first.build(&cargo, &cache).expect("the cold entry builds");
     let executable = fs::read_dir(cache.root())
@@ -52,4 +52,5 @@ fn sealed_warm_entry_is_reused_pinned_and_explicitly_deletable() {
         .expect("the empty cache is inspectable")
         .is_empty());
     drop(cargo);
+    drop(lane);
 }

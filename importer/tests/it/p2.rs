@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use rawr_import::cargo::config::{Dependency, Environment};
 use rawr_import::cargo::{Limits, Request};
@@ -19,10 +20,20 @@ impl Drop for Project {
     }
 }
 
-pub fn graph() -> rawr_import::api::Graph<rawr_import::api::Extracted> {
-    graphs(1)
-        .pop()
-        .expect("one requested real P2 graph is returned")
+/// The symbolic fixture's contract, extracted and classified once per
+/// process; its raw graph is [`rawr_import::Contract::raw_graph`].
+pub fn contract() -> &'static rawr_import::Contract<rawr_import::Classified> {
+    static CONTRACT: OnceLock<rawr_import::Contract<rawr_import::Classified>> = OnceLock::new();
+    CONTRACT.get_or_init(|| {
+        graphs(1)
+            .pop()
+            .expect("one requested real P2 graph is returned")
+            .classify(
+                &rawr_import::classify::Policy::standard(),
+                &Limits::standard(),
+            )
+            .expect("the real P2 graph classifies")
+    })
 }
 
 pub fn graphs(count: usize) -> Vec<rawr_import::api::Graph<rawr_import::api::Extracted>> {
@@ -37,6 +48,7 @@ pub fn graphs(count: usize) -> Vec<rawr_import::api::Graph<rawr_import::api::Ext
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     (0..count)
         .map(|_| {
+            let _lane = crate::shared::lane();
             request(&project.0, &limits)
                 .resolve(&native, &limits)
                 .and_then(|resolution| {

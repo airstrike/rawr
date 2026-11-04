@@ -118,7 +118,7 @@ pub fn isolate_for_tests() -> PathBuf {
 ///
 /// The lane admits one owner per process and refuses a second outright
 /// ("process busy") rather than waiting, so tests sharing a binary hold a turn
-/// for their whole body and wait for each other instead.
+/// around each call that takes the lane and wait for each other instead.
 #[doc(hidden)]
 pub fn test_turn() -> std::sync::MutexGuard<'static, ()> {
     static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());

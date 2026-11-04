@@ -41,7 +41,7 @@ impl Project {
 
 #[test]
 fn pinned_normal_build_extracts_once_per_selected_unit_and_repeats_byte_identically() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new();
     assert_fixture_hashes();
     let limits = Limits::standard();
@@ -111,7 +111,7 @@ fn assert_rejected_reason(reason: &ledger::Reason) {
 
 #[test]
 fn selected_rmeta_mutation_rejects_publication() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
