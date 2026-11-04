@@ -47,10 +47,6 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
         parse(line).is_some_and(|(tick, _)| tick >= 3)
     });
     assert_eq!(parse(&first), Some((3, 3)));
-    // Beside the suite's builds, the restarted program ends with a failing
-    // status once it is stopped; alone it ends cleanly. Until that race is
-    // found, the edits run alone.
-    crate::support::alone();
 
     // A body edit: the running native loop keeps its count, and its next
     // calls run the new code.
