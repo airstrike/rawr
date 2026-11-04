@@ -1024,7 +1024,7 @@ fn opaque_widget_outputs_take_no_lifetime_and_map_as_cargo_checks_them() {
 /// `cargo run`'s.
 #[test]
 fn an_opaque_type_inside_a_program_functions_output_is_the_bodys_type() {
-    let (rawr, cargo) = both_printed("crossing-wrapped", "wrapped.rs", "");
+    let (rawr, cargo) = both_printed("wrapped.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.ends_with("last view pad 0 pad 0 [Increment] 2@50 pad 3 [Decrement]"),
