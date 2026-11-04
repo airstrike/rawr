@@ -654,8 +654,11 @@ export function drift(plan, todo, issues, projectItems) {
         const item = byIssue(plan, n);
         if (!item) say(`chart: ${g.id}/${r.id} lists #${n}, which is no item's issue`);
         else if (!item.gantt) say(`chart: ${g.id}/${r.id} lists #${n}, but ${item.t} names no row`);
-        else if (r.state === "done" && item.state === "open") warnings.push(`chart: ${g.id}/${r.id} is done, but ${item.t} (#${n}) is open`);
+        else if (r.state === "done" && item.state === "open") say(`chart: ${g.id}/${r.id} is done, but ${item.t} (#${n}) is open: close it or move it to an open row`);
       }
+      const listed = r.issues.map((n) => byIssue(plan, n)).filter(Boolean);
+      if (r.state !== "done" && listed.length > 0 && listed.every((item) => item.state !== "open"))
+        say(`chart: ${g.id}/${r.id} is ${r.state}, but all its issues are closed: mark it done`);
     }
   }
   if (plan.gantt.version !== cargoVersion()) say(`chart: version ${plan.gantt.version}, but the crates are at ${cargoVersion()}`);
