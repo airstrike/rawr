@@ -330,7 +330,7 @@ fn a_snippet_past_its_memory_is_stopped_and_the_server_goes_on() {
 
 /// An iced program that never settles, run with a far ceiling and no
 /// deadline, picks up the deadline the bot sets as it runs: its shell ends
-/// the GIF before it, sooner than the shell's own 100 frames (5 s) would,
+/// the GIF before it, sooner than the shell's own 100 frames would,
 /// and the run is not killed.
 #[test]
 #[ignore = "needs the universe runner"]
@@ -364,6 +364,73 @@ pub fn main() -> iced::Result {{
     let image = output.frame.expect("the program drew");
     assert_eq!(rawr_play::plain::image_kind(&image), Some("gif"));
     assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}
+
+/// A program each of whose frames takes longer to draw than the shell's quiet second and
+/// than the 5 s a fast machine needs for 100 frames, as a frame does on
+/// ?play's fraction of a CPU, run as the bot runs one with nothing queued:
+/// it still answers with a GIF of every frame it changed.
+#[test]
+#[ignore = "needs the universe runner"]
+fn an_iced_program_slow_to_draw_answers_with_every_frame_it_changed() {
+    let source = r#"use iced::widget::{column, text, Widget};
+use iced::{window, Center, Subscription};
+use std::time::Duration;
+
+#[derive(Default)]
+struct Slow {
+    t: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Msg {
+    Tick,
+}
+
+impl Slow {
+    fn update(&mut self, _: Msg) {
+        self.t += 1;
+    }
+
+    fn view(&self) -> impl Widget<Msg> {
+        std::thread::sleep(Duration::from_millis(1800));
+        column![text(self.t).size(40)].padding(20).align_x(Center)
+    }
+
+    fn subscription(&self) -> Subscription<Msg> {
+        if self.t < 2 {
+            window::frames().map(|_| Msg::Tick)
+        } else {
+            Subscription::none()
+        }
+    }
+}
+
+fn main() -> iced::Result {
+    iced::application(Slow::default, Slow::update, Slow::view)
+        .subscription(Slow::subscription)
+        .run()
+}
+"#;
+    let server = server();
+    let file = rawr::play::deadline::File::new().unwrap();
+    let limits = rawr_play::Limits {
+        deadline: Some(file.path().to_owned()),
+        ..limits(600_000)
+    };
+    let output = server.run(source, &limits).unwrap();
+    assert_eq!((output.status, output.limit), (0, false), "{output:?}");
+    let image = output.frame.expect("the program drew");
+    assert_eq!(rawr_play::plain::image_kind(&image), Some("gif"));
+    let mut decoder = gif::DecodeOptions::new()
+        .read_info(image.as_slice())
+        .unwrap();
+    let mut frames = 0;
+    while decoder.read_next_frame().unwrap().is_some() {
+        frames += 1;
+    }
+    // 0, 1 and 2, a change a frame.
+    assert_eq!(frames, 3);
 }
 
 /// A snippet's state, message and enum, named otherwise than the

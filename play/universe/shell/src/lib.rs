@@ -58,8 +58,8 @@ pub const DEADLINE_FILE: &str = "PLAY_DEADLINE_FILE";
 /// ten, so 50 ms is a delay every viewer plays at its own speed. It also
 /// leaves the headless renderer time to draw each frame.
 pub const INTERVAL: Duration = Duration::from_millis(50);
-/// The most a GIF shows: 100 frames, five seconds at [`INTERVAL`]. A
-/// snippet's time budget usually ends it sooner.
+/// The most a GIF shows: 100 frames, five seconds at [`INTERVAL`] on a
+/// machine that draws each within it.
 pub const FRAMES: usize = 100;
 /// How long a program with subscriptions and nothing else pending may stay
 /// unchanged before its frame counts as settled.
@@ -115,17 +115,25 @@ where
         shell.updated = false;
         let drawn = Instant::now();
         let (frame, redraw) = shell.redraw(&program);
-        if film
+        let pushed = film
             .push(frame, drawn)
-            .map_err(Error::WindowCreationFailed)?
-        {
-            shell.changed = drawn;
-        }
+            .map_err(Error::WindowCreationFailed)?;
         let now = Instant::now();
+        // Quiet counts from the end of a changed frame: drawing it is the
+        // shell's time, not the program's, however slow the machine.
+        if pushed {
+            shell.changed = now;
+        }
         let step = now - drawn;
-        if film.full() || shell.exited || now + step * 2 + INTERVAL + FINISH >= deadline.at(now) {
+        let late = deadline
+            .at(now)
+            .is_some_and(|at| now + step * 2 + INTERVAL + FINISH >= at);
+        if film.full() || shell.exited || late {
             break;
         }
+        // What arrived while the frame was drawn, such as the message a
+        // subscription made of its redraw.
+        shell.wait(&program, now);
         // Whether the program may still change: what it did since this
         // frame began, and what it has pending. A program with
         // subscriptions may change when one fires, until it has been
@@ -144,11 +152,13 @@ where
     std::fs::write(path, bytes).map_err(Error::WindowCreationFailed)
 }
 
-/// The run's deadline: the one [`DEADLINE`] gives, or [`FRAMES`] intervals
-/// from the start when it is sooner or none is set, and the one the file
-/// [`DEADLINE_FILE`] names once that file gives one.
+/// The run's deadline: the one [`DEADLINE`] gives, or the sooner one the
+/// file [`DEADLINE_FILE`] names once that file gives one. A run with
+/// neither has none: [`FRAMES`] and [`QUIET`] end it, counted in frames
+/// and in the program's own time, so a slow machine draws the frames a
+/// fast one does, later.
 struct Deadline {
-    fixed: Instant,
+    fixed: Option<Instant>,
     file: Option<std::path::PathBuf>,
     set: Option<Instant>,
 }
@@ -156,20 +166,18 @@ struct Deadline {
 impl Deadline {
     fn from_env() -> Self {
         let now = Instant::now();
-        let fallback = now + INTERVAL * FRAMES as u32;
-        let fixed = std::env::var(DEADLINE)
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .map_or(fallback, |millis| instant(millis, now).min(fallback));
         Self {
-            fixed,
+            fixed: std::env::var(DEADLINE)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|millis| instant(millis, now)),
             file: std::env::var_os(DEADLINE_FILE).map(std::path::PathBuf::from),
             set: None,
         }
     }
 
-    /// The deadline at `now`, reading the file until it gives one.
-    fn at(&mut self, now: Instant) -> Instant {
+    /// The deadline at `now`, reading the file while it gives none.
+    fn at(&mut self, now: Instant) -> Option<Instant> {
         if self.set.is_none()
             && let Some(file) = &self.file
         {
@@ -178,7 +186,10 @@ impl Deadline {
                 .and_then(|text| text.trim().parse::<u64>().ok())
                 .map(|millis| instant(millis, now));
         }
-        self.set.map_or(self.fixed, |set| set.min(self.fixed))
+        match (self.set, self.fixed) {
+            (Some(set), Some(fixed)) => Some(set.min(fixed)),
+            (set, fixed) => set.or(fixed),
+        }
     }
 }
 
