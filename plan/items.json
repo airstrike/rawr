@@ -895,6 +895,8 @@
     {"t":"T892","issue":892,"title":"T892: rawr-import-cli's crossing suite shares prepared fixtures and runs in parallel","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"ship","row":"fast-suites"},"decisions":[],"commit":"c8e321118","release":null},
     {"t":"T893","issue":893,"title":"T893: rawr's state from one program breaks the next program in the same project","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T894","issue":894,"title":"T894: rawr's workspace observation reads ancestor manifests outside the project's own workspace","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T895","issue":895,"title":"T895: islands' restarted program ends with a failing status in the parallel suite","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T895","issue":895,"title":"T895: islands' restarted program ends with a failing status in the parallel suite","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T896","issue":896,"title":"T896: The never type `!` in signatures and as a value","state":"closed","category":"Divergences from rustc","labels":["rustc divergence","playground"],"gantt":{"group":"parity","row":"rustc-errors"},"decisions":[],"commit":"f467417c7","release":"0.3.128"},
+    {"t":"T897","issue":897,"title":"T897: Type mismatches report rustc's codes (E0308, E0317, E0069)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
