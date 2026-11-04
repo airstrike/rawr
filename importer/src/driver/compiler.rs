@@ -93,10 +93,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Schema 41 normalizes a projection a function or impl names in its own
 // environment, as `Self::Scalar` in an impl that sets it. Schema 43 gives a
 // blanket implementation's application its associated types, normalized in
-// the context it applies through.
+// the context it applies through. Schema 48 gives the `impl Trait` a trait's
+// method gives from its default body as the trait's opaque type.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 46;
+const PROTOCOL_SCHEMA: u32 = 48;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3943,6 +3944,23 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     if let Some(normalized) = self.normalized_in(ty, owner) =>
                 {
                     return self.type_of(normalized, owner, depth.saturating_add(1));
+                }
+                // The `impl Trait` a trait's method gives from the trait's
+                // own default body, as iced's `Widget::explain`: the type
+                // rustc gives the method's synthetic associated type, the
+                // trait's opaque type at the projection's arguments.
+                ty::AliasTyKind::Projection { def_id }
+                    if matches!(
+                        self.tcx.opt_rpitit_info(def_id),
+                        Some(ty::ImplTraitInTraitData::Trait { .. })
+                    ) && self.tcx.defaultness(def_id).has_value() =>
+                {
+                    let opaque = self
+                        .tcx
+                        .type_of(def_id)
+                        .instantiate(self.tcx, alias.args)
+                        .skip_norm_wip();
+                    return self.type_of(opaque, owner, depth.saturating_add(1));
                 }
                 ty::AliasTyKind::Projection { def_id } => {
                     let associated: DefId = def_id;

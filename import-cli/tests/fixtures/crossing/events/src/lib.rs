@@ -619,6 +619,63 @@ pub mod widgets {
         {
             parts::widget::Map::new(self, f)
         }
+
+        /// The widget, marked to show its layout in `color`, as iced's
+        /// `Widget::explain`: an opaque type the trait's own default body
+        /// gives, which no implementation overrides.
+        fn explain(self, color: impl Into<u32>) -> impl Widget<Message, Theme, Renderer>
+        where
+            Self: Sized,
+        {
+            explained::Explain {
+                widget: self,
+                color: color.into(),
+            }
+        }
+    }
+
+    /// A line `width` wide that sends a message when pressed, a widget at
+    /// the crate's theme and renderer.
+    pub struct Rule<Message> {
+        width: u16,
+        on_press: Message,
+    }
+
+    /// A line `width` wide that sends `on_press` when pressed.
+    pub fn rule<Message>(width: u16, on_press: Message) -> Rule<Message> {
+        Rule { width, on_press }
+    }
+
+    impl<Message: Clone> Widget<Message> for Rule<Message> {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("rule {}", self.width));
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            (label == "rule").then(|| self.on_press.clone())
+        }
+    }
+
+    /// The widget `Framed::explain` gives, which no public path names.
+    mod explained {
+        pub struct Explain<W> {
+            pub(super) widget: W,
+            pub(super) color: u32,
+        }
+
+        impl<W, Message, Theme, Renderer> super::Widget<Message, Theme, Renderer> for Explain<W>
+        where
+            W: super::Widget<Message, Theme, Renderer>,
+        {
+            fn labels(&self, labels: &mut Vec<String>) {
+                labels.push(format!("explain #{:06x}", self.color));
+                self.widget.labels(labels);
+            }
+
+            fn press(&self, label: &str) -> Option<Message> {
+                self.widget.press(label)
+            }
+        }
     }
 
     impl<W, A, B, F, Theme, Renderer> Widget<B, Theme, Renderer> for parts::widget::Map<W, F, A>
