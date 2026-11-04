@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.129 (2026-11-03)
+
 - A trait's method whose `impl Trait` the trait's own default body gives, as iced's `Widget::explain`, now runs: its result goes in `column!` as it is, and its trait's methods and the methods a blanket impl over that trait gives, as `.explain(color).boxed()`, run on it. (#885)
 - `rawr check` now refuses your own impl of a crate's trait used at a type that holds the crate's `impl Trait` value, as iced's loupe uses `impl Widget for Loupe<W>` at `Loupe<impl Widget>`, instead of passing a program the runner can't build. (#885)
 
