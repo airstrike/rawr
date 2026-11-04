@@ -1211,6 +1211,7 @@ fn pattern(
 fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
     Ok(match source {
         facade::Type::Unit => host::type_ref::Type::unit(),
+        facade::Type::Never => host::type_ref::Type::builtin(host::type_ref::Builtin::Never),
         facade::Type::Bool => host::type_ref::Type::builtin(host::type_ref::Builtin::Bool),
         facade::Type::Char => host::type_ref::Type::builtin(host::type_ref::Builtin::Char),
         facade::Type::F64 => host::type_ref::Type::builtin(host::type_ref::Builtin::F64),

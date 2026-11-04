@@ -513,6 +513,9 @@ fn parameter_indices(ty: &convert::Type, found: &mut BTreeSet<u32>) {
             parameter_indices(ok, found);
             parameter_indices(err, found);
         }
-        convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Inferred => {}
+        convert::Type::Unit
+        | convert::Type::Never
+        | convert::Type::Builtin(_)
+        | convert::Type::Inferred => {}
     }
 }

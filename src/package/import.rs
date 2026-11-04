@@ -672,7 +672,7 @@ fn crossing_impls(
                 paths(input, found);
                 paths(output, found);
             }
-            Type::Unit | Type::Builtin(_) | Type::Parameter(_) | Type::Inferred => {}
+            Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) | Type::Inferred => {}
         }
     }
     if impls.is_empty() {
@@ -1927,7 +1927,7 @@ fn facade_named(facade: &Facade<'_>) -> std::collections::BTreeSet<[u8; 32]> {
                     walk(member, named);
                 }
             }
-            Type::Inferred | Type::Unit | Type::Builtin(_) | Type::Parameter(_) => {}
+            Type::Inferred | Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) => {}
         }
     }
     fn outcome(
@@ -3045,7 +3045,7 @@ fn ty_ok(
         } => members.iter().all(|ty| ty_ok(ty, declared)),
         Type::ProfileMessage { payload, .. } => ty_ok(payload, declared),
         Type::Inferred => true,
-        Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
+        Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) => true,
     }
 }
 
@@ -3129,7 +3129,7 @@ fn writes_declared(
                 input: first,
                 output: second,
             } => declared(first, parameters) && declared(second, parameters),
-            Type::Unit | Type::Builtin(_) | Type::Inferred => true,
+            Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => true,
         }
     }
 
@@ -3232,6 +3232,7 @@ impl Types {
         Ok(match ty {
             Type::Inferred => unreachable!("a crate item's signature names no inferred type"),
             Type::Unit => host::type_ref::Type::unit(),
+            Type::Never => host::type_ref::Type::builtin(host::type_ref::Builtin::Never),
             Type::Builtin(builtin) => host::type_ref::Type::builtin(match builtin {
                 Builtin::Bool => host::type_ref::Builtin::Bool,
                 Builtin::Char => host::type_ref::Builtin::Char,
@@ -3633,7 +3634,7 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
     match ty {
         Type::Parameter(index) => index & representability::signature::IMPL_PARAMETER != 0,
         Type::Inferred => false,
-        Type::Unit | Type::Builtin(_) => false,
+        Type::Unit | Type::Never | Type::Builtin(_) => false,
         Type::Nominal { arguments, .. }
         | Type::Tuple(arguments)
         | Type::Script { arguments, .. } => arguments.iter().any(names_impl_parameter),
@@ -3821,7 +3822,7 @@ fn type_usage(
                 ))
             })?,
         Type::Inferred => (0, 0),
-        Type::Unit | Type::Builtin(_) => (0, 0),
+        Type::Unit | Type::Never | Type::Builtin(_) => (0, 0),
     };
     Ok((
         nested_items.checked_add(1).ok_or(Error::Allocation)?,

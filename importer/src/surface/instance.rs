@@ -890,7 +890,10 @@ fn concrete_type(ty: &convert::Type, depth: usize, limit: usize) -> Result<(), s
             concrete_type(ok, actual, limit)?;
             concrete_type(err, actual, limit)
         }
-        convert::Type::Inferred | convert::Type::Unit | convert::Type::Builtin(_) => Ok(()),
+        convert::Type::Inferred
+        | convert::Type::Unit
+        | convert::Type::Never
+        | convert::Type::Builtin(_) => Ok(()),
     }
 }
 

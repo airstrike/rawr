@@ -1153,7 +1153,7 @@ fn defaulted(ty: &convert::Type, parameters: &[signature::Parameter]) -> Option<
             payload: one(payload)?,
         },
         convert::Type::Inferred => convert::Type::Inferred,
-        convert::Type::Unit | convert::Type::Builtin(_) => ty.clone(),
+        convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => ty.clone(),
     })
 }
 
@@ -1213,6 +1213,7 @@ fn clone_type(source: &convert::Type) -> Result<convert::Type, Error> {
     Ok(match source {
         convert::Type::Inferred => convert::Type::Inferred,
         convert::Type::Unit => convert::Type::Unit,
+        convert::Type::Never => convert::Type::Never,
         convert::Type::Builtin(builtin) => convert::Type::Builtin(*builtin),
         convert::Type::Nominal {
             definition,
@@ -1360,7 +1361,10 @@ fn type_dynamic_bytes(ty: &convert::Type) -> Option<usize> {
             type_slice_bytes(arguments)?.checked_add(path.len())
         }
         convert::Type::Inferred => Some(0),
-        convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Parameter(_) => Some(0),
+        convert::Type::Unit
+        | convert::Type::Never
+        | convert::Type::Builtin(_)
+        | convert::Type::Parameter(_) => Some(0),
     }
 }
 

@@ -263,7 +263,7 @@ invalid digit found in string | ParseIntError { kind: InvalidDigit }
 <p><code>std::io::stdin()</code> reads the program&rsquo;s standard input. <code>read_line</code> and <code>read_to_string</code> append to a <code>&amp;mut String</code> and return an <code>io::Result</code> of the bytes read, as in Rust. <code>lines()</code> reads to the end of the input before it gives its first line, so a program that answers each line as it comes uses <code>read_line</code>. <code>lock()</code> gives the same reader. <code>std::io::stdout().flush()</code> flushes what the program printed.</p>
 <p><code>std::env::args()</code> gives the program&rsquo;s arguments. Under <code>rawr run</code> the first is the program&rsquo;s name and the rest come after <code>--</code>, as <code>cargo run</code> gives them. <a href="/docs/run#arguments">Run</a> says more.</p>
 <p><code>std::fs::read_to_string</code> reads a file into a <code>String</code>. Snippets in the playground read no files.</p>
-<p><code>std::process::id()</code> gives the id of the process the program runs in, as a <code>u32</code>.</p>
+<p><code>std::process::id()</code> gives the id of the process the program runs in, as a <code>u32</code>. <code>std::process::exit(code)</code> ends the process with that exit code, and <code>std::process::abort()</code> aborts it, as in Rust. Neither runs the destructors of the values still alive. Both give <code>!</code>, so a call of either is a value of any type (<a href="/docs/reference/types#never">the never type</a>).</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="path.rs" id="src-path">use std::path::PathBuf;
 

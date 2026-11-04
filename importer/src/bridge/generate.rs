@@ -7507,7 +7507,7 @@ fn witness_mode(plan: &Plan) -> u8 {
 /// Option<usize>` field is.
 fn copy_scalar(ty: &convert::Type) -> bool {
     match ty {
-        convert::Type::Unit => true,
+        convert::Type::Unit | convert::Type::Never => true,
         convert::Type::Builtin(builtin) => builtin.rust_name().is_some(),
         convert::Type::Nominal { definition, .. } => {
             COPY_TYPES.with_borrow(|copy| copy.contains(definition.as_bytes()))
@@ -7541,7 +7541,7 @@ fn shared_field(ty: &convert::Type) -> bool {
 /// Rust reads it, in place.
 fn plain_value(ty: &convert::Type) -> bool {
     match ty {
-        convert::Type::Unit => true,
+        convert::Type::Unit | convert::Type::Never => true,
         convert::Type::Builtin(builtin) => {
             builtin.rust_name().is_some() || *builtin == convert::Builtin::String
         }
@@ -12681,7 +12681,9 @@ fn render_rust_type(
             )
             .map_err(request::unwritable),
         convert::Type::Inferred => output.write_all(b"_").map_err(request::unwritable),
-        convert::Type::Unit => output.write_all(b"()").map_err(request::unwritable),
+        convert::Type::Unit | convert::Type::Never => {
+            output.write_all(b"()").map_err(request::unwritable)
+        }
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => output
             .write_all(b"std::ops::RangeInclusive<i64>")
             .map_err(request::unwritable),
@@ -14830,7 +14832,7 @@ fn render_take(
             )
             .map_err(request::unwritable);
         }
-        convert::Type::Unit | convert::Type::Builtin(_) => "take_primitive",
+        convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => "take_primitive",
     };
     writeln!(
         output,
@@ -14934,7 +14936,7 @@ fn render_give(
         convert::Type::Inferred => {
             return Err(request::drift("an inferred type parameter reached a runtime value"))
         }
-        convert::Type::Unit => {
+        convert::Type::Unit | convert::Type::Never => {
             writeln!(output, "    let _ = {value};\n    Ok(Dynamic::from(()))")
         }
         convert::Type::Builtin(_) => {
@@ -15004,7 +15006,7 @@ fn render_from_dynamic(
     };
     match ty {
         convert::Type::Inferred => return Err(request::drift("an inferred type parameter reached a runtime value")),
-        convert::Type::Unit => cast(output, "()"),
+        convert::Type::Unit | convert::Type::Never => cast(output, "()"),
         convert::Type::Builtin(convert::Builtin::Bool) => cast(output, "bool"),
         convert::Type::Builtin(convert::Builtin::Char) => cast(output, "char"),
         convert::Type::Builtin(convert::Builtin::F64) => cast(output, "f64"),
@@ -15391,7 +15393,7 @@ fn render_to_dynamic(
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}.to_string()))")
         }
         convert::Type::Inferred => return Err(request::drift("an inferred type parameter reached a runtime value")),
-        convert::Type::Unit | convert::Type::Builtin(_) => {
+        convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
         convert::Type::ProfileMessage { payload, .. } => {
@@ -15920,7 +15922,7 @@ fn instantiated(
             payload: one(payload)?,
         },
         convert::Type::Inferred => ty.clone(),
-        convert::Type::Unit | convert::Type::Builtin(_) => ty.clone(),
+        convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => ty.clone(),
     })
 }
 
@@ -17422,7 +17424,10 @@ fn names_parameter(ty: &convert::Type) -> bool {
         convert::Type::FunctionItem { input, output } => {
             names_parameter(input) || names_parameter(output)
         }
-        convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Inferred => false,
+        convert::Type::Unit
+        | convert::Type::Never
+        | convert::Type::Builtin(_)
+        | convert::Type::Inferred => false,
     }
 }
 
@@ -18102,7 +18107,10 @@ impl Drop for TypePaths {
 fn output_names(ty: &convert::Type, index: u32) -> bool {
     match ty {
         convert::Type::Parameter(parameter) => *parameter == index,
-        convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Inferred => false,
+        convert::Type::Unit
+        | convert::Type::Never
+        | convert::Type::Builtin(_)
+        | convert::Type::Inferred => false,
         convert::Type::Nominal { arguments, .. }
         | convert::Type::Tuple(arguments)
         | convert::Type::Script { arguments, .. } => arguments
@@ -18284,7 +18292,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
     }
     Some(match ty {
         convert::Type::Inferred => "_".to_owned(),
-        convert::Type::Unit => "()".to_owned(),
+        convert::Type::Unit | convert::Type::Never => "()".to_owned(),
         convert::Type::Builtin(convert::Builtin::String | convert::Builtin::Text) => {
             "String".to_owned()
         }
@@ -18622,7 +18630,7 @@ fn render_generic_arguments(
                 output
                     .write_all(match ty {
                         convert::Type::Inferred => b"_",
-                        convert::Type::Unit => b"()" as &[u8],
+                        convert::Type::Unit | convert::Type::Never => b"()" as &[u8],
                         // Rust infers the range's integer type from the
                         // call's bounds, as it does for `1..=6`.
                         convert::Type::Builtin(convert::Builtin::InclusiveRange) => b"_",
@@ -19002,7 +19010,7 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
                 "an inferred type parameter reached a runtime value",
             ))
         }
-        convert::Type::Unit => "Dynamic::from(())",
+        convert::Type::Unit | convert::Type::Never => "Dynamic::from(())",
         convert::Type::Builtin(convert::Builtin::Bool) => "Dynamic::from(false)",
         convert::Type::Builtin(convert::Builtin::Char) => "Dynamic::from('\\0')",
         convert::Type::Builtin(convert::Builtin::F64) => "Dynamic::from(0.0_f64)",
