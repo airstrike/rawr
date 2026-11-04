@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A crate's opaque value whose type arguments only a later use fixes now runs: `widget.map(..)` inside `column!` takes its message, theme and renderer from the later use, as rustc infers them. An opaque type has its bounds' supertraits too. A column of opaque widgets alone, as `column![opaque(slider(..))]`, is the view's widget.","issues":[886]},
+        {"text":"A crate's implementation of a std trait for a std type is callable: with iced's `impl From<Degrees> for f32`, `f32::from(degrees)` and `degrees.into()` convert through it, and a missing one is rustc's E0277.","issues":[887]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.130",
@@ -2157,8 +2163,8 @@
     {"issue":883,"title":"rawr-play lib tests that fail on main: no-files message and a 100 ms budget","state":"open","category":"Health"},
     {"issue":884,"title":"rawr-import lib test retirement_read_shutdown_unblocks_reader hangs","state":"open","category":"Health"},
     {"issue":885,"title":"Run the impl Trait a trait method gives from its default body (iced's Widget::explain)","state":"closed","category":"No glue (D593)","release":"0.3.129"},
-    {"issue":886,"title":"A crate opaque value whose type arguments only a later use fixes","state":"open","category":"No glue (D593)"},
-    {"issue":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"open","category":"Divergences from rustc"},
+    {"issue":886,"title":"A crate opaque value whose type arguments only a later use fixes","state":"closed","category":"No glue (D593)"},
+    {"issue":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"closed","category":"Divergences from rustc"},
     {"issue":888,"title":"?play's iced shell stops an animation after its first frame on a slow CPU","state":"closed","category":"Health","release":"0.3.125"},
     {"issue":889,"title":"?play GIF delays follow the bot's draw time","state":"closed","category":"Health","release":"0.3.126"},
     {"issue":890,"title":"?play binds iced's time::every (tokio executor in the universe)","state":"closed","category":"No glue (D593)","release":"0.3.127"},
@@ -2186,7 +2192,9 @@
     {"issue":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"open","category":"Divergences from rustc"},
     {"issue":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"open","category":"Divergences from rustc"},
     {"issue":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open","category":"Health"},
-    {"issue":915,"title":"A macro's own-crate segment in the remembered demand walks the whole crate a second time","state":"open","category":"Health"}
+    {"issue":915,"title":"A macro's own-crate segment in the remembered demand walks the whole crate a second time","state":"open","category":"Health"},
+    {"issue":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"open","category":"Divergences from rustc"},
+    {"issue":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2665,12 +2673,16 @@
           "start": 47,
           "size": 3,
           "state": "now",
-          "note": "loupe's return type and `explain` run. #886 and #887 next",
+          "note": "loupe's return type, `explain`, later-fixed types and From impls run. #912 and #913 next",
           "issues": [
             {"number":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"closed"},
             {"number":885,"title":"Run the impl Trait a trait method gives from its default body (iced's Widget::explain)","state":"closed"},
-            {"number":886,"title":"A crate opaque value whose type arguments only a later use fixes","state":"open"},
-            {"number":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"open"}
+            {"number":886,"title":"A crate opaque value whose type arguments only a later use fixes","state":"closed"},
+            {"number":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"closed"},
+            {"number":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"open"},
+            {"number":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"open"},
+            {"number":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"open"},
+            {"number":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open"}
           ]
         }
       ]
