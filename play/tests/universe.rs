@@ -366,10 +366,21 @@ pub fn main() -> iced::Result {{
     assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
 }
 
+/// Each frame's delay in a GIF, in hundredths of a second.
+fn delays(image: &[u8]) -> Vec<u16> {
+    let mut decoder = gif::DecodeOptions::new().read_info(image).unwrap();
+    let mut delays = Vec::new();
+    while let Some(frame) = decoder.read_next_frame().unwrap() {
+        delays.push(frame.delay);
+    }
+    delays
+}
+
 /// A program each of whose frames takes longer to draw than the shell's quiet second and
 /// than the 5 s a fast machine needs for 100 frames, as a frame does on
 /// ?play's fraction of a CPU, run as the bot runs one with nothing queued:
-/// it still answers with a GIF of every frame it changed.
+/// it still answers with a GIF of every frame it changed, at the pace of
+/// its frames rather than of its drawing (#889).
 #[test]
 #[ignore = "needs the universe runner"]
 fn an_iced_program_slow_to_draw_answers_with_every_frame_it_changed() {
@@ -422,15 +433,68 @@ fn main() -> iced::Result {
     assert_eq!((output.status, output.limit), (0, false), "{output:?}");
     let image = output.frame.expect("the program drew");
     assert_eq!(rawr_play::plain::image_kind(&image), Some("gif"));
-    let mut decoder = gif::DecodeOptions::new()
-        .read_info(image.as_slice())
-        .unwrap();
-    let mut frames = 0;
-    while decoder.read_next_frame().unwrap().is_some() {
-        frames += 1;
+    // 0, 1 and 2, a change a frame, each shown for a frame's 50 ms, and
+    // the last held.
+    assert_eq!(delays(&image), [5, 5, 300]);
+}
+
+/// A program whose clock ticks, each frame slower to draw than the shell's
+/// 50 ms, answers with a GIF at the pace of its ticks (#889).
+#[test]
+#[ignore = "needs the universe runner"]
+fn an_iced_program_on_its_own_clock_answers_with_a_gif_at_its_pace() {
+    let source = r#"use iced::widget::{column, text, Widget};
+use iced::{time, Center, Subscription};
+use std::time::Duration;
+
+#[derive(Default)]
+struct Ticks {
+    t: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Msg {
+    Tick,
+}
+
+impl Ticks {
+    fn update(&mut self, _: Msg) {
+        self.t += 1;
     }
-    // 0, 1 and 2, a change a frame.
-    assert_eq!(frames, 3);
+
+    fn view(&self) -> impl Widget<Msg> {
+        std::thread::sleep(Duration::from_millis(100));
+        column![text(self.t).size(40)].padding(20).align_x(Center)
+    }
+
+    fn subscription(&self) -> Subscription<Msg> {
+        if self.t < 3 {
+            time::every(Duration::from_millis(500)).map(|_| Msg::Tick)
+        } else {
+            Subscription::none()
+        }
+    }
+}
+
+fn main() -> iced::Result {
+    iced::application(Ticks::default, Ticks::update, Ticks::view)
+        .subscription(Ticks::subscription)
+        .run()
+}
+"#;
+    let output = output(&run(source).stdout);
+    assert_eq!(output.status, 0, "{}", output.text());
+    let image = output.frame.expect("the program drew");
+    assert_eq!(rawr_play::plain::image_kind(&image), Some("gif"));
+    let delays = delays(&image);
+    // 0 to 3, a tick each, shown for about the tick's 500 ms however many
+    // frames were drawn in it, and the last held.
+    assert_eq!(delays.len(), 4, "{delays:?}");
+    assert!(
+        delays[..3].iter().all(|delay| (40..=70).contains(delay)),
+        "{delays:?}"
+    );
+    assert_eq!(delays[3], 300, "{delays:?}");
 }
 
 /// A snippet's state, message and enum, named otherwise than the

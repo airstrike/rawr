@@ -118,7 +118,7 @@ impl Counter {
         2.0
     }
 
-    /// Frames until the count reaches five, then a tick a second back down,
+    /// Frames up to a count of five, a tick a second down to it,
     /// and keys matched as stopwatch and layout match them.
     fn subscription(&self) -> Subscription<Message> {
         // A key handler that names the event's type, as stopwatch's does.
@@ -136,7 +136,12 @@ impl Counter {
         let frames = if self.value < 5 {
             window::frames().map(|_| Message::Increment)
         } else {
+            Subscription::none()
+        };
+        let ticks = if self.value > 5 {
             time::every(Duration::from_secs(1)).map(|_| Message::Decrement)
+        } else {
+            Subscription::none()
         };
         let keys = keyboard::listen().filter_map(|event| {
             let keyboard::Event::KeyPressed {
@@ -163,7 +168,12 @@ impl Counter {
                 },
             }
         });
-        Subscription::batch(vec![frames, keys, keyboard::listen().filter_map(hotkey)])
+        Subscription::batch(vec![
+            frames,
+            ticks,
+            keys,
+            keyboard::listen().filter_map(hotkey),
+        ])
     }
 }
 
