@@ -5049,8 +5049,18 @@ impl<P: api::Phase> Context<'_, P> {
                 continue;
             };
             // Each trait the bounds name, and their supertraits, whose
-            // methods rustc reaches on the value as well.
-            for (trait_id, arguments) in self.bound_traits(bounds) {
+            // methods rustc reaches on the value as well, then each trait a
+            // blanket impl over them gives it (`blanket_extensions`).
+            let bound = self.bound_traits(bounds);
+            let extensions = self.blanket_extensions(&bound);
+            let traits = bound
+                .into_iter()
+                .map(|bound| (bound, false))
+                .chain(extensions.into_iter().map(|extension| (extension, true)));
+            // A method an extension shares a name with is the bound's, so
+            // each name is one member.
+            let mut names = Vec::<Box<str>>::new();
+            for ((trait_id, arguments), extension) in traits {
                 let trait_id = &trait_id;
                 let arguments = &arguments[..];
                 let Some(trait_definition) = self
@@ -5082,11 +5092,15 @@ impl<P: api::Phase> Context<'_, P> {
                     if matches!(method_signature.receiver(), model::Receiver::None) {
                         continue;
                     }
+                    let name = method.display_path().last().unwrap_or("<unnamed>");
+                    if extension && names.iter().any(|known| **known == *name) {
+                        continue;
+                    }
+                    names.push(name.into());
                     let selector = selector(method)?;
                     self.retain_selector(&selector)?;
                     let identity =
                         crate::surface::identity::Identity::imported(export, None, selector)?;
-                    let name = method.display_path().last().unwrap_or("<unnamed>");
                     self.retain_outcome_common(export.key(), name)?;
                     self.retain_span(export.span())?;
                     self.retain_span(method.span())?;
@@ -5127,6 +5141,97 @@ impl<P: api::Phase> Context<'_, P> {
             }
         }
         Ok(records)
+    }
+
+    /// The traits a blanket impl over a parameter gives a value whose type
+    /// implements the traits `bound` names, each with its arguments: iced's
+    /// `widget::Widget`, implemented for every `T: core::Widget`, gives the
+    /// opaque type `Widget::explain` gives its `boxed`. An impl applies when
+    /// each of its predicates is a bound of its self type that `bound` holds,
+    /// at arguments that fix the impl's parameters the trait names, or a
+    /// `Sized` bound.
+    fn blanket_extensions(
+        &self,
+        bound: &[(api::identity::Definition, Vec<model::Argument>)],
+    ) -> Vec<(api::identity::Definition, Vec<model::Argument>)> {
+        let mut found = Vec::<(api::identity::Definition, Vec<model::Argument>)>::new();
+        for implementation in self.graph.implementations() {
+            let model::Trait::Trait {
+                id,
+                arguments: implemented,
+            } = implementation.trait_ref()
+            else {
+                continue;
+            };
+            let model::Type::Parameter { owner, index: this } = implementation.self_type() else {
+                continue;
+            };
+            if owner != implementation.id()
+                || implementation.polarity() != model::Polarity::Positive
+                || bound.iter().chain(&found).any(|(known, _)| known == id)
+            {
+                continue;
+            }
+            let mut given = BTreeMap::<u32, model::Type>::new();
+            let mut through = false;
+            let applies = implementation.generics().predicates().all(|predicate| {
+                let model::Predicate::Bound {
+                    ty,
+                    bound: bounded,
+                } = predicate
+                else {
+                    return false;
+                };
+                let model::Bound::Trait {
+                    trait_id,
+                    arguments,
+                    polarity: model::Polarity::Positive,
+                    ..
+                } = bounded
+                else {
+                    return matches!(bounded, model::Bound::MaybeSized);
+                };
+                if self.definition_name(trait_id) == Some("Sized") {
+                    return true;
+                }
+                if !matches!(ty, model::Type::Parameter { owner, index }
+                    if owner == implementation.id() && index == this)
+                {
+                    return false;
+                }
+                let Some((_, held)) = bound.iter().find(|(known, _)| known == trait_id) else {
+                    return false;
+                };
+                through = true;
+                arguments.len() == held.len()
+                    && arguments.iter().zip(held).all(|pair| match pair {
+                        (
+                            model::Argument::Type(model::Type::Parameter { owner, index }),
+                            model::Argument::Type(held),
+                        ) if owner == implementation.id() => match given.get(index) {
+                            Some(known) => known == held,
+                            None => {
+                                given.insert(*index, held.clone());
+                                true
+                            }
+                        },
+                        (argument, held) => argument == held,
+                    })
+            });
+            if !applies || !through {
+                continue;
+            }
+            // The trait's arguments leave out `Self`, as a bound's do.
+            let Some(arguments) = relabel_arguments(
+                implemented.get(1..).unwrap_or_default(),
+                implementation.id(),
+                &|index| given.get(&index).cloned(),
+            ) else {
+                continue;
+            };
+            found.push((id.clone(), arguments.into_vec()));
+        }
+        found
     }
 
     /// The methods the trait `definition` declares that take `self` by
