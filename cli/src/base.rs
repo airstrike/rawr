@@ -35,15 +35,45 @@ pub fn discover(path: Option<&PathBuf>) -> Result<project::Target, diagnostic::R
     .map_err(|error| diagnostic::Report::from_project(&error))
 }
 
-/// Discover and load the program at `path` once, with its facts. A source
-/// whose parse cell holds its text is read from the cell, not parsed.
-pub fn load(path: Option<&PathBuf>) -> Result<Loaded, diagnostic::Report> {
+/// How a command builds the program it loads: as `cargo build` does, or
+/// as `cargo test` does, with `cfg(test)` holding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Build {
+    /// `rawr run` and `rawr check`.
+    Program,
+    /// `rawr test`.
+    Test,
+}
+
+impl Build {
+    /// An engine that parses a program for this build.
+    fn parser(self) -> Engine {
+        let mut engine = Engine::new();
+        engine.set_test(self == Self::Test);
+        engine
+    }
+
+    /// The parse cells directory of `target` for this build: a test
+    /// build's parse differs, so its cells are kept apart.
+    fn cells(self, target: &project::Target) -> PathBuf {
+        let directory = crate::cells::directory(target);
+        match self {
+            Self::Program => directory,
+            Self::Test => directory.join("test"),
+        }
+    }
+}
+
+/// Discover and load the program at `path` once, with its facts, for
+/// `build`. A source whose parse cell holds its text is read from the
+/// cell, not parsed.
+pub fn load(path: Option<&PathBuf>, build: Build) -> Result<Loaded, diagnostic::Report> {
     let target = discover(path)?;
-    let cells = Cells::new(crate::cells::directory(&target));
+    let cells = Cells::new(build.cells(&target));
     let timing = rawr::timing::Session::start();
     let graph = timing
         .observe_result(rawr::timing::Phase::ParseItems, || {
-            rawr::package::Graph::load_with_cells(&Engine::new(), &target, &cells)
+            rawr::package::Graph::load_with_cells(&build.parser(), &target, &cells)
         })
         .map_err(|error| compile_report(&error, &target))?;
     let mut sheet = Sheet::default();
@@ -117,17 +147,17 @@ pub fn uses(claims: &Claims) -> String {
         .join(" or ")
 }
 
-/// An engine for a program `rawr run` or `rawr check` reads: one that may
-/// reach everything, as a program Cargo builds may (D683.4).
-fn engine() -> Engine {
-    let mut engine = Engine::new();
+/// An engine for a program `rawr run`, `rawr check` or `rawr test` reads:
+/// one that may reach everything, as a program Cargo builds may (D683.4).
+pub(crate) fn engine(build: Build) -> Engine {
+    let mut engine = build.parser();
     engine.set_access(rawr::Access::all());
     engine
 }
 
 /// Compile a base program; the source path checked.
 pub fn check(loaded: Loaded) -> Result<PathBuf, diagnostic::Report> {
-    engine()
+    engine(Build::Program)
         .compile_package(loaded.graph)
         .map_err(|error| compile_report(&error, &loaded.target))?;
     Ok(loaded.target.source().path().to_path_buf())
@@ -146,7 +176,7 @@ pub enum Failed {
 pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     let Loaded { target, graph, .. } = loaded;
     let target = &target;
-    let mut engine = engine();
+    let mut engine = engine(Build::Program);
     // The debugger is registered before the program compiles, so only a
     // program a debugger reads carries what reading needs (#526).
     let inspector = inspector(&mut engine);
@@ -162,33 +192,7 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
         });
         inspector.compiled(&ast);
     }
-    // A runtime error's position is in the lowered program: the compiler's
-    // positions map it back to its file, the entry or a module's, or to
-    // none in code it wrote.
-    let runtime = |error: Box<rawr::EvalAltResult>| {
-        let Some(entry) = source(target) else {
-            return Failed::Panic(
-                diagnostic::Report::from_evaluation(None, &error).unwrap_or_else(|_| {
-                    report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, None)
-                }),
-            );
-        };
-        let located = match positions.locate(&entry, &error) {
-            Some((file, span)) => diagnostic::Report::from_evaluation_located(
-                cargo_named(file, target),
-                Some(span),
-                &error,
-            ),
-            None => diagnostic::Report::from_evaluation_located(
-                cargo_named(&entry, target),
-                None,
-                &error,
-            ),
-        };
-        Failed::Panic(located.unwrap_or_else(|_| {
-            report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, Some(entry))
-        }))
-    };
+    let runtime = |error| Failed::Panic(located(error, target, &positions));
     let mut scope = Scope::new();
     let value = engine
         .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
@@ -213,6 +217,31 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
         Some(Err(error)) => Some(format!("Error: {error:?}")),
         _ => None,
     })
+}
+
+/// A runtime `error` as Rust reports its panic. Its position is in the
+/// lowered program: the compiler's `positions` map it back to its file,
+/// the entry or a module's, or to none in code it wrote.
+pub(crate) fn located(
+    error: Box<rawr::EvalAltResult>,
+    target: &project::Target,
+    positions: &rawr::program::Positions,
+) -> diagnostic::Report {
+    let Some(entry) = source(target) else {
+        return diagnostic::Report::from_evaluation(None, &error)
+            .unwrap_or_else(|_| report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, None));
+    };
+    let located = match positions.locate(&entry, &error) {
+        Some((file, span)) => diagnostic::Report::from_evaluation_located(
+            cargo_named(file, target),
+            Some(span),
+            &error,
+        ),
+        None => {
+            diagnostic::Report::from_evaluation_located(cargo_named(&entry, target), None, &error)
+        }
+    };
+    located.unwrap_or_else(|_| report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, Some(entry)))
 }
 
 /// Under `rawr mcp`, answer `inspect` on the socket it named, from the
@@ -249,18 +278,27 @@ fn source(target: &project::Target) -> Option<diagnostic::Source> {
 /// `file` named as a Cargo-built program names it in a panic: by its path
 /// from the workspace root, or a lone file's from the current directory.
 fn cargo_named(file: &diagnostic::Source, target: &project::Target) -> diagnostic::Source {
+    cargo_path(Path::new(file.identity()), target)
+        .and_then(|relative| {
+            diagnostic::Source::new(relative.to_string_lossy().into_owned(), file.text()).ok()
+        })
+        .unwrap_or_else(|| file.clone())
+}
+
+/// `path` as a Cargo-built program names it in a panic, when it is under
+/// the workspace root, or a lone file's under the current directory.
+pub(crate) fn cargo_path<'a>(path: &'a Path, target: &project::Target) -> Option<&'a Path> {
     let base = match target.project() {
         Some(project) => Some(rawr_location::workspace_root(project.root().as_path())),
         None => std::env::current_dir().and_then(std::fs::canonicalize).ok(),
-    };
-    base.and_then(|base| {
-        let relative = Path::new(file.identity()).strip_prefix(base).ok()?;
-        diagnostic::Source::new(relative.to_string_lossy().into_owned(), file.text()).ok()
-    })
-    .unwrap_or_else(|| file.clone())
+    }?;
+    path.strip_prefix(base).ok()
 }
 
-fn compile_report(error: &rawr::package::Error, target: &project::Target) -> diagnostic::Report {
+pub(crate) fn compile_report(
+    error: &rawr::package::Error,
+    target: &project::Target,
+) -> diagnostic::Report {
     error.report().unwrap_or_else(|report_error| {
         report(
             diagnostic::code::ENVIRONMENT_DIAGNOSTIC,

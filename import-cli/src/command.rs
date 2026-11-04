@@ -103,7 +103,7 @@ fn cache(words: &[String]) -> ExitCode {
 }
 
 fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
-    let loaded = match rawr_cli::base::load(path) {
+    let loaded = match rawr_cli::base::load(path, rawr_cli::base::Build::Program) {
         Ok(loaded) => loaded,
         Err(report) => return failure(&report),
     };

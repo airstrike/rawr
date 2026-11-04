@@ -68,6 +68,9 @@ rawr_codegen = { version = "0.3.132", path = "codegen" }
 toml_edit = { package = "rawr-toml-edit", path = "toml/edit", default-features = false, features = ["parse", "display"] }
 rawr_import = { package = "rawr-import", path = "importer", optional = true }
 thiserror = { version = "2", optional = true }
+# The `syntax` feature parses what a `#[cfg]` leaves out, as rustc does.
+syn = { version = "2.0.0", default-features = false, features = ["full", "parsing"], optional = true }
+proc-macro2 = { version = "1.0.60", default-features = false, features = ["span-locations"], optional = true }
 
 serde = { version = "1.0.136", default-features = false, features = ["derive", "alloc"], optional = true }
 serde_json = { version = "1.0.45", default-features = false, features = ["alloc"] }
@@ -95,6 +98,11 @@ rust-import = ["dep:rawr_import", "dep:thiserror"]
 rust-import-driver-tests = ["rust-import", "rawr_import/rustc-driver"]
 ## Enable the pinned compiler metadata probe used by Phase 1 extraction.
 rust-import-driver = ["rust-import", "rawr_import/rustc-driver"]
+
+## Report a syntax error in an item a `#[cfg]` leaves out, as rustc parses
+## every item before it drops those. `rawr` turns it on; a project's runner
+## does not, since `rawr` parsed the program first.
+syntax = ["dep:syn", "dep:proc-macro2"]
 
 #! ### Enable Special Functionalities
 

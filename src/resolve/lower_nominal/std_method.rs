@@ -125,11 +125,14 @@ pub(super) fn steps(ty: &Ty) -> Vec<Step> {
                 behind_reference: false,
             })
             .collect(),
-        Ty::Keyed(..) => match std_impl::std_definition(ty) {
+        // A pointer's methods are its value's, through `Deref`.
+        Ty::Boxed(_) | Ty::Counted(..) | Ty::Weak(..) | Ty::Cow(_) => Vec::new(),
+        // Any other type std declares has its own: a map's, a
+        // `ParseIntError`'s, a `Duration`'s.
+        _ => match std_impl::std_definition(ty) {
             Some((definition, _)) => one(definition, ty),
             None => Vec::new(),
         },
-        _ => Vec::new(),
     }
 }
 

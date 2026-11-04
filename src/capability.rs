@@ -1,7 +1,7 @@
 //! Compile-time capabilities promised by resolved nominal types.
 
-use crate::resolve::{item, type_ref, Error, LocatedError};
-use crate::{program, type_def, ImmutableString, Span};
+use crate::resolve::{item, std_path, type_ref, Error, LocatedError};
+use crate::{program, std_table, type_def, ImmutableString, Span};
 use std::collections::BTreeMap;
 
 /// A capability that can be derived by a Rawr nominal type.
@@ -87,6 +87,24 @@ impl Kind {
             Self::Send => "Send",
             Self::Static => "Static",
             Self::Iterator => "Iterator",
+        }
+    }
+
+    /// The std trait the capability is, by definition: `core::fmt::Debug`
+    /// for `Debug`. `None` for `Send` and `Static`, which no impl states,
+    /// and `Iterator`, which is never derived.
+    const fn std_trait(self) -> Option<&'static str> {
+        match self {
+            Self::Default => Some("core::default::Default"),
+            Self::Debug => Some("core::fmt::Debug"),
+            Self::Clone => Some("core::clone::Clone"),
+            Self::Copy => Some("core::marker::Copy"),
+            Self::PartialEq => Some("core::cmp::PartialEq"),
+            Self::Eq => Some("core::cmp::Eq"),
+            Self::PartialOrd => Some("core::cmp::PartialOrd"),
+            Self::Ord => Some("core::cmp::Ord"),
+            Self::Hash => Some("core::hash::Hash"),
+            Self::Send | Self::Static | Self::Iterator => None,
         }
     }
 
@@ -858,19 +876,16 @@ pub(crate) fn type_supports(
     }
 }
 
+/// Whether rawr's builtin type `name` has `capability`: std implements
+/// the capability's trait for the std type it stands for. Each such type
+/// owns its value, so it is `Send` and `Static`.
 pub(crate) fn builtin_supports(name: &str, capability: Kind) -> bool {
-    match crate::host::runtime_builtin(name) {
-        "String" => capability != Kind::Copy,
-        "f64" => !matches!(capability, Kind::Eq | Kind::Ord | Kind::Hash),
-        "bool" | "char" | "i64" | "i128" => true,
-        // `std::cmp::Ordering` derives all but `Default`.
-        "Ordering" => capability != Kind::Default,
-        // `std::time::Duration` has them all; `Instant` all but `Default`.
-        "Duration" => true,
-        "Instant" => capability != Kind::Default,
-        // `std::ops::RangeInclusive` is neither `Copy` nor ordered.
-        "RangeInclusive" => !matches!(capability, Kind::Copy | Kind::PartialOrd | Kind::Ord),
-        _ => false,
+    let Some(key) = std_path::builtin_key(crate::host::runtime_builtin(name)) else {
+        return false;
+    };
+    match capability.std_trait() {
+        Some(definition) => std_table::impls(definition, key).next().is_some(),
+        None => matches!(capability, Kind::Send | Kind::Static),
     }
 }
 

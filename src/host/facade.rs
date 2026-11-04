@@ -659,7 +659,6 @@ impl Builder {
     /// crate::core::time::*` re-exports `core::time::Duration` at
     /// `time::Duration`: the path names that std item, which Rawr resolves by
     /// its std path. `path` is relative and `std` starts at `std`.
-    #[cfg(feature = "rust-import")]
     pub(crate) fn std_alias(&mut self, path: &str, std: &str) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         let target = host::path::Path::parse(std)?;

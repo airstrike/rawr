@@ -72,7 +72,7 @@ codes!(Resolve;
     (RESOLVE_NO_FIELD, "E0609", "No field of that name, as rustc reports it."),
     (RESOLVE_NOT_IN_MODULE, "E0425", "A path names no item of a module, as rustc reports it."),
     (RESOLVE_METHOD_VALUE, "E0615", "A method read like a field, as rustc reports it."),
-    (RESOLVE_UNKNOWN_FUNCTION, "RAWR-RESOLVE-UNKNOWN-FUNCTION", "Unknown function."),
+    (RESOLVE_UNKNOWN_FUNCTION, "E0425", "A call of a name no function in scope has, as rustc reports it."),
     (SCRIPT_NO_FUNCTION, "E0425", "A typed handle names no function of the script, as rustc reports it."),
     (SCRIPT_SIGNATURE, "E0308", "A typed handle's signature differs from the script's, as rustc reports it."),
     (BORROW_MUTABLE_TWICE, "E0499", "A `&mut` borrow while another is live, as rustc reports it."),
@@ -95,7 +95,7 @@ codes!(Resolve;
     (BORROW_TWO_UNIQUE, "E0524", "Two closures' unique captures of a place live at once, as rustc reports it."),
     (BORROW_NOT_MUTABLE, "E0596", "A `&mut` borrow of a local not declared `mut`, as a `&mut self` method takes it, as rustc reports it."),
     (BORROW_ASSIGN_IMMUTABLE, "E0594", "An assignment through a place that isn't mutable, as a dereference of a type with no `DerefMut`, as rustc reports it."),
-    (RESOLVE_UNKNOWN_VARIABLE, "RAWR-RESOLVE-UNKNOWN-VARIABLE", "Unknown variable."),
+    (RESOLVE_UNKNOWN_VARIABLE, "E0425", "A name no value in scope has, as rustc reports it."),
     (RESOLVE_MOVED_VALUE, "E0382", "A use of a value after it was moved, as rustc reports it."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),
     (RESOLVE_TYPE_MISMATCH, "RAWR-RESOLVE-TYPE-MISMATCH", "Resolved type mismatch."),
@@ -124,6 +124,8 @@ codes!(Resolve;
     (RESOLVE_NOT_YET, "RAWR-NOT-YET", "A std item rawr resolves but doesn't run yet."),
     (RESOLVE_TYPE_ANNOTATIONS, "E0282", "A generic parameter whose type nothing gives, as rustc reports it."),
     (RESOLVE_DUPLICATE_GENERIC, "E0403", "A generic parameter name used twice in one item's generics, as rustc reports it."),
+    (RESOLVE_PRIVATE_ITEM, "E0603", "A path to an item private to a module it is outside of, as rustc reports it."),
+    (RESOLVE_PRIVATE_FUNCTION, "E0624", "A method or associated function private to a module the call is outside of, as rustc reports it."),
     (RESOLVE_ARGUMENT_COUNT, "E0061", "A call with more or fewer arguments than its function, method or constructor takes, as rustc reports it."),
     (RESOLVE_ARGUMENT_SIGNATURE, "E0631", "A closure or function whose parameters differ from those of the callable it is passed as, as rustc reports it."),
     (RESOLVE_CANNOT_COMPARE, "E0277", "An `==` or `!=` whose left operand's type has no `PartialEq` impl for the right operand's, as rustc reports it."),
@@ -195,6 +197,15 @@ pub(crate) fn borrow(rustc: &str) -> Code {
         "E0508" => BORROW_MOVE_ELEMENT,
         "E0509" => BORROW_MOVE_DROP,
         _ => BORROW_LIFETIME,
+    }
+}
+
+/// The code of a private item's error: E0624 for an inherent impl's
+/// function, E0603 for an item a path names.
+pub(crate) fn private(item: crate::resolve::Private) -> Code {
+    match item.code() {
+        "E0624" => RESOLVE_PRIVATE_FUNCTION,
+        _ => RESOLVE_PRIVATE_ITEM,
     }
 }
 

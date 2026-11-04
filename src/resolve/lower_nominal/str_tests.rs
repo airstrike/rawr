@@ -316,3 +316,58 @@ main();
 "#;
     assert_eq!(printed(source), "true true\na true true true\n2\n");
 }
+
+#[test]
+fn language_a_string_literal_spans_lines_as_rustc_lexes_it() {
+    // A raw line break is part of the string, `\` before one skips the
+    // next line's leading whitespace (blank lines too), and raw and byte
+    // strings span lines. A test module skipped as rustc skips it holds
+    // one too (#905).
+    let source = r##"
+const TABLE: &str = "a,1
+b,2";
+
+fn main() {
+    let continued = "one \
+                     two \
+
+        three";
+    let raw = r#"x
+"y" \n"#;
+    let bytes = b"p
+q";
+    let escaped = "tab\there
+next";
+    println!("{:?}", TABLE.lines().collect::<Vec<_>>());
+    println!("{continued:?}");
+    println!("{raw:?}");
+    println!("{bytes:?}");
+    println!("{escaped:?}");
+    let message = "a\
+\n  b";
+    println!("{message:?}");
+}
+
+#[cfg(test)]
+mod tests {
+    const RESULTS: &str = "England,France,4,2
+France,Italy,3,1";
+
+    #[test]
+    fn reads() {
+        let team = RESULTS.lines().count();
+        assert_eq!(team, 2);
+    }
+}
+main();
+"##;
+    assert_eq!(
+        printed(source),
+        "[\"a,1\", \"b,2\"]\n\"one two three\"\n\"x\\n\\\"y\\\" \\\\n\"\n[112, 10, 113]\n\
+         \"tab\\there\\nnext\"\n\"a\\n  b\"\n"
+    );
+    // A string still open at the end of the file is rustc's unterminated
+    // string.
+    let report = refused("fn main() { let s = \"open\nstill open; }\nmain();\n");
+    assert!(report.contains("not terminated"), "{report}");
+}

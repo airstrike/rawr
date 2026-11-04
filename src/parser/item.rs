@@ -10,6 +10,8 @@ use crate::{Engine, ImmutableString, Position, Span, PERR};
 pub(super) struct ParsedFile {
     pub items: Box<[crate::item::Parsed]>,
     pub masked: Vec<Span>,
+    /// The spans of the items a `#[cfg(..)]` left out, which are masked too.
+    pub disabled: Vec<Span>,
     pub imports: Box<[crate::item::Use]>,
     pub inner_attributes: Box<[crate::item::Attribute]>,
 }
@@ -26,20 +28,25 @@ std::thread_local! {
     /// The spans of the items a `#[cfg(..)]` left out of the file being
     /// parsed, which the legacy script does not see either.
     static SKIPPED: core::cell::RefCell<Vec<Span>> = const { core::cell::RefCell::new(Vec::new()) };
+    /// Whether the file being parsed builds as `rustc --test` builds it:
+    /// `cfg(test)` holds.
+    static TEST: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
 
 pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     let outer = NESTED.take();
     let outer_skipped = SKIPPED.take();
     let outer_inner = INNER.take();
+    let outer_test = TEST.replace(engine.test());
     let parsed = parse_items(engine, source);
+    TEST.set(outer_test);
     let mut nested = NESTED.replace(outer);
     let skipped = SKIPPED.replace(outer_skipped);
     let mut inner_attributes = INNER.replace(outer_inner).into_boxed_slice();
     let (mut items, mut inner) = parsed?;
     attribute_text(source, &mut items, &mut inner_attributes);
     attribute_text(source, &mut nested, &mut []);
-    inner.extend(skipped);
+    inner.extend(skipped.iter().copied());
     // Preserve source authority before compatibility hoisting discards duplicates.
     let mut imports = items
         .iter()
@@ -94,6 +101,7 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     Ok(ParsedFile {
         items,
         masked: inner,
+        disabled: skipped,
         imports: imports.into_boxed_slice(),
         inner_attributes,
     })
@@ -1017,9 +1025,9 @@ fn cfg_disabled(attributes: &[crate::item::Attribute]) -> bool {
     })
 }
 
-/// One `cfg` predicate: `test` (false: Rawr builds as rustc does without
-/// `--test`), `debug_assertions` (true), `not(..)`, `all(..)`, `any(..)`;
-/// any other option, as `feature = "x"`, does not hold.
+/// One `cfg` predicate: `test` (as the engine builds: rustc's `--test`),
+/// `debug_assertions` (true), `not(..)`, `all(..)`, `any(..)`; any other
+/// option, as `feature = "x"`, does not hold.
 fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
     let name = parse_name(input, "in a `cfg` predicate")?;
     match name.text.as_str() {
@@ -1045,7 +1053,7 @@ fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
                 input.next();
                 return Ok(false);
             }
-            Ok(name == "debug_assertions")
+            Ok(name == "debug_assertions" || name == "test" && TEST.get())
         }
     }
 }
@@ -1224,7 +1232,7 @@ fn parse_attribute_after_marker(
     let path = parse_path(input)?;
     let mut arguments = Vec::new();
 
-    // `#[cfg(predicate)]`: Rawr builds as rustc does without `--test`.
+    // `#[cfg(predicate)]`, under the engine's build (`parse_cfg_predicate`).
     if path.segments.len() == 1 && path.segments[0].name.text == "cfg" {
         expect(input, Token::LeftParen, "after `cfg`")?;
         let enabled = parse_cfg_predicate(input)?;

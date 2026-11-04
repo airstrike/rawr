@@ -51,10 +51,20 @@ pub(super) fn declare(
             builder.alias(held::Value::facade(form), path)?;
         }
     }
+    let mut declared = BTreeSet::new();
     for module in &modules {
-        aliases(builder, &reader, module)?;
+        declared.extend(aliases(builder, &reader, module)?);
     }
     for path in bound {
+        if let Some(value) = values.iter().find(|value| {
+            value
+                .constants
+                .iter()
+                .any(|constant| held::Value::facade(constant) == path)
+        }) {
+            constant(builder, value, path)?;
+            continue;
+        }
         let (owner, name) = path.rsplit_once("::").unwrap_or(("", path));
         match values
             .iter()
@@ -63,6 +73,36 @@ pub(super) fn declare(
             Some(value) => member(builder, &reader, value, path, name)?,
             None => function(builder, &reader, path)?,
         }
+    }
+    declared.extend(bound.iter().cloned());
+    declared.extend(
+        values
+            .iter()
+            .flat_map(|value| value.forms())
+            .map(|form| held::Value::facade(form).to_owned()),
+    );
+    for module in &modules {
+        reexports(builder, module, &declared)?;
+    }
+    Ok(())
+}
+
+/// Re-export at `module` each of std's items there the facade doesn't
+/// declare, which Rawr resolves by its std path: after `use std::time;`,
+/// `time::Duration` is rawr's own as `std::time::Duration` is.
+fn reexports(
+    builder: &mut facade::Builder,
+    module: &str,
+    declared: &BTreeSet<String>,
+) -> Result<(), host::Error> {
+    let mut named = BTreeSet::new();
+    for path in std_table::children(&format!("std::{module}")) {
+        let name = path.path.rsplit("::").next().unwrap_or(path.path);
+        let facade = format!("{module}::{name}");
+        if path.kind == "mod" || declared.contains(&facade) || !named.insert(facade.clone()) {
+            continue;
+        }
+        builder.std_alias(&facade, path.path)?;
     }
     Ok(())
 }
@@ -105,7 +145,8 @@ fn aliases(
     builder: &mut facade::Builder,
     reader: &reader::Reader<'_>,
     module: &str,
-) -> Result<(), host::Error> {
+) -> Result<Vec<String>, host::Error> {
+    let mut declared = Vec::new();
     for path in std_table::children(&format!("std::{module}")) {
         if path.kind != "type" || path.stability != std_table::Stability::Stable {
             continue;
@@ -125,6 +166,7 @@ fn aliases(
             continue;
         };
         let name = path.path.rsplit("::").next().unwrap_or(path.path);
+        declared.push(format!("{module}::{name}"));
         builder.type_alias(
             &format!("{module}::{name}"),
             parameters
@@ -135,6 +177,26 @@ fn aliases(
             target,
         )?;
     }
+    Ok(declared)
+}
+
+/// Declare the constant at `path` of the held type `value`: an associated
+/// one where `path` is under the type's own, else a module's.
+fn constant(
+    builder: &mut facade::Builder,
+    value: &held::Value,
+    path: &str,
+) -> Result<(), host::Error> {
+    let own = held::Value::facade(value.std);
+    let ty = Type::registered(own)?;
+    let associated = path
+        .rsplit_once("::")
+        .is_some_and(|(owner, _)| owner == own);
+    builder.item(if associated {
+        item::Definition::associated_value(path, ty)?
+    } else {
+        item::Definition::value(path, ty)?
+    })?;
     Ok(())
 }
 

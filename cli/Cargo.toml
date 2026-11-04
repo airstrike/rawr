@@ -9,7 +9,7 @@ repository = "https://github.com/airstrike/rawr"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rawr = { path = "..", features = ["sync", "debugging"] }
+rawr = { path = "..", features = ["sync", "debugging", "syntax"] }
 rawr-location = { path = "../location" }
 rawr-watch = { path = "../watch" }
 serde_json = "1.0.45"
