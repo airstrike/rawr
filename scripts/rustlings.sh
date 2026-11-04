@@ -19,14 +19,17 @@
 #   the two exit statuses (0 passes, 101 panics) are compared.
 # - `exercise` rows run an unsolved exercise both ways. rustc's outcome is
 #   its first error code, else the program's exit status, else the outcome
-#   of its tests. rawr's is its first error code or its exit status. They
-#   match when both fail to compile with the same code, or both run alike.
+#   of its tests (`tests-build:CODE` or `tests-fail`). rawr's is its first
+#   error code or its exit status. They match when both fail to compile with
+#   the same code, or both run alike. An exercise that fails only in its
+#   tests is a `tests-gap`, since rawr can't run them.
 #
 # Every copy starts with `// rawr`. `rawr` is the one on PATH. RAWR_BIN names
 # a development build's directory (with `rawr-import` and
 # `rawr-import-driver`) to put first on PATH. RUSTC_TOOLCHAIN (default
 # stable) picks rustc's toolchain; RAWR_TIMEOUT (default 120) bounds each run
-# in seconds.
+# in seconds. RUSTLINGS_KINDS (default `solutions exercises`) picks
+# which to run.
 set -uo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -34,6 +37,7 @@ rustlings=${1:-$root/target/rustlings}
 out=${2:-$root/target/rustlings-out}
 toolchain=${RUSTC_TOOLCHAIN:-stable}
 limit=${RAWR_TIMEOUT:-120}
+kinds=${RUSTLINGS_KINDS:-solutions exercises}
 rustc=(rustc "+$toolchain" --edition 2024 -A warnings)
 [ -n "${RAWR_BIN:-}" ] && PATH=$RAWR_BIN:$PATH
 
@@ -165,7 +169,7 @@ exercise() {
             if native_build "$source" "$dir/tests" --test; then
                 [ "$(run "$dir/tests" "$dir/tests")" = 0 ] || native=tests-fail
             else
-                native="build:$(code "$dir/tests.build")"
+                native="tests-build:$(code "$dir/tests.build")"
             fi
         fi
     fi
@@ -181,7 +185,7 @@ exercise() {
                 *) verdict=rawr-accepts ;;
             esac
             ;;
-        tests-fail) verdict=tests-gap ;;
+        tests-*) verdict=tests-gap ;;
         *) verdict=differs ;;
     esac
     [ "$verdict" = match ] || detail=$(first_error "$dir/rawr.err")
@@ -189,11 +193,13 @@ exercise() {
 }
 
 for source in "$rustlings"/solutions/*/*.rs; do
+    [[ " $kinds " == *" solutions "* ]] || break
     name=$(basename "$(dirname "$source")")/$(basename "$source" .rs)
     echo "solution $name" >&2
     solution "$source" "$name"
 done
 for source in "$rustlings"/exercises/*/*.rs; do
+    [[ " $kinds " == *" exercises "* ]] || break
     name=$(basename "$(dirname "$source")")/$(basename "$source" .rs)
     echo "exercise $name" >&2
     exercise "$source" "$name"
