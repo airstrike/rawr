@@ -13457,3 +13457,13 @@ main();
     let error = rejected("fn main() { let code: i64 = 1; std::process::exit(code) } main(); 0");
     assert!(error.contains("expected 'i32', found 'i64'"), "{error}");
 }
+
+/// A Rust string literal holds the line breaks written in it, in a `const`
+/// item and in a body.
+#[test]
+fn language_string_literals_span_lines() {
+    let value = run(
+        "const RESULTS: &str = \"a,b\nc,d\";\npub fn run() -> i64 {\n    let more = \"e\nf\";\n    (RESULTS.lines().count() + more.len()) as i64\n}\nrun()",
+    );
+    assert_eq!(value, 5);
+}

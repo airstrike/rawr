@@ -27,7 +27,7 @@ const POLL: Duration = Duration::from_millis(25);
 #[must_use]
 pub fn child() -> Option<ExitCode> {
     let path = PathBuf::from(std::env::var_os(PROGRAM)?);
-    Some(match base::load(Some(&path)) {
+    Some(match base::load(Some(&path), base::Build::Program) {
         Ok(loaded) => crate::run_once(loaded),
         Err(report) => crate::failure(&report),
     })
@@ -171,7 +171,7 @@ pub fn run(
         }
         // A save: load the program again, and keep the one running unless
         // the new one compiles.
-        let loaded = match base::load(Some(&location)) {
+        let loaded = match base::load(Some(&location), base::Build::Program) {
             Ok(loaded) => loaded,
             Err(report) => {
                 eprint!("{}", crate::diagnostic::render(&report));
