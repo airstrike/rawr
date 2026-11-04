@@ -93,7 +93,8 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Schema 41 normalizes a projection a function or impl names in its own
 // environment, as `Self::Scalar` in an impl that sets it. Schema 43 gives a
 // blanket implementation's application its associated types, normalized in
-// the context it applies through.
+// the context it applies through. Schema 48 gives the `impl Trait` a trait's
+// method gives from its default body as the trait's opaque type.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
 const PROTOCOL_SCHEMA: u32 = 48;
