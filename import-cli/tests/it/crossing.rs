@@ -1492,6 +1492,17 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
     );
 }
 
+/// A crate's `-> !` functions cross: a call of one is a value of whatever
+/// type its place takes, in an `if` or `match` arm and a `let .. else`,
+/// and `finish` ends the process with its code, as `std::process::exit`
+/// does. The output is `cargo run`'s.
+#[test]
+fn a_crate_function_returning_never_is_a_value_of_any_type() {
+    let (rawr, cargo) = both_printed("diverging.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "3\n2 5\nfinishing");
+}
+
 /// A match binds a crate variant's fields without `Clone` as rustc does
 /// (#678): by value, also below a `Result`'s `Err`, it moves a `Door` and
 /// an `io::Error` out, so a consuming method and a by-value call take

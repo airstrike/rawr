@@ -100,6 +100,9 @@ impl Builtin {
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Type {
     Unit,
+    /// A function's output `!`: the call never gives a value, so Rawr
+    /// reads it as a value of whatever type its place takes.
+    Never,
     Builtin(Builtin),
     Nominal {
         definition: crate::surface::identity::Definition,

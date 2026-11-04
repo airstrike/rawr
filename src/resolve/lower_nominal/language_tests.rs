@@ -12792,8 +12792,8 @@ fn language_std_items_rawr_cannot_run_fail_at_their_use() {
             "std::num::NonZeroU8",
         ),
         (
-            "pub fn run() -> i64 { std::process::abort(); 0 } run()",
-            "std::process::abort",
+            "pub fn run() -> i64 { let c = std::process::Command::new(\"ls\"); 0 } run()",
+            "std::process::Command::new",
         ),
     ] {
         let error = rejected(source);
@@ -13309,4 +13309,151 @@ fn language_rc_is_not_send() {
         error.contains("cannot be sent between threads safely"),
         "{error}"
     );
+}
+
+/// The never type `!`: a `-> !` function whose body diverges by
+/// `panic!`, `loop {}`, `unreachable!`, `todo!` or another `-> !` call; a
+/// call of one in an `if` or `match` arm, a `let` initialiser and a
+/// `let .. else`; a `|| -> !` closure; `return`, `break`, `continue` and
+/// `panic!` in value positions; and a `fn(..) -> !` pointer. The output
+/// is rustc's build of the same program.
+#[test]
+fn language_never_type_diverges_as_rustc_runs_it() {
+    let output = printed(
+        r#"
+fn fail(msg: &str) -> ! {
+    panic!("{msg}")
+}
+fn spin() -> ! {
+    loop {}
+}
+fn never_here() -> ! {
+    unreachable!()
+}
+fn later() -> ! {
+    todo!()
+}
+fn relay(msg: &str) -> ! {
+    return fail(msg);
+}
+fn pick(n: i32) -> i32 {
+    if n > 0 { n } else { fail("negative") }
+}
+fn first(v: &[i32]) -> i32 {
+    let Some(x) = v.first() else { fail("empty") };
+    *x
+}
+fn parse(s: &str) -> u8 {
+    match s.parse::<u8>() {
+        Ok(v) => v,
+        Err(_) => return 0,
+    }
+}
+fn label(n: i32) -> &'static str {
+    match n {
+        0 => "zero",
+        1 => "one",
+        _ => unreachable!("only 0 or 1"),
+    }
+}
+trait Fails {
+    fn fail(&self, why: &str) -> !;
+    fn checked(&self, n: i32) -> i32 {
+        if n < 0 { self.fail("negative") } else { n }
+    }
+}
+struct Loud;
+impl Fails for Loud {
+    fn fail(&self, why: &str) -> ! {
+        panic!("loud: {why}")
+    }
+}
+fn main() {
+    println!("{}", pick(3));
+    let x: u32 = match Some(1) {
+        Some(v) => v,
+        None => fail("none"),
+    };
+    println!("{x}");
+    println!("{}", first(&[4, 5]));
+    println!("{} {}", parse("7"), parse("x"));
+    println!("{} {}", label(0), label(1));
+    let s: String = if x > 0 { String::from("pos") } else { panic!("no") };
+    println!("{s}");
+    let mut total = 0;
+    for i in 0..10 {
+        let v: i32 = if i % 2 == 0 { i } else { continue };
+        let w: i32 = if v < 8 { v } else { break };
+        total += w;
+    }
+    println!("{total}");
+    let bail = || -> ! { fail("closure") };
+    let pick2 = |n: i32| -> i32 { if n > 0 { n } else { bail() } };
+    println!("{}", pick2(9));
+    let f: fn(&str) -> ! = fail;
+    let y: i32 = if x == 1 { 5 } else { f("ptr") };
+    println!("{y}");
+    let v: Vec<i32> = (1..4).map(|n| if n > 0 { n * 2 } else { spin() }).collect();
+    println!("{v:?}");
+    let pointers: Vec<fn() -> !> = vec![never_here, later];
+    println!("{} {}", pointers.len(), Loud.checked(6));
+    let r: Result<u8, String> = Ok(4);
+    let m = r.unwrap_or_else(|e| panic!("{e}"));
+    println!("{m}");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "3\n1\n4\n7 0\nzero one\npos\n12\n9\n5\n[2, 4, 6]\n2 6\n4\n"
+    );
+    let error = Engine::new()
+        .run(
+            "fn fail(msg: &str) -> ! { panic!(\"{msg}\") }\n\
+             fn relay(msg: &str) -> ! { return fail(msg); }\n\
+             fn main() { relay(\"the end\") }\nmain();",
+        )
+        .expect_err("a `-> !` call that panics ends the run with its panic");
+    assert!(error.to_string().contains("the end"), "{error}");
+}
+
+/// `std::process::exit` and `std::process::abort` are `-> !`: rustc's
+/// program ends there, so nothing after the call runs. A program its
+/// engine grants no process (`?play`) ends its run instead of the host's
+/// process.
+#[test]
+fn language_process_exit_and_abort_end_the_program() {
+    let output = printed(
+        r#"
+use std::process;
+fn quit(code: i32) -> ! {
+    process::exit(code)
+}
+fn main() {
+    println!("before");
+    let n: u8 = match 2 {
+        2 => quit(3),
+        _ => 0,
+    };
+    println!("after {n}");
+}
+main();
+"#,
+    );
+    assert_eq!(output, "before\n");
+    let output = printed(
+        r#"
+fn main() {
+    println!("aborting");
+    let n: u8 = if true { std::process::abort() } else { 1 };
+    println!("{n}");
+}
+main();
+"#,
+    );
+    assert_eq!(output, "aborting\n");
+    // `exit` takes std's `i32`, as a typed variable or a literal.
+    let error = rejected("fn main() { let code: i64 = 1; std::process::exit(code) } main(); 0");
+    assert!(error.contains("expected 'i32', found 'i64'"), "{error}");
 }
