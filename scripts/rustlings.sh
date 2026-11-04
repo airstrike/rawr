@@ -47,13 +47,14 @@ printf 'kind\tfile\trustc\trawr\tverdict\tdetail\n' >"$results"
 
 row() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >>"$results"; }
 
-# The first `error[E....]` code in a file, else `error` when it has an
-# error line, else nothing.
+# The first error code in a file (`E0308`, or rawr's own such as
+# `RAWR-RESOLVE-…`), else `error` when it has an error line, else nothing.
 code() {
     local found
-    found=$(grep -o -m1 'error\[E[0-9]*\]' "$1" | head -1)
+    found=$(grep -o -m1 'error\[[^]]*\]' "$1" | head -1)
     if [ -n "$found" ]; then
-        echo "${found:6:5}"
+        found=${found#error[}
+        echo "${found%]}"
     elif grep -q -m1 '^error' "$1"; then
         echo error
     fi
