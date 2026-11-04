@@ -11901,6 +11901,9 @@ struct Parser<'a> {
     /// Each `s.parse()`'s target and error type, the error settled by the
     /// target (`settle_parse`).
     pending_parses: Vec<(Ty, Ty, Span, String)>,
+    /// Each settled `parse`'s placeholder and the text written over it
+    /// once its call is in the body.
+    settled_parses: Vec<(String, String)>,
     /// The `parse` calls read so far, which number their placeholders.
     parse_count: usize,
     /// The `text.into()` calls, whose target `Err(..)` may box as `dyn
@@ -12205,6 +12208,7 @@ impl<'a> Parser<'a> {
             pending_conversions: Vec::new(),
             pending_formats: Vec::new(),
             pending_parses: Vec::new(),
+            settled_parses: Vec::new(),
             parse_count: 0,
             text_into: Vec::new(),
             generics: BTreeMap::new(),
@@ -17275,6 +17279,9 @@ impl<'a> Parser<'a> {
             self.write_over(&into.placeholder, &format!("{helper}("));
         }
         self.finish_formats()?;
+        for (placeholder, text) in std::mem::take(&mut self.settled_parses) {
+            self.write_over(&placeholder, &text);
+        }
         for (target, error, span, placeholder) in std::mem::take(&mut self.pending_parses) {
             if let Some(helper) = self.settle_parse(&target, &error, span, true)? {
                 self.write_over(&placeholder, &format!("{helper}("));
@@ -25443,13 +25450,20 @@ impl<'a> Parser<'a> {
     }
 
     /// Each pending `parse` whose target a statement made known gets its
-    /// error type, so later statements can use it.
+    /// error type, so later statements can use it. A statement inside the
+    /// call's own expression (a closure's body in its chain) can settle it
+    /// before the call is written: its helper waits for the call.
     fn settle_parses(&mut self) -> Result<(), Error> {
         for pending in std::mem::take(&mut self.pending_parses) {
-            let (target, error, span, placeholder) = &pending;
+            let (target, error, span, _) = &pending;
             match self.settle_parse(target, error, *span, false)? {
-                Some(helper) => self.write_over(placeholder, &format!("{helper}(")),
+                Some(helper) => self.settled_parses.push((pending.3, format!("{helper}("))),
                 None => self.pending_parses.push(pending),
+            }
+        }
+        for (placeholder, text) in std::mem::take(&mut self.settled_parses) {
+            if !self.write_over(&placeholder, &text) {
+                self.settled_parses.push((placeholder, text));
             }
         }
         Ok(())
@@ -34983,14 +34997,16 @@ impl<'a> Parser<'a> {
     }
 
     /// Write `text` over `placeholder`, padded to its length so source
-    /// locations stay exact, in the body and its lifted closures.
-    fn write_over(&mut self, placeholder: &str, text: &str) {
+    /// locations stay exact, in the body and its lifted closures. Whether
+    /// the placeholder was written yet: a call still being read isn't.
+    fn write_over(&mut self, placeholder: &str, text: &str) -> bool {
         let replacement = format!("{text:<width$}", width = placeholder.len());
         debug_assert_eq!(replacement.len(), placeholder.len());
-        self.output.replace_same_length(placeholder, &replacement);
+        let mut found = self.output.replace_same_length(placeholder, &replacement);
         for closure in &mut self.lifted {
-            closure.body.replace_same_length(placeholder, &replacement);
+            found |= closure.body.replace_same_length(placeholder, &replacement);
         }
+        found
     }
 
     /// The `String` methods Rust code reaches for, with Rust results.

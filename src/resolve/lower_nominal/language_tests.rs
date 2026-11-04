@@ -6441,6 +6441,38 @@ fn language_str_parse_and_methods() {
     }
 }
 
+/// A `parse` whose target a later call in its chain gives (`.map(C::P)`),
+/// followed by a closure whose body is a statement (`format!`), settles
+/// while the chain is still being read: its call is written once the
+/// chain is (the playground's enums example, a match arm continued on
+/// the next lines).
+#[test]
+fn language_str_parse_settled_inside_its_own_chain() {
+    let value = run_string(
+        r#"
+        #[derive(Debug)]
+        enum Command { Push(i64), Add }
+        fn parse(word: &str) -> Result<Command, String> {
+            match word {
+                "+" => Ok(Command::Add),
+                _ => word
+                    .parse()
+                    .map(Command::Push)
+                    .map_err(|e| format!("not a command: {word:?} ({e})")),
+            }
+        }
+        pub fn run() -> String {
+            format!("{:?} {:?} {:?}", parse("+"), parse("7"), parse("x"))
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "Ok(Add) Ok(Push(7)) Err(\"not a command: \\\"x\\\" (invalid digit found in string)\")"
+    );
+}
+
 #[test]
 fn language_rust_names_the_legacy_lexer_reserves() {
     let value = run_string(
