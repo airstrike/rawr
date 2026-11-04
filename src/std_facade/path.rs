@@ -32,6 +32,7 @@ pub(super) const HELD: [Held; 3] = [
         },
         crosses: true,
         runs: RUNS,
+        constants: &[],
     }),
     Held::Value(held::Value {
         std: "std::ffi::OsString",
@@ -44,6 +45,7 @@ pub(super) const HELD: [Held; 3] = [
         },
         crosses: true,
         runs: RUNS,
+        constants: &[],
     }),
     Held::Text("std::path::Display"),
 ];

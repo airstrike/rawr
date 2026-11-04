@@ -11,13 +11,19 @@
 //! holds std's types ([`held`]). Every declaration is std's own, read from
 //! the std table ([`declare`]).
 
+mod case;
 mod declare;
 mod env;
 mod fs;
 mod held;
 mod io;
+mod num;
 mod path;
 mod process;
+mod time;
+
+pub(crate) use case::mapped as case_mapped;
+pub(crate) use num::int_error_kind;
 
 use crate::func::SendSync;
 use crate::host::{self, facade, runtime::Call};
@@ -93,8 +99,7 @@ impl Bind for host::runtime::Builder {
 /// std's own Rust value, which a crate takes, gives and borrows as itself
 /// (`crossing::Std`).
 pub(crate) fn crosses(path: &str) -> bool {
-    [path::HELD.as_slice(), io::HELD.as_slice()]
-        .concat()
+    held()
         .iter()
         .any(|held| matches!(held, held::Held::Value(value) if value.crosses && held::Value::facade(value.std) == path))
 }
@@ -110,12 +115,27 @@ pub(crate) fn definition() -> facade::Definition {
 fn build() -> Result<facade::Definition, host::Error> {
     path::register_debug();
     io::register_debug();
+    num::register_debug();
+    case::register_debug();
+    time::register_debug();
     let mut bound = Vec::new();
     bind(&mut bound);
-    let held = [path::HELD.as_slice(), io::HELD.as_slice()].concat();
+    let held = held();
     let mut builder = facade::Builder::new(ROOT, facade::Abi::new(1)?)?;
     declare::declare(&mut builder, &held, &bound)?;
     builder.finish()
+}
+
+/// Every module's held types.
+fn held() -> Vec<held::Held> {
+    [
+        path::HELD.as_slice(),
+        io::HELD.as_slice(),
+        case::HELD.as_slice(),
+        num::HELD.as_slice(),
+        time::HELD.as_slice(),
+    ]
+    .concat()
 }
 
 /// Every module's binds.
@@ -125,6 +145,9 @@ fn bind(binds: &mut impl Bind) {
     env::bind(binds);
     fs::bind(binds);
     process::bind(binds);
+    num::bind(binds);
+    case::bind(binds);
+    time::bind(binds);
 }
 
 /// The facade with its runtime bindings.
