@@ -486,6 +486,25 @@ fn resolution_report_with_sources(
         let label = primary_label(error, &source, error.primary_span());
         builder = builder.primary(source.clone(), member_span(error), label)?;
     }
+    if let resolve::Error::MovedValue {
+        name,
+        cause: Some(cause),
+        ..
+    } = error
+    {
+        builder = builder.secondary(
+            source.clone(),
+            cause.declaration,
+            Some(
+                format!(
+                    "move occurs because `{name}` has type `{}`, which does not implement the \
+                     `Copy` trait",
+                    cause.ty
+                )
+                .into(),
+            ),
+        )?;
+    }
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
         builder = builder.secondary(
             secondary_source.unwrap_or(source),
@@ -522,6 +541,10 @@ fn primary_label(
             previous_iteration: true,
             ..
         } => Some("value moved here, in previous iteration of loop".into()),
+        resolve::Error::MovedValue { borrowed: true, .. } => {
+            Some("value borrowed here after move".into())
+        }
+        resolve::Error::MovedValue { .. } => Some("value used here after move".into()),
         _ => None,
     }
 }
@@ -838,6 +861,11 @@ fn resolution_message(error: &resolve::Error) -> String {
         }
         resolve::Error::UnknownFunction { name, .. } => format!("unknown function `{name}`"),
         resolve::Error::UnknownVariable { name, .. } => format!("unknown variable `{name}`"),
+        resolve::Error::MovedValue {
+            name,
+            borrowed: true,
+            ..
+        } => format!("borrow of moved value: `{name}`"),
         resolve::Error::MovedValue { name, .. } => format!("use of moved value: `{name}`"),
         resolve::Error::BorrowConflict { message, .. } => message.to_string(),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {

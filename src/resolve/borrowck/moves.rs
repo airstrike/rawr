@@ -19,6 +19,8 @@ pub(crate) struct UseAfterMove {
     pub(crate) moved: Span,
     /// The use.
     pub(crate) access: Span,
+    /// The use borrows the place: rustc's "borrow of moved value".
+    pub(crate) borrowed: bool,
 }
 
 /// The first use of a moved place in `body`, in the order the body runs.
@@ -49,7 +51,7 @@ pub(crate) fn check(body: &Body) -> Option<UseAfterMove> {
     let mut work = vec![Block(0)];
     while let Some(block) = work.pop() {
         let mut state = entry[block.0 as usize].clone().expect("a reached block");
-        run(body, block, &moved, &mut state, &mut |_, _, _| {});
+        run(body, block, &moved, &mut state, &mut |_, _, _, _| {});
         for &next in &body.blocks[block.0 as usize].successors {
             let target = &mut entry[next.0 as usize];
             let changed = match target {
@@ -83,11 +85,12 @@ pub(crate) fn check(body: &Body) -> Option<UseAfterMove> {
             Block(index as u32),
             &moved,
             &mut state,
-            &mut |place, span, at| {
+            &mut |place, span, at, borrowed| {
                 first.get_or_insert_with(|| UseAfterMove {
                     name: describe(body, place),
                     moved: at,
                     access: span,
+                    borrowed,
                 });
             },
         );
@@ -99,13 +102,14 @@ pub(crate) fn check(body: &Body) -> Option<UseAfterMove> {
 }
 
 /// Runs `block`'s facts over `state` (which moved places may be moved),
-/// calling `error` at each access of a place that may be moved.
+/// calling `error` at each access of a place that may be moved, and whether
+/// the access borrows it.
 fn run(
     body: &Body,
     block: Block,
     moved: &[(&Place, Span)],
     state: &mut [bool],
-    error: &mut dyn FnMut(&Place, Span, Span),
+    error: &mut dyn FnMut(&Place, Span, Span, bool),
 ) {
     // Where a place that may be moved and overlaps `place` was moved, if
     // one does (`strict`: one above it).
@@ -142,7 +146,7 @@ fn run(
                     // place itself, or a place above what was moved, is
                     // given a value again.
                     if let Some(at) = moved_at(state, place, true) {
-                        error(place, *span, at);
+                        error(place, *span, at, false);
                     }
                     clear(moved, state, |known| {
                         known.projection.len() >= place.projection.len() && overlaps(known, place)
@@ -150,7 +154,9 @@ fn run(
                 }
                 _ => {
                     if let Some(at) = moved_at(state, place, false) {
-                        error(place, *span, at);
+                        let borrowed =
+                            matches!(access, Access::Shared | Access::Reserve | Access::Mutable);
+                        error(place, *span, at, borrowed);
                     }
                     if *access == Access::Move
                         && let Some(index) = moved.iter().position(|(known, _)| *known == place)

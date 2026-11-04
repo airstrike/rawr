@@ -302,20 +302,13 @@ impl Parser<'_> {
             return Ok(None);
         }
         // A borrow a `move` closure took is used after the move.
-        if let Some(binding) = self.bindings.get(name.as_str())
-            && !binding.available
+        if self
+            .bindings
+            .get(name.as_str())
+            .is_some_and(|binding| !binding.available)
             && self.peek() != Token::Equals
         {
-            return Err(Error::MovedValue {
-                moved: self
-                    .moved_at
-                    .get(&declaration)
-                    .copied()
-                    .unwrap_or(declaration),
-                name: name.clone(),
-                reference: span,
-                previous_iteration: false,
-            });
+            return Err(self.moved_value(name, &self.bindings[name.as_str()], span, false));
         }
         // A closure using the borrow reaches the place through what it
         // captured where it was made.

@@ -380,9 +380,16 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::BorrowConflict { message, code, .. } => {
                     write!(f, "{message} ({code})")
                 }
-                crate::resolve::Error::MovedValue { name, moved, .. } => {
-                    write!(f, "Use of moved value '{name}'; it was already moved at {moved}")
-                }
+                crate::resolve::Error::MovedValue {
+                    name,
+                    moved,
+                    borrowed,
+                    ..
+                } => write!(
+                    f,
+                    "{} of moved value '{name}'; it was already moved at {moved}",
+                    if *borrowed { "Borrow" } else { "Use" }
+                ),
                 crate::resolve::Error::InvalidConstruction { owner, reason, .. } => {
                     write!(f, "Invalid construction of '{owner}': {reason}")
                 }

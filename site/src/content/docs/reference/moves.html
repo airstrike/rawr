@@ -8,9 +8,9 @@
   <pre><code data-lang="rust" data-run="use-after-move.rs" id="src-use-after-move">let a = String::from("ra");
 let b = a + "wr";
 println!("{a}"); // error: `a` was moved</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-use-after-move" data-out="out-use-after-move" aria-label="Run use-after-move.rs" hidden></button><b>rawr run use-after-move.rs</b><span id="out-use-after-move" aria-live="polite"><span class="err">error[E0382]: use of moved value: `a`</span></span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-use-after-move" data-out="out-use-after-move" aria-label="Run use-after-move.rs" hidden></button><b>rawr run use-after-move.rs</b><span id="out-use-after-move" aria-live="polite"><span class="err">error[E0382]: borrow of moved value: `a`</span></span></div>
 </div>
-<p>Run shows the check&rsquo;s error. Write <code>a.clone() + "wr"</code> and the program prints <code>ra</code>.</p>
+<p>Run shows the check&rsquo;s error, worded as rustc words it: <code>println!</code> borrows <code>a</code>, so the error is a borrow of a moved value, and it names <code>a</code>&rsquo;s type, which is not <code>Copy</code>. Write <code>a.clone() + "wr"</code> and the program prints <code>ra</code>.</p>
 <h2 id="partial">Partial moves</h2>
 <p>Moving one field out of a struct leaves its other fields usable. So does moving a tuple&rsquo;s member, as <code>let b = t.1;</code> does, or a field below a field, as <code>let b = s.inner.b;</code> does. Assigning the part again makes it usable. A <code>let</code>, <code>if let</code> or <code>match</code> pattern moves each part it binds by value, and a closure moves the parts its body moves out.</p>
 <div class="block">

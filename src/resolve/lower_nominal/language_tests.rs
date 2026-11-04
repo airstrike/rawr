@@ -9421,6 +9421,48 @@ fn language_moves_loop_patterns_bind_fresh_values_each_iteration() {
     assert_eq!(value, (1 + 2 + 3 + 4 + 5 + 5) * 10 + 5);
 }
 
+/// A moved local `format!` names is a borrow of it, as rustc words it, at
+/// the name in the string; one used by value is a use. Either names the
+/// local's type, which isn't `Copy`, at its declaration.
+#[test]
+fn language_a_use_after_a_move_is_worded_and_placed_as_rustc_does() {
+    let source = "fn consume(words: Vec<String>) -> usize {\n    words.len()\n}\n\
+                  pub fn run() -> i64 {\n    let words = vec![String::from(\"a\")];\n    \
+                  let n = consume(words);\n    println!(\"{n} {words:?}\");\n    0\n}";
+    let error = Engine::new()
+        .compile(source)
+        .expect_err("rustc rejects this program");
+    let position = error.position();
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("borrow of moved value: `words`"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("value borrowed here after move"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "move occurs because `words` has type `Vec<String>`, which does not implement the \
+             `Copy` trait"
+        ),
+        "{rendered}"
+    );
+    assert_eq!((position.line(), position.position()), (Some(7), Some(20)));
+
+    let error = Engine::new()
+        .compile("pub fn run() -> i64 { let s = String::new(); let t = s; let u = s; 0 }")
+        .expect_err("rustc rejects this program")
+        .to_string();
+    assert!(error.contains("use of moved value: `s`"), "{error}");
+    assert!(error.contains("value used here after move"), "{error}");
+    assert!(
+        error.contains("move occurs because `s` has type `String`"),
+        "{error}"
+    );
+}
+
 #[test]
 fn language_moves_out_of_a_loop_are_moved_in_its_previous_iteration() {
     // A local declared outside the loop and moved inside it is moved on
