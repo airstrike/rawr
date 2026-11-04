@@ -5715,6 +5715,12 @@ enum PreludeOp {
     CharMethod,
     /// `char::from_digit(n, radix)`, or `char::from_u32(n)` with radix `-1`.
     CharFrom,
+    /// `e.kind()` of a `ParseIntError`, from its message: std's
+    /// `IntErrorKind`.
+    IntErrorKind,
+    /// `c.to_uppercase()`, or `c.to_lowercase()` when its flag is false:
+    /// std's `ToUppercase` or `ToLowercase`.
+    CaseMapping,
     /// A `Vec` changed in place (`VEC_METHODS`), called as a method so the
     /// array is taken by reference: `vec(code, a, b, c)`.
     VecMethod,
@@ -5872,6 +5878,8 @@ impl PreludeOp {
             Self::SplitAt => "slice.split-at",
             Self::CharMethod => "char.method",
             Self::CharFrom => "char.from",
+            Self::IntErrorKind => "error.int-kind",
+            Self::CaseMapping => "char.case-mapping",
             Self::VecMethod => "vec.method",
             Self::VecCapacity => "vec.capacity",
             Self::FrameCopy => "scope.frame-copy",
@@ -6099,6 +6107,8 @@ impl PreludeOp {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()]
             }
             Self::CharFrom => vec![TypeId::of::<crate::INT>(), TypeId::of::<crate::INT>()],
+            Self::IntErrorKind => vec![TypeId::of::<ImmutableString>()],
+            Self::CaseMapping => vec![TypeId::of::<char>(), TypeId::of::<bool>()],
             Self::SetAlgebra => vec![
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::Array>(),
@@ -6520,6 +6530,17 @@ impl PreludeOp {
                     Some(c) => crate::option::some(c.into()),
                     None => crate::option::none(),
                 });
+            }
+            Self::IntErrorKind => {
+                let message = args[0].clone_cast::<ImmutableString>();
+                return crate::std_facade::int_error_kind(&message)
+                    .map(Dynamic::from)
+                    .ok_or_else(|| invariant("a `ParseIntError` has std's message"));
+            }
+            Self::CaseMapping => {
+                let c = args[0].as_char().unwrap_or_default();
+                let upper = args[1].as_bool().unwrap_or_default();
+                return Ok(crate::std_facade::case_mapped(c, upper));
             }
             Self::CharMethod => {
                 let c = args[0].as_char().unwrap_or_default();
@@ -17917,21 +17938,8 @@ impl<'a> Parser<'a> {
             Ty::Range(element) | Ty::InclusiveOf(element) => {
                 capability != capability::Kind::Copy && self.type_provides(&element, capability)
             }
-            // `ParseIntError` and kin: `Debug`, `Clone`, `PartialEq`, `Eq`.
-            Ty::ParseError(_) => matches!(
-                capability,
-                capability::Kind::Debug
-                    | capability::Kind::Clone
-                    | capability::Kind::PartialEq
-                    | capability::Kind::Eq
-            ),
-            // `Ordering` derives what an integer has, but not `Default`.
-            Ty::Ordering => {
-                capability != capability::Kind::Default
-                    && crate::capability::builtin_supports("i64", capability)
-            }
-            // `Duration` and `Instant` are `Copy`, compare, order and print;
-            // a `Duration` is also `Default`.
+            Ty::ParseError(error) => crate::capability::builtin_supports(error.name(), capability),
+            Ty::Ordering => crate::capability::builtin_supports("Ordering", capability),
             Ty::Time(time) => crate::capability::builtin_supports(time.name(), capability),
             // `&T` compares, orders, hashes and prints as `T` does; a shared
             // reference is `Copy`.
@@ -23340,6 +23348,21 @@ impl<'a> Parser<'a> {
             }
             _ => false,
         }
+    }
+
+    /// The type Rawr's std holds at `path` under its root, as
+    /// `num::IntErrorKind`.
+    fn std_held(&self, path: &str) -> Option<Ty> {
+        let path = format!("{}::{path}", crate::std_facade::ROOT);
+        let definition = self.models.host.type_(&path)?.clone();
+        Some(Ty::Host {
+            proof: HostTyProof::new(
+                definition,
+                None,
+                self.models.host.type_owner(&path).cloned(),
+            ),
+            arguments: Box::default(),
+        })
     }
 
     /// `value.field` of an imported struct: a read, or, before `=`, the
@@ -36623,6 +36646,22 @@ impl<'a> Parser<'a> {
                 value = self.parse_time_method(value, time, member, member_span)?;
                 continue;
             }
+            // `e.kind()` of a `ParseIntError`: a borrow of its kind, which
+            // Rawr's std holds as std's own `IntErrorKind`.
+            if number == Ty::ParseError(ParseError::Int)
+                && member.as_str() == "kind"
+                && matches!(self.peek(), Token::Unit)
+                && let Some(kind) = self.std_held("num::IntErrorKind")
+            {
+                let end = self.next().1;
+                let source = self.prelude_op(PreludeOp::IntErrorKind, [value.rendered_source()]);
+                let ty = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(kind),
+                };
+                value = self.operator_expr(source, ty, span(value.span.start(), end));
+                continue;
+            }
             // `e.to_string()` and `e.clone()` of a `ParseIntError` and kin:
             // its message, which is its value.
             if let Ty::ParseError(error) = number
@@ -36656,6 +36695,27 @@ impl<'a> Parser<'a> {
             }
             if matches!(number, Ty::Int(_) | Ty::Float(_)) && member != "to_string" {
                 value = self.parse_number_method(value, number, member, member_span)?;
+                continue;
+            }
+            // `c.to_uppercase()` and `c.to_lowercase()`: std's iterators of
+            // the chars its case maps to, which Rawr's std holds as std's
+            // own.
+            if number == Ty::Char
+                && matches!(member.as_str(), "to_uppercase" | "to_lowercase")
+                && matches!(self.peek(), Token::Unit)
+                && let Some(ty) = self.std_held(if member.as_str() == "to_uppercase" {
+                    "char::ToUppercase"
+                } else {
+                    "char::ToLowercase"
+                })
+            {
+                let end = self.next().1;
+                let upper = (member.as_str() == "to_uppercase").to_string();
+                let source = self.prelude_op(
+                    PreludeOp::CaseMapping,
+                    [value.rendered_source(), upper.into()],
+                );
+                value = self.operator_expr(source, ty, span(value.span.start(), end));
                 continue;
             }
             if number == Ty::Char
@@ -42067,6 +42127,48 @@ impl<'a> Parser<'a> {
                     }),
                 )
             }
+            // `as_deref` borrows the `Ok` value through `Deref`, as
+            // `Option`'s does: `Result<String, E>` gives `Result<&str, &E>`.
+            "as_deref" | "as_deref_mut" => {
+                arity(0, &arguments)?;
+                let mutable = member.as_str() == "as_deref_mut";
+                let reference = Ty::Reference {
+                    mutable,
+                    target: Box::new(self.inference.resolve(&ok)),
+                };
+                let err = Box::new(Ty::Reference {
+                    mutable,
+                    target: Box::new(err),
+                });
+                match self.deref_reference(&reference, false) {
+                    Some((target, std_impl::DerefCall::Value)) => {
+                        source.push_text(r.as_str());
+                        Ty::Result(Box::new(target), err)
+                    }
+                    // A program's `deref` runs on the `Ok` value.
+                    Some((target, std_impl::DerefCall::Program(call))) if !mutable => {
+                        let test = is(self);
+                        let unwrapped = value_of(self);
+                        let dereferenced = Self::std_call(&call, unwrapped, &[]);
+                        let produced = self.prelude_op(PreludeOp::Ok, [dereferenced]);
+                        branch(&mut source, test, produced, r.as_str().into());
+                        Ty::Result(Box::new(target), err)
+                    }
+                    Some(_) => {
+                        return Err(Error::NotYet {
+                            path: format!("Result::{member}").into(),
+                            reference: member_span,
+                        });
+                    }
+                    None => {
+                        return Err(Error::UnknownMember {
+                            owner: owner.name(&self.models),
+                            member,
+                            reference: member_span,
+                        });
+                    }
+                }
+            }
             "clone" => {
                 arity(0, &arguments)?;
                 source.push_text(r.as_str());
@@ -42081,7 +42183,7 @@ impl<'a> Parser<'a> {
             }
         };
         source.push_text(" }");
-        if member.as_str() == "as_mut" {
+        if matches!(member.as_str(), "as_mut" | "as_deref_mut") {
             self.lend_place(&value, expression);
         }
         // A block is not an `if` condition in the legacy parser.
@@ -52146,6 +52248,7 @@ fn opaque_impl_use(ty: &str, opaque: &str, span: Span) -> Error {
     }
 }
 
+#[cfg(feature = "rust-import")]
 fn mentions_script(ty: &Ty) -> bool {
     match ty {
         Ty::Script(..) => true,
@@ -52851,6 +52954,18 @@ fn debug_typed(
                 && let Some(leaf) = DebugLeaf::of_name(path.name.as_str()) =>
         {
             spec.unwrap_or(&DebugSpec::PLAIN).leaf(value, leaf)
+        }
+        // `ParseIntError` and its kin are their messages at runtime, and
+        // print std's `Debug` of the error with that message.
+        (type_ref::Type::Path(path), Union::Str(text, ..))
+            if path.target == type_ref::Target::Builtin
+                && let Some(error) = ParseError::named(path.name.as_str()) =>
+        {
+            error
+                .texts()
+                .iter()
+                .find(|(message, _)| *message == text.as_str())
+                .map_or_else(|| text.to_string(), |(_, debug)| (*debug).to_owned())
         }
         (type_ref::Type::Path(path), Union::Int(value, ..))
             if path.target == type_ref::Target::Builtin && path.name.as_str() == "Ordering" =>

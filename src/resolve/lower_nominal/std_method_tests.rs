@@ -542,3 +542,82 @@ main();
         "Some(\"a\") Some(\"b\") Some(\"a\") Some(\"b\")\n"
     );
 }
+
+#[test]
+fn language_std_members_rustlings_reaches_for_run() {
+    // `ParseIntError::kind` gives std's own `IntErrorKind`,
+    // `Result::as_deref` borrows the `Ok` value through `Deref`, and a
+    // `char`'s case mapping is std's own iterator (#902).
+    let source = r#"
+use std::num::IntErrorKind;
+
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().to_string() + chars.as_str(),
+    }
+}
+
+fn main() {
+    let empty = "".parse::<u8>().unwrap_err();
+    let digit = "beep".parse::<i32>().unwrap_err();
+    let large = "300".parse::<u8>().unwrap_err();
+    let small = "-300".parse::<i8>().unwrap_err();
+    println!("{:?} {:?} {:?} {:?}", empty.kind(), digit.kind(), large.kind(), small.kind());
+    println!("{}", digit.kind() == &IntErrorKind::InvalidDigit);
+    match large.kind() {
+        IntErrorKind::PosOverflow => println!("too large"),
+        _ => println!("other"),
+    }
+    let name: Result<String, String> = Ok("Beyoncé".to_string());
+    let failed: Result<String, String> = Err("empty".to_string());
+    println!("{:?} {:?}", name.as_deref(), failed.as_deref());
+    println!("{}", name.as_deref() == Ok("Beyoncé"));
+    println!("{} {}", capitalize("hello"), capitalize("ß"));
+    let mut upper = 'ß'.to_uppercase();
+    println!("{:?} {:?} {:?}", upper.next(), upper.next(), upper.next());
+    println!("{} {}", 'Q'.to_lowercase(), 'q'.to_uppercase());
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Empty InvalidDigit PosOverflow NegOverflow\ntrue\ntoo large\n\
+         Ok(\"Beyoncé\") Err(\"empty\")\ntrue\nHello SS\nSome('S') Some('S') None\nq Q\n"
+    );
+}
+
+#[test]
+fn language_system_time_is_stds_own() {
+    let source = r#"
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+fn main() {
+    let now = SystemTime::now();
+    let since = now.duration_since(UNIX_EPOCH).unwrap();
+    println!("{}", since.as_secs() > 1_700_000_000);
+    let later = UNIX_EPOCH.checked_add(Duration::from_secs(90)).unwrap();
+    println!("{:?}", later.duration_since(SystemTime::UNIX_EPOCH));
+    let error = UNIX_EPOCH.duration_since(later).unwrap_err();
+    println!("{:?} {}", error.duration(), error);
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(n) => println!("{}", n.as_secs() > 0),
+        Err(_) => panic!("SystemTime before UNIX EPOCH!"),
+    }
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "true\nOk(90s)\n90s second time provided was later than self\ntrue\n"
+    );
+}
+
+#[test]
+fn language_only_a_parse_int_error_has_a_kind() {
+    // `ParseFloatError` has no `kind`: rustc's E0599.
+    let report =
+        refused("fn main() { let e = \"x\".parse::<f64>().unwrap_err(); e.kind(); }\nmain();\n");
+    assert!(report.starts_with("error[E0599]"), "{report}");
+}

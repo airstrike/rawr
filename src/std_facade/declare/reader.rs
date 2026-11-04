@@ -142,6 +142,8 @@ impl<'a> Reader<'a> {
             "core::result::Result" => return Some(Type::result(argument(0)?, argument(1)?)),
             "alloc::vec::Vec" => return Some(Type::vec(argument(0)?)),
             "alloc::string::String" => return Some(Type::builtin(Builtin::String)),
+            "core::time::Duration" => return Some(Type::builtin(Builtin::Duration)),
+            "std::time::Instant" => return Some(Type::builtin(Builtin::Instant)),
             "alloc::boxed::Box" => return Some(Type::boxed(argument(0)?)),
             // What a `Cow` holds is copied out: the type its `ToOwned`
             // makes.
