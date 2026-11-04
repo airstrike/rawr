@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-03",
-  "version": "0.3.124",
+  "version": "0.3.125",
   "examples": {
     "running": 37,
     "total": 56,
@@ -9,14 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"?play has no time limit while no other snippet is waiting. Once one waits, the running snippet gets the usual budget (60 s of script time, 120 s in all) from that moment, then stops with its output so far; a run nothing waits behind stops after 10 minutes.","issues":[880]},
-        {"text":"Releases run in stages (binaries, playground, bot, site): the ?play image is rebuilt only when its sources change and with cached dependencies when it is, and a Worker settings change deploys in minutes.","issues":[881]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.125",
+        "date": "2026-11-03",
+        "entries": [
+          {"text":"?play has no time limit while no other snippet is waiting. Once one waits, the running snippet gets the usual budget (60 s of script time, 120 s in all) from that moment, then stops with its output so far; a run nothing waits behind stops after 10 minutes.","issues":[880]},
+          {"text":"Releases run in stages (binaries, playground, bot, site): the ?play image is rebuilt only when its sources change and with cached dependencies when it is, and a Worker settings change deploys in minutes.","issues":[881]},
+          {"text":"An animated iced snippet on ?play answers with a GIF of every frame it drew on the bot's slow CPU, instead of a PNG of its first frame.","issues":[888]}
+        ]
+      },
       {
         "version": "0.3.124",
         "date": "2026-11-03",
@@ -2111,14 +2114,16 @@
     {"issue":877,"title":"?play universe: a snippet that passes two different script functions to one call shape doesn't compile","state":"open","category":"No glue (D593)"},
     {"issue":878,"title":"rawr-play plain-path lib tests exceed their time budget in a debug build","state":"open","category":"Health"},
     {"issue":879,"title":"Find why the ?play universe runner accepted std::io::Error::other at 0.3.119 but not at 0.3.122","state":"open","category":"Health"},
-    {"issue":880,"title":"?play: no time limit while no other snippet is queued","state":"closed","category":"Health"},
-    {"issue":881,"title":"Chain the release: rawr, playground, bot, site, each gated, with cached image builds","state":"closed","category":"Health"},
+    {"issue":880,"title":"?play: no time limit while no other snippet is queued","state":"closed","category":"Health","release":"0.3.125"},
+    {"issue":881,"title":"Chain the release: rawr, playground, bot, site, each gated, with cached image builds","state":"closed","category":"Health","release":"0.3.125"},
     {"issue":882,"title":"Lock play/universe's dependencies for a reproducible ?play image","state":"open","category":"Health"},
     {"issue":883,"title":"rawr-play lib tests that fail on main: no-files message and a 100 ms budget","state":"open","category":"Health"},
     {"issue":884,"title":"rawr-import lib test retirement_read_shutdown_unblocks_reader hangs","state":"open","category":"Health"},
     {"issue":885,"title":"Run the impl Trait a trait method gives from its default body (iced's Widget::explain)","state":"open","category":"No glue (D593)"},
     {"issue":886,"title":"A crate opaque value whose type arguments only a later use fixes","state":"open","category":"No glue (D593)"},
-    {"issue":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"open","category":"Divergences from rustc"}
+    {"issue":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"open","category":"Divergences from rustc"},
+    {"issue":888,"title":"?play's iced shell stops an animation after its first frame on a slow CPU","state":"closed","category":"Health","release":"0.3.125"},
+    {"issue":889,"title":"?play GIF delays follow the bot's draw time","state":"open","category":"Health"}
   ],
   "groups": [
     {

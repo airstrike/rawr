@@ -4,12 +4,18 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"?play has no time limit while no other snippet is waiting. Once one waits, the running snippet gets the usual budget (60 s of script time, 120 s in all) from that moment, then stops with its output so far; a run nothing waits behind stops after 10 minutes.","issues":[880]},
-      {"text":"Releases run in stages (binaries, playground, bot, site): the ?play image is rebuilt only when its sources change and with cached dependencies when it is, and a Worker settings change deploys in minutes.","issues":[881]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.125",
+      "date": "2026-11-03",
+      "entries": [
+        {"text":"?play has no time limit while no other snippet is waiting. Once one waits, the running snippet gets the usual budget (60 s of script time, 120 s in all) from that moment, then stops with its output so far; a run nothing waits behind stops after 10 minutes.","issues":[880]},
+        {"text":"Releases run in stages (binaries, playground, bot, site): the ?play image is rebuilt only when its sources change and with cached dependencies when it is, and a Worker settings change deploys in minutes.","issues":[881]},
+        {"text":"An animated iced snippet on ?play answers with a GIF of every frame it drew on the bot's slow CPU, instead of a PNG of its first frame.","issues":[888]}
+      ]
+    },
     {
       "version": "0.3.124",
       "date": "2026-11-03",
