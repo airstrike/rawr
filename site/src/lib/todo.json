@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A `parse()` whose target a later call in its chain gives, followed by a closure that formats (`.map(Command::Push).map_err(|e| format!(..))`), runs as in Rust. The playground's \"Enums, match and ?\" example runs again.","issues":[918]},
+        {"text":"A use after a move reads as rustc's E0382: `borrow of moved value` when the use borrows (as `println!(\"{x}\")` does), pointing at the name inside the format string, with the moved value's type at its declaration.","issues":[919]},
+        {"text":"Every playground example is tested against rustc's output, so an example that stops matching fails the build.","issues":[920]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.131",
@@ -2196,7 +2203,12 @@
     {"issue":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open","category":"Health"},
     {"issue":915,"title":"A macro's own-crate segment in the remembered demand walks the whole crate a second time","state":"open","category":"Health"},
     {"issue":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"open","category":"Divergences from rustc"},
-    {"issue":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open","category":"Divergences from rustc"}
+    {"issue":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open","category":"Divergences from rustc"},
+    {"issue":918,"title":"A parse whose target its own chain gives is lost when a closure in the chain formats","state":"closed","category":"Divergences from rustc"},
+    {"issue":919,"title":"E0382 says borrow or use as rustc does, at the name, with the move's type","state":"closed","category":"Divergences from rustc"},
+    {"issue":920,"title":"Restore the test that every playground example prints what rustc's build prints","state":"closed","category":"Health"},
+    {"issue":921,"title":"E0382: rustc's parameter note and clone suggestion","state":"open","category":"Divergences from rustc"},
+    {"issue":922,"title":"`std::num::ParseIntError` written in full in a let annotation is an unknown type","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2835,7 +2847,9 @@
             {"number":908,"title":"Smaller rustlings gaps: Cow<[T]> index, u8 into i16, AsRef<str>, fn item arrays, try_into's error, for over Option","state":"open"},
             {"number":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"open"},
             {"number":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"open"},
-            {"number":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"open"}
+            {"number":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"open"},
+            {"number":921,"title":"E0382: rustc's parameter note and clone suggestion","state":"open"},
+            {"number":922,"title":"`std::num::ParseIntError` written in full in a let annotation is an unknown type","state":"open"}
           ]
         }
       ]
@@ -2943,7 +2957,10 @@
             {"number":880,"title":"?play: no time limit while no other snippet is queued","state":"closed"},
             {"number":888,"title":"?play's iced shell stops an animation after its first frame on a slow CPU","state":"closed"},
             {"number":889,"title":"?play GIF delays follow the bot's draw time","state":"closed"},
-            {"number":890,"title":"?play binds iced's time::every (tokio executor in the universe)","state":"closed"}
+            {"number":890,"title":"?play binds iced's time::every (tokio executor in the universe)","state":"closed"},
+            {"number":918,"title":"A parse whose target its own chain gives is lost when a closure in the chain formats","state":"closed"},
+            {"number":919,"title":"E0382 says borrow or use as rustc does, at the name, with the move's type","state":"closed"},
+            {"number":920,"title":"Restore the test that every playground example prints what rustc's build prints","state":"closed"}
           ],
           "milestone": "0.3"
         }

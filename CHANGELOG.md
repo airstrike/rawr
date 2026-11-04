@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A `parse()` whose target a later call in its chain gives, followed by a closure that formats (`.map(Command::Push).map_err(|e| format!(..))`), runs as in Rust. The playground's "Enums, match and ?" example runs again. (#918)
+- A use after a move reads as rustc's E0382: `borrow of moved value` when the use borrows (as `println!("{x}")` does), pointing at the name inside the format string, with the moved value's type at its declaration. (#919)
+- Every playground example is tested against rustc's output, so an example that stops matching fails the build. (#920)
 
 ## 0.3.131 (2026-11-04)
 
