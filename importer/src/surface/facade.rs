@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 40;
+const SCHEMA: u32 = 41;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -1348,10 +1348,10 @@ impl Plan {
         if !opaque.is_empty() {
             for facade in &mut facades {
                 let mut types = std::mem::take(&mut facade.types).into_vec();
-                // The opaque type a trait's method gives is declared once,
-                // beside the method over the trait's `Self`, as Rawr
-                // declares it (`surface::member`), though each type the
-                // trait applies to has the method, as iced's
+                // The opaque type a trait's method gives is declared beside
+                // the method over the trait's `Self`, as Rawr declares it
+                // (`surface::member`), and not again beside each type the
+                // trait applies to, though each has the method, as iced's
                 // `Widget::explain` is each widget's.
                 let self_members = facade
                     .items
@@ -1361,14 +1361,19 @@ impl Plan {
                     .items
                     .iter()
                     .filter(|item| !super::member::declared(&item.path));
+                // Each path to the trait, as a crate's own path and its
+                // re-export, has its self member, with the opaque type's
+                // members beside it, so each path declares the type.
                 for item in self_members.chain(others) {
                     let mut found = Vec::new();
                     item.signature.output.opaque(&opaque, &mut found);
+                    let member = super::member::declared(&item.path);
                     for (index, (identity, parameters)) in found.into_iter().enumerate() {
                         let path = super::opaque::path(&item.path, index);
                         if types.iter().any(|ty| {
                             *ty.path == *path
-                                || (ty.opaque
+                                || (!member
+                                    && ty.opaque
                                     && ty.identity == identity
                                     && super::member::declared(&ty.path))
                         }) {

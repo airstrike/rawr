@@ -1039,9 +1039,8 @@ fn an_opaque_type_inside_a_program_functions_output_is_the_bodys_type() {
 /// adapter yet for the opaque type's own `boxed`, so the value reaches the
 /// trait's generic one. The output is `cargo run`'s.
 #[test]
-#[ignore = "the runner has no adapter for a trait method's opaque output's members yet"]
 fn a_trait_methods_opaque_output_from_its_default_body_is_usable() {
-    let (rawr, cargo) = both_printed("crossing-explained", "explained.rs", "");
+    let (rawr, cargo) = both_printed("explained.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.ends_with(
