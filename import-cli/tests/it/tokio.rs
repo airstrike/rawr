@@ -5,32 +5,15 @@
 //! driver first, as for `plain`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use crate::support::{copy, start};
+use crate::support::{start, Fixture};
 
-fn fixture(name: &str) -> PathBuf {
-    let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
-        "rawr-import-driver{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    assert!(
-        driver.is_file(),
-        "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
-        driver.display()
-    );
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_dir_all(root.join("src"));
-    copy(
-        &Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
-            .join(name),
-        &root,
-    );
-    root
-}
+static ASYNC: Fixture = Fixture::new("tokio-async");
+static BORROWED: Fixture = Fixture::new("tokio-borrowed");
+static TICKS: Fixture = Fixture::new("tokio-ticks");
+static SPAWN: Fixture = Fixture::new("tokio-spawn");
 
 /// `job N at T ms: ..`: `N` and `T`.
 fn job(line: &str) -> Option<(u64, u64)> {
@@ -42,11 +25,11 @@ fn job(line: &str) -> Option<(u64, u64)> {
 
 #[test]
 fn an_async_main_runs_on_the_projects_tokio_with_a_channel_join_and_spawn_blocking() {
-    let root = fixture("tokio-async");
+    let root = ASYNC.lease(&[]);
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&root)
+        .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -91,11 +74,11 @@ fn an_async_main_runs_on_the_projects_tokio_with_a_channel_join_and_spawn_blocki
 /// through a tuple of borrows (#677).
 #[test]
 fn an_async_fn_borrowing_its_argument_leases_it_to_its_future() {
-    let root = fixture("tokio-borrowed");
+    let root = BORROWED.lease(&[]);
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&root)
+        .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -118,7 +101,7 @@ fn an_async_fn_borrowing_its_argument_leases_it_to_its_future() {
 /// prints the same.
 #[test]
 fn a_module_function_names_another_crates_type() {
-    let root = fixture("tokio-borrowed");
+    let root = BORROWED.lease(&[]);
     fs::write(
         root.join("src/label.rs"),
         "pub fn describe(font: &shelf::Font) -> String {\n    format!(\"{} of {}\", font.family, font.bytes.len())\n}\n\npub fn owned(font: shelf::Font) -> String {\n    font.family\n}\n\npub fn make(family: &str) -> shelf::Font {\n    shelf::font(String::from(family), 2)\n}\n",
@@ -132,7 +115,7 @@ fn a_module_function_names_another_crates_type() {
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&root)
+        .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -152,8 +135,8 @@ fn a_module_function_names_another_crates_type() {
 /// output is `cargo run`'s.
 #[test]
 fn an_async_fn_leases_every_borrow_its_inputs_hold() {
-    let root = fixture("tokio-borrowed");
-    fs::copy(root.join("variants/store.rs"), root.join("src/main.rs")).unwrap();
+    let store = BORROWED.read("variants/store.rs");
+    let root = BORROWED.lease(&[("src/main.rs", &store)]);
     let directory = crate::support::scratch();
     let output = |command: &mut Command| {
         let run = command
@@ -171,7 +154,7 @@ fn an_async_fn_leases_every_borrow_its_inputs_hold() {
     let rawr = output(
         Command::new(env!("CARGO_BIN_EXE_rawr-import"))
             .arg("run")
-            .arg(&root)
+            .arg(&*root)
             .env("RAWR_HOME", directory.join("rawr-home")),
     );
     let cargo = output(Command::new("cargo").args(["run", "-q"]));
@@ -184,7 +167,7 @@ fn an_async_fn_leases_every_borrow_its_inputs_hold() {
 
 #[test]
 fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
-    let root = fixture("tokio-ticks");
+    let root = TICKS.lease(&[]);
     let main = root.join("src/main.rs");
     let mut run = start(&root, &[]);
 
@@ -218,18 +201,15 @@ fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
 
 /// `rawr-import run` on the `tokio-spawn` fixture with `attribute` in place
 /// of its `#[tokio::main]`: its whole output.
-fn spawned(name: &str, attribute: &str) -> String {
-    let root = fixture("tokio-spawn");
-    let copy_root = crate::support::scratch().join(name);
-    let _ = fs::remove_dir_all(copy_root.join("src"));
-    copy(&root, &copy_root);
-    let main = copy_root.join("src/main.rs");
-    let text = fs::read_to_string(&main).unwrap();
-    fs::write(&main, text.replace("#[tokio::main]", attribute)).unwrap();
+fn spawned(attribute: &str) -> String {
+    let main = SPAWN
+        .read("src/main.rs")
+        .replace("#[tokio::main]", attribute);
+    let root = SPAWN.lease(&[("src/main.rs", &main)]);
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&copy_root)
+        .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -251,15 +231,12 @@ fn spawned(name: &str, attribute: &str) -> String {
 /// both of tokio's runtimes.
 #[test]
 fn a_spawned_script_future_runs_unawaited_and_its_handle_gives_its_value() {
-    for (name, attribute) in [
-        ("tokio-spawn-multi", "#[tokio::main]"),
-        (
-            "tokio-spawn-current",
-            "#[tokio::main(flavor = \"current_thread\")]",
-        ),
+    for attribute in [
+        "#[tokio::main]",
+        "#[tokio::main(flavor = \"current_thread\")]",
     ] {
         assert_eq!(
-            spawned(name, attribute),
+            spawned(attribute),
             "ran\njoined 42\nblocking ran\n",
             "{attribute}"
         );

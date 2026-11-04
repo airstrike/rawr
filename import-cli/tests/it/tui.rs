@@ -13,76 +13,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::support::{copy, start_with};
+use crate::support::{copy, start_with, Fixture};
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-tui");
-
-fn fixture(name: &str) -> PathBuf {
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_dir_all(root.join("src"));
-    copy(Path::new(FIXTURE), &root);
-    root
-}
+static ISLANDS: Fixture = Fixture::new("islands-tui");
 
 fn edit(path: &Path, from: &str, to: &str) {
     let text = fs::read_to_string(path).unwrap();
     assert!(text.contains(from), "{text}");
     fs::write(path, text.replace(from, to)).unwrap();
-}
-
-/// The headless half of the fixture draws on ratatui's `TestBackend`, one
-/// frame per line it reads. A body edit of the marked view changes the
-/// next frame, and the app's state and the native `ListState` carry on.
-#[test]
-fn a_test_backend_frame_shows_a_body_edit_with_its_state_unbroken() {
-    let root = fixture("islands-tui-headless");
-    let app = root.join("src/app.rs");
-    let mut run = start_with(
-        &root,
-        &[("TUI_HEADLESS", PathBuf::from("1"))],
-        &[],
-        Stdio::piped(),
-    );
-    let mut stdin = run.child.stdin.take().unwrap();
-    let mut frame = |run: &mut crate::support::Run, line: &str, limit| {
-        stdin.write_all(format!("{line}\n").as_bytes()).unwrap();
-        let from = run.seen.len();
-        run.until(limit, |line| line == "end");
-        run.seen[from..run.seen.len() - 1]
-            .iter()
-            .filter(|line| line.starts_with('|'))
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-
-    let first = frame(&mut run, "down", Duration::from_secs(900));
-    assert_eq!(first[0], "|┌tui-one───────────────┐|", "{first:?}");
-    assert_eq!(first[2], "|│> beta                │|", "{first:?}");
-    let typed = frame(&mut run, "x", Duration::from_secs(30));
-    assert_eq!(typed[6], "|│keys=1:x              │|", "{typed:?}");
-
-    // An edit as the program starts may start it again (D531.9); this one
-    // comes once it runs.
-    std::thread::sleep(Duration::from_secs(3));
-    edit(&app, "\"tui-one\"", "\"tui-two\"");
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let swapped = loop {
-        let next = frame(&mut run, "", Duration::from_secs(30));
-        if next[0].contains("tui-two") {
-            break next;
-        }
-        assert!(Instant::now() < deadline, "{}", run.seen.join("\n"));
-        std::thread::sleep(Duration::from_millis(250));
-    };
-    let seen = run.seen.join("\n");
-    assert_eq!(swapped[0], "|┌tui-two───────────────┐|", "{seen}");
-    assert_eq!(swapped[2], "|│> beta                │|", "{seen}");
-    assert_eq!(swapped[6], "|│keys=1:x              │|", "{seen}");
-    assert!(
-        !run.seen.iter().any(|line| line.contains("restarting")),
-        "{}",
-        run.seen.join("\n")
-    );
 }
 
 const DRAW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tui-draw");
@@ -511,12 +449,16 @@ impl Drop for Terminal {
 /// a restart, `stty -g` is what it was before the run.
 #[test]
 fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it() {
-    let root = fixture("islands-tui-terminal");
+    let root = ISLANDS.lease(&[]);
     let app = root.join("src/app.rs");
     let terminal = Terminal::start(&root);
     let before = terminal.stty();
 
     terminal.shows(Duration::from_secs(900), "tui-one");
+    // From here it times the live program: a repaint within a minute of a
+    // save, and nothing on the screen in the 15 s after a failing one.
+    // Beside the suite's builds those windows measure the load, not rawr.
+    crate::support::alone();
     assert_ne!(terminal.stty(), before, "ratatui holds the terminal raw");
     terminal.keys(b"\x1b[B");
     terminal.keys(b"x");

@@ -3,30 +3,21 @@
 //! `mains/`. Each main prints what `cargo run` prints under `rawr-import
 //! run`. Build the driver first, as for `plain`.
 
-use std::fs;
-use std::path::Path;
 use std::process::Command;
 
-use crate::support::copy;
+use crate::support::Fixture;
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/crate-shapes");
+static SHAPES: Fixture = Fixture::new("crate-shapes");
 
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// The fixture with `mains/{main}.rs` as its `src/main.rs`, run by `cargo
-/// run` and by `rawr-import run`: both print `expected`.
+/// A lane of the fixture with `mains/{main}.rs` as its `src/main.rs`, run
+/// by `cargo run` and by `rawr-import run`: both print `expected`.
 fn runs_as_cargo_does(main: &str, expected: &str) {
-    let root = crate::support::scratch().join(format!("crate-shapes-{main}"));
-    let _ = fs::remove_dir_all(root.join("src"));
-    let _ = fs::remove_dir_all(root.join("natives/src"));
-    copy(Path::new(FIXTURE), &root);
-    fs::copy(
-        root.join("mains").join(format!("{main}.rs")),
-        root.join("src/main.rs"),
-    )
-    .unwrap();
+    let program = SHAPES.read(&format!("mains/{main}.rs"));
+    let root = SHAPES.lease(&[("src/main.rs", &program)]);
     let native = Command::new("cargo")
         .args(["run", "--quiet"])
         .current_dir(&root)
@@ -40,7 +31,7 @@ fn runs_as_cargo_does(main: &str, expected: &str) {
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&root)
+        .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
