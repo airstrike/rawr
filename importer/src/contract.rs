@@ -479,6 +479,26 @@ fn crate_root(definition: &api::model::Definition) -> bool {
         && definition.display_path().all(|segment| segment == name)
 }
 
+/// `outcome`, or the associated outcome below it, that binds `identity`:
+/// a member of a type, or of the opaque type a trait's method gives, which
+/// is below that method (`classify::method_opaque_implementations`).
+fn binding_outcome<'contract>(
+    outcome: crate::classify::Outcome<'contract>,
+    identity: &crate::surface::identity::Identity,
+) -> Option<crate::classify::Outcome<'contract>> {
+    if outcome.identity().same_binding(identity)
+        && outcome
+            .representability()
+            .contains_selector(outcome.identity().selector(), identity.selector())
+    {
+        return Some(outcome);
+    }
+    outcome
+        .implementations()
+        .flat_map(crate::classify::ImplementationOutcome::associated)
+        .find_map(|associated| binding_outcome(associated, identity))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{fingerprint, Allocation, Usage};
@@ -550,24 +570,4 @@ mod tests {
             .expect_err("checked overflow refuses");
         assert_eq!(allocation.usage(), retained);
     }
-}
-
-/// `outcome`, or the associated outcome below it, that binds `identity`:
-/// a member of a type, or of the opaque type a trait's method gives, which
-/// is below that method (`classify::method_opaque_implementations`).
-fn binding_outcome<'contract>(
-    outcome: crate::classify::Outcome<'contract>,
-    identity: &crate::surface::identity::Identity,
-) -> Option<crate::classify::Outcome<'contract>> {
-    if outcome.identity().same_binding(identity)
-        && outcome
-            .representability()
-            .contains_selector(outcome.identity().selector(), identity.selector())
-    {
-        return Some(outcome);
-    }
-    outcome
-        .implementations()
-        .flat_map(crate::classify::ImplementationOutcome::associated)
-        .find_map(|associated| binding_outcome(associated, identity))
 }

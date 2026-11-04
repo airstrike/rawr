@@ -52146,6 +52146,7 @@ fn opaque_impl_use(ty: &str, opaque: &str, span: Span) -> Error {
     }
 }
 
+#[cfg(feature = "rust-import")]
 fn mentions_script(ty: &Ty) -> bool {
     match ty {
         Ty::Script(..) => true,

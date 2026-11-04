@@ -5176,11 +5176,7 @@ impl<P: api::Phase> Context<'_, P> {
             let mut given = BTreeMap::<u32, model::Type>::new();
             let mut through = false;
             let applies = implementation.generics().predicates().all(|predicate| {
-                let model::Predicate::Bound {
-                    ty,
-                    bound: bounded,
-                } = predicate
-                else {
+                let model::Predicate::Bound { ty, bound: bounded } = predicate else {
                     return false;
                 };
                 let model::Bound::Trait {
