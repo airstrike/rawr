@@ -5,6 +5,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- ?play snippets can tick with `iced::time::every`, as iced's stopwatch and clock do. (#890)
+
+## 0.3.126 (2026-11-03)
+
+- ?play's GIFs play at the program's pace, not the bot's drawing speed: a change made on a frame shows for 50 ms however long the frame took to draw, and a change made on the program's own clock shows for the time that clock ran. (#889)
 
 ## 0.3.125 (2026-11-03)
 

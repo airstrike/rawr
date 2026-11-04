@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-03",
-  "version": "0.3.125",
+  "version": "0.3.126",
   "examples": {
     "running": 37,
     "total": 56,
@@ -9,8 +9,20 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"?play snippets can tick with `iced::time::every`, as iced's stopwatch and clock do.","issues":[890]}
+      ]
+    },
     "releases": [
+      {
+        "version": "0.3.126",
+        "date": "2026-11-03",
+        "entries": [
+          {"text":"?play's GIFs play at the program's pace, not the bot's drawing speed: a change made on a frame shows for 50 ms however long the frame took to draw, and a change made on the program's own clock shows for the time that clock ran.","issues":[889]}
+        ]
+      },
       {
         "version": "0.3.125",
         "date": "2026-11-03",
@@ -2123,7 +2135,8 @@
     {"issue":886,"title":"A crate opaque value whose type arguments only a later use fixes","state":"open","category":"No glue (D593)"},
     {"issue":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"open","category":"Divergences from rustc"},
     {"issue":888,"title":"?play's iced shell stops an animation after its first frame on a slow CPU","state":"closed","category":"Health","release":"0.3.125"},
-    {"issue":889,"title":"?play GIF delays follow the bot's draw time","state":"open","category":"Health"}
+    {"issue":889,"title":"?play GIF delays follow the bot's draw time","state":"closed","category":"Health","release":"0.3.126"},
+    {"issue":890,"title":"?play binds iced's time::every (tokio executor in the universe)","state":"closed","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -2806,14 +2819,15 @@
           "name": "?play on a small CPU",
           "start": 71,
           "size": 3,
-          "state": "now",
-          "note": "Check-time errors, a wider universe, no deadline while idle, every frame drawn; GIF pace next",
+          "state": "done",
+          "note": "Check-time errors, a wider universe, no deadline while idle, every frame drawn at the program's pace",
           "issues": [
             {"number":863,"title":"?play universe: iced calls outside the universe panic at run time instead of failing to compile","state":"closed"},
             {"number":872,"title":"?play time limits are too tight for the bot's shared container","state":"closed"},
             {"number":880,"title":"?play: no time limit while no other snippet is queued","state":"closed"},
             {"number":888,"title":"?play's iced shell stops an animation after its first frame on a slow CPU","state":"closed"},
-            {"number":889,"title":"?play GIF delays follow the bot's draw time","state":"open"}
+            {"number":889,"title":"?play GIF delays follow the bot's draw time","state":"closed"},
+            {"number":890,"title":"?play binds iced's time::every (tokio executor in the universe)","state":"closed"}
           ],
           "milestone": "0.3"
         }

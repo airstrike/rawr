@@ -4,9 +4,18 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"?play snippets can tick with `iced::time::every`, as iced's stopwatch and clock do.","issues":[890]}
+    ]
   },
   "releases": [
+    {
+      "version": "0.3.126",
+      "date": "2026-11-03",
+      "entries": [
+        {"text":"?play's GIFs play at the program's pace, not the bot's drawing speed: a change made on a frame shows for 50 ms however long the frame took to draw, and a change made on the program's own clock shows for the time that clock ran.","issues":[889]}
+      ]
+    },
     {
       "version": "0.3.125",
       "date": "2026-11-03",

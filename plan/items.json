@@ -889,6 +889,7 @@
     {"t":"T886","issue":886,"title":"T886: A crate opaque value whose type arguments only a later use fixes","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T887","issue":887,"title":"T887: ferris: `f32::from(Degrees)` is E0277","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T888","issue":888,"title":"T888: ?play's iced shell stops an animation after its first frame on a slow CPU","state":"closed","category":"Health","labels":["health","playground"],"gantt":{"group":"play","row":"play-universe-limits"},"decisions":[],"commit":"e6cf246bb","release":"0.3.125"},
-    {"t":"T889","issue":889,"title":"T889: ?play GIF delays follow the bot's draw time","state":"open","category":"Health","labels":["health"],"gantt":{"group":"play","row":"play-universe-limits"},"decisions":[],"commit":null,"release":null}
+    {"t":"T889","issue":889,"title":"T889: ?play GIF delays follow the bot's draw time","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"play","row":"play-universe-limits"},"decisions":[],"commit":"401f18253","release":"0.3.126"},
+    {"t":"T890","issue":890,"title":"T890: ?play binds iced's time::every (tokio executor in the universe)","state":"closed","category":"No glue (D593)","labels":["no glue","playground"],"gantt":{"group":"play","row":"play-universe-limits"},"decisions":[],"commit":"401f18253","release":null}
   ]
 }
