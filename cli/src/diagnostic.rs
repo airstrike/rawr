@@ -143,15 +143,20 @@ pub fn shape(report: &Report, base: &Path) -> Vec<Value> {
     shaped
 }
 
-/// A message without a leading `error[CODE]: ` and without a trailing
+/// A message without a leading `error[CODE]: ` (or `error: `) and without a trailing
 /// `(line N, position M)`, and that position.
 fn bare(message: &str) -> (String, Option<(usize, usize)>) {
     let mut text = message.trim();
     for severity in ["error", "warning"] {
-        if let Some(rest) = text.strip_prefix(severity)
-            && let Some(rest) = rest.strip_prefix('[')
+        let Some(rest) = text.strip_prefix(severity) else {
+            continue;
+        };
+        if let Some(rest) = rest.strip_prefix('[')
             && let Some((_, rest)) = rest.split_once("]: ")
         {
+            text = rest;
+        } else if let Some(rest) = rest.strip_prefix(": ") {
+            // An error rustc reports without a code.
             text = rest;
         }
     }
@@ -325,7 +330,7 @@ mod tests {
     #[test]
     fn a_report_becomes_one_positioned_diagnostic_with_an_absolute_file() {
         let source = Source::new("src/main.rs", "let x: i64 = \"a\";\n").unwrap();
-        let report = Report::error(code::PARSE_SYNTAX, "mismatched types")
+        let report = Report::error(code::RESOLVE_TYPE_MISMATCH, "mismatched types")
             .primary(
                 source,
                 Span::new(Position::new(1, 14), Position::new(1, 17)),
@@ -351,10 +356,15 @@ mod tests {
         assert_eq!(diagnostic["severity"], "error");
         assert_eq!(
             super::lines(&shaped),
-            format!(
-                "/work/app/src/main.rs:1:14: error[{}]: mismatched types\n  label: expected `i64`\n  help: use a number\n",
-                diagnostic["code"].as_str().unwrap()
-            )
+            "/work/app/src/main.rs:1:14: error[E0308]: mismatched types\n  label: expected `i64`\n  help: use a number\n"
+        );
+    }
+
+    #[test]
+    fn an_error_rustc_gives_without_a_code_loses_its_plain_prefix() {
+        assert_eq!(
+            super::bare("error: expected type, found `)` (line 2, position 16)"),
+            ("expected type, found `)`".to_string(), Some((2, 16)))
         );
     }
 

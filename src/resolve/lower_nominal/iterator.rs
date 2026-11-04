@@ -1607,11 +1607,7 @@ impl Parser<'_> {
                                 );
                             };
                             if !local.mutable {
-                                return Err(Error::ImmutableBinding {
-                                    binding: binding.clone(),
-                                    mutation: value.span,
-                                    declaration: local.declaration,
-                                });
+                                return Err(Error::borrow_immutable(binding, value.span));
                             }
                             self.mutable_use(&value, value.span);
                             let mut source =

@@ -1027,6 +1027,11 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::UnknownType { .. }
         | R::UnknownFunction { .. }
         | R::UnknownVariable { .. }
+        | R::UnknownMacro { .. }
+        | R::WrongKind { .. }
+        | R::Unimplemented { .. }
+        | R::IfWithoutElse { .. }
+        | R::ReturnWithoutValue { .. }
         | R::MovedValue { .. }
         | R::BorrowConflict { .. }
         | R::InvalidImport { .. }

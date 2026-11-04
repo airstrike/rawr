@@ -180,7 +180,8 @@ fn aggregate_compile_rejects_private_import_hops_with_both_sources() {
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resolution);
-    assert_eq!(report.code(), code::RESOLVE_INVALID_IMPORT);
+    assert_eq!(report.code(), code::RESOLVE_PRIVATE_ITEM);
+    assert_eq!(report.message(), "module `inner` is private");
     assert_eq!(report.labels().len(), 2);
     assert!(report.labels()[0].source().identity().ends_with("src/other.rs"));
     assert!(report.labels()[1].source().identity().ends_with("src/controls.rs"));
@@ -358,6 +359,22 @@ fn nested_child_module_types_resolve_from_their_containing_module() {
 }
 
 #[test]
+fn a_private_function_of_another_module_is_rustcs_e0603() {
+    let project = Project::new("private-function");
+    project.write("src/main.rs", "mod factory;\nfn main() {\n    factory::make();\n}\n");
+    project.write("src/factory.rs", "fn make() {}\n");
+    let target = rawr::project::Target::discover(project.path()).unwrap();
+
+    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let report = error.report().unwrap();
+
+    assert_eq!(report.code(), code::RESOLVE_PRIVATE_ITEM);
+    assert_eq!(report.message(), "function `make` is private");
+    assert_eq!(report.labels()[0].message(), Some("private function"));
+    assert_eq!(report.labels()[0].span().start().position(), Some(14));
+}
+
+#[test]
 fn relative_header_types_preserve_private_module_boundaries() {
     let project = Project::new("private-relative-header-type");
     // `controls` is open to the crate root, but its private `inner` is not.
@@ -370,8 +387,8 @@ fn relative_header_types_preserve_private_module_boundaries() {
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resolution);
-    assert_eq!(report.code(), code::RESOLVE_INVALID_IMPORT);
-    assert!(report.message().contains("private module"));
+    assert_eq!(report.code(), code::RESOLVE_PRIVATE_ITEM);
+    assert_eq!(report.message(), "module `inner` is private");
     assert_eq!(report.labels().len(), 2);
 }
 
