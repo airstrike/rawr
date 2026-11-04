@@ -12792,8 +12792,8 @@ fn language_std_items_rawr_cannot_run_fail_at_their_use() {
             "std::num::NonZeroU8",
         ),
         (
-            "pub fn run() -> i64 { std::process::abort(); 0 } run()",
-            "std::process::abort",
+            "pub fn run() -> i64 { let c = std::process::Command::new(\"ls\"); 0 } run()",
+            "std::process::Command::new",
         ),
     ] {
         let error = rejected(source);

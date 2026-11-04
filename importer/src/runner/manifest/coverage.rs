@@ -749,7 +749,7 @@ fn concrete(ty: &convert::Type, depth: usize) -> bool {
             arguments: members, ..
         } => members.iter().all(|ty| concrete(ty, depth + 1)),
         convert::Type::Inferred => true,
-        convert::Type::Unit | convert::Type::Builtin(_) => true,
+        convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => true,
     }
 }
 

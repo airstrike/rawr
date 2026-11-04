@@ -2629,6 +2629,7 @@ fn holds_value(ty: &rawr_import::classify::representability::convert::Type) -> b
         Type::ProfileMessage { payload, .. } => holds_value(payload),
         Type::Inferred
         | Type::Unit
+        | Type::Never
         | Type::Builtin(_)
         | Type::FunctionItem { .. }
         | Type::Parameter(_) => false,
@@ -2653,6 +2654,7 @@ fn holds_crate_value(ty: &rawr_import::classify::representability::convert::Type
         | Type::ProfileMessage { .. }
         | Type::Inferred
         | Type::Unit
+        | Type::Never
         | Type::Builtin(_)
         | Type::FunctionItem { .. }
         | Type::Parameter(_) => false,
@@ -2681,7 +2683,11 @@ fn is_erased(ty: &rawr_import::classify::representability::convert::Type) -> boo
         Type::Result(ok, err) => is_erased(ok) || is_erased(err),
         Type::ProfileMessage { payload, .. } => is_erased(payload),
         Type::Inferred => false,
-        Type::Unit | Type::Builtin(_) | Type::FunctionItem { .. } | Type::Parameter(_) => false,
+        Type::Unit
+        | Type::Never
+        | Type::Builtin(_)
+        | Type::FunctionItem { .. }
+        | Type::Parameter(_) => false,
     }
 }
 
