@@ -22,9 +22,9 @@
 #   of its tests. rawr's is its first error code or its exit status. They
 #   match when both fail to compile with the same code, or both run alike.
 #
-# Every copy starts with `// rawr`. `rawr` is the one on PATH: put a
-# development build's directory (with `rawr-import` and
-# `rawr-import-driver`) first on PATH to test it. RUSTC_TOOLCHAIN (default
+# Every copy starts with `// rawr`. `rawr` is the one on PATH. RAWR_BIN names
+# a development build's directory (with `rawr-import` and
+# `rawr-import-driver`) to put first on PATH. RUSTC_TOOLCHAIN (default
 # stable) picks rustc's toolchain; RAWR_TIMEOUT (default 120) bounds each run
 # in seconds.
 set -uo pipefail
@@ -35,6 +35,7 @@ out=${2:-$root/target/rustlings-out}
 toolchain=${RUSTC_TOOLCHAIN:-stable}
 limit=${RAWR_TIMEOUT:-120}
 rustc=(rustc "+$toolchain" --edition 2024 -A warnings)
+[ -n "${RAWR_BIN:-}" ] && PATH=$RAWR_BIN:$PATH
 
 [ -d "$rustlings/solutions" ] || {
     echo "no rustlings checkout at $rustlings" >&2
