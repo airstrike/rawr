@@ -139,8 +139,9 @@ fn rawr_test_takes_cargo_tests_filters() {
         "test",
         "tested.rs",
         "--",
+        "l",
         "--skip",
-        "s",
+        "fails",
         "--include-ignored",
     ]);
     let exact = sandbox.rawr(&["test", "tested.rs", "--", "--exact", "add"]);
@@ -154,7 +155,7 @@ fn rawr_test_takes_cargo_tests_filters() {
     );
     assert_success(&skipped);
     assert!(stdout(&skipped).contains("test tests::later ... ok\n"));
-    assert!(stdout(&skipped).contains("2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out"));
+    assert!(stdout(&skipped).contains("1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out"));
     assert_success(&exact);
     assert!(stdout(&exact).contains("running 0 tests\n"));
     assert_success(&ignored);
