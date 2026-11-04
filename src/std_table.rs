@@ -48,17 +48,23 @@
 //! hands its directory to [`install`], and gives it to the runner in
 //! `RAWR_STD_TABLE`. Without either, the embedded table is the one.
 //!
-//! Nothing is decoded ahead of a lookup: each lookup is a binary search of
-//! the table's text, so a program pays only for the paths it names.
+//! A process finds each file's lines once, when it first reads the table,
+//! and each lookup is a binary search of those lines, so a program pays
+//! only for the paths it names. The stable trait functions, which the
+//! method probe and the std facade ask for by name, are gathered in one
+//! pass over the items, when the first one is asked for.
 
+use std::collections::HashMap;
 use std::path::{Path as FilePath, PathBuf};
 use std::sync::OnceLock;
 
-/// The three files' text.
+/// The three files' lines.
 struct Table {
-    paths: &'static str,
-    items: &'static str,
-    impls: &'static str,
+    paths: Lines,
+    items: Lines,
+    impls: Lines,
+    /// The stable functions of std's stable traits, by name.
+    trait_functions: OnceLock<HashMap<&'static str, Vec<Item>>>,
     /// The directory it was read from; `None` for the embedded table.
     directory: Option<PathBuf>,
 }
@@ -66,26 +72,41 @@ struct Table {
 /// The table [`install`] set, or `RAWR_STD_TABLE`'s.
 static TABLE: OnceLock<Table> = OnceLock::new();
 
-const EMBEDDED: Table = Table {
-    paths: include_str!("std_table/paths.tsv"),
-    items: include_str!("std_table/items.tsv"),
-    impls: include_str!("std_table/impls.tsv"),
-    directory: None,
-};
+/// The embedded table, when no other is in use.
+static EMBEDDED: OnceLock<Table> = OnceLock::new();
+
+const EMBEDDED_PATHS: &str = include_str!("std_table/paths.tsv");
+const EMBEDDED_ITEMS: &str = include_str!("std_table/items.tsv");
+const EMBEDDED_IMPLS: &str = include_str!("std_table/impls.tsv");
 
 impl Table {
+    fn new(
+        paths: &'static str,
+        items: &'static str,
+        impls: &'static str,
+        directory: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            paths: Lines::new(paths),
+            items: Lines::new(items),
+            impls: Lines::new(impls),
+            trait_functions: OnceLock::new(),
+            directory,
+        }
+    }
+
     /// The table in `directory`. Its text lives as long as the process,
     /// as the embedded one does.
     fn read(directory: &FilePath) -> std::io::Result<Self> {
         let read = |name: &str| -> std::io::Result<&'static str> {
             Ok(String::leak(std::fs::read_to_string(directory.join(name))?))
         };
-        Ok(Self {
-            paths: read("paths.tsv")?,
-            items: read("items.tsv")?,
-            impls: read("impls.tsv")?,
-            directory: Some(directory.to_path_buf()),
-        })
+        Ok(Self::new(
+            read("paths.tsv")?,
+            read("items.tsv")?,
+            read("impls.tsv")?,
+            Some(directory.to_path_buf()),
+        ))
     }
 
     /// The process's table: the one [`install`]ed or named by
@@ -93,16 +114,85 @@ impl Table {
     /// [`install`] reads the embedded table, so rawr-import installs its
     /// toolchain's before it checks a program.
     fn get() -> &'static Self {
+        /// Set once `RAWR_STD_TABLE` is read, into [`TABLE`] when it names
+        /// a table.
+        static NAMED: OnceLock<()> = OnceLock::new();
         if let Some(table) = TABLE.get() {
             return table;
         }
-        match std::env::var_os("RAWR_STD_TABLE") {
-            Some(directory) => match Self::read(FilePath::new(&directory)) {
-                Ok(table) => TABLE.get_or_init(|| table),
-                Err(_) => &EMBEDDED,
-            },
-            None => &EMBEDDED,
-        }
+        NAMED.get_or_init(|| {
+            if let Some(directory) = std::env::var_os("RAWR_STD_TABLE")
+                && let Ok(table) = Self::read(FilePath::new(&directory))
+            {
+                let _ = TABLE.set(table);
+            }
+        });
+        TABLE.get().unwrap_or_else(|| {
+            EMBEDDED.get_or_init(|| Self::new(EMBEDDED_PATHS, EMBEDDED_ITEMS, EMBEDDED_IMPLS, None))
+        })
+    }
+
+    /// The stable functions of std's stable traits, by name: `clone` of
+    /// `core::clone::Clone`, `eq` of `core::cmp::PartialEq`.
+    fn trait_functions(&self) -> &HashMap<&'static str, Vec<Item>> {
+        self.trait_functions.get_or_init(|| {
+            let mut functions = HashMap::<&'static str, Vec<Item>>::new();
+            for line in &self.items.0 {
+                let mut fields = line.split('\t');
+                let (Some(definition), Some("assoc-fn"), Some("s"), Some("provided" | "required")) =
+                    (fields.next(), fields.next(), fields.next(), fields.next())
+                else {
+                    continue;
+                };
+                let Some((owner, name)) = definition.rsplit_once("::") else {
+                    continue;
+                };
+                let stable_trait = || {
+                    self.items
+                        .find(owner, 1)
+                        .map(item_line)
+                        .is_some_and(|owner| {
+                            owner.kind == "trait" && owner.stability == Stability::Stable
+                        })
+                };
+                if fields.next().is_some() && stable_trait() {
+                    functions.entry(name).or_default().push(item_line(line));
+                }
+            }
+            functions
+        })
+    }
+}
+
+/// A table file's lines, in their sorted order.
+struct Lines(Vec<&'static str>);
+
+impl Lines {
+    fn new(text: &'static str) -> Self {
+        Self(text.lines().collect())
+    }
+
+    /// The line whose key (what comes before its `fields`th tab) is `key`.
+    fn find(&self, key: &str, fields: usize) -> Option<&'static str> {
+        let key_of = |line: &'static str| -> &'static str {
+            let mut end = 0;
+            for _ in 0..fields {
+                match line[end..].find('\t') {
+                    Some(tab) => end += tab + 1,
+                    None => return line,
+                }
+            }
+            &line[..end.saturating_sub(1)]
+        };
+        self.0
+            .binary_search_by(|line| key_of(line).cmp(key))
+            .ok()
+            .map(|index| self.0[index])
+    }
+
+    /// The lines from the first at or after `prefix`.
+    fn from(&self, prefix: &str) -> &[&'static str] {
+        &self.0[self.0.partition_point(|line| *line < prefix)..]
     }
 }
 
@@ -374,44 +464,6 @@ impl Item {
     }
 }
 
-/// The line of `text` whose key (what comes before its `fields`th tab) is
-/// `key`, by binary search over the sorted text.
-fn find(text: &'static str, key: &str, fields: usize) -> Option<&'static str> {
-    let key_of = |line: &'static str| -> &'static str {
-        let mut end = 0;
-        for _ in 0..fields {
-            match line[end..].find('\t') {
-                Some(tab) => end += tab + 1,
-                None => return line,
-            }
-        }
-        &line[..end.saturating_sub(1)]
-    };
-    let bytes = text.as_bytes();
-    let line_at = |position: usize| -> (usize, &'static str) {
-        let start = bytes[..position]
-            .iter()
-            .rposition(|byte| *byte == b'\n')
-            .map_or(0, |newline| newline + 1);
-        let end = bytes[start..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(bytes.len(), |newline| start + newline);
-        (start, &text[start..end])
-    };
-    let (mut low, mut high) = (0, bytes.len());
-    while low < high {
-        let middle = low + (high - low) / 2;
-        let (start, line) = line_at(middle);
-        match key_of(line).cmp(key) {
-            std::cmp::Ordering::Equal => return Some(line),
-            std::cmp::Ordering::Less => low = start + line.len() + 1,
-            std::cmp::Ordering::Greater => high = start,
-        }
-    }
-    None
-}
-
 fn path_line(line: &'static str) -> Path {
     let mut fields = line.split('\t');
     let path = fields.next().unwrap_or_default();
@@ -438,12 +490,10 @@ fn path_line(line: &'static str) -> Path {
 /// The path `path` in `namespace`, as a program writes it:
 /// `std::collections::HashMap`.
 pub(crate) fn path(path: &str, namespace: Namespace) -> Option<Path> {
-    find(
-        Table::get().paths,
-        &format!("{path}\t{}", namespace.letter()),
-        2,
-    )
-    .map(path_line)
+    Table::get()
+        .paths
+        .find(&format!("{path}\t{}", namespace.letter()), 2)
+        .map(path_line)
 }
 
 /// The path in any namespace: a type's first, then a value's, then a
@@ -462,7 +512,7 @@ pub(crate) fn is_module(path: &str) -> bool {
 /// The definition `definition`, or a member of one: `alloc::vec::Vec`,
 /// `alloc::vec::Vec::push`, `i64::pow`.
 pub(crate) fn item(definition: &str) -> Option<Item> {
-    find(Table::get().items, definition, 1).map(item_line)
+    Table::get().items.find(definition, 1).map(item_line)
 }
 
 fn item_line(line: &'static str) -> Item {
@@ -481,66 +531,30 @@ fn item_line(line: &'static str) -> Item {
     }
 }
 
-/// `text`, a sorted table, from its first line at or after `prefix`.
-fn lines_from(text: &'static str, prefix: &str) -> &'static str {
-    let bytes = text.as_bytes();
-    let (mut low, mut high) = (0, bytes.len());
-    while low < high {
-        let middle = low + (high - low) / 2;
-        let start = bytes[..middle]
-            .iter()
-            .rposition(|byte| *byte == b'\n')
-            .map_or(0, |newline| newline + 1);
-        let end = bytes[start..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(bytes.len(), |newline| start + newline);
-        if text[start..end] < *prefix {
-            low = end + 1;
-        } else {
-            high = start;
-        }
-    }
-    &text[low.min(text.len())..]
-}
-
 /// The members the table lists under `definition`: a trait's items, a
 /// type's inherent items, an enum's variants.
 pub(crate) fn members(definition: &str) -> impl Iterator<Item = Item> {
     let prefix = format!("{definition}::");
     let length = prefix.len();
-    lines_from(Table::get().items, &prefix)
-        .lines()
+    Table::get()
+        .items
+        .from(&prefix)
+        .iter()
         .take_while(move |line| line.starts_with(&prefix))
         .filter(move |line| {
             let rest = &line[length..];
             !rest.split('\t').next().unwrap_or_default().contains("::")
         })
-        .map(item_line)
+        .map(|line| item_line(line))
 }
 
 /// The stable functions named `name` of std's stable traits: `clone` of
-/// `core::clone::Clone`, `eq` of `core::cmp::PartialEq`. One pass over the
-/// table, for the method probe's traits.
-pub(crate) fn trait_functions(name: &str) -> Vec<Item> {
-    let suffix = format!("::{name}\tassoc-fn\ts\t");
+/// `core::clone::Clone`, `eq` of `core::cmp::PartialEq`.
+pub(crate) fn trait_functions(name: &str) -> &'static [Item] {
     Table::get()
-        .items
-        .lines()
-        .filter(|line| {
-            line.find(&suffix).is_some_and(|at| {
-                let rest = &line[at + suffix.len()..];
-                !line[..at].contains('\t')
-                    && (rest.starts_with("provided\t") || rest.starts_with("required\t"))
-            })
-        })
-        .map(item_line)
-        .filter(|member| {
-            let owner = &member.definition[..member.definition.len() - name.len() - 2];
-            item(owner)
-                .is_some_and(|owner| owner.kind == "trait" && owner.stability == Stability::Stable)
-        })
-        .collect()
+        .trait_functions()
+        .get(name)
+        .map_or(&[], Vec::as_slice)
 }
 
 /// The stable std trait a program names by `path` (`std::str::FromStr`),
@@ -623,10 +637,12 @@ pub(crate) fn is_root(name: &str) -> bool {
 /// `use module::*;` binds.
 pub(crate) fn children(module: &str) -> impl Iterator<Item = Path> {
     let prefix = format!("{module}::");
-    lines_from(Table::get().paths, &prefix)
-        .lines()
+    Table::get()
+        .paths
+        .from(&prefix)
+        .iter()
         .take_while(move |line| line.starts_with(&prefix))
-        .map(path_line)
+        .map(|line| path_line(line))
         .filter(move |found| !found.path[module.len() + 2..].contains("::"))
 }
 
@@ -838,8 +854,10 @@ pub(crate) fn trait_impls(trait_: &str) -> impl Iterator<Item = Impl> {
 
 /// The impls whose lines start with `prefix`.
 fn impl_lines(prefix: String) -> impl Iterator<Item = Impl> {
-    lines_from(Table::get().impls, &prefix)
-        .lines()
+    Table::get()
+        .impls
+        .from(&prefix)
+        .iter()
         .take_while(move |line| line.starts_with(&prefix))
         .map(|line| {
             let mut fields = line.split('\t');
@@ -1056,9 +1074,9 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("rawr-std-table-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         for (name, text) in [
-            ("paths.tsv", EMBEDDED.paths),
-            ("items.tsv", EMBEDDED.items),
-            ("impls.tsv", EMBEDDED.impls),
+            ("paths.tsv", EMBEDDED_PATHS),
+            ("items.tsv", EMBEDDED_ITEMS),
+            ("impls.tsv", EMBEDDED_IMPLS),
         ] {
             std::fs::write(directory.join(name), text).unwrap();
         }

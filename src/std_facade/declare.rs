@@ -258,7 +258,7 @@ fn declarations<'a>(
                 reader.scoped(vec![("Self", this)], Vec::new()),
             ));
         }
-        for function in &functions {
+        for function in functions {
             let trait_ = &function.definition[..function.definition.len() - name.len() - 2];
             let parameters = std_table::item(trait_)
                 .map(|item| {

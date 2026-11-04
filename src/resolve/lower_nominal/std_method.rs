@@ -257,12 +257,12 @@ pub(super) fn receiver_mode(ty: &Ty, member: &str) -> Option<receiver::Mode> {
         return mode;
     }
     let mode = std_table::trait_functions(member)
-        .into_iter()
+        .iter()
         .find_map(|function| {
             let trait_ = &function.definition[..function.definition.len() - member.len() - 2];
             let implemented = std_table::impls(trait_, key).next().is_some()
                 || std_table::impls(trait_, "_").next().is_some();
-            implemented.then(|| mode_of(&function)).flatten()
+            implemented.then(|| mode_of(function)).flatten()
         });
     TRAIT_MODES.with_borrow_mut(|modes| modes.insert(cache_key, mode));
     mode
