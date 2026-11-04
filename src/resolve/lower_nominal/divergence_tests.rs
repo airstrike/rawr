@@ -590,6 +590,48 @@ main();
         output,
         "Ok([1, 11, 1426, 3])\nErr(NotDivisible)\n[Ok(1), Ok(11), Ok(1426), Ok(3)]\n"
     );
+    // Rust stops at the first `Err` or `None`: the closure runs no further.
+    // A set or a map from the return type is built as one.
+    let output = printed(
+        r#"
+use std::collections::{BTreeSet, HashMap};
+fn set() -> BTreeSet<i32> { vec![3, 1, 3].into_iter().collect() }
+fn map() -> HashMap<i32, i32> { vec![(1, 2), (1, 5)].into_iter().collect() }
+fn main() {
+    let o: Option<String> = vec![Some("a"), Some("b")].into_iter().collect();
+    let mut n = 0;
+    let r: Result<Vec<i32>, String> = (0..10)
+        .map(|i| {
+            n += 1;
+            if i == 3 { Err(format!("bad {i}")) } else { Ok(i) }
+        })
+        .collect();
+    let none = vec![Some(1), None, Some(3)].into_iter().collect::<Option<Vec<i32>>>();
+    println!("{o:?} {r:?} {n} {none:?} {:?} {:?}", set(), map().get(&1));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Some(\"ab\") Err(\"bad 3\") 4 None {1, 3} Some(5)\n"
+    );
+    for (source, expected) in [
+        (
+            "fn f() -> Vec<String> { vec![1, 2].into_iter().collect() }",
+            "`Vec<String>` cannot be built from an iterator over elements of type `{integer}`",
+        ),
+        (
+            "use std::collections::HashMap;\nfn f() -> HashMap<i32, i32> { vec![1].into_iter().collect() }",
+            "`HashMap<i32, i32>` cannot be built from an iterator over elements of type `{integer}`",
+        ),
+    ] {
+        let report = refused(&format!("{source}\nfn main() {{}}\nmain();\n"));
+        assert!(
+            report.starts_with("error[E0277]: a value of type ") && report.contains(expected),
+            "{source}: {report}"
+        );
+    }
 }
 
 #[test]
@@ -618,6 +660,33 @@ main();
 "#,
     );
     assert_eq!(output, "[\"Foo\", \"Bar\"]\n");
+    // Through a closure's capture, `self` is changed in place, or refused;
+    // never a copy changed and dropped.
+    let source = r#"
+trait Grow {
+    fn grow(self) -> Self;
+}
+
+impl Grow for Vec<i32> {
+    fn grow(mut self) -> Self {
+        let mut add = |n: i32| self.push(n);
+        add(7);
+        self
+    }
+}
+
+fn main() {
+    println!("{:?}", vec![3].grow());
+}
+main();
+"#;
+    let mut engine = Engine::new();
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    if engine.run(source).is_ok() {
+        assert_eq!(*lines.lock().unwrap(), "[3, 7]\n");
+    }
 }
 
 #[test]
@@ -641,6 +710,19 @@ main();
         output,
         "This Vec is empty, see? ()\n[3, 1, 2]\n[3, 1, 2, 5]\n"
     );
+    // A place reached through a reference is changed where it is.
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1];
+    let r = &mut v;
+    (*r).push(2);
+    println!("{:?}", v);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2]\n");
 }
 
 #[test]
@@ -720,20 +802,4 @@ main();
         ),
         "{report}"
     );
-}
-
-#[test]
-fn scratch_probe() {
-    let Ok(dir) = std::env::var("RAWR_SCRATCH") else { return };
-    let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
-    paths.sort();
-    for path in paths {
-        let source = std::fs::read_to_string(&path).unwrap();
-        let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-        let mut engine = Engine::new();
-        let sink = lines.clone();
-        engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
-        let result = engine.run(&format!("{source}\nmain();\n"));
-        eprintln!("=== {}\n{}{:?}", path.display(), lines.lock().unwrap(), result.err().map(|e| e.to_string()));
-    }
 }

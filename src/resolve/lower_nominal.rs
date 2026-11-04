@@ -17981,6 +17981,14 @@ impl<'a> Parser<'a> {
             Op::Prelude(op) => ExecutableOp::Prelude(op),
             Op::Collect { target } => match self.inference.resolve(&target) {
                 Ty::String => ExecutableOp::Prelude(PreludeOp::CollectString),
+                Ty::Keyed(kind, arguments) => {
+                    let op = if kind.is_map() {
+                        PreludeOp::MapFrom
+                    } else {
+                        PreludeOp::SetFrom
+                    };
+                    return self.prove_executable_op(self.keyed_op(op, kind, &arguments[0]));
+                }
                 Ty::Result(payload, _) => ExecutableOp::Kinded {
                     op: PreludeOp::CollectTry,
                     kinds: [COLLECT_RESULT, kind_code(self.inference.resolve(&payload))],

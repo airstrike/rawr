@@ -764,10 +764,38 @@ impl Parser<'_> {
         collect: Span,
     ) -> Result<(), Error> {
         let item = self.inference.resolve(item);
+        if let Ty::Result(payload, _) | Ty::Option(payload) = self.inference.resolve(target)
+            && let Ty::Keyed(..) = self.inference.resolve(&payload)
+        {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "`collect()` into a `Result` or an `Option` of a map or a set".into(),
+                source: collect,
+            });
+        }
         let fits = match self.inference.resolve(target) {
             target @ Ty::Array { kind, .. } if kind.length().is_none() => {
                 let collected = Ty::sequence(kind, item.clone());
                 self.unifies(&target, &collected) && self.unify_type(&target, &collected)
+            }
+            // A map of `(key, value)` items, a set of the items.
+            target @ Ty::Keyed(kind, _) => {
+                let collected = match (kind.is_map(), &item) {
+                    (true, Ty::Tuple(pair)) if pair.len() == 2 => {
+                        Some(Ty::Keyed(kind, pair.clone()))
+                    }
+                    (true, _) => None,
+                    (false, _) => Some(Ty::Keyed(kind, Box::new([item.clone()]))),
+                };
+                match collected {
+                    Some(collected) if self.unifies(&target, &collected) => {
+                        self.unify_type(&target, &collected);
+                        let Ty::Keyed(_, arguments) = self.inference.resolve(&collected) else {
+                            unreachable!("built as a map or set");
+                        };
+                        return self.require_key(kind, &arguments[0], collect);
+                    }
+                    _ => false,
+                }
             }
             Ty::String => matches!(
                 without_references(&item),
@@ -805,8 +833,11 @@ impl Parser<'_> {
     fn uncollectable(&self, target: &Ty, item: &Ty, collect: Span) -> Error {
         Error::MissingCapability {
             owner: self.inference.resolve(target).name(&self.models),
-            capability: format!("FromIterator<{}>", self.inference.resolve(item).name(&self.models))
-                .into(),
+            capability: format!(
+                "FromIterator<{}>",
+                self.inference.resolve(item).name(&self.models)
+            )
+            .into(),
             operation: collect,
             derive: false,
             required_by: None,

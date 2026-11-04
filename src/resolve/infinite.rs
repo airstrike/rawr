@@ -26,28 +26,27 @@ impl<'a> Layouts<'a> {
         let mut types = BTreeMap::new();
         let mut order = Vec::new();
         for shell in program.items() {
-            let (definition, header, name, generics, fields): (_, _, _, _, Vec<_>) = match &shell
-                .kind
-            {
-                item::Kind::Struct(item) => (
-                    item.definition,
-                    &item.header,
-                    &item.name,
-                    &item.generics,
-                    item.fields.iter().map(|field| &field.ty).collect(),
-                ),
-                item::Kind::Enum(item) => (
-                    item.definition,
-                    &item.header,
-                    &item.name,
-                    &item.generics,
-                    item.variants
-                        .iter()
-                        .flat_map(|variant| variant.payload.iter())
-                        .collect(),
-                ),
-                _ => continue,
-            };
+            let (definition, header, name, generics, fields): (_, _, _, _, Vec<_>) =
+                match &shell.kind {
+                    item::Kind::Struct(item) => (
+                        item.definition,
+                        &item.header,
+                        &item.name,
+                        &item.generics,
+                        item.fields.iter().map(|field| &field.ty).collect(),
+                    ),
+                    item::Kind::Enum(item) => (
+                        item.definition,
+                        &item.header,
+                        &item.name,
+                        &item.generics,
+                        item.variants
+                            .iter()
+                            .flat_map(|variant| variant.payload.iter())
+                            .collect(),
+                    ),
+                    _ => continue,
+                };
             order.push(definition);
             types.insert(
                 definition,
@@ -86,7 +85,10 @@ impl<'a> Layouts<'a> {
             let message = match names.as_slice() {
                 [one] => format!("recursive type {one} has infinite size"),
                 [rest @ .., last] => {
-                    format!("recursive types {} and {last} have infinite size", rest.join(", "))
+                    format!(
+                        "recursive types {} and {last} have infinite size",
+                        rest.join(", ")
+                    )
                 }
                 [] => unreachable!("a cycle has a type"),
             };
@@ -113,7 +115,8 @@ impl<'a> Layouts<'a> {
     fn cycle(&self, start: type_def::Id) -> Option<Vec<type_def::Id>> {
         let mut path = vec![start];
         let mut seen = BTreeSet::from([start]);
-        self.reach(start, start, &mut path, &mut seen).then_some(path)
+        self.reach(start, start, &mut path, &mut seen)
+            .then_some(path)
     }
 
     fn reach(

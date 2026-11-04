@@ -60,6 +60,7 @@ println!("{:?} {:?}", first_even(&amp;[1, 4]), first_even(&amp;[3]));</code></pr
 </div>
 <h2 id="pointers"><code>Box</code>, <code>Rc</code> and <code>Arc</code></h2>
 <p><code>Box&lt;T&gt;</code> and <code>Box&lt;dyn Trait&gt;</code> work. <code>Rc</code>, <code>Arc</code> and their <code>Weak</code>s are imported with <code>use</code>. Fields and methods reach through them, and <code>&amp;Arc&lt;String&gt;</code> passes where <code>&amp;str</code> is expected. Cloning one gives another pointer to the same value, as in Rust. <code>Rc::strong_count</code>, <code>Rc::weak_count</code>, <code>Rc::ptr_eq</code>, <code>Rc::downgrade</code>, <code>Weak::upgrade</code>, <code>Rc::get_mut</code>, <code>Rc::make_mut</code> and <code>Rc::try_unwrap</code> give rustc&rsquo;s answers, and so do <code>Arc</code>&rsquo;s. An <code>Rc</code> is not <code>Send</code>.</p>
+<p>A struct or enum that holds itself by value, as <code>enum List { Cons(i32, List), Nil }</code>, has no size and gets rustc&rsquo;s E0072. Holding it through a <code>Box</code>, an <code>Rc</code>, a reference or a <code>Vec</code> breaks the cycle.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="rc.rs" id="src-rc">use std::rc::Rc;
 
