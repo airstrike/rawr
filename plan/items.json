@@ -930,6 +930,8 @@
     {"t":"T927","issue":927,"title":"T927: `try_into()` into `Result<Color, _>` leaves the error type uninferred","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"rustlings"},"decisions":[],"commit":null,"release":null},
     {"t":"T928","issue":928,"title":"T928: `Rc<T>` doesn't meet a `T: Display` bound","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"rustlings"},"decisions":[],"commit":null,"release":null},
     {"t":"T929","issue":929,"title":"T929: `rawr test` runs `cargo check --tests` beside it","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"rustlings"},"decisions":[],"commit":null,"release":null},
-    {"t":"T930","issue":930,"title":"T930: Five rawr-cli integration tests fail on main","state":"open","category":"Health","labels":["health"],"gantt":{"group":"ship","row":"fast-suites"},"decisions":[],"commit":null,"release":null}
+    {"t":"T930","issue":930,"title":"T930: Five rawr-cli integration tests fail on main","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"ship","row":"fast-suites"},"decisions":[],"commit":"b74bc8004","release":null},
+    {"t":"T931","issue":931,"title":"T931: Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"open","category":"Health","labels":["health"],"gantt":{"group":"ship","row":"std-once"},"decisions":[],"commit":null,"release":null},
+    {"t":"T932","issue":932,"title":"T932: Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"rustlings"},"decisions":[],"commit":null,"release":null}
   ]
 }

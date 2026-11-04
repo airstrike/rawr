@@ -2227,7 +2227,9 @@
     {"issue":927,"title":"`try_into()` into `Result<Color, _>` leaves the error type uninferred","state":"open","category":"Divergences from rustc"},
     {"issue":928,"title":"`Rc<T>` doesn't meet a `T: Display` bound","state":"open","category":"Divergences from rustc"},
     {"issue":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"open","category":"Divergences from rustc"},
-    {"issue":930,"title":"Five rawr-cli integration tests fail on main","state":"open","category":"Health"}
+    {"issue":930,"title":"Five rawr-cli integration tests fail on main","state":"closed","category":"Health"},
+    {"issue":931,"title":"Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"open","category":"Health"},
+    {"issue":932,"title":"Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2874,7 +2876,8 @@
             {"number":926,"title":"A path to a type's method as a function value: `.flat_map(HashMap::values)`","state":"open"},
             {"number":927,"title":"`try_into()` into `Result<Color, _>` leaves the error type uninferred","state":"open"},
             {"number":928,"title":"`Rc<T>` doesn't meet a `T: Display` bound","state":"open"},
-            {"number":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"open"}
+            {"number":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"open"},
+            {"number":932,"title":"Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"open"}
           ]
         }
       ]
@@ -2914,15 +2917,26 @@
           "name": "Fast test suites",
           "start": 74,
           "size": 2,
-          "state": "now",
-          "note": "Suites share builds and run in parallel; #930: rawr-cli's integration suite drifted unrun",
+          "state": "done",
+          "note": "Suites share builds and run in parallel; every merge check runs rawr-cli's suite too (#930)",
           "issues": [
             {"number":891,"title":"rawr-import's integration suite shares its builds and runs in parallel","state":"closed"},
             {"number":892,"title":"rawr-import-cli's crossing suite shares prepared fixtures and runs in parallel","state":"closed"},
             {"number":893,"title":"rawr's state from one program breaks the next program in the same project","state":"closed"},
-            {"number":930,"title":"Five rawr-cli integration tests fail on main","state":"open"}
+            {"number":930,"title":"Five rawr-cli integration tests fail on main","state":"closed"}
           ],
           "milestone": "0.3"
+        },
+        {
+          "id": "std-once",
+          "name": "std bindings built once",
+          "start": 82,
+          "size": 2,
+          "state": "now",
+          "note": "Each process rebuilds them: 2.1 s debug, 0.35 s release",
+          "issues": [
+            {"number":931,"title":"Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"open"}
+          ]
         }
       ]
     },
