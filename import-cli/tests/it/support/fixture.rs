@@ -3,11 +3,11 @@
 //! fixture that keeps Cargo's build units between tests and between suite
 //! runs, so the fixture's crates and its runner's dependencies compile once
 //! per lane, and a test compiles only what its own program changes. Rawr's
-//! own products for the project, `target/rawr`, go at each lease: each test
-//! starts from what a fresh checkout of its program would, whichever
-//! programs ran in the lane before, so no test depends on the order the
-//! suite ran them in. Lanes are made as tests ask for them, up to one per
-//! test thread, so tests of one fixture run in parallel.
+//! own products for the project, `target/rawr`, stay too, as they do for a
+//! user who replaces one program with another in a project: each test's
+//! program runs as it would fresh whichever programs ran in the lane before
+//! (#893). Lanes are made as tests ask for them, up to one per test thread,
+//! so tests of one fixture run in parallel.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -121,7 +121,6 @@ impl Fixture {
             wanted.insert(PathBuf::from(path), text.as_bytes().to_vec());
         }
         settle(&lease.root, &wanted);
-        let _ = fs::remove_dir_all(lease.root.join("target/rawr"));
         lease
     }
 

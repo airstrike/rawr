@@ -37,11 +37,15 @@ fn lane(variant: Option<&str>) -> Lease {
 /// `variants/` as its `main.rs` when given: its stdout without the process
 /// id, which `cargo run` of the same crate prints too.
 fn printed(variant: Option<&str>) -> String {
-    let root = lane(variant);
+    printed_in(&lane(variant))
+}
+
+/// `rawr-import run` on the project at `root`, as `printed` gives it.
+fn printed_in(root: &std::path::Path) -> String {
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&*root)
+        .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -1474,11 +1478,15 @@ fn a_function_in_a_module_nested_under_an_imported_module_runs() {
 /// `rawr-import check` of a lane of the fixture with `variant` as its
 /// `main.rs`, which fails: its stderr.
 fn checked(variant: &str) -> String {
-    let root = lane(Some(variant));
+    checked_in(&lane(Some(variant)))
+}
+
+/// `rawr-import check` of the project at `root`, as `checked` gives it.
+fn checked_in(root: &std::path::Path) -> String {
     let directory = crate::support::scratch();
     let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
-        .arg(&*root)
+        .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -1556,16 +1564,50 @@ fn a_crate_function_returning_never_is_a_value_of_any_type() {
 fn a_match_moves_or_lends_variant_fields_without_clone() {
     let (rawr, cargo) = both_printed("matched.rs", "");
     assert_eq!(rawr, cargo);
+    assert_eq!(rawr, MATCHED);
+}
+
+/// What `matched.rs` prints, as `cargo run` does.
+const MATCHED: &str = "ok 4\nclosed vent\nfailed\n\
+                       door door door open\nclosed door\nfailed\n3 consumed refused\n\
+                       gate closed gate\nclosed hatch\nidle\n\
+                       below closed cellar\ntried 4 attempts\nquiet\n2 counted\n\
+                       above door attic\nagain failed\nbarn 5\n6\n7 by value\n\
+                       deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3\n\
+                       kept true\ndoor kept open\nloft door loft\n\
+                       Tag { label: \"blue\" } blue true\nblue true\nblue true false\ntrue";
+
+/// #893: a program runs in a project as it would in a fresh one after
+/// another program ran there. The first program's `column!` reaches the
+/// crate through its macros' `$crate`, so the project's remembered demand
+/// keeps the crate's types at their hidden paths too. The next program's
+/// values of those types are the types a crate signature or adapter names
+/// at their public paths, as rustc has them, and a crate method that gives
+/// an opaque receiver's own type keeps what the receiver keeps.
+#[test]
+fn a_program_runs_as_it_would_fresh_after_another_ran_in_its_project() {
+    let root = lane(None);
     assert_eq!(
-        rawr,
-        "ok 4\nclosed vent\nfailed\n\
-         door door door open\nclosed door\nfailed\n3 consumed refused\n\
-         gate closed gate\nclosed hatch\nidle\n\
-         below closed cellar\ntried 4 attempts\nquiet\n2 counted\n\
-         above door attic\nagain failed\nbarn 5\n6\n7 by value\n\
-         deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3\n\
-         kept true\ndoor kept open\nloft door loft\n\
-         Tag { label: \"blue\" } blue true\nblue true\nblue true false\ntrue"
+        printed_in(&root),
+        format!("title crossing::Counter\n{EVENTS}")
+    );
+    let replace = |variant: &str| {
+        fs::write(
+            root.join("src/main.rs"),
+            CROSSING.read(&format!("variants/{variant}")),
+        )
+        .unwrap();
+    };
+    replace("matched.rs");
+    assert_eq!(printed_in(&root), MATCHED);
+    replace("stock_again.rs");
+    let stderr = checked_in(&root);
+    let own = stderr.split("cargo check found").next().unwrap_or_default();
+    assert!(
+        own.contains(
+            "error[E0502]: cannot borrow `items` as mutable because it is also borrowed as immutable"
+        ),
+        "{stderr}"
     );
 }
 
