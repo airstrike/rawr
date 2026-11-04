@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 mod marked;
 mod mcp;
+mod harness;
 mod program;
 mod vocabulary;
 

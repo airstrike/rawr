@@ -47,7 +47,7 @@ fn main() {}</code></pre></div>
 <ul>
   <li>The lint attributes <code>allow</code>, <code>warn</code>, <code>deny</code>, <code>forbid</code> and <code>expect</code> are accepted. rawr ignores them.</li>
   <li>Build settings and documentation are accepted and ignored. These are <code>windows_subsystem</code>, <code>crate_name</code>, <code>crate_type</code>, <code>recursion_limit</code>, <code>type_length_limit</code>, <code>no_builtins</code>, <code>debugger_visualizer</code> and <code>doc</code>. <code>//!</code> comments are accepted too.</li>
-  <li><code>#![cfg_attr(predicate, ..)]</code> applies its attributes when the predicate holds. rawr builds as a debug build without <code>--test</code>, so <code>debug_assertions</code> holds and <code>test</code> and every <code>feature</code> don&rsquo;t. The attributes it applies follow the same rules.</li>
+  <li><code>#![cfg_attr(predicate, ..)]</code> applies its attributes when the predicate holds. rawr builds as a debug build, so <code>debug_assertions</code> holds and every <code>feature</code> doesn&rsquo;t. <code>test</code> holds under <a href="/docs/reference/commands#test"><code>rawr test</code></a> only. The attributes it applies follow the same rules.</li>
   <li>Attributes that change the prelude or the language are errors. These include <code>no_std</code>, <code>no_implicit_prelude</code>, <code>no_main</code> and <code>feature</code>.</li>
 </ul>
 <p><code>cargo build</code> reads every one of these attributes as Rust does.</p>

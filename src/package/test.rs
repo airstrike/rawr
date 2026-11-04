@@ -204,7 +204,133 @@ fn literal(text: &str) -> Option<Box<str>> {
 
 #[cfg(test)]
 mod tests {
-    use super::argument;
+    use super::{argument, Expected, Test};
+    use crate::package::{snapshot::Snapshot, Graph};
+    use crate::{CallFnOptions, Dynamic, Engine, Scope, AST};
+
+    const CRATE: &str = r#"
+fn main() {
+    println!("{}", add(1, 2));
+}
+
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+#[test]
+fn top_level() {
+    assert!(cfg!(test));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adds() {
+        assert_eq!(add(2, 2), 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "zero")]
+    fn divides() {
+        let zero = add(0, 0);
+        if zero == 0 {
+            panic!("divide by zero");
+        }
+    }
+
+    #[test]
+    #[ignore = "slow"]
+    fn later() {
+        #[cfg(test)]
+        let built = true;
+        #[cfg(not(test))]
+        let built = false;
+        assert!(built);
+    }
+
+    #[test]
+    fn fails() {
+        assert_eq!(add(1, 1), 3);
+    }
+}
+"#;
+
+    /// `text` as a crate's root, built for its tests when `test`.
+    fn compiled(text: &str, test: bool) -> (Engine, AST, Box<[Test]>) {
+        let mut engine = Engine::new();
+        engine.set_test(test);
+        let path = std::path::PathBuf::from("/tested/src/main.rs");
+        let snapshot = Snapshot::new(path.clone(), vec![(path, text.into())]).unwrap();
+        let graph = Graph::load_snapshot(&engine, &snapshot).unwrap();
+        let (ast, tests, _) = engine.compile_package_tests(graph).unwrap();
+        (engine, ast, tests)
+    }
+
+    fn call(engine: &Engine, ast: &AST, test: &Test) -> Result<Dynamic, String> {
+        engine
+            .call_fn_with_options::<Dynamic>(
+                CallFnOptions::new().eval_ast(false),
+                &mut Scope::new(),
+                ast,
+                test.function(),
+                (),
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn a_crate_built_for_its_tests_has_them_sorted_by_name() {
+        let (_, _, tests) = compiled(CRATE, true);
+        let names: Vec<_> = tests.iter().map(Test::name).collect();
+        assert_eq!(
+            names,
+            [
+                "tests::adds",
+                "tests::divides",
+                "tests::fails",
+                "tests::later",
+                "top_level"
+            ]
+        );
+        assert_eq!(tests[0].expected(), &Expected::Return);
+        assert_eq!(tests[0].ignored(), None);
+        assert_eq!(tests[0].location().line(), 20);
+        assert_eq!(tests[0].location().column(), 8);
+        assert_eq!(
+            tests[1].expected(),
+            &Expected::Panic(Some("zero".into()))
+        );
+        assert_eq!(tests[3].ignored(), Some(Some("slow")));
+    }
+
+    #[test]
+    fn cfg_test_holds_only_when_the_engine_builds_for_tests() {
+        let (engine, ast, tests) = compiled(CRATE, false);
+        let names: Vec<_> = tests.iter().map(Test::name).collect();
+        assert_eq!(names, ["top_level"]);
+        // `assert!(cfg!(test))` fails in a build that is not for tests.
+        assert!(call(&engine, &ast, &tests[0]).is_err());
+    }
+
+    #[test]
+    fn each_test_runs_as_a_function_and_its_failures_panic() {
+        let (engine, ast, tests) = compiled(CRATE, true);
+        let outcome = |name: &str| {
+            let test = tests.iter().find(|test| test.name() == name).unwrap();
+            call(&engine, &ast, test)
+        };
+        assert!(outcome("tests::adds").is_ok());
+        assert!(outcome("top_level").is_ok());
+        assert!(outcome("tests::later").is_ok());
+        assert!(outcome("tests::divides")
+            .unwrap_err()
+            .contains("divide by zero"));
+        assert!(outcome("tests::fails")
+            .unwrap_err()
+            .contains("assertion `left == right` failed"));
+    }
 
     #[test]
     fn should_panic_gives_its_expected_text() {

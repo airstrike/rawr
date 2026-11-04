@@ -1,4 +1,4 @@
-<meta name="description" content="Every command of rawr: run, check, new, mcp, init and doctor, the paths they take, exit statuses and the files rawr writes.">
+<meta name="description" content="Every command of rawr: run, check, test, new, mcp, init and doctor, the paths they take, exit statuses and the files rawr writes.">
 <article>
 <h1>Commands</h1>
 <p class="lede">Every command you type as <code>rawr ..</code>, and the extensions it hands programs to.</p>
@@ -12,6 +12,7 @@
   <tr><th>Command</th><th>What it does</th></tr>
   <tr><td><code>rawr [run] [path]</code></td><td>Checks a program and runs it. <code>run</code> is the default command, so <code>rawr</code> alone runs the crate in the current directory. Errors from <code>cargo check</code> are printed after a program that runs once. A program with Rust dependencies or native modules goes to <a href="/docs/imports">rawr-import</a>. An iced app goes there too, as <a href="/docs/iced#when">iced</a> describes.</td></tr>
   <tr><td><code>rawr check [path]</code></td><td>Checks a program without running it. It prints <code>Checked</code> and the entry path, or the first error. Then it runs <code>cargo check</code> and prints <code>cargo check passed</code> or rustc&rsquo;s errors. It exits with status 1 if either check fails.</td></tr>
+  <tr><td><code>rawr test [path] [filter] [-- options]</code></td><td>Runs the program&rsquo;s <code>#[test]</code> functions, as <code>cargo test</code> runs them. <a href="#test">Tests</a> says more.</td></tr>
   <tr><td><code>rawr new &lt;path&gt;</code></td><td>Creates a Cargo crate with no dependencies. Its <code>src/main.rs</code> starts with <code>// rawr</code> and prints three lines. It refuses a path that holds files.</td></tr>
   <tr><td><code>rawr new &lt;path&gt; --template &lt;name&gt;</code></td><td>Creates a crate from a template that an installed extension offers. <code>rawr new --help</code> lists the templates. No extension offers one today.</td></tr>
   <tr><td><code>rawr mcp [path]</code></td><td>Runs an MCP server on stdio for coding agents such as Claude Code and Codex. Relative paths in its calls start at <code>path</code>, else the current directory. Installed extensions add tools to it. <a href="/docs/agents">Agents</a> describes it.</td></tr>
@@ -22,8 +23,19 @@
 </table>
 <p>Set <code>RAWR_VERBOSE=1</code> to see how a program was loaded and which binary ran it.</p>
 
+<h2 id="test">Tests</h2>
+<p><code>rawr test</code> builds the program as <code>cargo test</code> builds it, so <code>#[cfg(test)]</code> items are in and <code>cfg!(test)</code> is true. Then it runs each <code>#[test]</code> function of the crate one after another, in name order. It reports them in <code>cargo test</code>&rsquo;s format: <code>running N tests</code>, a <code>test name ... ok</code> or <code>FAILED</code> line for each, the output and panic of each failure, and the <code>test result:</code> line.</p>
+<ul>
+  <li>A test passes when it returns. A test that returns <code>Err</code> fails with <code>Error:</code> and the error.</li>
+  <li><code>#[should_panic]</code> passes when the test panics. <code>#[should_panic(expected = "text")]</code> also needs <code>text</code> in the panic&rsquo;s message.</li>
+  <li><code>#[ignore]</code> and <code>#[ignore = "reason"]</code> leave a test out. It is reported as <code>ignored</code>.</li>
+  <li>What a test prints is shown only when it fails, as <code>cargo test</code> shows it.</li>
+</ul>
+<p>The first argument that isn&rsquo;t a path filters the tests by name, as <code>cargo test add</code> does. Options after <code>--</code> are libtest&rsquo;s: more name filters, <code>--exact</code>, <code>--skip &lt;filter&gt;</code>, <code>--ignored</code>, <code>--include-ignored</code> and <code>--nocapture</code>. <code>--test-threads</code> is accepted, and tests always run one at a time. <code>rawr test -p &lt;package&gt;</code> tests a package of the workspace.</p>
+<p>A program that isn&rsquo;t built for its tests still has its <code>#[cfg(test)]</code> items parsed, as rustc parses them. A syntax error in a test module stops <code>rawr run</code> and <code>rawr check</code> too.</p>
+
 <h2 id="extensions">Commands from extensions</h2>
-<p><code>rawr</code> runs <code>run</code>, <code>check</code>, <code>new</code>, <code>doctor</code>, <code>mcp</code> and <code>init</code> itself. It hands other commands to the installed extension that adds them. It looks for <code>rawr-&lt;name&gt;</code> binaries next to its own binary first and then on <code>PATH</code>.</p>
+<p><code>rawr</code> runs <code>run</code>, <code>check</code>, <code>test</code>, <code>new</code>, <code>doctor</code>, <code>mcp</code> and <code>init</code> itself. It hands other commands to the installed extension that adds them. It looks for <code>rawr-&lt;name&gt;</code> binaries next to its own binary first and then on <code>PATH</code>.</p>
 <ul>
   <li><a href="/docs/imports">rawr-import</a> runs <code>rawr run</code> and <code>rawr check</code> for programs with Cargo dependencies or native modules. It adds <code>rawr cache clean</code>, which removes what rawr&rsquo;s home holds that no build has used lately: hosts, rawr&rsquo;s runtimes, shared bindings and the nightly&rsquo;s check build. It skips anything a running build holds and never waits for one.</li>
 </ul>
@@ -33,7 +45,7 @@
 <ul>
   <li>0 when the command succeeds.</li>
   <li>1 when a check fails or when <code>main</code> returns <code>Err</code>. <code>rawr check</code> also exits with status 1 when <code>cargo check</code> fails.</li>
-  <li>101 when a program panics.</li>
+  <li>101 when a program panics, or when a test of <code>rawr test</code> fails.</li>
 </ul>
 
 <h2 id="files">Files rawr writes</h2>

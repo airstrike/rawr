@@ -12,17 +12,14 @@
 #
 # - `solution` rows run `fn main` both ways. They match when stdout and the
 #   exit status are equal.
-# - `test` rows run one `#[test]` of a solution. rawr has no test runner
-#   (`rawr test` is not a command), so each test runs as a program: a copy
-#   with `#[cfg(test)]`, `#[test]` and `#[should_panic]` removed, the test
-#   made `pub`, and a `main` that calls it. The same copy runs natively, so
-#   the two exit statuses (0 passes, 101 panics) are compared.
-# - `exercise` rows run an unsolved exercise both ways. rustc's outcome is
-#   its first error code, else the program's exit status, else the outcome
-#   of its tests (`tests-build:CODE` or `tests-fail`). rawr's is its first
-#   error code or its exit status. They match when both fail to compile with
-#   the same code, or both run alike. An exercise that fails only in its
-#   tests is a `tests-gap`, since rawr can't run them.
+# - `test` rows are one `#[test]` of a solution. Its tests run once each
+#   way, under `rustc --test` and under `rawr test`, and each test's result
+#   in libtest's report (`ok`, `FAILED` or `ignored`) is compared. A test
+#   whose build fails has the build's error code (`build:CODE`).
+# - `exercise` rows run an unsolved exercise both ways. Each side's outcome
+#   is its first error code, else the program's exit status, else the
+#   outcome of its tests (`tests-build:CODE` or `tests-fail`). They match
+#   when both fail to compile with the same code, or both run alike.
 #
 # Every copy starts with `// rawr`. `rawr` is the one on PATH. RAWR_BIN names
 # a development build's directory (with `rawr-import` and
@@ -102,16 +99,10 @@ tests_of() {
     ' "$1"
 }
 
-# `$1` with its test `$3` (as `module::name`) called from `main`, at `$2`.
-test_program() {
-    perl -pe '
-        s/#\[cfg\(test\)\]//;
-        s/#\[should_panic[^\]]*\]//;
-        if (s/#\[test\]//) { $test = 1 }
-        if ($test && s/^(\s*)fn\s/$1pub fn /) { $test = 0 }
-        s/^fn main\(\)/#[allow(dead_code)]\nfn rustlings_main()/;
-    ' "$1" >"$2"
-    printf '\nfn main() {\n    %s();\n}\n' "$3" >>"$2"
+# The result of the test `$2` (as `module::name`) in the libtest report
+# `$1`: `ok`, `FAILED` or `ignored`, else nothing.
+outcome() {
+    sed -n "s/^test ${2#::}\( - should panic\)\{0,1\} \.\.\. \([a-zA-Z]*\).*/\2/p" "$1" | head -1
 }
 
 solution() {
@@ -137,23 +128,42 @@ solution() {
     fi
     row solution "$name" "$native" "$rawr" "$verdict" "$detail"
 
+    grep -q '#\[test\]' "$source" || return
+    local native_build_code= rawr_code
+    if native_build "$source" "$dir/tests" --test; then
+        run "$dir/tests" "$dir/tests" --test-threads=1 >/dev/null
+    else
+        native_build_code="build:$(code "$dir/tests.build")"
+    fi
+    run "$dir/rawr-tests" rawr test "$dir/main.rs" >/dev/null
+    rawr_code=$(code "$dir/rawr-tests.err")
     local test
     for test in $(tests_of "$source"); do
-        local case=$dir/test-${test##*::}
-        test_program "$dir/main.rs" "$case.rs" "$test"
-        if native_build "$case.rs" "$case.native"; then
-            native=$(run "$case.native" "$case.native")
-        else
-            native="build:$(code "$case.native.build")"
-        fi
-        rawr=$(run "$case.rawr" rawr run "$case.rs")
+        native=${native_build_code:-$(outcome "$dir/tests.out" "$test")}
+        rawr=$(outcome "$dir/rawr-tests.out" "$test")
+        [ -z "$rawr" ] && rawr="build:${rawr_code:-none}"
         if [ "$native" = "$rawr" ]; then
             verdict=pass detail=
         else
-            verdict=fail detail=$(first_error "$case.rawr.err")
+            verdict=fail detail=$(first_error "$dir/rawr-tests.err")
         fi
         row test "$name::${test##*::}" "$native" "$rawr" "$verdict" "$detail"
     done
+}
+
+# The outcome of `$1`'s tests under `rawr test`, at `$2`: nothing when
+# they pass, `tests-build:CODE` when they fail to build, else `tests-fail`.
+rawr_tests() {
+    local status
+    status=$(run "$2" rawr test "$1")
+    [ "$status" = 0 ] && return
+    local found
+    found=$(code "$2.err")
+    if [ -n "$found" ] && ! grep -q '^test result:' "$2.out"; then
+        echo "tests-build:$found"
+    else
+        echo tests-fail
+    fi
 }
 
 exercise() {
@@ -177,15 +187,19 @@ exercise() {
     local rawr_code
     rawr_code=$(code "$dir/rawr.err")
     [ "$rawr" != 0 ] && [ -n "$rawr_code" ] && rawr="build:$rawr_code"
+    if [ "$rawr" = 0 ] && grep -q '#\[test\]' "$source"; then
+        local tests
+        tests=$(rawr_tests "$dir/main.rs" "$dir/rawr-tests")
+        [ -n "$tests" ] && rawr=$tests
+    fi
     case $native in
         "$rawr") verdict=match ;;
-        build:*)
+        build:* | tests-build:*)
             case $rawr in
-                build:*) verdict=code-differs ;;
+                build:* | tests-build:*) verdict=code-differs ;;
                 *) verdict=rawr-accepts ;;
             esac
             ;;
-        tests-*) verdict=tests-gap ;;
         *) verdict=differs ;;
     esac
     [ "$verdict" = match ] || detail=$(first_error "$dir/rawr.err")
@@ -207,8 +221,13 @@ done
 
 awk -F'\t' '
     NR > 1 { total[$1]++; if ($5 == "pass" || $5 == "match") good[$1]++ }
+    # A solution matches whole when its main and every one of its tests do.
+    $1 == "solution" { whole[$2] = ($5 == "pass") }
+    $1 == "test" && $5 != "pass" { name = $2; sub(/::[^:]*$/, "", name); whole[name] = 0 }
     END {
+        for (name in whole) if (whole[name]) wholes++
         printf "solutions: %d of %d run and match\n", good["solution"], total["solution"]
+        printf "solutions with main and all tests matching: %d of %d\n", wholes, total["solution"]
         printf "tests:     %d of %d run and match\n", good["test"], total["test"]
         printf "exercises: %d of %d fail as rustc fails\n", good["exercise"], total["exercise"]
     }
