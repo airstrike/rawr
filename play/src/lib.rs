@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn unknown_function_in_a_snippet_is_an_error_at_its_name() {
         let PlayError::Compile(error) = run("nonexistent(1)", &Limits::default()).unwrap_err();
-        assert!(error.contains("unknown function `nonexistent`"), "{error}");
+        assert!(error.contains("cannot find function `nonexistent`"), "{error}");
         assert!(error.contains("play.rs:1:1-1:12"), "{error}");
     }
 

@@ -16,8 +16,8 @@ pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub(crate) use error::{
-    derivable, ArgumentCount, ArgumentSignature, CannotCompare, Qualified, Unsatisfied,
-    Unsupported, ASYNC_MAIN,
+    derivable, ArgumentCount, ArgumentSignature, AssignTwice, CannotCompare, Described, NotFound,
+    Qualified, Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{Callee, Category, Error};
 use std::collections::BTreeMap;
@@ -2571,6 +2571,7 @@ fn crate_trait_generics(
                 let error = Error::UnknownType {
                     name: qualified.into(),
                     reference: bound.span,
+                    path: false,
                 };
                 site.record(&error);
                 return Err(error);
@@ -4758,6 +4759,7 @@ fn resolve_trait(
         let error = Error::UnknownType {
             name: qualified.clone(),
             reference: span,
+            path: false,
         };
         if let Some(site) = native.filter(|site| site.missing_binding(host, &qualified)) {
             site.record(&error);
@@ -4998,6 +5000,7 @@ fn check_generic_arity(
                     return Err(Error::UnknownType {
                         name: name.into(),
                         reference: path.span,
+                        path: false,
                     });
                 };
                 let bindings = ty.dyn_bindings();
@@ -5400,7 +5403,7 @@ mod tests {
         assert_eq!(error.primary_span().start().line(), Some(2));
         assert_eq!(error.primary_span().start().position(), Some(14));
         assert_eq!(error.secondary_span(), None);
-        assert!(error.to_string().contains("unknown type `Missing`"));
+        assert!(error.to_string().contains("cannot find type `Missing` in this scope"));
     }
 
     #[test]

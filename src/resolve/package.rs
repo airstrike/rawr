@@ -1487,15 +1487,40 @@ impl<'a> Resolver<'a> {
             return Err(Failure {
                 primary: context.source,
                 secondary: Some(declaration.source),
-                error: Error::InvalidImport {
-                    path: address.display(),
-                    reason: "import targets a private item".into(),
-                    reference,
-                    declaration: Some(declaration.span),
+                error: Error::Private {
+                    kind: self.kind_of(&declaration.target),
+                    name: address.name.clone(),
+                    reference: last_segment(reference, &address.name),
+                    declaration: declaration.span,
                 },
             });
         }
         Ok(())
+    }
+
+    /// What `target` is, as rustc's E0603 names it.
+    fn kind_of(&self, target: &Target) -> &'static str {
+        match target {
+            Target::Module => "module",
+            Target::Trait => "trait",
+            Target::Type(type_ref::Target::Script { definition, .. }) => {
+                match self
+                    .type_declarations
+                    .get(definition.index())
+                    .map(type_def::Declaration::kind)
+                {
+                    Some(type_def::Kind::Enum) => "enum",
+                    _ => "struct",
+                }
+            }
+            Target::Item(key) => match key.kind() {
+                crate::item::Kind::Struct => "struct",
+                crate::item::Kind::Enum => "enum",
+                _ => "function",
+            },
+            Target::Type(_) => "type",
+            Target::HostModuleItem { .. } | Target::HostItem { .. } => "item",
+        }
     }
 
     fn validate_module_hops(
@@ -1517,11 +1542,11 @@ impl<'a> Resolver<'a> {
                 return Err(Failure {
                     primary: context.source,
                     secondary: Some(module.source),
-                    error: Error::InvalidImport {
-                        path: address.display(),
-                        reason: "import crosses a private module".into(),
+                    error: Error::Private {
+                        kind: "module",
+                        name: address.modules[depth].clone(),
                         reference,
-                        declaration: Some(module.span),
+                        declaration: module.span,
                     },
                 });
             }
@@ -1752,6 +1777,23 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
     output
 }
 
+/// The end of `reference` that names `name`, where rustc's E0603 points:
+/// `make_sausage` of `sausage_factory::make_sausage`.
+fn last_segment(reference: Span, name: &str) -> Span {
+    let (start, end) = (reference.start(), reference.end());
+    let length = u16::try_from(name.chars().count()).unwrap_or(u16::MAX);
+    match (start.line(), end.line(), end.position()) {
+        (Some(first), Some(last), Some(column))
+            if first == last && column > usize::from(length) =>
+        {
+            let line = u16::try_from(last).unwrap_or(u16::MAX);
+            let column = u16::try_from(column).unwrap_or(u16::MAX);
+            Span::new(crate::Position::new(line, column - length), end)
+        }
+        _ => reference,
+    }
+}
+
 /// Rust privacy: a private item declared in a module is visible from that
 /// module and its descendants; `depth` is the length of the declaring path.
 fn within(context: &Context, address: &Address, depth: usize) -> bool {
@@ -1769,15 +1811,6 @@ impl Context {
             modules: self.namespace.modules.clone(),
             name: name.into(),
         }
-    }
-}
-
-impl Address {
-    fn display(&self) -> ImmutableString {
-        let mut segments = vec![self.package.as_str()];
-        segments.extend(self.modules.iter().map(|segment| segment.as_str()));
-        segments.push(self.name.as_str());
-        segments.join("::").into()
     }
 }
 
@@ -1831,6 +1864,7 @@ fn host_target(
             .ok_or_else(|| Error::UnknownType {
                 name: qualified.clone(),
                 reference,
+                path: false,
             }),
         Some(host::Entry::Item(definitions)) => Ok(Target::HostItem {
             definitions: definitions.into(),

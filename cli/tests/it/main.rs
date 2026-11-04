@@ -248,7 +248,7 @@ fn type_errors_are_the_same_diagnostic_for_check_and_run() {
     assert!(!run.status.success());
     assert_eq!(checked.stderr, run.stderr);
     let text = stderr(&checked);
-    assert!(text.starts_with("error[RAWR-RESOLVE-"), "{text}");
+    assert!(text.starts_with("error[E0308]: mismatched types"), "{text}");
     assert!(text.contains(&format!("{}:2:", source.display())), "{text}");
 }
 

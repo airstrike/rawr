@@ -112,10 +112,10 @@ fn mutable_child_updates_compose_through_a_parent_match_arm() {
 #[test]
 fn receiver_references_do_not_coerce_to_owned_values() {
     for (source, actual) in [
-        ("struct Counter { value: i64 } impl Counter { fn reject(&self) -> Counter { self } }", "found '&Counter'"),
-        ("struct Counter { value: i64 } impl Counter { fn reject(&mut self) -> Counter { self } }", "found '&mut Counter'"),
+        ("struct Counter { value: i64 } impl Counter { fn reject(&self) -> Counter { self } }", "found `&Counter`"),
+        ("struct Counter { value: i64 } impl Counter { fn reject(&mut self) -> Counter { self } }", "found `&mut Counter`"),
     ] {
-        let error = resolution_error(&Engine::new(), source, Category::TypeMismatch, "expected 'Counter'");
+        let error = resolution_error(&Engine::new(), source, Category::TypeMismatch, "expected `Counter`");
         assert!(error.err_type().to_string().contains(actual), "{error}");
     }
 }
@@ -179,7 +179,7 @@ fn method_owner_arguments_arity_and_call_form_are_compile_checked() {
         (
             "struct Counter { value: i64 } impl Counter { fn set(&mut self, value: i64) {} } let mut counter = Counter { value: 0 }; counter.set(true);",
             Category::TypeMismatch,
-            "expected 'i64', found 'bool'",
+            "expected `i64`, found `bool`",
         ),
         (
             "struct Counter { value: i64 } impl Counter { fn set(&mut self, value: i64) {} } let mut counter = Counter { value: 0 }; counter.set();",
@@ -242,16 +242,16 @@ fn shared_receivers_and_immutable_bindings_cannot_mutate() {
     assert_resolution(
         &Engine::new(),
         "struct Child { value: i64 } struct Parent { child: Child } impl Child { fn increment(&mut self) { self.value += 1; } } let parent = Parent { child: Child { value: 0 } }; parent.child.increment();",
-        Category::ImmutableBinding,
-        "immutable binding 'parent'",
+        Category::BorrowConflict,
+        "cannot borrow `parent.child` as mutable, as `parent` is not declared as mutable",
     );
 }
 
 #[test]
 fn method_return_types_are_compile_checked() {
-    assert_resolution(&Engine::new(), "struct Counter { value: i64 } impl Counter { fn value(&self) -> bool { self.value } }", Category::TypeMismatch, "expected 'bool', found 'i64'");
+    assert_resolution(&Engine::new(), "struct Counter { value: i64 } impl Counter { fn value(&self) -> bool { self.value } }", Category::TypeMismatch, "expected `bool`, found `i64`");
 
-    assert_resolution(&Engine::new(), "struct Counter { value: i64 } impl Counter { fn value(&self) -> i64 { self.value; } }", Category::TypeMismatch, "expected 'i64', found '()'");
+    assert_resolution(&Engine::new(), "struct Counter { value: i64 } impl Counter { fn value(&self) -> i64 { self.value; } }", Category::TypeMismatch, "expected `i64`, found `()`");
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn nested_if_scopes_bindings_and_evaluates_only_the_selected_branch() {
 
     assert_eq!(value, 43);
 
-    assert_resolution(&Engine::new(), "pub fn hidden(flag: bool) -> i64 { let result = if flag { let local = 1; local } else { 0 }; local }", Category::UnknownVariable, "Unknown variable 'local'");
+    assert_resolution(&Engine::new(), "pub fn hidden(flag: bool) -> i64 { let result = if flag { let local = 1; local } else { 0 }; local }", Category::UnknownVariable, "cannot find value `local` in this scope");
 }
 
 #[test]
@@ -333,7 +333,7 @@ fn if_unit_branches_and_divergence_boundary_are_explicit() {
 fn if_block_tail_mismatch_points_to_the_endpoint() {
     let source = "pub fn choose(flag: bool) -> i64 { if flag { let x = 1; x } else { false } }";
     // As rustc, the `else` branch is held to the `if` branch's type.
-    let error = resolution_error(&Engine::new(), source, Category::TypeMismatch, "expected '{integer}', found 'bool'");
+    let error = resolution_error(&Engine::new(), source, Category::TypeMismatch, "expected `{integer}`, found `bool`");
     let false_column = source.find("false").unwrap() + 1;
     assert_eq!(error.primary_span().start(), Position::new(1, false_column as u16));
 }

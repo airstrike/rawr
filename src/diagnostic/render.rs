@@ -10,9 +10,9 @@ pub fn render(report: &Report) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
-        "{}[{}]: {}",
+        "{}{}: {}",
         report.severity(),
-        report.code(),
+        report.code().tag(),
         report.message()
     );
     for source in report.sources().iter().filter(|source| {

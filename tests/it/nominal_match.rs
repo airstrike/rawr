@@ -388,13 +388,13 @@ fn recursive_pattern_owner_variant_arity_type_and_binding_failures_are_positione
             "enum Inner { Value } enum Other { Value } enum Outer { Wrap(Inner) } pub fn f(value: Outer) { match value { Outer::Wrap(Other::Value) => () } }",
             "Other::Value",
             Category::TypeMismatch,
-            "expected 'Inner', found 'Other'",
+            "expected `Inner`, found `Other`",
         ),
         (
             "enum Inner { Value } enum Outer { Wrap(i64) } pub fn f(value: Outer) { match value { Outer::Wrap(Inner::Value) => () } }",
             "Inner::Value",
             Category::TypeMismatch,
-            "expected 'i64', found 'Inner'",
+            "expected `i64`, found `Inner`",
         ),
         (
             "enum Inner { Value(i64) } enum Outer { Pair(i64, Inner) } pub fn f(value: Outer) { match value { Outer::Pair(value, Inner::Value(value)) => () } }",
@@ -575,9 +575,9 @@ fn names_arity_owner_and_arm_types_are_compile_checked() {
         (
             "enum Message { Tick, Tock } pub fn f(message: Message) -> i64 { match message { Message::Tick => 1, Message::Tock => false } }",
             Category::TypeMismatch,
-            "expected '{integer}', found 'bool'",
+            "expected `{integer}`, found `bool`",
         ),
-        ("enum Message { Tick } enum Other { Tick } pub fn f(message: Message) { match message { Other::Tick => () } }", Category::TypeMismatch, "expected 'Message', found 'Other'"),
+        ("enum Message { Tick } enum Other { Tick } pub fn f(message: Message) { match message { Other::Tick => () } }", Category::TypeMismatch, "expected `Message`, found `Other`"),
     ];
 
     for (source, category, message) in cases {
@@ -585,7 +585,7 @@ fn names_arity_owner_and_arm_types_are_compile_checked() {
     }
 
     let source = "enum Message { Tick, Tock } pub fn f(message: Message) -> i64 { match message { Message::Tick => 1, Message::Tock => false } }";
-    let error = assert_resolution(source, Category::TypeMismatch, "expected '{integer}', found 'bool'");
+    let error = assert_resolution(source, Category::TypeMismatch, "expected `{integer}`, found `bool`");
     assert_eq!(error.primary_span().start(), position_of(source, "false"));
 }
 
@@ -698,7 +698,7 @@ fn exhaustiveness_duplicates_unreachable_arms_and_binding_escape_are_rejected() 
         (
             "enum Message { Value(i64) } pub fn f(message: Message) -> i64 { let selected = match message { Message::Value(value) => value }; value }",
             Category::UnknownVariable,
-            "Unknown variable 'value'",
+            "cannot find value `value` in this scope",
         ),
     ];
 

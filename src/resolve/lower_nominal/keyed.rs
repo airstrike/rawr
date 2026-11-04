@@ -289,11 +289,7 @@ impl Parser<'_> {
                 mutation,
                 receiver: binding.declaration,
             },
-            BindingKind::Local | BindingKind::Invocation => Error::ImmutableBinding {
-                binding: name.clone(),
-                mutation,
-                declaration: binding.declaration,
-            },
+            BindingKind::Local | BindingKind::Invocation => Error::borrow_immutable(name, mutation),
         })
     }
 

@@ -18,10 +18,18 @@ impl Code {
         Self { value, category }
     }
 
-    /// Return the stable printable code.
+    /// Return the stable printable code: rustc's, as `E0308`, or empty for
+    /// an error rustc reports without one.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         self.value
+    }
+
+    /// The code as rustc prints it after the severity: `[E0308]`, or
+    /// nothing for an error rustc reports without one.
+    #[must_use]
+    pub const fn tag(self) -> Tag {
+        Tag(self)
     }
 
     /// Return the semantic family fixed by this code.
@@ -37,6 +45,19 @@ impl fmt::Display for Code {
     }
 }
 
+/// A code as rustc prints it after the severity (`Code::tag`).
+#[derive(Clone, Copy, Debug)]
+pub struct Tag(Code);
+
+impl fmt::Display for Tag {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0.value {
+            "" => Ok(()),
+            value => write!(formatter, "[{value}]"),
+        }
+    }
+}
+
 macro_rules! codes {
     ($category:ident; $(($name:ident, $value:literal, $docs:literal)),+ $(,)?) => {
         $(
@@ -47,12 +68,7 @@ macro_rules! codes {
 }
 
 codes!(Parse;
-    (PARSE_SYNTAX, "RAWR-PARSE-SYNTAX", "General source grammar failure."),
-    (PARSE_BAD_INPUT, "RAWR-PARSE-BAD-INPUT", "Invalid source token or literal."),
-    (PARSE_UNEXPECTED_EOF, "RAWR-PARSE-UNEXPECTED-EOF", "Unexpected end of source."),
-    (PARSE_MISSING_TOKEN, "RAWR-PARSE-MISSING-TOKEN", "Required source token is missing."),
-    (PARSE_MISSING_SYMBOL, "RAWR-PARSE-MISSING-SYMBOL", "Required source symbol is missing."),
-    (PARSE_UNEXPECTED, "RAWR-PARSE-UNEXPECTED", "Syntax Rust does not have, as rustc reports it."),
+    (PARSE_SYNTAX, "", "A syntax error, which rustc reports without a code."),
 );
 
 codes!(Resolve;
@@ -60,9 +76,10 @@ codes!(Resolve;
     (RESOLVE_RECEIVER, "RAWR-RESOLVE-RECEIVER", "Invalid associated-method receiver grammar."),
     (RESOLVE_TYPE_SHAPE, "RAWR-RESOLVE-TYPE-SHAPE", "Invalid structural type grammar."),
     (RESOLVE_DUPLICATE_ITEM, "RAWR-RESOLVE-DUPLICATE-ITEM", "Duplicate source item."),
-    (RESOLVE_UNKNOWN_TYPE, "RAWR-RESOLVE-UNKNOWN-TYPE", "Unknown source type."),
-    (RESOLVE_UNKNOWN_IMPORT, "RAWR-RESOLVE-UNKNOWN-IMPORT", "Unknown compile-time import."),
+    (RESOLVE_UNKNOWN_TYPE, "E0425", "A type name nothing in scope declares, as rustc reports it."),
+    (RESOLVE_UNKNOWN_IMPORT, "E0432", "A `use` of a path that doesn't exist, as rustc reports it."),
     (RESOLVE_INVALID_IMPORT, "RAWR-RESOLVE-INVALID-IMPORT", "Invalid compile-time import."),
+    (RESOLVE_PRIVATE, "E0603", "A path to an item or a module private to another module, as rustc reports it."),
     (RESOLVE_TYPE_ARGUMENTS, "RAWR-RESOLVE-TYPE-ARGUMENTS", "Invalid structural type arguments."),
     (RESOLVE_LOWERING, "RAWR-RESOLVE-LOWERING", "Unavailable item lowering."),
     (RESOLVE_DERIVE, "RAWR-RESOLVE-DERIVE", "Invalid derived capability."),
@@ -72,7 +89,7 @@ codes!(Resolve;
     (RESOLVE_NO_FIELD, "E0609", "No field of that name, as rustc reports it."),
     (RESOLVE_NOT_IN_MODULE, "E0425", "A path names no item of a module, as rustc reports it."),
     (RESOLVE_METHOD_VALUE, "E0615", "A method read like a field, as rustc reports it."),
-    (RESOLVE_UNKNOWN_FUNCTION, "RAWR-RESOLVE-UNKNOWN-FUNCTION", "Unknown function."),
+    (RESOLVE_UNKNOWN_FUNCTION, "E0425", "A call of a function nothing in scope declares, as rustc reports it."),
     (SCRIPT_NO_FUNCTION, "E0425", "A typed handle names no function of the script, as rustc reports it."),
     (SCRIPT_SIGNATURE, "E0308", "A typed handle's signature differs from the script's, as rustc reports it."),
     (BORROW_MUTABLE_TWICE, "E0499", "A `&mut` borrow while another is live, as rustc reports it."),
@@ -95,15 +112,19 @@ codes!(Resolve;
     (BORROW_TWO_UNIQUE, "E0524", "Two closures' unique captures of a place live at once, as rustc reports it."),
     (BORROW_NOT_MUTABLE, "E0596", "A `&mut` borrow of a local not declared `mut`, as a `&mut self` method takes it, as rustc reports it."),
     (BORROW_ASSIGN_IMMUTABLE, "E0594", "An assignment through a place that isn't mutable, as a dereference of a type with no `DerefMut`, as rustc reports it."),
-    (RESOLVE_UNKNOWN_VARIABLE, "RAWR-RESOLVE-UNKNOWN-VARIABLE", "Unknown variable."),
+    (RESOLVE_UNKNOWN_VARIABLE, "E0425", "A value nothing in scope declares, as rustc reports it."),
     (RESOLVE_MOVED_VALUE, "E0382", "A use of a value after it was moved, as rustc reports it."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),
-    (RESOLVE_TYPE_MISMATCH, "RAWR-RESOLVE-TYPE-MISMATCH", "Resolved type mismatch."),
-    (RESOLVE_IMMUTABLE_BINDING, "RAWR-RESOLVE-IMMUTABLE-BINDING", "Mutation of an immutable binding."),
+    (RESOLVE_TYPE_MISMATCH, "E0308", "An expression whose type differs from the one expected, as rustc reports it."),
+    (RESOLVE_IF_WITHOUT_ELSE, "E0317", "An `if` with no `else` where a value other than `()` is expected, as rustc reports it."),
+    (RESOLVE_RETURN_UNIT, "E0069", "A `return;` in a function whose output isn't `()`, as rustc reports it."),
+    (RESOLVE_IMMUTABLE_BINDING, "E0384", "An assignment to a variable not declared `mut`, as rustc reports it."),
     (RESOLVE_IMPL_OWNER, "RAWR-RESOLVE-IMPL-OWNER", "Invalid inherent implementation owner."),
     (RESOLVE_DUPLICATE_METHOD, "RAWR-RESOLVE-DUPLICATE-METHOD", "Duplicate inherent method."),
     (RESOLVE_METHOD_CALL, "RAWR-RESOLVE-METHOD-CALL", "Invalid inherent method call."),
     (RESOLVE_HOST_OPERATION, "RAWR-RESOLVE-HOST-OPERATION", "Invalid registered host operation."),
+    (RESOLVE_UNKNOWN_MACRO, "", "A macro nothing in scope declares, which rustc reports without a code."),
+    (RESOLVE_WRONG_KIND, "E0423", "A name used as another kind of item than the one it names, as rustc reports it."),
     (RESOLVE_UNUSED_VALUE, "RAWR-RESOLVE-UNUSED-VALUE", "Discarded value with required usage."),
     (RESOLVE_SELF, "RAWR-RESOLVE-SELF", "Invalid self use."),
     (RESOLVE_RECEIVER_MUTATION, "RAWR-RESOLVE-RECEIVER-MUTATION", "Mutation through a shared receiver."),

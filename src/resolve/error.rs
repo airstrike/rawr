@@ -14,6 +14,9 @@ pub enum Category {
     UnknownImport,
     /// A compile-time import targets a non-namespace entry.
     InvalidImport,
+    /// A path reaches an item or a module private to another module, as
+    /// rustc's E0603.
+    Private,
     /// A registered host type has the wrong number of structural arguments.
     InvalidTypeArguments,
     /// A resolved item body has no executable lowering yet.
@@ -30,6 +33,14 @@ pub enum Category {
     UnknownFunction,
     /// A path names no value in scope.
     UnknownVariable,
+    /// A macro call names no macro in scope.
+    UnknownMacro,
+    /// An operator whose operands no impl of its trait covers, in rustc's
+    /// own words for it, as rustc's E0277.
+    Unimplemented,
+    /// A name used as another kind of item than the one it names, as
+    /// rustc's E0423.
+    WrongKind,
     /// A local is used after its value was moved out, as rustc's E0382.
     MovedValue,
     /// An access conflicts with a live borrow, as rustc's borrow checker
@@ -38,9 +49,15 @@ pub enum Category {
     BorrowConflict,
     /// A nominal constructor has the wrong field or payload shape.
     InvalidConstruction,
-    /// A statically known expression type does not match its declaration.
+    /// An expression's type differs from the one expected, as rustc's
+    /// E0308.
     TypeMismatch,
-    /// A nominal field write targets an immutable binding.
+    /// An `if` with no `else` where a value other than `()` is expected, as
+    /// rustc's E0317.
+    IfWithoutElse,
+    /// A `return;` in a function whose output isn't `()`, as rustc's E0069.
+    ReturnWithoutValue,
+    /// An assignment to a variable not declared `mut`, as rustc's E0384.
     ImmutableBinding,
     /// An inherent impl targets something other than a visible script type.
     InvalidImplOwner,
@@ -97,6 +114,7 @@ impl fmt::Display for Category {
             Self::UnknownType => formatter.write_str("unknown type"),
             Self::UnknownImport => formatter.write_str("unknown import"),
             Self::InvalidImport => formatter.write_str("invalid import"),
+            Self::Private => formatter.write_str("private item"),
             Self::InvalidTypeArguments => formatter.write_str("invalid type arguments"),
             Self::LoweringUnavailable => formatter.write_str("lowering unavailable"),
             Self::InvalidDerive => formatter.write_str("invalid derive"),
@@ -105,10 +123,15 @@ impl fmt::Display for Category {
             Self::NotInModule => formatter.write_str("not in module"),
             Self::UnknownFunction => formatter.write_str("unknown function"),
             Self::UnknownVariable => formatter.write_str("unknown variable"),
+            Self::UnknownMacro => formatter.write_str("unknown macro"),
+            Self::Unimplemented => formatter.write_str("operator not implemented"),
+            Self::WrongKind => formatter.write_str("wrong kind of item"),
             Self::MovedValue => formatter.write_str("use of moved value"),
             Self::BorrowConflict => formatter.write_str("borrow conflict"),
             Self::InvalidConstruction => formatter.write_str("invalid construction"),
-            Self::TypeMismatch => formatter.write_str("type mismatch"),
+            Self::TypeMismatch => formatter.write_str("mismatched types"),
+            Self::IfWithoutElse => formatter.write_str("`if` without `else`"),
+            Self::ReturnWithoutValue => formatter.write_str("`return;` without a value"),
             Self::ImmutableBinding => formatter.write_str("immutable binding"),
             Self::InvalidImplOwner => formatter.write_str("invalid impl owner"),
             Self::DuplicateMethod => formatter.write_str("duplicate method"),
@@ -229,6 +252,9 @@ pub enum Error {
         name: ImmutableString,
         /// Exact span occupied by the unresolved path.
         reference: Span,
+        /// Whether the name is a path's first segment, as `Type::item` and
+        /// `module::item` write it, which rustc reports as E0433.
+        path: bool,
     },
     /// A `use` item references no registered static module, type, or item.
     UnknownImport {
@@ -247,6 +273,19 @@ pub enum Error {
         reference: Span,
         /// Related declaration that makes this path invalid, when any.
         declaration: Option<Span>,
+    },
+    /// A path reaches an item or a module private to another module, which
+    /// rustc refuses (E0603).
+    Private {
+        /// What the item is, as rustc names it: `function`, `struct`,
+        /// `module`.
+        kind: &'static str,
+        /// The item's name.
+        name: ImmutableString,
+        /// The path's segment naming it.
+        reference: Span,
+        /// The item's declaration.
+        declaration: Span,
     },
     /// A registered facade type is applied with the wrong structural arity.
     InvalidTypeArguments {
@@ -306,6 +345,41 @@ pub enum Error {
         /// The name as written.
         name: ImmutableString,
         /// Exact source reference.
+        reference: Span,
+    },
+    /// A macro call names no macro in scope, which rustc reports without a
+    /// code.
+    UnknownMacro {
+        /// The macro's name as written, without its `!`.
+        name: ImmutableString,
+        /// Exact source reference of the name.
+        reference: Span,
+    },
+    /// An operator whose operands no impl of its trait covers, which rustc
+    /// refuses (E0277) in its own words for the operator: a `?` in a
+    /// function returning `()` or on an error with no `From` conversion to
+    /// the output's, or arithmetic on two numeric types (`f64 / usize`).
+    Unimplemented {
+        /// rustc's message.
+        message: ImmutableString,
+        /// rustc's label under the operator.
+        label: ImmutableString,
+        /// rustc's help, when it gives one.
+        help: Option<ImmutableString>,
+        /// The operator.
+        at: Span,
+    },
+    /// A name used as another kind of item than the one it names, which
+    /// rustc refuses (E0423): a macro called as a function, a struct used
+    /// as a value.
+    WrongKind {
+        /// What the use expects: `function`, `value`.
+        expected: &'static str,
+        /// What the name is: `macro`, `struct`.
+        found: &'static str,
+        /// The name.
+        name: ImmutableString,
+        /// The name's use.
         reference: Span,
     },
     /// A local is used after its value was moved out, as rustc's E0382.
@@ -386,7 +460,24 @@ pub enum Error {
         /// Expression or assignment span.
         expression: Span,
     },
-    /// Mutation targets a binding declared without `mut`.
+    /// An `if` with no `else` whose value is expected to have a type other
+    /// than `()`, which rustc refuses (E0317).
+    IfWithoutElse {
+        /// The type expected.
+        expected: ImmutableString,
+        /// The `if` expression.
+        expression: Span,
+    },
+    /// A `return;` in a function whose output isn't `()`, which rustc
+    /// refuses (E0069).
+    ReturnWithoutValue {
+        /// The function's output type.
+        output: ImmutableString,
+        /// The `return` keyword.
+        at: Span,
+    },
+    /// An assignment to a variable declared without `mut`, which rustc
+    /// refuses (E0384).
     ImmutableBinding {
         /// Binding name.
         binding: ImmutableString,
@@ -632,6 +723,51 @@ impl Error {
         }
     }
 
+    /// rustc's E0596 for a `&mut` borrow of `binding`, a variable not
+    /// declared `mut`, as a `&mut self` method or an `IndexMut` takes it.
+    pub(crate) fn borrow_immutable(binding: &str, access: Span) -> Self {
+        Self::BorrowConflict {
+            code: "E0596",
+            message: format!(
+                "cannot borrow `{binding}` as mutable, as it is not declared as mutable"
+            )
+            .into(),
+            access,
+            borrow: Span::NONE,
+        }
+    }
+
+    /// rustc's E0596 for a `&mut` borrow of `place`, a part of `binding`, a
+    /// variable not declared `mut`.
+    pub(crate) fn borrow_immutable_place(place: &str, binding: &str, access: Span) -> Self {
+        if place == binding {
+            return Self::borrow_immutable(binding, access);
+        }
+        Self::BorrowConflict {
+            code: "E0596",
+            message: format!(
+                "cannot borrow `{place}` as mutable, as `{binding}` is not declared as mutable"
+            )
+            .into(),
+            access,
+            borrow: Span::NONE,
+        }
+    }
+
+    /// rustc's E0594 for an assignment to `place`, a part of `binding`, a
+    /// variable not declared `mut`.
+    pub(crate) fn assign_immutable(place: &str, binding: &str, access: Span) -> Self {
+        Self::BorrowConflict {
+            code: "E0594",
+            message: format!(
+                "cannot assign to `{place}`, as `{binding}` is not declared as mutable"
+            )
+            .into(),
+            access,
+            borrow: Span::NONE,
+        }
+    }
+
     /// Classify this resolution failure without parsing its message.
     #[must_use]
     pub const fn category(&self) -> Category {
@@ -640,6 +776,7 @@ impl Error {
             Self::UnknownType { .. } => Category::UnknownType,
             Self::UnknownImport { .. } => Category::UnknownImport,
             Self::InvalidImport { .. } => Category::InvalidImport,
+            Self::Private { .. } => Category::Private,
             Self::InvalidTypeArguments { .. } => Category::InvalidTypeArguments,
             Self::LoweringUnavailable { .. } => Category::LoweringUnavailable,
             Self::InvalidDerive { .. } => Category::InvalidDerive,
@@ -648,10 +785,15 @@ impl Error {
             Self::NotInModule { .. } => Category::NotInModule,
             Self::UnknownFunction { .. } => Category::UnknownFunction,
             Self::UnknownVariable { .. } => Category::UnknownVariable,
+            Self::UnknownMacro { .. } => Category::UnknownMacro,
+            Self::WrongKind { .. } => Category::WrongKind,
+            Self::Unimplemented { .. } => Category::Unimplemented,
             Self::MovedValue { .. } => Category::MovedValue,
             Self::BorrowConflict { .. } => Category::BorrowConflict,
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
             Self::TypeMismatch { .. } => Category::TypeMismatch,
+            Self::IfWithoutElse { .. } => Category::IfWithoutElse,
+            Self::ReturnWithoutValue { .. } => Category::ReturnWithoutValue,
             Self::ImmutableBinding { .. } => Category::ImmutableBinding,
             Self::InvalidImplOwner { .. } => Category::InvalidImplOwner,
             Self::DuplicateMethod { .. } => Category::DuplicateMethod,
@@ -686,9 +828,12 @@ impl Error {
             | Self::UnknownType { name, .. }
             | Self::UnknownFunction { name, .. }
             | Self::UnknownVariable { name, .. }
+            | Self::UnknownMacro { name, .. }
+            | Self::WrongKind { name, .. }
             | Self::MovedValue { name, .. } => name.as_str(),
             Self::BorrowConflict { message, .. } => message.as_str(),
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
+            Self::Private { name, .. } => name.as_str(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
             Self::LoweringUnavailable { item, .. } => item.as_str(),
             Self::InvalidDerive { owner, .. } | Self::DuplicateMember { owner, .. } => {
@@ -700,7 +845,10 @@ impl Error {
             | Self::InvalidConstruction { owner, .. }
             | Self::MissingCapability { owner, .. }
             | Self::InvalidMatch { owner, .. } => owner.as_str(),
-            Self::TypeMismatch { expected, .. } => expected.as_str(),
+            Self::TypeMismatch { expected, .. } | Self::IfWithoutElse { expected, .. } => {
+                expected.as_str()
+            }
+            Self::ReturnWithoutValue { output, .. } => output.as_str(),
             Self::ImmutableBinding { binding, .. } => binding.as_str(),
             Self::InvalidImplOwner { owner, .. }
             | Self::DuplicateMethod { owner, .. }
@@ -712,7 +860,7 @@ impl Error {
             Self::UnusedValue { value, .. } => value.as_str(),
             Self::SelfOutsideImpl { .. } => "self",
             Self::UnsupportedNominalSyntax { construct, .. } => construct.as_str(),
-            Self::Syntax { message, .. } => message.as_str(),
+            Self::Syntax { message, .. } | Self::Unimplemented { message, .. } => message.as_str(),
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::AsyncMain { .. } => "main",
             Self::StdPath { message, .. } => message.as_str(),
@@ -732,6 +880,7 @@ impl Error {
             Self::UnknownType { reference, .. } => *reference,
             Self::UnknownImport { reference, .. }
             | Self::InvalidImport { reference, .. }
+            | Self::Private { reference, .. }
             | Self::InvalidTypeArguments { reference, .. } => *reference,
             Self::LoweringUnavailable { body, .. } => *body,
             Self::InvalidDerive { attribute, .. } => *attribute,
@@ -740,11 +889,16 @@ impl Error {
             | Self::MemberKind { reference, .. }
             | Self::NotInModule { reference, .. } => *reference,
             Self::UnknownFunction { reference, .. } => *reference,
-            Self::UnknownVariable { reference, .. } => *reference,
+            Self::UnknownVariable { reference, .. }
+            | Self::UnknownMacro { reference, .. }
+            | Self::WrongKind { reference, .. } => *reference,
             Self::MovedValue { reference, .. } => *reference,
             Self::BorrowConflict { access, .. } => *access,
             Self::InvalidConstruction { construction, .. } => *construction,
-            Self::TypeMismatch { expression, .. } => *expression,
+            Self::TypeMismatch { expression, .. } | Self::IfWithoutElse { expression, .. } => {
+                *expression
+            }
+            Self::ReturnWithoutValue { at, .. } => *at,
             Self::ImmutableBinding { mutation, .. } => *mutation,
             Self::InvalidImplOwner { reference, .. } => *reference,
             Self::DuplicateMethod { declaration, .. } => *declaration,
@@ -763,6 +917,7 @@ impl Error {
             Self::TypeAnnotationsNeeded { reference, .. } => *reference,
             Self::ArgumentCount { call, .. } => *call,
             Self::Syntax { at, .. }
+            | Self::Unimplemented { at, .. }
             | Self::UnlabeledJumpInWhileCondition { at, .. }
             | Self::CannotCompare { at, .. }
             | Self::ArgumentSignature { at, .. } => *at,
@@ -795,6 +950,7 @@ impl Error {
             } => Some(*previous_declaration),
             Self::ImmutableReceiver { receiver, .. } => Some(*receiver),
             Self::InvalidImport { declaration, .. } => *declaration,
+            Self::Private { declaration, .. } => Some(*declaration),
             Self::ArgumentCount { definition, .. } => *definition,
             Self::UnknownType { .. }
             | Self::UnknownImport { .. }
@@ -805,8 +961,13 @@ impl Error {
             | Self::NotInModule { .. }
             | Self::UnknownFunction { .. }
             | Self::UnknownVariable { .. }
+            | Self::UnknownMacro { .. }
+            | Self::WrongKind { .. }
+            | Self::Unimplemented { .. }
             | Self::InvalidConstruction { .. }
             | Self::TypeMismatch { .. }
+            | Self::IfWithoutElse { .. }
+            | Self::ReturnWithoutValue { .. }
             | Self::MissingCapability { .. }
             | Self::InvalidMatch { .. }
             | Self::UnsupportedNominalSyntax { .. }
@@ -833,6 +994,98 @@ impl Error {
 /// entry (E0752).
 pub const ASYNC_MAIN: &str = "`main` function is not allowed to be `async`";
 
+/// rustc's message for an `if` with no `else` where a value is expected
+/// (E0317).
+pub const IF_WITHOUT_ELSE: &str = "`if` may be missing an `else` clause";
+
+/// rustc's message for a `return;` in a function whose output isn't `()`
+/// (E0069).
+pub const RETURN_WITHOUT_VALUE: &str = "`return;` in a function whose return type is not `()`";
+
+/// rustc's message for a name nothing in scope declares: E0425 for a value,
+/// a function or a type, E0433 for a path's first segment, and the uncoded
+/// "cannot find macro".
+pub(crate) enum NotFound<'a> {
+    Value(&'a str),
+    Function(&'a str),
+    Type(&'a str),
+    Module(&'a str),
+    Macro(&'a str),
+}
+
+impl<'a> NotFound<'a> {
+    /// An unknown type's: a path's lowercase first segment names a module
+    /// or a crate (`nothing::f`).
+    pub(crate) fn type_named(name: &'a str, path: bool) -> Self {
+        if path && name.starts_with(|first: char| first.is_lowercase() || first == '_') {
+            Self::Module(name)
+        } else {
+            Self::Type(name)
+        }
+    }
+
+    /// rustc's label for a path's unknown first segment (E0433).
+    pub(crate) fn undeclared(&self) -> String {
+        match self {
+            Self::Module(name) => format!("use of unresolved module or unlinked crate `{name}`"),
+            Self::Value(name) | Self::Function(name) | Self::Type(name) | Self::Macro(name) => {
+                format!("use of undeclared type `{name}`")
+            }
+        }
+    }
+}
+
+impl fmt::Display for NotFound<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (kind, name) = match self {
+            Self::Value(name) => ("value", *name),
+            Self::Function(name) => ("function", *name),
+            Self::Type(name) => ("type", *name),
+            Self::Module(name) => ("module or crate", *name),
+            Self::Macro(name) => ("macro", *name),
+        };
+        // rustc names a path's last segment and the module it looks in.
+        match name.rsplit_once("::") {
+            Some((module, name)) => {
+                write!(
+                    formatter,
+                    "cannot find {kind} `{name}` in module `{module}`"
+                )
+            }
+            None => write!(formatter, "cannot find {kind} `{name}` in this scope"),
+        }
+    }
+}
+
+/// A type as rustc's "expected .., found .." labels name it: an integer
+/// or a float literal whose type is still open by its kind, any other in
+/// backticks.
+pub(crate) struct Described<'a>(pub(crate) &'a str);
+
+impl fmt::Display for Described<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            "{integer}" => formatter.write_str("integer"),
+            "{float}" => formatter.write_str("floating-point number"),
+            ty => write!(formatter, "`{ty}`"),
+        }
+    }
+}
+
+/// rustc's E0384 message for an assignment to a variable not declared
+/// `mut`.
+pub(crate) struct AssignTwice<'a>(pub(crate) &'a str);
+
+impl fmt::Display for AssignTwice<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "cannot assign twice to immutable variable `{}`",
+            self.0
+        )
+    }
+}
+
 /// Names checked Rawr keeps under another spelling (`switch`, `debug`, ..)
 /// read as Rust's in every message (`tokenizer::demangle_names`), and an
 /// item reached through a crate's hidden segment reads from that crate's
@@ -858,11 +1111,18 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "duplicate item `{name}` at {declaration}; first declared at {previous_declaration}"
             ),
-            Error::UnknownType { name, reference } => {
-                write!(formatter, "unknown type `{name}` at {reference}")
-            }
+            Error::UnknownType {
+                name,
+                reference,
+                path,
+            } => write!(
+                formatter,
+                "{} at {reference} ({})",
+                NotFound::type_named(name, *path),
+                if *path { "E0433" } else { "E0425" }
+            ),
             Error::UnknownImport { path, reference } => {
-                write!(formatter, "unknown import `{path}` at {reference}")
+                write!(formatter, "unresolved import `{path}` at {reference} (E0432)")
             }
             Error::InvalidImport {
                 path,
@@ -870,6 +1130,12 @@ impl fmt::Display for Written<'_> {
                 reference,
                 ..
             } => write!(formatter, "invalid import `{path}` at {reference}: {reason}"),
+            Error::Private {
+                kind,
+                name,
+                reference,
+                ..
+            } => write!(formatter, "{kind} `{name}` is private at {reference} (E0603)"),
             Error::InvalidTypeArguments {
                 ty,
                 expected,
@@ -938,10 +1204,23 @@ impl fmt::Display for Written<'_> {
             } => write!(formatter, "method `{owner}::{member}` read like a field at {reference}"),
             Error::UnknownFunction {
                 name, reference, ..
-            } => write!(formatter, "unknown function `{name}` at {reference}"),
+            } => write!(formatter, "{} at {reference} (E0425)", NotFound::Function(name)),
             Error::UnknownVariable { name, reference } => {
-                write!(formatter, "unknown variable `{name}` at {reference}")
+                write!(formatter, "{} at {reference} (E0425)", NotFound::Value(name))
             }
+            Error::UnknownMacro { name, reference } => {
+                write!(formatter, "{} at {reference}", NotFound::Macro(name))
+            }
+            Error::Unimplemented { message, at, .. } => write!(formatter, "{message} at {at} (E0277)"),
+            Error::WrongKind {
+                expected,
+                found,
+                name,
+                reference,
+            } => write!(
+                formatter,
+                "expected {expected}, found {found} `{name}` at {reference} (E0423)"
+            ),
             Error::MovedValue {
                 name,
                 reference,
@@ -981,7 +1260,18 @@ impl fmt::Display for Written<'_> {
                 expression,
             } => write!(
                 formatter,
-                "type mismatch at {expression}: expected `{expected}`, found `{actual}`"
+                "mismatched types at {expression}: expected `{expected}`, found `{actual}` (E0308)"
+            ),
+            Error::IfWithoutElse {
+                expected,
+                expression,
+            } => write!(
+                formatter,
+                "{IF_WITHOUT_ELSE} at {expression}: expected `{expected}`, found `()` (E0317)"
+            ),
+            Error::ReturnWithoutValue { output, at } => write!(
+                formatter,
+                "{RETURN_WITHOUT_VALUE} at {at}: expected `{output}` (E0069)"
             ),
             Error::ImmutableBinding {
                 binding,
@@ -989,7 +1279,8 @@ impl fmt::Display for Written<'_> {
                 declaration,
             } => write!(
                 formatter,
-                "cannot mutate immutable binding `{binding}` at {mutation}; declared at {declaration}"
+                "{} at {mutation}; first assigned at {declaration} (E0384)",
+                AssignTwice(binding)
             ),
             Error::InvalidImplOwner { owner, reference } => write!(
                 formatter,

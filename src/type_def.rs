@@ -152,6 +152,10 @@ impl Declaration {
         self.id
     }
 
+    pub(crate) const fn kind(&self) -> Kind {
+        self.kind
+    }
+
     pub(crate) fn resolve(
         self,
         schema: program::schema::Fingerprint,
