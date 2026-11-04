@@ -365,6 +365,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::NotInModule { module, item, .. } => {
                     write!(f, "Cannot find '{item}' in module '{module}'")
                 }
+                crate::resolve::Error::PrivateItem { item, name, .. } => {
+                    write!(f, "{} `{name}` is private", item.noun())
+                }
                 crate::resolve::Error::MemberKind {
                     owner, member, field: true, ..
                 } => write!(f, "Field '{owner}::{member}' called like a method"),
