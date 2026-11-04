@@ -10,6 +10,8 @@ use crate::{Engine, ImmutableString, Position, Span, PERR};
 pub(super) struct ParsedFile {
     pub items: Box<[crate::item::Parsed]>,
     pub masked: Vec<Span>,
+    /// The spans of the items a `#[cfg(..)]` left out, which are masked too.
+    pub disabled: Vec<Span>,
     pub imports: Box<[crate::item::Use]>,
     pub inner_attributes: Box<[crate::item::Attribute]>,
 }
@@ -44,7 +46,7 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     let (mut items, mut inner) = parsed?;
     attribute_text(source, &mut items, &mut inner_attributes);
     attribute_text(source, &mut nested, &mut []);
-    inner.extend(skipped);
+    inner.extend(skipped.iter().copied());
     // Preserve source authority before compatibility hoisting discards duplicates.
     let mut imports = items
         .iter()
@@ -99,6 +101,7 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     Ok(ParsedFile {
         items,
         masked: inner,
+        disabled: skipped,
         imports: imports.into_boxed_slice(),
         inner_attributes,
     })
