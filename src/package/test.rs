@@ -228,7 +228,8 @@ mod tests {
 
     #[test]
     fn adds() {
-        assert_eq!(add(2, 2), 4);
+        // A module sees the private items of the modules it is in.
+        assert_eq!(add(2, 2), Total::new(4).0);
     }
 
     #[test]
@@ -253,6 +254,14 @@ mod tests {
     #[test]
     fn fails() {
         assert_eq!(add(1, 1), 3);
+    }
+}
+
+struct Total(i64);
+
+impl Total {
+    fn new(total: i64) -> Self {
+        Self(total)
     }
 }
 "#;

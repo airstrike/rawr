@@ -4384,6 +4384,9 @@ struct Tables {
     /// What the program may reach while it compiles: the files
     /// `include_str!` reads and the variables `env!` reads (D683.4).
     access: crate::Access,
+    /// Each source's package and module path, from the items it declares:
+    /// a private item is seen in its module and the modules within it.
+    modules: BTreeMap<crate::program::source::Id, (ImmutableString, Box<[ImmutableString]>)>,
     /// Whether the program builds as `rustc --test` builds it: `cfg(test)`
     /// holds.
     test: bool,
@@ -5007,7 +5010,19 @@ impl Models {
                     .or_insert_with(|| Nominal::clone(nominal));
             }
         }
+        let modules = program
+            .items
+            .iter()
+            .filter_map(|shell| {
+                let key = shell.key.as_ref()?;
+                Some((
+                    shell.source,
+                    (ImmutableString::from(key.package()), key.modules().into()),
+                ))
+            })
+            .collect();
         let tables = Tables {
+            modules,
             runtime,
             host,
             access: engine.access().clone(),
@@ -5204,13 +5219,28 @@ impl Models {
         .into_boxed_str()
     }
 
+    /// Whether code in this context sees the private items of `source`:
+    /// it is in that module or in a module within it, as Rust's privacy
+    /// has it.
+    fn sees(&self, source: crate::program::source::Id) -> bool {
+        if source == self.context {
+            return true;
+        }
+        match (self.modules.get(&source), self.modules.get(&self.context)) {
+            (Some((package, owner)), Some((within, modules))) => {
+                package == within && modules.starts_with(owner)
+            }
+            _ => false,
+        }
+    }
+
     /// The inherent function `name` of `owner`, or else the one trait
     /// function of that name its trait impls provide, as Rust looks them up.
     fn method(&self, owner: type_def::Id, name: &str) -> Option<&method::Definition> {
         if let Some(inherent) = self
             .methods
             .get(&(owner, name.into()))
-            .filter(|method| method.source() == self.context || method.is_public())
+            .filter(|method| method.is_public() || self.sees(method.source()))
         {
             return Some(inherent);
         }
@@ -13495,13 +13525,11 @@ impl<'a> Parser<'a> {
         source: &Ty,
         span: Span,
     ) -> Option<(method::Definition, Ty, Ty)> {
-        let context = self.models.context;
-        let candidates = self.models.conversions.get(&target)?.clone();
+        let mut candidates = self.models.conversions.get(&target)?.clone();
+        candidates
+            .retain(|candidate| candidate.is_public() || self.models.sees(candidate.source()));
         let mut chosen = None;
-        for candidate in candidates
-            .into_iter()
-            .filter(|candidate| candidate.source() == context || candidate.is_public())
-        {
+        for candidate in candidates {
             let (from, owner) = self.conversion_source(&candidate);
             let checkpoint = self.inference.checkpoint();
             let fits = expected.is_none_or(|expected| self.unify_type(&owner, expected))
