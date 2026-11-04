@@ -390,21 +390,24 @@ fn a_slider_beside_an_opaque_widget_runs() {
 }
 
 /// #886: `badge(..)` gives an opaque `impl Framed<Message, Theme,
-/// Renderer>` that nothing at the call fixes. `.map(..)` fixes its message,
-/// and `column!`'s boxing of the `Map` fixes its theme and renderer through
+/// Renderer>` that nothing at the call fixes, and `opaque(slider(..))` one
+/// whose theme and renderer it doesn't fix. `.map(..)` fixes the message,
+/// and `column!`'s boxing of the `Map` fixes the theme and renderer through
 /// `Map`'s impl, whose where-clause asks the opaque type for `Widget`, a
 /// supertrait of `Framed`. The call that made the value takes the types
-/// that later use fixes, held in a local or not, as rustc infers them. The
-/// output is `cargo run`'s.
+/// that later use fixes, held in a local or not, as rustc infers them. Each
+/// opaque widget's boxed element stays in the view's region, so a column of
+/// them alone is the view's widget. The output is `cargo run`'s.
 #[test]
 fn an_opaque_widget_takes_the_types_a_later_use_fixes() {
     let (rawr, cargo) = both_printed("deferred.rs", "slide");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("1 view pad 0 1..=100@50/None map badge50@16 map badge50@16 badge50@16")
-            && rawr.contains(
-                "last view pad 0 1..=100@100/None map badge100@16 map badge100@16 badge100@16"
-            ),
+        rawr.contains(
+            "1 view pad 0 opaque 1..=100@50/None map badge50@16 map badge50@16 badge50@16"
+        ) && rawr.contains(
+            "last view pad 0 opaque 1..=100@100/None map badge100@16 map badge100@16 badge100@16"
+        ),
         "{rawr}"
     );
 }

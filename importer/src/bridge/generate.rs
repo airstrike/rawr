@@ -10068,11 +10068,7 @@ fn render_adapter_body(
                             )
                             .map_err(request::unwritable)?;
                         } else {
-                            write!(
-                                output,
-                                "    let output{annotation} = lend(arguments.arena, || "
-                            )
-                            .map_err(request::unwritable)?;
+                            let mut call = Vec::new();
                             render_method_head(
                                 plan.name(),
                                 *receiver,
@@ -10080,11 +10076,30 @@ fn render_adapter_body(
                                 substitutions,
                                 constants,
                                 *container_parameters,
-                                output,
+                                &mut call,
                             )?;
+                            argument_list(signature.inputs().len(), 1, &mut call)?;
+                            call.write_all(b")").map_err(request::unwritable)?;
+                            let call = String::from_utf8(call).map_err(request::unwritable)?;
+                            // A value that carries a lifetime, made while a
+                            // slot's region is open, stays in that region,
+                            // as a function's does: `Widget::boxed` of an
+                            // opaque widget gives the view's element.
+                            if future_output(&returned).is_none()
+                                && !lifetime_inputs(signature, substitutions)?
+                            {
+                                render_anchored_output(&returned, &call, output)?;
+                            }
+                            writeln!(
+                                output,
+                                "    let output{annotation} = lend(arguments.arena, || {call});"
+                            )
+                            .map_err(request::unwritable)?;
                         }
-                        argument_list(signature.inputs().len(), 1, output)?;
-                        output.write_all(b"));\n").map_err(request::unwritable)?;
+                        if plan.application_invocation().is_some() {
+                            argument_list(signature.inputs().len(), 1, output)?;
+                            output.write_all(b"));\n").map_err(request::unwritable)?;
+                        }
                     }
                     Receiver::Shared | Receiver::Mutable => {
                         render_borrowed_receiver(
