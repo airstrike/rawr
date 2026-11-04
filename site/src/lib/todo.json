@@ -2599,6 +2599,165 @@
       ]
     },
     {
+      "id": "end",
+      "title": "Retire rawr-iced",
+      "subtitle": "Done in 0.3: generated bindings only",
+      "open": false,
+      "rows": [
+        {
+          "id": "flip-the-default-route",
+          "name": "Flip the default route",
+          "start": 63,
+          "size": 2,
+          "state": "done",
+          "note": "Every iced program runs on generated bindings",
+          "issues": [
+            {"number":203,"title":"The facade wins over the importer: the iced profile drops the importer's binding for any path…","state":"closed"},
+            {"number":430,"title":"Generated bindings collide with rawr-iced's hand-written entries","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "delete-rawr-iced",
+          "name": "Delete rawr-iced",
+          "start": 65,
+          "size": 1,
+          "state": "done",
+          "note": "Deleted by cutover, not attrition",
+          "issues": [
+            {"number":169,"title":"Inventory rawr-iced (`iced/`, `iced-cli/`) by part: the hand-written facade, the runner and…","state":"closed"},
+            {"number":306,"title":"rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"closed"},
+            {"number":430,"title":"Generated bindings collide with rawr-iced's hand-written entries","state":"closed"}
+          ],
+          "milestone": "0.3"
+        }
+      ]
+    },
+    {
+      "id": "parity",
+      "title": "Rust as rustc has it",
+      "subtitle": "0.3.6x–0.3.125: std, types, borrows and errors",
+      "open": true,
+      "rows": [
+        {
+          "id": "std-from-std",
+          "name": "Std from std's own table",
+          "start": 66,
+          "size": 4,
+          "state": "done",
+          "note": "Paths, traits, impls, methods, iterators and the facade from std's declarations",
+          "issues": [
+            {"number":745,"title":"Inherent methods and lifetime summaries come from the std table, type by type (D711 step 4)","state":"closed"},
+            {"number":746,"title":"The importer's std matchers and STD_TYPES come from the std table (D711 step 5)","state":"closed"},
+            {"number":747,"title":"The std facade keeps only its binds (D711 step 6)","state":"closed"},
+            {"number":768,"title":"Iterator's methods and adapter summaries come from Iterator's std declaration (D711 step 4, last type)","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "rustc-types",
+          "name": "rustc's own types",
+          "start": 67,
+          "size": 3,
+          "state": "done",
+          "note": "String and &str, Vec, [T] and VecDeque, Cow, Rc and Arc",
+          "issues": [
+            {"number":706,"title":"String and &str stay distinct in inference: a String for &str is E0308, and impls are chosen by exact type","state":"closed"},
+            {"number":769,"title":"VecDeque, Vec and [T] are distinct types in rawr","state":"closed"},
+            {"number":701,"title":"`std::borrow::Cow` imports, and `*` works on `&str` and `String` (rustc's `str`)","state":"closed"},
+            {"number":775,"title":"An Rc or Arc of a crate value crosses to a crate as the pointer itself","state":"closed"},
+            {"number":777,"title":"HashMap, HashSet, BTreeMap and BTreeSet in a crate's signature cross as rawr's keyed collections","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "borrowed-values",
+          "name": "Borrowed values",
+          "start": 69,
+          "size": 4,
+          "state": "done",
+          "note": "Variant fields move or lend; opaque results borrow their inputs for their whole life",
+          "issues": [
+            {"number":678,"title":"Matching a crate enum variant by value moves its non-Clone fields out","state":"closed"},
+            {"number":783,"title":"A field lent by a variant pattern expires at the end of its arm","state":"closed"},
+            {"number":782,"title":"A borrow of a crate variant's Clone field through `&T` is a copy, not a borrow","state":"closed"},
+            {"number":846,"title":"An opaque result that borrows its inputs lives as long as Rust says","state":"closed"},
+            {"number":849,"title":"Hold an opaque result of a trait that isn't object-safe through a generated proxy trait","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "rustc-errors",
+          "name": "rustc's errors",
+          "start": 68,
+          "size": 3,
+          "state": "done",
+          "note": "E0107, E0283, E0369, E0425, E0433, E0596, E0658 and more, worded as rustc words them",
+          "issues": [
+            {"number":772,"title":"v.get(range) on a Vec or slice gives Option<&[T]>","state":"closed"},
+            {"number":774,"title":"A &mut self method on an immutable crate-type local is rustc's E0596","state":"closed"},
+            {"number":733,"title":"`&str + &str` reports rustc's E0369, not a type mismatch","state":"closed"},
+            {"number":736,"title":"A String's .into() with no target is E0283, not accepted as itself","state":"closed"},
+            {"number":752,"title":"A wrong builtin type arity is rustc's E0107","state":"closed"},
+            {"number":771,"title":"An unstable std inherent method is rustc's E0658, not an unknown member","state":"closed"},
+            {"number":751,"title":"A std type named bare with no `use` is refused as rustc refuses it (E0425, E0433)","state":"closed"},
+            {"number":858,"title":"A DerefMut impl using Self::Target is refused as a signature mismatch","state":"closed"},
+            {"number":859,"title":"`*x` on a program type with Deref is unsupported","state":"closed"},
+            {"number":860,"title":"`.into()` to Cow in an if branch is typed as String","state":"closed"},
+            {"number":861,"title":"?play prints a Cow tail value as a Rust type name","state":"closed"},
+            {"number":862,"title":"`return place = value` is a false type mismatch","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "any-nightly",
+          "name": "Any nightly",
+          "start": 72,
+          "size": 2,
+          "state": "done",
+          "note": "The project's nightly reads crate APIs; a daily job moves the window",
+          "issues": [
+            {"number":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"closed"},
+            {"number":864,"title":"Extend the driver's nightly window as nightly moves","state":"closed"}
+          ],
+          "milestone": "0.3"
+        }
+      ]
+    },
+    {
+      "id": "ship",
+      "title": "Shipping",
+      "subtitle": "Install, release and tests",
+      "open": true,
+      "rows": [
+        {
+          "id": "one-command-install",
+          "name": "One-command install",
+          "start": 70,
+          "size": 2,
+          "state": "done",
+          "note": "Prebuilt binaries and a self-installed nightly; binaries wait on patch tags",
+          "issues": [
+            {"number":797,"title":"Install rawr with one command: prebuilt binaries and a self-installed toolchain","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {
+          "id": "staged-release",
+          "name": "Staged, cached release",
+          "start": 72,
+          "size": 2,
+          "state": "done",
+          "note": "Playground, bot and site each gated; the image rebuilds only when its inputs change",
+          "issues": [
+            {"number":881,"title":"Chain the release: rawr, playground, bot, site, each gated, with cached image builds","state":"closed"}
+          ],
+          "milestone": "0.3"
+        },
+        {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"now","note":"Shared fixture builds and parallel tests: the import suite went from 40 min to under 5","issues":[],"milestone":"0.3"}
+      ]
+    },
+    {
       "id": "play",
       "title": "Playground",
       "subtitle": "Without rawr-iced",
@@ -2641,6 +2800,22 @@
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"}
           ]
+        },
+        {
+          "id": "play-universe-limits",
+          "name": "?play on a small CPU",
+          "start": 71,
+          "size": 3,
+          "state": "now",
+          "note": "Check-time errors, a wider universe, no deadline while idle, every frame drawn; GIF pace next",
+          "issues": [
+            {"number":863,"title":"?play universe: iced calls outside the universe panic at run time instead of failing to compile","state":"closed"},
+            {"number":872,"title":"?play time limits are too tight for the bot's shared container","state":"closed"},
+            {"number":880,"title":"?play: no time limit while no other snippet is queued","state":"closed"},
+            {"number":888,"title":"?play's iced shell stops an animation after its first frame on a slow CPU","state":"closed"},
+            {"number":889,"title":"?play GIF delays follow the bot's draw time","state":"open"}
+          ],
+          "milestone": "0.3"
         }
       ]
     },
@@ -2704,41 +2879,6 @@
             {"number":491,"title":"Record and replay messages, with iced's comet","state":"open"}
           ],
           "milestone": "0.5"
-        }
-      ]
-    },
-    {
-      "id": "end",
-      "title": "Retire rawr-iced",
-      "subtitle": "The last step",
-      "open": true,
-      "rows": [
-        {
-          "id": "flip-the-default-route",
-          "name": "Flip the default route",
-          "start": 63,
-          "size": 2,
-          "state": "done",
-          "note": "Every iced program runs on generated bindings",
-          "issues": [
-            {"number":203,"title":"The facade wins over the importer: the iced profile drops the importer's binding for any path…","state":"closed"},
-            {"number":430,"title":"Generated bindings collide with rawr-iced's hand-written entries","state":"closed"}
-          ],
-          "milestone": "0.3"
-        },
-        {
-          "id": "delete-rawr-iced",
-          "name": "Delete rawr-iced",
-          "start": 65,
-          "size": 1,
-          "state": "done",
-          "note": "Deleted by cutover, not attrition",
-          "issues": [
-            {"number":169,"title":"Inventory rawr-iced (`iced/`, `iced-cli/`) by part: the hand-written facade, the runner and…","state":"closed"},
-            {"number":306,"title":"rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"closed"},
-            {"number":430,"title":"Generated bindings collide with rawr-iced's hand-written entries","state":"closed"}
-          ],
-          "milestone": "0.3"
         }
       ]
     }

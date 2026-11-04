@@ -98,6 +98,40 @@
       ]
     },
     {
+      "id": "end",
+      "title": "Retire rawr-iced",
+      "subtitle": "Done in 0.3: generated bindings only",
+      "open": false,
+      "rows": [
+        {"id":"flip-the-default-route","name":"Flip the default route","start":63,"size":2,"state":"done","note":"Every iced program runs on generated bindings","issues":[203,430],"milestone":"0.3"},
+        {"id":"delete-rawr-iced","name":"Delete rawr-iced","start":65,"size":1,"state":"done","note":"Deleted by cutover, not attrition","issues":[169,306,430],"milestone":"0.3"}
+      ]
+    },
+    {
+      "id": "parity",
+      "title": "Rust as rustc has it",
+      "subtitle": "0.3.6x–0.3.125: std, types, borrows and errors",
+      "open": true,
+      "rows": [
+        {"id":"std-from-std","name":"Std from std's own table","start":66,"size":4,"state":"done","note":"Paths, traits, impls, methods, iterators and the facade from std's declarations","issues":[745,746,747,768],"milestone":"0.3"},
+        {"id":"rustc-types","name":"rustc's own types","start":67,"size":3,"state":"done","note":"String and &str, Vec, [T] and VecDeque, Cow, Rc and Arc","issues":[706,769,701,775,777],"milestone":"0.3"},
+        {"id":"borrowed-values","name":"Borrowed values","start":69,"size":4,"state":"done","note":"Variant fields move or lend; opaque results borrow their inputs for their whole life","issues":[678,783,782,846,849],"milestone":"0.3"},
+        {"id":"rustc-errors","name":"rustc's errors","start":68,"size":3,"state":"done","note":"E0107, E0283, E0369, E0425, E0433, E0596, E0658 and more, worded as rustc words them","issues":[772,774,733,736,752,771,751,858,859,860,861,862],"milestone":"0.3"},
+        {"id":"any-nightly","name":"Any nightly","start":72,"size":2,"state":"done","note":"The project's nightly reads crate APIs; a daily job moves the window","issues":[692,864],"milestone":"0.3"}
+      ]
+    },
+    {
+      "id": "ship",
+      "title": "Shipping",
+      "subtitle": "Install, release and tests",
+      "open": true,
+      "rows": [
+        {"id":"one-command-install","name":"One-command install","start":70,"size":2,"state":"done","note":"Prebuilt binaries and a self-installed nightly; binaries wait on patch tags","issues":[797],"milestone":"0.3"},
+        {"id":"staged-release","name":"Staged, cached release","start":72,"size":2,"state":"done","note":"Playground, bot and site each gated; the image rebuilds only when its inputs change","issues":[881],"milestone":"0.3"},
+        {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"now","note":"Shared fixture builds and parallel tests: the import suite went from 40 min to under 5","issues":[],"milestone":"0.3"}
+      ]
+    },
+    {
       "id": "play",
       "title": "Playground",
       "subtitle": "Without rawr-iced",
@@ -105,7 +139,8 @@
       "rows": [
         {"id":"deploy-gate","name":"Deploy gate","start":36,"size":1,"state":"done","note":"Waits for Cloudflare's rollout","issues":[321],"milestone":"0.3"},
         {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"now","note":"iced snippets render a frame and tokio runs; GIFs and a shared engine remain","issues":[434,436,465,507,515]},
-        {"id":"browser-wasm-bindings","name":"wasm bindings for the browser","start":58,"size":5,"state":"next","note":"rawr-web","issues":[435]}
+        {"id":"browser-wasm-bindings","name":"wasm bindings for the browser","start":58,"size":5,"state":"next","note":"rawr-web","issues":[435]},
+        {"id":"play-universe-limits","name":"?play on a small CPU","start":71,"size":3,"state":"now","note":"Check-time errors, a wider universe, no deadline while idle, every frame drawn; GIF pace next","issues":[863,872,880,888,889],"milestone":"0.3"}
       ]
     },
     {
@@ -118,16 +153,6 @@
         {"id":"breakpoints","name":"Breakpoints and stepping","start":56,"size":4,"state":"done","note":"break, step, continue, clear, and a paused state","issues":[489,534,535],"milestone":"0.5"},
         {"id":"repl","name":"Evaluate in a paused frame","start":60,"size":3,"state":"next","note":"The same interpreter, the same errors","issues":[490],"milestone":"0.5"},
         {"id":"record-replay","name":"Record, replay and comet","start":63,"size":4,"state":"next","note":"Messages and state over time","issues":[491],"milestone":"0.5"}
-      ]
-    },
-    {
-      "id": "end",
-      "title": "Retire rawr-iced",
-      "subtitle": "The last step",
-      "open": true,
-      "rows": [
-        {"id":"flip-the-default-route","name":"Flip the default route","start":63,"size":2,"state":"done","note":"Every iced program runs on generated bindings","issues":[203,430],"milestone":"0.3"},
-        {"id":"delete-rawr-iced","name":"Delete rawr-iced","start":65,"size":1,"state":"done","note":"Deleted by cutover, not attrition","issues":[169,306,430],"milestone":"0.3"}
       ]
     }
   ]
