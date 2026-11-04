@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-03",
-  "version": "0.3.129",
+  "updated": "2026-11-04",
+  "version": "0.3.130",
   "examples": {
     "running": 37,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A program runs in a project as it would in a fresh one after other programs ran there. A crate's types reached through its macros' `$crate` are named at their public paths, as rustc names them, and they are one type to the checker at every path.","issues":[893]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.130",
+        "date": "2026-11-04",
+        "entries": [
+          {"text":"A program runs in a project as it would in a fresh one after other programs ran there. A crate's types reached through its macros' `$crate` are named at their public paths, as rustc names them, and they are one type to the checker at every path.","issues":[893]}
+        ]
+      },
       {
         "version": "0.3.129",
         "date": "2026-11-03",
@@ -2162,7 +2164,7 @@
     {"issue":890,"title":"?play binds iced's time::every (tokio executor in the universe)","state":"closed","category":"No glue (D593)","release":"0.3.127"},
     {"issue":891,"title":"rawr-import's integration suite shares its builds and runs in parallel","state":"closed","category":"Health"},
     {"issue":892,"title":"rawr-import-cli's crossing suite shares prepared fixtures and runs in parallel","state":"closed","category":"Health"},
-    {"issue":893,"title":"rawr's state from one program breaks the next program in the same project","state":"closed","category":"Divergences from rustc"},
+    {"issue":893,"title":"rawr's state from one program breaks the next program in the same project","state":"closed","category":"Divergences from rustc","release":"0.3.130"},
     {"issue":894,"title":"rawr's workspace observation reads ancestor manifests outside the project's own workspace","state":"open","category":"Health"},
     {"issue":895,"title":"islands' restarted program ends with a failing status in the parallel suite","state":"open","category":"Health"},
     {"issue":896,"title":"The never type `!` in signatures and as a value","state":"closed","category":"Divergences from rustc","release":"0.3.128"},
