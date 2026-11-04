@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.131 (2026-11-04)
+
 - A crate's opaque value whose type arguments only a later use fixes now runs: `widget.map(..)` inside `column!` takes its message, theme and renderer from the later use, as rustc infers them. An opaque type has its bounds' supertraits too. A column of opaque widgets alone, as `column![opaque(slider(..))]`, is the view's widget. (#886)
 - A crate's implementation of a std trait for a std type is callable: with iced's `impl From<Degrees> for f32`, `f32::from(degrees)` and `degrees.into()` convert through it, and a missing one is rustc's E0277. (#887)
 
