@@ -17064,7 +17064,7 @@ impl<'a> Parser<'a> {
         if !matches!(source, Ty::Host { .. }) {
             return value;
         }
-        let (forms, owner) = self.into_forms(source);
+        let (forms, owner) = self.conversion_forms(source);
         self.parse_target_into(value, source, forms, owner, end)
     }
 
@@ -17072,7 +17072,7 @@ impl<'a> Parser<'a> {
     /// inputs, and their owner: at the path its alias names, or for an
     /// imported type no alias of the program names, at one of its crate's
     /// paths that has them.
-    fn into_forms(
+    fn conversion_forms(
         &self,
         source: &Ty,
     ) -> (
@@ -46844,7 +46844,7 @@ impl<'a> Parser<'a> {
             // facade calls carry witnesses, so it calls the type's own
             // `into`.
             if let Ty::Host { .. } = &source {
-                let (forms, owner) = self.into_forms(&source);
+                let (forms, owner) = self.conversion_forms(&source);
                 let gives = forms.iter().any(|item| {
                     let checkpoint = self.inference.checkpoint();
                     let fits = self
