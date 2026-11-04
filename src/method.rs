@@ -349,6 +349,13 @@ impl Definition {
             parameter.ty = substitute(&parameter.ty);
         }
         instance.output = substitute(&instance.output);
+        // Elision reads the template's output, as rustc reads the generic
+        // signature: a type argument that holds a borrow, as a crate's
+        // opaque widget at `'a` does in `fn padded(self) -> Column<W>`,
+        // is still the parameter's.
+        if instance.lifetimes.written_output.is_none() {
+            instance.lifetimes.written_output = Some(Box::new(self.output.clone()));
+        }
         instance.owner_arguments = instance.owner_arguments.iter().map(&substitute).collect();
         instance.trait_arguments = instance.trait_arguments.iter().map(&substitute).collect();
         let parameters = self
