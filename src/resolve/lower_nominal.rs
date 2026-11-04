@@ -38,6 +38,8 @@ mod language_tests;
 #[cfg(test)]
 mod placeholder_tests;
 #[cfg(test)]
+mod privacy_tests;
+#[cfg(test)]
 mod rust_meaning_tests;
 #[cfg(test)]
 mod std_impl_tests;
