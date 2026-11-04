@@ -1494,7 +1494,7 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
 /// does. The output is `cargo run`'s.
 #[test]
 fn a_crate_function_returning_never_is_a_value_of_any_type() {
-    let (rawr, cargo) = both_printed("crossing-diverging", "diverging.rs", "");
+    let (rawr, cargo) = both_printed("diverging.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "3\n2 5\nfinishing");
 }
