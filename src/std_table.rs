@@ -148,12 +148,9 @@ impl Table {
                     continue;
                 };
                 let stable_trait = || {
-                    self.items
-                        .find(owner, 1)
-                        .map(item_line)
-                        .is_some_and(|owner| {
-                            owner.kind == "trait" && owner.stability == Stability::Stable
-                        })
+                    self.items.find(owner).map(item_line).is_some_and(|owner| {
+                        owner.kind == "trait" && owner.stability == Stability::Stable
+                    })
                 };
                 if fields.next().is_some() && stable_trait() {
                     functions.entry(name).or_default().push(item_line(line));
@@ -172,20 +169,18 @@ impl Lines {
         Self(text.lines().collect())
     }
 
-    /// The line whose key (what comes before its `fields`th tab) is `key`.
-    fn find(&self, key: &str, fields: usize) -> Option<&'static str> {
-        let key_of = |line: &'static str| -> &'static str {
-            let mut end = 0;
-            for _ in 0..fields {
-                match line[end..].find('\t') {
-                    Some(tab) => end += tab + 1,
-                    None => return line,
-                }
-            }
-            &line[..end.saturating_sub(1)]
-        };
+    /// The line whose leading fields are `key`: a path's `path\tnamespace`,
+    /// an item's definition. A tab sorts before any character of a key, so
+    /// a line that starts with `key` and goes on with a tab is the one.
+    fn find(&self, key: &str) -> Option<&'static str> {
         self.0
-            .binary_search_by(|line| key_of(line).cmp(key))
+            .binary_search_by(|line| match line.strip_prefix(key) {
+                Some(rest) if rest.is_empty() || rest.starts_with('\t') => {
+                    std::cmp::Ordering::Equal
+                }
+                Some(_) => std::cmp::Ordering::Greater,
+                None => (*line).cmp(key),
+            })
             .ok()
             .map(|index| self.0[index])
     }
@@ -492,7 +487,7 @@ fn path_line(line: &'static str) -> Path {
 pub(crate) fn path(path: &str, namespace: Namespace) -> Option<Path> {
     Table::get()
         .paths
-        .find(&format!("{path}\t{}", namespace.letter()), 2)
+        .find(&format!("{path}\t{}", namespace.letter()))
         .map(path_line)
 }
 
@@ -512,7 +507,7 @@ pub(crate) fn is_module(path: &str) -> bool {
 /// The definition `definition`, or a member of one: `alloc::vec::Vec`,
 /// `alloc::vec::Vec::push`, `i64::pow`.
 pub(crate) fn item(definition: &str) -> Option<Item> {
-    Table::get().items.find(definition, 1).map(item_line)
+    Table::get().items.find(definition).map(item_line)
 }
 
 fn item_line(line: &'static str) -> Item {
