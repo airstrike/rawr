@@ -105,6 +105,22 @@ let f = double as fn(i64) -&gt; i64;
 println!("{}", f(21));</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-fn-pointer" data-out="out-fn-pointer" aria-label="Run fn-pointer.rs" hidden></button><b>rawr run fn-pointer.rs</b><span id="out-fn-pointer" aria-live="polite">42</span></div>
 </div>
+<h2 id="never">The never type <code>!</code></h2>
+<p>A function whose output is <code>!</code> never returns. Its body ends in <code>panic!</code>, <code>loop {}</code>, <code>std::process::exit</code> or another call that never returns. A call of it, like <code>return</code>, <code>break</code>, <code>continue</code> and <code>panic!</code>, is a value of whatever type its place takes, in an <code>if</code> or <code>match</code> arm, a <code>let</code> or a <code>let .. else</code>. A closure (<code>|| -&gt; ! { .. }</code>), a <code>fn</code> pointer (<code>fn(&amp;str) -&gt; !</code>) and a crate&rsquo;s function can give <code>!</code> too.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="never.rs" id="src-never">fn fail(msg: &amp;str) -&gt; ! {
+    panic!("{msg}")
+}
+
+let n: i32 = "7".parse().unwrap_or_else(|_| fail("not a number"));
+let label = match n {
+    7 =&gt; "seven",
+    _ =&gt; fail("unexpected"),
+};
+println!("{n} {label}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-never" data-out="out-never" aria-label="Run never.rs" hidden></button><b>rawr run never.rs</b><span id="out-never" aria-live="polite">7 seven</span></div>
+</div>
+<p>As in stable Rust, <code>!</code> is written only as an output. Anywhere else, as in <code>let x: ! = ..</code>, <code>Option&lt;!&gt;</code> or <code>impl Fn() -&gt; !</code>, rawr gives rustc&rsquo;s error E0658, <code>the `!` type is experimental</code>. A body of a <code>-&gt; !</code> function that can finish fails the check, which expects <code>!</code> and finds <code>()</code>.</p>
 <h2 id="casts">Casts</h2>
 <p><code>as</code> converts between numbers. It truncates and saturates as Rust does. Mixing numeric types without a cast fails the check, as in Rust.</p>
 <div class="block">

@@ -188,6 +188,22 @@ pub(crate) fn unstable(stability: Stability, reference: Span) -> Option<Error> {
     })
 }
 
+/// rustc's E0658 for the never type `!` written where only a function's
+/// output may name it on stable Rust: a `let`'s type, a parameter's, a
+/// field's or a type argument.
+pub(crate) fn experimental_never(reference: Span) -> Error {
+    Error::StdPath {
+        code: "E0658",
+        message: "the `!` type is experimental".into(),
+        label: None,
+        note: Some(
+            "see issue #35121 <https://github.com/rust-lang/rust/issues/35121> for more information"
+                .into(),
+        ),
+        reference,
+    }
+}
+
 /// The segments of `path` when it is a path into std, core or alloc the
 /// table covers.
 fn std_segments(path: &str) -> Option<Vec<&str>> {
