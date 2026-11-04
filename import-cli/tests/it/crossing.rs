@@ -389,6 +389,37 @@ fn a_slider_beside_an_opaque_widget_runs() {
     );
 }
 
+/// iced's slider and pick_list (#886): `opaque(slider(..))` and
+/// `opaque(caption(..))` give opaque widgets whose theme and renderer, and
+/// for the caption its message, only a later use fixes: `column!` boxes
+/// them, and the view's `impl Widget<Message>` fixes them by the trait's
+/// defaults. The call that makes each value takes the types that later use
+/// fixes, as rustc infers them. The output is `cargo run`'s.
+#[test]
+fn an_opaque_widget_takes_the_types_a_later_use_fixes() {
+    let (rawr, cargo) = both_printed("deferred.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 opaque 1..=100@50/None opaque \"50\"")
+            && rawr.contains("last view pad 0 opaque 1..=100@100/None opaque \"100\""),
+        "{rawr}"
+    );
+}
+
+/// iced's ferris (#887): `f32::from(self.angle)` and `angle.into()` call
+/// the crate's `impl From<Turn> for f32`, its impl of a std trait for a std
+/// type. The output is `cargo run`'s.
+#[test]
+fn a_crates_impl_of_a_std_trait_for_a_std_type_is_callable() {
+    let (rawr, cargo) = both_printed("degrees.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 Turn(0.0)..=Turn(1.0)@Turn(0.25)/None \"90\" \"45\" \"0\"")
+            && rawr.contains("last view pad 0 Turn(0.0)..=Turn(1.0)@Turn(1.0)/None \"360\" \"180\" \"360\""),
+        "{rawr}"
+    );
+}
+
 /// iced's gradient: `slider(Radians::RANGE, ..)` reads an associated
 /// constant whose type is std's `RangeInclusive` of the crate's own type,
 /// and the slider takes it at that type. The output is `cargo run`'s.

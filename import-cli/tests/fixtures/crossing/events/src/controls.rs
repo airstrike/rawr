@@ -253,6 +253,14 @@ impl From<u8> for Turn {
     }
 }
 
+/// A turn in degrees, as iced's `impl From<Degrees> for f32`: the crate's
+/// impl of a std trait for a std type.
+impl From<Turn> for f32 {
+    fn from(turn: Turn) -> f32 {
+        turn.0 * 360.0
+    }
+}
+
 /// Where a hint goes, which the crate's `Default` puts on top.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum Position {
