@@ -19,7 +19,7 @@ pub(crate) use error::{
     derivable, ArgumentCount, ArgumentSignature, CannotCompare, Qualified, Unsatisfied,
     Unsupported, ASYNC_MAIN,
 };
-pub use error::{Callee, Category, Error};
+pub use error::{Callee, Category, Error, Private};
 use std::collections::BTreeMap;
 
 pub(crate) struct LocatedError {
@@ -140,6 +140,8 @@ pub(crate) struct ImplInstance {
 
 pub(crate) struct Script {
     source: program::source::Id,
+    /// The module the source is, whose descendants see its private items.
+    namespace: Namespace,
     /// The statements outside the items, the body of `fn main` to the
     /// checker.
     text: String,
@@ -563,6 +565,7 @@ fn resolve_with_evidence_and_namespace(
         aliases,
         scripts: vec![Script {
             source: program::source::Id::ROOT,
+            namespace: namespace.clone(),
             text: statement_source,
         }]
         .into_boxed_slice(),
@@ -1001,6 +1004,12 @@ impl Namespace {
 
     fn type_key(&self, name: &str) -> type_def::Key {
         type_def::Key::new(self.package.clone(), self.modules.clone(), name.into())
+    }
+
+    /// Whether code in this module sees an item private to `module`: Rust
+    /// lets a module and its descendants see its private items.
+    fn sees_private(&self, module: &Self) -> bool {
+        self.package == module.package && self.modules.starts_with(&module.modules)
     }
 }
 

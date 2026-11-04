@@ -4411,6 +4411,9 @@ struct Tables {
     entry_crate: Option<ImmutableString>,
     /// The type aliases each source names, resolved once with the headers.
     aliases: BTreeMap<(crate::program::source::Id, ImmutableString), type_ref::Alias>,
+    /// The module each source is, which decides what it sees of another
+    /// module's private items.
+    namespaces: BTreeMap<crate::program::source::Id, crate::resolve::Namespace>,
     methods: BTreeMap<(type_def::Id, ImmutableString), method::Definition>,
     /// Each type's `impl From<T>` functions, by the type converted to.
     conversions: BTreeMap<type_def::Id, Vec<method::Definition>>,
@@ -5027,6 +5030,11 @@ impl Models {
             qualified_rust: program.qualified_rust.clone(),
             entry_crate: program.entry_crate.clone(),
             aliases: program.aliases.clone(),
+            namespaces: program
+                .scripts
+                .iter()
+                .map(|script| (script.source, script.namespace.clone()))
+                .collect(),
             methods,
             conversions,
             trait_methods,
@@ -5207,11 +5215,13 @@ impl Models {
 
     /// The inherent function `name` of `owner`, or else the one trait
     /// function of that name its trait impls provide, as Rust looks them up.
+    /// An inherent function this source can't see is passed over, as
+    /// rustc's probe passes over a private candidate.
     fn method(&self, owner: type_def::Id, name: &str) -> Option<&method::Definition> {
         if let Some(inherent) = self
             .methods
             .get(&(owner, name.into()))
-            .filter(|method| method.source() == self.context || method.is_public())
+            .filter(|method| self.sees(method))
         {
             return Some(inherent);
         }
@@ -5219,6 +5229,31 @@ impl Models {
             [single] => Some(single),
             _ => None,
         }
+    }
+
+    /// The inherent function `name` of `owner` that is private to a module
+    /// this source is outside of: rustc's E0624 where nothing else of that
+    /// name is found.
+    fn private_method(&self, owner: type_def::Id, name: &str) -> Option<&method::Definition> {
+        self.methods
+            .get(&(owner, name.into()))
+            .filter(|method| !self.sees(method))
+    }
+
+    /// Whether this source sees `method`: a public one, a trait impl's
+    /// (which is as visible as its trait), or one private to this source's
+    /// module or one of its ancestors.
+    fn sees(&self, method: &method::Definition) -> bool {
+        method.is_public()
+            || method.trait_name().is_some()
+            || method.source() == self.context
+            || match (
+                self.namespaces.get(&self.context),
+                self.namespaces.get(&method.source()),
+            ) {
+                (Some(here), Some(module)) => here.sees_private(module),
+                _ => false,
+            }
     }
 
     /// Whether `owner` implements the crate trait `trait_name`.
@@ -13496,13 +13531,10 @@ impl<'a> Parser<'a> {
         source: &Ty,
         span: Span,
     ) -> Option<(method::Definition, Ty, Ty)> {
-        let context = self.models.context;
         let candidates = self.models.conversions.get(&target)?.clone();
         let mut chosen = None;
-        for candidate in candidates
-            .into_iter()
-            .filter(|candidate| candidate.source() == context || candidate.is_public())
-        {
+        // An `impl From` is as visible as `From`, from every module.
+        for candidate in candidates {
             let (from, owner) = self.conversion_source(&candidate);
             let checkpoint = self.inference.checkpoint();
             let fits = expected.is_none_or(|expected| self.unify_type(&owner, expected))
@@ -33460,10 +33492,13 @@ impl<'a> Parser<'a> {
                                 // continues it.
                                 let Some(binding) = this.bindings.get(name.as_str()) else {
                                     let at = expression.start();
-                                    this.splice_tokens(vec![
-                                        (Token::Identifier(Box::new(name.as_str().into())), at),
-                                        (Token::Comma, at),
-                                    ]);
+                                    // `{self:?}` in a method reads its
+                                    // receiver, which is the keyword's token.
+                                    let token = match name.as_str() {
+                                        "self" => Token::SelfValue,
+                                        _ => Token::Identifier(Box::new(name.as_str().into())),
+                                    };
+                                    this.splice_tokens(vec![(token, at), (Token::Comma, at)]);
                                     let captured = match this.parse_expr() {
                                         Ok(captured) => captured,
                                         Err(Error::UnknownVariable { .. }) => {
@@ -36806,11 +36841,13 @@ impl<'a> Parser<'a> {
                     "copy" => capability::Kind::Copy,
                     "debug" => capability::Kind::Debug,
                     _ => {
-                        return Err(Error::UnknownMember {
-                            owner: model.name().into(),
-                            member,
-                            reference: member_span,
-                        });
+                        return Err(self
+                            .private_member(definition_id, &member, member_span)
+                            .unwrap_or_else(|| Error::UnknownMember {
+                                owner: model.name().into(),
+                                member,
+                                reference: member_span,
+                            }));
                     }
                 };
                 if !args.is_empty() {
@@ -36965,6 +37002,24 @@ impl<'a> Parser<'a> {
             self.finish_method_call(&receiver, &member, &value);
         }
         Ok(value)
+    }
+
+    /// rustc's E0624 for `member` of the script type `owner` where it is
+    /// an inherent function private to a module this source is outside of
+    /// and nothing else of that name is found.
+    fn private_member(&self, owner: type_def::Id, member: &str, reference: Span) -> Option<Error> {
+        let definition = self.models.private_method(owner, member)?;
+        Some(Error::PrivateItem {
+            item: if definition.receiver().is_some() {
+                crate::resolve::Private::Method
+            } else {
+                crate::resolve::Private::AssociatedFunction
+            },
+            name: definition.name().into(),
+            reference,
+            declaration: (definition.source() == self.models.context)
+                .then_some(definition.name_span()),
+        })
     }
 
     /// `value.member(args)` through `owner`'s inherent or trait function
@@ -47947,12 +48002,15 @@ impl<'a> Parser<'a> {
             .retain_origin());
         }
 
+        let owner_id = model.definition().id();
         let Nominal::Enum { definition, item } = model else {
-            return Err(Error::UnknownMember {
-                owner,
-                member,
-                reference: member_span,
-            });
+            return Err(self
+                .private_member(owner_id, &member, member_span)
+                .unwrap_or(Error::UnknownMember {
+                    owner,
+                    member,
+                    reference: member_span,
+                }));
         };
         let Some((variant, declaration)) = item
             .variants
@@ -47960,11 +48018,13 @@ impl<'a> Parser<'a> {
             .enumerate()
             .find(|(_, variant)| variant.name.text == member)
         else {
-            return Err(Error::UnknownMember {
-                owner: definition.name().into(),
-                member,
-                reference: member_span,
-            });
+            return Err(self
+                .private_member(owner_id, &member, member_span)
+                .unwrap_or_else(|| Error::UnknownMember {
+                    owner: definition.name().into(),
+                    member,
+                    reference: member_span,
+                }));
         };
         // `E::V { x, y: 1 }` of a struct variant.
         if let Some(fields) = &declaration.fields {

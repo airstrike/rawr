@@ -321,6 +321,9 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
     let resolve::Error::UnknownMember { owner, member, .. } = error else {
         return resolution_builder(error);
     };
+    // `print` as the source writes it, not Rawr's spelling of it.
+    let member = crate::tokenizer::demangle_names(member);
+    let member = member.as_ref();
     let Some(kind) = member_kind(source, primary, member) else {
         return resolution_builder(error);
     };
@@ -413,7 +416,7 @@ fn member_span(error: &resolve::Error) -> Span {
     match (
         start.line(),
         start.position(),
-        u16::try_from(member.chars().count()),
+        u16::try_from(crate::tokenizer::demangle_names(member).chars().count()),
     ) {
         (Some(line), Some(column), Ok(length)) if primary.end() == start && length > 0 => {
             let line = u16::try_from(line).unwrap_or(u16::MAX);
@@ -479,6 +482,7 @@ fn resolution_report_with_sources(
         resolve::Error::MovedValue { .. } => "value moved here",
         resolve::Error::BorrowConflict { .. } => "borrow made here",
         resolve::Error::ArgumentCount { callee, .. } => callee.defined_here(),
+        resolve::Error::PrivateItem { item, .. } => item.defined_here(),
         _ => "first declaration or related definition is here",
     });
     let mut builder = builder.source(source.clone());
@@ -515,6 +519,7 @@ fn primary_label(
             Some(format!("no implementation for `{lhs} == {rhs}`").into())
         }
         resolve::Error::ArgumentSignature { .. } => Some("found signature defined here".into()),
+        resolve::Error::PrivateItem { item, .. } => Some(format!("private {}", item.noun()).into()),
         resolve::Error::NotInModule { module, .. } => {
             Some(format!("not found in `{}`", written_module(source, primary, module)).into())
         }
@@ -618,8 +623,17 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             } => code::RESOLVE_CLOSURE_ARGUMENT_COUNT,
             _ => code::RESOLVE_ARGUMENT_COUNT,
         },
+        resolve::Category::PrivateItem => match error {
+            resolve::Error::PrivateItem { item, .. } => code::private(*item),
+            _ => unreachable!("a private item's category"),
+        },
     };
-    let builder = Report::error(stable_code, resolution_message(error));
+    // Names Rawr keeps under another spelling read as Rust's.
+    let message = resolution_message(error);
+    let builder = Report::error(
+        stable_code,
+        crate::tokenizer::demangle_names(&message).into_owned(),
+    );
     match error {
         resolve::Error::Syntax {
             help: Some(help), ..
@@ -832,6 +846,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         }
         resolve::Error::NotInModule { module, item, .. } => {
             format!("cannot find `{item}` in module `{module}`")
+        }
+        resolve::Error::PrivateItem { item, name, .. } => {
+            format!("{} `{name}` is private", item.noun())
         }
         resolve::Error::MemberKind { owner, member, .. } => {
             format!("member `{owner}::{member}` used as the other kind")

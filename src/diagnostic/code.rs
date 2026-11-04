@@ -124,6 +124,8 @@ codes!(Resolve;
     (RESOLVE_NOT_YET, "RAWR-NOT-YET", "A std item rawr resolves but doesn't run yet."),
     (RESOLVE_TYPE_ANNOTATIONS, "E0282", "A generic parameter whose type nothing gives, as rustc reports it."),
     (RESOLVE_DUPLICATE_GENERIC, "E0403", "A generic parameter name used twice in one item's generics, as rustc reports it."),
+    (RESOLVE_PRIVATE_ITEM, "E0603", "A path to an item private to a module it is outside of, as rustc reports it."),
+    (RESOLVE_PRIVATE_FUNCTION, "E0624", "A method or associated function private to a module the call is outside of, as rustc reports it."),
     (RESOLVE_ARGUMENT_COUNT, "E0061", "A call with more or fewer arguments than its function, method or constructor takes, as rustc reports it."),
     (RESOLVE_ARGUMENT_SIGNATURE, "E0631", "A closure or function whose parameters differ from those of the callable it is passed as, as rustc reports it."),
     (RESOLVE_CANNOT_COMPARE, "E0277", "An `==` or `!=` whose left operand's type has no `PartialEq` impl for the right operand's, as rustc reports it."),
@@ -195,6 +197,15 @@ pub(crate) fn borrow(rustc: &str) -> Code {
         "E0508" => BORROW_MOVE_ELEMENT,
         "E0509" => BORROW_MOVE_DROP,
         _ => BORROW_LIFETIME,
+    }
+}
+
+/// The code of a private item's error: E0624 for an inherent impl's
+/// function, E0603 for an item a path names.
+pub(crate) fn private(item: crate::resolve::Private) -> Code {
+    match item.code() {
+        "E0624" => RESOLVE_PRIVATE_FUNCTION,
+        _ => RESOLVE_PRIVATE_ITEM,
     }
 }
 

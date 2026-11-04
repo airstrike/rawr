@@ -88,6 +88,9 @@ pub enum Category {
     /// A closure or function whose parameters differ from the ones its
     /// callable's signature gives, as rustc's E0631.
     ArgumentSignature,
+    /// An item private to a module the use is outside of, as rustc's E0603
+    /// or E0624.
+    PrivateItem,
 }
 
 impl fmt::Display for Category {
@@ -132,6 +135,7 @@ impl fmt::Display for Category {
             Self::ArgumentCount => formatter.write_str("wrong number of arguments"),
             Self::CannotCompare => formatter.write_str("can't compare"),
             Self::ArgumentSignature => formatter.write_str("type mismatch in arguments"),
+            Self::PrivateItem => formatter.write_str("private item"),
         }
     }
 }
@@ -183,6 +187,74 @@ impl Callee {
             Self::Closure => "closure defined here",
             Self::Struct => "tuple struct defined here",
             Self::Variant => "tuple variant defined here",
+        }
+    }
+}
+
+/// What a private item is, as rustc names it in E0603 and E0624.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Private {
+    /// A free function.
+    Function,
+    /// A struct.
+    Struct,
+    /// An enum.
+    Enum,
+    /// A module.
+    Module,
+    /// A trait.
+    Trait,
+    /// A type alias.
+    TypeAlias,
+    /// A `use` binding, which a path reaches only from inside its module.
+    Import,
+    /// A method of an inherent impl.
+    Method,
+    /// An associated function of an inherent impl, which takes no `self`.
+    AssociatedFunction,
+}
+
+impl Private {
+    /// rustc's code: E0624 for an inherent impl's function, E0603 for an
+    /// item a path names.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Method | Self::AssociatedFunction => "E0624",
+            _ => "E0603",
+        }
+    }
+
+    /// rustc's label at the item's definition: "private method defined
+    /// here".
+    #[must_use]
+    pub const fn defined_here(self) -> &'static str {
+        match self {
+            Self::Function => "private function defined here",
+            Self::Struct => "private struct defined here",
+            Self::Enum => "private enum defined here",
+            Self::Module => "private module defined here",
+            Self::Trait => "private trait defined here",
+            Self::TypeAlias => "private type alias defined here",
+            Self::Import => "private import defined here",
+            Self::Method => "private method defined here",
+            Self::AssociatedFunction => "private associated function defined here",
+        }
+    }
+
+    /// The noun rustc's message names the item by.
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Struct => "struct",
+            Self::Enum => "enum",
+            Self::Module => "module",
+            Self::Trait => "trait",
+            Self::TypeAlias => "type alias",
+            Self::Import => "import",
+            Self::Method => "method",
+            Self::AssociatedFunction => "associated function",
         }
     }
 }
@@ -355,6 +427,19 @@ pub enum Error {
         item: ImmutableString,
         /// Exact source reference of the item's name.
         reference: Span,
+    },
+    /// An item private to a module the use is outside of: rustc's E0603
+    /// "function `f` is private" for a path, E0624 "method `get` is
+    /// private" for an inherent impl's function.
+    PrivateItem {
+        /// What the item is.
+        item: Private,
+        /// The item's name.
+        name: ImmutableString,
+        /// Exact source reference of the item's name.
+        reference: Span,
+        /// The item's declaration, when it is in the same source.
+        declaration: Option<Span>,
     },
     /// A member used as the other kind: a field called like a method
     /// (rustc's E0599), or a method read like a field (rustc's E0615).
@@ -675,6 +760,7 @@ impl Error {
             Self::ArgumentCount { .. } => Category::ArgumentCount,
             Self::CannotCompare { .. } => Category::CannotCompare,
             Self::ArgumentSignature { .. } => Category::ArgumentSignature,
+            Self::PrivateItem { .. } => Category::PrivateItem,
         }
     }
 
@@ -695,6 +781,7 @@ impl Error {
                 owner.as_str()
             }
             Self::NotInModule { module, .. } => module.as_str(),
+            Self::PrivateItem { name, .. } => name.as_str(),
             Self::UnknownMember { owner, .. }
             | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
@@ -738,7 +825,8 @@ impl Error {
             Self::DuplicateMember { declaration, .. } => *declaration,
             Self::UnknownMember { reference, .. }
             | Self::MemberKind { reference, .. }
-            | Self::NotInModule { reference, .. } => *reference,
+            | Self::NotInModule { reference, .. }
+            | Self::PrivateItem { reference, .. } => *reference,
             Self::UnknownFunction { reference, .. } => *reference,
             Self::UnknownVariable { reference, .. } => *reference,
             Self::MovedValue { reference, .. } => *reference,
@@ -794,7 +882,9 @@ impl Error {
                 ..
             } => Some(*previous_declaration),
             Self::ImmutableReceiver { receiver, .. } => Some(*receiver),
-            Self::InvalidImport { declaration, .. } => *declaration,
+            Self::InvalidImport { declaration, .. } | Self::PrivateItem { declaration, .. } => {
+                *declaration
+            }
             Self::ArgumentCount { definition, .. } => *definition,
             Self::UnknownType { .. }
             | Self::UnknownImport { .. }
@@ -924,6 +1014,17 @@ impl fmt::Display for Written<'_> {
                 item,
                 reference,
             } => write!(formatter, "cannot find `{item}` in module `{module}` at {reference}"),
+            Error::PrivateItem {
+                item,
+                name,
+                reference,
+                ..
+            } => write!(
+                formatter,
+                "{} `{name}` is private at {reference} ({})",
+                item.noun(),
+                item.code()
+            ),
             Error::MemberKind {
                 owner,
                 member,

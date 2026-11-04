@@ -569,6 +569,7 @@ impl<'a> Resolver<'a> {
                 source_map,
                 Script {
                     source: program::source::Id::from_index(context.source.index()),
+                    namespace: context.namespace.clone(),
                     text: statement_source,
                 },
             ));
