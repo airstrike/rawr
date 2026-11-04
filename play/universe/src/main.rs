@@ -8,14 +8,15 @@
 //! The calls are iced's examples' own: the counter, a row and a column
 //! with spacing, text of a number, a `&str` and a `String`, sliders of an
 //! `f32` and of `Radians` (gradient), a pick list (pick_list), keyboard
-//! keys matched in a subscription (stopwatch, layout), and an application
-//! with a subscription and a scale factor (#863). A script function a call
+//! keys matched in a subscription (stopwatch, layout), a clock's ticks
+//! (stopwatch, clock: #889), and an application with a subscription and a
+//! scale factor (#863). A script function a call
 //! takes fills it by its place, whatever it is named, so a snippet's
 //! `view` or message meets this program's.
 
 use iced::keyboard::{self, key};
 use iced::widget::{button, column, pick_list, row, slider, text, Widget};
-use iced::{window, Center, Radians, Subscription};
+use iced::{time, window, Center, Radians, Subscription};
 use std::time::Duration;
 
 /// Its `Default` is derived, as the counter's is: the `default` an
@@ -117,8 +118,8 @@ impl Counter {
         2.0
     }
 
-    /// Frames until the count reaches five, and keys matched as stopwatch
-    /// and layout match them.
+    /// Frames up to a count of five, a tick a second down to it,
+    /// and keys matched as stopwatch and layout match them.
     fn subscription(&self) -> Subscription<Message> {
         // A key handler that names the event's type, as stopwatch's does.
         fn hotkey(event: keyboard::Event) -> Option<Message> {
@@ -134,6 +135,11 @@ impl Counter {
 
         let frames = if self.value < 5 {
             window::frames().map(|_| Message::Increment)
+        } else {
+            Subscription::none()
+        };
+        let ticks = if self.value > 5 {
+            time::every(Duration::from_secs(1)).map(|_| Message::Decrement)
         } else {
             Subscription::none()
         };
@@ -162,7 +168,12 @@ impl Counter {
                 },
             }
         });
-        Subscription::batch(vec![frames, keys, keyboard::listen().filter_map(hotkey)])
+        Subscription::batch(vec![
+            frames,
+            ticks,
+            keys,
+            keyboard::listen().filter_map(hotkey),
+        ])
     }
 }
 

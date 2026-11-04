@@ -10,7 +10,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+# tokio is iced's executor, as iced's stopwatch and clock enable it: it
+# gives them `time::every` (#889).
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", features = ["tokio"] }
 iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 

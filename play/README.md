@@ -58,7 +58,15 @@ later. It also stops at 100 frames, at 6 MiB of GIF, or before the
 deadline `PLAY_DEADLINE` names (the snippet's time budget) or the sooner
 one the file `PLAY_DEADLINE_FILE` names gives. A program whose frame never changed is written as a PNG, and one
 that changed as a GIF of each change, with no loop extension, so it plays
-once and holds its last frame. Either goes to the file `PLAY_FRAME` names,
+once and holds its last frame. The GIF plays at the program's pace, not
+the machine's (#889). A redraw advances its clock by 50 ms, however long
+the frame took to draw, so a program that changes on each frame plays as
+it would on a fast machine. A change a message on the program's own clock
+made (a subscription that doesn't listen to the window, such as
+`time::every`, or a task) shows for the wall time since the last change,
+the time that clock ran. The program itself still sees the machine's
+time, in its redraw events and through `Instant::now`: a widget compares
+one with the other, so a clock of the shell's own would stop it. Either goes to the file `PLAY_FRAME` names,
 and `run` returns, as iced's `run` returns when its window closes. A run
 that wrote a frame and exited with status 0 answers with its text and the
 frame.
