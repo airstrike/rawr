@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A trait's method whose `impl Trait` the trait's own default body gives, as iced's `Widget::explain`, now runs: its result goes in `column!` as it is, and its trait's methods and the methods a blanket impl over that trait gives, as `.explain(color).boxed()`, run on it.","issues":[885]},
+        {"text":"`rawr check` now refuses your own impl of a crate's trait used at a type that holds the crate's `impl Trait` value, as iced's loupe uses `impl Widget for Loupe<W>` at `Loupe<impl Widget>`, instead of passing a program the runner can't build.","issues":[885]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.128",
@@ -2141,7 +2147,7 @@
     {"issue":882,"title":"Lock play/universe's dependencies for a reproducible ?play image","state":"open","category":"Health"},
     {"issue":883,"title":"rawr-play lib tests that fail on main: no-files message and a 100 ms budget","state":"open","category":"Health"},
     {"issue":884,"title":"rawr-import lib test retirement_read_shutdown_unblocks_reader hangs","state":"open","category":"Health"},
-    {"issue":885,"title":"Run the impl Trait a trait method gives from its default body (iced's Widget::explain)","state":"open","category":"No glue (D593)"},
+    {"issue":885,"title":"Run the impl Trait a trait method gives from its default body (iced's Widget::explain)","state":"closed","category":"No glue (D593)"},
     {"issue":886,"title":"A crate opaque value whose type arguments only a later use fixes","state":"open","category":"No glue (D593)"},
     {"issue":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"open","category":"Divergences from rustc"},
     {"issue":888,"title":"?play's iced shell stops an animation after its first frame on a slow CPU","state":"closed","category":"Health","release":"0.3.125"},
@@ -2153,7 +2159,23 @@
     {"issue":894,"title":"rawr's workspace observation reads ancestor manifests outside the project's own workspace","state":"open","category":"Health"},
     {"issue":895,"title":"islands' restarted program ends with a failing status in the parallel suite","state":"open","category":"Health"},
     {"issue":896,"title":"The never type `!` in signatures and as a value","state":"closed","category":"Divergences from rustc","release":"0.3.128"},
-    {"issue":897,"title":"Type mismatches report rustc's codes (E0308, E0317, E0069)","state":"open","category":"Divergences from rustc"}
+    {"issue":897,"title":"Type mismatches report rustc's codes (E0308, E0317, E0069)","state":"open","category":"Divergences from rustc"},
+    {"issue":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"open","category":"Divergences from rustc"},
+    {"issue":899,"title":"A private method or associated function isn't visible from a child module","state":"open","category":"Divergences from rustc"},
+    {"issue":900,"title":"`use super::*` brings the parent's `use` imports, and a glob-imported name can start a path","state":"open","category":"Divergences from rustc"},
+    {"issue":901,"title":"std::thread::spawn with join, Mutex and mpsc in plain programs","state":"open","category":"Divergences from rustc"},
+    {"issue":902,"title":"std members rustlings needs: SystemTime::now, char::to_uppercase, Result::as_deref, ParseIntError::kind","state":"open","category":"Divergences from rustc"},
+    {"issue":903,"title":"Inline format argument `{self:?}`","state":"open","category":"Divergences from rustc"},
+    {"issue":904,"title":"#[derive(Debug)] on an enum whose payload is a std error type","state":"open","category":"Divergences from rustc"},
+    {"issue":905,"title":"Multi-line string literals","state":"open","category":"Divergences from rustc"},
+    {"issue":906,"title":"A Result's runtime value doesn't match its type after let-else on parse()","state":"open","category":"Divergences from rustc"},
+    {"issue":907,"title":"A changing method on a collection that isn't a named place: `self` of an impl for Vec, or a temporary","state":"open","category":"Divergences from rustc"},
+    {"issue":908,"title":"Smaller rustlings gaps: Cow<[T]> index, u8 into i16, AsRef<str>, fn item arrays, try_into's error, for over Option","state":"open","category":"Divergences from rustc"},
+    {"issue":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"open","category":"Divergences from rustc"},
+    {"issue":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"open","category":"Divergences from rustc"},
+    {"issue":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"open","category":"Divergences from rustc"},
+    {"issue":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"open","category":"Divergences from rustc"},
+    {"issue":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2625,6 +2647,20 @@
             {"number":345,"title":"No-glue stops after #312 and #338","state":"open"}
           ],
           "milestone": "0.4"
+        },
+        {
+          "id": "opaque-values",
+          "name": "A crate's `impl Trait` values",
+          "start": 47,
+          "size": 3,
+          "state": "now",
+          "note": "loupe's return type and `explain` run. #886 and #887 next",
+          "issues": [
+            {"number":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"closed"},
+            {"number":885,"title":"Run the impl Trait a trait method gives from its default body (iced's Widget::explain)","state":"closed"},
+            {"number":886,"title":"A crate opaque value whose type arguments only a later use fixes","state":"open"},
+            {"number":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"open"}
+          ]
         }
       ]
     },
@@ -2752,6 +2788,30 @@
             {"number":864,"title":"Extend the driver's nightly window as nightly moves","state":"closed"}
           ],
           "milestone": "0.3"
+        },
+        {
+          "id": "rustlings",
+          "name": "rustlings: 59 of 94",
+          "start": 74,
+          "size": 4,
+          "state": "now",
+          "note": "Solutions whose main and every test match rustc (scripts/rustlings.sh). 15 of 94 exercises fail with rustc's code. #898 is the biggest gap",
+          "issues": [
+            {"number":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"open"},
+            {"number":899,"title":"A private method or associated function isn't visible from a child module","state":"open"},
+            {"number":900,"title":"`use super::*` brings the parent's `use` imports, and a glob-imported name can start a path","state":"open"},
+            {"number":901,"title":"std::thread::spawn with join, Mutex and mpsc in plain programs","state":"open"},
+            {"number":902,"title":"std members rustlings needs: SystemTime::now, char::to_uppercase, Result::as_deref, ParseIntError::kind","state":"open"},
+            {"number":903,"title":"Inline format argument `{self:?}`","state":"open"},
+            {"number":904,"title":"#[derive(Debug)] on an enum whose payload is a std error type","state":"open"},
+            {"number":905,"title":"Multi-line string literals","state":"open"},
+            {"number":906,"title":"A Result's runtime value doesn't match its type after let-else on parse()","state":"open"},
+            {"number":907,"title":"A changing method on a collection that isn't a named place: `self` of an impl for Vec, or a temporary","state":"open"},
+            {"number":908,"title":"Smaller rustlings gaps: Cow<[T]> index, u8 into i16, AsRef<str>, fn item arrays, try_into's error, for over Option","state":"open"},
+            {"number":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"open"},
+            {"number":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"open"},
+            {"number":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"open"}
+          ]
         }
       ]
     },

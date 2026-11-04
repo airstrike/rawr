@@ -94,7 +94,8 @@
         {"id":"struct-literals-live-edits","name":"Struct literals and live edits","start":44,"size":2,"state":"next","note":"Not started","issues":[325,326],"milestone":"0.4"},
         {"id":"projections-function-values","name":"Projections and function values","start":44,"size":3,"state":"now","note":"#317 and #319 remain","issues":[317,318,319,327],"milestone":"0.4"},
         {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"Events, exit, theme and modal runners","issues":[335,336,337,339,340,338],"milestone":"0.4"},
-        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"Gaps in about 18 examples","issues":[283,314,328,334,345],"milestone":"0.4"}
+        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"Gaps in about 18 examples","issues":[283,314,328,334,345],"milestone":"0.4"},
+        {"id":"opaque-values","name":"A crate's `impl Trait` values","start":47,"size":3,"state":"now","note":"loupe's return type and `explain` run. #886 and #887 next","issues":[845,885,886,887]}
       ]
     },
     {
@@ -117,7 +118,8 @@
         {"id":"rustc-types","name":"rustc's own types","start":67,"size":3,"state":"done","note":"String and &str, Vec, [T] and VecDeque, Cow, Rc and Arc","issues":[706,769,701,775,777],"milestone":"0.3"},
         {"id":"borrowed-values","name":"Borrowed values","start":69,"size":4,"state":"done","note":"Variant fields move or lend; opaque results borrow their inputs for their whole life","issues":[678,783,782,846,849],"milestone":"0.3"},
         {"id":"rustc-errors","name":"rustc's errors","start":68,"size":3,"state":"done","note":"E0107, E0283, E0369, E0425, E0433, E0596, E0658 and more, worded as rustc words them","issues":[772,774,733,736,752,771,751,858,859,860,861,862,896],"milestone":"0.3"},
-        {"id":"any-nightly","name":"Any nightly","start":72,"size":2,"state":"done","note":"The project's nightly reads crate APIs; a daily job moves the window","issues":[692,864],"milestone":"0.3"}
+        {"id":"any-nightly","name":"Any nightly","start":72,"size":2,"state":"done","note":"The project's nightly reads crate APIs; a daily job moves the window","issues":[692,864],"milestone":"0.3"},
+        {"id":"rustlings","name":"rustlings: 59 of 94","start":74,"size":4,"state":"now","note":"Solutions whose main and every test match rustc (scripts/rustlings.sh). 15 of 94 exercises fail with rustc's code. #898 is the biggest gap","issues":[898,899,900,901,902,903,904,905,906,907,908,909,910,911]}
       ]
     },
     {
