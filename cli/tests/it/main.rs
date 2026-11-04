@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod harness;
 mod marked;
 mod mcp;
-mod harness;
 mod program;
 mod vocabulary;
 

@@ -183,6 +183,10 @@ fn a_syntax_error_in_a_test_module_stops_run_and_check() {
             "{}",
             stderr(output)
         );
-        assert!(stderr(output).contains("broken.rs:10:22"), "{}", stderr(output));
+        assert!(
+            stderr(output).contains("broken.rs:10:22"),
+            "{}",
+            stderr(output)
+        );
     }
 }

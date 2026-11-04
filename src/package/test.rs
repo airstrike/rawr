@@ -298,10 +298,7 @@ mod tests {
         assert_eq!(tests[0].ignored(), None);
         assert_eq!(tests[0].location().line(), 20);
         assert_eq!(tests[0].location().column(), 8);
-        assert_eq!(
-            tests[1].expected(),
-            &Expected::Panic(Some("zero".into()))
-        );
+        assert_eq!(tests[1].expected(), &Expected::Panic(Some("zero".into())));
         assert_eq!(tests[3].ignored(), Some(Some("slow")));
     }
 

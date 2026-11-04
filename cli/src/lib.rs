@@ -834,4 +834,26 @@ mod tests {
         assert!(request(&["run", "a", "b"]).is_err());
         assert!(request(&["--bogus"]).is_err());
     }
+
+    #[test]
+    fn rawr_test_takes_a_path_a_filter_and_libtests_options() {
+        let test = |path: Option<&str>, libtest: &[&str]| {
+            let libtest: Vec<_> = libtest.iter().map(OsString::from).collect();
+            Ok(Request::Test {
+                path: path.map(PathBuf::from),
+                options: crate::harness::Options::parse(&libtest).unwrap(),
+            })
+        };
+        assert_eq!(request(&["test"]), test(None, &[]));
+        assert_eq!(request(&["test", "app.rs"]), test(Some("app.rs"), &[]));
+        assert_eq!(request(&["test", "adds"]), test(None, &["adds"]));
+        assert_eq!(
+            request(&["test", ".", "adds", "--", "--exact", "--skip", "x"]),
+            test(Some("."), &["adds", "--exact", "--skip", "x"])
+        );
+        assert_eq!(request(&["test", "--help"]), Ok(Request::Help));
+        assert!(request(&["test", "a", "b"]).is_err());
+        assert!(request(&["test", "--", "--bogus"]).is_err());
+        assert_ne!(test(None, &["adds"]), test(None, &[]));
+    }
 }
