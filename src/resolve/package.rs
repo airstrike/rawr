@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{item, type_ref, Error, LocatedError, Namespace, Program, Script};
+use super::{item, type_ref, Error, LocatedError, Namespace, Private, Program, Script};
 use crate::package::{graph, source, Graph};
 use crate::{host, parse, program, type_def, ImmutableString, Span};
 
@@ -108,6 +108,10 @@ struct Resolver<'a> {
     exports: BTreeMap<Address, Export>,
     /// Private `use` bindings, so a path may start with an imported module.
     aliases: BTreeMap<Address, Export>,
+    /// The names each module's private glob imports bind (`use super::*;`,
+    /// `use Shape::*;`), which its declarations and explicit imports
+    /// shadow, as in Rust.
+    globs: BTreeMap<Address, Export>,
     type_declarations: Vec<type_def::Declaration>,
     /// Each crate enum's variant names, for `use Shape::Circle;` and
     /// `use Shape::*;`.
@@ -178,10 +182,12 @@ impl<'a> Resolver<'a> {
             declarations: BTreeMap::new(),
             exports: BTreeMap::new(),
             aliases: BTreeMap::new(),
+            globs: BTreeMap::new(),
             type_declarations: Vec::new(),
             enum_variants: BTreeMap::new(),
         };
         resolver.predeclare()?;
+        resolver.predeclare_globs();
         Ok(resolver)
     }
 
@@ -339,6 +345,61 @@ impl<'a> Resolver<'a> {
             self.units[unit_index].slots = slots;
         }
         Ok(())
+    }
+
+    /// Bind each private glob import's names until none binds more: a glob
+    /// may reach names another glob bound, as `use Progress::*;` after
+    /// `use super::*;` does, or a module's glob the names its parent's
+    /// glob bound. A glob that names nothing binds nothing here; its
+    /// module's bindings report it.
+    fn predeclare_globs(&mut self) {
+        loop {
+            let mut found = BTreeMap::new();
+            for unit in &self.units {
+                let context = &unit.context;
+                for parsed in unit.parsed.items() {
+                    let crate::item::Parsed::Use(used) = parsed else {
+                        continue;
+                    };
+                    let crate::item::UseTree::Glob { prefix, span } = &used.tree else {
+                        continue;
+                    };
+                    if used.header.visibility.is_some() {
+                        continue;
+                    }
+                    let segments = path_segments(prefix);
+                    for name in self.glob_names(context, &segments).unwrap_or_default() {
+                        let address = context.address(&name);
+                        if self.binds(&address) || found.contains_key(&address) {
+                            continue;
+                        }
+                        let mut path = segments.to_vec();
+                        path.push(name);
+                        found.insert(
+                            address,
+                            Export {
+                                source: context.source,
+                                context: context.clone(),
+                                path: path.into_boxed_slice(),
+                                span: *span,
+                            },
+                        );
+                    }
+                }
+            }
+            if found.is_empty() {
+                return;
+            }
+            self.globs.extend(found);
+        }
+    }
+
+    /// Whether a declaration or an import binds `address`.
+    fn binds(&self, address: &Address) -> bool {
+        self.declarations.contains_key(address)
+            || self.exports.contains_key(address)
+            || self.aliases.contains_key(address)
+            || self.globs.contains_key(address)
     }
 
     fn insert_declaration(
@@ -728,9 +789,9 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    /// The names a glob import (`use dep::module::*;`) binds: every public
-    /// name of that Rust module that no declaration or explicit import of
-    /// this unit already binds.
+    /// The names a glob import (`use dep::module::*;`) binds: every name
+    /// of that module this unit sees that no declaration or explicit import
+    /// of this unit already binds.
     fn glob_paths(
         &self,
         context: &Context,
@@ -742,64 +803,10 @@ impl<'a> Resolver<'a> {
         };
         let segments = path_segments(prefix);
         let module: ImmutableString = segments.join("::").into();
-        // `use Shape::*;`: every variant of a crate enum, and
-        // `use std::cmp::Ordering::*;` std's three.
-        let variants = match self.script_enum(context, &segments) {
-            Some((definition, _)) => Some(self.enum_variants[&definition].clone()),
-            None if super::std_ordering(&module) => Some(
-                ORDERING_VARIANTS
-                    .iter()
-                    .map(|name| ImmutableString::from(*name))
-                    .collect(),
-            ),
-            None => None,
-        };
-        if let Some(variants) = variants {
-            return Ok(variants
-                .iter()
-                .filter(|name| !occupied.contains_key(*name))
-                .map(|name| {
-                    let mut path = segments.to_vec();
-                    path.push(name.clone());
-                    (
-                        crate::item::Name {
-                            span: *span,
-                            text: name.clone(),
-                        },
-                        path.into_boxed_slice(),
-                    )
-                })
-                .collect());
-        }
-        // `use super::*;`, `use crate::shapes::*;`: every item that module
-        // of this crate declares.
-        if let Some(modules) = self.local_glob_module(context, &segments) {
-            let mut names = self
-                .declarations
-                .keys()
-                .filter(|address| {
-                    address.package == context.namespace.package && *address.modules == *modules
-                })
-                .map(|address| address.name.clone())
-                .filter(|name| !occupied.contains_key(name))
-                .collect::<Vec<_>>();
-            names.dedup();
-            return Ok(names
-                .into_iter()
-                .map(|name| {
-                    let mut path = segments.to_vec();
-                    path.push(name.clone());
-                    (
-                        crate::item::Name {
-                            span: *span,
-                            text: name,
-                        },
-                        path.into_boxed_slice(),
-                    )
-                })
-                .collect());
-        }
-        if parsed.header.visibility.is_some() {
+        let local = self.script_enum(context, &segments).is_some()
+            || super::std_ordering(&module)
+            || self.local_glob_module(context, &segments).is_some();
+        if parsed.header.visibility.is_some() && !local {
             return Err(Failure {
                 primary: context.source,
                 secondary: None,
@@ -811,15 +818,7 @@ impl<'a> Resolver<'a> {
                 },
             });
         }
-        // `use std::collections::*;`: every name of that std module.
-        let names = if let Some(std_names) = super::std_path::glob(&module) {
-            std_names
-        } else if matches!(
-            self.host.entry(&module),
-            Some(host::Entry::Module | host::Entry::ModuleItem(_))
-        ) {
-            self.host.children(&module)
-        } else {
+        let Some(names) = self.glob_names(context, &segments) else {
             return Err(Failure {
                 primary: context.source,
                 secondary: None,
@@ -846,6 +845,111 @@ impl<'a> Resolver<'a> {
             .collect())
     }
 
+    /// Every name a glob import of `segments` reaches from `context`: a
+    /// crate enum's variants (`use Shape::*;`) or std `Ordering`'s; the
+    /// names a module of this crate binds that `context` sees (`use
+    /// super::*;`); or a std or crate module's names. `None` when the
+    /// prefix names none of these.
+    fn glob_names(
+        &self,
+        context: &Context,
+        segments: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let module: ImmutableString = segments.join("::").into();
+        if let Some((definition, _)) = self.script_enum(context, segments) {
+            return Some(self.enum_variants[&definition].to_vec());
+        }
+        if super::std_ordering(&module) {
+            return Some(
+                ORDERING_VARIANTS
+                    .iter()
+                    .map(|name| ImmutableString::from(*name))
+                    .collect(),
+            );
+        }
+        if let Some(modules) = self.local_glob_module(context, segments) {
+            return Some(self.module_names(context, &modules));
+        }
+        // `use std::collections::*;`: every name of that std module.
+        if let Some(names) = super::std_path::glob(&module) {
+            return Some(names);
+        }
+        matches!(
+            self.host.entry(&module),
+            Some(host::Entry::Module | host::Entry::ModuleItem(_))
+        )
+        .then(|| self.host.children(&module))
+    }
+
+    /// The names the crate module `modules` binds that `context` sees, as a
+    /// glob import of it reaches them: its public items and re-exports,
+    /// and, from inside it, its private items and imports too.
+    fn module_names(&self, context: &Context, modules: &[ImmutableString]) -> Vec<ImmutableString> {
+        let inside = context.namespace.modules.starts_with(modules);
+        let at = |address: &Address| {
+            address.package == context.namespace.package && *address.modules == *modules
+        };
+        let declared = self
+            .declarations
+            .iter()
+            .filter(|(address, declaration)| at(address) && (declaration.public || inside))
+            .map(|(address, _)| address);
+        let exported = self.exports.keys().filter(|address| at(address));
+        let imported = self
+            .aliases
+            .keys()
+            .chain(self.globs.keys())
+            .filter(|address| inside && at(address));
+        declared
+            .chain(exported)
+            .chain(imported)
+            .map(|address| address.name.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Where a path of this crate's names its item: through each `use` or
+    /// glob import that binds it, to the path that import names
+    /// (`super::Circle` after the root's `use Shape::*;` is `Shape::Circle`
+    /// in the root).
+    fn origin(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> (Context, Box<[ImmutableString]>) {
+        let mut context = context.clone();
+        let mut path: Box<[ImmutableString]> = path.into();
+        // Each step follows a distinct import, so a cycle ends the walk.
+        for _ in 0..=self.aliases.len() + self.exports.len() + self.globs.len() {
+            let Some((name, prefix)) = path.split_last() else {
+                break;
+            };
+            let Some(modules) = self.local_glob_module(&context, prefix) else {
+                break;
+            };
+            let address = Address {
+                package: context.namespace.package.clone(),
+                modules: modules.into_boxed_slice(),
+                name: name.clone(),
+            };
+            if self.declarations.contains_key(&address) {
+                break;
+            }
+            let Some(import) = self
+                .exports
+                .get(&address)
+                .or_else(|| self.aliases.get(&address))
+                .or_else(|| self.globs.get(&address))
+            else {
+                break;
+            };
+            context = import.context.clone();
+            path = import.path.clone();
+        }
+        (context, path)
+    }
+
     /// The crate enum a `use` prefix names, as `Shape`, `shapes::Shape` or
     /// `super::Shape`, or a name another `use` of this module imported.
     fn script_enum(
@@ -858,7 +962,11 @@ impl<'a> Resolver<'a> {
             [name] => match self.declarations.get(&context.address(name)) {
                 Some(declaration) => declaration.target.clone(),
                 None => {
-                    let alias = self.aliases.get(&context.address(name))?;
+                    let address = context.address(name);
+                    let alias = self
+                        .aliases
+                        .get(&address)
+                        .or_else(|| self.globs.get(&address))?;
                     if alias.path.len() < 2 {
                         return None;
                     }
@@ -994,9 +1102,12 @@ impl<'a> Resolver<'a> {
                         }),
                     _ => path,
                 };
-                // `use Shape::Circle;`: a variant of a crate enum.
-                let variant = path.split_last().and_then(|(last, prefix)| {
-                    let Some((definition, identity)) = self.script_enum(context, prefix) else {
+                // `use Shape::Circle;`: a variant of a crate enum, which
+                // `use super::Circle;` reaches through the parent's import.
+                let (origin_context, origin_path) = self.origin(context, &path);
+                let variant = origin_path.split_last().and_then(|(last, prefix)| {
+                    let Some((definition, identity)) = self.script_enum(&origin_context, prefix)
+                    else {
                         if super::std_ordering(&prefix.join("::"))
                             && ORDERING_VARIANTS.contains(&last.as_str())
                         {
@@ -1007,7 +1118,7 @@ impl<'a> Resolver<'a> {
                         // iced::Center;`.
                         return self
                             .host
-                            .enum_variant(&super::std_reexport(&path.join("::"), self.host))
+                            .enum_variant(&super::std_reexport(&origin_path.join("::"), self.host))
                             .map(|owner| item::Import::HostVariant { owner });
                     };
                     self.enum_variants[&definition].contains(last).then_some(
@@ -1473,6 +1584,17 @@ impl<'a> Resolver<'a> {
             active.remove(&address);
             return Ok(target);
         }
+        // A name a private glob import binds, which the module's
+        // descendants see as they see its private `use`s.
+        if let Some(glob) = self.globs.get(&address)
+            && within(context, &address, address.modules.len())
+            && active.insert(address.clone())
+        {
+            self.validate_module_hops(context, &address, reference)?;
+            let target = self.resolve_any_path(&glob.context, &glob.path, glob.span, active)?;
+            active.remove(&address);
+            return Ok(target);
+        }
         Err(self.unknown_import(context, path, reference))
     }
 
@@ -1485,16 +1607,7 @@ impl<'a> Resolver<'a> {
     ) -> Result<(), Failure> {
         self.validate_module_hops(context, address, reference)?;
         if !declaration.public && !within(context, address, address.modules.len()) {
-            return Err(Failure {
-                primary: context.source,
-                secondary: Some(declaration.source),
-                error: Error::InvalidImport {
-                    path: address.display(),
-                    reason: "import targets a private item".into(),
-                    reference,
-                    declaration: Some(declaration.span),
-                },
-            });
+            return Err(self.private(context, address, declaration, reference));
         }
         Ok(())
     }
@@ -1506,28 +1619,54 @@ impl<'a> Resolver<'a> {
         reference: Span,
     ) -> Result<(), Failure> {
         for depth in 0..address.modules.len() {
-            let module = Address {
+            let module_address = Address {
                 package: address.package.clone(),
                 modules: address.modules[..depth].into(),
                 name: address.modules[depth].clone(),
             };
-            let Some(module) = self.declarations.get(&module) else {
+            let Some(module) = self.declarations.get(&module_address) else {
                 return Err(self.unknown_import(context, &[], reference));
             };
             if !module.public && !within(context, address, depth) {
-                return Err(Failure {
-                    primary: context.source,
-                    secondary: Some(module.source),
-                    error: Error::InvalidImport {
-                        path: address.display(),
-                        reason: "import crosses a private module".into(),
-                        reference,
-                        declaration: Some(module.span),
-                    },
-                });
+                return Err(self.private(context, &module_address, module, reference));
             }
         }
         Ok(())
+    }
+
+    /// rustc's E0603 for a path to `declaration`, an item private to a
+    /// module `context` is outside of.
+    fn private(
+        &self,
+        context: &Context,
+        address: &Address,
+        declaration: &Declaration,
+        reference: Span,
+    ) -> Failure {
+        let item = match &declaration.target {
+            Target::Module => Private::Module,
+            Target::Trait => Private::Trait,
+            Target::Type(type_ref::Target::Script { definition, .. })
+                if self.enum_variants.contains_key(definition) =>
+            {
+                Private::Enum
+            }
+            Target::Type(type_ref::Target::Alias(_)) => Private::TypeAlias,
+            Target::Type(_) => Private::Struct,
+            Target::Item(_) | Target::HostItem { .. } | Target::HostModuleItem { .. } => {
+                Private::Function
+            }
+        };
+        Failure {
+            primary: context.source,
+            secondary: Some(declaration.source),
+            error: Error::PrivateItem {
+                item,
+                name: address.name.clone(),
+                reference,
+                declaration: Some(declaration.span),
+            },
+        }
     }
 
     /// A path that starts with `::` names an outside crate, as in Rust:
@@ -1770,15 +1909,6 @@ impl Context {
             modules: self.namespace.modules.clone(),
             name: name.into(),
         }
-    }
-}
-
-impl Address {
-    fn display(&self) -> ImmutableString {
-        let mut segments = vec![self.package.as_str()];
-        segments.extend(self.modules.iter().map(|segment| segment.as_str()));
-        segments.push(self.name.as_str());
-        segments.join("::").into()
     }
 }
 
