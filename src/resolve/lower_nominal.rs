@@ -8037,11 +8037,34 @@ fn matches_runtime_model(value: &Dynamic, model: &Nominal, models: &Models) -> b
         .is_ok()
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 struct HostTyProof {
     definition: crate::host::type_def::Definition,
     alias: Option<crate::host::type_def::Definition>,
     owner: Option<crate::host::facade::Dependency>,
+}
+
+/// One imported type is one type at each of its paths, as rustc has it: a
+/// crate's macros name its types through a hidden segment
+/// (`events::__rawr_crate_events_<id>::stock::Stock`) beside their public
+/// paths, and a value made at one path is the type a signature names at
+/// the other (#893). Any other type is the definition it names.
+impl PartialEq for HostTyProof {
+    fn eq(&self, other: &Self) -> bool {
+        match (
+            self.definition.identity().imported(),
+            other.definition.identity().imported(),
+        ) {
+            (Some(identity), Some(other_identity)) => {
+                identity == other_identity && self.owner == other.owner
+            }
+            _ => {
+                self.definition == other.definition
+                    && self.alias == other.alias
+                    && self.owner == other.owner
+            }
+        }
+    }
 }
 
 #[cfg(all(test, feature = "rust-import"))]
