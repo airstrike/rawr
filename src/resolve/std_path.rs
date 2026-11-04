@@ -63,6 +63,17 @@ fn definition_of(name: &str) -> Option<&'static str> {
         .map(|(definition, _)| *definition)
 }
 
+/// The key std's impls file gives rawr's builtin type `name`: a
+/// primitive's own name, else the std definition it stands for
+/// (`alloc::string::String` for `String`).
+pub(crate) fn builtin_key(name: &str) -> Option<&'static str> {
+    const PRIMITIVES: [&str; 5] = ["bool", "char", "i64", "i128", "f64"];
+    PRIMITIVES
+        .into_iter()
+        .find(|primitive| *primitive == name)
+        .or_else(|| definition_of(name))
+}
+
 /// The name a std type Rawr represents goes by, which Rawr's spellings
 /// read: `BTreeMap` for `alloc::collections::BTreeMap`. `std::fmt`'s
 /// `Formatter` and `Result` keep their paths, which Rawr reads as such.

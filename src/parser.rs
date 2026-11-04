@@ -1,5 +1,7 @@
 //! Main module defining the lexer and parser.
 
+#[cfg(feature = "syntax")]
+mod disabled;
 pub(crate) mod item;
 
 use crate::api::options::LangOptions;
@@ -508,9 +510,16 @@ impl Engine {
         let item::ParsedFile {
             items,
             masked,
+            disabled,
             imports,
             inner_attributes,
         } = item::parse(self, source.text())?;
+        #[cfg(feature = "syntax")]
+        if let Some(error) = disabled::error(&source, disabled) {
+            return Err(error);
+        }
+        #[cfg(not(feature = "syntax"))]
+        let _ = disabled;
         let script_source =
             source.without(items.iter().map(crate::item::Parsed::span).chain(masked));
         // The statements outside the items are typed Rust, which the

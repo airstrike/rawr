@@ -22,6 +22,19 @@ impl Map {
     }
 
     pub(crate) fn without(&self, spans: impl IntoIterator<Item = Span>) -> String {
+        self.masked(spans, true)
+    }
+
+    /// The text with everything outside `spans` blanked, lines kept, so
+    /// each position in it is the source's.
+    #[cfg(feature = "syntax")]
+    pub(crate) fn only(&self, spans: impl IntoIterator<Item = Span>) -> String {
+        self.masked(spans, false)
+    }
+
+    /// The text with the characters in `spans` blanked when `inside`, else
+    /// those outside them.
+    fn masked(&self, spans: impl IntoIterator<Item = Span>, inside: bool) -> String {
         let spans: Vec<_> = spans.into_iter().collect();
         let mut masked = String::with_capacity(self.text.len());
         let mut line = 1_u16;
@@ -41,7 +54,7 @@ impl Map {
                 .iter()
                 .any(|span| position >= span.start() && position < span.end());
 
-            masked.push(if is_item { ' ' } else { character });
+            masked.push(if is_item == inside { ' ' } else { character });
         }
 
         masked

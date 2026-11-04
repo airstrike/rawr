@@ -1023,6 +1023,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
             ImportedNamespace::Type,
         )),
         R::DuplicateItem { .. }
+        | R::PrivateItem { .. }
         | R::UnknownType { .. }
         | R::UnknownFunction { .. }
         | R::UnknownVariable { .. }

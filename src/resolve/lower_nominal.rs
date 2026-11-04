@@ -39,6 +39,8 @@ mod language_tests;
 #[cfg(test)]
 mod placeholder_tests;
 #[cfg(test)]
+mod privacy_tests;
+#[cfg(test)]
 mod rust_meaning_tests;
 #[cfg(test)]
 mod std_impl_tests;
@@ -118,7 +120,7 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     let compiler_host = host
         .clone_for_import(allocation)
         .map_err(super::ImportedFailure::Surface)?;
-    let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+    let models = Models::new(program, runtime, compiler_host, engine);
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
     let mut allocation_failure = None;
@@ -388,7 +390,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+        let models = Models::new(program, runtime, compiler_host, engine);
         let mut revealed = Vec::new();
         let mut waiting = Vec::new();
         let mut first_failure = None;
@@ -1013,7 +1015,7 @@ fn body_templates<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+        let models = Models::new(program, runtime, compiler_host, engine);
         let mut promoted = Vec::new();
         for (key, candidate) in &candidates {
             let mut uses = Vec::new();
@@ -1129,7 +1131,7 @@ fn instance_round<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+        let models = Models::new(program, runtime, compiler_host, engine);
         let mut found = Vec::<(crate::item::Key, Vec<Ty>)>::new();
         let mut impl_uses = Vec::new();
         for shell in program.items.iter() {
@@ -2709,7 +2711,7 @@ pub(super) fn lower(
         program,
         runtime_model.clone(),
         engine.host_registry.clone(),
-        engine.access().clone(),
+        engine,
     );
     lower_with_context(
         engine,
@@ -2736,12 +2738,7 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
         .host_registry
         .clone_for_import(allocation)
         .map_err(super::ImportedFailure::Surface)?;
-    let mut models = Models::new(
-        program,
-        runtime_model.clone(),
-        compiler_host,
-        engine.access().clone(),
-    );
+    let mut models = Models::new(program, runtime_model.clone(), compiler_host, engine);
     models._imported_owner = allocation.support_owner();
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
@@ -4390,6 +4387,9 @@ struct Tables {
     /// What the program may reach while it compiles: the files
     /// `include_str!` reads and the variables `env!` reads (D683.4).
     access: crate::Access,
+    /// Whether the program builds as `rustc --test` builds it: `cfg(test)`
+    /// holds.
+    test: bool,
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
     #[cfg(feature = "rust-import")]
@@ -4412,6 +4412,9 @@ struct Tables {
     entry_crate: Option<ImmutableString>,
     /// The type aliases each source names, resolved once with the headers.
     aliases: BTreeMap<(crate::program::source::Id, ImmutableString), type_ref::Alias>,
+    /// The module each source is, which decides what it sees of another
+    /// module's private items.
+    namespaces: BTreeMap<crate::program::source::Id, crate::resolve::Namespace>,
     methods: BTreeMap<(type_def::Id, ImmutableString), method::Definition>,
     /// Each type's `impl From<T>` functions, by the type converted to.
     conversions: BTreeMap<type_def::Id, Vec<method::Definition>>,
@@ -4537,7 +4540,7 @@ impl Models {
         program: &Program,
         runtime: crate::program::model::Model,
         host: crate::host::Registry,
-        access: crate::Access,
+        engine: &Engine,
     ) -> Self {
         let definitions: BTreeMap<_, _> = program
             .types
@@ -5013,7 +5016,8 @@ impl Models {
         let tables = Tables {
             runtime,
             host,
-            access,
+            access: engine.access().clone(),
+            test: engine.test(),
             imports,
             #[cfg(feature = "rust-import")]
             lexical: program.lexical.clone(),
@@ -5028,6 +5032,11 @@ impl Models {
             qualified_rust: program.qualified_rust.clone(),
             entry_crate: program.entry_crate.clone(),
             aliases: program.aliases.clone(),
+            namespaces: program
+                .scripts
+                .iter()
+                .map(|script| (script.source, script.namespace.clone()))
+                .collect(),
             methods,
             conversions,
             trait_methods,
@@ -5208,11 +5217,13 @@ impl Models {
 
     /// The inherent function `name` of `owner`, or else the one trait
     /// function of that name its trait impls provide, as Rust looks them up.
+    /// An inherent function this source can't see is passed over, as
+    /// rustc's probe passes over a private candidate.
     fn method(&self, owner: type_def::Id, name: &str) -> Option<&method::Definition> {
         if let Some(inherent) = self
             .methods
             .get(&(owner, name.into()))
-            .filter(|method| method.source() == self.context || method.is_public())
+            .filter(|method| self.sees(method))
         {
             return Some(inherent);
         }
@@ -5220,6 +5231,31 @@ impl Models {
             [single] => Some(single),
             _ => None,
         }
+    }
+
+    /// The inherent function `name` of `owner` that is private to a module
+    /// this source is outside of: rustc's E0624 where nothing else of that
+    /// name is found.
+    fn private_method(&self, owner: type_def::Id, name: &str) -> Option<&method::Definition> {
+        self.methods
+            .get(&(owner, name.into()))
+            .filter(|method| !self.sees(method))
+    }
+
+    /// Whether this source sees `method`: a public one, a trait impl's
+    /// (which is as visible as its trait), or one private to this source's
+    /// module or one of its ancestors.
+    fn sees(&self, method: &method::Definition) -> bool {
+        method.is_public()
+            || method.trait_name().is_some()
+            || method.source() == self.context
+            || match (
+                self.namespaces.get(&self.context),
+                self.namespaces.get(&method.source()),
+            ) {
+                (Some(here), Some(module)) => here.sees_private(module),
+                _ => false,
+            }
     }
 
     /// Whether `owner` implements the crate trait `trait_name`.
@@ -5730,6 +5766,12 @@ enum PreludeOp {
     CharMethod,
     /// `char::from_digit(n, radix)`, or `char::from_u32(n)` with radix `-1`.
     CharFrom,
+    /// `e.kind()` of a `ParseIntError`, from its message: std's
+    /// `IntErrorKind`.
+    IntErrorKind,
+    /// `c.to_uppercase()`, or `c.to_lowercase()` when its flag is false:
+    /// std's `ToUppercase` or `ToLowercase`.
+    CaseMapping,
     /// A `Vec` changed in place (`VEC_METHODS`), called as a method so the
     /// array is taken by reference: `vec(code, a, b, c)`.
     VecMethod,
@@ -5889,6 +5931,8 @@ impl PreludeOp {
             Self::SplitAt => "slice.split-at",
             Self::CharMethod => "char.method",
             Self::CharFrom => "char.from",
+            Self::IntErrorKind => "error.int-kind",
+            Self::CaseMapping => "char.case-mapping",
             Self::VecMethod => "vec.method",
             Self::VecCapacity => "vec.capacity",
             Self::FrameCopy => "scope.frame-copy",
@@ -6116,6 +6160,8 @@ impl PreludeOp {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()]
             }
             Self::CharFrom => vec![TypeId::of::<crate::INT>(), TypeId::of::<crate::INT>()],
+            Self::IntErrorKind => vec![TypeId::of::<ImmutableString>()],
+            Self::CaseMapping => vec![TypeId::of::<char>(), TypeId::of::<bool>()],
             Self::SetAlgebra => vec![
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::Array>(),
@@ -6545,6 +6591,17 @@ impl PreludeOp {
                     Some(c) => crate::option::some(c.into()),
                     None => crate::option::none(),
                 });
+            }
+            Self::IntErrorKind => {
+                let message = args[0].clone_cast::<ImmutableString>();
+                return crate::std_facade::int_error_kind(&message)
+                    .map(Dynamic::from)
+                    .ok_or_else(|| invariant("a `ParseIntError` has std's message"));
+            }
+            Self::CaseMapping => {
+                let c = args[0].as_char().unwrap_or_default();
+                let upper = args[1].as_bool().unwrap_or_default();
+                return Ok(crate::std_facade::case_mapped(c, upper));
             }
             Self::CharMethod => {
                 let c = args[0].as_char().unwrap_or_default();
@@ -13545,13 +13602,10 @@ impl<'a> Parser<'a> {
         source: &Ty,
         span: Span,
     ) -> Option<(method::Definition, Ty, Ty)> {
-        let context = self.models.context;
         let candidates = self.models.conversions.get(&target)?.clone();
         let mut chosen = None;
-        for candidate in candidates
-            .into_iter()
-            .filter(|candidate| candidate.source() == context || candidate.is_public())
-        {
+        // An `impl From` is as visible as `From`, from every module.
+        for candidate in candidates {
             let (from, owner) = self.conversion_source(&candidate);
             let checkpoint = self.inference.checkpoint();
             let fits = expected.is_none_or(|expected| self.unify_type(&owner, expected))
@@ -18037,21 +18091,8 @@ impl<'a> Parser<'a> {
             Ty::Range(element) | Ty::InclusiveOf(element) => {
                 capability != capability::Kind::Copy && self.type_provides(&element, capability)
             }
-            // `ParseIntError` and kin: `Debug`, `Clone`, `PartialEq`, `Eq`.
-            Ty::ParseError(_) => matches!(
-                capability,
-                capability::Kind::Debug
-                    | capability::Kind::Clone
-                    | capability::Kind::PartialEq
-                    | capability::Kind::Eq
-            ),
-            // `Ordering` derives what an integer has, but not `Default`.
-            Ty::Ordering => {
-                capability != capability::Kind::Default
-                    && crate::capability::builtin_supports("i64", capability)
-            }
-            // `Duration` and `Instant` are `Copy`, compare, order and print;
-            // a `Duration` is also `Default`.
+            Ty::ParseError(error) => crate::capability::builtin_supports(error.name(), capability),
+            Ty::Ordering => crate::capability::builtin_supports("Ordering", capability),
             Ty::Time(time) => crate::capability::builtin_supports(time.name(), capability),
             // `&T` compares, orders, hashes and prints as `T` does; a shared
             // reference is `Copy`.
@@ -23463,6 +23504,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The type Rawr's std holds at `path` under its root, as
+    /// `num::IntErrorKind`.
+    fn std_held(&self, path: &str) -> Option<Ty> {
+        let path = format!("{}::{path}", crate::std_facade::ROOT);
+        let definition = self.models.host.type_(&path)?.clone();
+        Some(Ty::Host {
+            proof: HostTyProof::new(
+                definition,
+                None,
+                self.models.host.type_owner(&path).cloned(),
+            ),
+            arguments: Box::default(),
+        })
+    }
+
     /// `value.field` of an imported struct: a read, or, before `=`, the
     /// field's store (`store_imported_field`).
     #[cfg(feature = "rust-import")]
@@ -24646,7 +24702,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The predicate of `cfg(..)` or `cfg!(..)` for the target Rawr runs
-    /// on. No feature is on.
+    /// on, `test` holding as the engine builds. No feature is on.
     fn cfg_predicate(&mut self) -> Result<bool, Error> {
         let (name, at) = match self.next() {
             (Token::Identifier(name), position) => (name.to_string(), position),
@@ -24691,6 +24747,7 @@ impl<'a> Parser<'a> {
                 };
                 Ok(cfg_value(&name, &value))
             }
+            "test" => Ok(self.models.test),
             _ => Ok(cfg_flag(&name)),
         }
     }
@@ -33620,10 +33677,13 @@ impl<'a> Parser<'a> {
                                 // continues it.
                                 let Some(binding) = this.bindings.get(name.as_str()) else {
                                     let at = expression.start();
-                                    this.splice_tokens(vec![
-                                        (Token::Identifier(Box::new(name.as_str().into())), at),
-                                        (Token::Comma, at),
-                                    ]);
+                                    // `{self:?}` in a method reads its
+                                    // receiver, which is the keyword's token.
+                                    let token = match name.as_str() {
+                                        "self" => Token::SelfValue,
+                                        _ => Token::Identifier(Box::new(name.as_str().into())),
+                                    };
+                                    this.splice_tokens(vec![(token, at), (Token::Comma, at)]);
                                     let captured = match this.parse_expr() {
                                         Ok(captured) => captured,
                                         Err(Error::UnknownVariable { .. }) => {
@@ -36856,6 +36916,22 @@ impl<'a> Parser<'a> {
                 value = self.parse_time_method(value, time, member, member_span)?;
                 continue;
             }
+            // `e.kind()` of a `ParseIntError`: a borrow of its kind, which
+            // Rawr's std holds as std's own `IntErrorKind`.
+            if number == Ty::ParseError(ParseError::Int)
+                && member.as_str() == "kind"
+                && matches!(self.peek(), Token::Unit)
+                && let Some(kind) = self.std_held("num::IntErrorKind")
+            {
+                let end = self.next().1;
+                let source = self.prelude_op(PreludeOp::IntErrorKind, [value.rendered_source()]);
+                let ty = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(kind),
+                };
+                value = self.operator_expr(source, ty, span(value.span.start(), end));
+                continue;
+            }
             // `e.to_string()` and `e.clone()` of a `ParseIntError` and kin:
             // its message, which is its value.
             if let Ty::ParseError(error) = number
@@ -36889,6 +36965,27 @@ impl<'a> Parser<'a> {
             }
             if matches!(number, Ty::Int(_) | Ty::Float(_)) && member != "to_string" {
                 value = self.parse_number_method(value, number, member, member_span)?;
+                continue;
+            }
+            // `c.to_uppercase()` and `c.to_lowercase()`: std's iterators of
+            // the chars its case maps to, which Rawr's std holds as std's
+            // own.
+            if number == Ty::Char
+                && matches!(member.as_str(), "to_uppercase" | "to_lowercase")
+                && matches!(self.peek(), Token::Unit)
+                && let Some(ty) = self.std_held(if member.as_str() == "to_uppercase" {
+                    "char::ToUppercase"
+                } else {
+                    "char::ToLowercase"
+                })
+            {
+                let end = self.next().1;
+                let upper = (member.as_str() == "to_uppercase").to_string();
+                let source = self.prelude_op(
+                    PreludeOp::CaseMapping,
+                    [value.rendered_source(), upper.into()],
+                );
+                value = self.operator_expr(source, ty, span(value.span.start(), end));
                 continue;
             }
             if number == Ty::Char
@@ -37039,11 +37136,13 @@ impl<'a> Parser<'a> {
                     "copy" => capability::Kind::Copy,
                     "debug" => capability::Kind::Debug,
                     _ => {
-                        return Err(Error::UnknownMember {
-                            owner: model.name().into(),
-                            member,
-                            reference: member_span,
-                        });
+                        return Err(self
+                            .private_member(definition_id, &member, member_span)
+                            .unwrap_or_else(|| Error::UnknownMember {
+                                owner: model.name().into(),
+                                member,
+                                reference: member_span,
+                            }));
                     }
                 };
                 if !args.is_empty() {
@@ -37198,6 +37297,24 @@ impl<'a> Parser<'a> {
             self.finish_method_call(&receiver, &member, &value);
         }
         Ok(value)
+    }
+
+    /// rustc's E0624 for `member` of the script type `owner` where it is
+    /// an inherent function private to a module this source is outside of
+    /// and nothing else of that name is found.
+    fn private_member(&self, owner: type_def::Id, member: &str, reference: Span) -> Option<Error> {
+        let definition = self.models.private_method(owner, member)?;
+        Some(Error::PrivateItem {
+            item: if definition.receiver().is_some() {
+                crate::resolve::Private::Method
+            } else {
+                crate::resolve::Private::AssociatedFunction
+            },
+            name: definition.name().into(),
+            reference,
+            declaration: (definition.source() == self.models.context)
+                .then_some(definition.name_span()),
+        })
     }
 
     /// `value.member(args)` through `owner`'s inherent or trait function
@@ -42282,6 +42399,48 @@ impl<'a> Parser<'a> {
                     }),
                 )
             }
+            // `as_deref` borrows the `Ok` value through `Deref`, as
+            // `Option`'s does: `Result<String, E>` gives `Result<&str, &E>`.
+            "as_deref" | "as_deref_mut" => {
+                arity(0, &arguments)?;
+                let mutable = member.as_str() == "as_deref_mut";
+                let reference = Ty::Reference {
+                    mutable,
+                    target: Box::new(self.inference.resolve(&ok)),
+                };
+                let err = Box::new(Ty::Reference {
+                    mutable,
+                    target: Box::new(err),
+                });
+                match self.deref_reference(&reference, false) {
+                    Some((target, std_impl::DerefCall::Value)) => {
+                        source.push_text(r.as_str());
+                        Ty::Result(Box::new(target), err)
+                    }
+                    // A program's `deref` runs on the `Ok` value.
+                    Some((target, std_impl::DerefCall::Program(call))) if !mutable => {
+                        let test = is(self);
+                        let unwrapped = value_of(self);
+                        let dereferenced = Self::std_call(&call, unwrapped, &[]);
+                        let produced = self.prelude_op(PreludeOp::Ok, [dereferenced]);
+                        branch(&mut source, test, produced, r.as_str().into());
+                        Ty::Result(Box::new(target), err)
+                    }
+                    Some(_) => {
+                        return Err(Error::NotYet {
+                            path: format!("Result::{member}").into(),
+                            reference: member_span,
+                        });
+                    }
+                    None => {
+                        return Err(Error::UnknownMember {
+                            owner: owner.name(&self.models),
+                            member,
+                            reference: member_span,
+                        });
+                    }
+                }
+            }
             "clone" => {
                 arity(0, &arguments)?;
                 source.push_text(r.as_str());
@@ -42296,7 +42455,7 @@ impl<'a> Parser<'a> {
             }
         };
         source.push_text(" }");
-        if member.as_str() == "as_mut" {
+        if matches!(member.as_str(), "as_mut" | "as_deref_mut") {
             self.lend_place(&value, expression);
         }
         // A block is not an `if` condition in the legacy parser.
@@ -48182,12 +48341,15 @@ impl<'a> Parser<'a> {
             .retain_origin());
         }
 
+        let owner_id = model.definition().id();
         let Nominal::Enum { definition, item } = model else {
-            return Err(Error::UnknownMember {
-                owner,
-                member,
-                reference: member_span,
-            });
+            return Err(self
+                .private_member(owner_id, &member, member_span)
+                .unwrap_or(Error::UnknownMember {
+                    owner,
+                    member,
+                    reference: member_span,
+                }));
         };
         let Some((variant, declaration)) = item
             .variants
@@ -48195,11 +48357,13 @@ impl<'a> Parser<'a> {
             .enumerate()
             .find(|(_, variant)| variant.name.text == member)
         else {
-            return Err(Error::UnknownMember {
-                owner: definition.name().into(),
-                member,
-                reference: member_span,
-            });
+            return Err(self
+                .private_member(owner_id, &member, member_span)
+                .unwrap_or_else(|| Error::UnknownMember {
+                    owner: definition.name().into(),
+                    member,
+                    reference: member_span,
+                }));
         };
         // `E::V { x, y: 1 }` of a struct variant.
         if let Some(fields) = &declaration.fields {
@@ -53088,6 +53252,18 @@ fn debug_typed(
         {
             spec.unwrap_or(&DebugSpec::PLAIN).leaf(value, leaf)
         }
+        // `ParseIntError` and its kin are their messages at runtime, and
+        // print std's `Debug` of the error with that message.
+        (type_ref::Type::Path(path), Union::Str(text, ..))
+            if path.target == type_ref::Target::Builtin
+                && let Some(error) = ParseError::named(path.name.as_str()) =>
+        {
+            error
+                .texts()
+                .iter()
+                .find(|(message, _)| *message == text.as_str())
+                .map_or_else(|| text.to_string(), |(_, debug)| (*debug).to_owned())
+        }
         (type_ref::Type::Path(path), Union::Int(value, ..))
             if path.target == type_ref::Target::Builtin && path.name.as_str() == "Ordering" =>
         {
@@ -57540,18 +57716,8 @@ pub fn run() -> i64 {
         let new_generation = crate::program::GenerationId::issue();
         let old_runtime = crate::program::model::Model::new(old_generation, &old);
         let new_runtime = crate::program::model::Model::new(new_generation, &new);
-        let old_models = Models::new(
-            &old,
-            old_runtime,
-            host::Registry::new(),
-            crate::Access::none(),
-        );
-        let new_models = Models::new(
-            &new,
-            new_runtime,
-            host::Registry::new(),
-            crate::Access::none(),
-        );
+        let old_models = Models::new(&old, old_runtime, host::Registry::new(), &Engine::new_raw());
+        let new_models = Models::new(&new, new_runtime, host::Registry::new(), &Engine::new_raw());
         let old_outer = old_models.get("Outer").unwrap();
         let new_outer = new_models.get("Outer").unwrap();
         let retained = default_value(old_outer, &old_models, &mut Vec::new()).unwrap();
