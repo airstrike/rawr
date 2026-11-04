@@ -1,16 +1,19 @@
 // rawr
-// iced's slider and pick_list: `opaque(slider(..))` gives an opaque widget
-// whose theme and renderer, and `opaque(caption(..))` one whose message
-// too, nothing at the call fixes. `column!` boxes them, and the view's
-// `impl Widget<Message>` fixes them by the trait's defaults, as rustc
-// carries a later use's types back to the call that made the value.
+// iced's widgets give `impl Widget<Message, Theme, Renderer>`: nothing at
+// `badge(..)` fixes its message, theme or renderer. `.map(..)` fixes its
+// message by the callable's input, and `column!`'s boxing of the `Map`
+// fixes its theme and renderer through `Map`'s impl, whose where-clause
+// asks the opaque type for `Widget`, a supertrait of the `Framed` it is
+// written as. The view's `impl Widget<Message>` gives them the trait's
+// defaults, and rustc carries them back to the call that made the value.
 
-use events::controls::{caption, slider};
-use events::widgets::{column, opaque, Widget};
+use events::controls::{badge, slider};
+use events::widgets::{column, Framed, Widget};
 
 #[derive(Debug, Clone)]
 enum Message {
     SliderChanged(u8),
+    Pressed(u8),
 }
 
 struct Slider {
@@ -26,17 +29,19 @@ impl Default for Slider {
 impl Slider {
     fn update(&mut self, message: Message) {
         match message {
-            Message::SliderChanged(value) => {
+            Message::SliderChanged(value) | Message::Pressed(value) => {
                 self.value = value;
             }
         }
     }
 
     fn view(&self) -> impl Widget<Message> {
-        let held = opaque(caption(self.value));
+        let held = badge(self.value);
         column![
-            opaque(slider(1..=100, self.value, Message::SliderChanged)),
-            held,
+            slider(1..=100, self.value, Message::SliderChanged),
+            badge(self.value).map(Message::Pressed),
+            held.map(Message::Pressed),
+            badge(self.value),
         ]
     }
 }

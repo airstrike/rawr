@@ -389,19 +389,22 @@ fn a_slider_beside_an_opaque_widget_runs() {
     );
 }
 
-/// iced's slider and pick_list (#886): `opaque(slider(..))` and
-/// `opaque(caption(..))` give opaque widgets whose theme and renderer, and
-/// for the caption its message, only a later use fixes: `column!` boxes
-/// them, and the view's `impl Widget<Message>` fixes them by the trait's
-/// defaults. The call that makes each value takes the types that later use
-/// fixes, as rustc infers them. The output is `cargo run`'s.
+/// #886: `badge(..)` gives an opaque `impl Framed<Message, Theme,
+/// Renderer>` that nothing at the call fixes. `.map(..)` fixes its message,
+/// and `column!`'s boxing of the `Map` fixes its theme and renderer through
+/// `Map`'s impl, whose where-clause asks the opaque type for `Widget`, a
+/// supertrait of `Framed`. The call that made the value takes the types
+/// that later use fixes, held in a local or not, as rustc infers them. The
+/// output is `cargo run`'s.
 #[test]
 fn an_opaque_widget_takes_the_types_a_later_use_fixes() {
     let (rawr, cargo) = both_printed("deferred.rs", "slide");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("1 view pad 0 opaque 1..=100@50/None opaque \"50\"")
-            && rawr.contains("last view pad 0 opaque 1..=100@100/None opaque \"100\""),
+        rawr.contains("1 view pad 0 1..=100@50/None map badge50@16 map badge50@16 badge50@16")
+            && rawr.contains(
+                "last view pad 0 1..=100@100/None map badge100@16 map badge100@16 badge100@16"
+            ),
         "{rawr}"
     );
 }
