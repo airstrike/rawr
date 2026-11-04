@@ -14464,20 +14464,8 @@ impl<'a> Parser<'a> {
             }
             // `impl Into<Length>` of a number: a library type's own
             // `from` of it.
-            if let Ty::Host { proof, .. } = &target
-                && let Some(items) = self
-                    .models
-                    .host_items(&format!("{}::from", proof.definition.path()))
-            {
-                let source = source.clone();
-                let converts = items.iter().any(|item| {
-                    item.kind() == crate::host::item::Kind::AssociatedFunction
-                        && matches!(item.signature().parameters(), [parameter]
-                            if host_number_accepts(parameter, &source))
-                });
-                if converts {
-                    return true;
-                }
+            if self.host_from(&target, &source) {
+                return true;
             }
             if trait_name != "From" {
                 return self.type_implements_with(&target, "From", &[source]);
@@ -17309,6 +17297,72 @@ impl<'a> Parser<'a> {
                 .map(Some);
         }
         Ok(None)
+    }
+
+    /// Whether the library type `target` has a `from` that takes `source`,
+    /// as `impl From<f32> for Pixels` makes `f32: Into<Pixels>` hold. A
+    /// literal of a kind still open takes the kind of the one `from` that
+    /// fits it, as rustc selects the one impl: `50` is the `u32` of
+    /// `From<u32>`. An imported type's `from` the program never named is
+    /// demanded with the failure, as `finish_conversions` demands it.
+    fn host_from(&mut self, target: &Ty, source: &Ty) -> bool {
+        let Ty::Host { proof, .. } = target else {
+            return false;
+        };
+        let path = format!("{}::from", proof.definition.path());
+        #[cfg(feature = "rust-import")]
+        let path = match self.imported_member_owner(target, "from") {
+            Some(owner) if self.models.host_items(&path).is_none() => {
+                format!("{}::from", owner.path())
+            }
+            _ => path,
+        };
+        let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+            #[cfg(feature = "rust-import")]
+            if let Some(owner) = self.imported_public_path(target, "from") {
+                self.recovered.push(Error::UnknownMember {
+                    owner,
+                    member: "from".into(),
+                    reference: Span::NONE,
+                });
+            }
+            return false;
+        };
+        let argument = self.operator_expr(origin::Fragment::default(), source.clone(), Span::NONE);
+        let fits = |parser: &mut Self, item: &crate::host::item::Definition| {
+            parser
+                .instantiate_host_signature(
+                    item,
+                    None,
+                    Some(std::slice::from_ref(&argument)),
+                    Span::NONE,
+                )
+                .is_ok_and(|signature| {
+                    matches!(&signature.inputs[..], [input] if parser.unify_type(input, source))
+                        && parser.unify_type(&signature.output, target)
+                })
+        };
+        let mut fitting = Vec::new();
+        for item in items
+            .iter()
+            .filter(|item| item.kind() == crate::host::item::Kind::AssociatedFunction)
+        {
+            // A facade's number input takes each number of its kind.
+            if matches!(item.signature().parameters(), [parameter]
+                if host_number_accepts(parameter, source))
+            {
+                return true;
+            }
+            let checkpoint = self.inference.checkpoint();
+            if fits(self, item) {
+                fitting.push(item);
+            }
+            self.inference.rollback(checkpoint);
+        }
+        if let [item] = fitting[..] {
+            fits(self, item);
+        }
+        !fitting.is_empty()
     }
 
     /// The generic parameters `T` in scope with a bound `T: From<S>` that
