@@ -9527,7 +9527,13 @@ fn render_adapter_body(
             if copy_field(field.ty()) {
                 let mut converted = String::new();
                 render_to_dynamic(field.ty(), "output", 0, &mut converted)?;
-                writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
+                // A field that borrows for the struct's lifetime, as iced's
+                // `Stroke::line_dash: LineDash<'a>` (#951), keeps the borrow
+                // where the struct is: a lent struct lends it only for the
+                // accessor's call, so it can't be given out of it, and one
+                // in a scope frame's region gives it into the region.
+                if !carries_lifetime(field.ty()) {
+                    writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
         let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
             .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
         let mut output = None;
@@ -9536,6 +9542,7 @@ fn render_adapter_body(
         let output = output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?;
         return {converted};
     }}", field.name()).map_err(request::unwritable)?;
+                }
                 output
                     .write_all(b"    let handle = native_handle(arguments, 0, false)?;\n")
                     .map_err(request::unwritable)?;
