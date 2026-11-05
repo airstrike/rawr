@@ -410,6 +410,19 @@ pub struct Module {
     pub inline: Option<Span>,
 }
 
+/// A `macro_rules!` definition among a module's items. Its rules are read
+/// from its span of the source where the program is lowered.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MacroRules {
+    /// Definition metadata: `#[macro_export]` among its attributes.
+    pub header: Header,
+    /// The macro's name.
+    pub name: Name,
+    /// From `macro_rules` through the closing delimiter, and the `;` a
+    /// `(..)` or `[..]` body ends with.
+    pub span: Span,
+}
+
 /// A compile-time import.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Use {

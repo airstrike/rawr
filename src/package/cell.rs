@@ -30,7 +30,7 @@ use crate::{parse, source, ImmutableString, Position, Span};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 11;
+const FORMAT: u32 = 12;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`), whether it
@@ -208,6 +208,7 @@ impl Cells {
         put_all(items, &mut writer);
         put_all(unit.imports(), &mut writer);
         put_all(unit.inner_attributes(), &mut writer);
+        put_all(unit.macros(), &mut writer);
         Some(writer.0)
     }
 }
@@ -221,9 +222,11 @@ fn decode(reader: &mut Reader, text: &str) -> Option<parse::Unit> {
     let items = Box::<[item::Parsed]>::get(reader)?;
     let imports = Box::<[item::Use]>::get(reader)?;
     let attributes = Box::<[item::Attribute]>::get(reader)?;
+    let macros = Box::<[item::MacroRules]>::get(reader)?;
     reader.bytes.is_empty().then(|| {
         parse::Unit::new(source::Map::new(text), items, None, script_source)
             .with_scope(imports, attributes)
+            .with_macros(macros)
     })
 }
 
@@ -472,6 +475,7 @@ record! {
     item::Header { attributes, visibility, span }
     item::Attribute { path, arguments, span, text }
     item::Module { header, name, span, inline }
+    item::MacroRules { header, name, span }
     item::Use { scope, header, tree, span }
     item::UseMember { name, alias }
     item::GenericParam { name, bounds, projections, default }

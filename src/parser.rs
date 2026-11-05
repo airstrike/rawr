@@ -513,6 +513,7 @@ impl Engine {
             disabled,
             imports,
             inner_attributes,
+            macros,
         } = item::parse(self, source.text())?;
         #[cfg(feature = "syntax")]
         if let Some(error) = disabled::error(&source, disabled) {
@@ -520,8 +521,13 @@ impl Engine {
         }
         #[cfg(not(feature = "syntax"))]
         let _ = disabled;
-        let script_source =
-            source.without(items.iter().map(crate::item::Parsed::span).chain(masked));
+        let script_source = source.without(
+            items
+                .iter()
+                .map(crate::item::Parsed::span)
+                .chain(masked)
+                .chain(macros.iter().map(|definition| definition.span)),
+        );
         // The statements outside the items are typed Rust, which the
         // checker reads when it lowers them. Here it is enough to know
         // where the first one starts.
@@ -537,7 +543,8 @@ impl Engine {
 
         Ok(
             crate::parse::Unit::new(source, items, statements, script_source)
-                .with_scope(imports, inner_attributes),
+                .with_scope(imports, inner_attributes)
+                .with_macros(macros),
         )
     }
 

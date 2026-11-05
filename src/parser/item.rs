@@ -14,6 +14,8 @@ pub(super) struct ParsedFile {
     pub disabled: Vec<Span>,
     pub imports: Box<[crate::item::Use]>,
     pub inner_attributes: Box<[crate::item::Attribute]>,
+    /// The `macro_rules!` definitions among the items.
+    pub macros: Box<[crate::item::MacroRules]>,
 }
 
 type ParsedItems = (Box<[crate::item::Parsed]>, Vec<Span>);
@@ -28,6 +30,10 @@ std::thread_local! {
     /// The spans of the items a `#[cfg(..)]` left out of the file being
     /// parsed, which the legacy script does not see either.
     static SKIPPED: core::cell::RefCell<Vec<Span>> = const { core::cell::RefCell::new(Vec::new()) };
+    /// The `macro_rules!` definitions among the items of the file being
+    /// parsed.
+    static MACROS: core::cell::RefCell<Vec<crate::item::MacroRules>> =
+        const { core::cell::RefCell::new(Vec::new()) };
     /// Whether the file being parsed builds as `rustc --test` builds it:
     /// `cfg(test)` holds.
     static TEST: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
@@ -37,14 +43,19 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     let outer = NESTED.take();
     let outer_skipped = SKIPPED.take();
     let outer_inner = INNER.take();
+    let outer_macros = MACROS.take();
     let outer_test = TEST.replace(engine.test());
     let parsed = parse_items(engine, source);
     TEST.set(outer_test);
     let mut nested = NESTED.replace(outer);
     let skipped = SKIPPED.replace(outer_skipped);
     let mut inner_attributes = INNER.replace(outer_inner).into_boxed_slice();
+    let mut macros = MACROS.replace(outer_macros);
     let (mut items, mut inner) = parsed?;
     attribute_text(source, &mut items, &mut inner_attributes);
+    for definition in &mut macros {
+        fill_attribute_text(source, &mut definition.header.attributes);
+    }
     attribute_text(source, &mut nested, &mut []);
     inner.extend(skipped.iter().copied());
     // Preserve source authority before compatibility hoisting discards duplicates.
@@ -104,6 +115,7 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
         disabled: skipped,
         imports: imports.into_boxed_slice(),
         inner_attributes,
+        macros: macros.into_boxed_slice(),
     })
 }
 
@@ -265,7 +277,8 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
                 items.extend(parse_item(input, &tokenizer_control)?);
             }
             (Token::Identifier(name), _)
-                if scan.delimiter_depth == 0 && matches!(name.as_str(), "trait" | "type") =>
+                if scan.delimiter_depth == 0
+                    && matches!(name.as_str(), "trait" | "type" | "macro_rules") =>
             {
                 items.extend(parse_item(input, &tokenizer_control)?);
             }
@@ -689,6 +702,13 @@ fn parse_item_with_leading(
     ) {
         return parse_unsafe_item(input, tokenizer_control, attributes, visibility, start);
     }
+    if input.peek().is_some_and(
+        |(token, _)| matches!(token, Token::Identifier(text) if text.as_str() == "macro_rules"),
+    ) {
+        let definition = parse_macro_rules(input, attributes, visibility, start)?;
+        MACROS.with_borrow_mut(|macros| macros.push(definition));
+        return Ok(None);
+    }
     match parse_enabled_item(input, tokenizer_control, attributes, visibility, start)? {
         crate::item::Parsed::Impl(item) => marker_impl(item, None),
         item => Ok(Some(item)),
@@ -869,6 +889,86 @@ fn parse_enabled_item(
         )
         .into_err(*position)),
     }
+}
+
+/// `macro_rules! name { .. }`, or with `(..);` or `[..];`, checked as
+/// rustc checks a definition.
+fn parse_macro_rules(
+    input: &mut TokenStream,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<crate::item::MacroRules> {
+    let mut tokens = vec![input.next().expect("peeked `macro_rules`")];
+    tokens.push((Token::Bang, expect(input, Token::Bang, "after `macro_rules`")?));
+    let name = parse_name(input, "after `macro_rules!`")?;
+    tokens.push((
+        Token::Identifier(Box::new(name.text.as_str().into())),
+        name.span.start(),
+    ));
+    let (open, position) = input.next().expect("token streams always end with EOF");
+    let close = match open {
+        Token::LeftBrace | Token::MapStart => Token::RightBrace,
+        Token::LeftParen => Token::RightParen,
+        Token::LeftBracket => Token::RightBracket,
+        token => {
+            return Err(unexpected(
+                format!("expected one of `(`, `[`, or `{{`, found {}", found(&token)),
+                "expected one of `(`, `[`, or `{`",
+                None,
+                &token,
+                position,
+            ));
+        }
+    };
+    let braced = close == Token::RightBrace;
+    tokens.push((open, position));
+    let mut depth = 0_usize;
+    let mut end = loop {
+        let (token, position) = input.next().expect("token streams always end with EOF");
+        match &token {
+            Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart => {
+                depth += 1;
+            }
+            Token::RightBrace | Token::RightParen | Token::RightBracket if depth > 0 => depth -= 1,
+            token if *token == close => {
+                tokens.push((close.clone(), position));
+                break position;
+            }
+            Token::EOF => {
+                return Err(PERR::MissingToken(
+                    close.into(),
+                    "to close a macro definition".into(),
+                )
+                .into_err(position));
+            }
+            Token::LexError(error) => return Err(error.clone().into_err(position)),
+            _ => {}
+        }
+        tokens.push((token, position));
+    };
+    if !braced {
+        end = expect(input, Token::SemiColon, "after a macro definition")?;
+    }
+    crate::resolve::macro_rules::Rules::from_tokens(&tokens).map_err(|malformed| {
+        PERR::Unexpected {
+            message: malformed.message().into(),
+            label: malformed.label().into(),
+            help: malformed.help().map(Into::into),
+            span: Span::new(malformed.at(), after(malformed.at(), 1)),
+        }
+        .into_err(malformed.at())
+    })?;
+    let span = Span::new(start, after(end, 1));
+    Ok(crate::item::MacroRules {
+        header: crate::item::Header {
+            attributes,
+            visibility,
+            span,
+        },
+        name,
+        span,
+    })
 }
 
 /// `type Name<T> = Type;`.
@@ -1151,15 +1251,7 @@ fn attribute_text(
     inner: &mut [crate::item::Attribute],
 ) {
     use crate::item::Parsed;
-    let fill = |attributes: &mut [crate::item::Attribute]| {
-        for attribute in attributes {
-            let text = attribute.span.text(source);
-            let text = text.strip_prefix('#').unwrap_or(text).trim_start();
-            let text = text.strip_prefix('[').unwrap_or(text);
-            let text = text.strip_suffix(']').unwrap_or(text);
-            attribute.text = text.trim().into();
-        }
-    };
+    let fill = |attributes: &mut [crate::item::Attribute]| fill_attribute_text(source, attributes);
     let function = |function: &mut crate::item::Function| fill(&mut function.header.attributes);
     fill(inner);
     for item in items {
@@ -1192,6 +1284,17 @@ fn attribute_text(
             Parsed::Function(item) => function(item),
             Parsed::TypeAlias(item) => fill(&mut item.header.attributes),
         }
+    }
+}
+
+/// Each attribute's text between `#[` and `]`, from `source`.
+fn fill_attribute_text(source: &str, attributes: &mut [crate::item::Attribute]) {
+    for attribute in attributes {
+        let text = attribute.span.text(source);
+        let text = text.strip_prefix('#').unwrap_or(text).trim_start();
+        let text = text.strip_prefix('[').unwrap_or(text);
+        let text = text.strip_suffix(']').unwrap_or(text);
+        attribute.text = text.trim().into();
     }
 }
 

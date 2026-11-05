@@ -8,6 +8,7 @@ mod intrinsic;
 pub(crate) mod item;
 pub(crate) mod lower_nominal;
 pub(crate) mod macro_rules;
+pub(crate) mod macros;
 #[cfg(feature = "rust-import")]
 pub(crate) mod native;
 pub(crate) mod package;
@@ -21,7 +22,7 @@ pub(crate) use error::{
     Qualified, TypeNeeded, Uninitialized, Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE,
     RETURN_WITHOUT_VALUE,
 };
-pub use error::{Callee, Category, Error, MoveCause, Private};
+pub use error::{Callee, Category, Error, MacroScope, MoveCause, Private};
 use std::collections::BTreeMap;
 
 pub(crate) struct LocatedError {
@@ -101,6 +102,8 @@ pub struct Program {
     /// before hoisting: the scope a proof-backed imported call reads.
     #[cfg(feature = "rust-import")]
     lexical: BTreeMap<program::source::Id, Box<[crate::item::Use]>>,
+    /// The program's own `macro_rules!` macros and their scopes.
+    macros: macros::Table,
 }
 
 /// An instance of a template: the name of the type each generic parameter
@@ -504,6 +507,14 @@ fn resolve_with_evidence_and_namespace(
         program::source::Id::ROOT,
         unit.imports().to_vec().into_boxed_slice(),
     )]);
+    let macros = macros::Table::new([macros::Module {
+        source: program::source::Id::ROOT,
+        package: &namespace.package,
+        path: &[],
+        items: unit.items(),
+        macros: unit.macros(),
+        inner_attributes: unit.inner_attributes(),
+    }]);
     let (source, parsed_items, _, statement_source) = unit.into_parts();
     if let Some(module) = parsed_items.iter().find_map(|item| match item {
         crate::item::Parsed::Module(module) => Some(module),
@@ -574,6 +585,7 @@ fn resolve_with_evidence_and_namespace(
         instances: Instances::default(),
         #[cfg(feature = "rust-import")]
         lexical,
+        macros,
     };
     validate_invocation_storage(&program).map_err(LocatedError::into_error)?;
     infinite::Layouts::of(&program)

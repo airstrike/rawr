@@ -4498,6 +4498,13 @@ struct Tables {
     /// crate's bound selects as rustc selects an impl (D627, D629).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     script_impls: Vec<ScriptTraitImpl>,
+    /// The program's own `macro_rules!` macros and their scopes.
+    macros: crate::resolve::macros::Table,
+    /// Each of `macros`' rules, by its source and span, read once.
+    macro_rules: BTreeMap<
+        (crate::program::source::Id, Span),
+        Result<Shared<crate::resolve::macro_rules::Rules>, crate::resolve::macro_rules::Malformed>,
+    >,
 }
 
 /// A script's impl of a crate's trait for a script type (`Tables::
@@ -5138,6 +5145,22 @@ impl Models {
             sources: program.source.table().clone(),
             entry: program.source.entry(),
             instances: program.instances.clone(),
+            macros: program.macros.clone(),
+            macro_rules: program
+                .macros
+                .definitions()
+                .map(|definition| {
+                    let text = source_span(
+                        program.source.text_at(definition.source()),
+                        definition.span(),
+                    );
+                    let tokens = lex_rust(engine, &text);
+                    (
+                        (definition.source(), definition.span()),
+                        crate::resolve::macro_rules::Rules::from_tokens(&tokens).map(Shared::new),
+                    )
+                })
+                .collect(),
             script_impls: program
                 .items
                 .iter()
@@ -11901,6 +11924,12 @@ struct Parser<'a> {
     bound_lifetimes: Vec<ImmutableString>,
     /// The `macro_rules!` expansions made so far (`expand`).
     expansions: usize,
+    /// For each expansion being parsed, how many tokens follow it: those
+    /// whose tokens are not all read yet nest the next call.
+    expansion_ends: Vec<usize>,
+    /// The `macro_rules!` macros the blocks being parsed define so far,
+    /// the innermost last.
+    local_macros: Vec<(ImmutableString, Shared<crate::resolve::macro_rules::Rules>)>,
     /// The host type a host callable returns, as iced's `Element`, at each
     /// argument: a closure's body is converted into it, as Rust's `Into`.
     closure_outputs: Vec<Option<ClosureOutput>>,
@@ -12330,6 +12359,8 @@ impl<'a> Parser<'a> {
             closure_hint: None,
             bound_lifetimes: Vec::new(),
             expansions: 0,
+            expansion_ends: Vec::new(),
+            local_macros: Vec::new(),
             closure_outputs: Vec::new(),
             closure_output: None,
             async_step: None,
@@ -12791,7 +12822,7 @@ impl<'a> Parser<'a> {
         if let Some(error) = self.std_not_yet(&written, reference) {
             return Some(error);
         }
-        if self.program_macro(name, at.start()) {
+        if self.program_macro(name, at.start()).is_some() {
             return Some(Error::WrongKind {
                 expected: "function",
                 found: "macro",
@@ -12970,6 +13001,7 @@ impl<'a> Parser<'a> {
                 Token::Const => self.parse_binding(false)?,
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
+                _ if self.macro_definition_ahead() => self.parse_local_macro()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
                 _ => self.parse_statement()?,
             }
@@ -13693,6 +13725,7 @@ impl<'a> Parser<'a> {
                 Token::Const => self.parse_binding(false)?,
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
+                _ if self.macro_definition_ahead() => self.parse_local_macro()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
                 _ => self.parse_statement()?,
             }
@@ -24687,6 +24720,45 @@ impl<'a> Parser<'a> {
 
     /// Whether a `struct`, `enum`, `impl`, `trait` or `type` item, or an
     /// attribute, starts here in a body.
+    /// The program's own macro `name` names at `at`: the innermost block's
+    /// that defines one so far, else the one textual scope makes visible.
+    fn program_macro(
+        &self,
+        name: &str,
+        at: Position,
+    ) -> Option<Result<Shared<crate::resolve::macro_rules::Rules>, Error>> {
+        if let Some((_, rules)) = self
+            .local_macros
+            .iter()
+            .rev()
+            .find(|(defined, _)| defined.as_str() == name)
+        {
+            return Some(Ok(rules.clone()));
+        }
+        let crate::resolve::macros::Lookup::Found(definition) =
+            self.models.macros.lookup(name, self.models.context, at)
+        else {
+            return None;
+        };
+        let rules = self
+            .models
+            .macro_rules
+            .get(&(definition.source(), definition.span()))
+            .expect("every definition's rules are read with the tables");
+        Some(rules.clone().map_err(|malformed| Error::Syntax {
+            message: malformed.message().into(),
+            label: malformed.label().into(),
+            help: malformed.help().map(Into::into),
+            at: point_span(malformed.at()),
+        }))
+    }
+
+    /// Whether a `macro_rules!` definition is next.
+    fn macro_definition_ahead(&mut self) -> bool {
+        matches!(self.peek(), Token::Identifier(ref name) if name.as_str() == "macro_rules")
+            && matches!(self.peek_second(), Token::Bang)
+    }
+
     fn nested_item_ahead(&mut self) -> bool {
         if self.attribute_ahead() {
             return true;
@@ -31721,6 +31793,7 @@ impl<'a> Parser<'a> {
             let outer_output = std::mem::take(&mut self.output);
             let outer_last_type = self.last_type.clone();
             let outer_last_expression = self.last_expression.take();
+            let outer_macros = self.local_macros.len();
             self.last_type = Ty::Unit;
             self.open_drops();
             self.flow().open_block();
@@ -31741,10 +31814,13 @@ impl<'a> Parser<'a> {
                     Token::Const => self.parse_binding(false)?,
                     Token::Fn => self.skip_nested_fn()?,
                     Token::Use => self.skip_nested_use()?,
-                    _ if self.nested_item_ahead() => self.skip_nested_item()?,
+                    _ if self.macro_definition_ahead() => self.parse_local_macro()?,
+                _ if self.nested_item_ahead() => self.skip_nested_item()?,
                     _ => self.parse_statement()?,
                 }
             }
+            // A block's own macros end with it.
+            self.local_macros.truncate(outer_macros);
             let end = self.expect(Token::RightBrace, "'}' after a match arm block")?;
             // The block's own locals end with it.
             let declared: Vec<Span> = self
@@ -38636,6 +38712,13 @@ impl<'a> Parser<'a> {
             return Ok(value);
         }
 
+        // The program's own macro: textual scope shadows the prelude's.
+        if matches!(self.peek(), Token::Bang)
+            && let Some(rules) = self.program_macro(&name, name_span.start())
+        {
+            let rules = rules?;
+            return self.expand_program_macro(&rules, name_span);
+        }
         if matches!(self.peek(), Token::Bang)
             && name.as_str() == "format"
             && self.models.import(&name).is_none()
@@ -38971,15 +39054,26 @@ impl<'a> Parser<'a> {
 
         if matches!(self.peek(), Token::Bang) {
             let Some(binding) = self.models.import(&name).cloned() else {
-                if self.program_macro(&name, name_span.start()) {
-                    return Err(Error::UnsupportedNominalSyntax {
-                        construct: format!("the program's own `macro_rules! {name}`").into(),
-                        source: name_span,
-                    });
-                }
+                let scope = match self.models.macros.lookup(
+                    &name,
+                    self.models.context,
+                    name_span.start(),
+                ) {
+                    crate::resolve::macros::Lookup::Later(definition) => {
+                        crate::resolve::MacroScope::Later(definition)
+                    }
+                    crate::resolve::macros::Lookup::Elsewhere => {
+                        crate::resolve::MacroScope::Elsewhere
+                    }
+                    crate::resolve::macros::Lookup::Found(_)
+                    | crate::resolve::macros::Lookup::Missing => {
+                        crate::resolve::MacroScope::Undefined
+                    }
+                };
                 return Err(Error::UnknownMacro {
                     reference: Span::new(name_span.start(), text_end(name_span.start(), &name)),
                     name,
+                    scope,
                 });
             };
             let (item::Import::Item {
@@ -46939,38 +47033,6 @@ impl<'a> Parser<'a> {
             help: None,
             at,
         }
-    }
-
-    /// Whether the program defines `macro_rules! name` at a file's top
-    /// level before `at`, where Rust's textual scope makes it visible.
-    fn program_macro(&self, name: &str, at: Position) -> bool {
-        let key = self.models.sources.key(self.models.context.index());
-        let Ok(source) = self.models.sources.resolve(key) else {
-            return false;
-        };
-        let Some(line) = at.line() else {
-            return false;
-        };
-        let mut depth = 0usize;
-        for text in source.text().split('\n').take(line.saturating_sub(1)) {
-            let trimmed = text.trim_start();
-            if depth == 0
-                && let Some(rest) = trimmed.strip_prefix("macro_rules!")
-                && rest.trim_start().strip_prefix(name).is_some_and(|after| {
-                    after.starts_with(|next: char| next.is_whitespace() || next == '{')
-                })
-            {
-                return true;
-            }
-            for character in text.chars() {
-                match character {
-                    '{' => depth += 1,
-                    '}' => depth = depth.saturating_sub(1),
-                    _ => {}
-                }
-            }
-        }
-        false
     }
 
     /// rustc's error for the inference variable `unknown`, which the use at

@@ -540,6 +540,21 @@ impl<'a> Resolver<'a> {
         let qualified_pattern_owners = self.resolve_qualified_pattern_owners()?;
         let mut shells = Vec::new();
         let mut scripts = Vec::new();
+        let entry = self.entry_source;
+        let macros = super::macros::Table::new(
+            self.units
+                .iter()
+                .filter(|unit| unit.context.source == entry)
+                .chain(self.units.iter().filter(|unit| unit.context.source != entry))
+                .map(|unit| super::macros::Module {
+                    source: program::source::Id::from_index(unit.context.source.index()),
+                    package: &unit.context.namespace.package,
+                    path: &unit.context.namespace.modules,
+                    items: unit.parsed.items(),
+                    macros: unit.parsed.macros(),
+                    inner_attributes: unit.parsed.inner_attributes(),
+                }),
+        );
 
         self.resolve_aliases()?;
         let mut aliases = BTreeMap::new();
@@ -684,6 +699,7 @@ impl<'a> Resolver<'a> {
             instances: super::Instances::default(),
             #[cfg(feature = "rust-import")]
             lexical,
+            macros,
         };
         super::validate_invocation_storage(&program).map_err(Failure::from_located)?;
         super::infinite::Layouts::of(&program)
