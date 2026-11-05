@@ -15,6 +15,7 @@ pub mod custom;
 pub mod diverging;
 pub mod fonts;
 pub mod grid;
+pub mod image;
 pub mod keyed;
 pub mod keys;
 pub mod matched;
@@ -950,6 +951,74 @@ pub mod widgets {
         Opaque(content)
     }
 
+    /// `top` over `base`, as iced's `hover`: a widget of both, whose type
+    /// names no lifetime of its own. A press `top` doesn't take presses
+    /// `base`'s rule.
+    pub struct Hover<W, V> {
+        base: W,
+        top: V,
+    }
+
+    /// `top` over `base`, as iced's `hover(base, top)`.
+    pub fn hover<W, V>(base: W, top: V) -> Hover<W, V> {
+        Hover { base, top }
+    }
+
+    impl<W, V, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Hover<W, V>
+    where
+        W: Widget<Message, Theme, Renderer>,
+        V: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push("hover".to_owned());
+            self.base.labels(labels);
+            self.top.labels(labels);
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.top.press(label).or_else(|| self.base.press("rule"))
+        }
+    }
+
+    /// One widget with padding around it, as iced's `Container<'a, W,
+    /// Theme>`, invariant in `'a` as iced's is through its `Theme::Class<'a>`.
+    pub struct Container<'a, W, Theme = crate::Theme> {
+        content: W,
+        padding: u16,
+        look: std::marker::PhantomData<fn(&'a Theme) -> &'a Theme>,
+    }
+
+    /// A container of `content`, as iced's `container(content)`.
+    pub fn container<'a, W, Theme>(content: W) -> Container<'a, W, Theme> {
+        Container {
+            content,
+            padding: 0,
+            look: std::marker::PhantomData,
+        }
+    }
+
+    impl<W, Theme> Container<'_, W, Theme> {
+        /// The container with `padding` around its content.
+        pub fn padding(mut self, padding: u16) -> Self {
+            self.padding = padding;
+            self
+        }
+    }
+
+    impl<W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Container<'_, W, Theme>
+    where
+        W: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("container {}", self.padding));
+            self.content.labels(labels);
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.content.press(label)
+        }
+    }
+
     /// A column of one widget, as iced's `center` is a container of one.
     pub fn center<W>(content: W) -> Column<W> {
         Column {
@@ -1333,6 +1402,15 @@ impl Color {
     pub fn rgb(r: u8, g: u8, b: u8) -> Self {
         Color { r, g, b }
     }
+}
+
+/// The color of `r`, `g` and `b`, as iced's `color!`, which names the
+/// crate's type through `$crate`.
+#[macro_export]
+macro_rules! color {
+    ($r:expr, $g:expr, $b:expr) => {
+        $crate::Color::rgb($r, $g, $b)
+    };
 }
 
 /// `color` as a crate takes a color: anything that converts into one, as

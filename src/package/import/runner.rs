@@ -651,9 +651,23 @@ fn structural_path<'facade>(
             let identity = definition.identity().imported();
             match found {
                 // One type at two paths, as ratatui re-exports
-                // `ratatui_core::layout::Rect`: the first path stands.
-                Some((_, _, first)) if first.is_some() && first == identity => continue,
-                Some(_) => panic!("one structural adapter selector names one item"),
+                // `ratatui_core::layout::Rect`: the first path stands, but
+                // for one through a crate's hidden segment, which a public
+                // path replaces, as values of the type are attested at it
+                // (`iced::__rawr_crate_iced_widget_<id>::core::border::
+                // Radius` is `iced::border::Radius`, #953).
+                Some((path, _, first)) if first.is_some() && first == identity => {
+                    let hidden = |path: &host::path::Path| {
+                        path.segments()
+                            .iter()
+                            .any(|segment| host::path::is_hidden(segment))
+                    };
+                    if hidden(path) && !hidden(definition.path_ref()) {
+                        found = Some((definition.path_ref(), kind, identity));
+                    }
+                    continue;
+                }
+                Some((first_path, _, first)) => panic!("one structural adapter selector names one item: RAWRDEBUG {first_path} {} and {} {} owner {} kind {:?}", first.is_some(), definition.path(), identity.is_some(), row.owner, row.kind),
                 None => found = Some((definition.path_ref(), kind, identity)),
             }
         }

@@ -3228,7 +3228,7 @@ fn invoke_in_arena(
             .and_then(|value| value.read_lock::<NativeHandle>().map(|value| value.clone()))
             .and_then(|handle| arena.witness(handle).cloned());
         let mut arguments = Arguments { values, arena };
-        let output = (adapter.invoke)(&mut arguments)?;
+        let output = (adapter.invoke)(&mut arguments).inspect_err(|error| { if error.bug().is_some() { eprintln!("RAWRDEBUG identity {:#04x?} signature {:#04x?}", &adapter.identity[..4], &adapter.signature[..4]); } })?;
         // A projected iced Task takes this call's output witness.
         let output = match output.try_cast_result::<__rawr_internal::host::runtime::Unwitnessed>() {
             Ok(pending) => {
@@ -8681,7 +8681,9 @@ fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'
         // A value in a scope frame's region the call takes (D558 tier 1),
         // as `push_html(&mut s, parser)` takes `Parser::new(&text)`'s: the
         // call runs inside the region, which keeps what it makes that
-        // carries the region's lifetime.
+        // carries the region's lifetime. So does a call a slot's region is
+        // open around that takes none, as iced's `hover(base, None)` in a
+        // view: what it makes joins what the view makes (#352).
         let indices = region
             .iter()
             .map(usize::to_string)
@@ -8689,8 +8691,8 @@ fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'
             .join(", ");
         writeln!(
             output,
-            "    if let Some(scoped) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))) {{
-        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{"
+            "    if let Some((nonce, name)) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))).map(|scoped| (scoped.nonce(), scoped.name())).or_else(|| __rawr_internal::scope::anchor().map(|anchor| (anchor, \"a slot's region\"))) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(nonce, |region| -> Result<Dynamic, Error> {{"
         )
         .map_err(encoding)?;
         {
@@ -8701,7 +8703,7 @@ fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'
         output
             .write_all(
                 b"        })
-        .map_err(|error| Error::Lent(scoped.name(), error))?;
+        .map_err(|error| Error::Lent(name, error))?;
     }
 ",
             )
@@ -13697,13 +13699,14 @@ fn render_take_input(
     }
     // A type parameter a borrow of one of std's values fills, as `&PathBuf`
     // fills `opened<P: AsRef<Path>>(path: P)`: the value itself, lent as a
-    // `&Path` input is.
+    // `&Path` input is. So is a borrow of a crate value, as `&Handle` fills
+    // iced's `canvas::Image::new(handle: impl Into<Handle>)` (#954).
     if let convert::Type::Parameter(_) = ty
         && let lent @ convert::Type::Borrowed {
             mutable: false,
             ty: target,
         } = substitute(ty, signature, substitutions)?
-        && std_value(target).is_some()
+        && (std_value(target).is_some() || matches!(**target, convert::Type::Nominal { .. }))
     {
         let lent = lent.clone();
         return render_take_input(
@@ -13877,22 +13880,8 @@ fn render_take_input(
         } = substituted(ty, signature, substitutions)?
         && let Some(family) = family_of(&element)
     {
-        // An element made outside any region is in the arena, at
-        // `'static`, which the region's lifetime shortens when the type is
-        // covariant in it, as rustc's variance says. An invariant one, as
-        // iced's `Text<'a>` is through `Theme::Class<'a>`, can't be: Rust
-        // makes each element of a view at the view's lifetime, as Rawr
-        // makes it in the region, and one made before can't join them.
-        let rust =
-            concrete_type(&element).ok_or_else(|| request::drift("a region array's element"))?;
-        let arena = if shortens(&element) {
-            format!("item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))")
-        } else {
-            format!(
-                "Err(Error::Value({:?}.to_owned()))",
-                format!("`{rust}` is invariant in its lifetime, so one made outside the view can't join those the view makes")
-            )
-        };
+        // An element made outside any region is in the arena.
+        let arena = region_arena(&element)?;
         return writeln!(
             output,
             "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).collect::<Result<Vec<_>, Error>>())?;"
@@ -13907,16 +13896,7 @@ fn render_take_input(
         && let convert::Type::Option(element) = substituted(ty, signature, substitutions)?
         && let Some(family) = family_of(&element)
     {
-        let rust =
-            concrete_type(&element).ok_or_else(|| request::drift("a region option's element"))?;
-        let arena = if shortens(&element) {
-            format!("item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))")
-        } else {
-            format!(
-                "Err(Error::Value({:?}.to_owned()))",
-                format!("`{rust}` is invariant in its lifetime, so one made outside the view can't join those the view makes")
-            )
-        };
+        let arena = region_arena(&element)?;
         return writeln!(
             output,
             "    let argument_{local} = {{ let mut value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)?.map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).transpose()? }};"
@@ -13924,13 +13904,16 @@ fn render_take_input(
         .map_err(request::unwritable);
     }
     // A value of a scope frame's region, moved out of it into the call
-    // (D558 tier 1), as `push_html` takes a `Parser`.
+    // (D558 tier 1), as `push_html` takes a `Parser`. One made outside any
+    // region is in the arena, as an array's element is (#952).
     if REGION_ARGUMENTS.get()
-        && let Some(family) = family_of(&substituted(ty, signature, substitutions)?)
+        && let region_ty = substituted(ty, signature, substitutions)?
+        && let Some(family) = family_of(&region_ty)
     {
+        let arena = region_arena(&region_ty)?;
         return writeln!(
             output,
-            "    let argument_{local} = {{ let scoped = scoped_value(arguments, {index}).ok_or(Error::TypeMismatch)?; region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))? }};"
+            "    let argument_{local} = {{ let item = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }}? }};"
         )
         .map_err(request::unwritable);
     }
@@ -17082,6 +17065,29 @@ fn may_borrow(ty: &convert::Type) -> bool {
 }
 
 /// Whether a value of `ty` borrows when it is made in a scope frame.
+/// The expression that takes `item`, a native value of `ty` a region's
+/// call takes, from the arena, where one made outside any region is, at
+/// `'static`. The region's lifetime shortens it when the type is covariant
+/// in it, as rustc's variance says. An invariant one, as iced's `Text<'a>`
+/// is through `Theme::Class<'a>`, can't be: Rust makes each widget of a
+/// view at the view's lifetime, as Rawr makes it in the region, and one
+/// made before can't join them.
+fn region_arena(ty: &convert::Type) -> Result<String, request::Error> {
+    let rust = concrete_type(ty).ok_or_else(|| request::drift("a region value's type"))?;
+    Ok(if shortens(ty) {
+        format!(
+            "item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))"
+        )
+    } else {
+        format!(
+            "Err(Error::Value({:?}.to_owned()))",
+            format!(
+                "`{rust}` is invariant in its lifetime, so one made outside the view can't join those the view makes"
+            )
+        )
+    })
+}
+
 /// Whether a native value of `ty` at `'static` is one at any shorter
 /// lifetime: its type is covariant in each lifetime it declares, as rustc's
 /// variance says, and its type arguments carry none.
