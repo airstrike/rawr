@@ -161,7 +161,11 @@ impl Wrapper {
 /// The family of the opaque type spelled `key` at `'x`, when a wrapper
 /// makes it.
 pub(super) fn of(key: &str) -> Option<Family> {
-    WRAPPERS.with_borrow(|wrappers| wrappers.get(key).map(|wrapper| Family::Given(wrapper.index)))
+    WRAPPERS.with_borrow(|wrappers| {
+        wrappers
+            .get(key)
+            .map(|wrapper| Family::Given(wrapper.index))
+    })
 }
 
 pub(super) fn clear() {
@@ -215,18 +219,26 @@ impl Ops {
     /// The call of the `consumer`-th call on the opaque type spelled `key`,
     /// on `receiver`, a region's `Box<dyn ..>` of it reached as `receiver`
     /// says, with `arguments` inputs: its trait's method.
-    pub(super) fn call(key: &str, consumer: usize, receiver: &str, arguments: usize) -> Option<String> {
+    pub(super) fn call(
+        key: &str,
+        consumer: usize,
+        receiver: &str,
+        arguments: usize,
+    ) -> Option<String> {
         OPS.with_borrow(|ops| {
             let ops = ops.get(key)?;
-            ops.methods.iter().any(|method| method.consumer == consumer).then(|| {
-                let mut inputs = vec![receiver.to_owned()];
-                inputs.extend((0..arguments).map(|position| format!("argument_{position}")));
-                format!(
-                    "RawrOpaque{}::rawr_{consumer}({})",
-                    ops.index,
-                    inputs.join(", ")
-                )
-            })
+            ops.methods
+                .iter()
+                .any(|method| method.consumer == consumer)
+                .then(|| {
+                    let mut inputs = vec![receiver.to_owned()];
+                    inputs.extend((0..arguments).map(|position| format!("argument_{position}")));
+                    format!(
+                        "RawrOpaque{}::rawr_{consumer}({})",
+                        ops.index,
+                        inputs.join(", ")
+                    )
+                })
         })
     }
 
@@ -235,7 +247,10 @@ impl Ops {
     pub(super) fn add(key: &str, method: Method) {
         OPS.with_borrow_mut(|ops| {
             if let Some(ops) = ops.get_mut(key)
-                && !ops.methods.iter().any(|known| known.consumer == method.consumer)
+                && !ops
+                    .methods
+                    .iter()
+                    .any(|known| known.consumer == method.consumer)
             {
                 ops.methods.push(method);
             }
