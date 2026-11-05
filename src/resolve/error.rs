@@ -1711,6 +1711,19 @@ impl fmt::Display for Unsatisfied<'_> {
                 "the size for values of type `{}` cannot be known at compilation time",
                 self.0
             ),
+            // std's own wording for `collect()` (`#[rustc_on_unimplemented]`).
+            capability
+                if let Some(item) = capability
+                    .strip_prefix("FromIterator<")
+                    .and_then(|rest| rest.strip_suffix('>')) =>
+            {
+                write!(
+                    formatter,
+                    "a value of type `{}` cannot be built from an iterator over elements of type \
+                     `{item}`",
+                    self.0
+                )
+            }
             capability => write!(
                 formatter,
                 "the trait bound `{}: {capability}` is not satisfied",

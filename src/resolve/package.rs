@@ -686,6 +686,9 @@ impl<'a> Resolver<'a> {
             lexical,
         };
         super::validate_invocation_storage(&program).map_err(Failure::from_located)?;
+        super::infinite::Layouts::of(&program)
+            .reject()
+            .map_err(Failure::from_located)?;
         Ok(program)
     }
 

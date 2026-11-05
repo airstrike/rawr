@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn recursive_shared_value_cycles_are_rejected_without_recursing_forever() {
-        let (model, definition, _) = struct_model("struct Loop { next: Loop }", "Loop");
+        let (model, definition, _) = struct_model("struct Loop { next: Box<Loop> }", "Loop");
         let identity = type_def::Identity::Script(definition.key().clone());
         let malformed = Struct {
             identity: identity.clone(),

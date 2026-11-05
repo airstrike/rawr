@@ -6,6 +6,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.136 (2026-11-05)
+
+- `collect()` into a `Result` or an `Option` works, including when the target comes only from the return type, and stops at the first `Err` or `None` as Rust does. A set or map collected from the return type is built as one. `let Ok(x) = s.parse() else { .. }` with a target a later use gives no longer panics. (#906)
+- A `mut self` or `&mut self` method on a std type can change it (`self.push(..)`), and a changing method runs on a temporary (`vec![..].resize(0, 5)`), as in Rust. (#907)
+- A struct or enum that holds itself by value is refused with rustc's E0072, and a `collect()` whose items its target can't be built from gets rustc's E0277, even in a function nothing calls. (#911)
+- Starting rawr is quick again: building the std bindings takes about 20 ms instead of 0.35 s with a release build, so `rawr check`, a restart on save and a program started from `rawr mcp` no longer wait on it. (#931)
+
 ## 0.3.135 (2026-11-05)
 
 - A function of yours can take a parameter such as `impl Into<Length> + Copy` and pass it on to a crate, as iced's layout example's `square` does. The bound holds of each type the crate's `From` impls convert from, and a number literal takes the type of the one impl of its kind, so `square(50)` passes a `u32`, as rustc infers it. (#912)

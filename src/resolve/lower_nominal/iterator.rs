@@ -753,6 +753,97 @@ impl Parser<'_> {
         )
     }
 
+    /// Rust's `FromIterator<item>` for a `collect()` into `target`, once
+    /// `target` is known: a `Vec` or a `VecDeque` of the items, a `String`
+    /// of text or `char`s, a `Result` or an `Option` of items that are, each
+    /// of a payload that is. Else rustc's E0277.
+    pub(super) fn collected_into(
+        &mut self,
+        target: &Ty,
+        item: &Ty,
+        collect: Span,
+    ) -> Result<(), Error> {
+        let item = self.inference.resolve(item);
+        if let Ty::Result(payload, _) | Ty::Option(payload) = self.inference.resolve(target)
+            && let Ty::Keyed(..) = self.inference.resolve(&payload)
+        {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "`collect()` into a `Result` or an `Option` of a map or a set".into(),
+                source: collect,
+            });
+        }
+        let fits = match self.inference.resolve(target) {
+            target @ Ty::Array { kind, .. } if kind.length().is_none() => {
+                let collected = Ty::sequence(kind, item.clone());
+                self.unifies(&target, &collected) && self.unify_type(&target, &collected)
+            }
+            // A map of `(key, value)` items, a set of the items.
+            target @ Ty::Keyed(kind, _) => {
+                let collected = match (kind.is_map(), &item) {
+                    (true, Ty::Tuple(pair)) if pair.len() == 2 => {
+                        Some(Ty::Keyed(kind, pair.clone()))
+                    }
+                    (true, _) => None,
+                    (false, _) => Some(Ty::Keyed(kind, Box::new([item.clone()]))),
+                };
+                match collected {
+                    Some(collected) if self.unifies(&target, &collected) => {
+                        self.unify_type(&target, &collected);
+                        let Ty::Keyed(_, arguments) = self.inference.resolve(&collected) else {
+                            unreachable!("built as a map or set");
+                        };
+                        return self.require_key(kind, &arguments[0], collect);
+                    }
+                    _ => false,
+                }
+            }
+            Ty::String => matches!(
+                without_references(&item),
+                Ty::Char | Ty::String | Ty::Str | Ty::Infer(_)
+            ),
+            Ty::Result(payload, error) => {
+                let (inner, failure) = (self.inference.fresh(), self.inference.fresh());
+                let shape = Ty::Result(Box::new(inner.clone()), Box::new(failure.clone()));
+                if self.unifies(&shape, &item) && self.unifies(&error, &failure) {
+                    self.unify_type(&shape, &item);
+                    self.unify_type(&error, &failure);
+                    return self.collected_into(&payload, &inner, collect);
+                }
+                false
+            }
+            Ty::Option(payload) => {
+                let inner = self.inference.fresh();
+                let shape = Ty::Option(Box::new(inner.clone()));
+                if self.unifies(&shape, &item) {
+                    self.unify_type(&shape, &item);
+                    return self.collected_into(&payload, &inner, collect);
+                }
+                false
+            }
+            _ => true,
+        };
+        if fits {
+            return Ok(());
+        }
+        Err(self.uncollectable(target, &item, collect))
+    }
+
+    /// rustc's E0277 for a `collect()` into `target` of items no
+    /// `FromIterator` impl of it takes.
+    fn uncollectable(&self, target: &Ty, item: &Ty, collect: Span) -> Error {
+        Error::MissingCapability {
+            owner: self.inference.resolve(target).name(&self.models),
+            capability: format!(
+                "FromIterator<{}>",
+                self.inference.resolve(item).name(&self.models)
+            )
+            .into(),
+            operation: collect,
+            derive: false,
+            required_by: None,
+        }
+    }
+
     /// An iterator method on `value`: an adaptor extends its chain, a
     /// consumer runs it.
     pub(super) fn parse_iterator_method(
@@ -1236,6 +1327,7 @@ impl Parser<'_> {
                     .map(|ty| self.inference.resolve(&ty));
                 match target {
                     Some(Ty::String) => {
+                        self.collected_into(&Ty::String, &item, member_span)?;
                         let out = self.temporary("text");
                         let sink = origin::Fragment::plain(format!("{out} += {x}; "));
                         let source =
@@ -1300,19 +1392,41 @@ impl Parser<'_> {
                             sequence::Kind::Deque => sequence::Kind::Deque,
                             _ => sequence::Kind::Vec,
                         };
-                        let collected = Ty::sequence(kind, item);
+                        let collected = Ty::sequence(kind, item.clone());
+                        if !self.unifies(&target, &collected) {
+                            return Err(self.uncollectable(&target, &item, member_span));
+                        }
                         self.require_type(&target, &collected, expression)?;
                         (self.materialized(&pipeline), collected)
                     }
-                    // Decided by inference: a `Vec`, or a `String` it
-                    // concatenates (`-> String { s.chars().rev().collect() }`).
-                    _ => {
-                        let target = self.inference.fresh();
+                    // A `Result` or an `Option`, which stops at the first
+                    // `Err` or `None`, or a target inference decides: a
+                    // `Vec`, or a `String` it concatenates
+                    // (`-> String { s.chars().rev().collect() }`).
+                    target => {
+                        let target = match target {
+                            Some(target @ (Ty::Result(..) | Ty::Option(_))) => target,
+                            _ => self.inference.fresh(),
+                        };
+                        self.pending_collects
+                            .push((target.clone(), item.clone(), member_span));
+                        let test = self.push_op(Op::CollectStop {
+                            target: target.clone(),
+                        });
                         let helper = self.push_op(Op::Collect {
                             target: target.clone(),
                         });
-                        let items = self.materialized(&pipeline);
-                        (origin::Fragment::call(&helper, [items]), target)
+                        let out = self.temporary("items");
+                        let sink = origin::Fragment::plain(format!(
+                            "{out}.push({x}); if {test}({x}) {stop} "
+                        ));
+                        let source = self.consume(
+                            &pipeline,
+                            &format!("let {out} = [];"),
+                            sink,
+                            &format!("{helper}({out})"),
+                        );
+                        (source, target)
                     }
                 }
             }

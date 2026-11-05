@@ -193,12 +193,12 @@ fn structural_capabilities_are_proven_through_recursive_nominal_types() {
     let ast = engine
         .compile(
             r#"
-                #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-                enum List { Nil, Cons(i64, List) }
+                #[derive(Debug, Clone, PartialEq, Eq)]
+                enum List { Nil, Cons(i64, Box<List>) }
 
-                let list = List::Cons(1, List::Nil);
-                let copied = list.clone().copy();
-                copied == list
+                let list = List::Cons(1, Box::new(List::Cons(2, Box::new(List::Nil))));
+                let cloned = list.clone();
+                cloned == list
             "#,
         )
         .unwrap();
