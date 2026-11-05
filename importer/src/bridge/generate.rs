@@ -8856,18 +8856,7 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
 /// value in a scope frame's region may fill them (D558 tier 1), as
 /// `push_html`'s `I` is a `Parser`: each one's argument index.
 fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
-    // A function that also takes a script closure, as iced's
-    // `table::column(header, |row| ..)` takes the view's header (#952).
-    let called = match plan.operation() {
-        Operation::Function {
-            signature,
-            substitutions,
-            call: None,
-            ..
-        } => Some((signature, &substitutions[..], 0)),
-        _ => call_signature(plan),
-    };
-    let Some((signature, substitutions, offset)) = called else {
+    let Some((signature, substitutions, offset)) = call_signature(plan) else {
         return Ok(Vec::new());
     };
     if signature.scope().is_some() {
@@ -9387,7 +9376,9 @@ fn opaque_holes(ty: &str) -> Vec<usize> {
 }
 
 /// The signature, substitutions and argument offset of a call: a
-/// function's, or a method's after its receiver.
+/// function's, or a method's after its receiver, whether or not it also
+/// takes a script closure, as iced's `table::column(header, |row| ..)`
+/// and `Cache::draw(renderer, size, |frame| ..)` do (#952, #954).
 fn call_signature(
     plan: &Plan,
 ) -> Option<(
@@ -9399,14 +9390,11 @@ fn call_signature(
         Operation::Function {
             signature,
             substitutions,
-            mappers,
-            call: None,
             ..
-        } if mappers.is_empty() => Some((signature, substitutions, 0)),
+        } => Some((signature, substitutions, 0)),
         Operation::Method {
             signature,
             substitutions,
-            call: None,
             ..
         } => Some((signature, substitutions, 1)),
         _ => None,
