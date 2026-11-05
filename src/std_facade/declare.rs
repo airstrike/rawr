@@ -268,7 +268,7 @@ fn declarations<'a>(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            for implementation in std_table::trait_impls(trait_) {
+            for implementation in solve::impls(trait_, Some(&own)) {
                 for binding in solve::instances(&implementation, &own) {
                     let arguments = implementation.arguments();
                     let mut names = vec![("Self", own.clone())];

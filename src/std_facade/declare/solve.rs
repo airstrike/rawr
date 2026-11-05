@@ -30,7 +30,11 @@ pub(super) fn solve(trait_: &str, self_ty: &Slot, arguments: &[Slot], depth: u8)
     let Some(depth) = depth.checked_sub(1) else {
         return found;
     };
-    for implementation in std_table::trait_impls(trait_) {
+    let known = match self_ty {
+        Slot::Known(known) => Some(known),
+        Slot::Unknown => None,
+    };
+    for implementation in impls(trait_, known) {
         let variables = variables(&implementation);
         let own = read(implementation.self_ty);
         let mut binding = Binding::new();
@@ -71,6 +75,41 @@ pub(super) fn solve(trait_: &str, self_ty: &Slot, arguments: &[Slot], depth: u8)
     found
 }
 
+/// The impls of `trait_` that may apply to `self_ty`, in the table's
+/// order: those filed under its simplified key and the blanket ones. Any
+/// other impl's self type is another type's, so none of them applies. With
+/// no key known, every impl.
+pub(super) fn impls(trait_: &str, self_ty: Option<&Written>) -> Vec<Impl> {
+    let Some(key) = self_ty.and_then(key) else {
+        return std_table::trait_impls(trait_).collect();
+    };
+    let own = std_table::impls(trait_, key);
+    let blanket = std_table::impls(trait_, "_");
+    // The table is sorted, keys too.
+    if key < "_" {
+        own.chain(blanket).collect()
+    } else {
+        blanket.chain(own).collect()
+    }
+}
+
+/// The key `impls.tsv` files impls of `written` under, as rustc's
+/// simplified type: a primitive's name, a type's definition, `&`, `&mut`,
+/// `[]`, `[;]`, `()` or `!`. `None` for a name std doesn't define, as an
+/// impl's parameter.
+fn key(written: &Written) -> Option<&'static str> {
+    match written {
+        Written::Path { path, .. } => std_table::definition_of(path),
+        Written::Reference { mutable: false, .. } => Some("&"),
+        Written::Reference { mutable: true, .. } => Some("&mut"),
+        Written::Slice(_) => Some("[]"),
+        Written::Array(..) => Some("[;]"),
+        Written::Tuple(_) => Some("()"),
+        Written::Never => Some("!"),
+        Written::Other(_) => None,
+    }
+}
+
 /// Whether std implements `trait_<arguments>` for `self_ty`.
 pub(super) fn holds(trait_: &str, self_ty: &Written, arguments: &[Written]) -> bool {
     let arguments = arguments
@@ -99,13 +138,15 @@ pub(super) fn instances(implementation: &Impl, self_ty: &Written) -> Vec<Binding
 /// The associated type `name` of the first impl of `trait_` that applies
 /// to `self_ty`: `String` of `<str as ToOwned>::Owned`.
 pub(super) fn associated(trait_: &str, self_ty: &Written, name: &str) -> Option<Written> {
-    std_table::trait_impls(trait_).find_map(|implementation| {
-        let binding = instances(&implementation, self_ty).into_iter().next()?;
-        Some(substitute(
-            &read(implementation.associated(name)?),
-            &binding,
-        ))
-    })
+    impls(trait_, Some(self_ty))
+        .into_iter()
+        .find_map(|implementation| {
+            let binding = instances(&implementation, self_ty).into_iter().next()?;
+            Some(substitute(
+                &read(implementation.associated(name)?),
+                &binding,
+            ))
+        })
 }
 
 /// The type `text` writes, without its lifetimes, which no bound reads:
