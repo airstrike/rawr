@@ -10023,9 +10023,7 @@ fn render_adapter_body(
                                 }
                             }
                         }
-                        output
-                            .write_all(b"    let receiver: ")
-                            .map_err(request::unwritable)?;
+                        let mut container = Vec::new();
                         render_container_path(
                             &path,
                             signature,
@@ -10033,11 +10031,19 @@ fn render_adapter_body(
                             constants,
                             *container_parameters,
                             true,
-                            output,
+                            &mut container,
                         )?;
-                        output
-                            .write_all(b" = take_native(arguments, 0)?;\n")
-                            .map_err(request::unwritable)?;
+                        let container =
+                            String::from_utf8(container).map_err(request::unwritable)?;
+                        writeln!(
+                            output,
+                            "    let receiver: {container} = take_native(arguments, 0)?;"
+                        )
+                        .map_err(request::unwritable)?;
+                        // A receiver of a type that carries no lifetime, as
+                        // iced's `Table` or `Space`, borrows nothing a
+                        // region must keep (#352).
+                        let lifetime_free = container_family(&path, &container).is_none();
                         // An implementation's parameter the call infers, as
                         // `Renderer` of iced's `Widget` for `Button`, is
                         // named by the output's type.
@@ -10083,10 +10089,11 @@ fn render_adapter_body(
                             // slot's region is open from an opaque value its
                             // table takes, stays in that region, as a
                             // function's does: `Widget::boxed` of an opaque
-                            // widget gives the view's element. A receiver
-                            // of a type that names its own lifetime keeps
-                            // the one it was made at.
-                            if OPAQUE_WITNESSED.with_borrow(Option::is_some)
+                            // widget gives the view's element, and so does
+                            // `boxed` of a widget whose type carries no
+                            // lifetime. A receiver of a type that names its
+                            // own lifetime keeps the one it was made at.
+                            if (lifetime_free || OPAQUE_WITNESSED.with_borrow(Option::is_some))
                                 && future_output(&returned).is_none()
                                 && !lifetime_inputs(signature, substitutions)?
                             {

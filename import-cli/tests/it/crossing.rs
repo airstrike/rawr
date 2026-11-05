@@ -812,6 +812,20 @@ fn a_borrowed_vec_fills_rows_a_crate_takes_by_into_iterator() {
     );
 }
 
+/// iced's table again, with the table alone in the view's `column!`: a
+/// widget with no lifetime, made from what the view borrows, is the view's
+/// value without anything else that borrows (#352). The output is `cargo
+/// run`'s.
+#[test]
+fn a_view_of_only_a_lifetime_free_widget_runs() {
+    let (rawr, cargo) = both_printed("table_alone.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("last view pad 0 |Name|Time|Talk|45 min|Workshop|120 min|"),
+        "{rawr}"
+    );
+}
+
 /// iced's canvas aliases: `canvas::Cache` passes its parameter on to a
 /// type of another crate that no path of the root reaches, and defaults it
 /// to the root's `Renderer` alias. A derived `Default` builds a field of it,
