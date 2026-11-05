@@ -2785,6 +2785,25 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     ))
 }
 
+/// A function's or a method's body, which `lower_with_context` lowers.
+#[derive(Clone, Copy)]
+enum Body<'a> {
+    Function(&'a item::Shell, &'a item::Function),
+    Method(&'a method::Definition),
+}
+
+impl Body<'_> {
+    /// Where the program writes the body: its source, then its place there.
+    fn written_at(&self) -> (usize, Position) {
+        match self {
+            Self::Function(shell, definition) => {
+                (shell.source.index(), definition.body.span.start())
+            }
+            Self::Method(definition) => (definition.source().index(), definition.body().start()),
+        }
+    }
+}
+
 fn lower_with_context(
     engine: &Engine,
     program: &Program,
@@ -2868,134 +2887,152 @@ fn lower_with_context(
             .map_err(|error| LoweringFailure::original(shell.source, error.into()))?;
     }
 
-    for shell in program.items.iter() {
-        let item::Kind::Function(definition) = &shell.kind else {
-            continue;
-        };
-        // A template compiled per instantiation is lowered as its
-        // instances only (D629).
-        if shell
-            .key
-            .as_ref()
-            .is_some_and(|key| program.instances.templates.contains_key(key))
-        {
-            continue;
-        }
-        let body_source = body_source(
-            definition
-                .body
-                .text
-                .as_deref()
-                .unwrap_or_else(|| program.source.text_at(shell.source)),
-            &definition.body,
-        );
-        let mut parser = Parser::for_function(
-            engine,
-            &body_source,
-            models.for_source(shell.source),
-            definition,
-            shell
-                .key
-                .clone()
-                .expect("resolved functions retain stable item keys"),
-            ops.len(),
-            patterns.len(),
-            #[cfg(feature = "rust-import")]
-            imported
-                .as_mut()
-                .map(|context| context.for_source(shell.source)),
-        );
-        let lowered = parser
-            .parse_function_body(definition)
-            .map_err(|error| LoweringFailure::original(shell.source, error.into()))?;
-        let generated_name = function_name(shell.id);
-        if let Some(index) = this_parameter(definition) {
-            receivers.insert(
-                generated_name.as_str().into(),
-                definition.parameters[index].name.text.clone(),
-            );
-        }
-        let body = write_function(
-            &mut generated,
-            shell.source,
-            &generated_name,
-            definition,
-            &lowered,
-            &models,
-        );
-        retain_locations(
-            &mut locations,
-            body,
-            Some(
-                shell
+    // Bodies are checked in the order the program writes them, so the
+    // first error reported is the first rustc reports.
+    let mut bodies = program
+        .items
+        .iter()
+        .filter_map(|shell| match &shell.kind {
+            item::Kind::Function(definition) => Some(Body::Function(shell, definition)),
+            _ => None,
+        })
+        .chain(
+            program
+                .methods
+                .iter()
+                .chain(&program.builtin_methods)
+                .map(Body::Method),
+        )
+        .collect::<Vec<_>>();
+    bodies.sort_by_key(Body::written_at);
+    for body in bodies {
+        match body {
+            Body::Function(shell, definition) => {
+                // A template compiled per instantiation is lowered as its
+                // instances only (D629).
+                if shell
                     .key
                     .as_ref()
-                    .expect("resolved functions retain stable item keys"),
-            ),
-            shell.source,
-            lowered.locations,
-        );
-        ops.extend(lowered.ops);
-        patterns.extend(lowered.patterns);
-        write_closures(
-            &mut generated,
-            &mut locations,
-            shell.source,
-            lowered.closures,
-            &mut closures,
-            &mut symbol_rewrites,
-        );
-    }
-
-    for definition in program.methods.iter().chain(&program.builtin_methods) {
-        // A method compiled per instantiation is lowered as its instances
-        // only (D629).
-        if program.instances.templates.contains_key(definition.key()) {
-            continue;
+                    .is_some_and(|key| program.instances.templates.contains_key(key))
+                {
+                    continue;
+                }
+                let body_source = body_source(
+                    definition
+                        .body
+                        .text
+                        .as_deref()
+                        .unwrap_or_else(|| program.source.text_at(shell.source)),
+                    &definition.body,
+                );
+                let mut parser = Parser::for_function(
+                    engine,
+                    &body_source,
+                    models.for_source(shell.source),
+                    definition,
+                    shell
+                        .key
+                        .clone()
+                        .expect("resolved functions retain stable item keys"),
+                    ops.len(),
+                    patterns.len(),
+                    #[cfg(feature = "rust-import")]
+                    imported
+                        .as_mut()
+                        .map(|context| context.for_source(shell.source)),
+                );
+                let lowered = parser
+                    .parse_function_body(definition)
+                    .map_err(|error| LoweringFailure::original(shell.source, error.into()))?;
+                let generated_name = function_name(shell.id);
+                if let Some(index) = this_parameter(definition) {
+                    receivers.insert(
+                        generated_name.as_str().into(),
+                        definition.parameters[index].name.text.clone(),
+                    );
+                }
+                let body = write_function(
+                    &mut generated,
+                    shell.source,
+                    &generated_name,
+                    definition,
+                    &lowered,
+                    &models,
+                );
+                retain_locations(
+                    &mut locations,
+                    body,
+                    Some(
+                        shell
+                            .key
+                            .as_ref()
+                            .expect("resolved functions retain stable item keys"),
+                    ),
+                    shell.source,
+                    lowered.locations,
+                );
+                ops.extend(lowered.ops);
+                patterns.extend(lowered.patterns);
+                write_closures(
+                    &mut generated,
+                    &mut locations,
+                    shell.source,
+                    lowered.closures,
+                    &mut closures,
+                    &mut symbol_rewrites,
+                );
+            }
+            Body::Method(definition) => {
+                // A method compiled per instantiation is lowered as its instances
+                // only (D629).
+                if program.instances.templates.contains_key(definition.key()) {
+                    continue;
+                }
+                let body_source = source_span(
+                    definition
+                        .body_text()
+                        .unwrap_or_else(|| program.source.text_at(definition.source())),
+                    definition.body(),
+                );
+                let mut parser = Parser::for_method(
+                    engine,
+                    &body_source,
+                    models.for_source(definition.source()),
+                    definition,
+                    ops.len(),
+                    patterns.len(),
+                    #[cfg(feature = "rust-import")]
+                    imported
+                        .as_mut()
+                        .map(|context| context.for_source(definition.source())),
+                )
+                .map_err(|error| LoweringFailure::original(definition.source(), error.into()))?;
+                let lowered = parser.parse_method_body(definition).map_err(|error| {
+                    LoweringFailure::original(definition.source(), error.into())
+                })?;
+                if definition.receiver().is_some() {
+                    receivers.insert(method_name(definition.id()).into(), "self".into());
+                }
+                let body = write_method(&mut generated, definition, &lowered, &models);
+                retain_locations(
+                    &mut locations,
+                    body,
+                    Some(definition.key()),
+                    definition.source(),
+                    lowered.locations,
+                );
+                ops.extend(lowered.ops);
+                patterns.extend(lowered.patterns);
+                write_closures(
+                    &mut generated,
+                    &mut locations,
+                    definition.source(),
+                    lowered.closures,
+                    &mut closures,
+                    &mut symbol_rewrites,
+                );
+            }
         }
-        let body_source = source_span(
-            definition
-                .body_text()
-                .unwrap_or_else(|| program.source.text_at(definition.source())),
-            definition.body(),
-        );
-        let mut parser = Parser::for_method(
-            engine,
-            &body_source,
-            models.for_source(definition.source()),
-            definition,
-            ops.len(),
-            patterns.len(),
-            #[cfg(feature = "rust-import")]
-            imported
-                .as_mut()
-                .map(|context| context.for_source(definition.source())),
-        )
-        .map_err(|error| LoweringFailure::original(definition.source(), error.into()))?;
-        let lowered = parser
-            .parse_method_body(definition)
-            .map_err(|error| LoweringFailure::original(definition.source(), error.into()))?;
-        if definition.receiver().is_some() {
-            receivers.insert(method_name(definition.id()).into(), "self".into());
-        }
-        let body = write_method(&mut generated, definition, &lowered, &models);
-        retain_locations(
-            &mut locations,
-            body,
-            Some(definition.key()),
-            definition.source(),
-            lowered.locations,
-        );
-        ops.extend(lowered.ops);
-        patterns.extend(lowered.patterns);
-        write_closures(
-            &mut generated,
-            &mut locations,
-            definition.source(),
-            lowered.closures,
-            &mut closures,
-            &mut symbol_rewrites,
-        );
     }
 
     write_trait_dispatchers(&mut generated, &models, &mut ops);
