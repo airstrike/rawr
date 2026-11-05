@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.139 (2026-11-05)
+
+- A program's own `macro_rules!` macros expand as rustc expands them: all fragment specifiers, repetitions with separators, rules tried in order, hygiene for the macro's locals, nested and recursive calls up to the recursion limit, and Rust's textual scope with `#[macro_use]` and `#[macro_export]`. A call used as a statement splices in its statements. The errors are rustc's: `no rules expected`, `cannot find macro`, which points at a definition that comes later or asks for `#[macro_use]`, and its errors for a malformed definition. All of rustlings' macros exercises now match rustc. (#236)
+
 ## 0.3.138 (2026-11-05)
 
 - `std::thread::spawn` runs each closure on a thread of its own, in parallel; `join` gives its value or `Err` for a panic, and a program exits when `main` returns. `Arc<Mutex<T>>` locks with `lock().unwrap()`, and `std::sync::mpsc` channels send, receive and end a `for` loop when every sender is gone. A closure that captures an `Rc` is E0277, one that borrows a local without `move` is E0373. (#901)
