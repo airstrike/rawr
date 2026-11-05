@@ -102,7 +102,7 @@ impl Engine {
             }),
 
             #[cfg(feature = "sync")]
-            threads: super::threads::Threads::root(),
+            threads: super::threads::Threads::root(self.lasting),
         }
     }
 }

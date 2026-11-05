@@ -9200,7 +9200,8 @@ impl Ty {
                 thread::Kind::Sender => Some(TypeId::of::<thread::Sender>()),
                 thread::Kind::Receiver => Some(TypeId::of::<thread::Receiver>()),
                 thread::Kind::SendError => Some(TypeId::of::<thread::SendError>()),
-                thread::Kind::RecvError | thread::Kind::Panic => Some(TypeId::of::<()>()),
+                thread::Kind::RecvError => Some(TypeId::of::<()>()),
+                thread::Kind::Panic => Some(TypeId::of::<thread::Panic>()),
             },
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
@@ -11878,6 +11879,10 @@ struct Parser<'a> {
     /// that has one, by the closure's span: what `std::thread::spawn`
     /// refuses (`thread.rs`).
     unsent_captures: BTreeMap<Span, Ty>,
+    /// A local a closure that isn't `move` borrows, of each closure that
+    /// borrows one, by the closure's span: what a `'static` bound refuses
+    /// (rustc's E0373), as `std::thread::spawn`'s does.
+    borrowed_captures: BTreeMap<Span, ImmutableString>,
     /// Reads of a crate struct's field that leave the struct whole, by
     /// their span: a by-value use moves that field out, as Rust's partial
     /// move (`move_local`).
@@ -12319,6 +12324,7 @@ impl<'a> Parser<'a> {
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
             unsent_captures: BTreeMap::new(),
+            borrowed_captures: BTreeMap::new(),
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
             owning_closures: BTreeSet::new(),
@@ -38670,6 +38676,22 @@ impl<'a> Parser<'a> {
             }
             return Ok(self.literal("()", Ty::Unit, span(name_span.start(), end)));
         }
+        // `spawn(f)` and `channel()` imported from `std::thread` and
+        // `std::sync::mpsc`, unless a local or the program names them.
+        if !self.bindings.contains_key(name.as_str())
+            && self.models.function(&name).is_none()
+            && matches!(
+                self.peek(),
+                Token::LeftParen | Token::Unit | Token::DoubleColon
+            )
+            && let Some(binding) = self.models.import(&name)
+        {
+            match binding.qualified.as_str() {
+                "std::thread::spawn" => return self.parse_thread_spawn(name_span.start()),
+                "std::sync::mpsc::channel" => return self.parse_channel(name_span.start()),
+                _ => {}
+            }
+        }
         // `std::thread::sleep(duration)`, `thread::sleep`, `sleep`.
         if let Some(skip) = self.sleep_path(&name) {
             for _ in 0..skip {
@@ -45055,6 +45077,19 @@ impl<'a> Parser<'a> {
             .find(|ty| self.not_send(ty))
         {
             self.unsent_captures.insert(expression, ty);
+        }
+        if !moved
+            && let Some(name) = scope
+                .captures
+                .iter()
+                .find(|name| !scope.consumed.contains(*name))
+        {
+            let name = if name == "this" {
+                "self".into()
+            } else {
+                name.clone()
+            };
+            self.borrowed_captures.insert(expression, name);
         }
         // `move` moves each captured place that is not `Copy` into the
         // closure as it is created, and copies the others: a field leaves

@@ -80,7 +80,9 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 </ul>
 <h3 id="missing-std">Standard library</h3>
 <ul>
-  <li><code>Mutex</code>.</li>
+  <li><code>Mutex</code> methods other than <code>new</code>, <code>default</code> and <code>lock().unwrap()</code> (or <code>.expect(..)</code>), and a <code>LockResult</code> kept as it is. rawr says it doesn&rsquo;t run them yet.</li>
+  <li><code>Receiver::try_recv</code>, <code>recv_timeout</code> and <code>sync_channel</code>.</li>
+  <li>The file and line in a spawned thread&rsquo;s panic message.</li>
   <li>Cloning a struct, enum or <code>Vec</code> that holds a <code>Cell</code> or <code>RefCell</code> outside an <code>Rc</code>.</li>
   <li><code>Rc</code> and <code>Arc</code> functions other than <code>new</code>, <code>from</code>, <code>clone</code>, the counts, <code>ptr_eq</code>, <code>downgrade</code>, <code>get_mut</code>, <code>make_mut</code>, <code>try_unwrap</code>, <code>into_inner</code> and <code>unwrap_or_clone</code>, as <code>Rc::as_ptr</code>. rawr says it doesn&rsquo;t run them yet.</li>
   <li>An <code>Arc</code> of a crate&rsquo;s value passed to a crate function.</li>

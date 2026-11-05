@@ -49,15 +49,18 @@ impl Kind {
         }
     }
 
-    /// std's definition of the type, whose inherent methods it has.
-    pub(super) const fn definition(self) -> &'static str {
-        match self {
-            Self::JoinHandle => "std::thread::join_handle::JoinHandle",
-            Self::Sender => "std::sync::mpsc::Sender",
-            Self::Receiver => "std::sync::mpsc::Receiver",
-            Self::SendError => "std::sync::mpsc::SendError",
-            Self::RecvError | Self::Panic => "std::sync::mpsc::RecvError",
-        }
+    /// std's definition of the type, whose inherent methods and impls it
+    /// has, and whether it takes the inner type as its argument. `None`
+    /// for `join`'s `Box<dyn Any + Send>`, which is no std type rawr names.
+    pub(super) const fn definition(self) -> Option<(&'static str, bool)> {
+        Some(match self {
+            Self::JoinHandle => ("std::thread::join_handle::JoinHandle", true),
+            Self::Sender => ("std::sync::mpsc::Sender", true),
+            Self::Receiver => ("std::sync::mpsc::Receiver", true),
+            Self::SendError => ("std::sync::mpsc::SendError", true),
+            Self::RecvError => ("std::sync::mpsc::RecvError", false),
+            Self::Panic => return None,
+        })
     }
 
     /// Whether a value of the kind holding `inner` is `Send` where
@@ -126,6 +129,11 @@ impl Receiver {
         }))
     }
 }
+
+/// The payload `join` gives of a thread that panicked, whose `Debug` is
+/// `Any { .. }`: rawr's panic is its message, which the thread printed.
+#[derive(Clone)]
+pub(crate) struct Panic;
 
 /// A send no receiver took. Its value is dropped with it.
 #[derive(Clone)]
@@ -217,7 +225,7 @@ fn join(handle: &Dynamic) -> RawrResult {
         Ok(value) => crate::result::ok(value),
         // The thread printed its panic as it ended; `join` gives its
         // payload.
-        Err(_) => crate::result::err(Dynamic::UNIT),
+        Err(_) => crate::result::err(Dynamic::from(Panic)),
     })
 }
 
@@ -247,8 +255,10 @@ fn debug(value: &Dynamic) -> String {
         "Receiver { .. }".into()
     } else if value.is::<SendError>() {
         "SendError { .. }".into()
+    } else if value.is::<Panic>() {
+        "Any { .. }".into()
     } else if value.is_unit() {
-        // `RecvError` and `join`'s panic, whose runtime value is `()`.
+        // `RecvError`, whose runtime value is `()`.
         "RecvError".into()
     } else {
         "JoinHandle { .. }".into()
@@ -286,6 +296,19 @@ impl Parser<'_> {
         };
         self.coerce_expr(&expected, closure)?;
         self.move_local(closure)?;
+        // `F: 'static`: a closure that borrows a local may outlive it.
+        if let Some(name) = self.borrowed_captures.get(&closure.span) {
+            return Err(Error::BorrowConflict {
+                code: "E0373",
+                message: format!(
+                    "closure may outlive the current function, but it borrows `{name}`, which \
+                     is owned by the current function"
+                )
+                .into(),
+                access: closure.span,
+                borrow: closure.span,
+            });
+        }
         // `F: Send` and `T: Send`, std's bounds.
         if let Some(unsent) = self.unsent_captures.get(&closure.span).cloned() {
             return Err(Error::MissingCapability {

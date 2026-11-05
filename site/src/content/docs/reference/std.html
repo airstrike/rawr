@@ -5,7 +5,7 @@
 <h2 id="paths">Paths</h2>
 <p>rawr knows every path of <code>std</code>, <code>core</code> and <code>alloc</code>, read from the standard library of its pinned toolchain. A path resolves through every re-export, so <code>std::collections::hash_map::HashMap</code> and <code>alloc::collections::BTreeMap</code> name the types this page lists, and <code>use std::collections::*;</code> brings in every name of the module. A path std doesn&rsquo;t have gets rustc&rsquo;s error, as <code>core::thread::sleep</code> does. An unstable item gets rustc&rsquo;s E0658, as on stable Rust.</p>
 <p>A std type outside the prelude is in scope only through a <code>use</code>, as in rustc. <code>Vec</code>, <code>String</code>, <code>Option</code>, <code>Result</code> and <code>Box</code> need none. Without <code>use std::collections::HashMap;</code>, a <code>HashMap&lt;K, V&gt;</code> in a type gets rustc&rsquo;s E0425 and <code>HashMap::new()</code> gets its E0433.</p>
-<p>An item std has and rawr doesn&rsquo;t run yet can be imported. A use of it says <code>rawr doesn't run `std::sync::Mutex` yet</code>, where the program uses it.</p>
+<p>An item std has and rawr doesn&rsquo;t run yet can be imported. A use of it says <code>rawr doesn't run `std::sync::RwLock::new` yet</code>, where the program uses it.</p>
 <p>A closure passed to a std method has the parameter types std declares for it. In <code>v.sort_by_key(|x| -*x)</code>, <code>x</code> is a <code>&amp;T</code>, as <code>F: FnMut(&amp;T) -&gt; K</code> says. This holds for a method rawr doesn&rsquo;t run yet too. <code>v.dedup_by_key(|x| *x / 2)</code> gives &ldquo;rawr doesn&rsquo;t run `Vec::dedup_by_key` yet&rdquo; and no error inside the closure.</p>
 <h2 id="string"><code>String</code> and <code>&amp;str</code></h2>
 <p><code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>retain</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>rsplitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes.</p>
@@ -81,6 +81,28 @@ println!("{squares:?}");</code></pre>
 let wrapped = f32::rem_euclid(-0.25, 1.0); // 0.75
 println!("{angle:?} {wrapped:?}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-floats" data-out="out-floats" aria-label="Run floats.rs" hidden></button><b>rawr run floats.rs</b><span id="out-floats" aria-live="polite">45.0 0.75</span></div>
+</div>
+<h2 id="threads">Threads, <code>Mutex</code> and channels</h2>
+<p><code>std::thread::spawn</code> runs its closure on a thread of its own, in parallel with the others, as Rust does. <code>join</code> waits for it and gives what the closure returned, or <code>Err</code> when it panicked. The program exits when <code>main</code> returns, ending the threads still running. The closure must be <code>Send</code> and <code>'static</code>: one that captures an <code>Rc</code> is rustc&rsquo;s E0277, and one that borrows a local without <code>move</code> is E0373.</p>
+<p><code>Arc&lt;Mutex&lt;T&gt;&gt;</code> shares a value between threads. <code>lock().unwrap()</code> waits for the thread holding the lock, and the lock is held until the guard&rsquo;s statement or block ends. <code>std::sync::mpsc::channel()</code> gives a <code>Sender</code> and a <code>Receiver</code>. <code>send</code>, <code>clone</code>, <code>recv</code>, <code>iter</code> and <code>for v in rx</code> work, and the loop ends once every sender is gone.</p>
+<div class="block">
+  <pre><code data-lang="rust">use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+
+let counter = Arc::new(Mutex::new(0));
+let (tx, rx) = mpsc::channel();
+for id in 0..4 {
+    let counter = Arc::clone(&amp;counter);
+    let tx = tx.clone();
+    thread::spawn(move || {
+        *counter.lock().unwrap() += 1;
+        tx.send(id * 10).unwrap();
+    });
+}
+drop(tx);
+let mut ids: Vec&lt;i32&gt; = rx.iter().collect();
+ids.sort();
+println!("{ids:?} {}", *counter.lock().unwrap()); // [0, 10, 20, 30] 4</code></pre>
 </div>
 <h2 id="time"><code>Duration</code>, <code>Instant</code> and <code>SystemTime</code></h2>
 <p><code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code> and <code>duration_since</code> work. So do <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>std::thread::sleep(duration)</code> pauses the program. In an iced app, these are <code>iced::time</code>&rsquo;s, which are std&rsquo;s own.</p>

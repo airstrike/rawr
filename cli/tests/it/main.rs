@@ -11,6 +11,7 @@ mod harness;
 mod marked;
 mod mcp;
 mod program;
+mod threads;
 mod vocabulary;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);

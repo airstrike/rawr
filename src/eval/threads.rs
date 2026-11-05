@@ -12,8 +12,9 @@
 //! for its whole length, and each may use the engine while it runs.
 //!
 //! A Rust program exits when `main` returns, ending the threads still
-//! running. `rawr run` exits the same way (`cli::base`), without waiting
-//! for an evaluation's root to drop.
+//! running. An engine that lasts for the process ([`Engine::leak`], as
+//! `rawr run`'s does) leaves its threads running as its evaluation
+//! returns, and the process ends them as it exits.
 
 use std::sync::{Mutex, PoisonError};
 
@@ -37,6 +38,7 @@ struct Group {
 /// evaluation's state, or a copy of it, which a call under it holds.
 pub struct Threads {
     group: Shared<Group>,
+    /// Whether this is the root, which joins the group as it drops.
     root: bool,
 }
 
@@ -45,13 +47,14 @@ pub struct Threads {
 pub struct Handle(Slot);
 
 impl Threads {
-    /// The root of a new evaluation's group.
-    pub(crate) fn root() -> Self {
+    /// The root of a new evaluation's group, which joins it unless the
+    /// engine is `lasting`: one that lives as long as the process.
+    pub(crate) fn root(lasting: bool) -> Self {
         Self {
             group: Shared::new(Group {
                 running: Mutex::new(Some(Vec::new())),
             }),
-            root: true,
+            root: !lasting,
         }
     }
 
@@ -73,11 +76,12 @@ impl Threads {
                 "rawr: a thread was spawned after its evaluation returned",
             ));
         };
-        // SAFETY: the group's root joins this thread before it drops (its
-        // `Drop`, which waits for this lock to add the thread first). The
-        // root belongs to the state of an evaluation of this engine, which
-        // borrows the engine until it returns, after the root drops. So the
-        // engine outlives every use the thread makes of it.
+        // SAFETY: the engine lasts for the process, or the group's root
+        // joins this thread before it drops (its `Drop`, which waits for
+        // this lock to add the thread first). The root belongs to the state
+        // of an evaluation of this engine, which borrows the engine until it
+        // returns, after the root drops. So the engine outlives every use
+        // the thread makes of it.
         let engine: &'static Engine = unsafe { &*std::ptr::from_ref(context.engine()) };
         let global = context.global_runtime_state().clone();
         let name = context.fn_name().to_owned();
@@ -85,7 +89,15 @@ impl Threads {
         let thread = std::thread::Builder::new()
             .spawn(move || {
                 let context = NativeCallContext::from((engine, &*name, None, &global, position));
-                closure.call_raw(&context, None, [])
+                let outcome = closure.call_raw(&context, None, []);
+                // A thread that panics prints its panic as it ends, as
+                // Rust's panic hook does; `join` gives the payload.
+                if let Err(error) = &outcome
+                    && let Ok(report) = crate::diagnostic::Report::from_evaluation(None, error)
+                {
+                    eprint!("{}", crate::diagnostic::panicked(&report, "<unnamed>"));
+                }
+                outcome
             })
             // What `std::thread::spawn` panics with.
             .map_err(|error| panic(&format!("failed to spawn thread: {error:?}")))?;

@@ -12872,15 +12872,15 @@ fn language_io_error_methods_are_stable_through_std() {
 #[test]
 fn language_std_items_rawr_cannot_run_fail_at_their_use() {
     // The `use` resolves: std has the item, and nothing names it.
-    run("use std::sync::mpsc::channel;\nuse std::sync::Mutex;\npub fn run() -> i64 { 1 } run()");
+    run("use std::sync::mpsc::sync_channel;\nuse std::sync::RwLock;\npub fn run() -> i64 { 1 } run()");
     for (source, path) in [
         (
-            "use std::sync::mpsc::channel;\npub fn run() -> i64 { let (a, b) = channel::<i64>(); 0 } run()",
-            "std::sync::mpsc::channel",
+            "use std::sync::mpsc::sync_channel;\npub fn run() -> i64 { let (a, b) = sync_channel::<i64>(1); 0 } run()",
+            "std::sync::mpsc::sync_channel",
         ),
         (
-            "use std::sync::Mutex;\nfn take(m: Mutex<i64>) {}\npub fn run() -> i64 { 0 } run()",
-            "std::sync::Mutex",
+            "use std::sync::RwLock;\nfn take(m: RwLock<i64>) {}\npub fn run() -> i64 { 0 } run()",
+            "std::sync::RwLock",
         ),
         (
             "pub fn run() -> i64 { let x: Option<std::num::NonZeroU8> = None; 0 } run()",
