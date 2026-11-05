@@ -142,6 +142,7 @@ codes!(Resolve;
     (RESOLVE_UNKNOWN_TRAIT, "E0405", "A trait name nothing in scope declares, as rustc reports it."),
     (RESOLVE_BINARY_OPERATOR, "E0369", "A binary operator whose left operand's type has no impl of its trait, as rustc reports it."),
     (RESOLVE_GENERIC_ARGUMENT_COUNT, "E0107", "A path with more or fewer generic arguments than its type takes, as rustc reports it."),
+    (RESOLVE_EXPECTED_PATTERN, "E0532", "A pattern that names something no pattern is, as a call, as rustc reports it."),
     (RESOLVE_AMBIGUOUS_IMPL, "E0283", "A trait call whose type more than one impl could give, as rustc reports it."),
     (RESOLVE_NOT_YET, "RAWR-NOT-YET", "A std item rawr resolves but doesn't run yet."),
     (RESOLVE_PROJECTION_ANNOTATIONS, "E0284", "An operator whose output its operand's unknown type leaves open, as rustc reports it."),
@@ -252,6 +253,7 @@ pub(crate) fn std_path(rustc: &str) -> Code {
         "E0405" => RESOLVE_UNKNOWN_TRAIT,
         "E0369" => RESOLVE_BINARY_OPERATOR,
         "E0283" => RESOLVE_AMBIGUOUS_IMPL,
+        "E0532" => RESOLVE_EXPECTED_PATTERN,
         "E0107" => RESOLVE_GENERIC_ARGUMENT_COUNT,
         _ => RESOLVE_UNSTABLE,
     }

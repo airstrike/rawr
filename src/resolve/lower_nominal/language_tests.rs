@@ -13562,3 +13562,42 @@ fn language_string_literals_span_lines() {
     );
     assert_eq!(value, 5);
 }
+
+#[test]
+fn a_let_without_a_value_takes_its_first_assignment() {
+    // rustlings' lifetimes2, with the borrow kept in its scope.
+    let value = run(r#"
+        fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+            if x.len() > y.len() { x } else { y }
+        }
+        fn pick(c: bool) -> i64 {
+            let x;
+            if c {
+                x = 1;
+            } else {
+                x = 2;
+            }
+            x
+        }
+        pub fn run() -> i64 {
+            let a: i64;
+            a = 5;
+            let mut c;
+            c = 1;
+            c += 2;
+            let s;
+            let t = String::from("long");
+            {
+                s = longest(&t, "xyz");
+            }
+            let n;
+            loop {
+                n = 7;
+                break;
+            }
+            a * 1000 + c * 100 + (s.len() as i64) * 10 + n + pick(true) + pick(false)
+        }
+        run()
+    "#);
+    assert_eq!(value, 5000 + 300 + 40 + 7 + 1 + 2);
+}

@@ -11852,6 +11852,9 @@ struct Parser<'a> {
     /// Each use of a `deferred` local before it has a value, reported once
     /// the body's types are settled (`finish_uninitialized`).
     uninitialized: Vec<UninitializedUse>,
+    /// Each `let`'s local, in the order the body declares them: where an
+    /// inference variable nothing settles is reported (`unsettled`).
+    local_types: Vec<LocalType>,
     /// Reads of a crate struct's field that leave the struct whole, by
     /// their span: a by-value use moves that field out, as Rust's partial
     /// move (`move_local`).
@@ -12297,6 +12300,7 @@ impl<'a> Parser<'a> {
             moved_at: BTreeMap::new(),
             deferred: BTreeMap::new(),
             uninitialized: Vec::new(),
+            local_types: Vec::new(),
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
             owning_closures: BTreeSet::new(),
@@ -17079,6 +17083,44 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// The error type of each pending `try_into()` whose target is known
+    /// by now: its `TryFrom` impl's `Error`, as rustc selects the impl once
+    /// the target is, before the end of the body chooses its helper.
+    fn settle_try_from_errors(&mut self) {
+        let pending = self
+            .pending_conversions
+            .iter()
+            .filter_map(|conversion| {
+                let error = conversion.try_from.as_ref()?;
+                let target = self.inference.resolve(&conversion.target);
+                (!matches!(target, Ty::Infer(_))
+                    && matches!(self.inference.resolve(error), Ty::Infer(_)))
+                .then(|| (target, conversion.source.clone(), error.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (target, source, error) in pending {
+            for (_, from, owner) in self.program_try_froms() {
+                let checkpoint = self.inference.checkpoint();
+                if !(self.unify_type(&owner, &target) && self.unify_type(&from, &source)) {
+                    self.inference.rollback(checkpoint);
+                    continue;
+                }
+                let declared = self.inference.resolve(&Ty::Projection(
+                    Box::new(target.clone()),
+                    "TryFrom".into(),
+                    "Error".into(),
+                ));
+                if matches!(declared, Ty::Projection(..)) {
+                    self.inference.rollback(checkpoint);
+                } else {
+                    self.inference.commit(checkpoint);
+                    self.unify_type(&error, &declared);
+                }
+                break;
+            }
+        }
+    }
+
     /// The helper of `source.try_into()` into `target`: the program's
     /// `TryFrom<source>` for it, its `Error` the call's `error`.
     fn try_from_helper(
@@ -17610,6 +17652,9 @@ impl<'a> Parser<'a> {
             let helper = if let Some(error) = &conversion.try_from {
                 self.try_from_helper(&target, &conversion.source, error, conversion.span)?
             } else if matches!(target, Ty::Infer(_)) {
+                if let Some(error) = self.unsettled(&target, conversion.span, true) {
+                    return Err(error);
+                }
                 let source = conversion.source.name(&self.models);
                 return Err(Error::InvalidMethodCall {
                     owner: source.clone(),
@@ -24459,7 +24504,12 @@ impl<'a> Parser<'a> {
             value.source = self.with_temporaries(&temporaries, value.rendered_source());
             value.prelude = origin::Fragment::default();
         }
-        let ty = annotation.unwrap_or_else(|| value.ty.clone());
+        // `let x = todo!();`: a value that never comes coerces to any
+        // type, so the local's is the one its uses give it.
+        let ty = annotation.unwrap_or_else(|| match self.inference.resolve(&value.ty) {
+            Ty::Never => self.inference.fresh(),
+            _ => value.ty.clone(),
+        });
         // An immutable local iterator stays its chain: what it evaluates is
         // evaluated here, and each use runs it.
         let bound = match self.inference.resolve(&ty) {
@@ -24472,6 +24522,12 @@ impl<'a> Parser<'a> {
         };
         let hold = self.note_drop(&name, name_span, &ty)?;
         self.bound_value(&name, name_span, &value, value_start);
+        self.local_types.push(LocalType {
+            name: name.clone(),
+            declaration: name_span,
+            ty: ty.clone(),
+            value: Some(value.span),
+        });
         let keyword = self.binding_keyword(mutable, &ty);
         self.bindings.insert(
             name.clone(),
@@ -24538,6 +24594,12 @@ impl<'a> Parser<'a> {
         self.entry_aliases.remove(&name);
         self.flow().local(&name, name_span);
         self.deferred.insert(name_span, None);
+        self.local_types.push(LocalType {
+            name: name.clone(),
+            declaration: name_span,
+            ty: ty.clone(),
+            value: None,
+        });
         self.bindings.insert(
             name.clone(),
             Binding {
@@ -26195,6 +26257,29 @@ impl<'a> Parser<'a> {
     /// `let` take.
     fn parse_pattern_no_alt(&mut self) -> Result<PatternSyntax, Error> {
         let start = self.position();
+        // `todo!()` where a pattern goes: std's panicking macros expand to
+        // a call, which no pattern is (E0532).
+        if matches!(self.peek(), Token::Identifier(ref name)
+                if matches!(name.as_str(), "todo" | "unimplemented" | "panic" | "unreachable"))
+            && matches!(self.peek_second(), Token::Bang)
+        {
+            self.next();
+            self.next();
+            let unit = matches!(self.peek(), Token::Unit);
+            let (_, end) = self.take_argument_tokens()?;
+            let end = text_end(end, if unit { "()" } else { ")" });
+            return Err(Error::StdPath {
+                code: "E0532",
+                message: "expected a pattern, found a function call".into(),
+                label: Some("not a tuple struct or tuple variant".into()),
+                note: Some(
+                    "function calls are not allowed in patterns: \
+                     <https://doc.rust-lang.org/book/ch19-00-patterns.html>"
+                        .into(),
+                ),
+                reference: Span::new(start, end),
+            });
+        }
         if matches!(self.peek(), Token::Underscore) {
             self.next();
             let span = Span::new(start, text_end(start, "_"));
@@ -28084,7 +28169,11 @@ impl<'a> Parser<'a> {
                         && self.unit_struct(&name).is_none()
                         && !matches!(
                             self.peek_second(),
-                            Token::DoubleColon | Token::LeftParen | Token::LeftBrace | Token::Pipe
+                            Token::DoubleColon
+                                | Token::LeftParen
+                                | Token::LeftBrace
+                                | Token::Pipe
+                                | Token::Bang
                         )
                         && !matches!(self.peek_second(), Token::Reserved(ref text) if text.as_str() == "@") =>
                 {
@@ -36383,6 +36472,14 @@ impl<'a> Parser<'a> {
                 }
                 continue;
             }
+            // A member of a local whose type nothing has given yet, as
+            // `let mut it = todo!(); it.next()`: rustc needs the type here
+            // (E0282).
+            if matches!(value.lvalue, Some(Lvalue::Binding { .. }))
+                && let Some(error) = self.unsettled(&value.ty, value.span, false)
+            {
+                return Err(error);
+            }
             // A method call borrows its place; a field is a place below it.
             if matches!(self.peek(), Token::LeftParen | Token::Unit) {
                 self.call_on_place(&value);
@@ -36560,6 +36657,16 @@ impl<'a> Parser<'a> {
                     )
                     && !source.is_text()
                     && self.widget_erasure(&source).is_none()
+                    && !self.converts_from(&source)
+                {
+                    value = self.parse_target_into(value, &source, Vec::new(), None, end);
+                    continue;
+                }
+                // A number's `.into()`: the target the use site needs,
+                // through std's `From` of it (`impl From<u8> for u16`), as
+                // rustc infers it, and E0282 or E0283 when no use does.
+                if matches!(source, Ty::Int(_) | Ty::Float(_))
+                    && self.host_witnesses.is_empty()
                     && !self.converts_from(&source)
                 {
                     value = self.parse_target_into(value, &source, Vec::new(), None, end);
@@ -37907,6 +38014,22 @@ impl<'a> Parser<'a> {
                 indexed.span = expression;
                 return Ok(indexed);
             }
+        }
+        // `cow[i]` of a `Cow<[T]>` or a reference to one: through its
+        // `Deref`, as rustc's index auto-derefs.
+        let mut value = value;
+        while let Ty::Cow(_) = self.inference.resolve(&value.ty) {
+            let owner = self.inference.resolve(&value.ty);
+            let Some((target, call)) = self.deref_target(&owner, false) else {
+                break;
+            };
+            self.apply_derefs(&mut value, vec![call], target)?;
+        }
+        if let Ty::Reference { target, .. } = self.inference.resolve(&value.ty)
+            && let Ty::Cow(_) = self.inference.resolve(&target)
+            && let Some((target, call)) = self.deref_target(&target, false)
+        {
+            self.apply_derefs(&mut value, vec![call], target)?;
         }
         if let Some(keyed) = self.keyed_type(&value.ty) {
             return self.keyed_index(value, keyed, index, end);
@@ -42406,6 +42529,11 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let owner = Ty::Result(Box::new(ok.clone()), Box::new(err.clone()));
         self.script_callables = true;
+        // The error type of a `try_into()` whose target is known, which
+        // `unwrap` and `expect` show.
+        if matches!(self.inference.resolve(&err), Ty::Infer(_)) {
+            self.settle_try_from_errors();
+        }
         let (mut arguments, end) =
             self.parse_std_arguments(&owner, &member, "`Result` method arguments")?;
         self.builtin_enum_receiver(
@@ -43099,7 +43227,13 @@ impl<'a> Parser<'a> {
         value: origin::Fragment,
         span: Span,
     ) -> Result<origin::Fragment, Error> {
-        let ty = self.inference.resolve(ty);
+        let mut ty = self.inference.resolve(ty);
+        // `let c: Result<Color, _> = v.try_into();`: the error type is the
+        // impl's, which the target the annotation gave selects.
+        if matches!(ty, Ty::Infer(_)) {
+            self.settle_try_from_errors();
+            ty = self.inference.resolve(&ty);
+        }
         if self.std_error(&ty, false) {
             return Ok(self.error_text(value, true));
         }
@@ -43373,6 +43507,11 @@ impl<'a> Parser<'a> {
                     definition: model.definition().clone(),
                 });
                 origin::Fragment::call(&helper, [value])
+            }
+            // A local's type nothing has given yet, as the element of a
+            // `Vec::new()` only `.into()`s go in: rustc needs it (E0282).
+            Ty::Infer(_) if let Some(error) = self.unsettled(&ty, span, false) => {
+                return Err(error);
             }
             _ => {
                 return Err(Error::MissingCapability {
@@ -46752,6 +46891,37 @@ impl<'a> Parser<'a> {
             }
         }
         false
+    }
+
+    /// rustc's error for the inference variable `unknown`, which the use at
+    /// `needed` needs known, at the first `let` whose type holds it: E0282
+    /// "type annotations needed for `Vec<_>`". A trait's conversion that
+    /// nothing settles (`ambiguous`) is E0283 at the `let` of its value,
+    /// and E0282 at a `let` whose own value made the variable
+    /// (`Vec::new()`), which rustc marks.
+    fn unsettled(&self, unknown: &Ty, needed: Span, ambiguous: bool) -> Option<Error> {
+        let unknown @ Ty::Infer(_) = self.inference.resolve(unknown) else {
+            return None;
+        };
+        let (local, ty) = self.local_types.iter().find_map(|local| {
+            let ty = self.inference.resolve(&local.ty);
+            contains(&ty, &|inner| *inner == unknown).then_some((local, ty))
+        })?;
+        let made = local
+            .value
+            .filter(|value| !(value.start() <= needed.start() && needed.end() <= value.end()))
+            .filter(|_| ty != unknown);
+        Some(Error::LocalTypeNeeded {
+            code: if ambiguous && made.is_none() {
+                "E0283"
+            } else {
+                "E0282"
+            },
+            name: local.name.clone(),
+            ty: (ty != unknown).then(|| ty.name(&self.models)),
+            declaration: self.name_span(local.declaration, &local.name),
+            needed: Some(made.unwrap_or(needed)),
+        })
     }
 
     /// The first use of a `let x;` before it has a value, now the body's
@@ -53046,20 +53216,20 @@ fn mentions_script(ty: &Ty) -> bool {
 }
 
 fn contains_inference(ty: &Ty) -> bool {
-    contains(ty, |ty| matches!(ty, Ty::Infer(_)))
+    contains(ty, &|ty| matches!(ty, Ty::Infer(_)))
 }
 
 /// Whether `ty` holds a literal whose kind is still open: `{integer}` or
 /// `{float}`, which only the end of its body settles.
 #[cfg(feature = "rust-import")]
 fn contains_open_literal(ty: &Ty) -> bool {
-    contains(ty, |ty| {
+    contains(ty, &|ty| {
         matches!(ty, Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_)))
     })
 }
 
 /// Whether `ty` or a type inside it is one `leaf` picks.
-fn contains(ty: &Ty, leaf: fn(&Ty) -> bool) -> bool {
+fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
     let inside = |ty: &Ty| contains(ty, leaf);
     leaf(ty)
         || match ty {
@@ -56825,6 +56995,15 @@ struct PendingWide {
     at: Span,
     placeholder: String,
     texts: [String; 3],
+}
+
+/// A `let`'s local and its type (`Lowering::local_types`).
+struct LocalType {
+    name: ImmutableString,
+    declaration: Span,
+    ty: Ty,
+    /// The `let`'s value, when it has one.
+    value: Option<Span>,
 }
 
 /// A use of a `let x;` before an assignment gives it a value

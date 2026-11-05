@@ -560,6 +560,15 @@ fn bind(
                 element: given,
                 kind: sequence::Kind::Slice,
             }) => bind(solver, element, &given, parameters, substitution),
+            // A type still to be inferred, as `Cow::from`'s `B`, becomes a
+            // slice of an element to be inferred.
+            Some(ty @ Ty::Infer(_)) => solver.fresh().is_some_and(|given| {
+                let slice = Ty::Array {
+                    element: Box::new(given.clone()),
+                    kind: sequence::Kind::Slice,
+                };
+                solver.unify(&slice, &ty) && bind(solver, element, &given, parameters, substitution)
+            }),
             _ => false,
         },
         Written::Array(element, length) => match ty {

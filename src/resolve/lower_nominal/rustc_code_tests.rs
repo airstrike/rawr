@@ -255,3 +255,76 @@ fn errors_rustc_gives_without_a_code_print_a_plain_error() {
     assert!(plain("const NUMBER = 3;\nfn main() {}\n")
         .starts_with("error: missing type for `const` item\n"));
 }
+
+#[test]
+fn a_let_used_before_its_assignment_is_e0381() {
+    // rustlings' variables3.
+    assert_eq!(
+        refused("fn main() {\n    let x: i32;\n    println!(\"Number {x}\");\n}\n"),
+        (
+            "E0381".into(),
+            "used binding `x` isn't initialized".into(),
+            label("`x` used here but it isn't initialized")
+        )
+    );
+    // Only one branch gives it a value.
+    assert_eq!(
+        refused(
+            "fn f(c: bool) -> i32 {\n    let x: i32;\n    if c {\n        x = 1;\n    }\n    x\n}\n"
+        ),
+        (
+            "E0381".into(),
+            "used binding `x` is possibly-uninitialized".into(),
+            label("`x` used here but it is possibly-uninitialized")
+        )
+    );
+    // A move after its assignment is E0382 as for any local.
+    let (code, _, _) = refused(
+        "fn main() {\n    let s;\n    s = String::from(\"a\");\n    let t = s;\n    \
+         println!(\"{s} {t}\");\n}\n",
+    );
+    assert_eq!(code, "E0382");
+}
+
+#[test]
+fn a_let_without_a_value_assigned_twice_is_e0384() {
+    assert_eq!(
+        refused("fn main() {\n    let x;\n    x = 1;\n    x = 2;\n    println!(\"{x}\");\n}\n"),
+        (
+            "E0384".into(),
+            "cannot assign twice to immutable variable `x`".into(),
+            label("cannot assign twice to immutable variable")
+        )
+    );
+}
+
+#[test]
+fn a_let_without_a_value_or_a_type_where_one_is_needed_is_e0283() {
+    // rustlings' variables2: the comparison needs `x`'s type.
+    let (code, message, _) = refused(
+        "fn main() {\n    let x;\n    if x == 10 {\n        println!(\"ten\");\n    }\n}\n",
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0283", "type annotations needed")
+    );
+    let (code, _, _) = refused("fn main() {\n    let x;\n    let y = x + 1;\n}\n");
+    assert_eq!(code, "E0284");
+}
+
+#[test]
+fn a_borrow_assigned_to_a_let_without_a_value_is_checked() {
+    // rustlings' lifetimes2: `string2` ends while `result` holds it.
+    let (code, message, _) = refused(
+        "fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {\n    \
+         if x.len() > y.len() { x } else { y }\n}\n\
+         fn main() {\n    let string1 = String::from(\"long string is long\");\n    \
+         let result;\n    {\n        let string2 = String::from(\"xyz\");\n        \
+         result = longest(&string1, &string2);\n    }\n    \
+         println!(\"The longest string is '{result}'\");\n}\n",
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0597", "`string2` does not live long enough")
+    );
+}
