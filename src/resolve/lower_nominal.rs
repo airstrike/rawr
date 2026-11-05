@@ -8692,8 +8692,10 @@ enum Ty {
     Cell(CellKind, Box<Ty>),
     /// An iterator of `Item` (`impl Iterator<Item = T>`): an adaptor chain
     /// fused into one loop where it is consumed, else the array of its
-    /// items at runtime.
-    Iter(Box<Ty>),
+    /// items at runtime. With the std struct it is, when rawr knows it
+    /// (`core::str::iter::Chars` of `s.chars()`), whose own inherent
+    /// methods it also has; an adaptor's chain is any iterator.
+    Iter(Box<Ty>, Option<&'static str>),
     /// `dyn Trait`, behind `&` or `Box`: a value of some type implementing
     /// the trait, whose methods dispatch by the value's runtime type.
     /// With its associated type bindings by name (`dyn Shape<Output =
@@ -8712,6 +8714,11 @@ enum Ty {
 }
 
 impl Ty {
+    /// Any iterator of `item`, as an adaptor makes.
+    fn iter(item: Ty) -> Self {
+        Self::Iter(Box::new(item), None)
+    }
+
     /// The sequence `kind` of `element`: `Vec<T>`, `[T]`, ..
     fn sequence(kind: sequence::Kind, element: Ty) -> Self {
         Self::Array {
@@ -8759,7 +8766,7 @@ impl Ty {
             | Self::Boxed(target)
             | Self::Counted(_, target)
             | Self::Weak(_, target)
-            | Self::Iter(target)
+            | Self::Iter(target, _)
             | Self::Reverse(target)
             | Self::Cow(target)
             | Self::Range(target)
@@ -8867,7 +8874,7 @@ impl Ty {
             );
         }
         if let Some((item, _)) = ty.iterator_item() {
-            return Self::Iter(Box::new(Self::from_resolved(item)));
+            return Self::iter(Self::from_resolved(item));
         }
         if let Some(inner) = ty.reverse_element() {
             return Self::Reverse(Box::new(Self::from_resolved(inner)));
@@ -9052,7 +9059,11 @@ impl Ty {
                 format!("{}<{}>", counter.name(), target.name(models)).into()
             }
             Self::Weak(_, target) => format!("Weak<{}>", target.name(models)).into(),
-            Self::Iter(item) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
+            // rustc names a std iterator by its struct: `Chars<'_>`.
+            Self::Iter(_, Some(std)) => {
+                format!("{}<'_>", std.rsplit("::").next().unwrap_or(std)).into()
+            }
+            Self::Iter(item, None) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
             Self::Cow(borrowed) => format!("Cow<'_, {}>", borrowed.name(models)).into(),
             Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
@@ -9135,7 +9146,7 @@ impl Ty {
             Self::Array { .. }
             | Self::Tuple(_)
             | Self::FnChoice { .. }
-            | Self::Iter(_)
+            | Self::Iter(..)
             | Self::Keyed(..) => Some(TypeId::of::<crate::Array>()),
             Self::Reverse(_) => Some(TypeId::of::<std::cmp::Reverse<Dynamic>>()),
             Self::Cow(_) => Some(TypeId::of::<cow::Value>()),
@@ -9301,7 +9312,7 @@ impl Ty {
             | Self::Boxed(..)
             | Self::Counted(..)
             | Self::Weak(..)
-            | Self::Iter(_)
+            | Self::Iter(..)
             | Self::Keyed(..)
             | Self::Reverse(_)
             | Self::Cow(_)
@@ -9559,7 +9570,7 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
                 left_counter == right_counter && compare(left, right, forward, reverse)
             }
             (Ty::Option(left), Ty::Option(right))
-            | (Ty::Iter(left), Ty::Iter(right))
+            | (Ty::Iter(left, _), Ty::Iter(right, _))
             | (Ty::Reverse(left), Ty::Reverse(right))
             | (Ty::Cow(left), Ty::Cow(right))
             | (Ty::Range(left), Ty::Range(right))
@@ -9819,7 +9830,7 @@ impl Inference {
             Ty::Boxed(target) => Ty::Boxed(Box::new(self.resolve(target))),
             Ty::Counted(counter, target) => Ty::Counted(*counter, Box::new(self.resolve(target))),
             Ty::Weak(counter, target) => Ty::Weak(*counter, Box::new(self.resolve(target))),
-            Ty::Iter(item) => Ty::Iter(Box::new(self.resolve(item))),
+            Ty::Iter(item, std) => Ty::Iter(Box::new(self.resolve(item)), *std),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
             Ty::Cow(inner) => Ty::Cow(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
@@ -9951,7 +9962,7 @@ impl Inference {
             && let Some(item) =
                 self.associated_equality(&base, trait_name, name, is_iterator_trait, "Item")
         {
-            return Ty::Iter(Box::new(item));
+            return Ty::iter(item);
         }
         // `T::Fore` of `type Fore: Iterator;` is an iterator of the opaque
         // `<T::Fore as Iterator>::Item`, as rustc types its items (T379).
@@ -9962,11 +9973,11 @@ impl Inference {
                 .contains(&(trait_name.clone(), name.clone()))
         {
             let fore = Ty::Projection(Box::new(base), trait_name.clone(), name.clone());
-            return Ty::Iter(Box::new(Ty::Projection(
+            return Ty::iter(Ty::Projection(
                 Box::new(fore),
                 "Iterator".into(),
                 "Item".into(),
-            )));
+            ));
         }
         Ty::Projection(Box::new(base), trait_name.clone(), name.clone())
     }
@@ -11008,7 +11019,7 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         Ty::Weak(counter, target) => {
             Ty::Weak(*counter, Box::new(instantiate(target, substitution)))
         }
-        Ty::Iter(item) => Ty::Iter(Box::new(instantiate(item, substitution))),
+        Ty::Iter(item, std) => Ty::Iter(Box::new(instantiate(item, substitution)), *std),
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
         Ty::Cow(inner) => Ty::Cow(Box::new(instantiate(inner, substitution))),
         Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
@@ -14450,7 +14461,7 @@ impl<'a> Parser<'a> {
             }
             Ty::Script(id, _) if self.models.implements(trait_name, *id) => true,
             // Rawr's iterator type: a `Range`, a chain, `impl Iterator`.
-            Ty::Iter(_) if is_iterator_trait(trait_name) => true,
+            Ty::Iter(..) if is_iterator_trait(trait_name) => true,
             // An imported type the crate implements `Iterator`,
             // `PartialOrd` or `Ord` for.
             Ty::Host { proof, .. }
@@ -15050,7 +15061,7 @@ impl<'a> Parser<'a> {
                 }
                 // Rawr's iterator type stands for the projection
                 // (`Inference::project`), so the impl's type must be one.
-                let Ty::Iter(item) = self.inference.resolve(ty) else {
+                let Ty::Iter(item, _) = self.inference.resolve(ty) else {
                     return Err(Error::UnsupportedNominalSyntax {
                         construct: format!(
                             "`{}` as an associated type bounded by `{bound}<Item = ..>`: Rawr \
@@ -18228,7 +18239,7 @@ impl<'a> Parser<'a> {
             }
             // Rawr's iterators are iterators, and `Clone` when their items
             // are.
-            Ty::Iter(item) => {
+            Ty::Iter(item, _) => {
                 capability == capability::Kind::Iterator
                     || capability == capability::Kind::Clone
                         && self.type_provides(&item, capability)
@@ -18317,7 +18328,7 @@ impl<'a> Parser<'a> {
                 intrinsic::Type::array(self.proven_type(&element, operation, span)?, kind.length())
             }
             // An iterator a host gives is the array of its items.
-            Ty::Iter(element) => {
+            Ty::Iter(element, _) => {
                 intrinsic::Type::array(self.proven_type(&element, operation, span)?, None)
             }
             // `None` where the host takes an `Option` of a callable: no item
@@ -20174,14 +20185,14 @@ impl<'a> Parser<'a> {
                     originating,
                 )?),
             ),
-            Shape::Iter(element) => Ty::Iter(Box::new(self.instantiate_host_type(
+            Shape::Iter(element) => Ty::iter(self.instantiate_host_type(
                 element,
                 parameters,
                 operation,
                 span,
                 owner,
                 originating,
-            )?)),
+            )?),
             Shape::Range(element) => Ty::Range(Box::new(self.instantiate_host_type(
                 element,
                 parameters,
@@ -20660,7 +20671,7 @@ impl<'a> Parser<'a> {
                     kind: sequence::Kind::Vec,
                     ..
                 },
-                Ty::Iter(item),
+                Ty::Iter(item, _),
             ) = (
                 self.inference.resolve(expected),
                 self.inference.resolve(&argument.ty),
@@ -23454,7 +23465,7 @@ impl<'a> Parser<'a> {
                 | Ty::Never
                 | Ty::Reference { .. }
                 | Ty::Dyn(..)
-                | Ty::Iter(_)
+                | Ty::Iter(..)
                 | Ty::Callable { .. }
                 | Ty::Param(_)
                 | Ty::Projection(..)
@@ -24392,7 +24403,7 @@ impl<'a> Parser<'a> {
         // An immutable local iterator stays its chain: what it evaluates is
         // evaluated here, and each use runs it.
         let bound = match self.inference.resolve(&ty) {
-            Ty::Iter(item) if !mutable && value.prelude.is_empty() => self
+            Ty::Iter(item, _) if !mutable && value.prelude.is_empty() => self
                 .pipelines
                 .get(value.source.as_str())
                 .cloned()
@@ -29311,7 +29322,7 @@ impl<'a> Parser<'a> {
         self.loop_element = Some((iterator, element, positions, Vec::new()));
         // A `Box<dyn Iterator>` is its iterator at runtime.
         if let Ty::Boxed(inner) = self.inference.resolve(&lhs.ty)
-            && let iterator @ Ty::Iter(_) = self.inference.resolve(&inner)
+            && let iterator @ Ty::Iter(..) = self.inference.resolve(&inner)
         {
             lhs.ty = iterator;
         }
@@ -29321,7 +29332,7 @@ impl<'a> Parser<'a> {
             _ => {
                 // An iterator chain of one loop runs the body in it.
                 let iterated = self.inference.resolve(&lhs.ty);
-                if (matches!(iterated, Ty::Iter(_) | Ty::InclusiveRange)
+                if (matches!(iterated, Ty::Iter(..) | Ty::InclusiveRange)
                     || (iterated.script().is_some() || matches!(iterated, Ty::Host { .. }))
                         && self.type_implements(&iterated, "Iterator"))
                     && let Some((pipeline, item)) = self.for_pipeline(&lhs)
@@ -29356,7 +29367,7 @@ impl<'a> Parser<'a> {
                 }
                 // `for x in v` takes each element; `&v` and `v.iter()` borrow it.
                 let ty = match self.inference.resolve(&lhs.ty) {
-                    Ty::Iter(item) => *item,
+                    Ty::Iter(item, _) => *item,
                     Ty::Array { element, .. } => *element,
                     Ty::Keyed(kind, arguments) => keyed::keyed_item(kind, &arguments, None),
                     Ty::Reference { mutable, target } => match *target {
@@ -33606,7 +33617,7 @@ impl<'a> Parser<'a> {
         if parameter
             .iterator_item()
             .is_some_and(|(_, into)| into || iterator(self, &argument.ty))
-            && !matches!(self.inference.resolve(&argument.ty), Ty::Iter(_))
+            && !matches!(self.inference.resolve(&argument.ty), Ty::Iter(..))
             && let Some(iterator) = self.iterator_of(argument)
         {
             *argument = iterator;
@@ -40005,7 +40016,7 @@ impl<'a> Parser<'a> {
                         .extend(bound.names.iter().map(|name| name.as_str().into()));
                 }
             }
-            let ty = Ty::Iter(Box::new(bound.item.clone()));
+            let ty = Ty::iter(bound.item.clone());
             let mut value = self.iterator_expr(bound.pipeline, bound.item, name_span);
             value.lvalue = Some(Lvalue::Binding { binding: name, ty });
             return Ok(value);
@@ -43395,7 +43406,7 @@ impl<'a> Parser<'a> {
             operands.push(inclusive.to_string().into());
             let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
             let source = self.mutation_call(&value, &helper, operands)?;
-            let ty = Ty::Iter(Box::new(element));
+            let ty = Ty::iter(element);
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }
         // A deque's `range(r)`: an iterator over references to the
@@ -49202,7 +49213,7 @@ impl<'a> Parser<'a> {
         let element = self.parse_local_type()?;
         self.expect_close_angle("'>' after a range type's element")?;
         if range != "RangeInclusive" {
-            return Ok(Ty::Iter(Box::new(element)));
+            return Ok(Ty::iter(element));
         }
         Ok(match element {
             Ty::Float(_) => Ty::FloatRange,
@@ -49986,7 +49997,7 @@ impl<'a> Parser<'a> {
         {
             return match (&positional[..], &mut bindings[..]) {
                 ([], [(name, item)]) if name.as_str() == "Item" => {
-                    Ok(Ty::Iter(Box::new(std::mem::replace(item, Ty::Unknown))))
+                    Ok(Ty::iter(std::mem::replace(item, Ty::Unknown)))
                 }
                 _ => Err(Error::UnsupportedNominalSyntax {
                     construct: format!("`dyn {trait_name}` without its `<Item = T>`").into(),
@@ -50608,7 +50619,7 @@ impl<'a> Parser<'a> {
         };
         let target_element = self.inference.resolve(target_element);
         let source_element = match source {
-            Ty::Array { element, .. } | Ty::Iter(element) => self.inference.resolve(element),
+            Ty::Array { element, .. } | Ty::Iter(element, _) => self.inference.resolve(element),
             _ => return Ok(false),
         };
         let fixed = matches!(
@@ -50618,7 +50629,7 @@ impl<'a> Parser<'a> {
                 ..
             }
         );
-        let iterator = matches!(source, Ty::Iter(_));
+        let iterator = matches!(source, Ty::Iter(..));
         // iced's `keyed_column(pairs)`: an iterator of `(key, Element)`
         // pairs, a facade slice of tuples that hold a widget.
         if iterator
@@ -51467,7 +51478,7 @@ impl<'a> Parser<'a> {
                     && self.unify_type(expected_element, actual_element)
             }
             (Ty::Option(expected_element), Ty::Option(actual_element))
-            | (Ty::Iter(expected_element), Ty::Iter(actual_element))
+            | (Ty::Iter(expected_element, _), Ty::Iter(actual_element, _))
             | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
             | (Ty::Cow(expected_element), Ty::Cow(actual_element))
             | (Ty::Range(expected_element), Ty::Range(actual_element))
@@ -52833,7 +52844,7 @@ fn contains(ty: &Ty, leaf: fn(&Ty) -> bool) -> bool {
         || match ty {
             Ty::Reference { target, .. }
             | Ty::Boxed(target)
-            | Ty::Iter(target)
+            | Ty::Iter(target, _)
             | Ty::Reverse(target)
             | Ty::Cow(target)
             | Ty::Range(target)

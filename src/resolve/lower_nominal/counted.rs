@@ -699,7 +699,7 @@ impl Parser<'_> {
             | Ty::Option(inner)
             | Ty::Array { element: inner, .. }
             | Ty::Reverse(inner)
-            | Ty::Iter(inner)
+            | Ty::Iter(inner, _)
             | Ty::Cell(_, inner) => self.not_send_in(&inner, visiting),
             Ty::Result(ok, err) => {
                 self.not_send_in(&ok, visiting) || self.not_send_in(&err, visiting)
@@ -755,7 +755,7 @@ impl Parser<'_> {
             | Ty::Option(inner)
             | Ty::Array { element: inner, .. }
             | Ty::Reverse(inner)
-            | Ty::Iter(inner) => self.sync_in(&inner, visiting),
+            | Ty::Iter(inner, _) => self.sync_in(&inner, visiting),
             Ty::Result(ok, err) => self.sync_in(&ok, visiting) && self.sync_in(&err, visiting),
             Ty::Tuple(members) | Ty::Keyed(_, members) => {
                 members.iter().all(|member| self.sync_in(member, visiting))
@@ -798,7 +798,7 @@ impl Parser<'_> {
             | Ty::Option(inner)
             | Ty::Array { element: inner, .. }
             | Ty::Reverse(inner)
-            | Ty::Iter(inner)
+            | Ty::Iter(inner, _)
             | Ty::Cell(_, inner) => self.holds_counted(&inner, visiting),
             Ty::Result(ok, err) => {
                 self.holds_counted(&ok, visiting) || self.holds_counted(&err, visiting)
