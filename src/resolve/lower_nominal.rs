@@ -39,7 +39,11 @@ mod language_tests;
 #[cfg(test)]
 mod placeholder_tests;
 #[cfg(test)]
+mod privacy_tests;
+#[cfg(test)]
 mod rust_meaning_tests;
+#[cfg(test)]
+mod rustc_code_tests;
 #[cfg(test)]
 mod std_impl_tests;
 #[cfg(test)]
@@ -118,7 +122,7 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     let compiler_host = host
         .clone_for_import(allocation)
         .map_err(super::ImportedFailure::Surface)?;
-    let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+    let models = Models::new(program, runtime, compiler_host, engine);
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
     let mut allocation_failure = None;
@@ -388,7 +392,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+        let models = Models::new(program, runtime, compiler_host, engine);
         let mut revealed = Vec::new();
         let mut waiting = Vec::new();
         let mut first_failure = None;
@@ -1017,7 +1021,7 @@ fn body_templates<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+        let models = Models::new(program, runtime, compiler_host, engine);
         let mut promoted = Vec::new();
         for (key, candidate) in &candidates {
             let mut uses = Vec::new();
@@ -1137,7 +1141,7 @@ fn instance_round<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
+        let models = Models::new(program, runtime, compiler_host, engine);
         let mut found = Vec::<(crate::item::Key, Vec<Ty>)>::new();
         let mut impl_uses = Vec::new();
         for shell in program.items.iter() {
@@ -2717,7 +2721,7 @@ pub(super) fn lower(
         program,
         runtime_model.clone(),
         engine.host_registry.clone(),
-        engine.access().clone(),
+        engine,
     );
     lower_with_context(
         engine,
@@ -2744,12 +2748,7 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
         .host_registry
         .clone_for_import(allocation)
         .map_err(super::ImportedFailure::Surface)?;
-    let mut models = Models::new(
-        program,
-        runtime_model.clone(),
-        compiler_host,
-        engine.access().clone(),
-    );
+    let mut models = Models::new(program, runtime_model.clone(), compiler_host, engine);
     models._imported_owner = allocation.support_owner();
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
@@ -4398,6 +4397,9 @@ struct Tables {
     /// What the program may reach while it compiles: the files
     /// `include_str!` reads and the variables `env!` reads (D683.4).
     access: crate::Access,
+    /// Whether the program builds as `rustc --test` builds it: `cfg(test)`
+    /// holds.
+    test: bool,
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
     #[cfg(feature = "rust-import")]
@@ -4420,6 +4422,9 @@ struct Tables {
     entry_crate: Option<ImmutableString>,
     /// The type aliases each source names, resolved once with the headers.
     aliases: BTreeMap<(crate::program::source::Id, ImmutableString), type_ref::Alias>,
+    /// The module each source is, which decides what it sees of another
+    /// module's private items.
+    namespaces: BTreeMap<crate::program::source::Id, crate::resolve::Namespace>,
     methods: BTreeMap<(type_def::Id, ImmutableString), method::Definition>,
     /// Each type's `impl From<T>` functions, by the type converted to.
     conversions: BTreeMap<type_def::Id, Vec<method::Definition>>,
@@ -4545,7 +4550,7 @@ impl Models {
         program: &Program,
         runtime: crate::program::model::Model,
         host: crate::host::Registry,
-        access: crate::Access,
+        engine: &Engine,
     ) -> Self {
         let definitions: BTreeMap<_, _> = program
             .types
@@ -5021,7 +5026,8 @@ impl Models {
         let tables = Tables {
             runtime,
             host,
-            access,
+            access: engine.access().clone(),
+            test: engine.test(),
             imports,
             #[cfg(feature = "rust-import")]
             lexical: program.lexical.clone(),
@@ -5036,6 +5042,11 @@ impl Models {
             qualified_rust: program.qualified_rust.clone(),
             entry_crate: program.entry_crate.clone(),
             aliases: program.aliases.clone(),
+            namespaces: program
+                .scripts
+                .iter()
+                .map(|script| (script.source, script.namespace.clone()))
+                .collect(),
             methods,
             conversions,
             trait_methods,
@@ -5216,11 +5227,13 @@ impl Models {
 
     /// The inherent function `name` of `owner`, or else the one trait
     /// function of that name its trait impls provide, as Rust looks them up.
+    /// An inherent function this source can't see is passed over, as
+    /// rustc's probe passes over a private candidate.
     fn method(&self, owner: type_def::Id, name: &str) -> Option<&method::Definition> {
         if let Some(inherent) = self
             .methods
             .get(&(owner, name.into()))
-            .filter(|method| method.source() == self.context || method.is_public())
+            .filter(|method| self.sees(method))
         {
             return Some(inherent);
         }
@@ -5228,6 +5241,31 @@ impl Models {
             [single] => Some(single),
             _ => None,
         }
+    }
+
+    /// The inherent function `name` of `owner` that is private to a module
+    /// this source is outside of: rustc's E0624 where nothing else of that
+    /// name is found.
+    fn private_method(&self, owner: type_def::Id, name: &str) -> Option<&method::Definition> {
+        self.methods
+            .get(&(owner, name.into()))
+            .filter(|method| !self.sees(method))
+    }
+
+    /// Whether this source sees `method`: a public one, a trait impl's
+    /// (which is as visible as its trait), or one private to this source's
+    /// module or one of its ancestors.
+    fn sees(&self, method: &method::Definition) -> bool {
+        method.is_public()
+            || method.trait_name().is_some()
+            || method.source() == self.context
+            || match (
+                self.namespaces.get(&self.context),
+                self.namespaces.get(&method.source()),
+            ) {
+                (Some(here), Some(module)) => here.sees_private(module),
+                _ => false,
+            }
     }
 
     /// Whether `owner` implements the crate trait `trait_name`.
@@ -5724,6 +5762,12 @@ enum PreludeOp {
     CharMethod,
     /// `char::from_digit(n, radix)`, or `char::from_u32(n)` with radix `-1`.
     CharFrom,
+    /// `e.kind()` of a `ParseIntError`, from its message: std's
+    /// `IntErrorKind`.
+    IntErrorKind,
+    /// `c.to_uppercase()`, or `c.to_lowercase()` when its flag is false:
+    /// std's `ToUppercase` or `ToLowercase`.
+    CaseMapping,
     /// A `Vec` changed in place (`VEC_METHODS`), called as a method so the
     /// array is taken by reference: `vec(code, a, b, c)`.
     VecMethod,
@@ -5881,6 +5925,8 @@ impl PreludeOp {
             Self::SplitAt => "slice.split-at",
             Self::CharMethod => "char.method",
             Self::CharFrom => "char.from",
+            Self::IntErrorKind => "error.int-kind",
+            Self::CaseMapping => "char.case-mapping",
             Self::VecMethod => "vec.method",
             Self::VecCapacity => "vec.capacity",
             Self::FrameCopy => "scope.frame-copy",
@@ -6108,6 +6154,8 @@ impl PreludeOp {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()]
             }
             Self::CharFrom => vec![TypeId::of::<crate::INT>(), TypeId::of::<crate::INT>()],
+            Self::IntErrorKind => vec![TypeId::of::<ImmutableString>()],
+            Self::CaseMapping => vec![TypeId::of::<char>(), TypeId::of::<bool>()],
             Self::SetAlgebra => vec![
                 TypeId::of::<crate::Array>(),
                 TypeId::of::<crate::Array>(),
@@ -6529,6 +6577,17 @@ impl PreludeOp {
                     Some(c) => crate::option::some(c.into()),
                     None => crate::option::none(),
                 });
+            }
+            Self::IntErrorKind => {
+                let message = args[0].clone_cast::<ImmutableString>();
+                return crate::std_facade::int_error_kind(&message)
+                    .map(Dynamic::from)
+                    .ok_or_else(|| invariant("a `ParseIntError` has std's message"));
+            }
+            Self::CaseMapping => {
+                let c = args[0].as_char().unwrap_or_default();
+                let upper = args[1].as_bool().unwrap_or_default();
+                return Ok(crate::std_facade::case_mapped(c, upper));
             }
             Self::CharMethod => {
                 let c = args[0].as_char().unwrap_or_default();
@@ -12061,6 +12120,13 @@ struct Parser<'a> {
     no_struct: bool,
     /// The second `>` of a `>>` closing nested generic arguments.
     split_angle: Option<Position>,
+    /// Where the block-like expression statement being parsed starts: an
+    /// `if` there with no `else` is a statement, whose consequent must be
+    /// `()` (E0308), where elsewhere its value is wanted (E0317).
+    block_statement: Option<Position>,
+    /// Where each `if` with no `else` starts: its value, `()`, where another
+    /// type is expected is rustc's E0317.
+    else_less: BTreeSet<Position>,
     /// The declared output of the body being parsed, for `?` and `return`.
     return_ty: Option<Ty>,
     /// A function whose `&mut` output borrows its receiver: each value it
@@ -12282,6 +12348,8 @@ impl<'a> Parser<'a> {
             pending_defaults: Vec::new(),
             no_struct: false,
             split_angle: None,
+            block_statement: None,
+            else_less: BTreeSet::new(),
             return_ty: None,
             place_output: false,
             returns: 0,
@@ -12648,6 +12716,14 @@ impl<'a> Parser<'a> {
         if let Some(error) = self.std_not_yet(&written, reference) {
             return Some(error);
         }
+        if self.program_macro(name, at.start()) {
+            return Some(Error::WrongKind {
+                expected: "function",
+                found: "macro",
+                name: written.as_ref().into(),
+                reference,
+            });
+        }
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
         imports.sort_by_key(|path| (path.len(), path.clone()));
         Some(Error::UnknownFunction {
@@ -12687,6 +12763,15 @@ impl<'a> Parser<'a> {
         }
         if let Some(error) = self.std_not_yet(&written, reference) {
             return error;
+        }
+        // A struct with fields isn't a value: rustc's E0423.
+        if let Some(Nominal::Struct { .. }) = self.models.get(name) {
+            return Error::WrongKind {
+                expected: "value",
+                found: "struct",
+                name: written.as_ref().into(),
+                reference,
+            };
         }
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
         if imports.is_empty() {
@@ -13549,13 +13634,10 @@ impl<'a> Parser<'a> {
         source: &Ty,
         span: Span,
     ) -> Option<(method::Definition, Ty, Ty)> {
-        let context = self.models.context;
         let candidates = self.models.conversions.get(&target)?.clone();
         let mut chosen = None;
-        for candidate in candidates
-            .into_iter()
-            .filter(|candidate| candidate.source() == context || candidate.is_public())
-        {
+        // An `impl From` is as visible as `From`, from every module.
+        for candidate in candidates {
             let (from, owner) = self.conversion_source(&candidate);
             let checkpoint = self.inference.checkpoint();
             let fits = expected.is_none_or(|expected| self.unify_type(&owner, expected))
@@ -17654,6 +17736,7 @@ impl<'a> Parser<'a> {
                     .ok_or_else(|| Error::UnknownType {
                         name: last.text.clone(),
                         reference: *span,
+                        path: false,
                     })?;
                 let (ty, substitution) = self.fresh_nominal(&model, *span);
                 let Nominal::Struct { definition, item } = model else {
@@ -18076,21 +18159,8 @@ impl<'a> Parser<'a> {
             Ty::Range(element) | Ty::InclusiveOf(element) => {
                 capability != capability::Kind::Copy && self.type_provides(&element, capability)
             }
-            // `ParseIntError` and kin: `Debug`, `Clone`, `PartialEq`, `Eq`.
-            Ty::ParseError(_) => matches!(
-                capability,
-                capability::Kind::Debug
-                    | capability::Kind::Clone
-                    | capability::Kind::PartialEq
-                    | capability::Kind::Eq
-            ),
-            // `Ordering` derives what an integer has, but not `Default`.
-            Ty::Ordering => {
-                capability != capability::Kind::Default
-                    && crate::capability::builtin_supports("i64", capability)
-            }
-            // `Duration` and `Instant` are `Copy`, compare, order and print;
-            // a `Duration` is also `Default`.
+            Ty::ParseError(error) => crate::capability::builtin_supports(error.name(), capability),
+            Ty::Ordering => crate::capability::builtin_supports("Ordering", capability),
             Ty::Time(time) => crate::capability::builtin_supports(time.name(), capability),
             // `&T` compares, orders, hashes and prints as `T` does; a shared
             // reference is `Copy`.
@@ -22841,11 +22911,12 @@ impl<'a> Parser<'a> {
                         mutation: operation,
                         receiver: binding.declaration,
                     },
-                    BindingKind::Local | BindingKind::Invocation => Error::ImmutableBinding {
-                        binding: root,
-                        mutation: operation,
-                        declaration: binding.declaration,
-                    },
+                    BindingKind::Local | BindingKind::Invocation => {
+                        let place = self
+                            .written(receiver.span)
+                            .unwrap_or_else(|| root.to_string());
+                        Error::borrow_immutable_place(&place, &root, receiver.span)
+                    }
                 }),
                 None => Err(Error::InvalidHostOperation {
                     item: item.path().into(),
@@ -23502,6 +23573,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The type Rawr's std holds at `path` under its root, as
+    /// `num::IntErrorKind`.
+    fn std_held(&self, path: &str) -> Option<Ty> {
+        let path = format!("{}::{path}", crate::std_facade::ROOT);
+        let definition = self.models.host.type_(&path)?.clone();
+        Some(Ty::Host {
+            proof: HostTyProof::new(
+                definition,
+                None,
+                self.models.host.type_owner(&path).cloned(),
+            ),
+            arguments: Box::default(),
+        })
+    }
+
     /// `value.field` of an imported struct: a read, or, before `=`, the
     /// field's store (`store_imported_field`).
     #[cfg(feature = "rust-import")]
@@ -23606,11 +23692,10 @@ impl<'a> Parser<'a> {
                                 receiver: binding.declaration,
                             },
                             BindingKind::Local | BindingKind::Invocation => {
-                                Error::ImmutableBinding {
-                                    binding: root,
-                                    mutation: member_span,
-                                    declaration: binding.declaration,
-                                }
+                                let place = self
+                                    .written(span(receiver.span.start(), member_span.end()))
+                                    .unwrap_or_else(|| root.to_string());
+                                Error::assign_immutable(&place, &root, member_span)
                             }
                         });
                     }
@@ -24685,7 +24770,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The predicate of `cfg(..)` or `cfg!(..)` for the target Rawr runs
-    /// on. No feature is on.
+    /// on, `test` holding as the engine builds. No feature is on.
     fn cfg_predicate(&mut self) -> Result<bool, Error> {
         let (name, at) = match self.next() {
             (Token::Identifier(name), position) => (name.to_string(), position),
@@ -24730,6 +24815,7 @@ impl<'a> Parser<'a> {
                 };
                 Ok(cfg_value(&name, &value))
             }
+            "test" => Ok(self.models.test),
             _ => Ok(cfg_flag(&name)),
         }
     }
@@ -25652,7 +25738,10 @@ impl<'a> Parser<'a> {
         let operation_count = self.ops.len();
         let checkpoint = self.inference.checkpoint();
         let block_like = self.peek_block_like();
-        let value = self.parse_expr_in(block_like)?;
+        let outer = std::mem::replace(&mut self.block_statement, block_like.then_some(start));
+        let value = self.parse_expr_in(block_like);
+        self.block_statement = outer;
+        let value = value?;
         // Nothing runs after a diverging expression (`panic!()`).
         if matches!(self.inference.resolve(&value.ty), Ty::Never) {
             self.flow().diverge();
@@ -25774,18 +25863,18 @@ impl<'a> Parser<'a> {
         let Some(binding) = self.mutation_binding(&binding_name) else {
             return Err(self.unsupported("assignment through an unknown binding"));
         };
-        if !binding.mutable {
+        // rustc checks an assignment's types before its mutability: an
+        // immutable local is reported once the value's type is.
+        let immutable = (!binding.mutable && matches!(binding.kind, BindingKind::Local))
+            .then_some(binding.declaration);
+        if !binding.mutable && immutable.is_none() {
             return Err(match &binding.kind {
                 BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
                     owner: owner.clone(),
                     mutation: value.span,
                     receiver: binding.declaration,
                 },
-                BindingKind::Local => Error::ImmutableBinding {
-                    binding: binding_name.clone(),
-                    mutation: value.span,
-                    declaration: binding.declaration,
-                },
+                BindingKind::Local => unreachable!("an immutable local is reported below"),
                 BindingKind::Invocation => Error::InvalidHostOperation {
                     item: lvalue.ty().name(&self.models),
                     reason:
@@ -25799,6 +25888,7 @@ impl<'a> Parser<'a> {
             matches!(binding.ty, Ty::Reference { .. }) && !matches!(value.ty, Ty::Reference { .. });
         // `r = &mut b;` of a `&mut` local given new borrows.
         if compound_operator(&assignment).is_none()
+            && immutable.is_none()
             && let Some((selector, mutable)) = self.rebound_selector(&value.ty, &lvalue)
         {
             return self.rebind_selector(value.span, &value.ty, selector, mutable);
@@ -25829,6 +25919,10 @@ impl<'a> Parser<'a> {
             replacement = self.compound_assignment(operator, target, replacement)?;
         }
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
+        if let Some(declaration) = immutable {
+            let assignment = span(value.span.start(), replacement.span.end());
+            return Err(self.immutable_assignment(&lvalue, declaration, assignment));
+        }
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
         self.move_local(&mut replacement)?;
         if compound_operator(&assignment).is_none()
@@ -27281,6 +27375,7 @@ impl<'a> Parser<'a> {
         .ok_or_else(|| Error::UnknownType {
             name: owner.clone(),
             reference: syntax.owner_span,
+            path: false,
         })?;
         let Nominal::Enum { definition, item } = model else {
             return Err(Error::InvalidMatch {
@@ -28849,7 +28944,12 @@ impl<'a> Parser<'a> {
             self.peek(),
             Token::SemiColon | Token::RightBrace | Token::Comma | Token::EOF
         ) {
-            self.require_type(&output, &Ty::Unit, start)?;
+            if !self.unify_type(&output, &Ty::Unit) {
+                return Err(Error::ReturnWithoutValue {
+                    output: self.inference.resolve(&output).name(&self.models),
+                    at: Span::new(start.start(), text_end(start.start(), "return")),
+                });
+            }
             if let Some(returned) = self.copied_return("()".into()) {
                 source.push_text(" ");
                 source.push(returned);
@@ -31085,7 +31185,7 @@ impl<'a> Parser<'a> {
         let consequent_end = self.flow().arm_end();
         self.flow().arm(split);
         let alternative = if !matches!(self.peek(), Token::Else) {
-            self.require_type(&Ty::Unit, &consequent.value.ty, consequent.value.span)?;
+            self.require_else_less(if_span, &consequent)?;
             Branch {
                 value: self.literal("()", Ty::Unit, consequent.syntax),
                 syntax: consequent.syntax,
@@ -31133,6 +31233,33 @@ impl<'a> Parser<'a> {
         source.push(alternative.value.rendered_block());
         source.push_text("\n}");
         Ok(self.operator_expr(source.surrounded("(", ")"), output, span))
+    }
+
+    /// An `if` with no `else` has type `()`, so its consequent must be
+    /// `()`. As a statement, rustc reports the consequent (E0308); where its
+    /// value is wanted, the `if` (E0317). A function body's tail is wanted
+    /// unless the function returns `()`.
+    fn require_else_less(&mut self, if_span: Span, consequent: &Branch) -> Result<(), Error> {
+        self.else_less.insert(if_span.start());
+        let ty = self.inference.resolve(&consequent.value.ty);
+        if self.unify_type(&Ty::Unit, &ty) || matches!(ty, Ty::Never) {
+            return Ok(());
+        }
+        let statement = self.block_statement == Some(if_span.start());
+        let tail = matches!(self.peek(), Token::RightBrace | Token::EOF);
+        let wanted = !statement
+            || tail
+                && self
+                    .return_ty
+                    .as_ref()
+                    .is_some_and(|output| !matches!(self.inference.resolve(output), Ty::Unit));
+        if !wanted {
+            return self.require_type(&Ty::Unit, &ty, consequent.value.span);
+        }
+        Err(Error::IfWithoutElse {
+            expected: ty.name(&self.models),
+            expression: span(if_span.start(), consequent.syntax.end()),
+        })
     }
 
     fn parse_if(&mut self, if_span: Span) -> Result<ParsedExpr, Error> {
@@ -31206,8 +31333,7 @@ impl<'a> Parser<'a> {
         let consequent_end = self.flow().arm_end();
         self.flow().arm(split);
         let alternative = if !matches!(self.peek(), Token::Else) {
-            // `if` without `else` has type `()`.
-            self.require_type(&Ty::Unit, &consequent.value.ty, consequent.value.span)?;
+            self.require_else_less(if_span, &consequent)?;
             Branch {
                 value: self.literal("()", Ty::Unit, consequent.syntax),
                 syntax: consequent.syntax,
@@ -31446,11 +31572,9 @@ impl<'a> Parser<'a> {
                     mutation: value.span,
                     receiver: binding.declaration,
                 },
-                BindingKind::Local | BindingKind::Invocation => Error::ImmutableBinding {
-                    binding: binding_name.clone(),
-                    mutation: value.span,
-                    declaration: binding.declaration,
-                },
+                BindingKind::Local | BindingKind::Invocation => {
+                    self.immutable_assignment(&lvalue, binding.declaration, value.span)
+                }
             });
         }
         // `Some(n) => r = &mut b,` of a `&mut` local given new borrows.
@@ -32321,6 +32445,28 @@ impl<'a> Parser<'a> {
                     note: None,
                     reference: operator_at.unwrap_or(span(lhs.span.start(), rhs.span.end())),
                 });
+            }
+            // Two numeric types, as `f64 / usize`: the left's impl of the
+            // operator's trait takes only its own type, rustc's E0277.
+            let right = self.inference.resolve(&rhs.ty);
+            if matches!(left, Ty::Int(_) | Ty::Float(_))
+                && matches!(right, Ty::Int(_) | Ty::Float(_))
+                && !self.unifies(&left, &right)
+            {
+                let (left, right) = (left.name(&self.models), right.name(&self.models));
+                if let Some((message, trait_name)) = arithmetic_trait(symbol, &left, &right) {
+                    return Err(Error::Unimplemented {
+                        message: message.into(),
+                        label: format!("no implementation for `{left} {symbol} {right}`").into(),
+                        help: Some(
+                            format!(
+                                "the trait `{trait_name}<{right}>` is not implemented for `{left}`"
+                            )
+                            .into(),
+                        ),
+                        at: operator_at.unwrap_or(span(lhs.span.start(), rhs.span.end())),
+                    });
+                }
             }
         }
         let ty = self.operand_type(&lhs, &mut rhs, allowed)?;
@@ -33635,19 +33781,14 @@ impl<'a> Parser<'a> {
                                 // continues it.
                                 let Some(binding) = this.bindings.get(name.as_str()) else {
                                     let at = expression.start();
-                                    this.splice_tokens(vec![
-                                        (Token::Identifier(Box::new(name.as_str().into())), at),
-                                        (Token::Comma, at),
-                                    ]);
-                                    let captured = match this.parse_expr() {
-                                        Ok(captured) => captured,
-                                        Err(Error::UnknownVariable { .. }) => {
-                                            return Err(invalid(format!(
-                                                "cannot find value `{name}` in this scope"
-                                            )));
-                                        }
-                                        Err(error) => return Err(error),
+                                    // `{self:?}` in a method reads its
+                                    // receiver, which is the keyword's token.
+                                    let token = match name.as_str() {
+                                        "self" => Token::SelfValue,
+                                        _ => Token::Identifier(Box::new(name.as_str().into())),
                                     };
+                                    this.splice_tokens(vec![(token, at), (Token::Comma, at)]);
+                                    let captured = this.parse_expr()?;
                                     this.expect(Token::Comma, "an inline `format!` argument")?;
                                     arguments.push((Some(name.as_str().into()), captured));
                                     return Ok(arguments.len() - 1);
@@ -35567,11 +35708,7 @@ impl<'a> Parser<'a> {
                     return Err(self.unsupported("assignment through an unknown binding"));
                 };
                 if !local.mutable {
-                    return Err(Error::ImmutableBinding {
-                        binding: binding.clone(),
-                        mutation: value.span,
-                        declaration: local.declaration,
-                    });
+                    return Err(Error::borrow_immutable(binding, value.span));
                 }
                 self.mutable_use(&value, expression);
                 let mut call = origin::Fragment::plain(format!("{{ {binding} += "));
@@ -36871,6 +37008,22 @@ impl<'a> Parser<'a> {
                 value = self.parse_time_method(value, time, member, member_span)?;
                 continue;
             }
+            // `e.kind()` of a `ParseIntError`: a borrow of its kind, which
+            // Rawr's std holds as std's own `IntErrorKind`.
+            if number == Ty::ParseError(ParseError::Int)
+                && member.as_str() == "kind"
+                && matches!(self.peek(), Token::Unit)
+                && let Some(kind) = self.std_held("num::IntErrorKind")
+            {
+                let end = self.next().1;
+                let source = self.prelude_op(PreludeOp::IntErrorKind, [value.rendered_source()]);
+                let ty = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(kind),
+                };
+                value = self.operator_expr(source, ty, span(value.span.start(), end));
+                continue;
+            }
             // `e.to_string()` and `e.clone()` of a `ParseIntError` and kin:
             // its message, which is its value.
             if let Ty::ParseError(error) = number
@@ -36904,6 +37057,27 @@ impl<'a> Parser<'a> {
             }
             if matches!(number, Ty::Int(_) | Ty::Float(_)) && member != "to_string" {
                 value = self.parse_number_method(value, number, member, member_span)?;
+                continue;
+            }
+            // `c.to_uppercase()` and `c.to_lowercase()`: std's iterators of
+            // the chars its case maps to, which Rawr's std holds as std's
+            // own.
+            if number == Ty::Char
+                && matches!(member.as_str(), "to_uppercase" | "to_lowercase")
+                && matches!(self.peek(), Token::Unit)
+                && let Some(ty) = self.std_held(if member.as_str() == "to_uppercase" {
+                    "char::ToUppercase"
+                } else {
+                    "char::ToLowercase"
+                })
+            {
+                let end = self.next().1;
+                let upper = (member.as_str() == "to_uppercase").to_string();
+                let source = self.prelude_op(
+                    PreludeOp::CaseMapping,
+                    [value.rendered_source(), upper.into()],
+                );
+                value = self.operator_expr(source, ty, span(value.span.start(), end));
                 continue;
             }
             if number == Ty::Char
@@ -37054,11 +37228,13 @@ impl<'a> Parser<'a> {
                     "copy" => capability::Kind::Copy,
                     "debug" => capability::Kind::Debug,
                     _ => {
-                        return Err(Error::UnknownMember {
-                            owner: model.name().into(),
-                            member,
-                            reference: member_span,
-                        });
+                        return Err(self
+                            .private_member(definition_id, &member, member_span)
+                            .unwrap_or_else(|| Error::UnknownMember {
+                                owner: model.name().into(),
+                                member,
+                                reference: member_span,
+                            }));
                     }
                 };
                 if !args.is_empty() {
@@ -37213,6 +37389,24 @@ impl<'a> Parser<'a> {
             self.finish_method_call(&receiver, &member, &value);
         }
         Ok(value)
+    }
+
+    /// rustc's E0624 for `member` of the script type `owner` where it is
+    /// an inherent function private to a module this source is outside of
+    /// and nothing else of that name is found.
+    fn private_member(&self, owner: type_def::Id, member: &str, reference: Span) -> Option<Error> {
+        let definition = self.models.private_method(owner, member)?;
+        Some(Error::PrivateItem {
+            item: if definition.receiver().is_some() {
+                crate::resolve::Private::Method
+            } else {
+                crate::resolve::Private::AssociatedFunction
+            },
+            name: definition.name().into(),
+            reference,
+            declaration: (definition.source() == self.models.context)
+                .then_some(definition.name_span()),
+        })
     }
 
     /// `value.member(args)` through `owner`'s inherent or trait function
@@ -38440,10 +38634,15 @@ impl<'a> Parser<'a> {
 
         if matches!(self.peek(), Token::Bang) {
             let Some(binding) = self.models.import(&name).cloned() else {
-                return Err(Error::InvalidHostOperation {
-                    item: name,
-                    reason: "no macro of this name is in scope; import it with `use`".into(),
-                    operation: name_span,
+                if self.program_macro(&name, name_span.start()) {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!("the program's own `macro_rules! {name}`").into(),
+                        source: name_span,
+                    });
+                }
+                return Err(Error::UnknownMacro {
+                    reference: Span::new(name_span.start(), text_end(name_span.start(), &name)),
+                    name,
                 });
             };
             let (item::Import::Item {
@@ -41435,15 +41634,7 @@ impl<'a> Parser<'a> {
                         reference: value.span,
                     });
                 }
-                return Err(Error::TypeMismatch {
-                    expected: self.inference.resolve(&output).name(&self.models),
-                    actual: format!(
-                        "Result<_, {}> (`?` returns the error early, converted by `From`)",
-                        error.name(&self.models)
-                    )
-                    .into(),
-                    expression,
-                });
+                return Err(self.try_operator(&output, &early, expression));
             };
             let ok = self.inference.fresh();
             self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
@@ -41468,18 +41659,7 @@ impl<'a> Parser<'a> {
             return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
         }
         if !self.unify_type(&output, &early) {
-            let actual = match self.inference.resolve(&early) {
-                Ty::Result(_, err) => format!(
-                    "Result<_, {}> (`?` returns the error early, converted by `From`)",
-                    err.name(&self.models)
-                ),
-                _ => "Option<_> (`?` returns `None` early)".to_string(),
-            };
-            return Err(Error::TypeMismatch {
-                expected: self.inference.resolve(&output).name(&self.models),
-                actual: actual.into(),
-                expression,
-            });
+            return Err(self.try_operator(&output, &early, expression));
         }
         // The early return is the operand itself: `None`, or `Err(error)`.
         let mut value = value;
@@ -42297,6 +42477,48 @@ impl<'a> Parser<'a> {
                     }),
                 )
             }
+            // `as_deref` borrows the `Ok` value through `Deref`, as
+            // `Option`'s does: `Result<String, E>` gives `Result<&str, &E>`.
+            "as_deref" | "as_deref_mut" => {
+                arity(0, &arguments)?;
+                let mutable = member.as_str() == "as_deref_mut";
+                let reference = Ty::Reference {
+                    mutable,
+                    target: Box::new(self.inference.resolve(&ok)),
+                };
+                let err = Box::new(Ty::Reference {
+                    mutable,
+                    target: Box::new(err),
+                });
+                match self.deref_reference(&reference, false) {
+                    Some((target, std_impl::DerefCall::Value)) => {
+                        source.push_text(r.as_str());
+                        Ty::Result(Box::new(target), err)
+                    }
+                    // A program's `deref` runs on the `Ok` value.
+                    Some((target, std_impl::DerefCall::Program(call))) if !mutable => {
+                        let test = is(self);
+                        let unwrapped = value_of(self);
+                        let dereferenced = Self::std_call(&call, unwrapped, &[]);
+                        let produced = self.prelude_op(PreludeOp::Ok, [dereferenced]);
+                        branch(&mut source, test, produced, r.as_str().into());
+                        Ty::Result(Box::new(target), err)
+                    }
+                    Some(_) => {
+                        return Err(Error::NotYet {
+                            path: format!("Result::{member}").into(),
+                            reference: member_span,
+                        });
+                    }
+                    None => {
+                        return Err(Error::UnknownMember {
+                            owner: owner.name(&self.models),
+                            member,
+                            reference: member_span,
+                        });
+                    }
+                }
+            }
             "clone" => {
                 arity(0, &arguments)?;
                 source.push_text(r.as_str());
@@ -42311,7 +42533,7 @@ impl<'a> Parser<'a> {
             }
         };
         source.push_text(" }");
-        if member.as_str() == "as_mut" {
+        if matches!(member.as_str(), "as_mut" | "as_deref_mut") {
             self.lend_place(&value, expression);
         }
         // A block is not an `if` condition in the legacy parser.
@@ -42368,11 +42590,9 @@ impl<'a> Parser<'a> {
                     mutation,
                     receiver: binding.declaration,
                 },
-                BindingKind::Local | BindingKind::Invocation => Error::ImmutableBinding {
-                    binding: binding_name.clone(),
-                    mutation,
-                    declaration: binding.declaration,
-                },
+                BindingKind::Local | BindingKind::Invocation => {
+                    self.immutable_assignment(lvalue, binding.declaration, mutation)
+                }
             });
         }
         Ok(match lvalue {
@@ -46277,6 +46497,163 @@ impl<'a> Parser<'a> {
         Ok(substitution)
     }
 
+    /// rustc's E0277 for `expression`, a `?` whose operand returns `early`
+    /// where the function's output is `output`, which can't hold it.
+    fn try_operator(&self, output: &Ty, early: &Ty, expression: Span) -> Error {
+        let output = self.inference.resolve(output);
+        let early = self.inference.resolve(early);
+        let name = output.name(&self.models);
+        let (message, label) = match (&output, &early) {
+            (Ty::Result(_, returned), Ty::Result(_, error)) => (
+                format!(
+                    "`?` couldn't convert the error to `{}`",
+                    returned.name(&self.models)
+                ),
+                format!(
+                    "the trait `From<{}>` is not implemented for `{}`",
+                    error.name(&self.models),
+                    returned.name(&self.models)
+                ),
+            ),
+            (Ty::Result(..), _) => (
+                "the `?` operator can only be used on `Result`s, not `Option`s, in a function \
+                 that returns `Result`"
+                    .to_string(),
+                format!("use `.ok_or(...)?` to provide an error compatible with `{name}`"),
+            ),
+            (Ty::Option(_), _) => (
+                "the `?` operator can only be used on `Option`s, not `Result`s, in a function \
+                 that returns `Option`"
+                    .to_string(),
+                format!(
+                    "use `.ok()?` if you want to discard the `{}` error information",
+                    early.name(&self.models)
+                ),
+            ),
+            _ => (
+                "the `?` operator can only be used in a function that returns `Result` or \
+                 `Option` (or another type that implements `FromResidual`)"
+                    .to_string(),
+                format!("cannot use the `?` operator in a function that returns `{name}`"),
+            ),
+        };
+        // rustc points at the `?` itself.
+        let end = expression.end();
+        let at = match (end.line(), end.position()) {
+            (Some(line), Some(column)) if column > 1 => Span::new(
+                Position::new(
+                    u16::try_from(line).unwrap_or(u16::MAX),
+                    u16::try_from(column - 1).unwrap_or(u16::MAX),
+                ),
+                end,
+            ),
+            _ => expression,
+        };
+        Error::Unimplemented {
+            message: message.into(),
+            label: label.into(),
+            help: None,
+            at,
+        }
+    }
+
+    /// Whether the program defines `macro_rules! name` at a file's top
+    /// level before `at`, where Rust's textual scope makes it visible.
+    fn program_macro(&self, name: &str, at: Position) -> bool {
+        let key = self.models.sources.key(self.models.context.index());
+        let Ok(source) = self.models.sources.resolve(key) else {
+            return false;
+        };
+        let Some(line) = at.line() else {
+            return false;
+        };
+        let mut depth = 0usize;
+        for text in source.text().split('\n').take(line.saturating_sub(1)) {
+            let trimmed = text.trim_start();
+            if depth == 0
+                && let Some(rest) = trimmed.strip_prefix("macro_rules!")
+                && rest.trim_start().strip_prefix(name).is_some_and(|after| {
+                    after.starts_with(|next: char| next.is_whitespace() || next == '{')
+                })
+            {
+                return true;
+            }
+            for character in text.chars() {
+                match character {
+                    '{' => depth += 1,
+                    '}' => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
+    /// The source text at `at`, on one line, as the program writes it.
+    fn written(&self, at: Span) -> Option<String> {
+        let key = self.models.sources.key(self.models.context.index());
+        let source = self.models.sources.resolve(key).ok()?;
+        let (start, end) = (at.start(), at.end());
+        if start.line()? != end.line()? {
+            return None;
+        }
+        let line = source
+            .text()
+            .split('\n')
+            .nth(start.line()?.checked_sub(1)?)?;
+        let chars = line.chars().collect::<Vec<_>>();
+        let from = start.position()?.checked_sub(1)?;
+        let to = end.position()?.checked_sub(1)?;
+        (from < to && to <= chars.len()).then(|| chars[from..to].iter().collect())
+    }
+
+    /// rustc's error for an assignment to `lvalue`, at `at`, whose root
+    /// local `binding` (declared at `declaration`) isn't `mut`: E0384 for the
+    /// local itself, E0596 for an element of a `Vec`, which `IndexMut`
+    /// borrows, and E0594 for another part.
+    fn immutable_assignment(&self, lvalue: &Lvalue, declaration: Span, at: Span) -> Error {
+        let binding = lvalue.binding();
+        let place = self
+            .written(at)
+            .map(|text| assigned_place(&text).to_string())
+            .unwrap_or_else(|| binding.to_string());
+        let array = self.bindings.get(binding.as_str()).is_some_and(|local| {
+            matches!(
+                self.inference.resolve(&local.ty),
+                Ty::Array {
+                    kind: sequence::Kind::Array(_),
+                    ..
+                }
+            )
+        });
+        match lvalue {
+            Lvalue::Binding { .. } => Error::ImmutableBinding {
+                binding: binding.clone(),
+                mutation: at,
+                declaration,
+            },
+            Lvalue::Field(field) => {
+                Error::assign_immutable(&format!("{binding}.{}", field.member), binding, at)
+            }
+            // An element of anything but an array is `IndexMut`'s, which
+            // borrows the indexed place mutably.
+            _ if !array && place.ends_with(']') => {
+                let indexed = place
+                    .rfind('[')
+                    .map_or(place.as_str(), |open| place[..open].trim_end());
+                Error::borrow_immutable_place(
+                    indexed,
+                    binding,
+                    Span::new(at.start(), text_end(at.start(), indexed)),
+                )
+            }
+            Lvalue::Place { .. } | Lvalue::Slice(..) => {
+                Error::assign_immutable(&format!("{binding}[_]"), binding, at)
+            }
+            Lvalue::Nested(..) => Error::assign_immutable(&place, binding, at),
+        }
+    }
+
     /// The binding a change through `name` changes. A closure's `self` is
     /// the method's own: the statement making the closure writes it back
     /// (`lend_self`).
@@ -46348,11 +46725,13 @@ impl<'a> Parser<'a> {
                     borrow: Span::NONE,
                 }
             }
-            BindingKind::Local | BindingKind::Invocation => Error::ImmutableBinding {
-                binding: name,
-                mutation: operation,
-                declaration: binding.declaration,
-            },
+            BindingKind::Local | BindingKind::Invocation => {
+                let place = match &value.lvalue {
+                    Some(Lvalue::Field(field)) => format!("{}.{}", field.binding, field.member),
+                    _ => self.written(value.span).unwrap_or_else(|| name.to_string()),
+                };
+                Error::borrow_immutable_place(&place, &name, value.span)
+            }
         })
     }
 
@@ -48026,6 +48405,7 @@ impl<'a> Parser<'a> {
                 Error::UnknownType {
                     name: owner,
                     reference: owner_span,
+                    path: true,
                 }
             };
             // A crate's module path no binding names, as a macro's
@@ -48209,12 +48589,15 @@ impl<'a> Parser<'a> {
             .retain_origin());
         }
 
+        let owner_id = model.definition().id();
         let Nominal::Enum { definition, item } = model else {
-            return Err(Error::UnknownMember {
-                owner,
-                member,
-                reference: member_span,
-            });
+            return Err(self
+                .private_member(owner_id, &member, member_span)
+                .unwrap_or(Error::UnknownMember {
+                    owner,
+                    member,
+                    reference: member_span,
+                }));
         };
         let Some((variant, declaration)) = item
             .variants
@@ -48222,11 +48605,13 @@ impl<'a> Parser<'a> {
             .enumerate()
             .find(|(_, variant)| variant.name.text == member)
         else {
-            return Err(Error::UnknownMember {
-                owner: definition.name().into(),
-                member,
-                reference: member_span,
-            });
+            return Err(self
+                .private_member(owner_id, &member, member_span)
+                .unwrap_or_else(|| Error::UnknownMember {
+                    owner: definition.name().into(),
+                    member,
+                    reference: member_span,
+                }));
         };
         // `E::V { x, y: 1 }` of a struct variant.
         if let Some(fields) = &declaration.fields {
@@ -49177,6 +49562,7 @@ impl<'a> Parser<'a> {
                 return Err(Error::UnknownType {
                     name,
                     reference: name_span,
+                    path: false,
                 });
             };
             qualified = Some((definition, self.models.host.type_owner(&path).cloned()));
@@ -49612,6 +49998,7 @@ impl<'a> Parser<'a> {
             return Err(Error::UnknownType {
                 name: trait_name.into(),
                 reference: span,
+                path: false,
             });
         };
         let names = bindings
@@ -49743,6 +50130,7 @@ impl<'a> Parser<'a> {
                             Error::UnknownType {
                                 name: name.into(),
                                 reference: span,
+                                path: false,
                             }
                         }));
                     }
@@ -49806,6 +50194,12 @@ impl<'a> Parser<'a> {
         );
         if let Some(error) = self.argument_signature(&expected, &actual, span) {
             return Err(error);
+        }
+        if matches!(actual, Ty::Unit) && self.else_less.contains(&span.start()) {
+            return Err(Error::IfWithoutElse {
+                expected: expected.name(&self.models),
+                expression: span,
+            });
         }
         let mut found = actual.name(&self.models).to_string();
         // Arrays of two lengths: rustc's label for them.
@@ -51473,6 +51867,7 @@ impl<'a> Parser<'a> {
             return Err(Error::UnknownType {
                 name,
                 reference: name_span,
+                path: false,
             });
         };
         let substitution = alias.params.iter().cloned().zip(arguments).collect();
@@ -53127,6 +53522,18 @@ fn debug_typed(
                 && let Some(leaf) = DebugLeaf::of_name(path.name.as_str()) =>
         {
             spec.unwrap_or(&DebugSpec::PLAIN).leaf(value, leaf)
+        }
+        // `ParseIntError` and its kin are their messages at runtime, and
+        // print std's `Debug` of the error with that message.
+        (type_ref::Type::Path(path), Union::Str(text, ..))
+            if path.target == type_ref::Target::Builtin
+                && let Some(error) = ParseError::named(path.name.as_str()) =>
+        {
+            error
+                .texts()
+                .iter()
+                .find(|(message, _)| *message == text.as_str())
+                .map_or_else(|| text.to_string(), |(_, debug)| (*debug).to_owned())
         }
         (type_ref::Type::Path(path), Union::Int(value, ..))
             if path.target == type_ref::Target::Builtin && path.name.as_str() == "Ordering" =>
@@ -55810,6 +56217,43 @@ fn integer_text(text: &str) -> Option<Wide> {
     (magnitude <= 1 << 127).then(|| Wide::Signed(0i128.wrapping_sub_unsigned(magnitude)))
 }
 
+/// The place an assignment's text `text` assigns: `g.c[0]` of
+/// `g.c[0] += 2`.
+fn assigned_place(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let assignment = (0..bytes.len()).find(|&index| {
+        bytes[index] == b'='
+            && bytes.get(index + 1) != Some(&b'=')
+            && !matches!(
+                index.checked_sub(1).map(|before| bytes[before]),
+                Some(b'=' | b'!' | b'<' | b'>')
+            )
+    });
+    let Some(assignment) = assignment else {
+        return text.trim();
+    };
+    text[..assignment]
+        .trim_end()
+        .trim_end_matches(['+', '-', '*', '/', '%', '^', '&', '|', '<', '>'])
+        .trim_end()
+}
+
+/// rustc's message for arithmetic `symbol` of `left` and `right` that no
+/// impl covers, and the operator's trait.
+fn arithmetic_trait(symbol: &str, left: &str, right: &str) -> Option<(String, &'static str)> {
+    Some(match symbol {
+        "+" => (format!("cannot add `{right}` to `{left}`"), "Add"),
+        "-" => (format!("cannot subtract `{right}` from `{left}`"), "Sub"),
+        "*" => (format!("cannot multiply `{left}` by `{right}`"), "Mul"),
+        "/" => (format!("cannot divide `{left}` by `{right}`"), "Div"),
+        "%" => (
+            format!("cannot calculate the remainder of `{left}` divided by `{right}`"),
+            "Rem",
+        ),
+        _ => return None,
+    })
+}
+
 /// Rust's error for an integer literal `value` out of `kind`'s range.
 fn literal_range(kind: Int, value: Wide, at: Span) -> Error {
     Error::TypeMismatch {
@@ -57531,18 +57975,8 @@ pub fn run() -> i64 {
         let new_generation = crate::program::GenerationId::issue();
         let old_runtime = crate::program::model::Model::new(old_generation, &old);
         let new_runtime = crate::program::model::Model::new(new_generation, &new);
-        let old_models = Models::new(
-            &old,
-            old_runtime,
-            host::Registry::new(),
-            crate::Access::none(),
-        );
-        let new_models = Models::new(
-            &new,
-            new_runtime,
-            host::Registry::new(),
-            crate::Access::none(),
-        );
+        let old_models = Models::new(&old, old_runtime, host::Registry::new(), &Engine::new_raw());
+        let new_models = Models::new(&new, new_runtime, host::Registry::new(), &Engine::new_raw());
         let old_outer = old_models.get("Outer").unwrap();
         let new_outer = new_models.get("Outer").unwrap();
         let retained = default_value(old_outer, &old_models, &mut Vec::new()).unwrap();

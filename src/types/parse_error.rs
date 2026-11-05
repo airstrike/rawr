@@ -323,11 +323,11 @@ impl fmt::Display for ParseErrorType {
                     f,
                     "Duplicate item '{name}'; first declared at {previous_declaration}"
                 ),
-                crate::resolve::Error::UnknownType { name, .. } => {
-                    write!(f, "Unknown type '{name}' in item header")
+                crate::resolve::Error::UnknownType { name, path, .. } => {
+                    write!(f, "{}", crate::resolve::NotFound::type_named(name, *path))
                 }
                 crate::resolve::Error::UnknownImport { path, .. } => {
-                    write!(f, "Unknown compile-time import '{path}'")
+                    write!(f, "unresolved import `{path}`")
                 }
                 crate::resolve::Error::InvalidImport { path, reason, .. } => {
                     write!(f, "Invalid compile-time import '{path}': {reason}")
@@ -365,6 +365,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::NotInModule { module, item, .. } => {
                     write!(f, "Cannot find '{item}' in module '{module}'")
                 }
+                crate::resolve::Error::PrivateItem { item, name, .. } => {
+                    write!(f, "{} `{name}` is private", item.noun())
+                }
                 crate::resolve::Error::MemberKind {
                     owner, member, field: true, ..
                 } => write!(f, "Field '{owner}::{member}' called like a method"),
@@ -372,11 +375,21 @@ impl fmt::Display for ParseErrorType {
                     owner, member, field: false, ..
                 } => write!(f, "Method '{owner}::{member}' read like a field"),
                 crate::resolve::Error::UnknownFunction { name, .. } => {
-                    write!(f, "Unknown function '{name}'")
+                    write!(f, "{}", crate::resolve::NotFound::Function(name))
                 }
                 crate::resolve::Error::UnknownVariable { name, .. } => {
-                    write!(f, "Unknown variable '{name}'")
+                    write!(f, "{}", crate::resolve::NotFound::Value(name))
                 }
+                crate::resolve::Error::UnknownMacro { name, .. } => {
+                    write!(f, "{}", crate::resolve::NotFound::Macro(name))
+                }
+                crate::resolve::Error::Unimplemented { message, .. } => f.write_str(message),
+                crate::resolve::Error::WrongKind {
+                    expected,
+                    found,
+                    name,
+                    ..
+                } => write!(f, "expected {expected}, found {found} `{name}`"),
                 crate::resolve::Error::BorrowConflict { message, code, .. } => {
                     write!(f, "{message} ({code})")
                 }
@@ -395,9 +408,15 @@ impl fmt::Display for ParseErrorType {
                 }
                 crate::resolve::Error::TypeMismatch {
                     expected, actual, ..
-                } => write!(f, "Type mismatch: expected '{expected}', found '{actual}'"),
+                } => write!(f, "mismatched types: expected `{expected}`, found `{actual}`"),
+                crate::resolve::Error::IfWithoutElse { .. } => {
+                    f.write_str(crate::resolve::IF_WITHOUT_ELSE)
+                }
+                crate::resolve::Error::ReturnWithoutValue { .. } => {
+                    f.write_str(crate::resolve::RETURN_WITHOUT_VALUE)
+                }
                 crate::resolve::Error::ImmutableBinding { binding, .. } => {
-                    write!(f, "Cannot mutate immutable binding '{binding}'")
+                    write!(f, "{}", crate::resolve::AssignTwice(binding))
                 }
                 crate::resolve::Error::InvalidImplOwner { owner, .. } => {
                     write!(f, "Cannot define inherent methods for '{owner}'")

@@ -33,13 +33,19 @@ const MAGIC: &[u8; 4] = b"RPCL";
 const FORMAT: u32 = 11;
 
 /// What a cell must have been written by to be read: the format, the crate
-/// version, a digest of the parser's sources (see `build.rs`) and the
-/// widths that change what a parse holds.
+/// version, a digest of the parser's sources (see `build.rs`), whether it
+/// checks the syntax of what a `#[cfg]` leaves out (the `syntax` feature),
+/// and the widths that change what a parse holds.
 fn stamp() -> String {
     format!(
-        "{FORMAT}/{}/{}/{}.{}",
+        "{FORMAT}/{}/{}{}/{}.{}",
         env!("CARGO_PKG_VERSION"),
         env!("RAWR_PARSER_DIGEST"),
+        if cfg!(feature = "syntax") {
+            "+syntax"
+        } else {
+            ""
+        },
         core::mem::size_of::<crate::INT>(),
         core::mem::size_of::<crate::FLOAT>(),
     )

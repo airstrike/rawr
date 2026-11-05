@@ -467,8 +467,10 @@ impl fmt::Display for Report {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{}[{}]: {}",
-            self.severity, self.code, self.message
+            "{}{}: {}",
+            self.severity,
+            self.code.tag(),
+            self.message
         )
     }
 }

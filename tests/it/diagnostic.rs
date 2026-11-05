@@ -74,14 +74,16 @@ fn duplicate_item_adapter_preserves_both_exact_spans() {
 }
 
 #[test]
-fn unknown_type_adapter_is_actionable_and_positioned() {
+fn unknown_type_adapter_reads_as_rustcs_e0425() {
     let text = "struct Counter { value: Missing }\n";
     let error = Engine::new().compile(text).unwrap_err();
     let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
 
-    assert_eq!(report.code(), code::RESOLVE_UNKNOWN_TYPE);
+    assert_eq!(report.code().as_str(), "E0425");
+    assert_eq!(report.message(), "cannot find type `Missing` in this scope");
     assert_eq!(report.labels().len(), 1);
-    assert!(report.help().unwrap().contains("import it with `use`"));
+    assert_eq!(report.labels()[0].message(), Some("not found in this scope"));
+    assert_eq!(report.help(), None);
 }
 
 #[test]

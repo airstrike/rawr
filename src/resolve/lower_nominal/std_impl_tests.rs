@@ -354,3 +354,48 @@ fn main() {
     );
     assert!(report.contains("E0596"), "{report}");
 }
+
+#[test]
+fn language_a_derive_holds_where_std_implements_the_trait_for_a_field() {
+    // std's error types and `Duration` have the traits std's impls give
+    // them, so a type holding them derives those (#904).
+    let source = r#"
+use std::num::{ParseFloatError, ParseIntError, TryFromIntError};
+use std::time::Duration;
+
+#[derive(Debug, Clone, PartialEq)]
+enum ParseError {
+    Int(ParseIntError),
+    Float(ParseFloatError),
+    Range(TryFromIntError),
+    Empty,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+struct Timeout {
+    after: Duration,
+}
+
+fn main() {
+    let int = ParseError::Int("x".parse::<i32>().unwrap_err());
+    let float = ParseError::Float("y".parse::<f64>().unwrap_err());
+    let range = ParseError::Range(u8::try_from(300_i32).unwrap_err());
+    println!("{int:?}");
+    println!("{float:?}");
+    println!("{range:?}");
+    println!("{:?} {}", ParseError::Empty, int == int.clone());
+    println!("{:?}", Timeout::default());
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Int(ParseIntError { kind: InvalidDigit })\nFloat(ParseFloatError { kind: Invalid })\n\
+         Range(TryFromIntError(PosOverflow))\nEmpty true\nTimeout { after: 0ns }\n"
+    );
+    // std's `ParseIntError` is not `Default` or `Copy`: rustc's E0277.
+    let report = refused(
+        "#[derive(Default)]\nstruct S { e: std::num::ParseIntError }\nfn main() {}\nmain();\n",
+    );
+    assert!(report.contains("Default"), "{report}");
+}

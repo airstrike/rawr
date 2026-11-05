@@ -1598,7 +1598,10 @@ fn language_result_question_mark() {
         "fn half(n: i64) -> Result<i64, String> { Ok(n) } \
          fn f() -> Option<i64> { Some(half(2)?) } pub fn run() -> i64 { 0 } run()",
     );
-    assert!(mixed.contains("Result<_, String>"), "{mixed}");
+    assert!(
+        mixed.contains("the `?` operator can only be used on `Option`s, not `Result`s"),
+        "{mixed}"
+    );
     rejected(
         "fn half(n: i64) -> Option<i64> { Some(n) } \
          fn f() -> Result<i64, String> { Ok(half(2)?) } pub fn run() -> i64 { 0 } run()",
@@ -1843,7 +1846,7 @@ fn language_patterns_literals_ranges_tuples_and_bindings() {
     let owned = rejected(
         r#"fn f(w: Option<String>) -> i64 { if let Some("hi") = w { 1 } else { 0 } } pub fn run() -> i64 { 0 } run()"#,
     );
-    assert!(owned.contains("expected 'String', found '&str'"), "{owned}");
+    assert!(owned.contains("expected `String`, found `&str`"), "{owned}");
 }
 
 #[test]
@@ -5211,7 +5214,7 @@ fn language_default_binding_modes() {
         "pub fn run() -> i64 { let v = vec![(1, 2)]; v.iter().map(|(a, _)| -> i64 { a }).sum() } run()",
     ] {
         let error = rejected(source);
-        assert!(error.contains("expected 'i64', found '&"), "{error}");
+        assert!(error.contains("expected `i64`, found `&"), "{error}");
     }
 }
 
@@ -5243,7 +5246,7 @@ fn language_default_binding_mode_through_reference_members() {
     let error = rejected(
         "pub fn run() -> i64 { let n: i64 = 5; let t = (1, &n); let r = &t; let (_, x) = r; let y: i64 = *x; y } run()",
     );
-    assert!(error.contains("expected 'i64', found '&i64'"), "{error}");
+    assert!(error.contains("expected `i64`, found `&i64`"), "{error}");
 }
 
 #[test]
@@ -6390,7 +6393,10 @@ fn language_field_element_assignment() {
     let immutable = rejected(
         "struct G { c: Vec<i64> } pub fn run() -> i64 { let g = G { c: vec![1] }; g.c[0] = 2; 0 } run()",
     );
-    assert!(immutable.contains("immutable"), "{immutable}");
+    assert!(
+        immutable.contains("cannot borrow `g.c` as mutable, as `g` is not declared as mutable"),
+        "{immutable}"
+    );
 }
 
 #[test]
@@ -6802,7 +6808,10 @@ fn language_index_mut_and_mutable_trait_object_borrows() {
          impl IndexMut<usize> for G { fn index_mut(&mut self, i: usize) -> &mut i64 { &mut self.c[i] } } \
          pub fn run() -> i64 { let g = G { c: vec![1] }; g[0] = 2; 0 } run()",
     );
-    assert!(immutable.contains("immutable"), "{immutable}");
+    assert!(
+        immutable.contains("cannot borrow `g` as mutable, as it is not declared as mutable"),
+        "{immutable}"
+    );
 }
 
 #[test]
@@ -6845,7 +6854,7 @@ fn language_block_expressions() {
     assert_eq!(value, "6 1 9 12 0 3 () 2-6");
     let unit_tail = rejected("pub fn run() -> i64 { let n: i64 = { let t = 1; t; }; n } run()");
     assert!(
-        unit_tail.contains("expected 'i64', found '()'"),
+        unit_tail.contains("expected `i64`, found `()`"),
         "{unit_tail}"
     );
     rejected("pub fn run() -> i64 { { let t = 1; } t } run()");
@@ -6917,7 +6926,7 @@ fn language_panic_macros() {
         assert!(error.contains(message), "{body}: {error}");
     }
     let mismatch = rejected("pub fn run() -> i64 { assert!(1); 0 } run()");
-    assert!(mismatch.contains("expected 'bool'"), "{mismatch}");
+    assert!(mismatch.contains("expected `bool`"), "{mismatch}");
 }
 
 #[test]
@@ -8161,7 +8170,10 @@ fn language_iter_mut_held_in_a_local_steps_with_next() {
     let error = rejected(
         "pub fn run() -> i64 { let mut v = vec![1]; let it = v.iter_mut(); if let Some(x) = it.next() { *x = 2; } v[0] } run()",
     );
-    assert!(error.contains("immutable binding 'it'"), "{error}");
+    assert!(
+        error.contains("cannot borrow `it` as mutable, as it is not declared as mutable"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -8196,7 +8208,7 @@ fn language_euclidean_division_of_floats_and_integers() {
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(
-        error.contains("nknown function") && error.contains("centre"),
+        error.contains("cannot find function `centre` in this scope"),
         "{error}"
     );
 }
@@ -8964,7 +8976,10 @@ fn rejected_at(source: &str) -> (String, Option<usize>, Option<usize>) {
 #[test]
 fn language_unknown_call_is_an_error_at_its_name() {
     let (error, line, column) = rejected_at("pub fn run() -> i64 { nonexistent(1) }");
-    assert!(error.contains("Unknown function 'nonexistent'"), "{error}");
+    assert!(
+        error.contains("cannot find function `nonexistent` in this scope"),
+        "{error}"
+    );
     assert_eq!((line, column), (Some(1), Some(23)), "{error}");
 }
 
@@ -8972,7 +8987,10 @@ fn language_unknown_call_is_an_error_at_its_name() {
 fn language_unknown_call_bound_to_a_local_is_an_error_at_its_name() {
     let (error, line, column) =
         rejected_at("fn main() {\n    let x = nonexistent(1);\n    println!(\"{x}\");\n}");
-    assert!(error.contains("Unknown function 'nonexistent'"), "{error}");
+    assert!(
+        error.contains("cannot find function `nonexistent` in this scope"),
+        "{error}"
+    );
     assert!(!error.contains("dynamic"), "{error}");
     assert_eq!((line, column), (Some(2), Some(13)), "{error}");
 }
@@ -8982,7 +9000,7 @@ fn language_method_on_an_unknown_call_is_an_error_at_its_name() {
     let (error, line, column) =
         rejected_at("pub fn run() -> i64 { nonexistent_widget(1).scale(2.0); 0 }");
     assert!(
-        error.contains("Unknown function 'nonexistent_widget'"),
+        error.contains("cannot find function `nonexistent_widget` in this scope"),
         "{error}"
     );
     assert!(!error.contains("non-nominal"), "{error}");
@@ -8992,7 +9010,10 @@ fn language_method_on_an_unknown_call_is_an_error_at_its_name() {
 #[test]
 fn language_unknown_variable_is_an_error_at_its_name() {
     let (error, line, column) = rejected_at("pub fn run() -> i64 { let y = missing + 1; y }");
-    assert!(error.contains("Unknown variable 'missing'"), "{error}");
+    assert!(
+        error.contains("cannot find value `missing` in this scope"),
+        "{error}"
+    );
     assert_eq!((line, column), (Some(1), Some(31)), "{error}");
 }
 
@@ -9763,7 +9784,7 @@ fn language_pointer_kinds_do_not_mix() {
     "#,
     );
     assert!(
-        error.contains("expected 'Arc<i64>', found 'Box<"),
+        error.contains("expected `Arc<i64>`, found `Box<"),
         "{error}"
     );
     let error = rejected(
@@ -12369,7 +12390,7 @@ main();
 "#,
     );
     assert!(
-        error.contains("expected '(&str, i64)', found '(&String, {integer})'"),
+        error.contains("expected `(&str, i64)`, found `(&String, {integer})`"),
         "{error}"
     );
 }
@@ -12416,21 +12437,21 @@ main();
         r#"struct Label { text: String } fn main() { let l = Label { text: "x" }; } main();"#,
     ] {
         let error = rejected(source);
-        assert!(error.contains("expected 'String', found '&str'"), "{error}");
+        assert!(error.contains("expected `String`, found `&str`"), "{error}");
     }
     // A `&String` is no `String`: expected `String`, found `&String`.
     let error = rejected(
         r#"fn keep(name: String) -> usize { name.len() } fn main() { let s = String::from("a"); keep(&s); } main();"#,
     );
     assert!(
-        error.contains("expected 'String', found '&String'"),
+        error.contains("expected `String`, found `&String`"),
         "{error}"
     );
     // `String + String`: `Add` takes a `&str`, expected `&str`, found `String`.
     let error = rejected(
         r#"fn main() { let s = String::from("a"); let t = String::from("b"); let u = s + t; } main();"#,
     );
-    assert!(error.contains("expected '&str', found 'String'"), "{error}");
+    assert!(error.contains("expected `&str`, found `String`"), "{error}");
 }
 
 struct UiTheme;
@@ -13529,5 +13550,15 @@ main();
     assert_eq!(output, "aborting\n");
     // `exit` takes std's `i32`, as a typed variable or a literal.
     let error = rejected("fn main() { let code: i64 = 1; std::process::exit(code) } main(); 0");
-    assert!(error.contains("expected 'i32', found 'i64'"), "{error}");
+    assert!(error.contains("expected `i32`, found `i64`"), "{error}");
+}
+
+/// A Rust string literal holds the line breaks written in it, in a `const`
+/// item and in a body.
+#[test]
+fn language_string_literals_span_lines() {
+    let value = run(
+        "const RESULTS: &str = \"a,b\nc,d\";\npub fn run() -> i64 {\n    let more = \"e\nf\";\n    (RESULTS.lines().count() + more.len()) as i64\n}\nrun()",
+    );
+    assert_eq!(value, 5);
 }

@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-04",
-  "version": "0.3.132",
+  "updated": "2026-11-05",
+  "version": "0.3.134",
   "examples": {
     "running": 37,
     "total": 56,
@@ -11,6 +11,22 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.134",
+        "date": "2026-11-05",
+        "entries": [
+          {"text":"Errors use rustc's codes and wording: mismatched types E0308, an `if` without `else` E0317, `return;` E0069, unknown names E0425, E0433 and E0432, E0423, assignments E0384, E0594 and E0596, and `?` or mixed-number arithmetic E0277. Syntax errors and an unknown macro print a plain `error:` as rustc does.","issues":[897,909,910]}
+        ]
+      },
+      {
+        "version": "0.3.133",
+        "date": "2026-11-04",
+        "entries": [
+          {"text":"`rawr test` runs a file's or a crate's `#[test]` functions as `cargo test` does: `cfg(test)` holds under it, `#[should_panic]` (with `expected`) and `#[ignore]` behave as in cargo, it takes cargo's name filters and libtest's options, reports in libtest's format and exits with 101 when a test fails. A syntax error in an item a `#[cfg]` leaves out stops `rawr run` and `rawr check`, as rustc parses every item.","issues":[898]},
+          {"text":"Modules see what Rust lets them see: a module's private methods and associated functions are visible to its descendants (`mod tests { use super::*; }`), `use super::*;` brings in the parent's own imports, and a glob-imported name can start another `use`. From any other module a private method is E0624 and a private item E0603. Unknown functions and values are rustc's E0425. `{self:?}` in a method reads the receiver.","issues":[899,900,903]},
+          {"text":"More of std runs: `SystemTime` (`now`, `UNIX_EPOCH`, `duration_since`, `elapsed`), `ParseIntError::kind` with `IntErrorKind`, `char::to_uppercase`/`to_lowercase` and `Result::as_deref`. A type holding `ParseIntError`, another std error or a `Duration` derives each trait std implements for it. String literals span lines, and a `\\` at a line's end skips the next line's leading whitespace.","issues":[902,904,905]}
+        ]
+      },
       {
         "version": "0.3.132",
         "date": "2026-11-04",
@@ -2185,20 +2201,20 @@
     {"issue":894,"title":"rawr's workspace observation reads ancestor manifests outside the project's own workspace","state":"open","category":"Health"},
     {"issue":895,"title":"islands' restarted program ends with a failing status in the parallel suite","state":"open","category":"Health"},
     {"issue":896,"title":"The never type `!` in signatures and as a value","state":"closed","category":"Divergences from rustc","release":"0.3.128"},
-    {"issue":897,"title":"Type mismatches report rustc's codes (E0308, E0317, E0069)","state":"open","category":"Divergences from rustc"},
-    {"issue":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"open","category":"Divergences from rustc"},
-    {"issue":899,"title":"A private method or associated function isn't visible from a child module","state":"open","category":"Divergences from rustc"},
-    {"issue":900,"title":"`use super::*` brings the parent's `use` imports, and a glob-imported name can start a path","state":"open","category":"Divergences from rustc"},
+    {"issue":897,"title":"Type mismatches report rustc's codes (E0308, E0317, E0069)","state":"closed","category":"Divergences from rustc","release":"0.3.134"},
+    {"issue":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"closed","category":"Divergences from rustc","release":"0.3.133"},
+    {"issue":899,"title":"A private method or associated function isn't visible from a child module","state":"closed","category":"Divergences from rustc","release":"0.3.133"},
+    {"issue":900,"title":"`use super::*` brings the parent's `use` imports, and a glob-imported name can start a path","state":"closed","category":"Divergences from rustc","release":"0.3.133"},
     {"issue":901,"title":"std::thread::spawn with join, Mutex and mpsc in plain programs","state":"open","category":"Divergences from rustc"},
-    {"issue":902,"title":"std members rustlings needs: SystemTime::now, char::to_uppercase, Result::as_deref, ParseIntError::kind","state":"open","category":"Divergences from rustc"},
-    {"issue":903,"title":"Inline format argument `{self:?}`","state":"open","category":"Divergences from rustc"},
-    {"issue":904,"title":"#[derive(Debug)] on an enum whose payload is a std error type","state":"open","category":"Divergences from rustc"},
-    {"issue":905,"title":"Multi-line string literals","state":"open","category":"Divergences from rustc"},
+    {"issue":902,"title":"std members rustlings needs: SystemTime::now, char::to_uppercase, Result::as_deref, ParseIntError::kind","state":"closed","category":"Divergences from rustc","release":"0.3.133"},
+    {"issue":903,"title":"Inline format argument `{self:?}`","state":"closed","category":"Divergences from rustc","release":"0.3.133"},
+    {"issue":904,"title":"#[derive(Debug)] on an enum whose payload is a std error type","state":"closed","category":"Divergences from rustc","release":"0.3.133"},
+    {"issue":905,"title":"Multi-line string literals","state":"closed","category":"Divergences from rustc","release":"0.3.133"},
     {"issue":906,"title":"A Result's runtime value doesn't match its type after let-else on parse()","state":"open","category":"Divergences from rustc"},
     {"issue":907,"title":"A changing method on a collection that isn't a named place: `self` of an impl for Vec, or a temporary","state":"open","category":"Divergences from rustc"},
     {"issue":908,"title":"Smaller rustlings gaps: Cow<[T]> index, u8 into i16, AsRef<str>, fn item arrays, try_into's error, for over Option","state":"open","category":"Divergences from rustc"},
-    {"issue":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"open","category":"Divergences from rustc"},
-    {"issue":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"open","category":"Divergences from rustc"},
+    {"issue":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"closed","category":"Divergences from rustc","release":"0.3.134"},
+    {"issue":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"closed","category":"Divergences from rustc","release":"0.3.134"},
     {"issue":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"open","category":"Divergences from rustc"},
     {"issue":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"open","category":"Divergences from rustc"},
     {"issue":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"open","category":"Divergences from rustc"},
@@ -2210,7 +2226,20 @@
     {"issue":919,"title":"E0382 says borrow or use as rustc does, at the name, with the move's type","state":"closed","category":"Divergences from rustc","release":"0.3.132"},
     {"issue":920,"title":"Restore the test that every playground example prints what rustc's build prints","state":"closed","category":"Health","release":"0.3.132"},
     {"issue":921,"title":"E0382: rustc's parameter note and clone suggestion","state":"open","category":"Divergences from rustc"},
-    {"issue":922,"title":"`std::num::ParseIntError` written in full in a let annotation is an unknown type","state":"open","category":"Divergences from rustc"}
+    {"issue":922,"title":"`std::num::ParseIntError` written in full in a let annotation is an unknown type","state":"open","category":"Divergences from rustc"},
+    {"issue":923,"title":"`Chars::as_str` is E0599","state":"open","category":"Divergences from rustc"},
+    {"issue":924,"title":"Operator traits on a std facade type","state":"open","category":"Divergences from rustc"},
+    {"issue":925,"title":"The std table records no constant's type","state":"open","category":"Divergences from rustc"},
+    {"issue":926,"title":"A path to a type's method as a function value: `.flat_map(HashMap::values)`","state":"open","category":"Divergences from rustc"},
+    {"issue":927,"title":"`try_into()` into `Result<Color, _>` leaves the error type uninferred","state":"open","category":"Divergences from rustc"},
+    {"issue":928,"title":"`Rc<T>` doesn't meet a `T: Display` bound","state":"open","category":"Divergences from rustc"},
+    {"issue":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"open","category":"Divergences from rustc"},
+    {"issue":930,"title":"Five rawr-cli integration tests fail on main","state":"closed","category":"Health"},
+    {"issue":931,"title":"Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"open","category":"Health"},
+    {"issue":932,"title":"Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"open","category":"Divergences from rustc"},
+    {"issue":933,"title":"A missing item in a local module is E0432, not rustc's E0425","state":"open","category":"Divergences from rustc"},
+    {"issue":934,"title":"rawr infers types where rustc needs an annotation or reports a mismatch","state":"open","category":"Divergences from rustc"},
+    {"issue":935,"title":"rustlings harness compares rustc's first coded error, not its first error","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -2829,28 +2858,39 @@
         },
         {
           "id": "rustlings",
-          "name": "rustlings: 59 of 94",
+          "name": "rustlings: 74 of 95",
           "start": 74,
           "size": 4,
           "state": "now",
-          "note": "Solutions whose main and every test match rustc (scripts/rustlings.sh). 15 of 94 exercises fail with rustc's code. #898 is the biggest gap",
+          "note": "Solutions whose main and every test match rustc (scripts/rustlings.sh, rustlings v6.5.0); 74 of 95 exercises fail as rustc fails (was 17)",
           "issues": [
-            {"number":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"open"},
-            {"number":899,"title":"A private method or associated function isn't visible from a child module","state":"open"},
-            {"number":900,"title":"`use super::*` brings the parent's `use` imports, and a glob-imported name can start a path","state":"open"},
+            {"number":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"closed"},
+            {"number":899,"title":"A private method or associated function isn't visible from a child module","state":"closed"},
+            {"number":900,"title":"`use super::*` brings the parent's `use` imports, and a glob-imported name can start a path","state":"closed"},
             {"number":901,"title":"std::thread::spawn with join, Mutex and mpsc in plain programs","state":"open"},
-            {"number":902,"title":"std members rustlings needs: SystemTime::now, char::to_uppercase, Result::as_deref, ParseIntError::kind","state":"open"},
-            {"number":903,"title":"Inline format argument `{self:?}`","state":"open"},
-            {"number":904,"title":"#[derive(Debug)] on an enum whose payload is a std error type","state":"open"},
-            {"number":905,"title":"Multi-line string literals","state":"open"},
+            {"number":902,"title":"std members rustlings needs: SystemTime::now, char::to_uppercase, Result::as_deref, ParseIntError::kind","state":"closed"},
+            {"number":903,"title":"Inline format argument `{self:?}`","state":"closed"},
+            {"number":904,"title":"#[derive(Debug)] on an enum whose payload is a std error type","state":"closed"},
+            {"number":905,"title":"Multi-line string literals","state":"closed"},
             {"number":906,"title":"A Result's runtime value doesn't match its type after let-else on parse()","state":"open"},
             {"number":907,"title":"A changing method on a collection that isn't a named place: `self` of an impl for Vec, or a temporary","state":"open"},
             {"number":908,"title":"Smaller rustlings gaps: Cow<[T]> index, u8 into i16, AsRef<str>, fn item arrays, try_into's error, for over Option","state":"open"},
-            {"number":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"open"},
-            {"number":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"open"},
+            {"number":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"closed"},
+            {"number":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"closed"},
             {"number":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"open"},
             {"number":921,"title":"E0382: rustc's parameter note and clone suggestion","state":"open"},
-            {"number":922,"title":"`std::num::ParseIntError` written in full in a let annotation is an unknown type","state":"open"}
+            {"number":922,"title":"`std::num::ParseIntError` written in full in a let annotation is an unknown type","state":"open"},
+            {"number":923,"title":"`Chars::as_str` is E0599","state":"open"},
+            {"number":924,"title":"Operator traits on a std facade type","state":"open"},
+            {"number":925,"title":"The std table records no constant's type","state":"open"},
+            {"number":926,"title":"A path to a type's method as a function value: `.flat_map(HashMap::values)`","state":"open"},
+            {"number":927,"title":"`try_into()` into `Result<Color, _>` leaves the error type uninferred","state":"open"},
+            {"number":928,"title":"`Rc<T>` doesn't meet a `T: Display` bound","state":"open"},
+            {"number":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"open"},
+            {"number":932,"title":"Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"open"},
+            {"number":933,"title":"A missing item in a local module is E0432, not rustc's E0425","state":"open"},
+            {"number":934,"title":"rawr infers types where rustc needs an annotation or reports a mismatch","state":"open"},
+            {"number":935,"title":"rustlings harness compares rustc's first coded error, not its first error","state":"open"}
           ]
         }
       ]
@@ -2891,13 +2931,25 @@
           "start": 74,
           "size": 2,
           "state": "done",
-          "note": "Suites share builds and run in parallel; lanes keep rawr's products between programs (#893)",
+          "note": "Suites share builds and run in parallel; every merge check runs rawr-cli's suite too (#930)",
           "issues": [
             {"number":891,"title":"rawr-import's integration suite shares its builds and runs in parallel","state":"closed"},
             {"number":892,"title":"rawr-import-cli's crossing suite shares prepared fixtures and runs in parallel","state":"closed"},
-            {"number":893,"title":"rawr's state from one program breaks the next program in the same project","state":"closed"}
+            {"number":893,"title":"rawr's state from one program breaks the next program in the same project","state":"closed"},
+            {"number":930,"title":"Five rawr-cli integration tests fail on main","state":"closed"}
           ],
           "milestone": "0.3"
+        },
+        {
+          "id": "std-once",
+          "name": "std bindings built once",
+          "start": 82,
+          "size": 2,
+          "state": "now",
+          "note": "Each process rebuilds them: 2.1 s debug, 0.35 s release",
+          "issues": [
+            {"number":931,"title":"Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"open"}
+          ]
         }
       ]
     },
