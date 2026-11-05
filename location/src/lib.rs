@@ -6,7 +6,7 @@
 //! ([`rawr_directory`]). `cargo clean` removes it.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use toml_edit::DocumentMut;
 
@@ -14,7 +14,22 @@ use toml_edit::DocumentMut;
 /// `CARGO_BUILD_TARGET_DIR`, then `build.target-dir` from the Cargo config files
 /// Cargo reads for `project` (the deepest `.cargo/config.toml` first, then
 /// `$CARGO_HOME/config.toml`), else `target` under the workspace root.
+///
+/// The directory is [`resolved`], so a relative `CARGO_TARGET_DIR` names
+/// the same paths as the absolute one.
 pub fn target_directory<'a>(
+    project: &Path,
+    environment: impl Fn(&str) -> Option<&'a str>,
+    cargo_home: Option<&Path>,
+) -> PathBuf {
+    resolved(&configured_target_directory(
+        project,
+        environment,
+        cargo_home,
+    ))
+}
+
+fn configured_target_directory<'a>(
     project: &Path,
     environment: impl Fn(&str) -> Option<&'a str>,
     cargo_home: Option<&Path>,
@@ -62,7 +77,7 @@ pub fn build_directory<'a>(
             Some(home) => value.replace("{cargo-cache-home}", &home.to_string_lossy()),
             None => value,
         };
-        (!value.contains('{')).then(|| base.join(value))
+        (!value.contains('{')).then(|| resolved(&base.join(value)))
     };
     if let Some(value) = environment("CARGO_BUILD_BUILD_DIR").filter(|value| !value.is_empty()) {
         if let Some(path) = expand(value, project) {
@@ -91,6 +106,39 @@ pub fn build_directory<'a>(
         }
     }
     target_directory(project, environment, cargo_home)
+}
+
+/// `path` as the filesystem reaches it, spelled without `.` or `..`: each
+/// `..` leaves the directory named so far past its symlinks, as the kernel
+/// does, and an absent directory is left lexically. Symlinks the path names
+/// keep their spelling, so a watch on them still sees them retargeted.
+#[must_use]
+pub fn resolved(path: &Path) -> PathBuf {
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir if resolved.has_root() => {
+                if let Ok(physical) = fs::canonicalize(&resolved) {
+                    resolved = physical;
+                }
+                resolved.pop();
+            }
+            // A relative path keeps the `..` that leaves where it starts.
+            Component::ParentDir => {
+                if matches!(
+                    resolved.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    resolved.pop();
+                } else {
+                    resolved.push(component);
+                }
+            }
+            _ => resolved.push(component),
+        }
+    }
+    resolved
 }
 
 /// The target triple `cargo build` builds `project` for when none is named:
@@ -276,7 +324,9 @@ pub fn workspace_root(project: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_directory, member_path, package, rawr_directory, target_directory};
+    use super::{
+        build_directory, member_path, package, rawr_directory, resolved, target_directory,
+    };
     use std::fs;
     use std::path::Path;
 
@@ -404,6 +454,48 @@ mod tests {
             build_directory(&project, environment, None),
             Path::new("/elsewhere")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_relative_target_directory_names_the_paths_the_absolute_one_does() {
+        let root = fixture("relative");
+        let project = root.join("examples/app");
+        write(
+            &project.join("Cargo.toml"),
+            "[package]\nname = \"app\"\n[workspace]\n",
+        );
+        let absolute = root.join("examples/_target");
+        let spelled = absolute.to_str().unwrap();
+        let relative = |key: &str| (key == "CARGO_TARGET_DIR").then_some("../_target");
+        let named = |key: &str| (key == "CARGO_TARGET_DIR").then_some(spelled);
+        assert_eq!(target_directory(&project, relative, None), absolute);
+        assert_eq!(target_directory(&project, named, None), absolute);
+        let current = |key: &str| (key == "CARGO_TARGET_DIR").then_some("./out/.");
+        assert_eq!(
+            target_directory(&project, current, None),
+            project.join("out")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolved_leaves_each_parent_as_the_filesystem_does() {
+        let root = fixture("resolved");
+        fs::create_dir_all(root.join("real/inner")).unwrap();
+        std::os::unix::fs::symlink(root.join("real/inner"), root.join("link")).unwrap();
+        // Through a symlink, `..` reaches the target's parent, not the link's.
+        assert_eq!(resolved(&root.join("link/../file")), root.join("real/file"));
+        // A symlink the path only names keeps its spelling.
+        assert_eq!(resolved(&root.join("link/./file")), root.join("link/file"));
+        // An absent directory is left lexically, and the root floors `..`.
+        assert_eq!(
+            resolved(&root.join("absent/deeper/../../file")),
+            root.join("file")
+        );
+        assert_eq!(resolved(Path::new("/../a")), Path::new("/a"));
+        // A relative path keeps the `..` that leaves where it starts.
+        assert_eq!(resolved(Path::new("../a/./b/../c")), Path::new("../a/c"));
         fs::remove_dir_all(root).unwrap();
     }
 }
