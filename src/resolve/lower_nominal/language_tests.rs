@@ -7538,7 +7538,8 @@ fn language_builtin_functions_as_values() {
                 let roots: Vec<f64> = vec![4.0, 9.0].into_iter().map(f64::sqrt).collect();
                 let ones: Vec<i64> = vec![true, false].into_iter().map(i64::from).collect();
                 let named: Vec<Word> = words.clone().into_iter().map(Word::Named).collect();
-                let upper: Vec<char> = "ab".chars().map(char::to_ascii_uppercase).collect();
+                let letters: Vec<char> = "ab".chars().collect();
+                let upper: Vec<char> = letters.iter().map(char::to_ascii_uppercase).collect();
                 format!("{:?} {:?} {:?} {:?} {:?}", words, roots, ones, named, upper)
             }
             run()
@@ -13675,4 +13676,112 @@ fn a_try_into_annotated_with_an_open_error_takes_its_impls() {
         run()
     "#);
     assert_eq!(value, 183 + "Ok(Color(183))".len() as i64 * 1000);
+}
+
+#[test]
+fn a_path_to_a_std_types_method_is_a_function_value() {
+    // rustlings' iterators5: `HashMap::values` is a `fn(&HashMap<K, V>) ->
+    // Values<K, V>`, which `flat_map` takes. Each path's first input is
+    // the receiver, as std declares it; a std trait's method and an
+    // associated function are values too. The value is rustc's.
+    let value = run(r#"
+        use std::collections::HashMap;
+        #[derive(Clone, Copy, PartialEq)]
+        enum Progress { None, Some, Complete }
+        fn count_collection(collection: &[HashMap<String, Progress>], value: Progress) -> usize {
+            collection
+                .iter()
+                .flat_map(HashMap::values)
+                .filter(|val| **val == value)
+                .count()
+        }
+        pub fn run() -> i64 {
+            let mut first = HashMap::new();
+            first.insert(String::from("variables1"), Progress::Complete);
+            first.insert(String::from("functions1"), Progress::Some);
+            let mut second = HashMap::new();
+            second.insert(String::from("hashmaps1"), Progress::Complete);
+            second.insert(String::from("move1"), Progress::None);
+            let maps = [first, second];
+            let complete = count_collection(&maps, Progress::Complete) as i64;
+            let keys: usize = maps.iter().map(HashMap::len).sum();
+            let words = vec![String::from("ab"), String::from(" cde ")];
+            let lengths: Vec<usize> = words.iter().map(String::len).collect();
+            let trimmed: Vec<usize> =
+                words.iter().map(String::as_str).map(str::trim).map(str::len).collect();
+            let upper: String = "rawr"
+                .chars()
+                .collect::<Vec<char>>()
+                .iter()
+                .map(char::to_ascii_uppercase)
+                .collect();
+            let some = [Some(1), None, Some(3)].iter().filter(|o| Option::is_some(o)).count() as i64;
+            let widest = vec![vec![1, 2, 3], vec![4]].iter().map(Vec::len).fold(0, std::cmp::max) as i64;
+            let counted: usize = vec![vec![1, 2], vec![3]].iter().map(|v| v.iter()).map(Iterator::count).sum();
+            let largest = [4, 9, 2].into_iter().fold(i32::MIN, i32::max) as i64;
+            let empty = None.unwrap_or_else(String::new).len() as i64;
+            let letter = Some(114).and_then(char::from_u32) == Some('r');
+            let pointer: fn(&str) -> usize = str::len;
+            complete * 1_000_000_000
+                + keys as i64 * 100_000_000
+                + (lengths[0] * 10 + lengths[1]) as i64 * 1_000_000
+                + (trimmed[0] * 10 + trimmed[1]) as i64 * 10_000
+                + (upper == "RAWR") as i64 * 1000
+                + some * 100
+                + widest * 10
+                + counted as i64
+                + largest * 100_000_000_000
+                + empty
+                + letter as i64 * 1_000_000_000_000
+                + pointer("abcd") as i64 * 10_000_000_000_000
+        }
+        run()
+    "#);
+    assert_eq!(value, 41902425231233);
+}
+
+#[test]
+fn a_path_to_a_std_types_method_calls_it_on_its_first_argument() {
+    // `Vec::len(&v)` is `v.len()`; `String::push_str(&mut s, ..)` changes
+    // `s`. The value is rustc's.
+    let value = run(r#"
+        use std::collections::HashMap;
+        pub fn run() -> i64 {
+            let v = vec![1, 2, 3];
+            let mut m = HashMap::new();
+            m.insert(1, 40);
+            let mut s = String::from("ab");
+            String::push_str(&mut s, "cd");
+            let mut grown = Vec::new();
+            Vec::push(&mut grown, 7);
+            let a = Vec::len(&v) as i64;
+            let b = *HashMap::get(&m, &1).unwrap() as i64;
+            let c = str::len(" xyz ".trim()) as i64;
+            let d = String::len(&s) as i64;
+            let e = char::to_ascii_uppercase(&'q') == 'Q';
+            let f = Option::is_some(&Some(1));
+            let g = i32::max(3, 8) as i64;
+            let h = Vec::is_empty(&grown);
+            a + b * 10 + c * 1000 + d * 10_000 + e as i64 * 100_000 + f as i64 * 1_000_000
+                + g * 10_000_000 + h as i64 * 100_000_000 + grown[0] as i64 * 1_000_000_000
+        }
+        run()
+    "#);
+    assert_eq!(value, 7081143403);
+}
+
+#[test]
+fn a_path_to_a_std_method_is_refused_where_rustc_refuses_it() {
+    // A path doesn't autoderef: `String::trim` is `str`'s (E0599). A
+    // `fn(&char) -> char` is no `FnMut(char)` (E0631).
+    let message = rejected("pub fn run() -> i64 { let f = String::trim; 0 } run()");
+    assert!(message.contains("Unknown member 'String::trim'"), "{message}");
+    let message = rejected(
+        "pub fn run() -> i64 { let v: Vec<char> = \"ab\".chars().map(char::to_ascii_uppercase).collect(); 0 } run()",
+    );
+    assert!(
+        message.contains("type mismatch in function arguments")
+            && message.contains("fn(&char) -> _"),
+        "{message}"
+    );
 }

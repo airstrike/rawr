@@ -72,7 +72,7 @@ use crate::{
 };
 use compare::{Comparison, Shape};
 use std::any::TypeId;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write;
 use std::iter::Peekable;
 use std::rc::Rc;
@@ -12073,6 +12073,9 @@ struct Parser<'a> {
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
     pending_turbofish: Option<Vec<Ty>>,
+    /// The closures that stand for a path to a function (`Vec::len`,
+    /// `Look::name`), which rustc's notes call functions.
+    path_values: HashSet<crate::item::Key>,
     /// The crate trait each `Trait::method(receiver, ..)` call names, by
     /// the position of the method it was rewritten to (`path_method_call`):
     /// a text receiver takes the method the trait's impl for `&str` gives.
@@ -12388,6 +12391,7 @@ impl<'a> Parser<'a> {
             text_into: Vec::new(),
             generics: BTreeMap::new(),
             pending_turbofish: None,
+            path_values: HashSet::new(),
             spliced_traits: BTreeMap::new(),
             std_probed: BTreeMap::new(),
             host_turbofish: None,
@@ -15744,17 +15748,20 @@ impl<'a> Parser<'a> {
             && given.len() == inputs.len()
         {
             let checkpoint = self.inference.checkpoint();
-            if !inputs
+            if inputs
                 .iter()
                 .zip(&given)
                 .all(|(own, given)| self.unify_type(own, given))
             {
+                self.inference.commit(checkpoint);
+            } else {
                 self.inference.rollback(checkpoint);
             }
         }
         self.splice_tokens(tokens);
         self.closure_hint = Some(inputs);
-        self.parse_closure(Token::Pipe, owner_span, false)
+        let value = self.parse_closure(Token::Pipe, owner_span, false)?;
+        Ok(self.path_value(value))
     }
 
     /// `Type::method(receiver, a, ..)` read from its `(`: the tokens of
@@ -21276,7 +21283,16 @@ impl<'a> Parser<'a> {
             .collect::<Vec<_>>()
             .into_iter()
             .peekable();
-        self.parse_primary()
+        let value = self.parse_primary()?;
+        Ok(self.path_value(value))
+    }
+
+    /// `value`, a closure read in place of a path to a function, kept as one.
+    fn path_value(&mut self, value: ParsedExpr) -> ParsedExpr {
+        if let Ty::FnItem { key, .. } = &value.ty {
+            self.path_values.insert((**key).clone());
+        }
+        value
     }
 
     fn parse_host_value(
@@ -50697,7 +50713,10 @@ impl<'a> Parser<'a> {
             return None;
         };
         let (closure, have) = match actual {
-            Ty::FnItem { key, inputs, .. } => (key.name().contains("{closure#"), inputs),
+            Ty::FnItem { key, inputs, .. } => (
+                key.name().contains("{closure#") && !self.path_values.contains(&**key),
+                inputs,
+            ),
             // A closure or function the host is given, as its callable.
             Ty::Callable {
                 inputs,
