@@ -371,8 +371,12 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::OverflowingLiteral { ty, .. } => {
                     write!(f, "literal out of range for `{ty}`")
                 }
-                crate::resolve::Error::LocalTypeNeeded { ty, .. } => {
-                    write!(f, "{}", crate::resolve::TypeNeeded(ty.as_deref()))
+                crate::resolve::Error::LocalTypeNeeded { ty, note, .. } => {
+                    write!(f, "{}", crate::resolve::TypeNeeded(ty.as_deref()))?;
+                    match note {
+                        Some(note) => write!(f, ": {note}"),
+                        None => Ok(()),
+                    }
                 }
                 crate::resolve::Error::Uninitialized { name, possibly, .. } => write!(
                     f,

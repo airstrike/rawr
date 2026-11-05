@@ -328,3 +328,62 @@ fn a_borrow_assigned_to_a_let_without_a_value_is_checked() {
         ("E0597", "`string2` does not live long enough")
     );
 }
+
+#[test]
+fn a_type_nothing_settles_where_rustc_needs_it_is_e0282() {
+    // rustlings' generics1: two `.into()`s give the element no type.
+    assert_eq!(
+        refused(
+            "fn main() {\n    let mut numbers = Vec::new();\n    let n1: u8 = 42;\n    \
+             numbers.push(n1.into());\n    let n2: i8 = -1;\n    numbers.push(n2.into());\n    \
+             println!(\"{numbers:?}\");\n}\n"
+        ),
+        (
+            "E0282".into(),
+            "type annotations needed for `Vec<_>`".into(),
+            None
+        )
+    );
+    // rustlings' iterators1: a method of a local `todo!()` gave.
+    let (code, message, _) = refused(
+        "fn main() {\n    let mut it = todo!();\n    assert_eq!(it.next(), Some(&\"a\"));\n}\n",
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0282", "type annotations needed")
+    );
+    // An `.into()` no use gives a target.
+    let (code, message, _) = refused("fn main() {\n    let n: u8 = 1;\n    let x = n.into();\n}\n");
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0283", "type annotations needed")
+    );
+}
+
+#[test]
+fn a_macro_call_where_a_pattern_goes_is_e0532() {
+    // rustlings' smart_pointers4.
+    assert_eq!(
+        refused("fn main() {\n    let x = Some(1);\n    assert!(matches!(x, todo!()));\n}\n"),
+        (
+            "E0532".into(),
+            "expected a pattern, found a function call".into(),
+            label("not a tuple struct or tuple variant")
+        )
+    );
+}
+
+#[test]
+fn the_first_error_is_the_first_body_the_program_writes() {
+    // rustlings' conversions4: an impl's empty body before `main`.
+    let (code, _, label) = refused(
+        "struct C;\nimpl TryFrom<i16> for C {\n    type Error = ();\n    \
+         fn try_from(t: i16) -> Result<Self, Self::Error> {}\n}\n\
+         fn main() {\n    let y: i32 = \"a\";\n}\n",
+    );
+    assert_eq!(code, "E0308");
+    assert_eq!(
+        label.as_deref(),
+        Some("expected `Result<C, ()>`, found `()`")
+    );
+}

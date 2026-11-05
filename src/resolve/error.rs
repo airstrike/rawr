@@ -773,6 +773,9 @@ pub enum Error {
         declaration: Span,
         /// Where its type must be known, when rustc says.
         needed: Option<Span>,
+        /// rustc's note on the trait the type must implement, as
+        /// "the type must implement `From<u8>`".
+        note: Option<ImmutableString>,
     },
     /// An integer literal its type can't hold, which rustc's
     /// deny-by-default `overflowing_literals` lint refuses: "literal out of
@@ -1583,12 +1586,15 @@ impl fmt::Display for Written<'_> {
                 code,
                 ty,
                 declaration,
+                note,
                 ..
-            } => write!(
-                formatter,
-                "{} at {declaration} ({code})",
-                TypeNeeded(ty.as_deref())
-            ),
+            } => {
+                write!(formatter, "{} at {declaration}", TypeNeeded(ty.as_deref()))?;
+                if let Some(note) = note {
+                    write!(formatter, ": {note}")?;
+                }
+                write!(formatter, " ({code})")
+            }
             Error::OverflowingLiteral { ty, literal, .. } => {
                 write!(formatter, "literal out of range for `{ty}` at {literal}")
             }

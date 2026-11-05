@@ -808,8 +808,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             ))
         }
         resolve::Error::Uninitialized { .. } => builder.help("consider assigning a value"),
-        resolve::Error::LocalTypeNeeded { name, .. } => {
-            builder.help(format!("consider giving `{name}` an explicit type"))
+        resolve::Error::LocalTypeNeeded { name, note, .. } => {
+            let builder = builder.help(format!("consider giving `{name}` an explicit type"));
+            match note {
+                Some(note) => builder.note(note.clone()),
+                None => builder,
+            }
         }
         resolve::Error::OverflowingLiteral { note, help, .. } => {
             let builder = match help {

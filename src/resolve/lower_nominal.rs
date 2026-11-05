@@ -17652,7 +17652,8 @@ impl<'a> Parser<'a> {
             let helper = if let Some(error) = &conversion.try_from {
                 self.try_from_helper(&target, &conversion.source, error, conversion.span)?
             } else if matches!(target, Ty::Infer(_)) {
-                if let Some(error) = self.unsettled(&target, conversion.span, true) {
+                let bound = format!("From<{}>", conversion.source.name(&self.models));
+                if let Some(error) = self.unsettled(&target, conversion.span, Some(bound)) {
                     return Err(error);
                 }
                 let source = conversion.source.name(&self.models);
@@ -36476,7 +36477,7 @@ impl<'a> Parser<'a> {
             // `let mut it = todo!(); it.next()`: rustc needs the type here
             // (E0282).
             if matches!(value.lvalue, Some(Lvalue::Binding { .. }))
-                && let Some(error) = self.unsettled(&value.ty, value.span, false)
+                && let Some(error) = self.unsettled(&value.ty, value.span, None)
             {
                 return Err(error);
             }
@@ -43510,7 +43511,7 @@ impl<'a> Parser<'a> {
             }
             // A local's type nothing has given yet, as the element of a
             // `Vec::new()` only `.into()`s go in: rustc needs it (E0282).
-            Ty::Infer(_) if let Some(error) = self.unsettled(&ty, span, false) => {
+            Ty::Infer(_) if let Some(error) = self.unsettled(&ty, span, None) => {
                 return Err(error);
             }
             _ => {
@@ -46895,11 +46896,11 @@ impl<'a> Parser<'a> {
 
     /// rustc's error for the inference variable `unknown`, which the use at
     /// `needed` needs known, at the first `let` whose type holds it: E0282
-    /// "type annotations needed for `Vec<_>`". A trait's conversion that
-    /// nothing settles (`ambiguous`) is E0283 at the `let` of its value,
-    /// and E0282 at a `let` whose own value made the variable
-    /// (`Vec::new()`), which rustc marks.
-    fn unsettled(&self, unknown: &Ty, needed: Span, ambiguous: bool) -> Option<Error> {
+    /// "type annotations needed for `Vec<_>`". A conversion nothing
+    /// settles, whose trait bound is `ambiguous` (`From<u8>`), is E0283 at
+    /// the `let` of its value, and E0282 at a `let` whose own value made
+    /// the variable (`Vec::new()`), which rustc marks.
+    fn unsettled(&self, unknown: &Ty, needed: Span, ambiguous: Option<String>) -> Option<Error> {
         let unknown @ Ty::Infer(_) = self.inference.resolve(unknown) else {
             return None;
         };
@@ -46912,7 +46913,7 @@ impl<'a> Parser<'a> {
             .filter(|value| !(value.start() <= needed.start() && needed.end() <= value.end()))
             .filter(|_| ty != unknown);
         Some(Error::LocalTypeNeeded {
-            code: if ambiguous && made.is_none() {
+            code: if ambiguous.is_some() && made.is_none() {
                 "E0283"
             } else {
                 "E0282"
@@ -46921,6 +46922,9 @@ impl<'a> Parser<'a> {
             ty: (ty != unknown).then(|| ty.name(&self.models)),
             declaration: self.name_span(local.declaration, &local.name),
             needed: Some(made.unwrap_or(needed)),
+            note: ambiguous
+                .filter(|_| made.is_none())
+                .map(|bound| format!("the type must implement `{bound}`").into()),
         })
     }
 
@@ -46941,6 +46945,7 @@ impl<'a> Parser<'a> {
                 ty: None,
                 declaration,
                 needed: Some(needed),
+                note: None,
             },
             None if unknown => Error::LocalTypeNeeded {
                 code: "E0282",
@@ -46948,6 +46953,7 @@ impl<'a> Parser<'a> {
                 ty: None,
                 declaration,
                 needed: None,
+                note: None,
             },
             None => Error::Uninitialized {
                 reference: self.name_span(first.reference, &first.name),
