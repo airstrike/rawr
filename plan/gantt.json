@@ -3,9 +3,9 @@
   "updated": "2026-11-05",
   "version": "0.3.138",
   "examples": {
-    "running": 37,
+    "running": 15,
     "total": 56,
-    "note": "37 pass rawr check: the 31 of 0.3.117 plus stopwatch, multi_window, delineate, modal, gradient and pane_grid"
+    "note": "0.3.135 survey: 37 pass rawr check, 15 run under rawr run; 17 runner builds fail and 5 crash after their first frame"
   },
   "groups": [
     {
@@ -93,8 +93,8 @@
         {"id":"native-callback-mutation","name":"Native callback mutations","start":47,"size":4,"state":"now","note":"The audit and Miri remain","issues":[365],"milestone":"0.4"},
         {"id":"struct-literals-live-edits","name":"Struct literals and live edits","start":44,"size":2,"state":"next","note":"Not started","issues":[325,326],"milestone":"0.4"},
         {"id":"projections-function-values","name":"Projections and function values","start":44,"size":3,"state":"now","note":"#317 and #319 remain","issues":[317,318,319,327],"milestone":"0.4"},
-        {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"Events, exit, theme and modal runners","issues":[335,336,337,339,340,338],"milestone":"0.4"},
-        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"Gaps in about 18 examples","issues":[283,314,328,334,345],"milestone":"0.4"},
+        {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"now","note":"17 examples pass check but their runner doesn't build (#951 #955 #957)","issues":[335,336,337,339,340,338,951,955,957],"milestone":"0.4"},
+        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"now","note":"5 crash after a frame, 2 panic at start, 18 fail check (#952 #953 #954 #956 #958)","issues":[283,314,328,334,345,952,953,954,956,958],"milestone":"0.4"},
         {"id":"opaque-values","name":"A crate's `impl Trait` values","start":47,"size":3,"state":"now","note":"`explain`, later-fixed types, From impls and `impl Into + Copy` arguments run; layout passes check. #936 next","issues":[845,885,886,887,912,913,916,917,936]}
       ]
     },
@@ -131,6 +131,7 @@
         {"id":"one-command-install","name":"One-command install","start":70,"size":2,"state":"done","note":"Prebuilt binaries and a self-installed nightly; binaries ship at milestones, the only tagged versions","issues":[797],"milestone":"0.3"},
         {"id":"staged-release","name":"Staged, cached release","start":72,"size":2,"state":"done","note":"Playground, bot and site each gated; the image rebuilds only when its inputs change","issues":[881],"milestone":"0.3"},
         {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"done","note":"Suites share builds and run in parallel; every merge check runs rawr-cli's suite too (#930)","issues":[891,892,893,930],"milestone":"0.3"},
+        {"id":"example-sweeps","name":"Example sweeps fit on the machine","start":84,"size":2,"state":"next","note":"The store grows 1.5-2 GB per example (#960); worktrees break rawr run (#959)","issues":[959,960]},
         {"id":"std-once","name":"std bindings built once","start":82,"size":2,"state":"done","note":"0.02 s release startup (#931); once per machine is 0.4 work","issues":[931,939,940,941]}
       ]
     },
