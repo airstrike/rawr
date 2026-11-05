@@ -490,3 +490,72 @@ pub mod deref {
         }
     }
 }
+
+/// A type whose methods a program names as function values, as iced's
+/// `pick_list(selected, Theme::ALL, Theme::to_string)` names one: its own
+/// methods, its `Display`'s `to_string` and a trait's method, and a function
+/// that takes a labeller.
+pub mod looks {
+    use std::fmt;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Look {
+        Light,
+        Dark,
+    }
+
+    impl Look {
+        pub fn all() -> Vec<Look> {
+            vec![Look::Light, Look::Dark]
+        }
+
+        pub fn name(&self) -> &'static str {
+            match self {
+                Look::Light => "light",
+                Look::Dark => "dark",
+            }
+        }
+
+        pub fn shade(self) -> u8 {
+            match self {
+                Look::Light => 200,
+                Look::Dark => 30,
+            }
+        }
+
+        pub fn mix(&self, other: Look) -> u8 {
+            self.shade() / 2 + other.shade() / 2
+        }
+
+        pub fn flip(&mut self) {
+            *self = match self {
+                Look::Light => Look::Dark,
+                Look::Dark => Look::Light,
+            };
+        }
+    }
+
+    impl fmt::Display for Look {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(match self {
+                Look::Light => "Light",
+                Look::Dark => "Dark",
+            })
+        }
+    }
+
+    pub trait Tone {
+        fn tone(&self) -> i32;
+    }
+
+    impl Tone for Look {
+        fn tone(&self) -> i32 {
+            i32::from(self.shade()) - 100
+        }
+    }
+
+    /// Each look's label, as a pick list draws its options.
+    pub fn labels(looks: &[Look], label: impl Fn(&Look) -> String) -> Vec<String> {
+        looks.iter().map(label).collect()
+    }
+}
