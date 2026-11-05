@@ -431,7 +431,8 @@ main();
     // In a function returning `i32`, a mismatch, as rustc's E0308 is.
     let report = refused("fn bump(n: &mut i32) -> i32 { return *n = 3 }\nfn main() {}\nmain();\n");
     assert!(
-        report.contains("type mismatch: expected `i32`, found `()`"),
+        report.contains("error[E0308]: mismatched types")
+            && report.contains("expected `i32`, found `()`"),
         "{report}"
     );
 }
@@ -457,11 +458,11 @@ fn language_never_type_errors_are_rustcs() {
         ),
         (
             "fn f() -> ! { 5 }\nfn main() { f() }",
-            "expected `!`, found `{integer}`",
+            "expected `!`, found integer",
         ),
         (
             "fn main() { let c = || -> ! { 1 }; c(); }",
-            "expected `!`, found `{integer}`",
+            "expected `!`, found integer",
         ),
     ] {
         let report = refused(&format!("{source}\nmain();\n"));

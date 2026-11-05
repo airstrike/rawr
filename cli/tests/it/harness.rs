@@ -180,7 +180,7 @@ fn a_syntax_error_in_a_test_module_stops_run_and_check() {
     for output in [&run, &checked] {
         assert!(!output.status.success());
         assert!(
-            stderr(output).contains("error[RAWR-PARSE-UNEXPECTED]"),
+            stderr(output).contains("error: expected `,`"),
             "{}",
             stderr(output)
         );

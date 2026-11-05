@@ -794,7 +794,7 @@ fn external_type_arity_names_the_item_that_uses_it() {
 /// Rawr exports only the types its facades declare: another is a rawr bug,
 /// which panics naming the invariant (D664).
 #[test]
-#[should_panic(expected = "a facade exports only a type it declares, not `iced::Missing`")]
+#[should_panic(expected = "bindings export only a type they declare, not `iced::Missing`")]
 fn exporting_an_undeclared_type_panics() {
     let _ = widget_facade(false, facade::Abi::new(1).unwrap()).export_type("Missing");
 }

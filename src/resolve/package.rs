@@ -1675,7 +1675,7 @@ impl<'a> Resolver<'a> {
             error: Error::PrivateItem {
                 item,
                 name: address.name.clone(),
-                reference,
+                reference: last_segment(reference, &address.name),
                 declaration: Some(declaration.span),
             },
         }
@@ -1904,6 +1904,23 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
     output
 }
 
+/// The end of `reference` that names `name`, where rustc's E0603 points:
+/// `make_sausage` of `sausage_factory::make_sausage`.
+fn last_segment(reference: Span, name: &str) -> Span {
+    let (start, end) = (reference.start(), reference.end());
+    let length = u16::try_from(name.chars().count()).unwrap_or(u16::MAX);
+    match (start.line(), end.line(), end.position()) {
+        (Some(first), Some(last), Some(column))
+            if first == last && column > usize::from(length) =>
+        {
+            let line = u16::try_from(last).unwrap_or(u16::MAX);
+            let column = u16::try_from(column).unwrap_or(u16::MAX);
+            Span::new(crate::Position::new(line, column - length), end)
+        }
+        _ => reference,
+    }
+}
+
 /// Rust privacy: a private item declared in a module is visible from that
 /// module and its descendants; `depth` is the length of the declaring path.
 fn within(context: &Context, address: &Address, depth: usize) -> bool {
@@ -1974,6 +1991,7 @@ fn host_target(
             .ok_or_else(|| Error::UnknownType {
                 name: qualified.clone(),
                 reference,
+                path: false,
             }),
         Some(host::Entry::Item(definitions)) => Ok(Target::HostItem {
             definitions: definitions.into(),

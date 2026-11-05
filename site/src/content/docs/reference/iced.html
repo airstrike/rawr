@@ -33,7 +33,7 @@ iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a1
  <span class="c">26 |</span>         }
     <span class="c">|</span> <span class="e">^^^^^^^^</span></code></pre>
 </div>
-<p>The error code names the stage that failed and the kind of error. Codes will change while rawr is pre-alpha.</p>
+<p>An error rustc would give has rustc&rsquo;s code and wording, such as <code>error[E0308]: mismatched types</code>. One rustc gives without a code, as a syntax error or <code>cannot find macro</code>, prints a plain <code>error:</code>. Only an error rustc has no counterpart for keeps a <code>RAWR-</code> code, which names the stage that failed. Those codes will change while rawr is pre-alpha.</p>
 
 <h2 id="examples">iced&rsquo;s own examples</h2>
 <p>iced&rsquo;s examples run as the generated bindings reach the items they use. <a href="/docs/iced#works">iced</a> names the ones known to run unchanged but for the <code>// rawr</code> line.</p>

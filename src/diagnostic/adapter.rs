@@ -245,7 +245,7 @@ fn unexpected_report(
     else {
         unreachable!("only syntax Rust does not have is reported here");
     };
-    let mut builder = Report::error(code::PARSE_UNEXPECTED, message.clone());
+    let mut builder = Report::error(code::PARSE_SYNTAX, message.clone());
     if let Some(help) = help {
         builder = builder.help(help.clone());
     }
@@ -259,20 +259,17 @@ fn unexpected_report(
 
 fn parse_code(error: &ParseErrorType) -> (code::Code, Option<&'static str>) {
     match error {
-        ParseErrorType::BadInput(..) => (code::PARSE_BAD_INPUT, None),
         ParseErrorType::UnexpectedEOF => (
-            code::PARSE_UNEXPECTED_EOF,
+            code::PARSE_SYNTAX,
             Some("finish the incomplete expression or declaration"),
         ),
-        ParseErrorType::MissingToken(..) => (code::PARSE_MISSING_TOKEN, None),
-        ParseErrorType::MissingSymbol(..) => (code::PARSE_MISSING_SYMBOL, None),
         ParseErrorType::UnknownEnum(..)
         | ParseErrorType::UnknownEnumVariant(..)
         | ParseErrorType::WrongEnumVariantArity(..) => (code::RESOLVE_ENUM_PATTERN, None),
         ParseErrorType::MalformedReceiver(..) => (code::RESOLVE_RECEIVER, None),
         ParseErrorType::MalformedTypeTuple(..) => (code::RESOLVE_TYPE_SHAPE, None),
-        ParseErrorType::Unexpected { .. } => (code::PARSE_UNEXPECTED, None),
         ParseErrorType::Resolution(..) => unreachable!(),
+        // rustc reports a syntax error without a code.
         _ => (code::PARSE_SYNTAX, None),
     }
 }
@@ -479,11 +476,14 @@ fn resolution_report_with_sources(
 ) -> Result<Report, Error> {
     let builder = sourced_builder(error, &source, error.primary_span());
     let secondary_message = error.secondary_span().map(|_| match error {
-        resolve::Error::MovedValue { .. } => "value moved here",
-        resolve::Error::BorrowConflict { .. } => "borrow made here",
-        resolve::Error::ArgumentCount { callee, .. } => callee.defined_here(),
-        resolve::Error::PrivateItem { item, .. } => item.defined_here(),
-        _ => "first declaration or related definition is here",
+        resolve::Error::MovedValue { .. } => "value moved here".into(),
+        resolve::Error::BorrowConflict { .. } => "borrow made here".into(),
+        resolve::Error::ArgumentCount { callee, .. } => callee.defined_here().into(),
+        resolve::Error::ImmutableBinding { binding, .. } => {
+            format!("first assignment to `{binding}`").into()
+        }
+        resolve::Error::PrivateItem { item, .. } => item.defined_here().into(),
+        _ => crate::ImmutableString::from("first declaration or related definition is here"),
     });
     let mut builder = builder.source(source.clone());
     if !error.primary_span().is_none() {
@@ -513,7 +513,7 @@ fn resolution_report_with_sources(
         builder = builder.secondary(
             secondary_source.unwrap_or(source),
             secondary,
-            secondary_message.map(Into::into),
+            secondary_message,
         )?;
     }
     Ok(builder.finish())
@@ -542,8 +542,34 @@ fn primary_label(
         resolve::Error::NotInModule { module, .. } => {
             Some(format!("not found in `{}`", written_module(source, primary, module)).into())
         }
-        resolve::Error::UnknownFunction { .. } | resolve::Error::UnknownVariable { .. } => {
-            Some("not found in this scope".into())
+        resolve::Error::UnknownVariable { .. }
+        | resolve::Error::UnknownFunction { .. }
+        | resolve::Error::UnknownType { path: false, .. } => Some("not found in this scope".into()),
+        resolve::Error::UnknownType {
+            name, path: true, ..
+        } => Some(
+            resolve::NotFound::type_named(name, true)
+                .undeclared()
+                .into(),
+        ),
+        resolve::Error::TypeMismatch {
+            expected, actual, ..
+        } => Some(
+            format!(
+                "expected {}, found {}",
+                resolve::Described(expected),
+                resolve::Described(actual)
+            )
+            .into(),
+        ),
+        resolve::Error::IfWithoutElse { expected, .. } => {
+            Some(format!("expected {}, found `()`", resolve::Described(expected)).into())
+        }
+        resolve::Error::ReturnWithoutValue { .. } => Some("return type is not `()`".into()),
+        resolve::Error::WrongKind { expected, .. } => Some(format!("not a {expected}").into()),
+        resolve::Error::Unimplemented { label, .. } => Some(label.clone()),
+        resolve::Error::ImmutableBinding { .. } => {
+            Some("cannot assign twice to immutable variable".into())
         }
         resolve::Error::MovedValue {
             previous_iteration: true,
@@ -596,7 +622,10 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
     }
     let stable_code = match error.category() {
         resolve::Category::DuplicateItem => code::RESOLVE_DUPLICATE_ITEM,
-        resolve::Category::UnknownType => code::RESOLVE_UNKNOWN_TYPE,
+        resolve::Category::UnknownType => match error {
+            resolve::Error::UnknownType { path: true, .. } => code::RESOLVE_FAILED_PATH,
+            _ => code::RESOLVE_UNKNOWN_TYPE,
+        },
         resolve::Category::UnknownImport => code::RESOLVE_UNKNOWN_IMPORT,
         resolve::Category::InvalidImport => code::RESOLVE_INVALID_IMPORT,
         resolve::Category::InvalidTypeArguments => code::RESOLVE_TYPE_ARGUMENTS,
@@ -612,6 +641,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::NotInModule => code::RESOLVE_NOT_IN_MODULE,
         resolve::Category::UnknownFunction => code::RESOLVE_UNKNOWN_FUNCTION,
         resolve::Category::UnknownVariable => code::RESOLVE_UNKNOWN_VARIABLE,
+        resolve::Category::UnknownMacro => code::RESOLVE_UNKNOWN_MACRO,
+        resolve::Category::WrongKind => code::RESOLVE_WRONG_KIND,
+        resolve::Category::Unimplemented => code::RESOLVE_CAPABILITY,
         resolve::Category::MovedValue => code::RESOLVE_MOVED_VALUE,
         resolve::Category::BorrowConflict => match error {
             resolve::Error::BorrowConflict { code, .. } => code::borrow(code),
@@ -619,6 +651,8 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         },
         resolve::Category::InvalidConstruction => code::RESOLVE_CONSTRUCTION,
         resolve::Category::TypeMismatch => code::RESOLVE_TYPE_MISMATCH,
+        resolve::Category::IfWithoutElse => code::RESOLVE_IF_WITHOUT_ELSE,
+        resolve::Category::ReturnWithoutValue => code::RESOLVE_RETURN_UNIT,
         resolve::Category::ImmutableBinding => code::RESOLVE_IMMUTABLE_BINDING,
         resolve::Category::InvalidImplOwner => code::RESOLVE_IMPL_OWNER,
         resolve::Category::DuplicateMethod => code::RESOLVE_DUPLICATE_METHOD,
@@ -631,7 +665,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::MissingCapability => code::RESOLVE_CAPABILITY,
         resolve::Category::InvalidMatch => code::RESOLVE_MATCH,
         resolve::Category::UnsupportedNominalSyntax => code::RESOLVE_UNSUPPORTED_SYNTAX,
-        resolve::Category::Syntax => code::PARSE_UNEXPECTED,
+        resolve::Category::Syntax => code::PARSE_SYNTAX,
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
         resolve::Category::StdPath => match error {
@@ -672,9 +706,6 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnknownType { name, .. } if name.contains("::") => builder.help(format!(
             "`{name}` isn't available in Rawr yet, or the path is misspelled"
         )),
-        resolve::Error::UnknownType { name, .. } => {
-            builder.help(format!("declare `{name}`, or import it with `use`"))
-        }
         resolve::Error::UnknownMember { owner, member, .. } if owner.contains("::") => builder
             .help(format!(
                 "`{owner}::{member}` isn't available in Rawr yet, or the name is misspelled"
@@ -687,12 +718,21 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         } => builder.note(note.clone()),
         resolve::Error::UnknownFunction {
             import: Some(path), ..
-        } => builder.help(format!("import it with `use {path};`")),
-        resolve::Error::UnknownFunction { name, .. } => {
-            builder.help(format!("declare `fn {name}`, or import it with `use`"))
+        } => builder.help(format!("consider importing this function: `use {path};`")),
+        resolve::Error::IfWithoutElse { .. } => builder
+            .note("`if` expressions without `else` evaluate to `()`")
+            .help("consider adding an `else` block that evaluates to the expected type"),
+        resolve::Error::ReturnWithoutValue { .. } => {
+            builder.help("give the `return` a value of the expected type")
         }
-        resolve::Error::UnknownVariable { name, .. } => builder.help(format!(
-            "declare `{name}` with `let`, or import it with `use`"
+        resolve::Error::WrongKind { found: "macro", .. } => {
+            builder.help("use `!` to invoke the macro")
+        }
+        resolve::Error::Unimplemented {
+            help: Some(help), ..
+        } => builder.help(help.clone()),
+        resolve::Error::ImmutableBinding { binding, .. } => builder.help(format!(
+            "consider making this binding mutable: `mut {binding}`"
         )),
         resolve::Error::MovedValue { name, .. } => builder.help(format!(
             "`{name}` was moved before this use; clone it before the move to keep a copy"
@@ -841,8 +881,10 @@ fn evaluation_message(error: &EvalAltResult) -> String {
 fn resolution_message(error: &resolve::Error) -> String {
     match error {
         resolve::Error::DuplicateItem { name, .. } => format!("duplicate item `{name}`"),
-        resolve::Error::UnknownType { name, .. } => format!("unknown type `{name}`"),
-        resolve::Error::UnknownImport { path, .. } => format!("unknown import `{path}`"),
+        resolve::Error::UnknownType { name, path, .. } => {
+            resolve::NotFound::type_named(name, *path).to_string()
+        }
+        resolve::Error::UnknownImport { path, .. } => format!("unresolved import `{path}`"),
         resolve::Error::InvalidImport { path, reason, .. } => {
             format!("invalid import `{path}`: {reason}")
         }
@@ -880,11 +922,17 @@ fn resolution_message(error: &resolve::Error) -> String {
             format!("member `{owner}::{member}` used as the other kind")
         }
         resolve::Error::UnknownFunction { name, .. } => {
-            format!("cannot find function `{name}` in this scope")
+            resolve::NotFound::Function(name).to_string()
         }
-        resolve::Error::UnknownVariable { name, .. } => {
-            format!("cannot find value `{name}` in this scope")
-        }
+        resolve::Error::UnknownVariable { name, .. } => resolve::NotFound::Value(name).to_string(),
+        resolve::Error::UnknownMacro { name, .. } => resolve::NotFound::Macro(name).to_string(),
+        resolve::Error::WrongKind {
+            expected,
+            found,
+            name,
+            ..
+        } => format!("expected {expected}, found {found} `{name}`"),
+        resolve::Error::Unimplemented { message, .. } => message.to_string(),
         resolve::Error::MovedValue {
             name,
             borrowed: true,
@@ -895,11 +943,11 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }
-        resolve::Error::TypeMismatch {
-            expected, actual, ..
-        } => format!("type mismatch: expected `{expected}`, found `{actual}`"),
+        resolve::Error::TypeMismatch { .. } => "mismatched types".into(),
+        resolve::Error::IfWithoutElse { .. } => resolve::IF_WITHOUT_ELSE.into(),
+        resolve::Error::ReturnWithoutValue { .. } => resolve::RETURN_WITHOUT_VALUE.into(),
         resolve::Error::ImmutableBinding { binding, .. } => {
-            format!("cannot mutate immutable binding `{binding}`")
+            resolve::AssignTwice(binding).to_string()
         }
         resolve::Error::InvalidImplOwner { owner, .. } => {
             format!("cannot define inherent methods for `{owner}`")
@@ -1033,7 +1081,7 @@ mod tests {
         let report =
             Report::from_parse_unpositioned(&error, "generated diagnostic has no origin proof");
 
-        assert_eq!(report.code(), code::PARSE_UNEXPECTED_EOF);
+        assert_eq!(report.code(), code::PARSE_SYNTAX);
         assert!(report.labels().is_empty());
         assert!(report.sources().is_empty());
         assert_eq!(

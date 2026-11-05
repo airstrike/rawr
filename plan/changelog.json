@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.134",
+      "date": "2026-11-05",
+      "entries": [
+        {"text":"Errors use rustc's codes and wording: mismatched types E0308, an `if` without `else` E0317, `return;` E0069, unknown names E0425, E0433 and E0432, E0423, assignments E0384, E0594 and E0596, and `?` or mixed-number arithmetic E0277. Syntax errors and an unknown macro print a plain `error:` as rustc does.","issues":[897,909,910]}
+      ]
+    },
+    {
       "version": "0.3.133",
       "date": "2026-11-04",
       "entries": [
