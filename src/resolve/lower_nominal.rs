@@ -19935,11 +19935,6 @@ impl<'a> Parser<'a> {
             .flatten()
     }
 
-    /// Rawr's inclusive range where a crate takes `RangeInclusive<T>` of
-    /// `element`: `RangeInclusive<f64>` where `float` says the argument is
-    /// a range of floats, or with no argument where `T` is a float, and
-    /// `RangeInclusive<i64>` otherwise. `T` takes the range's kind of
-    /// number, as rustc's `{float}` or `{integer}`.
     /// The `RangeInclusive<T>` input at `index`, whose argument is not known
     /// yet, of the kind the call's other arguments make `element`: `T` of
     /// `slider(range, value, message)` is the `f32` of a closure's
@@ -19972,6 +19967,11 @@ impl<'a> Parser<'a> {
         self.inclusive_range_of(element, float)
     }
 
+    /// Rawr's inclusive range where a crate takes `RangeInclusive<T>` of
+    /// `element`: `RangeInclusive<f64>` where `float` says the argument is
+    /// a range of floats, or with no argument where `T` is a float, and
+    /// `RangeInclusive<i64>` otherwise. `T` takes the range's kind of
+    /// number, as rustc's `{float}` or `{integer}`.
     fn inclusive_range_of(&mut self, element: &Ty, float: Option<bool>) -> Ty {
         // With no argument to read, as a closure's hint is made, an open
         // `T` stays open for the call's own arguments to settle. A range of
