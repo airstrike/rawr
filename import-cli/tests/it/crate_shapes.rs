@@ -78,6 +78,21 @@ fn a_borrowed_crate_field_derefs_without_moving_its_owner() {
     runs_as_cargo_does("deref_field", "7\n4 2\n4 Some(1)\n4\n");
 }
 
+/// A crate type's methods are function values, as iced's
+/// `pick_list(.., Theme::ALL, Theme::to_string)` names one (#319): its
+/// own `&self`, `self` and `&mut self` methods, its `Display`'s
+/// `to_string` and a trait's method by the trait's path, `<T as Trait>::`
+/// and the type's, passed where a crate function takes `impl Fn(&T) ->
+/// String`, coerced to a `fn` pointer, and called by path. A script
+/// function of `&Look` fills the same slot.
+#[test]
+fn a_crate_types_methods_are_function_values() {
+    runs_as_cargo_does(
+        "method_paths",
+        "[\"Light\", \"Dark\"]\n[\"<Light>\", \"<Dark>\"]\n[\"light\", \"dark\"] [200, 30] [200, 30]\n[100, -70] [100, -70] [100, -70]\ndark light Dark\n",
+    );
+}
+
 /// A crate's `pub use Alignment::Center;` re-exports the variant, as
 /// `iced::Center` is, and `use Enum::Variant;` imports one: each name is
 /// the variant in expressions and patterns.

@@ -493,8 +493,8 @@ pub mod deref {
 
 /// A type whose methods a program names as function values, as iced's
 /// `pick_list(selected, Theme::ALL, Theme::to_string)` names one: its own
-/// methods, its `Display`'s `to_string` and a trait's method, and functions
-/// that take a labeller as a closure or a `fn` pointer.
+/// methods, its `Display`'s `to_string` and a trait's method, and a function
+/// that takes a labeller.
 pub mod looks {
     use std::fmt;
 
@@ -505,7 +505,9 @@ pub mod looks {
     }
 
     impl Look {
-        pub const ALL: [Look; 2] = [Look::Light, Look::Dark];
+        pub fn all() -> Vec<Look> {
+            vec![Look::Light, Look::Dark]
+        }
 
         pub fn name(&self) -> &'static str {
             match self {
@@ -554,10 +556,6 @@ pub mod looks {
 
     /// Each look's label, as a pick list draws its options.
     pub fn labels(looks: &[Look], label: impl Fn(&Look) -> String) -> Vec<String> {
-        looks.iter().map(label).collect()
-    }
-
-    pub fn pointed(looks: &[Look], label: fn(&Look) -> String) -> Vec<String> {
         looks.iter().map(label).collect()
     }
 }

@@ -21255,6 +21255,25 @@ impl<'a> Parser<'a> {
         {
             return self.host_function_value(item.clone(), expression);
         }
+        // `Look::mix(a, b)`: a crate type's method called by its path is
+        // the method called on its first argument.
+        if matches!(self.peek(), Token::LeftParen)
+            && let [item] = items.as_ref()
+            && item.kind() == crate::host::item::Kind::Method
+        {
+            let member = item.path_ref().name().to_owned();
+            if let Some(tokens) = self.path_method_call(&member, expression, None) {
+                self.splice_tokens(tokens);
+                return self.parse_primary();
+            }
+            return Err(Error::argument_count(
+                Callee::AssociatedFunction,
+                item.path(),
+                item.signature().parameters().len() + 1,
+                0,
+                expression,
+            ));
+        }
         #[cfg(feature = "rust-import")]
         if !matches!(self.peek(), Token::LeftParen | Token::Unit)
             && items.len() == 1
