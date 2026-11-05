@@ -401,7 +401,7 @@ fn rawr_check_reports_what_only_rustc_rejects() {
         &main,
         text.replace(
             "    println!(\"total: {}\", total(&cart));",
-            "    let shown: u8 = 300;\n    println!(\"total: {} ({shown})\", total(&cart));",
+            "    let n = 3;\n    let shown: &'static i32 = &n;\n    println!(\"total: {} ({shown})\", total(&cart));",
         ),
     )
     .unwrap();
@@ -420,10 +420,12 @@ fn rawr_check_reports_what_only_rustc_rejects() {
     assert_eq!(stdout(&output), format!("Checked {}\n", main.display()));
     let text = stderr(&output);
     assert!(
-        text.starts_with("\ncargo check found 1 error:\n\nerror: literal out of range for `u8`"),
+        text.starts_with(
+            "\ncargo check found 1 error:\n\nerror[E0597]: `n` does not live long enough"
+        ),
         "{text}"
     );
-    assert!(text.contains("src/main.rs:16:21"), "{text}");
+    assert!(text.contains("src/main.rs:17:31"), "{text}");
 }
 
 /// A script gets `cargo check` too, though rustc refuses its frontmatter
@@ -439,7 +441,7 @@ fn rawr_check_reports_what_only_rustc_rejects_in_a_script() {
     fs::write(
         &script,
         "#!/usr/bin/env rawr\n---cargo\n[package]\nedition = \"2024\"\n---\n// rawr\n\
-         fn main() {\n    let x: u8 = 300;\n    println!(\"{x}\");\n}\n",
+         fn main() {\n    let n = 3;\n    let x: &'static i32 = &n;\n    println!(\"{x}\");\n}\n",
     )
     .unwrap();
     let bin = Path::new(&cargo).parent().unwrap();
@@ -457,11 +459,13 @@ fn rawr_check_reports_what_only_rustc_rejects_in_a_script() {
     assert_eq!(stdout(&output), format!("Checked {}\n", script.display()));
     let text = stderr(&output);
     assert!(
-        text.starts_with("\ncargo check found 1 error:\n\nerror: literal out of range for `u8`"),
+        text.starts_with(
+            "\ncargo check found 1 error:\n\nerror[E0597]: `n` does not live long enough"
+        ),
         "{text}"
     );
     assert!(
-        text.contains(&format!("{}:8:17", script.display())),
+        text.contains(&format!("{}:9:27", script.display())),
         "{text}"
     );
     assert_eq!(
@@ -481,6 +485,7 @@ fn background_cargo_check_restarts_on_saves_and_reports_only_the_newest() {
 
     let sandbox = Sandbox::new("marked-background");
     let log = sandbox.path.join("log");
+    let signal = sandbox.path.join("signal");
     let cargo = sandbox.path.join("bin/cargo");
     fs::write(
         &cargo,
@@ -488,11 +493,13 @@ fn background_cargo_check_restarts_on_saves_and_reports_only_the_newest() {
             "#!/bin/sh\n\
              echo started >> '{log}/started'\n\
              n=$(wc -l < '{log}/started' | tr -d ' ')\n\
+             echo \"$n\" > '{signal}'\n\
              sleep 1\n\
              echo \"$n\" >> '{log}/finished'\n\
              printf '{{\"reason\":\"compiler-message\",\"message\":{{\"level\":\"error\",\"message\":\"run %s\",\"rendered\":\"error: run %s\"}}}}\\n' \"$n\" \"$n\"\n\
              exit 101\n",
-            log = log.display()
+            log = log.display(),
+            signal = signal.display()
         ),
     )
     .unwrap();
@@ -503,6 +510,27 @@ fn background_cargo_check_restarts_on_saves_and_reports_only_the_newest() {
             .map(|text| text.lines().map(str::to_owned).collect::<Vec<_>>())
             .unwrap_or_default()
     };
+    // Each check says it started through a FIFO. The test holds the FIFO
+    // open for reading and writing, so a check's write never blocks.
+    assert!(Command::new("mkfifo")
+        .arg(&signal)
+        .status()
+        .unwrap()
+        .success());
+    let fifo = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&signal)
+        .unwrap();
+    let (signalled, starts) = mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::BufRead as _;
+        for line in std::io::BufReader::new(fifo).lines().map_while(Result::ok) {
+            if signalled.send(line).is_err() {
+                break;
+            }
+        }
+    });
 
     let (reported, reports) = mpsc::channel();
     let background = rawr_cli::cargo::Background::start_with(
@@ -512,23 +540,19 @@ fn background_cargo_check_restarts_on_saves_and_reports_only_the_newest() {
         move |status| drop(reported.send(status)),
     );
     // The launch check starts at once. Three saves stop it and start one.
-    let launched = std::time::Instant::now();
-    while lines("started").is_empty() {
-        if let Ok(status) = reports.try_recv() {
-            panic!("the stand-in cargo did not start: {status:?}");
+    let Ok(first) = starts.recv_timeout(Duration::from_secs(120)) else {
+        match reports.try_recv() {
+            Ok(status) => panic!("the stand-in cargo did not start: {status:?}"),
+            Err(_) => panic!("no check started"),
         }
-        assert!(
-            launched.elapsed() < Duration::from_secs(10),
-            "no check started"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    };
+    assert_eq!(first, "1");
     for _ in 0..3 {
         background.saved();
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    let status = reports.recv_timeout(Duration::from_secs(10)).unwrap();
+    let status = reports.recv_timeout(Duration::from_secs(120)).unwrap();
     let rawr_cli::cargo::Status::Finished(outcome) = status else {
         panic!("{status:?}");
     };

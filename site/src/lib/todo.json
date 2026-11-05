@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-05",
-  "version": "0.3.135",
+  "version": "0.3.137",
   "examples": {
     "running": 37,
     "total": 56,
@@ -11,6 +11,26 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.137",
+        "date": "2026-11-05",
+        "entries": [
+          {"text":"A `let` may leave out its value (`let x;`, `let x: i32;`). A later assignment gives the local its value, and its type if the `let` names none. A use before that is rustc's E0381, also after a branch that may not have assigned it. A second assignment to a local not declared `mut` is E0384. A borrow the assignment stores is checked like any other borrow (E0597).","issues":[149]},
+          {"text":"An integer literal its type can't hold, such as `let x: u8 = 300;` or `-129i8`, is refused with rustc's deny-by-default `overflowing_literals` error, worded as rustc words it.","issues":[932]},
+          {"text":"A path into a module that has no such item, such as `snacks::FRUIT`, is rustc's E0425 \"cannot find value `FRUIT` in module `snacks`\". It was E0432.","issues":[933]},
+          {"text":"Errors come in the order rustc gives them: impl methods are checked in source order with free functions. A number's `.into()` converts to the type its use needs. A type nothing settles is E0282 or E0283, as for `Vec::new()` with only `.into()`s pushed, or a method of `let x = todo!();`. `Result<T, _>` from `try_into()` takes the impl's error type. `Cow<[T]>` indexes and comes from `&Vec<T>` and `Vec<T>`. `todo!()` in a pattern is E0532.","issues":[934]}
+        ]
+      },
+      {
+        "version": "0.3.136",
+        "date": "2026-11-05",
+        "entries": [
+          {"text":"`collect()` into a `Result` or an `Option` works, including when the target comes only from the return type, and stops at the first `Err` or `None` as Rust does. A set or map collected from the return type is built as one. `let Ok(x) = s.parse() else { .. }` with a target a later use gives no longer panics.","issues":[906]},
+          {"text":"A `mut self` or `&mut self` method on a std type can change it (`self.push(..)`), and a changing method runs on a temporary (`vec![..].resize(0, 5)`), as in Rust.","issues":[907]},
+          {"text":"A struct or enum that holds itself by value is refused with rustc's E0072, and a `collect()` whose items its target can't be built from gets rustc's E0277, even in a function nothing calls.","issues":[911]},
+          {"text":"Starting rawr is quick again: building the std bindings takes about 20 ms instead of 0.35 s with a release build, so `rawr check`, a restart on save and a program started from `rawr mcp` no longer wait on it.","issues":[931]}
+        ]
+      },
       {
         "version": "0.3.135",
         "date": "2026-11-05",
@@ -1460,7 +1480,7 @@
     {"issue":146,"title":"A closure that captures by `&mut` is treated as `Copy`","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
     {"issue":147,"title":"The borrows a block's tail value holds don't reach the `let` that binds the block …","state":"open","category":"Borrow checker (D572)"},
     {"issue":148,"title":"A closure that takes and returns borrows is left to `cargo check` (`issue-52534`, `issue-117146`)","state":"open","category":"Borrow checker (D572)"},
-    {"issue":149,"title":"`let c;` with a later assignment isn't lowered","state":"open","category":"Borrow checker (D572)"},
+    {"issue":149,"title":"`let c;` with a later assignment isn't lowered","state":"closed","category":"Borrow checker (D572)","release":"0.3.137"},
     {"issue":150,"title":"A copy of a `move` closure shares the state it changes with the closure it was copied from","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
     {"issue":151,"title":"A closure body written as a block that ends in a captured local (`|| { ...; x }`) doesn't move…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
     {"issue":152,"title":"A closure that isn't `move` and moves a field out of a capture (`|| s.a`) doesn't move that…","state":"closed","category":"Borrow checker (D572)","release":"0.2.0"},
@@ -2217,12 +2237,12 @@
     {"issue":903,"title":"Inline format argument `{self:?}`","state":"closed","category":"Divergences from rustc","release":"0.3.133"},
     {"issue":904,"title":"#[derive(Debug)] on an enum whose payload is a std error type","state":"closed","category":"Divergences from rustc","release":"0.3.133"},
     {"issue":905,"title":"Multi-line string literals","state":"closed","category":"Divergences from rustc","release":"0.3.133"},
-    {"issue":906,"title":"A Result's runtime value doesn't match its type after let-else on parse()","state":"open","category":"Divergences from rustc"},
-    {"issue":907,"title":"A changing method on a collection that isn't a named place: `self` of an impl for Vec, or a temporary","state":"open","category":"Divergences from rustc"},
+    {"issue":906,"title":"A Result's runtime value doesn't match its type after let-else on parse()","state":"closed","category":"Divergences from rustc","release":"0.3.136"},
+    {"issue":907,"title":"A changing method on a collection that isn't a named place: `self` of an impl for Vec, or a temporary","state":"closed","category":"Divergences from rustc","release":"0.3.136"},
     {"issue":908,"title":"Smaller rustlings gaps: Cow<[T]> index, u8 into i16, AsRef<str>, fn item arrays, try_into's error, for over Option","state":"open","category":"Divergences from rustc"},
     {"issue":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"closed","category":"Divergences from rustc","release":"0.3.134"},
     {"issue":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"closed","category":"Divergences from rustc","release":"0.3.134"},
-    {"issue":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"open","category":"Divergences from rustc"},
+    {"issue":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"closed","category":"Divergences from rustc","release":"0.3.136"},
     {"issue":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"closed","category":"Divergences from rustc","release":"0.3.135"},
     {"issue":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"open","category":"Divergences from rustc"},
     {"issue":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open","category":"Health"},
@@ -2242,12 +2262,23 @@
     {"issue":928,"title":"`Rc<T>` doesn't meet a `T: Display` bound","state":"open","category":"Divergences from rustc"},
     {"issue":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"open","category":"Divergences from rustc"},
     {"issue":930,"title":"Five rawr-cli integration tests fail on main","state":"closed","category":"Health"},
-    {"issue":931,"title":"Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"open","category":"Health"},
-    {"issue":932,"title":"Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"open","category":"Divergences from rustc"},
-    {"issue":933,"title":"A missing item in a local module is E0432, not rustc's E0425","state":"open","category":"Divergences from rustc"},
-    {"issue":934,"title":"rawr infers types where rustc needs an annotation or reports a mismatch","state":"open","category":"Divergences from rustc"},
+    {"issue":931,"title":"Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"closed","category":"Health","release":"0.3.136"},
+    {"issue":932,"title":"Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"closed","category":"Divergences from rustc","release":"0.3.137"},
+    {"issue":933,"title":"A missing item in a local module is E0432, not rustc's E0425","state":"closed","category":"Divergences from rustc","release":"0.3.137"},
+    {"issue":934,"title":"rawr infers types where rustc needs an annotation or reports a mismatch","state":"closed","category":"Divergences from rustc","release":"0.3.137"},
     {"issue":935,"title":"rustlings harness compares rustc's first coded error, not its first error","state":"open","category":"Health"},
-    {"issue":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"open","category":"Divergences from rustc"}
+    {"issue":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"open","category":"Divergences from rustc"},
+    {"issue":937,"title":"collect() into a Result or Option of a map or set","state":"open","category":"Divergences from rustc"},
+    {"issue":938,"title":"A `&self` method changing a std collection is a type mismatch, not E0596","state":"open","category":"Divergences from rustc"},
+    {"issue":939,"title":"mcp inspect test asserts one line of a running loop","state":"closed","category":"Health"},
+    {"issue":940,"title":"background cargo check test waits on a deadline, not an event","state":"closed","category":"Health"},
+    {"issue":941,"title":"rawr-cli breakpoint test sets its breakpoint before the program has compiled","state":"closed","category":"Health"},
+    {"issue":942,"title":"Build the std bindings once per machine, not once per process (0.4)","state":"open","category":"Health"},
+    {"issue":943,"title":"Two default methods of one trait that give opaque types mix up their members","state":"open","category":"Divergences from rustc"},
+    {"issue":944,"title":"Type::try_from(&v[..]) of untyped integers picks the [T; N] impl","state":"open","category":"Divergences from rustc"},
+    {"issue":945,"title":"`-` on an unsigned value or literal is E0600","state":"open","category":"Divergences from rustc"},
+    {"issue":946,"title":"`let x;` follow-ups: Drop types, patterns, flow-exact E0384","state":"open","category":"Divergences from rustc"},
+    {"issue":947,"title":"arithmetic_overflow and unconditional_panic lints","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2881,12 +2912,12 @@
             {"number":903,"title":"Inline format argument `{self:?}`","state":"closed"},
             {"number":904,"title":"#[derive(Debug)] on an enum whose payload is a std error type","state":"closed"},
             {"number":905,"title":"Multi-line string literals","state":"closed"},
-            {"number":906,"title":"A Result's runtime value doesn't match its type after let-else on parse()","state":"open"},
-            {"number":907,"title":"A changing method on a collection that isn't a named place: `self` of an impl for Vec, or a temporary","state":"open"},
+            {"number":906,"title":"A Result's runtime value doesn't match its type after let-else on parse()","state":"closed"},
+            {"number":907,"title":"A changing method on a collection that isn't a named place: `self` of an impl for Vec, or a temporary","state":"closed"},
             {"number":908,"title":"Smaller rustlings gaps: Cow<[T]> index, u8 into i16, AsRef<str>, fn item arrays, try_into's error, for over Option","state":"open"},
             {"number":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"closed"},
             {"number":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"closed"},
-            {"number":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"open"},
+            {"number":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"closed"},
             {"number":921,"title":"E0382: rustc's parameter note and clone suggestion","state":"open"},
             {"number":922,"title":"`std::num::ParseIntError` written in full in a let annotation is an unknown type","state":"open"},
             {"number":923,"title":"`Chars::as_str` is E0599","state":"open"},
@@ -2896,10 +2927,16 @@
             {"number":927,"title":"`try_into()` into `Result<Color, _>` leaves the error type uninferred","state":"open"},
             {"number":928,"title":"`Rc<T>` doesn't meet a `T: Display` bound","state":"open"},
             {"number":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"open"},
-            {"number":932,"title":"Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"open"},
-            {"number":933,"title":"A missing item in a local module is E0432, not rustc's E0425","state":"open"},
-            {"number":934,"title":"rawr infers types where rustc needs an annotation or reports a mismatch","state":"open"},
-            {"number":935,"title":"rustlings harness compares rustc's first coded error, not its first error","state":"open"}
+            {"number":932,"title":"Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"closed"},
+            {"number":933,"title":"A missing item in a local module is E0432, not rustc's E0425","state":"closed"},
+            {"number":934,"title":"rawr infers types where rustc needs an annotation or reports a mismatch","state":"closed"},
+            {"number":935,"title":"rustlings harness compares rustc's first coded error, not its first error","state":"open"},
+            {"number":937,"title":"collect() into a Result or Option of a map or set","state":"open"},
+            {"number":938,"title":"A `&self` method changing a std collection is a type mismatch, not E0596","state":"open"},
+            {"number":944,"title":"Type::try_from(&v[..]) of untyped integers picks the [T; N] impl","state":"open"},
+            {"number":945,"title":"`-` on an unsigned value or literal is E0600","state":"open"},
+            {"number":946,"title":"`let x;` follow-ups: Drop types, patterns, flow-exact E0384","state":"open"},
+            {"number":947,"title":"arithmetic_overflow and unconditional_panic lints","state":"open"}
           ]
         }
       ]
@@ -2954,10 +2991,13 @@
           "name": "std bindings built once",
           "start": 82,
           "size": 2,
-          "state": "now",
-          "note": "0.02 s release startup (#931); one build per machine is 0.4 work",
+          "state": "done",
+          "note": "0.02 s release startup (#931); once per machine is 0.4 work",
           "issues": [
-            {"number":931,"title":"Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"open"}
+            {"number":931,"title":"Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"closed"},
+            {"number":939,"title":"mcp inspect test asserts one line of a running loop","state":"closed"},
+            {"number":940,"title":"background cargo check test waits on a deadline, not an event","state":"closed"},
+            {"number":941,"title":"rawr-cli breakpoint test sets its breakpoint before the program has compiled","state":"closed"}
           ]
         }
       ]
