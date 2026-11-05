@@ -3300,7 +3300,17 @@ fn write_trait_dispatchers(
             // type without a hand-written impl: a derive, or a builtin.
             let fallback = match (models.std_traits.contains(trait_name), trait_name.as_str()) {
                 (true, "Clone") => "return this;".to_string(),
-                (true, "Display") => "return \"\" + this;".to_string(),
+                // An `Rc` or `Arc` writes what it points to, as std's
+                // `impl<T: Display> Display for Rc<T>` does.
+                (true, "Display") => {
+                    let get = format!("{SENTINEL}{}", ops.len());
+                    ops.push(ExecutableOp::Prelude(PreludeOp::CountedGet));
+                    format!(
+                        "if __rawr_type == {COUNTED_KEY} {{ return {get}(this).{}({parameters}); }}\n\
+                         return \"\" + this;",
+                        trait_dispatcher_name(trait_name, &function.name.text)
+                    )
+                }
                 (true, "Debug") => {
                     let generic = format!("{SENTINEL}{}", ops.len());
                     ops.push(ExecutableOp::Prelude(PreludeOp::GenericDebug));
@@ -7154,6 +7164,10 @@ fn builtin_code(ty: &Ty) -> Option<crate::INT> {
     })
 }
 
+/// The runtime type key of an `Rc` or `Arc`, which owns no impl: what a
+/// std trait's dispatcher derefs it by.
+const COUNTED_KEY: crate::INT = -12;
+
 /// The runtime type key of a builtin value: the witness code of its type
 /// (`builtin_code`). One match on the value's tag, after the script-type
 /// arms, so script dispatch pays nothing for it.
@@ -7169,6 +7183,7 @@ fn builtin_type_key(value: &Dynamic) -> Option<crate::INT> {
         Union::Unit(..) => -9,
         Union::Variant(..) if crate::option::is(value) => -7,
         Union::Variant(..) if crate::result::is(value) => -10,
+        Union::Variant(..) if value.is::<counted::Counted>() => COUNTED_KEY,
         _ => return None,
     })
 }
@@ -13887,6 +13902,21 @@ impl<'a> Parser<'a> {
                         required_by: None,
                     });
                 }
+                // rustc names the innermost type std's impls needed it
+                // of: `Vec<i32>` of `Rc<Vec<i32>>: Display`.
+                let ty = match trait_name.as_str() {
+                    "Display" if self.std_declared(&ty) => std_impl::holds(
+                        &mut std_impl::Probe(self),
+                        "core::fmt::Display",
+                        &ty,
+                        &[],
+                        true,
+                        0,
+                    )
+                    .err()
+                    .map_or(ty, |(inner, _)| inner),
+                    _ => ty,
+                };
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
                     capability: trait_name,
@@ -14489,6 +14519,22 @@ impl<'a> Parser<'a> {
                 if trait_name == "Display" && self.models.std_traits.contains(trait_name) =>
             {
                 true
+            }
+            // std's other `Display` impls, from the std table: `Rc<T>`,
+            // `Box<T>`, `&T` and `Cow<'_, B>` where what they hold is.
+            ty if trait_name == "Display"
+                && self.models.std_traits.contains(trait_name)
+                && self.std_declared(ty) =>
+            {
+                std_impl::holds(
+                    &mut std_impl::Probe(self),
+                    "core::fmt::Display",
+                    ty,
+                    &[],
+                    true,
+                    0,
+                )
+                .is_ok()
             }
             // `impl<T: For + Copy> For for &T` forwarding to `T`'s impl
             // (`resolve::forward`): `&T` implements it where `T` does and

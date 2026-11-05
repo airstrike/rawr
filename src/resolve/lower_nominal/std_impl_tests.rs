@@ -399,3 +399,64 @@ main();
     );
     assert!(report.contains("Default"), "{report}");
 }
+
+#[test]
+fn language_a_pointer_is_display_where_its_value_is() {
+    // std's `impl<T: Display> Display for Rc<T>` and its kin meet a
+    // `T: Display` bound, and a generic `{}` writes what they point to
+    // (#928).
+    let source = r#"
+use std::fmt;
+use std::rc::Rc;
+use std::sync::Arc;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl fmt::Display for Point {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
+
+struct Holder<T> {
+    v: T,
+}
+
+impl<T: fmt::Display> Holder<T> {
+    fn print(&self) {
+        println!("[{}]", self.v);
+    }
+}
+
+fn show<T: fmt::Display>(value: T) -> String {
+    format!("<{value}>")
+}
+
+fn main() {
+    Holder { v: Rc::new(3) }.print();
+    Holder { v: Arc::new(String::from("arc")) }.print();
+    Holder { v: Box::new(1.5) }.print();
+    let shared = Rc::new(Point { x: 1, y: 2 });
+    println!("{} {}", show(shared.clone()), show(&shared));
+    println!("{} {}", show(Arc::new(Rc::new(5u8))), show(Rc::new('x')));
+    println!("{} {}", shared, Rc::strong_count(&shared));
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "[3]\n[arc]\n[1.5]\n<(1, 2)> <(1, 2)>\n<5> <x>\n(1, 2) 1\n"
+    );
+    // rustc names the type the pointer's impl needed `Display` of.
+    let report = refused(
+        "use std::rc::Rc;\nfn show<T: std::fmt::Display>(v: T) -> String { format!(\"{v}\") }\n\
+         fn main() { show(Rc::new(vec![1])); }\nmain();\n",
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Vec<{integer}>` doesn't implement `std::fmt::Display`"),
+        "{report}"
+    );
+}
