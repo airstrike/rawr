@@ -2907,7 +2907,7 @@
           "start": 70,
           "size": 2,
           "state": "done",
-          "note": "Prebuilt binaries and a self-installed nightly; binaries wait on patch tags",
+          "note": "Prebuilt binaries and a self-installed nightly; binaries ship at milestones, the only tagged versions",
           "issues": [
             {"number":797,"title":"Install rawr with one command: prebuilt binaries and a self-installed toolchain","state":"closed"}
           ],

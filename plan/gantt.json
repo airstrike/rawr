@@ -128,7 +128,7 @@
       "subtitle": "Install, release and tests",
       "open": true,
       "rows": [
-        {"id":"one-command-install","name":"One-command install","start":70,"size":2,"state":"done","note":"Prebuilt binaries and a self-installed nightly; binaries wait on patch tags","issues":[797],"milestone":"0.3"},
+        {"id":"one-command-install","name":"One-command install","start":70,"size":2,"state":"done","note":"Prebuilt binaries and a self-installed nightly; binaries ship at milestones, the only tagged versions","issues":[797],"milestone":"0.3"},
         {"id":"staged-release","name":"Staged, cached release","start":72,"size":2,"state":"done","note":"Playground, bot and site each gated; the image rebuilds only when its inputs change","issues":[881],"milestone":"0.3"},
         {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"done","note":"Suites share builds and run in parallel; every merge check runs rawr-cli's suite too (#930)","issues":[891,892,893,930],"milestone":"0.3"},
         {"id":"std-once","name":"std bindings built once","start":82,"size":2,"state":"now","note":"Each process rebuilds them: 2.1 s debug, 0.35 s release","issues":[931]}
