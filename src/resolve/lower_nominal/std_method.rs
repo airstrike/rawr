@@ -291,7 +291,9 @@ fn trait_function(key: &'static str, member: &str) -> Option<Item> {
 pub(super) fn path_function(ty: &Ty, member: &str) -> Option<PathFunction> {
     let own = steps(ty).into_iter().next().and_then(|step| {
         let item = std_table::item(&format!("{}::{member}", step.owner))?;
-        let fits = item.impl_self().is_none_or(|own| fits(&std_table::written(own), &step.ty));
+        let fits = item
+            .impl_self()
+            .is_none_or(|own| fits(&std_table::written(own), &step.ty));
         (item.kind == "assoc-fn" && item.stability == Stability::Stable && fits).then_some(item)
     });
     let item = match own {

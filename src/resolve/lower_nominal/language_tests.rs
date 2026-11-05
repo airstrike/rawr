@@ -13775,7 +13775,10 @@ fn a_path_to_a_std_method_is_refused_where_rustc_refuses_it() {
     // A path doesn't autoderef: `String::trim` is `str`'s (E0599). A
     // `fn(&char) -> char` is no `FnMut(char)` (E0631).
     let message = rejected("pub fn run() -> i64 { let f = String::trim; 0 } run()");
-    assert!(message.contains("Unknown member 'String::trim'"), "{message}");
+    assert!(
+        message.contains("Unknown member 'String::trim'"),
+        "{message}"
+    );
     let message = rejected(
         "pub fn run() -> i64 { let v: Vec<char> = \"ab\".chars().map(char::to_ascii_uppercase).collect(); 0 } run()",
     );

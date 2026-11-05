@@ -15650,10 +15650,7 @@ impl<'a> Parser<'a> {
             };
         // `Iterator::count`, `From::from` as a value is a closure
         // (`parse_std_trait_call`).
-        if !called
-            && !valued
-            && !matches!(trait_name, "From" | "Into" | "Clone" | "ToString")
-        {
+        if !called && !valued && !matches!(trait_name, "From" | "Into" | "Clone" | "ToString") {
             return None;
         }
         if self
@@ -16815,12 +16812,18 @@ impl<'a> Parser<'a> {
                     return self.parse_primary();
                 }
             } else if !matches!(self.peek(), Token::Unit) {
-                let arity = self.closure_hint.as_ref().map_or(1, |hint| hint.len().max(1));
+                let arity = self
+                    .closure_hint
+                    .as_ref()
+                    .map_or(1, |hint| hint.len().max(1));
                 let mut inputs: Vec<Ty> = (0..arity).map(|_| self.inference.fresh()).collect();
                 if let Some(self_ty) = self_ty {
                     // The written `Self` is the receiver's, through any
                     // reference the use gives it.
-                    let given = self.closure_hint.as_ref().and_then(|hint| hint.first().cloned());
+                    let given = self
+                        .closure_hint
+                        .as_ref()
+                        .and_then(|hint| hint.first().cloned());
                     let receiver = match given.map(|given| self.inference.resolve(&given)) {
                         Some(Ty::Reference { mutable, .. }) => Ty::Reference {
                             mutable,
@@ -40534,7 +40537,8 @@ impl<'a> Parser<'a> {
             if std_method::path_function(&owner, &member).is_some() {
                 self.next();
                 let (member, member_span) = self.expect_member_name()?;
-                if let Some(value) = self.std_method_path(owner, &name, &member, name_span, member_span)
+                if let Some(value) =
+                    self.std_method_path(owner, &name, &member, name_span, member_span)
                 {
                     return value;
                 }
@@ -48987,7 +48991,10 @@ impl<'a> Parser<'a> {
                 && !matches!(self.peek(), Token::LeftParen | Token::Unit)
                 && member.starts_with(|c: char| c.is_ascii_lowercase())
             {
-                let arity = self.closure_hint.as_ref().map_or(1, |hint| hint.len().max(1));
+                let arity = self
+                    .closure_hint
+                    .as_ref()
+                    .map_or(1, |hint| hint.len().max(1));
                 let inputs = (0..arity).map(|_| self.inference.fresh()).collect();
                 return self.method_value(member, inputs, owner_span, member_span);
             }

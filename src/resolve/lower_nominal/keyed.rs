@@ -133,7 +133,9 @@ impl Parser<'_> {
         let (member, member_span) = self.expect_member_name()?;
         let ty = Ty::Keyed(kind, arguments.clone().into_boxed_slice());
         // `HashMap::values`, `HashSet::contains(&set, &k)`.
-        if let Some(value) = self.std_method_path(ty.clone(), kind.name(), &member, name_span, member_span) {
+        if let Some(value) =
+            self.std_method_path(ty.clone(), kind.name(), &member, name_span, member_span)
+        {
             return value;
         }
         let (mut values, end) = self.parse_call_arguments("map or set constructor arguments")?;
