@@ -203,13 +203,12 @@ impl<'a> Layouts<'a> {
         self.types[&owner]
             .fields
             .iter()
-            .any(|field| self.holds_named(field, owner, parameter, seen))
+            .any(|field| self.holds_named(field, parameter, seen))
     }
 
     fn holds_named(
         &self,
         ty: &type_ref::Type,
-        owner: type_def::Id,
         parameter: &ImmutableString,
         seen: &mut BTreeSet<(type_def::Id, ImmutableString)>,
     ) -> bool {
@@ -218,16 +217,15 @@ impl<'a> Layouts<'a> {
             .or_else(|| ty.array_element().map(|(element, _)| element))
             .or_else(|| ty.cell_element().map(|(_, element)| element))
         {
-            return self.holds_named(element, owner, parameter, seen);
+            return self.holds_named(element, parameter, seen);
         }
         if let Some((ok, err)) = ty.result_elements() {
-            return self.holds_named(ok, owner, parameter, seen)
-                || self.holds_named(err, owner, parameter, seen);
+            return self.holds_named(ok, parameter, seen) || self.holds_named(err, parameter, seen);
         }
         match ty {
             type_ref::Type::Tuple { members, .. } => members
                 .iter()
-                .any(|member| self.holds_named(member, owner, parameter, seen)),
+                .any(|member| self.holds_named(member, parameter, seen)),
             type_ref::Type::Path(path) => match &path.target {
                 type_ref::Target::Parameter => path.name == *parameter,
                 type_ref::Target::Script { definition, .. } => {
@@ -243,7 +241,7 @@ impl<'a> Layouts<'a> {
                         .iter()
                         .zip(arguments)
                         .any(|(inner, argument)| {
-                            self.holds_named(argument, owner, parameter, seen)
+                            self.holds_named(argument, parameter, seen)
                                 && self.holds_parameter(*definition, inner, seen)
                         })
                 }
