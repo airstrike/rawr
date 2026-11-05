@@ -8337,6 +8337,7 @@ impl<P: api::Phase> Context<'_, P> {
                 // arguments, which a runner names where Rust code must write
                 // the type, as a region of a view's borrows holds a value.
                 let hidden = hidden
+                    .0
                     .as_deref()
                     .and_then(|hidden| self.convert(hidden).ok())
                     .and_then(|hidden| positional(&hidden, &arguments));
@@ -10024,9 +10025,12 @@ fn rebind_lifetime(ty: &model::Type, from: &model::Lifetime, to: &model::Lifetim
             id: id.clone(),
             bounds: bounds.iter().map(predicate).collect(),
             captures: captures.iter().map(argument).collect(),
-            hidden: hidden
-                .as_deref()
-                .map(|hidden| Box::new(rebind_lifetime(hidden, from, to))),
+            hidden: model::Hidden(
+                hidden
+                    .0
+                    .as_deref()
+                    .map(|hidden| Box::new(rebind_lifetime(hidden, from, to))),
+            ),
         },
         model::Type::Primitive(_)
         | model::Type::Parameter { .. }
@@ -10389,10 +10393,13 @@ fn relabel_type(
                 .map(|bound| relabel_predicate(bound, from, renamed))
                 .collect::<Option<_>>()?,
             captures: relabel_arguments(captures, from, renamed)?,
-            hidden: hidden
-                .as_deref()
-                .and_then(|hidden| relabel_type(hidden, from, renamed))
-                .map(Box::new),
+            hidden: model::Hidden(
+                hidden
+                    .0
+                    .as_deref()
+                    .and_then(|hidden| relabel_type(hidden, from, renamed))
+                    .map(Box::new),
+            ),
         },
         model::Type::SelfType(id) if id == from => return None,
         model::Type::FunctionPointer(_) | model::Type::TraitObject { .. } => return None,
@@ -10659,9 +10666,12 @@ fn self_replaced(
             id: id.clone(),
             bounds: bounds.clone(),
             captures: arguments(captures),
-            hidden: hidden
-                .as_deref()
-                .map(|hidden| Box::new(self_replaced(hidden, trait_id, this))),
+            hidden: model::Hidden(
+                hidden
+                    .0
+                    .as_deref()
+                    .map(|hidden| Box::new(self_replaced(hidden, trait_id, this))),
+            ),
         },
         other => other.clone(),
     }
@@ -10917,9 +10927,12 @@ fn substitute_parameters(
             id: id.clone(),
             bounds: bounds.clone(),
             captures: captures.iter().map(argument).collect(),
-            hidden: hidden
-                .as_deref()
-                .map(|hidden| Box::new(substitute_parameters(hidden, substitutions))),
+            hidden: model::Hidden(
+                hidden
+                    .0
+                    .as_deref()
+                    .map(|hidden| Box::new(substitute_parameters(hidden, substitutions))),
+            ),
         },
         other => other.clone(),
     }
@@ -11583,9 +11596,12 @@ fn projected_parameters(ty: &model::Type, projected: &[Projected]) -> model::Typ
             hidden,
         } => model::Type::ImplTrait {
             id: id.clone(),
-            hidden: hidden
-                .as_deref()
-                .map(|hidden| Box::new(projected_parameters(hidden, projected))),
+            hidden: model::Hidden(
+                hidden
+                    .0
+                    .as_deref()
+                    .map(|hidden| Box::new(projected_parameters(hidden, projected))),
+            ),
             bounds: bounds
                 .iter()
                 .map(|predicate| match predicate {
@@ -12046,7 +12062,7 @@ mod tests {
         let view = free(
             Box::from([items]),
             model::Type::ImplTrait {
-                hidden: None,
+                hidden: model::Hidden::default(),
                 id: id.clone(),
                 bounds: Box::from([model::Predicate::TypeOutlives {
                     ty: parameter.clone(),
@@ -12540,7 +12556,7 @@ mod tests {
             ),
             (
                 model::Type::ImplTrait {
-                    hidden: None,
+                    hidden: model::Hidden::default(),
                     id: id.clone(),
                     bounds: Box::default(),
                     captures: Box::default(),

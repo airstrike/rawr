@@ -478,6 +478,41 @@ pub enum Lifetime {
     Erased,
 }
 
+/// The type rustc gives an opaque type (`Type::ImplTrait`), which is
+/// advisory: it never tells two uses of one opaque type apart, so any two
+/// are equal and order the same.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct Hidden(pub Option<Box<Type>>);
+
+impl Hidden {
+    /// Whether rustc gave no type the model holds.
+    #[must_use]
+    pub const fn is_none(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl PartialEq for Hidden {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Hidden {}
+
+impl PartialOrd for Hidden {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Hidden {
+    fn cmp(&self, _: &Self) -> std::cmp::Ordering {
+        std::cmp::Ordering::Equal
+    }
+}
+
 /// A complete compiler type shape.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum Type {
@@ -540,8 +575,8 @@ pub enum Type {
         /// as `Explain<Self>` of iced's `Widget::explain`: what a runner
         /// names where Rust code must write the type. `None` when the
         /// compiler gives none or it has no model.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        hidden: Option<Box<Type>>,
+        #[serde(default, skip_serializing_if = "Hidden::is_none")]
+        hidden: Hidden,
     },
     /// An associated-type projection.
     Projection {
@@ -1041,7 +1076,7 @@ impl Type {
                     for predicate in bounds {
                         predicate.retain(retained)?;
                     }
-                    if let Some(hidden) = hidden {
+                    if let Hidden(Some(hidden)) = hidden {
                         retained.boxed::<Type>()?;
                         hidden.retain(retained)?;
                     }

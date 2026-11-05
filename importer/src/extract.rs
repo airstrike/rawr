@@ -5474,7 +5474,7 @@ fn type_of(
             bounds: predicates(raw, catalog, limits, allocation)?,
             captures: arguments_of(captures, catalog, limits, allocation)?,
             // A type rustc gives it that has no model leaves it opaque.
-            hidden: match hidden {
+            hidden: model::Hidden(match hidden {
                 Some(hidden) => {
                     allocation.items(1)?;
                     type_of(*hidden, catalog, limits, allocation)
@@ -5482,7 +5482,7 @@ fn type_of(
                         .map(Box::new)
                 }
                 None => None,
-            },
+            }),
         },
         protocol::Type::Projection {
             trait_id,
