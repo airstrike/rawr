@@ -221,6 +221,19 @@ impl Callee {
     }
 }
 
+/// Where the program defines a macro a call can't see, which rustc's
+/// "cannot find macro" points out.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum MacroScope {
+    /// The program defines no macro of the name.
+    Undefined,
+    /// One of the name is defined later in the call's module: its name.
+    Later(Span),
+    /// One of the name is defined in a module whose macros the call can't
+    /// see.
+    Elsewhere,
+}
+
 /// What a private item is, as rustc names it in E0603 and E0624.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Private {
@@ -431,6 +444,8 @@ pub enum Error {
         name: ImmutableString,
         /// Exact source reference of the name.
         reference: Span,
+        /// Where the program defines one of the name, if anywhere.
+        scope: MacroScope,
     },
     /// An operator whose operands no impl of its trait covers, which rustc
     /// refuses (E0277) in its own words for the operator: a `?` in a
@@ -1103,6 +1118,10 @@ impl Error {
                 *declaration
             }
             Self::ArgumentCount { definition, .. } => *definition,
+            Self::UnknownMacro {
+                scope: MacroScope::Later(definition),
+                ..
+            } => Some(*definition),
             Self::UnknownType { .. }
             | Self::UnknownImport { .. }
             | Self::InvalidTypeArguments { .. }
@@ -1397,7 +1416,9 @@ impl fmt::Display for Written<'_> {
             Error::UnknownVariable { name, reference } => {
                 write!(formatter, "{} at {reference} (E0425)", NotFound::Value(name))
             }
-            Error::UnknownMacro { name, reference } => {
+            Error::UnknownMacro {
+                name, reference, ..
+            } => {
                 write!(formatter, "{} at {reference}", NotFound::Macro(name))
             }
             Error::Unimplemented { message, at, .. } => write!(formatter, "{message} at {at} (E0277)"),

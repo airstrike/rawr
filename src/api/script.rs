@@ -747,6 +747,21 @@ mod tests {
     }
 
     #[test]
+    fn an_edit_to_a_macro_reexpands_its_uses_at_the_reload() {
+        let program = |body: &str| {
+            format!("macro_rules! scale {{ ($x:expr) => {{ $x {body} }}; }}\nfn scaled(x: i64) -> i64 {{ scale!(x + 1) }}")
+        };
+        let file = File::new("macro", &program("* 2"));
+        let script = Engine::new().load(&file.0).unwrap();
+        let scaled = script.func::<(i64,), i64>("scaled").unwrap();
+        assert_eq!(scaled.call(3).unwrap(), 8);
+
+        file.write(&program("* 10"));
+        assert!(script.reload().unwrap());
+        assert_eq!(scaled.call(3).unwrap(), 40);
+    }
+
+    #[test]
     fn reloading_a_refused_text_again_does_not_compile_it_again() {
         let file = File::new("refused", "fn double(x: i64) -> i64 { x * 2 }");
         let script = Engine::new().load(&file.0).unwrap();
