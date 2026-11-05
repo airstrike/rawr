@@ -1,8 +1,9 @@
 //! Conversions at the crate boundary, in the shape of iced's exit, modal
 //! and table examples: a number or an array of two into a `Padding`
 //! through the `From` impls it has, a crate type into another inside
-//! `Some(..)` through `From`, rows a crate takes by `IntoIterator`, and a
-//! number's `.into()` a field's `Pixels`.
+//! `Some(..)` through `From`, rows a crate takes by `IntoIterator`, a
+//! number's `.into()` a field's `Pixels`, and a size taken as `impl
+//! Into<Pixels> + Copy`, as iced's layout example takes one.
 
 use crate::widgets::Widget;
 
@@ -243,4 +244,53 @@ impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Table {
     fn press(&self, _label: &str) -> Option<Message> {
         None
     }
+}
+
+/// A box sized in pixels, as iced's `Canvas` with its `width` and `height`.
+pub struct Sized {
+    label: String,
+    width: Pixels,
+    height: Pixels,
+}
+
+/// A box labelled `label`, as iced's `canvas(..)`.
+pub fn sized(label: impl ToString) -> Sized {
+    Sized {
+        label: label.to_string(),
+        width: Pixels(0.0),
+        height: Pixels(0.0),
+    }
+}
+
+impl Sized {
+    /// Its width, as iced's `Canvas::width` takes it.
+    pub fn width(mut self, width: impl Into<Pixels>) -> Self {
+        self.width = width.into();
+        self
+    }
+
+    /// Its height, as iced's `Canvas::height` takes it.
+    pub fn height(mut self, height: impl Into<Pixels>) -> Self {
+        self.height = height.into();
+        self
+    }
+}
+
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Sized {
+    fn labels(&self, labels: &mut Vec<String>) {
+        labels.push(format!(
+            "[{} {}x{}]",
+            self.label, self.width.0, self.height.0
+        ));
+    }
+
+    fn press(&self, _label: &str) -> Option<Message> {
+        None
+    }
+}
+
+/// A square of side `size`, which it converts twice, so `size` is `Copy`
+/// as well as `Into<Pixels>`.
+pub fn square(label: impl ToString, size: impl Into<Pixels> + Copy) -> Sized {
+    sized(label).width(size).height(size)
 }

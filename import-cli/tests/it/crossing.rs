@@ -775,6 +775,28 @@ fn a_numbers_into_reaches_a_crate_fields_from_as_rustc_infers_it() {
     );
 }
 
+/// iced's layout: `fn square(size: impl Into<Length> + Copy) -> impl
+/// Widget<Message>` passes its parameter of two bounds to a crate's
+/// methods that take `impl Into<Length>`, and is compiled per instantiation
+/// (D629) though its output is opaque. An `f32`, a `u32` and the crate's
+/// own type fill it through the crate's `From` impls, and the literal `50`
+/// is the `u32` of the one impl of its kind, as rustc selects it. A crate
+/// function taking `impl Into<Pixels> + Copy` takes the same (#912). The
+/// output is `cargo run`'s.
+#[test]
+fn a_parameter_of_two_bounds_takes_what_a_crates_from_impls_convert() {
+    let (rawr, cargo) = both_printed("squared.rs", "grow");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains(
+            "last view pad 0 [grow 0x0 None/0] [program 15x15] [pixels 3x3] \
+             [integer 7.5x7.5] [literal 50.5x50.5] [crate 30x30] \
+             [crate-integer 4.5x4.5] [crate-literal 4.5x4.5]"
+        ),
+        "{rawr}"
+    );
+}
+
 /// iced's table: `table(columns, &self.events)` takes a borrowed `Vec` as
 /// rows of `impl IntoIterator<Item = T>`, whose items are the `&Event` the
 /// columns' `|event: &Event|` closures take, so `T: Clone` holds of a
