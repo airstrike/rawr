@@ -8856,7 +8856,18 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
 /// value in a scope frame's region may fill them (D558 tier 1), as
 /// `push_html`'s `I` is a `Parser`: each one's argument index.
 fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
-    let Some((signature, substitutions, offset)) = call_signature(plan) else {
+    // A function that also takes a script closure, as iced's
+    // `table::column(header, |row| ..)` takes the view's header (#952).
+    let called = match plan.operation() {
+        Operation::Function {
+            signature,
+            substitutions,
+            call: None,
+            ..
+        } => Some((signature, &substitutions[..], 0)),
+        _ => call_signature(plan),
+    };
+    let Some((signature, substitutions, offset)) = called else {
         return Ok(Vec::new());
     };
     if signature.scope().is_some() {
