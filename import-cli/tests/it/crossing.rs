@@ -1115,6 +1115,38 @@ fn a_trait_methods_opaque_output_from_its_default_body_is_usable() {
     );
 }
 
+/// iced's layout: `self.example().explain(color).boxed()` calls `explain`,
+/// a default method of a trait the crate re-exports at its root, on an
+/// `Element<'_, ..>` a method of the program gives. The opaque type it
+/// gives borrows what the element borrows, so its value lives in the view's
+/// region, whose family names it as the type rustc gives it, the crate's
+/// `widgets::explained::Explain<..>`, which the root doesn't re-export. The
+/// output is `cargo run`'s.
+#[test]
+fn a_borrowing_opaque_output_lives_in_its_region_as_the_type_rustc_gives_it() {
+    let (rawr, cargo) = both_printed("explained_element.rs", "Increment,Increment");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 [Increment] 2@50 explain #0000ff rule 4 [Decrement]"),
+        "{rawr}"
+    );
+}
+
+/// `outlined`, a default method like `explain`, gives a type no public path
+/// names, so a value of its opaque type that borrows an element has no type
+/// Rust code can write, and the check refuses the call, not the build.
+#[test]
+fn a_borrowing_opaque_output_whose_type_has_no_path_is_refused_at_check() {
+    let stderr = checked("outlined_element.rs");
+    let own = stderr.split("cargo check found").next().unwrap_or_default();
+    assert!(
+        own.contains("__rawr_opaque_outlined")
+            && own.contains("that borrows what it was made from, whose type has no public path")
+            && own.contains("is not supported"),
+        "{stderr}"
+    );
+}
+
 /// iced's loupe (#885): the program's own `Zoomed<W>` implements the
 /// crate's `Widget` for any `W: Widget` through `W`'s methods, and holds
 /// what `explain` gives. The runner compiles the impl for each type it is
