@@ -1,7 +1,7 @@
-<meta name="description" content="The built-in macros rawr supports, the macro_rules! macros of crates it expands, and the format strings that println! and format! take.">
+<meta name="description" content="The built-in macros rawr supports, the macro_rules! macros it expands, the program's own and its crates', and the format strings that println! and format! take.">
 <article>
 <h1>Macros</h1>
-<p class="lede">rawr has a fixed set of built-in macros, and it expands the <code>macro_rules!</code> macros of the crates a program depends on. A <code>macro_rules!</code> the program defines itself isn&rsquo;t supported yet.</p>
+<p class="lede">rawr has a fixed set of built-in macros. It expands <code>macro_rules!</code> macros as rustc does, both the ones a program defines and the ones its crates export.</p>
 <h2 id="built-in">Built-in macros</h2>
 <table>
   <tr><th>Macro</th><th>Notes</th></tr>
@@ -39,6 +39,31 @@ for i in 1..4 {
 writeln!(&amp;mut s, " done").unwrap();
 print!("{s}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-write" data-out="out-write" aria-label="Run write.rs" hidden></button><b>rawr run write.rs</b><span id="out-write" aria-live="polite">1,2,3, done</span></div>
+</div>
+<h2 id="macro-rules">Your own macros</h2>
+<p>A <code>macro_rules!</code> macro your program defines expands where it is called, as rustc expands it.</p>
+<ul>
+  <li>Its rules are tried in order, with Rust&rsquo;s fragment specifiers (<code>expr</code>, <code>ident</code>, <code>ty</code>, <code>tt</code>, <code>pat</code>, <code>pat_param</code>, <code>stmt</code>, <code>block</code>, <code>literal</code>, <code>path</code>, <code>item</code>, <code>vis</code>, <code>lifetime</code> and <code>meta</code>) and repetitions (<code>$(..),*</code>, <code>+</code> and <code>?</code>, with or without a separator).</li>
+  <li>A macro is in scope after its definition: in the rest of its module, and in the modules declared after it there. A macro defined in a block is in scope to the end of the block. A later definition of the same name shadows the earlier one from where it is.</li>
+  <li><code>#[macro_use]</code> on a module lets the module&rsquo;s macros into its parent, after the module. A <code>#[macro_export]</code> macro can be called anywhere in the crate root, even before its definition.</li>
+  <li>A local that the macro binds with <code>let</code>, <code>for</code> or a closure parameter is the macro&rsquo;s own. A name your program passes in stays yours, so <code>let $name = ..</code> in a macro called as a statement binds <code>$name</code> after the call.</li>
+  <li>A macro may call other macros and itself. The nesting stops at rustc&rsquo;s recursion limit of 128, or at the crate&rsquo;s <code>#![recursion_limit = ".."]</code>.</li>
+  <li>An edit to a macro reaches every call of it at the next reload.</li>
+  <li>The errors are rustc&rsquo;s. A call no rule matches is <code>no rules expected `x`</code>, under the token. An unknown name is <code>cannot find macro `x` in this scope</code>, which points at a definition that comes later or asks for <code>#[macro_use]</code>. A malformed definition gets rustc&rsquo;s error too.</li>
+</ul>
+<p>A macro call in an expression or a statement expands. A call where an item, a type or a pattern goes isn&rsquo;t supported yet.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="macro_rules.rs" id="src-macro-rules">macro_rules! sum {
+    () =&gt; { 0 };
+    ($x:expr $(, $rest:expr)* $(,)?) =&gt; { $x + sum!($($rest),*) };
+}
+macro_rules! square_all {
+    ($($name:ident),+) =&gt; { $(let $name = $name * $name;)+ };
+}
+let (a, b) = (3, 4);
+square_all!(a, b);
+println!("{} {}", sum!(a, b, 1), sum!());</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-macro-rules" data-out="out-macro-rules" aria-label="Run macro_rules.rs" hidden></button><b>rawr run macro_rules.rs</b><span id="out-macro-rules" aria-live="polite">26 0</span></div>
 </div>
 <h2 id="crates">Macros from crates</h2>
 <p>A <code>macro_rules!</code> macro that a dependency exports expands from the dependency&rsquo;s own source, as rustc expands it. You import it with <code>use</code> or call it by its path, as in <code>use iced::widget::column;</code> or <code>outer::scaled!(2, 3)</code>.</p>

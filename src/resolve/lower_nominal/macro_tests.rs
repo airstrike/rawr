@@ -95,6 +95,12 @@ macro_rules! double {
         x * 2
     }};
 }
+// A `let` of a name the caller passes binds it after the call.
+macro_rules! define {
+    ($name:ident) => {
+        let $name = 5;
+    };
+}
 macro_rules! swap_named {
     ($a:ident, $b:ident) => {
         let t = $a;
@@ -110,9 +116,11 @@ fn main() {
     let mut b = 2;
     swap_named!(a, b);
     println!("{} {}", a, b);
+    define!(five);
+    println!("{}", five);
 }
 "#;
-    assert_eq!(printed(source), "22\n10\n2 1\n");
+    assert_eq!(printed(source), "22\n10\n2 1\n5\n");
 }
 
 #[test]

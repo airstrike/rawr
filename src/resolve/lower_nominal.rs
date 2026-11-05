@@ -12851,6 +12851,8 @@ impl<'a> Parser<'a> {
             let result = match self.peek() {
                 Token::Let => self.parse_binding(true),
                 Token::Const => self.parse_binding(false),
+                _ if self.macro_definition_ahead() => self.parse_local_macro(),
+                _ if self.macro_statement_ahead() => self.parse_macro_statement(),
                 _ => self.parse_statement(),
             };
 
