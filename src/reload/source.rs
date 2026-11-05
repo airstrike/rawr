@@ -202,16 +202,22 @@ impl Inputs {
 
     /// The exact files and recursive roots of an imported generation proof
     /// alone, so one native generation derives its directories once.
+    ///
+    /// A proof keeps each path as Cargo spelled it, which may hold `..`
+    /// (a relative target directory, a `package.workspace` redirect). Each
+    /// is watched where that spelling reaches, the one identity a change to
+    /// it has ([`rawr_import::location::resolved`]).
     #[cfg(feature = "rust-import")]
     #[doc(hidden)]
     #[must_use]
     pub fn imported(imported: impl IntoIterator<Item = rawr_import::input::proof::Watch>) -> Self {
+        use rawr_import::location::resolved;
         let mut paths = BTreeSet::new();
         let mut trees = BTreeSet::new();
         for input in imported {
             match input {
-                rawr_import::input::proof::Watch::Exact(path) => paths.insert(path),
-                rawr_import::input::proof::Watch::Tree(path) => trees.insert(path),
+                rawr_import::input::proof::Watch::Exact(path) => paths.insert(resolved(&path)),
+                rawr_import::input::proof::Watch::Tree(path) => trees.insert(resolved(&path)),
             };
         }
         Self::from_paths(paths, trees)
@@ -579,6 +585,85 @@ mod tests {
         let tree = inputs.with_imported([Watch::Tree(source.parent().unwrap().to_path_buf())]);
         assert!(tree.contains(source));
         assert!(!tree.is_source_only(source));
+    }
+
+    /// #959: a crate in a git worktree inside another workspace, and an
+    /// ordinary crate, each with a relative and an absolute target directory.
+    /// Cargo spells the shared harness and the ancestor manifests through
+    /// `..`; the watcher gets the paths they reach and its encoder takes them.
+    #[test]
+    fn spelled_native_inputs_encode_where_they_reach_from_every_crate_location() {
+        use rawr_import::input::proof::Watch;
+        use std::path::Path;
+        let root = fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "rawr-source-spelled-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        let write = |path: PathBuf, text: &str| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        let workspace = "[workspace]\nmembers = [\"member\"]\n";
+        write(root.join("outer/Cargo.toml"), workspace);
+        write(
+            root.join("outer/.claude/worktrees/wt/Cargo.toml"),
+            workspace,
+        );
+        let layouts = [
+            root.join("outer/.claude/worktrees/wt/target/scratch/iced-examples/app"),
+            root.join("examples/app"),
+        ];
+        for project in layouts {
+            write(
+                project.join("Cargo.toml"),
+                "[package]\nname = \"app\"\n[workspace]\n",
+            );
+            write(project.join("src/main.rs"), "// rawr\npub fn main() {}\n");
+            let target = crate::project::Target::discover(&project).unwrap();
+            let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
+            let graph = super::Graph::from_package(&graph);
+            let source = graph.entry_source().path().to_path_buf();
+            let shared = project.parent().unwrap().join("_target/rawr/shared");
+            let observed = |target: &Path| {
+                let mut watches = vec![
+                    Watch::Exact(target.join("rawr/shared/Cargo.toml")),
+                    Watch::Exact(target.join("rawr/shared/Cargo.lock")),
+                    Watch::Tree(target.join("rawr/runner")),
+                ];
+                // The workspace scan's ancestor manifests, as spelled.
+                watches.extend(
+                    project
+                        .ancestors()
+                        .skip(1)
+                        .map(|directory| Watch::Exact(directory.join("./Cargo.toml"))),
+                );
+                Inputs::from_graph(&graph).with_imported(watches)
+            };
+            let relative = observed(&project.join("../_target"));
+            let absolute = observed(&project.parent().unwrap().join("_target"));
+            assert_eq!(relative, absolute, "{}", project.display());
+            let decoded = super::observation::decode(&relative.encode_observation().unwrap())
+                .unwrap()
+                .into_inputs();
+            assert_eq!(decoded, relative);
+            assert!(relative.contains(&shared.join("Cargo.toml")));
+            assert!(relative.contains(&shared.parent().unwrap().join("runner/build.rs")));
+            assert!(project
+                .ancestors()
+                .skip(1)
+                .all(|directory| relative.contains(&directory.join("Cargo.toml"))));
+            assert_eq!(relative.source_paths(), &[source]);
+        }
     }
 
     #[test]

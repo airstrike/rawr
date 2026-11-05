@@ -82,3 +82,7 @@ pub fn rawr_profile_configs(
 pub fn member_path(project: &Path) -> Option<PathBuf> {
     rawr_location::member_path(project)
 }
+
+/// A path as the filesystem reaches it, without `.` or `..`
+/// ([`rawr_location::resolved`]).
+pub use rawr_location::resolved;
