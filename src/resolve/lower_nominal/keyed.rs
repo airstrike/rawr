@@ -131,9 +131,13 @@ impl Parser<'_> {
             arguments = written;
         }
         let (member, member_span) = self.expect_member_name()?;
+        let ty = Ty::Keyed(kind, arguments.clone().into_boxed_slice());
+        // `HashMap::values`, `HashSet::contains(&set, &k)`.
+        if let Some(value) = self.std_method_path(ty.clone(), kind.name(), &member, name_span, member_span) {
+            return value;
+        }
         let (mut values, end) = self.parse_call_arguments("map or set constructor arguments")?;
         let call = span(name_span.start(), end);
-        let ty = Ty::Keyed(kind, arguments.clone().into_boxed_slice());
         let source = match (member.as_str(), values.as_mut_slice()) {
             ("new" | "default", []) => origin::Fragment::plain("[]"),
             // The capacity is a hint; the sorted array grows as it needs.

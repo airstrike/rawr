@@ -234,7 +234,13 @@ pub(super) fn receiver_mode(ty: &Ty, member: &str) -> Option<receiver::Mode> {
     if let Some(found) = inherent(ty, member) {
         return Some(found.mode);
     }
-    let key = match ty {
+    mode_of(&trait_function(impl_key(ty)?, member)?)
+}
+
+/// The self type `ty` is in std's impl table: `&` of a reference,
+/// `alloc::vec::Vec` of a `Vec`.
+fn impl_key(ty: &Ty) -> Option<&'static str> {
+    Some(match ty {
         Ty::Reference { mutable: false, .. } => "&",
         Ty::Reference { mutable: true, .. } => "&mut",
         Ty::Array {
@@ -246,26 +252,84 @@ pub(super) fn receiver_mode(ty: &Ty, member: &str) -> Option<receiver::Mode> {
             ..
         } => "[;]",
         ty => std_impl::std_definition(ty)?.0,
-    };
+    })
+}
+
+/// The function `member` of a std trait std implements for the self type
+/// `key` (`impl_key`), which takes `self`: `Clone::clone` of a `Vec`,
+/// `ToString::to_string` of an `i32`.
+fn trait_function(key: &'static str, member: &str) -> Option<Item> {
     thread_local! {
-        static TRAIT_MODES: std::cell::RefCell<
-            std::collections::HashMap<(&'static str, String), Option<receiver::Mode>>,
+        static TRAIT_FUNCTIONS: std::cell::RefCell<
+            std::collections::HashMap<(&'static str, String), Option<Item>>,
         > = std::cell::RefCell::new(std::collections::HashMap::new());
     }
     let cache_key = (key, member.to_owned());
-    if let Some(mode) = TRAIT_MODES.with_borrow(|modes| modes.get(&cache_key).copied()) {
-        return mode;
+    if let Some(found) = TRAIT_FUNCTIONS.with_borrow(|found| found.get(&cache_key).copied()) {
+        return found;
     }
-    let mode = std_table::trait_functions(member)
+    let found = std_table::trait_functions(member)
         .iter()
-        .find_map(|function| {
+        .find(|function| {
             let trait_ = &function.definition[..function.definition.len() - member.len() - 2];
-            let implemented = std_table::impls(trait_, key).next().is_some()
-                || std_table::impls(trait_, "_").next().is_some();
-            implemented.then(|| mode_of(function)).flatten()
-        });
-    TRAIT_MODES.with_borrow_mut(|modes| modes.insert(cache_key, mode));
-    mode
+            mode_of(function).is_some()
+                && (std_table::impls(trait_, key).next().is_some()
+                    || std_table::impls(trait_, "_").next().is_some())
+        })
+        .copied();
+    TRAIT_FUNCTIONS.with_borrow_mut(|functions| functions.insert(cache_key, found));
+    found
+}
+
+/// A function of the native type `ty` as a path names it (`Vec::len`,
+/// `str::trim`, `String::clone`, `String::new`, `i32::default`): one of
+/// the type's own impls, since a path doesn't autoderef (`Vec::iter` is
+/// `[T]`'s, which rustc refuses), else the function of a std trait std
+/// implements for it.
+pub(super) fn path_function(ty: &Ty, member: &str) -> Option<PathFunction> {
+    let own = steps(ty).into_iter().next().and_then(|step| {
+        let item = std_table::item(&format!("{}::{member}", step.owner))?;
+        let fits = item.impl_self().is_none_or(|own| fits(&std_table::written(own), &step.ty));
+        (item.kind == "assoc-fn" && item.stability == Stability::Stable && fits).then_some(item)
+    });
+    let item = match own {
+        Some(item) => item,
+        None if inherent(ty, member).is_some() => return None,
+        None => {
+            // A path's `str` is the type a `&str` refers to.
+            let key = match ty {
+                Ty::Str => "str",
+                ty => impl_key(ty)?,
+            };
+            trait_function(key, member).or_else(|| associated_trait_function(key, member))?
+        }
+    };
+    let declared = std_table::Declared::parse(item.declaration())?;
+    Some(PathFunction {
+        mode: mode_of(&item),
+        inputs: std_table::split_list(declared.inputs).len(),
+    })
+}
+
+/// The function `member` without `self` of a std trait std implements for
+/// the self type `key`: `Default::default` of an `i32`.
+fn associated_trait_function(key: &'static str, member: &str) -> Option<Item> {
+    std_table::trait_functions(member)
+        .iter()
+        .find(|function| {
+            let trait_ = &function.definition[..function.definition.len() - member.len() - 2];
+            mode_of(function).is_none() && std_table::impls(trait_, key).next().is_some()
+        })
+        .copied()
+}
+
+/// A std function that a path to its type names.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PathFunction {
+    /// How it takes its receiver; `None` for an associated function.
+    pub mode: Option<receiver::Mode>,
+    /// Its inputs, the receiver first.
+    pub inputs: usize,
 }
 
 /// Whether `member` is a method of another of std's sequence types and
