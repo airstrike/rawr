@@ -401,6 +401,85 @@ main();
 }
 
 #[test]
+fn language_try_into_takes_its_error_type_from_the_impl_its_target_selects() {
+    // `let c: Result<Color, _> = x.try_into();` is a `Result<Color,
+    // IntoColorError>` from that statement on, as rustc infers it once
+    // the target selects the `TryFrom` impl (#927).
+    let source = r#"
+#[derive(Debug, PartialEq)]
+struct Color {
+    red: u8,
+    green: u8,
+    blue: u8,
+}
+
+#[derive(Debug, PartialEq)]
+enum IntoColorError {
+    BadLen,
+    IntConversion,
+}
+
+impl TryFrom<(i16, i16, i16)> for Color {
+    type Error = IntoColorError;
+
+    fn try_from(tuple: (i16, i16, i16)) -> Result<Self, Self::Error> {
+        let (Ok(red), Ok(green), Ok(blue)) = (
+            u8::try_from(tuple.0),
+            u8::try_from(tuple.1),
+            u8::try_from(tuple.2),
+        ) else {
+            return Err(IntoColorError::IntConversion);
+        };
+        Ok(Self { red, green, blue })
+    }
+}
+
+impl TryFrom<[i16; 3]> for Color {
+    type Error = IntoColorError;
+
+    fn try_from(arr: [i16; 3]) -> Result<Self, Self::Error> {
+        Self::try_from((arr[0], arr[1], arr[2]))
+    }
+}
+
+impl TryFrom<&[i16]> for Color {
+    type Error = IntoColorError;
+
+    fn try_from(slice: &[i16]) -> Result<Self, Self::Error> {
+        if let &[red, green, blue] = slice {
+            Self::try_from((red, green, blue))
+        } else {
+            Err(IntoColorError::BadLen)
+        }
+    }
+}
+
+fn main() {
+    let c2: Result<Color, _> = [183, 65, 14].try_into();
+    println!("{c2:?}");
+    let v = vec![183, 65, 14];
+    let c4: Result<Color, _> = (&v[..]).try_into();
+    println!("{c4:?}");
+    let c5: Result<Color, _> = (183, 65, 1000).try_into();
+    println!("{c5:?}");
+    let short = [1, 2];
+    let c6: Result<Color, _> = (&short[..]).try_into();
+    println!("{:?}", c6);
+    // A literal's `{integer}` inside the argument selects the one impl
+    // it fits, `&[i16]`'s, not the array's.
+    let long = vec![0, 0, 0, 0];
+    println!("{:?} {:?}", Color::try_from(&long[..]), Color::try_from(&v[..2]));
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Ok(Color { red: 183, green: 65, blue: 14 })\nOk(Color { red: 183, green: 65, blue: 14 })\n\
+         Err(IntConversion)\nErr(BadLen)\nErr(BadLen) Err(BadLen)\n"
+    );
+}
+
+#[test]
 fn language_a_pointer_is_display_where_its_value_is() {
     // std's `impl<T: Display> Display for Rc<T>` and its kin meet a
     // `T: Display` bound, and a generic `{}` writes what they point to

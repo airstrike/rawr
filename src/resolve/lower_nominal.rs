@@ -14181,23 +14181,19 @@ impl<'a> Parser<'a> {
     /// Write each generic trait call's instance dispatcher over its
     /// placeholder, now that inference knows the trait's arguments.
     /// Before the literal fallback, as Rust selects impls: a trait
-    /// argument that is a literal's `{integer}` or `{float}` takes the type
-    /// of the one impl of that kind whose other arguments match.
+    /// argument that holds a literal's `{integer}` or `{float}` (`&[{integer}]`
+    /// of `Color::try_from(&v[..])`) takes the types of the one impl whose
+    /// arguments it unifies with.
     fn settle_instance_literals(&mut self) {
         for (_, trait_name, _, arguments, _, _) in self.pending_instances.clone() {
             let arguments = arguments
                 .iter()
                 .map(|ty| self.inference.resolve(ty))
                 .collect::<Vec<_>>();
-            let literal = |ty: &Ty| match ty {
-                Ty::Int(Int::Var(id)) => Some((*id, true)),
-                Ty::Float(Float::Var(id)) => Some((*id, false)),
-                _ => None,
-            };
-            if !arguments.iter().any(|argument| literal(argument).is_some()) {
+            if !arguments.iter().any(contains_open_literal) {
                 continue;
             }
-            let Some(instances) = self.models.trait_instances.get(&trait_name) else {
+            let Some(instances) = self.models.trait_instances.get(&trait_name).cloned() else {
                 continue;
             };
             let matching = instances
@@ -14205,21 +14201,15 @@ impl<'a> Parser<'a> {
                 .map(|instance| instance.iter().map(Ty::from_resolved).collect::<Vec<_>>())
                 .filter(|instance| {
                     instance.len() == arguments.len()
-                        && instance.iter().zip(&arguments).all(|(instance, argument)| {
-                            match (literal(argument), instance) {
-                                (Some((_, true)), Ty::Int(_))
-                                | (Some((_, false)), Ty::Float(_)) => true,
-                                (Some(_), _) => false,
-                                (None, instance) => instance == argument,
-                            }
-                        })
+                        && instance
+                            .iter()
+                            .zip(&arguments)
+                            .all(|(instance, argument)| self.unifies(instance, argument))
                 })
                 .collect::<Vec<_>>();
             if let [instance] = &matching[..] {
                 for (argument, ty) in arguments.iter().zip(instance) {
-                    if let Some((id, _)) = literal(argument) {
-                        self.inference.bind(id, ty.clone());
-                    }
+                    self.unify_type(ty, argument);
                 }
             }
         }
@@ -17066,6 +17056,44 @@ impl<'a> Parser<'a> {
             Ty::Result(Box::new(target), Box::new(error)),
             expression,
         )
+    }
+
+    /// Each pending `try_into` whose target a statement made known gets
+    /// its error type, its `TryFrom` impl's `Error`, as rustc infers it
+    /// once it selects the impl: `let c: Result<Color, _> = x.try_into();`
+    /// is a `Result<Color, IntoColorError>` from that statement on. The
+    /// impl's helper is still written when the body finishes.
+    fn settle_try_into_errors(&mut self) {
+        let settled = self
+            .pending_conversions
+            .iter()
+            .filter_map(|conversion| {
+                let error = conversion.try_from.as_ref()?;
+                let target = self.inference.resolve(&conversion.target);
+                (!matches!(target, Ty::Infer(_))
+                    && matches!(self.inference.resolve(error), Ty::Infer(_)))
+                .then(|| (target, conversion.source.clone(), error.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (target, source, error) in settled {
+            for (_, from, owner) in self.program_try_froms() {
+                let checkpoint = self.inference.checkpoint();
+                if !(self.unify_type(&owner, &target) && self.unify_type(&from, &source)) {
+                    self.inference.rollback(checkpoint);
+                    continue;
+                }
+                let declared = self.inference.resolve(&Ty::Projection(
+                    Box::new(target.clone()),
+                    "TryFrom".into(),
+                    "Error".into(),
+                ));
+                self.inference.rollback(checkpoint);
+                if !matches!(declared, Ty::Projection(..)) {
+                    self.unify_type(&error, &declared);
+                }
+                break;
+            }
+        }
     }
 
     /// The helper of `source.try_into()` into `target`: the program's
@@ -25773,8 +25801,10 @@ impl<'a> Parser<'a> {
     /// Each pending `parse` whose target a statement made known gets its
     /// error type, so later statements can use it. A statement inside the
     /// call's own expression (a closure's body in its chain) can settle it
-    /// before the call is written: its helper waits for the call.
+    /// before the call is written: its helper waits for the call. So does
+    /// each pending `try_into` (`settle_try_into_errors`).
     fn settle_parses(&mut self) -> Result<(), Error> {
+        self.settle_try_into_errors();
         for pending in std::mem::take(&mut self.pending_parses) {
             let (target, error, span, _) = &pending;
             match self.settle_parse(target, error, *span, false)? {
@@ -52876,7 +52906,6 @@ fn contains_inference(ty: &Ty) -> bool {
 
 /// Whether `ty` holds a literal whose kind is still open: `{integer}` or
 /// `{float}`, which only the end of its body settles.
-#[cfg(feature = "rust-import")]
 fn contains_open_literal(ty: &Ty) -> bool {
     contains(ty, |ty| {
         matches!(ty, Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_)))
