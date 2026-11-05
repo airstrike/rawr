@@ -25,7 +25,7 @@ use crate::{Position, Span};
 /// make, so it has the methods of `Iterator`, `DoubleEndedIterator`,
 /// `Peekable` and `IntoIterator`. Its `Self` is a type parameter, as a
 /// trait method's is, and `Self::Item` is its items'.
-const ITERATOR: [&str; 4] = [
+pub(super) const ITERATOR: [&str; 4] = [
     "core::iter::traits::iterator::Iterator",
     "core::iter::traits::double_ended::DoubleEndedIterator",
     "core::iter::adapters::peekable::Peekable",
@@ -117,8 +117,10 @@ pub(super) fn steps(ty: &Ty) -> Vec<Step> {
                 sequence::Kind::Deque => vec![own("alloc::collections::vec_deque::VecDeque")],
             }
         }
-        Ty::Iter(_) => ITERATOR
+        // A std iterator struct's own methods, then any iterator's.
+        Ty::Iter(_, std) => std
             .iter()
+            .chain(ITERATOR.iter())
             .map(|owner| Step {
                 owner,
                 ty: ty.clone(),
@@ -349,7 +351,7 @@ pub(super) fn arguments(receiver: &Ty, member: &str, fresh: &mut impl FnMut() ->
     let mut known = Known {
         types: Vec::new(),
         items: match native {
-            Ty::Iter(item) => Some((**item).clone()),
+            Ty::Iter(item, _) => Some((**item).clone()),
             _ => None,
         },
     };
@@ -618,6 +620,9 @@ fn fits(written: &Written, ty: &Ty) -> bool {
                 // An impl's parameter.
                 return true;
             };
+            if let Ty::Iter(_, Some(std)) = ty {
+                return definition == *std;
+            }
             let Some((found, found_arguments)) = std_impl::std_definition(ty) else {
                 return false;
             };
@@ -658,7 +663,7 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
         next: 0,
         slice_output: holds_array(output),
         output_item: match output {
-            Ty::Iter(item) => Some((**item).clone()),
+            Ty::Iter(item, _) => Some((**item).clone()),
             _ => None,
         },
         substitution: Vec::new(),
@@ -688,7 +693,7 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
     }
     let owner = match native {
         // `Self` of an iterator's method: what holds its items.
-        Ty::Iter(item) if ITERATOR.contains(&found.owner) => {
+        Ty::Iter(item, _) if ITERATOR.contains(&found.owner) => {
             let items = reader.items(item, "Self::Item");
             let own = reader.iterator_self(items);
             reader.iterator = Some(own.clone());
@@ -1657,7 +1662,7 @@ mod tests {
             into: at(&[RegionStep::Arg(0)]),
             from: Source::Call(0),
         }));
-        let iter = summary(&v, &Ty::Iter(Box::new(reference)), "iter").expect("iter");
+        let iter = summary(&v, &Ty::iter(reference), "iter").expect("iter");
         let taps = iter.output.expect("known");
         assert!(taps.contains(&Tap {
             into: at(&[RegionStep::Arg(0), RegionStep::Own]),
@@ -1688,7 +1693,7 @@ mod tests {
             mutable: false,
             target: Box::new(Ty::Int(Int::I64)),
         };
-        let iter = |item: Ty| Ty::Iter(Box::new(item));
+        let iter = |item: Ty| Ty::iter(item);
         let refs = iter(reference.clone());
         let taps = |member: &str, output: &Ty| {
             let found = summary(&refs, output, member).unwrap_or_else(|| panic!("{member}"));

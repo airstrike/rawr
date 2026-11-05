@@ -15,7 +15,8 @@
   <tr><td><code>std::env::args()</code></td><td>It yields no arguments.</td></tr>
   <tr><td><code>std::process::id()</code></td><td>It panics with std&rsquo;s message for a platform without processes, <code>no pids on this platform</code>.</td></tr>
   <tr><td><code>std::process::exit(code)</code> or <code>std::process::abort()</code></td><td>The snippet ends there. Nothing after the call runs.</td></tr>
-  <tr><td><code>std::net</code> or <code>std::thread</code></td><td>The snippet doesn&rsquo;t compile. rawr has neither module.</td></tr>
+  <tr><td><code>std::net</code></td><td>The snippet doesn&rsquo;t compile. rawr doesn&rsquo;t have the module.</td></tr>
+  <tr><td><code>std::thread::spawn</code> in the browser</td><td>It panics as std does on the web, with <code>failed to spawn thread</code>: a page runs one thread.</td></tr>
   <tr><td><code>use reqwest;</code> or any other crate</td><td>The snippet doesn&rsquo;t compile. The error is <code>unknown import `reqwest`</code>.</td></tr>
 </table>
 

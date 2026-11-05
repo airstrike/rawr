@@ -483,6 +483,10 @@ fn resolution_report_with_sources(
             format!("first assignment to `{binding}`").into()
         }
         resolve::Error::PrivateItem { item, .. } => item.defined_here().into(),
+        resolve::Error::Uninitialized { .. } => {
+            "binding declared here but left uninitialized".into()
+        }
+        resolve::Error::LocalTypeNeeded { .. } => "type must be known at this point".into(),
         _ => crate::ImmutableString::from("first declaration or related definition is here"),
     });
     let mut builder = builder.source(source.clone());
@@ -579,6 +583,14 @@ fn primary_label(
             Some("value borrowed here after move".into())
         }
         resolve::Error::MovedValue { .. } => Some("value used here after move".into()),
+        resolve::Error::Uninitialized {
+            name,
+            possibly: false,
+            ..
+        } => Some(format!("`{name}` used here but it isn't initialized").into()),
+        resolve::Error::Uninitialized { name, .. } => {
+            Some(format!("`{name}` used here but it is possibly-uninitialized").into())
+        }
         _ => None,
     }
 }
@@ -682,6 +694,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 ..
             } => code::RESOLVE_CLOSURE_ARGUMENT_COUNT,
             _ => code::RESOLVE_ARGUMENT_COUNT,
+        },
+        resolve::Category::OverflowingLiteral => code::RESOLVE_OVERFLOWING_LITERAL,
+        resolve::Category::Uninitialized => code::RESOLVE_UNINITIALIZED,
+        resolve::Category::LocalTypeNeeded => match error {
+            resolve::Error::LocalTypeNeeded { code, .. } => code::type_needed(code),
+            _ => unreachable!("a needed type's category"),
         },
         resolve::Category::PrivateItem => match error {
             resolve::Error::PrivateItem { item, .. } => code::private(*item),
@@ -788,6 +806,23 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             builder.note(format!(
                 "expected {kind} signature `{expected}`\n   found {kind} signature `{found}`"
             ))
+        }
+        resolve::Error::Uninitialized { .. } => builder.help("consider assigning a value"),
+        resolve::Error::LocalTypeNeeded { name, note, .. } => {
+            let builder = builder.help(format!("consider giving `{name}` an explicit type"));
+            match note {
+                Some(note) => builder.note(note.clone()),
+                None => builder,
+            }
+        }
+        resolve::Error::OverflowingLiteral { note, help, .. } => {
+            let builder = match help {
+                Some(help) => builder.help(help.clone()),
+                None => builder,
+            };
+            builder
+                .note(note.clone())
+                .note("`#[deny(overflowing_literals)]` on by default")
         }
         resolve::Error::ArgumentCount {
             expected, found, ..
@@ -1023,6 +1058,17 @@ fn resolution_message(error: &resolve::Error) -> String {
         }
         resolve::Error::ArgumentSignature { closure, .. } => {
             resolve::ArgumentSignature(*closure).to_string()
+        }
+        resolve::Error::OverflowingLiteral { ty, .. } => {
+            format!("literal out of range for `{ty}`")
+        }
+        resolve::Error::Uninitialized { name, possibly, .. } => resolve::Uninitialized {
+            name,
+            possibly: *possibly,
+        }
+        .to_string(),
+        resolve::Error::LocalTypeNeeded { ty, .. } => {
+            resolve::TypeNeeded(ty.as_deref()).to_string()
         }
     }
 }

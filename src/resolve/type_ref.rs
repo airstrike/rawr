@@ -655,6 +655,14 @@ fn resolve_path(
         {
             pointer.into()
         }
+        // `std::thread::JoinHandle` and `std::sync::mpsc`'s `Sender` and
+        // `Receiver`, unless the crate or a host names the type.
+        None if let Some(thread) = super::std_thread_type(&name)
+            && declared(types, name.as_str()).is_none()
+            && host.source_type(name.as_str()).is_none() =>
+        {
+            thread.into()
+        }
         None if declared(types, name.as_str()).is_none()
             && super::std_range(&name).is_some_and(|range| declared(types, range).is_none()) =>
         {
@@ -675,6 +683,10 @@ fn resolve_path(
         || name.as_str() == "VecDeque"
         || name.as_str() == "Rc"
         || name.as_str() == "Arc"
+        || matches!(
+            name.as_str(),
+            "JoinHandle" | super::MPSC_SENDER | super::MPSC_RECEIVER | "Mutex"
+        )
         || super::lower_nominal::counted::std_weak(&written).is_some()
         || name.as_str() == "RangeInclusive"
         || name.as_str() == item::type_ref::ITER_TYPE
@@ -1513,13 +1525,35 @@ impl Type {
         })
     }
 
-    /// The cell's name and `T` of `std::cell::RefCell<T>` or
-    /// `std::cell::Cell<T>`.
+    /// The builtin name and `T` of a std thread or channel type:
+    /// `JoinHandle<T>`, or `std::sync::mpsc`'s `Sender<T>` or `Receiver<T>`.
+    pub(crate) fn thread_element(&self) -> Option<(&str, &Type)> {
+        let Type::Path(path) = self else {
+            return None;
+        };
+        if path.target != Target::Builtin
+            || !matches!(
+                path.name.as_str(),
+                "JoinHandle" | super::MPSC_SENDER | super::MPSC_RECEIVER
+            )
+        {
+            return None;
+        }
+        path.arguments.iter().find_map(|argument| match argument {
+            Argument::Type(ty) => Some((path.name.as_str(), ty)),
+            Argument::Lifetime(_) => None,
+        })
+    }
+
+    /// The cell's name and `T` of `std::cell::RefCell<T>`,
+    /// `std::cell::Cell<T>` or `std::sync::Mutex<T>`.
     pub(crate) fn cell_element(&self) -> Option<(&str, &Type)> {
         let Type::Path(path) = self else {
             return None;
         };
-        if path.target != Target::Builtin || !matches!(path.name.as_str(), "RefCell" | "Cell") {
+        if path.target != Target::Builtin
+            || !matches!(path.name.as_str(), "RefCell" | "Cell" | "Mutex")
+        {
             return None;
         }
         path.arguments.iter().find_map(|argument| match argument {

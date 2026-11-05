@@ -76,6 +76,11 @@ pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
         Ty::Cow(borrowed) => (cow::DEFINITION, one(borrowed)),
         Ty::Cell(CellKind::RefCell, inner) => ("core::cell::RefCell", one(inner)),
         Ty::Cell(CellKind::Cell, inner) => ("core::cell::Cell", one(inner)),
+        Ty::Cell(CellKind::Mutex, inner) => ("std::sync::poison::mutex::Mutex", one(inner)),
+        Ty::Thread(kind, inner) => match kind.definition()? {
+            (definition, true) => (definition, one(inner)),
+            (definition, false) => (definition, Vec::new()),
+        },
         Ty::Ordering => ("core::cmp::Ordering", Vec::new()),
         Ty::Time(Time::Duration) => ("core::time::Duration", Vec::new()),
         Ty::Time(Time::Instant) => ("std::time::Instant", Vec::new()),
@@ -560,6 +565,15 @@ fn bind(
                 element: given,
                 kind: sequence::Kind::Slice,
             }) => bind(solver, element, &given, parameters, substitution),
+            // A type still to be inferred, as `Cow::from`'s `B`, becomes a
+            // slice of an element to be inferred.
+            Some(ty @ Ty::Infer(_)) => solver.fresh().is_some_and(|given| {
+                let slice = Ty::Array {
+                    element: Box::new(given.clone()),
+                    kind: sequence::Kind::Slice,
+                };
+                solver.unify(&slice, &ty) && bind(solver, element, &given, parameters, substitution)
+            }),
             _ => false,
         },
         Written::Array(element, length) => match ty {

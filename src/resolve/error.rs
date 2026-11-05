@@ -105,6 +105,14 @@ pub enum Category {
     /// An item private to a module the use is outside of, as rustc's E0603
     /// or E0624.
     PrivateItem,
+    /// An integer literal its type can't hold, rustc's deny-by-default
+    /// `overflowing_literals` lint.
+    OverflowingLiteral,
+    /// A local used before it is given a value, as rustc's E0381.
+    Uninitialized,
+    /// A local whose type nothing settles where rustc needs it, as rustc's
+    /// E0282 (or E0283 and E0284 for an operator).
+    LocalTypeNeeded,
 }
 
 impl fmt::Display for Category {
@@ -155,6 +163,9 @@ impl fmt::Display for Category {
             Self::CannotCompare => formatter.write_str("can't compare"),
             Self::ArgumentSignature => formatter.write_str("type mismatch in arguments"),
             Self::PrivateItem => formatter.write_str("private item"),
+            Self::OverflowingLiteral => formatter.write_str("literal out of range"),
+            Self::Uninitialized => formatter.write_str("used binding isn't initialized"),
+            Self::LocalTypeNeeded => formatter.write_str("type annotations needed"),
         }
     }
 }
@@ -734,6 +745,51 @@ pub enum Error {
         /// The use.
         reference: Span,
     },
+    /// A local used where it may not have a value yet, which rustc refuses
+    /// (E0381): `let x: i32; println!("{x}");`.
+    Uninitialized {
+        /// The local.
+        name: ImmutableString,
+        /// Whether some path to the use gives it a value: rustc's
+        /// "possibly-uninitialized".
+        possibly: bool,
+        /// The use.
+        reference: Span,
+        /// The local's declaration, which gives it no value.
+        declaration: Span,
+    },
+    /// A local whose type nothing settles, or not where rustc needs it
+    /// known, which rustc refuses: E0282, or E0283 and E0284 where an
+    /// operator's trait needs it. `let v = Vec::new();` with nothing put in.
+    LocalTypeNeeded {
+        /// rustc's code.
+        code: &'static str,
+        /// The local.
+        name: ImmutableString,
+        /// The local's type as rustc writes it (`Vec<_>`), when part of it
+        /// is known.
+        ty: Option<ImmutableString>,
+        /// The local's name where it is declared.
+        declaration: Span,
+        /// Where its type must be known, when rustc says.
+        needed: Option<Span>,
+        /// rustc's note on the trait the type must implement, as
+        /// "the type must implement `From<u8>`".
+        note: Option<ImmutableString>,
+    },
+    /// An integer literal its type can't hold, which rustc's
+    /// deny-by-default `overflowing_literals` lint refuses: "literal out of
+    /// range for `u8`".
+    OverflowingLiteral {
+        /// The literal's type: `u8`.
+        ty: ImmutableString,
+        /// rustc's note: the literal as written, and the type's range.
+        note: ImmutableString,
+        /// rustc's help, a type that holds the literal, when it has one.
+        help: Option<ImmutableString>,
+        /// The literal.
+        literal: Span,
+    },
     /// A call of a generic function that gives one of its type parameters
     /// no type, which rustc refuses (E0282).
     TypeAnnotationsNeeded {
@@ -901,6 +957,9 @@ impl Error {
             Self::CannotCompare { .. } => Category::CannotCompare,
             Self::ArgumentSignature { .. } => Category::ArgumentSignature,
             Self::PrivateItem { .. } => Category::PrivateItem,
+            Self::OverflowingLiteral { .. } => Category::OverflowingLiteral,
+            Self::Uninitialized { .. } => Category::Uninitialized,
+            Self::LocalTypeNeeded { .. } => Category::LocalTypeNeeded,
         }
     }
 
@@ -924,6 +983,8 @@ impl Error {
             }
             Self::NotInModule { module, .. } => module.as_str(),
             Self::PrivateItem { name, .. } => name.as_str(),
+            Self::OverflowingLiteral { ty, .. } => ty.as_str(),
+            Self::Uninitialized { name, .. } | Self::LocalTypeNeeded { name, .. } => name.as_str(),
             Self::UnknownMember { owner, .. }
             | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
@@ -972,6 +1033,9 @@ impl Error {
             | Self::MemberKind { reference, .. }
             | Self::NotInModule { reference, .. }
             | Self::PrivateItem { reference, .. } => *reference,
+            Self::OverflowingLiteral { literal, .. } => *literal,
+            Self::Uninitialized { reference, .. } => *reference,
+            Self::LocalTypeNeeded { declaration, .. } => *declaration,
             Self::UnknownFunction { reference, .. } => *reference,
             Self::UnknownVariable { reference, .. }
             | Self::UnknownMacro { reference, .. }
@@ -1021,7 +1085,9 @@ impl Error {
                 previous_declaration,
                 ..
             } => Some(*previous_declaration),
-            Self::ImmutableBinding { declaration, .. } => Some(*declaration),
+            Self::ImmutableBinding { declaration, .. }
+            | Self::Uninitialized { declaration, .. } => Some(*declaration),
+            Self::LocalTypeNeeded { needed, .. } => *needed,
             Self::MovedValue {
                 previous_iteration: true,
                 ..
@@ -1062,7 +1128,8 @@ impl Error {
             | Self::NotYet { .. }
             | Self::TypeAnnotationsNeeded { .. }
             | Self::CannotCompare { .. }
-            | Self::ArgumentSignature { .. } => None,
+            | Self::ArgumentSignature { .. }
+            | Self::OverflowingLiteral { .. } => None,
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -1071,6 +1138,38 @@ impl Error {
             | Self::UnusedValue { .. }
             | Self::SelfOutsideImpl { .. }
             | Self::InvalidMethodSignature { .. } => None,
+        }
+    }
+}
+
+/// rustc's message for a local whose type is unknown where it must be
+/// known (E0282, E0283, E0284), with the type as far as it is known.
+pub(crate) struct TypeNeeded<'a>(pub(crate) Option<&'a str>);
+
+impl fmt::Display for TypeNeeded<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(ty) => write!(formatter, "type annotations needed for `{ty}`"),
+            None => formatter.write_str("type annotations needed"),
+        }
+    }
+}
+
+/// rustc's message for a local used before it has a value (E0381).
+pub(crate) struct Uninitialized<'a> {
+    /// The local.
+    pub(crate) name: &'a str,
+    /// Whether some path to the use gives it a value.
+    pub(crate) possibly: bool,
+}
+
+impl fmt::Display for Uninitialized<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = self.name;
+        if self.possibly {
+            write!(formatter, "used binding `{name}` is possibly-uninitialized")
+        } else {
+            write!(formatter, "used binding `{name}` isn't initialized")
         }
     }
 }
@@ -1469,6 +1568,35 @@ impl fmt::Display for Written<'_> {
             } => write!(formatter, "{message} at {reference} ({code})"),
             Error::NotYet { path, reference } => {
                 write!(formatter, "rawr doesn't run `{path}` yet at {reference}")
+            }
+            Error::Uninitialized {
+                name,
+                possibly,
+                reference,
+                ..
+            } => write!(
+                formatter,
+                "{} at {reference} (E0381)",
+                Uninitialized {
+                    name,
+                    possibly: *possibly
+                }
+            ),
+            Error::LocalTypeNeeded {
+                code,
+                ty,
+                declaration,
+                note,
+                ..
+            } => {
+                write!(formatter, "{} at {declaration}", TypeNeeded(ty.as_deref()))?;
+                if let Some(note) = note {
+                    write!(formatter, ": {note}")?;
+                }
+                write!(formatter, " ({code})")
+            }
+            Error::OverflowingLiteral { ty, literal, .. } => {
+                write!(formatter, "literal out of range for `{ty}` at {literal}")
             }
             Error::TypeAnnotationsNeeded {
                 parameter,
