@@ -13083,6 +13083,7 @@ impl<'a> Parser<'a> {
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
                 _ if self.macro_definition_ahead() => self.parse_local_macro()?,
+                _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
                 _ => self.parse_statement()?,
             }
@@ -13807,6 +13808,7 @@ impl<'a> Parser<'a> {
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
                 _ if self.macro_definition_ahead() => self.parse_local_macro()?,
+                _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
                 _ => self.parse_statement()?,
             }
@@ -31965,7 +31967,8 @@ impl<'a> Parser<'a> {
                     Token::Fn => self.skip_nested_fn()?,
                     Token::Use => self.skip_nested_use()?,
                     _ if self.macro_definition_ahead() => self.parse_local_macro()?,
-                _ if self.nested_item_ahead() => self.skip_nested_item()?,
+                    _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
+                    _ if self.nested_item_ahead() => self.skip_nested_item()?,
                     _ => self.parse_statement()?,
                 }
             }
@@ -39239,22 +39242,23 @@ impl<'a> Parser<'a> {
 
         if matches!(self.peek(), Token::Bang) {
             let Some(binding) = self.models.import(&name).cloned() else {
-                let scope = match self.models.macros.lookup(
-                    &name,
-                    self.models.context,
-                    name_span.start(),
-                ) {
-                    crate::resolve::macros::Lookup::Later(definition) => {
-                        crate::resolve::MacroScope::Later(definition)
-                    }
-                    crate::resolve::macros::Lookup::Elsewhere => {
-                        crate::resolve::MacroScope::Elsewhere
-                    }
-                    crate::resolve::macros::Lookup::Found(_)
-                    | crate::resolve::macros::Lookup::Missing => {
-                        crate::resolve::MacroScope::Undefined
-                    }
-                };
+                let scope =
+                    match self
+                        .models
+                        .macros
+                        .lookup(&name, self.models.context, name_span.start())
+                    {
+                        crate::resolve::macros::Lookup::Later(definition) => {
+                            crate::resolve::MacroScope::Later(definition)
+                        }
+                        crate::resolve::macros::Lookup::Elsewhere => {
+                            crate::resolve::MacroScope::Elsewhere
+                        }
+                        crate::resolve::macros::Lookup::Found(_)
+                        | crate::resolve::macros::Lookup::Missing => {
+                            crate::resolve::MacroScope::Undefined
+                        }
+                    };
                 return Err(Error::UnknownMacro {
                     reference: Span::new(name_span.start(), text_end(name_span.start(), &name)),
                     name,

@@ -158,7 +158,11 @@ impl Table {
         let mut best: Option<(&Definition, (usize, Position))> = None;
         let mut later = None;
         let mut elsewhere = false;
-        for definition in self.definitions.iter().filter(|definition| definition.name == name) {
+        for definition in self
+            .definitions
+            .iter()
+            .filter(|definition| definition.name == name)
+        {
             let Some(rank) = self.visible(definition, source, at) else {
                 if definition.source == source && definition.span.start() > at {
                     later = later.or(Some(definition.name_span));
@@ -167,9 +171,9 @@ impl Table {
                 continue;
             };
             // The nearer module wins, then the later definition there.
-            if best.is_none_or(|(_, (hops, from))| {
-                rank.0 < hops || (rank.0 == hops && rank.1 >= from)
-            }) {
+            if best
+                .is_none_or(|(_, (hops, from))| rank.0 < hops || (rank.0 == hops && rank.1 >= from))
+            {
                 best = Some((definition, rank));
             }
         }

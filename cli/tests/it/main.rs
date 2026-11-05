@@ -8,6 +8,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod harness;
+mod macros;
 mod marked;
 mod mcp;
 mod program;

@@ -262,7 +262,10 @@ fn a_malformed_definition_is_rustcs_error() {
         )
         .map(|_| ())
         .expect_err("rustc refuses it");
-    assert_eq!(error.to_string().lines().next(), Some("error: expected `;`, found `(`"));
+    assert_eq!(
+        error.to_string().lines().next(),
+        Some("error: expected `;`, found `(`")
+    );
 }
 
 #[test]

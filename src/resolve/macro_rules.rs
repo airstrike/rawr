@@ -199,7 +199,9 @@ impl fmt::Display for Malformed {
 impl fmt::Display for Failure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoRules(Some((token, _))) => write!(formatter, "no rules expected `{}`", text(token)),
+            Self::NoRules(Some((token, _))) => {
+                write!(formatter, "no rules expected `{}`", text(token))
+            }
             Self::NoRules(None) => formatter.write_str("unexpected end of macro invocation"),
             Self::Transcription(message) => formatter.write_str(message),
         }
@@ -316,7 +318,9 @@ impl Rules {
     /// Parse a definition from its tokens, from `macro_rules` to its end,
     /// with rustc's error for one it refuses.
     pub(crate) fn from_tokens(tokens: &[(Token, Position)]) -> Result<Self, Malformed> {
-        let start = tokens.first().map_or(Position::NONE, |(_, position)| *position);
+        let start = tokens
+            .first()
+            .map_or(Position::NONE, |(_, position)| *position);
         let trees = trees(tokens).map_err(|reason| Malformed::new(reason, "", start))?;
         let (name, body, close) = match trees.as_slice() {
             [Tree::Leaf(keyword, _), Tree::Leaf(Token::Bang, _), Tree::Leaf(name, _), Tree::Group(_, _, body, close), ..]
@@ -594,10 +598,8 @@ fn matches(
         Pattern::Group(delimiter, inner) => match input.first() {
             Some(Tree::Group(found, _, contents, close)) if found == delimiter => {
                 let mark = state.bound.len();
-                let outer = std::mem::replace(
-                    &mut state.end,
-                    (*close, Some(delimiters(*delimiter).1)),
-                );
+                let outer =
+                    std::mem::replace(&mut state.end, (*close, Some(delimiters(*delimiter).1)));
                 let within = matches(inner, contents, indices, state, &mut |rest, _, state| {
                     state.exhausted(rest)
                 });
@@ -890,8 +892,8 @@ impl Transcription<'_> {
                         index += 2;
                     }
                     Some(Tree::Group(Delimiter::Paren, _, inner, _)) => {
-                        let (separator, _, next) = repetition(trees, index + 2)
-                            .map_err(|malformed| malformed.message)?;
+                        let (separator, _, next) =
+                            repetition(trees, index + 2).map_err(|malformed| malformed.message)?;
                         let count = self.count(inner, indices)?;
                         for iteration in 0..count {
                             if iteration > 0
@@ -1164,7 +1166,13 @@ mod tests {
         let tokens = super::super::lower_nominal::lex_rust(&engine, call);
         let input = trees(&tokens).unwrap();
         let output = rules
-            .expand(&input, "dep::__rawr_crate_dep_0", Position::NONE, Position::NONE, 1)
+            .expand(
+                &input,
+                "dep::__rawr_crate_dep_0",
+                Position::NONE,
+                Position::NONE,
+                1,
+            )
             .unwrap_or_else(|error| panic!("{error}"));
         output
             .iter()
@@ -1242,7 +1250,9 @@ mod tests {
         let rules = Rules::parse(definition).unwrap();
         let engine = crate::Engine::new_raw();
         let tokens = super::super::lower_nominal::lex_rust(&engine, call);
-        let end = tokens.last().map_or(Position::NONE, |(_, position)| *position);
+        let end = tokens
+            .last()
+            .map_or(Position::NONE, |(_, position)| *position);
         rules
             .expand(&trees(&tokens).unwrap(), "dep", Position::NONE, end, 0)
             .unwrap_err()

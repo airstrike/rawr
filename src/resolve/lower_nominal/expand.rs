@@ -67,14 +67,13 @@ impl Parser<'_> {
             let end = self.expect(Token::SemiColon, "';' after a macro definition")?;
             tokens.push((Token::SemiColon, end));
         }
-        let rules = macro_rules::Rules::from_tokens(&tokens).map_err(|malformed| {
-            Error::Syntax {
+        let rules =
+            macro_rules::Rules::from_tokens(&tokens).map_err(|malformed| Error::Syntax {
                 message: malformed.message().into(),
                 label: malformed.label().into(),
                 help: malformed.help().map(Into::into),
                 at: point_span(malformed.at()),
-            }
-        })?;
+            })?;
         let name = ImmutableString::from(rules.name());
         self.local_macros.push((name, Shared::new(rules)));
         Ok(())
@@ -131,6 +130,46 @@ impl Parser<'_> {
         krate: &str,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        self.splice_expansion(rules, krate, name_span, false)?;
+        self.parse_primary()
+    }
+
+    /// Whether a call of the program's own macro starts the next statement.
+    pub(super) fn macro_statement_ahead(&mut self) -> bool {
+        let Token::Identifier(name) = self.peek() else {
+            return false;
+        };
+        matches!(self.peek_second(), Token::Bang) && {
+            let at = self.position();
+            self.program_macro(&name, at).is_some()
+        }
+    }
+
+    /// A call of the program's own macro as a statement: its expansion
+    /// takes its place among the block's statements, so a `let` of a name
+    /// the caller passed in binds it after the call, as in Rust.
+    pub(super) fn parse_macro_statement(&mut self) -> Result<(), Error> {
+        let (token, position) = self.next();
+        let Token::Identifier(name) = token else {
+            unreachable!("`macro_statement_ahead` saw a name");
+        };
+        let name_span = span(position, text_end(position, &name));
+        let rules = self
+            .program_macro(&name, position)
+            .expect("`macro_statement_ahead` found the macro")?;
+        self.splice_expansion(&rules, "crate", name_span, true)
+    }
+
+    /// Expand the call of `rules` from its `!` and put its tokens next in
+    /// the input: one expression, parenthesised or a block, or, for a call
+    /// that is a `statement`, the statements it expands to.
+    fn splice_expansion(
+        &mut self,
+        rules: &macro_rules::Rules,
+        krate: &str,
+        name_span: Span,
+        statement: bool,
+    ) -> Result<(), Error> {
         let name: ImmutableString = rules.name().into();
         self.expect(Token::Bang, "'!' after a macro name")?;
         let (open, position) = self.next();
@@ -195,8 +234,6 @@ impl Parser<'_> {
                     at,
                 }
             })?;
-        // One expression: parenthesised, or a block when the expansion is
-        // statements, as a macro called as a statement may expand to.
         let statements = {
             let mut depth = 0_usize;
             expansion.iter().any(|(token, _)| {
@@ -213,7 +250,20 @@ impl Parser<'_> {
         };
         let at = name_span.start();
         let mut spliced = Vec::with_capacity(expansion.len() + 2);
-        if expansion.is_empty() {
+        if statement && statements {
+            // The call's own `;` ends the last statement when it has none.
+            let ended = matches!(
+                expansion.last(),
+                Some((Token::SemiColon | Token::RightBrace, _))
+            );
+            spliced.extend(expansion);
+            if matches!(self.peek(), Token::SemiColon) {
+                let semicolon = self.next();
+                if !ended {
+                    spliced.push(semicolon);
+                }
+            }
+        } else if expansion.is_empty() {
             spliced.push((Token::Unit, at));
         } else if statements {
             spliced.push((Token::LeftBrace, at));
@@ -226,6 +276,6 @@ impl Parser<'_> {
         }
         self.expansion_ends.push(remaining);
         self.splice_tokens(spliced);
-        self.parse_primary()
+        Ok(())
     }
 }

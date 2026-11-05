@@ -902,7 +902,10 @@ fn parse_macro_rules(
     let keyword = input.next().expect("peeked `macro_rules`");
     let rules_start = keyword.1;
     let mut tokens = vec![keyword];
-    tokens.push((Token::Bang, expect(input, Token::Bang, "after `macro_rules`")?));
+    tokens.push((
+        Token::Bang,
+        expect(input, Token::Bang, "after `macro_rules`")?,
+    ));
     let name = parse_name(input, "after `macro_rules!`")?;
     tokens.push((
         Token::Identifier(Box::new(name.text.as_str().into())),
@@ -938,11 +941,10 @@ fn parse_macro_rules(
                 break position;
             }
             Token::EOF => {
-                return Err(PERR::MissingToken(
-                    close.into(),
-                    "to close a macro definition".into(),
-                )
-                .into_err(position));
+                return Err(
+                    PERR::MissingToken(close.into(), "to close a macro definition".into())
+                        .into_err(position),
+                );
             }
             Token::LexError(error) => return Err(error.clone().into_err(position)),
             _ => {}

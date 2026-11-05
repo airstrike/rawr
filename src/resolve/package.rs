@@ -545,7 +545,11 @@ impl<'a> Resolver<'a> {
             self.units
                 .iter()
                 .filter(|unit| unit.context.source == entry)
-                .chain(self.units.iter().filter(|unit| unit.context.source != entry))
+                .chain(
+                    self.units
+                        .iter()
+                        .filter(|unit| unit.context.source != entry),
+                )
                 .map(|unit| super::macros::Module {
                     source: program::source::Id::from_index(unit.context.source.index()),
                     package: &unit.context.namespace.package,
