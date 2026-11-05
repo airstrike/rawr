@@ -683,6 +683,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             } => code::RESOLVE_CLOSURE_ARGUMENT_COUNT,
             _ => code::RESOLVE_ARGUMENT_COUNT,
         },
+        resolve::Category::OverflowingLiteral => code::RESOLVE_OVERFLOWING_LITERAL,
         resolve::Category::PrivateItem => match error {
             resolve::Error::PrivateItem { item, .. } => code::private(*item),
             _ => unreachable!("a private item's category"),
@@ -788,6 +789,15 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             builder.note(format!(
                 "expected {kind} signature `{expected}`\n   found {kind} signature `{found}`"
             ))
+        }
+        resolve::Error::OverflowingLiteral { note, help, .. } => {
+            let builder = match help {
+                Some(help) => builder.help(help.clone()),
+                None => builder,
+            };
+            builder
+                .note(note.clone())
+                .note("`#[deny(overflowing_literals)]` on by default")
         }
         resolve::Error::ArgumentCount {
             expected, found, ..
@@ -1023,6 +1033,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         }
         resolve::Error::ArgumentSignature { closure, .. } => {
             resolve::ArgumentSignature(*closure).to_string()
+        }
+        resolve::Error::OverflowingLiteral { ty, .. } => {
+            format!("literal out of range for `{ty}`")
         }
     }
 }

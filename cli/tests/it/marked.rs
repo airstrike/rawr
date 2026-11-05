@@ -401,7 +401,7 @@ fn rawr_check_reports_what_only_rustc_rejects() {
         &main,
         text.replace(
             "    println!(\"total: {}\", total(&cart));",
-            "    let shown: u8 = 300;\n    println!(\"total: {} ({shown})\", total(&cart));",
+            "    let shown: u8 = 255 + 1;\n    println!(\"total: {} ({shown})\", total(&cart));",
         ),
     )
     .unwrap();
@@ -420,7 +420,9 @@ fn rawr_check_reports_what_only_rustc_rejects() {
     assert_eq!(stdout(&output), format!("Checked {}\n", main.display()));
     let text = stderr(&output);
     assert!(
-        text.starts_with("\ncargo check found 1 error:\n\nerror: literal out of range for `u8`"),
+        text.starts_with(
+            "\ncargo check found 1 error:\n\nerror: this arithmetic operation will overflow"
+        ),
         "{text}"
     );
     assert!(text.contains("src/main.rs:16:21"), "{text}");
@@ -439,7 +441,7 @@ fn rawr_check_reports_what_only_rustc_rejects_in_a_script() {
     fs::write(
         &script,
         "#!/usr/bin/env rawr\n---cargo\n[package]\nedition = \"2024\"\n---\n// rawr\n\
-         fn main() {\n    let x: u8 = 300;\n    println!(\"{x}\");\n}\n",
+         fn main() {\n    let x: u8 = 255 + 1;\n    println!(\"{x}\");\n}\n",
     )
     .unwrap();
     let bin = Path::new(&cargo).parent().unwrap();
@@ -457,7 +459,9 @@ fn rawr_check_reports_what_only_rustc_rejects_in_a_script() {
     assert_eq!(stdout(&output), format!("Checked {}\n", script.display()));
     let text = stderr(&output);
     assert!(
-        text.starts_with("\ncargo check found 1 error:\n\nerror: literal out of range for `u8`"),
+        text.starts_with(
+            "\ncargo check found 1 error:\n\nerror: this arithmetic operation will overflow"
+        ),
         "{text}"
     );
     assert!(

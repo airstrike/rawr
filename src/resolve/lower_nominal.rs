@@ -15,6 +15,7 @@ mod keyed;
 mod literal;
 mod location;
 mod origin;
+mod overflow;
 mod places;
 mod sequence;
 use places::PlacePattern;
@@ -12059,6 +12060,9 @@ struct Parser<'a> {
     /// The `{integer}` (`true`) and `{float}` literal kinds of this body,
     /// which become `i64` and `f64` where nothing else binds them.
     literal_kinds: Vec<(usize, bool)>,
+    /// Each unsuffixed integer literal's kind, number and place, checked
+    /// against the kind inference settles on (`overflow`).
+    literal_values: Vec<(usize, INT, Span)>,
     /// In an impl of a generic trait, its parameters' arguments: `T` is
     /// `i64` in `impl Convert<i64> for C`'s methods and default bodies.
     trait_parameters: BTreeMap<ImmutableString, Ty>,
@@ -12330,6 +12334,7 @@ impl<'a> Parser<'a> {
             generic_trait_arguments: BTreeMap::new(),
             pending_instances: Vec::new(),
             literal_kinds: Vec::new(),
+            literal_values: Vec::new(),
             trait_parameters: BTreeMap::new(),
             instance_calls: Vec::new(),
             collecting_instances: false,
@@ -14007,6 +14012,14 @@ impl<'a> Parser<'a> {
                 self.inference.bind(id, default);
             }
         }
+        for (id, value, at) in std::mem::take(&mut self.literal_values) {
+            let value = Wide::Signed(value.into());
+            if let Ty::Int(kind) = self.inference.resolve(&Ty::Int(Int::Var(id)))
+                && value.fits(kind).is_err()
+            {
+                return Err(self.overflowing(kind, value, at));
+            }
+        }
         for pending in std::mem::take(&mut self.pending_wide_literals) {
             let kind = match self.inference.resolve(&pending.ty) {
                 Ty::Int(Int::Var(_)) => Int::I32,
@@ -14014,7 +14027,7 @@ impl<'a> Parser<'a> {
                 _ => continue,
             };
             if pending.value.fits(kind).is_err() {
-                return Err(literal_range(kind, pending.value, pending.at));
+                return Err(self.overflowing(kind, pending.value, pending.at));
             }
             let [signed, unsigned, bits] = &pending.texts;
             let text = match kind {
@@ -46589,6 +46602,41 @@ impl<'a> Parser<'a> {
         false
     }
 
+    /// rustc's `overflowing_literals` error for the integer literal at
+    /// `at`, whose number `value` `kind` can't hold: the literal as the
+    /// program writes it, suffix included.
+    fn overflowing(&self, kind: Int, value: Wide, at: Span) -> Error {
+        let written = self
+            .written_from(at.start())
+            .map(|line| {
+                let mut chars = line.char_indices();
+                let start = usize::from(line.starts_with('-'));
+                let end = chars
+                    .find(|&(index, character)| {
+                        index >= start && !(character.is_alphanumeric() || character == '_')
+                    })
+                    .map_or(line.len(), |(index, _)| index);
+                line[..end].to_string()
+            })
+            .filter(|written| {
+                written
+                    .trim_start_matches('-')
+                    .starts_with(|c: char| c.is_ascii_digit())
+            })
+            .unwrap_or_else(|| value.to_string());
+        let literal = span(at.start(), text_end(at.start(), &written));
+        overflow::error(kind, value, &written, literal)
+    }
+
+    /// The rest of the source line from `at`, as the program writes it.
+    fn written_from(&self, at: Position) -> Option<String> {
+        let key = self.models.sources.key(self.models.context.index());
+        let source = self.models.sources.resolve(key).ok()?;
+        let line = source.text().split('\n').nth(at.line()?.checked_sub(1)?)?;
+        let from = at.position()?.checked_sub(1)?;
+        Some(line.chars().skip(from).collect())
+    }
+
     /// The source text at `at`, on one line, as the program writes it.
     fn written(&self, at: Span) -> Option<String> {
         let key = self.models.sources.key(self.models.context.index());
@@ -49086,21 +49134,19 @@ impl<'a> Parser<'a> {
             && (integer || matches!(ty, Ty::Float(_)))
         {
             self.next();
-            if let Ty::Int(kind) = ty {
-                let (low, high) = kind.range();
-                if !(low..=high).contains(&value) {
-                    return Err(Error::TypeMismatch {
-                        expected: format!("a literal in the range of `{}`", kind.name()).into(),
-                        actual: value.to_string().into(),
-                        expression: span,
-                    });
-                }
+            if let Ty::Int(kind) = ty
+                && Wide::Signed(value.into()).fits(kind).is_err()
+            {
+                return Err(self.overflowing(kind, Wide::Signed(value.into()), span));
             }
             let float = integer && matches!(ty, Ty::Float(_));
             return Ok((ty, float));
         }
         let id = self.inference.fresh_id();
         self.literal_kinds.push((id, integer));
+        if integer {
+            self.literal_values.push((id, value, span));
+        }
         Ok((
             if integer {
                 Ty::Int(Int::Var(id))
@@ -49169,7 +49215,7 @@ impl<'a> Parser<'a> {
                 placeholder
             }
             Ty::Int(kind) if value.fits(kind).is_err() => {
-                return Err(literal_range(kind, value, at));
+                return Err(self.overflowing(kind, value, at));
             }
             Ty::Int(Int::U64 | Int::Usize) => bits,
             Ty::Int(kind) => boxed(kind),
@@ -56252,15 +56298,6 @@ fn arithmetic_trait(symbol: &str, left: &str, right: &str) -> Option<(String, &'
         ),
         _ => return None,
     })
-}
-
-/// Rust's error for an integer literal `value` out of `kind`'s range.
-fn literal_range(kind: Int, value: Wide, at: Span) -> Error {
-    Error::TypeMismatch {
-        expected: format!("a literal in the range of `{}`", kind.name()).into(),
-        actual: value.to_string().into(),
-        expression: at,
-    }
 }
 
 /// A runtime integer as the number it is, or `None` for another value.

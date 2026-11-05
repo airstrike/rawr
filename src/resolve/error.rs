@@ -105,6 +105,9 @@ pub enum Category {
     /// An item private to a module the use is outside of, as rustc's E0603
     /// or E0624.
     PrivateItem,
+    /// An integer literal its type can't hold, rustc's deny-by-default
+    /// `overflowing_literals` lint.
+    OverflowingLiteral,
 }
 
 impl fmt::Display for Category {
@@ -155,6 +158,7 @@ impl fmt::Display for Category {
             Self::CannotCompare => formatter.write_str("can't compare"),
             Self::ArgumentSignature => formatter.write_str("type mismatch in arguments"),
             Self::PrivateItem => formatter.write_str("private item"),
+            Self::OverflowingLiteral => formatter.write_str("literal out of range"),
         }
     }
 }
@@ -734,6 +738,19 @@ pub enum Error {
         /// The use.
         reference: Span,
     },
+    /// An integer literal its type can't hold, which rustc's
+    /// deny-by-default `overflowing_literals` lint refuses: "literal out of
+    /// range for `u8`".
+    OverflowingLiteral {
+        /// The literal's type: `u8`.
+        ty: ImmutableString,
+        /// rustc's note: the literal as written, and the type's range.
+        note: ImmutableString,
+        /// rustc's help, a type that holds the literal, when it has one.
+        help: Option<ImmutableString>,
+        /// The literal.
+        literal: Span,
+    },
     /// A call of a generic function that gives one of its type parameters
     /// no type, which rustc refuses (E0282).
     TypeAnnotationsNeeded {
@@ -901,6 +918,7 @@ impl Error {
             Self::CannotCompare { .. } => Category::CannotCompare,
             Self::ArgumentSignature { .. } => Category::ArgumentSignature,
             Self::PrivateItem { .. } => Category::PrivateItem,
+            Self::OverflowingLiteral { .. } => Category::OverflowingLiteral,
         }
     }
 
@@ -924,6 +942,7 @@ impl Error {
             }
             Self::NotInModule { module, .. } => module.as_str(),
             Self::PrivateItem { name, .. } => name.as_str(),
+            Self::OverflowingLiteral { ty, .. } => ty.as_str(),
             Self::UnknownMember { owner, .. }
             | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
@@ -972,6 +991,7 @@ impl Error {
             | Self::MemberKind { reference, .. }
             | Self::NotInModule { reference, .. }
             | Self::PrivateItem { reference, .. } => *reference,
+            Self::OverflowingLiteral { literal, .. } => *literal,
             Self::UnknownFunction { reference, .. } => *reference,
             Self::UnknownVariable { reference, .. }
             | Self::UnknownMacro { reference, .. }
@@ -1062,7 +1082,8 @@ impl Error {
             | Self::NotYet { .. }
             | Self::TypeAnnotationsNeeded { .. }
             | Self::CannotCompare { .. }
-            | Self::ArgumentSignature { .. } => None,
+            | Self::ArgumentSignature { .. }
+            | Self::OverflowingLiteral { .. } => None,
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -1469,6 +1490,9 @@ impl fmt::Display for Written<'_> {
             } => write!(formatter, "{message} at {reference} ({code})"),
             Error::NotYet { path, reference } => {
                 write!(formatter, "rawr doesn't run `{path}` yet at {reference}")
+            }
+            Error::OverflowingLiteral { ty, literal, .. } => {
+                write!(formatter, "literal out of range for `{ty}` at {literal}")
             }
             Error::TypeAnnotationsNeeded {
                 parameter,
