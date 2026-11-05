@@ -924,7 +924,7 @@ impl Parser<'_> {
             mutable: false,
             target: Box::new(walked.clone()),
         };
-        let iterator = Ty::Iter(Box::new(walked));
+        let iterator = Ty::iter(walked);
         let (mut arguments, end) =
             self.parse_std_arguments(&iterator, "find", "`find` arguments")?;
         let expression = span(value.span.start(), end);
@@ -1070,10 +1070,10 @@ impl Parser<'_> {
             self.require_mutable_binding(&owner, value.span)?;
             let (_, end) = self.next();
             let expression = span(value.span.start(), end);
-            let ty = Ty::Iter(Box::new(Ty::Reference {
+            let ty = Ty::iter(Ty::Reference {
                 mutable: true,
                 target: Box::new(element.clone()),
-            }));
+            });
             self.pending_iter_mut = Some(HeldIterMut {
                 declaration: expression,
                 place: value.clone(),

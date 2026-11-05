@@ -950,7 +950,7 @@ impl Parser<'_> {
         let a0 = path(&[Step::Arg(0)]);
         let element = path(&[Step::Arg(0), Step::Arg(0)]);
         match self.inference.resolve(ty) {
-            Ty::Iter(_) | Ty::Array { .. } | Ty::Option(_) | Ty::Range(_) => {
+            Ty::Iter(..) | Ty::Array { .. } | Ty::Option(_) | Ty::Range(_) => {
                 vec![(Path::ROOT, a0)]
             }
             // A map's `(K, V)` items are where its arguments are.

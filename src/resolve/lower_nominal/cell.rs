@@ -7,6 +7,10 @@
 //! the borrow lasts until the local's block ends, as Rust's `RefMut` does.
 //! A borrow in an expression is released at the end of its statement. A
 //! borrow that conflicts with one still held is Rust's panic.
+//!
+//! A `std::sync::Mutex<T>` is the same cell, whose `lock` is a mutable
+//! borrow that waits for the one held, on whichever thread holds it, to be
+//! released, as Rust's lock does.
 
 use super::*;
 
@@ -26,6 +30,14 @@ pub struct Inner {
     /// Each held borrow's token and whether it is mutable. A borrow whose
     /// guard is gone is released.
     borrows: crate::Locked<Vec<(BorrowToken, bool)>>,
+    /// A `Mutex`'s waiting lockers, woken as a lock is released.
+    lockers: Option<Lockers>,
+}
+
+/// What a `Mutex`'s lock waits on.
+struct Lockers {
+    gate: std::sync::Mutex<()>,
+    released: std::sync::Condvar,
 }
 
 /// One borrow of a cell, held while any copy of it lives.
@@ -89,7 +101,61 @@ pub(crate) fn made(value: Dynamic, plain: bool) -> Dynamic {
         value: crate::Locked::new(value),
         plain,
         borrows: crate::Locked::new(Vec::new()),
+        lockers: None,
     })))
+}
+
+/// A new `Mutex` of `value`.
+fn mutex(value: Dynamic) -> Dynamic {
+    Dynamic::from(Cell(crate::Shared::new(Inner {
+        value: crate::Locked::new(value),
+        plain: false,
+        borrows: crate::Locked::new(Vec::new()),
+        lockers: Some(Lockers {
+            gate: std::sync::Mutex::new(()),
+            released: std::sync::Condvar::new(),
+        }),
+    })))
+}
+
+/// Whether `value` is a `Mutex`, whose `Debug` is its own.
+pub(super) fn is_mutex(value: &Dynamic) -> bool {
+    value
+        .read_lock::<Cell>()
+        .is_some_and(|cell| cell.0.lockers.is_some())
+}
+
+impl Lockers {
+    /// Wait for `inner`'s held borrow to be released, then hold one: Rust's
+    /// `lock`. A guard dropped without its release is seen at the next
+    /// wake, which comes at least once a millisecond.
+    fn lock(&self, inner: &Inner) -> crate::Shared<()> {
+        let mut gate = self
+            .gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while inner.held().0 {
+            gate = self
+                .released
+                .wait_timeout(gate, std::time::Duration::from_millis(1))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        let token = crate::Shared::new(());
+        if let Some(mut borrows) = crate::func::locked_write(&inner.borrows) {
+            borrows.push((crate::Shared::downgrade(&token), true));
+        }
+        token
+    }
+
+    /// Wake a locker, once a lock is released.
+    fn release(&self) {
+        let _gate = self
+            .gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.released.notify_one();
+    }
 }
 
 /// A new `RefCell` of `value`.
@@ -120,6 +186,9 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
     if matches!(op, PreludeOp::CellNew | PreludeOp::PlainCellNew) {
         return Ok(made(args[0].take(), matches!(op, PreludeOp::PlainCellNew)));
     }
+    if op == PreludeOp::MutexNew {
+        return Ok(mutex(args[0].take()));
+    }
     // An imported method's borrow guard: each read and store reaches the
     // native target through one call of its own, so there is no borrow to
     // release.
@@ -139,6 +208,13 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
     }
     let inner = cell(args[0]).ok_or_else(|| invariant("a `RefCell` is not one at runtime"))?;
     match op {
+        PreludeOp::CellBorrow if let Some(lockers) = &inner.lockers => {
+            let token = lockers.lock(&inner);
+            Ok(Dynamic::from(Guard {
+                cell: inner.clone(),
+                token,
+            }))
+        }
         PreludeOp::CellBorrow => {
             let mutable = args[1].as_bool().unwrap_or(false);
             let (held, held_mutably) = inner.held();
@@ -165,6 +241,9 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
             {
                 let held = crate::Shared::as_ptr(&guard.token);
                 borrows.retain(|(token, _)| token.as_ptr() != held);
+            }
+            if let Some(lockers) = &inner.lockers {
+                lockers.release();
             }
             Ok(Dynamic::UNIT)
         }
@@ -222,6 +301,17 @@ impl Parser<'_> {
     pub(super) fn cell_named(&self, path: &str) -> Option<CellKind> {
         if crate::resolve::std_cell(path) && self.models.get("RefCell").is_none() {
             return Some(CellKind::RefCell);
+        }
+        // `std::sync::Mutex`, written with its module or imported.
+        let mutex = |path: &str| crate::resolve::std_thread_type(path) == Some("Mutex");
+        if self.models.get("Mutex").is_none()
+            && (path.contains("::") && mutex(path)
+                || self
+                    .models
+                    .import(path)
+                    .is_some_and(|binding| mutex(&binding.qualified)))
+        {
+            return Some(CellKind::Mutex);
         }
         let imported = || {
             self.models
@@ -298,6 +388,67 @@ impl Parser<'_> {
                 call,
             }),
         }
+    }
+
+    /// `mutex.lock().unwrap()` or `.lock().expect(msg)`: the lock, held as
+    /// a `RefCell`'s mutable borrow is, which no thread poisons, since a
+    /// panic in rawr ends the thread it is on before the guard drops.
+    /// A `LockResult` kept as it is, and `Mutex`'s other methods, are the
+    /// not-yet error (D712.1).
+    pub(super) fn parse_mutex_member(
+        &mut self,
+        value: ParsedExpr,
+        inner: Ty,
+        member: ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let mut ahead = self.input.clone();
+        let mut next = || ahead.next().map_or(Token::EOF, |(token, _)| token);
+        let unwrapped = member.as_str() == "lock"
+            && next() == Token::Unit
+            && next() == Token::Period
+            && matches!(next(), Token::Identifier(name) if matches!(name.as_str(), "unwrap" | "expect"))
+            && matches!(next(), Token::Unit | Token::LeftParen);
+        if !unwrapped {
+            let owner = Ty::Cell(CellKind::Mutex, Box::new(inner.clone()));
+            let path = std_method::inherent(&owner, &member).map_or_else(
+                || {
+                    Err(Error::UnknownMember {
+                        owner: owner.name(&self.models),
+                        member: member.clone(),
+                        reference: member_span,
+                    })
+                },
+                |found| Ok(std_method::path(&found)),
+            )?;
+            return Err(Error::NotYet {
+                path: path.into(),
+                reference: member_span,
+            });
+        }
+        let mut locked = self.parse_cell_member(value, inner, "borrow_mut".into(), member_span)?;
+        self.expect(Token::Period, "'.' after `lock()`")?;
+        let (unwrap, _) = self.expect_member_name()?;
+        let (mut arguments, end) = self.parse_call_arguments("`unwrap` arguments")?;
+        if unwrap.as_str() == "expect" {
+            let [message] = arguments.as_mut_slice() else {
+                return Err(Error::argument_count(
+                    Callee::Method,
+                    crate::resolve::Qualified("Result", "expect").to_string(),
+                    1,
+                    arguments.len(),
+                    span(locked.span.start(), end),
+                ));
+            };
+            self.coerce_expr(&Ty::Str, message)?;
+        }
+        // `let guard = m.lock().unwrap();` holds the lock for `guard`'s
+        // block, as `let v = cell.borrow_mut();` does.
+        locked.span = span(locked.span.start(), end);
+        if let Some(borrow) = &mut self.last_cell_borrow {
+            borrow.span = locked.span;
+        }
+        Ok(locked)
     }
 
     /// `cell.borrow()`, `borrow_mut()`, `get_mut()`, `into_inner()`,

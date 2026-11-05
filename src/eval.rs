@@ -8,6 +8,8 @@ mod global_state;
 pub(crate) mod machine;
 mod stmt;
 mod target;
+#[cfg(feature = "sync")]
+pub(crate) mod threads;
 
 #[allow(unused_imports)]
 pub use cache::FnResolutionCache;

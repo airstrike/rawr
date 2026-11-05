@@ -741,7 +741,7 @@ impl Parser<'_> {
                 }
                 false
             }
-            Ty::Iter(item) => {
+            Ty::Iter(item, _) => {
                 if self.needs_drop_in(item, at, visiting)? {
                     return Err(unsupported("an iterator"));
                 }

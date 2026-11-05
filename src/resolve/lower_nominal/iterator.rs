@@ -84,7 +84,7 @@ fn header(parts: &[Part]) -> origin::Fragment {
 }
 
 #[derive(Clone)]
-enum Source {
+pub(super) enum Source {
     /// A value Rawr's `for` walks: an array (`array`), a string's chars or
     /// a range value.
     Values {
@@ -106,6 +106,9 @@ enum Source {
 /// items are made by; one between the surrogates fails.
 pub(super) const CHAR_OF_CODE: &str = "15";
 
+/// std's iterator of a string's chars, which `str::chars` gives.
+pub(super) const CHARS: &str = "core::str::iter::Chars";
+
 impl Parser<'_> {
     /// The item of a range's source at `at`: its integer, or for a char
     /// range its char.
@@ -124,7 +127,7 @@ impl Parser<'_> {
     /// `ExactSizeIterator`, `IntoIterator`).
     pub(super) fn iterator_receiver(&self, ty: &Ty, member: &str) -> bool {
         match self.inference.resolve(ty) {
-            Ty::Iter(_) => true,
+            Ty::Iter(..) => true,
             ty @ Ty::InclusiveRange => {
                 let Some((definition, _)) = std_impl::std_definition(&ty) else {
                     return false;
@@ -280,7 +283,9 @@ impl Parser<'_> {
             array: false,
         };
         let pipeline = self.source_pipeline(source);
-        self.iterator_expr(pipeline, Ty::Char, span(value.span.start(), end))
+        let mut expr = self.iterator_expr(pipeline, Ty::Char, span(value.span.start(), end));
+        expr.ty = Ty::Iter(Box::new(Ty::Char), Some(CHARS));
+        expr
     }
 
     /// `low..high`, `low..` and, kept as Rawr's range value, `low..=high`.
@@ -338,7 +343,7 @@ impl Parser<'_> {
         }
     }
 
-    fn source_pipeline(&mut self, source: Source) -> Pipeline {
+    pub(super) fn source_pipeline(&mut self, source: Source) -> Pipeline {
         let item = self.temporary("item");
         let mut pipeline = Pipeline {
             setup: origin::Fragment::default(),
@@ -439,7 +444,7 @@ impl Parser<'_> {
         expression: Span,
     ) -> ParsedExpr {
         let source = self.materialized(&pipeline);
-        let expr = self.operator_expr(source, Ty::Iter(Box::new(item)), expression);
+        let expr = self.operator_expr(source, Ty::iter(item), expression);
         self.pipelines
             .insert(expr.source.as_str().to_string(), pipeline);
         expr
@@ -511,7 +516,7 @@ impl Parser<'_> {
             return self.user_pipeline(value, None).ok();
         }
         let item = match &ty {
-            Ty::Iter(item) => (**item).clone(),
+            Ty::Iter(item, _) => (**item).clone(),
             Ty::InclusiveRange => Ty::Int(Int::Var(self.inference.fresh_id())),
             Ty::Array { element, .. } => (**element).clone(),
             // A map's or set's sorted entries.
@@ -708,7 +713,7 @@ impl Parser<'_> {
     /// A discarded iterator (`v.iter().map(f);`) as Rust runs it: its
     /// sources and closures are evaluated, and no stage runs.
     pub(super) fn discarded(&mut self, value: &ParsedExpr) -> Option<origin::Fragment> {
-        if !matches!(self.inference.resolve(&value.ty), Ty::Iter(_)) {
+        if !matches!(self.inference.resolve(&value.ty), Ty::Iter(..)) {
             return None;
         }
         let pipeline = self.pipelines.get(value.source.as_str())?.clone();
@@ -898,7 +903,7 @@ impl Parser<'_> {
                 // A crate function named as an argument is the closure that
                 // calls it, as for `Option::map` (T327): `.map(text)`.
                 self.script_callables = true;
-                let iterator = Ty::Iter(Box::new(item.clone()));
+                let iterator = Ty::iter(item.clone());
                 self.parse_std_arguments(&iterator, &member, "iterator method arguments")?
             };
         let expression = span(value.span.start(), end);
@@ -1145,7 +1150,7 @@ impl Parser<'_> {
                 arity(0, &arguments)?;
                 if !self.type_provides(&item, capability::Kind::Clone) {
                     return Err(Error::MissingCapability {
-                        owner: Ty::Iter(Box::new(item)).name(&self.models),
+                        owner: Ty::iter(item).name(&self.models),
                         capability: "Clone".into(),
                         operation: expression,
                         derive: false,
@@ -1279,7 +1284,7 @@ impl Parser<'_> {
                     }
                     inner_ty => {
                         let inner_item = match inner_ty {
-                            Ty::Iter(item) => *item,
+                            Ty::Iter(item, _) => *item,
                             Ty::Array { element, .. } => *element,
                             Ty::InclusiveRange => Ty::Int(Int::Var(self.inference.fresh_id())),
                             Ty::Reference { mutable, target } => match *target {
@@ -1651,7 +1656,7 @@ impl Parser<'_> {
                     // `let mut it`: its first item, taken only when it passes.
                     "peek" | "next_if" | "next_if_eq"
                         if let Some(Lvalue::Binding { binding, .. }) = &value.lvalue
-                            && matches!(self.inference.resolve(&value.ty), Ty::Iter(_)) =>
+                            && matches!(self.inference.resolve(&value.ty), Ty::Iter(..)) =>
                     {
                         let binding = binding.clone();
                         self.require_mutable_binding(&binding, value.span)?;
@@ -1713,7 +1718,7 @@ impl Parser<'_> {
                         // `it.next()` on a `let mut it`: its first item,
                         // taken from its array.
                         if let Some(Lvalue::Binding { binding, .. }) = &value.lvalue
-                            && matches!(self.inference.resolve(&value.ty), Ty::Iter(_))
+                            && matches!(self.inference.resolve(&value.ty), Ty::Iter(..))
                         {
                             let Some(local) = self.bindings.get(binding) else {
                                 return Err(
@@ -1745,7 +1750,7 @@ impl Parser<'_> {
                         if matches!(
                             &value.lvalue,
                             Some(Lvalue::Field(_) | Lvalue::Nested(_) | Lvalue::Place { .. })
-                        ) && matches!(self.inference.resolve(&value.ty), Ty::Iter(_))
+                        ) && matches!(self.inference.resolve(&value.ty), Ty::Iter(..))
                         {
                             let shifted = self.mutation_call(&value, "shift", Vec::new())?;
                             let mut source = origin::Fragment::plain("if ");
@@ -1859,9 +1864,31 @@ impl Parser<'_> {
                 let best = if borrowed { best } else { element };
                 (source, Ty::Option(Box::new(best)))
             }
+            // `Chars::as_str`: the text of the chars left, which the
+            // iterator borrows from.
+            "as_str"
+                if self.inference.resolve(&value.ty)
+                    == Ty::Iter(Box::new(Ty::Char), Some(CHARS)) =>
+            {
+                arity(0, &arguments)?;
+                let out = self.temporary("text");
+                let sink = origin::Fragment::plain(format!("{out} += {x}; "));
+                let source = self.consume(&pipeline, &format!("let {out} = \"\";"), sink, &out);
+                (source, Ty::Str)
+            }
             // A method std declares that rawr doesn't run yet (D712.1):
-            // `ExactSizeIterator`'s only while the chain is one.
+            // a std iterator struct's own, and `ExactSizeIterator`'s only
+            // while the chain is one.
             _ => {
+                if let Some(found) =
+                    std_method::inherent(&self.inference.resolve(&value.ty), &member)
+                    && !std_method::ITERATOR.contains(&found.owner)
+                {
+                    return Err(Error::NotYet {
+                        path: std_method::path(&found).into(),
+                        reference: member_span,
+                    });
+                }
                 let exact = pipeline.exact;
                 if let Some(found) = std_method::iterator(&member, |trait_| {
                     std_method::trait_name(trait_) != "ExactSizeIterator" || exact
@@ -1872,7 +1899,7 @@ impl Parser<'_> {
                     });
                 }
                 return Err(Error::UnknownMember {
-                    owner: Ty::Iter(Box::new(item)).name(&self.models),
+                    owner: Ty::iter(item).name(&self.models),
                     member,
                     reference: member_span,
                 });

@@ -23,6 +23,7 @@ mod reborrow;
 mod reverse;
 mod std_impl;
 mod std_method;
+pub(crate) mod thread;
 
 #[cfg(test)]
 mod argument_count_tests;
@@ -3338,7 +3339,17 @@ fn write_trait_dispatchers(
             // type without a hand-written impl: a derive, or a builtin.
             let fallback = match (models.std_traits.contains(trait_name), trait_name.as_str()) {
                 (true, "Clone") => "return this;".to_string(),
-                (true, "Display") => "return \"\" + this;".to_string(),
+                // An `Rc` or `Arc` writes what it points to, as std's
+                // `impl<T: Display> Display for Rc<T>` does.
+                (true, "Display") => {
+                    let get = format!("{SENTINEL}{}", ops.len());
+                    ops.push(ExecutableOp::Prelude(PreludeOp::CountedGet));
+                    format!(
+                        "if __rawr_type == {COUNTED_KEY} {{ return {get}(this).{}({parameters}); }}\n\
+                         return \"\" + this;",
+                        trait_dispatcher_name(trait_name, &function.name.text)
+                    )
+                }
                 (true, "Debug") => {
                     let generic = format!("{SENTINEL}{}", ops.len());
                     ops.push(ExecutableOp::Prelude(PreludeOp::GenericDebug));
@@ -5739,6 +5750,8 @@ enum PreludeOp {
     /// A `parse` error, whose kind its target's kind code gives, boxed as
     /// `dyn Error` by `?`.
     ErrorParse,
+    /// `Mutex::new`: a cell whose borrow waits for the one held.
+    MutexNew,
     CellBorrow,
     CellGet,
     CellSet,
@@ -5842,6 +5855,9 @@ enum PreludeOp {
     /// A `std::time` function, method or operator of `TIME_METHODS`:
     /// `time(value, code, operand)`.
     Time,
+    /// A `std::thread` or `std::sync::mpsc` function or method of
+    /// `thread::METHODS`: `thread(value, code, operand)` (`thread.rs`).
+    Thread,
     /// A `str` method of `STR_METHODS`: `str(text, code, a, b)`.
     StrMethod,
     /// `s.parse::<T>()` for the target kind (`ExecutableOp::Kinded`): a
@@ -5934,6 +5950,7 @@ impl PreludeOp {
             Self::CowValue => "cow.value",
             Self::DisplayText => "format.display",
             Self::CellNew => "cell.new",
+            Self::MutexNew => "cell.new_mutex",
             Self::PlainCellNew => "cell.new_plain",
             Self::ErrorNew => "error.new",
             Self::ErrorText => "error.text",
@@ -5988,6 +6005,7 @@ impl PreludeOp {
             Self::KeyedRange => "keyed.range",
             Self::IntMethod => "int.method",
             Self::Time => "time.method",
+            Self::Thread => "thread.method",
             Self::Parse => "str.parse",
             Self::StrMethod => "str.method",
             Self::Print => "io.print",
@@ -6069,6 +6087,7 @@ impl PreludeOp {
             | Self::DisplayText
             | Self::CellNew
             | Self::PlainCellNew
+            | Self::MutexNew
             | Self::CellGet
             | Self::CellRelease
             | Self::CellClone
@@ -6221,7 +6240,7 @@ impl PreludeOp {
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
             ],
-            Self::Time => vec![
+            Self::Time | Self::Thread => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
@@ -6585,6 +6604,7 @@ impl PreludeOp {
                     .map_or(Dynamic::UNIT, |opening| opening.copies().get(index)));
             }
             Self::Time => return time_method(args),
+            Self::Thread => return thread::invoke(context, args),
             Self::StrChange => return str_change(context, args),
             Self::StrPieces => return str_pieces(args),
             Self::SliceChunks => {
@@ -6682,6 +6702,7 @@ impl PreludeOp {
             }
             Self::CellNew
             | Self::PlainCellNew
+            | Self::MutexNew
             | Self::CellBorrow
             | Self::CellGet
             | Self::CellSet
@@ -7216,6 +7237,10 @@ fn builtin_code(ty: &Ty) -> Option<crate::INT> {
     })
 }
 
+/// The runtime type key of an `Rc` or `Arc`, which owns no impl: what a
+/// std trait's dispatcher derefs it by.
+const COUNTED_KEY: crate::INT = -12;
+
 /// The runtime type key of a builtin value: the witness code of its type
 /// (`builtin_code`). One match on the value's tag, after the script-type
 /// arms, so script dispatch pays nothing for it.
@@ -7231,6 +7256,7 @@ fn builtin_type_key(value: &Dynamic) -> Option<crate::INT> {
         Union::Unit(..) => -9,
         Union::Variant(..) if crate::option::is(value) => -7,
         Union::Variant(..) if crate::result::is(value) => -10,
+        Union::Variant(..) if value.is::<counted::Counted>() => COUNTED_KEY,
         _ => return None,
     })
 }
@@ -8472,20 +8498,22 @@ impl Time {
 }
 
 /// Which of std's cells a `Ty::Cell` is: `RefCell`, whose value is
-/// borrowed, or `Cell`, whose value is copied in and out.
+/// borrowed, `Cell`, whose value is copied in and out, or `Mutex`, whose
+/// value one thread at a time locks, as a `RefCell` borrows it mutably.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CellKind {
     RefCell,
     Cell,
+    Mutex,
 }
 
 impl CellKind {
     /// The cell `name` is, as `type_ref::Type::cell_element` names it.
     fn named(name: &str) -> Self {
-        if name == "Cell" {
-            Self::Cell
-        } else {
-            Self::RefCell
+        match name {
+            "Cell" => Self::Cell,
+            "Mutex" => Self::Mutex,
+            _ => Self::RefCell,
         }
     }
 
@@ -8493,6 +8521,7 @@ impl CellKind {
         match self {
             Self::RefCell => "RefCell",
             Self::Cell => "Cell",
+            Self::Mutex => "Mutex",
         }
     }
 
@@ -8501,6 +8530,7 @@ impl CellKind {
         match self {
             Self::RefCell => PreludeOp::CellNew,
             Self::Cell => PreludeOp::PlainCellNew,
+            Self::Mutex => PreludeOp::MutexNew,
         }
     }
 }
@@ -8740,10 +8770,16 @@ enum Ty {
     /// `std::cell::RefCell<T>` or `std::cell::Cell<T>`: a `cell::Cell` at
     /// runtime, which every copy of it shares (`cell.rs`).
     Cell(CellKind, Box<Ty>),
+    /// `std::thread::JoinHandle<T>`, `std::sync::mpsc::Sender<T>` or
+    /// `Receiver<T>`: std's own handle at runtime (`thread.rs`), which a
+    /// move hands on and a copy never makes.
+    Thread(thread::Kind, Box<Ty>),
     /// An iterator of `Item` (`impl Iterator<Item = T>`): an adaptor chain
     /// fused into one loop where it is consumed, else the array of its
-    /// items at runtime.
-    Iter(Box<Ty>),
+    /// items at runtime. With the std struct it is, when rawr knows it
+    /// (`core::str::iter::Chars` of `s.chars()`), whose own inherent
+    /// methods it also has; an adaptor's chain is any iterator.
+    Iter(Box<Ty>, Option<&'static str>),
     /// `dyn Trait`, behind `&` or `Box`: a value of some type implementing
     /// the trait, whose methods dispatch by the value's runtime type.
     /// With its associated type bindings by name (`dyn Shape<Output =
@@ -8762,6 +8798,11 @@ enum Ty {
 }
 
 impl Ty {
+    /// Any iterator of `item`, as an adaptor makes.
+    fn iter(item: Ty) -> Self {
+        Self::Iter(Box::new(item), None)
+    }
+
     /// The sequence `kind` of `element`: `Vec<T>`, `[T]`, ..
     fn sequence(kind: sequence::Kind, element: Ty) -> Self {
         Self::Array {
@@ -8809,12 +8850,13 @@ impl Ty {
             | Self::Boxed(target)
             | Self::Counted(_, target)
             | Self::Weak(_, target)
-            | Self::Iter(target)
+            | Self::Iter(target, _)
             | Self::Reverse(target)
             | Self::Cow(target)
             | Self::Range(target)
             | Self::InclusiveOf(target)
             | Self::Cell(_, target)
+            | Self::Thread(_, target)
             | Self::Projection(target, ..) => {
                 target.collect_dependencies(dependencies);
             }
@@ -8917,7 +8959,7 @@ impl Ty {
             );
         }
         if let Some((item, _)) = ty.iterator_item() {
-            return Self::Iter(Box::new(Self::from_resolved(item)));
+            return Self::iter(Self::from_resolved(item));
         }
         if let Some(inner) = ty.reverse_element() {
             return Self::Reverse(Box::new(Self::from_resolved(inner)));
@@ -8932,6 +8974,11 @@ impl Ty {
         }
         if let Some((kind, inner)) = ty.cell_element() {
             return Self::Cell(CellKind::named(kind), Box::new(Self::from_resolved(inner)));
+        }
+        if let Some((name, inner)) = ty.thread_element()
+            && let Some(kind) = thread::Kind::named(name)
+        {
+            return Self::Thread(kind, Box::new(Self::from_resolved(inner)));
         }
         if let Some((name, arguments)) = ty.keyed_arguments()
             && let Some(kind) = Keyed::from_name(name)
@@ -9102,10 +9149,15 @@ impl Ty {
                 format!("{}<{}>", counter.name(), target.name(models)).into()
             }
             Self::Weak(_, target) => format!("Weak<{}>", target.name(models)).into(),
-            Self::Iter(item) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
+            // rustc names a std iterator by its struct: `Chars<'_>`.
+            Self::Iter(_, Some(std)) => {
+                format!("{}<'_>", std.rsplit("::").next().unwrap_or(std)).into()
+            }
+            Self::Iter(item, None) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
             Self::Cow(borrowed) => format!("Cow<'_, {}>", borrowed.name(models)).into(),
             Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
+            Self::Thread(kind, inner) => kind.name(&inner.name(models)).into(),
             Self::Keyed(kind, arguments) => format!(
                 "{}<{}>",
                 kind.name(),
@@ -9185,11 +9237,22 @@ impl Ty {
             Self::Array { .. }
             | Self::Tuple(_)
             | Self::FnChoice { .. }
-            | Self::Iter(_)
+            | Self::Iter(..)
             | Self::Keyed(..) => Some(TypeId::of::<crate::Array>()),
             Self::Reverse(_) => Some(TypeId::of::<std::cmp::Reverse<Dynamic>>()),
             Self::Cow(_) => Some(TypeId::of::<cow::Value>()),
             Self::Cell(..) => Some(TypeId::of::<cell::Cell>()),
+            Self::Thread(kind, _) => match kind {
+                #[cfg(feature = "sync")]
+                thread::Kind::JoinHandle => Some(TypeId::of::<crate::eval::threads::Handle>()),
+                #[cfg(not(feature = "sync"))]
+                thread::Kind::JoinHandle => None,
+                thread::Kind::Sender => Some(TypeId::of::<thread::Sender>()),
+                thread::Kind::Receiver => Some(TypeId::of::<thread::Receiver>()),
+                thread::Kind::SendError => Some(TypeId::of::<thread::SendError>()),
+                thread::Kind::RecvError => Some(TypeId::of::<()>()),
+                thread::Kind::Panic => Some(TypeId::of::<thread::Panic>()),
+            },
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
             #[cfg(feature = "rust-import")]
@@ -9351,11 +9414,12 @@ impl Ty {
             | Self::Boxed(..)
             | Self::Counted(..)
             | Self::Weak(..)
-            | Self::Iter(_)
+            | Self::Iter(..)
             | Self::Keyed(..)
             | Self::Reverse(_)
             | Self::Cow(_)
             | Self::Cell(..)
+            | Self::Thread(..)
             | Self::Dyn(..)
             | Self::Infer(_)
             | Self::Unknown => crate::host::usage::Policy::Ordinary,
@@ -9609,7 +9673,7 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
                 left_counter == right_counter && compare(left, right, forward, reverse)
             }
             (Ty::Option(left), Ty::Option(right))
-            | (Ty::Iter(left), Ty::Iter(right))
+            | (Ty::Iter(left, _), Ty::Iter(right, _))
             | (Ty::Reverse(left), Ty::Reverse(right))
             | (Ty::Cow(left), Ty::Cow(right))
             | (Ty::Range(left), Ty::Range(right))
@@ -9617,6 +9681,9 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
                 compare(left, right, forward, reverse)
             }
             (Ty::Cell(left_kind, left), Ty::Cell(right_kind, right)) => {
+                left_kind == right_kind && compare(left, right, forward, reverse)
+            }
+            (Ty::Thread(left_kind, left), Ty::Thread(right_kind, right)) => {
                 left_kind == right_kind && compare(left, right, forward, reverse)
             }
             (Ty::Keyed(left_kind, left), Ty::Keyed(right_kind, right)) => {
@@ -9869,12 +9936,13 @@ impl Inference {
             Ty::Boxed(target) => Ty::Boxed(Box::new(self.resolve(target))),
             Ty::Counted(counter, target) => Ty::Counted(*counter, Box::new(self.resolve(target))),
             Ty::Weak(counter, target) => Ty::Weak(*counter, Box::new(self.resolve(target))),
-            Ty::Iter(item) => Ty::Iter(Box::new(self.resolve(item))),
+            Ty::Iter(item, std) => Ty::Iter(Box::new(self.resolve(item)), *std),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
             Ty::Cow(inner) => Ty::Cow(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
             Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(self.resolve(element))),
             Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(self.resolve(inner))),
+            Ty::Thread(kind, inner) => Ty::Thread(*kind, Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
                 *kind,
                 arguments
@@ -10001,7 +10069,7 @@ impl Inference {
             && let Some(item) =
                 self.associated_equality(&base, trait_name, name, is_iterator_trait, "Item")
         {
-            return Ty::Iter(Box::new(item));
+            return Ty::iter(item);
         }
         // `T::Fore` of `type Fore: Iterator;` is an iterator of the opaque
         // `<T::Fore as Iterator>::Item`, as rustc types its items (T379).
@@ -10012,11 +10080,11 @@ impl Inference {
                 .contains(&(trait_name.clone(), name.clone()))
         {
             let fore = Ty::Projection(Box::new(base), trait_name.clone(), name.clone());
-            return Ty::Iter(Box::new(Ty::Projection(
+            return Ty::iter(Ty::Projection(
                 Box::new(fore),
                 "Iterator".into(),
                 "Item".into(),
-            )));
+            ));
         }
         Ty::Projection(Box::new(base), trait_name.clone(), name.clone())
     }
@@ -11058,12 +11126,13 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         Ty::Weak(counter, target) => {
             Ty::Weak(*counter, Box::new(instantiate(target, substitution)))
         }
-        Ty::Iter(item) => Ty::Iter(Box::new(instantiate(item, substitution))),
+        Ty::Iter(item, std) => Ty::Iter(Box::new(instantiate(item, substitution)), *std),
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
         Ty::Cow(inner) => Ty::Cow(Box::new(instantiate(inner, substitution))),
         Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
         Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(instantiate(element, substitution))),
         Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(instantiate(inner, substitution))),
+        Ty::Thread(kind, inner) => Ty::Thread(*kind, Box::new(instantiate(inner, substitution))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
             *kind,
             arguments
@@ -11856,6 +11925,14 @@ struct Parser<'a> {
     closures: Vec<ClosureScope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
     moved_at: BTreeMap<Span, Span>,
+    /// The type of a capture rawr knows isn't `Send`, of each closure
+    /// that has one, by the closure's span: what `std::thread::spawn`
+    /// refuses (`thread.rs`).
+    unsent_captures: BTreeMap<Span, Ty>,
+    /// A local a closure that isn't `move` borrows, of each closure that
+    /// borrows one, by the closure's span: what a `'static` bound refuses
+    /// (rustc's E0373), as `std::thread::spawn`'s does.
+    borrowed_captures: BTreeMap<Span, ImmutableString>,
     /// The locals `let x;` declares without a value, by their declaration,
     /// with their first assignment once one is parsed: a use before an
     /// assignment gives one a value is rustc's E0381, and one not declared
@@ -12314,6 +12391,8 @@ impl<'a> Parser<'a> {
             loops: Vec::new(),
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
+            unsent_captures: BTreeMap::new(),
+            borrowed_captures: BTreeMap::new(),
             deferred: BTreeMap::new(),
             uninitialized: Vec::new(),
             local_types: Vec::new(),
@@ -13957,6 +14036,21 @@ impl<'a> Parser<'a> {
                         required_by: None,
                     });
                 }
+                // rustc names the innermost type std's impls needed it
+                // of: `Vec<i32>` of `Rc<Vec<i32>>: Display`.
+                let ty = match trait_name.as_str() {
+                    "Display" if self.std_declared(&ty) => std_impl::holds(
+                        &mut std_impl::Probe(self),
+                        "core::fmt::Display",
+                        &ty,
+                        &[],
+                        true,
+                        0,
+                    )
+                    .err()
+                    .map_or(ty, |(inner, _)| inner),
+                    _ => ty,
+                };
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
                     capability: trait_name,
@@ -14229,23 +14323,19 @@ impl<'a> Parser<'a> {
     /// Write each generic trait call's instance dispatcher over its
     /// placeholder, now that inference knows the trait's arguments.
     /// Before the literal fallback, as Rust selects impls: a trait
-    /// argument that is a literal's `{integer}` or `{float}` takes the type
-    /// of the one impl of that kind whose other arguments match.
+    /// argument that holds a literal's `{integer}` or `{float}` (`&[{integer}]`
+    /// of `Color::try_from(&v[..])`) takes the types of the one impl whose
+    /// arguments it unifies with.
     fn settle_instance_literals(&mut self) {
         for (_, trait_name, _, arguments, _, _) in self.pending_instances.clone() {
             let arguments = arguments
                 .iter()
                 .map(|ty| self.inference.resolve(ty))
                 .collect::<Vec<_>>();
-            let literal = |ty: &Ty| match ty {
-                Ty::Int(Int::Var(id)) => Some((*id, true)),
-                Ty::Float(Float::Var(id)) => Some((*id, false)),
-                _ => None,
-            };
-            if !arguments.iter().any(|argument| literal(argument).is_some()) {
+            if !arguments.iter().any(contains_open_literal) {
                 continue;
             }
-            let Some(instances) = self.models.trait_instances.get(&trait_name) else {
+            let Some(instances) = self.models.trait_instances.get(&trait_name).cloned() else {
                 continue;
             };
             let matching = instances
@@ -14253,21 +14343,15 @@ impl<'a> Parser<'a> {
                 .map(|instance| instance.iter().map(Ty::from_resolved).collect::<Vec<_>>())
                 .filter(|instance| {
                     instance.len() == arguments.len()
-                        && instance.iter().zip(&arguments).all(|(instance, argument)| {
-                            match (literal(argument), instance) {
-                                (Some((_, true)), Ty::Int(_))
-                                | (Some((_, false)), Ty::Float(_)) => true,
-                                (Some(_), _) => false,
-                                (None, instance) => instance == argument,
-                            }
-                        })
+                        && instance
+                            .iter()
+                            .zip(&arguments)
+                            .all(|(instance, argument)| self.unifies(instance, argument))
                 })
                 .collect::<Vec<_>>();
             if let [instance] = &matching[..] {
                 for (argument, ty) in arguments.iter().zip(instance) {
-                    if let Some((id, _)) = literal(argument) {
-                        self.inference.bind(id, ty.clone());
-                    }
+                    self.unify_type(ty, argument);
                 }
             }
         }
@@ -14539,7 +14623,7 @@ impl<'a> Parser<'a> {
             }
             Ty::Script(id, _) if self.models.implements(trait_name, *id) => true,
             // Rawr's iterator type: a `Range`, a chain, `impl Iterator`.
-            Ty::Iter(_) if is_iterator_trait(trait_name) => true,
+            Ty::Iter(..) if is_iterator_trait(trait_name) => true,
             // An imported type the crate implements `Iterator`,
             // `PartialOrd` or `Ord` for.
             Ty::Host { proof, .. }
@@ -14567,6 +14651,22 @@ impl<'a> Parser<'a> {
                 if trait_name == "Display" && self.models.std_traits.contains(trait_name) =>
             {
                 true
+            }
+            // std's other `Display` impls, from the std table: `Rc<T>`,
+            // `Box<T>`, `&T` and `Cow<'_, B>` where what they hold is.
+            ty if trait_name == "Display"
+                && self.models.std_traits.contains(trait_name)
+                && self.std_declared(ty) =>
+            {
+                std_impl::holds(
+                    &mut std_impl::Probe(self),
+                    "core::fmt::Display",
+                    ty,
+                    &[],
+                    true,
+                    0,
+                )
+                .is_ok()
             }
             // `impl<T: For + Copy> For for &T` forwarding to `T`'s impl
             // (`resolve::forward`): `&T` implements it where `T` does and
@@ -14937,6 +15037,9 @@ impl<'a> Parser<'a> {
             ),
             // A `ParseIntError` and kin is its message.
             Ty::ParseError(error) => Some(self.parse_error_display(*error, value)),
+            Ty::Thread(thread::Kind::SendError | thread::Kind::RecvError, _) => {
+                Some(self.thread_text(value, false))
+            }
             // A `Cow` writes what it derefs to.
             Ty::Cow(borrowed) => {
                 let payload = self.prelude_op(PreludeOp::CowValue, [value]);
@@ -15139,7 +15242,7 @@ impl<'a> Parser<'a> {
                 }
                 // Rawr's iterator type stands for the projection
                 // (`Inference::project`), so the impl's type must be one.
-                let Ty::Iter(item) = self.inference.resolve(ty) else {
+                let Ty::Iter(item, _) = self.inference.resolve(ty) else {
                     return Err(Error::UnsupportedNominalSyntax {
                         construct: format!(
                             "`{}` as an associated type bounded by `{bound}<Item = ..>`: Rawr \
@@ -18372,6 +18475,29 @@ impl<'a> Parser<'a> {
             // `Eq` when `T` is, and never `Copy`. `Cell<T>` reads its value
             // by copy, so its `Clone`, `Debug`, `PartialEq` and `Eq` also
             // need `T: Copy`.
+            // A `Mutex<T>` is `Default` and `Debug` when `T` is, and
+            // `Send` and `Sync` when `T` is `Send`: it never compares,
+            // hashes or copies, and never `Clone`s.
+            Ty::Cell(CellKind::Mutex, inner) => {
+                matches!(
+                    capability,
+                    capability::Kind::Default
+                        | capability::Kind::Debug
+                        | capability::Kind::Send
+                        | capability::Kind::Static
+                ) && self.type_provides(&inner, capability)
+            }
+            // std's thread and channel handles are `Debug`, `Send` and
+            // `'static` as their values are, and a `Sender` is `Clone`.
+            Ty::Thread(kind, inner) => match capability {
+                capability::Kind::Debug => true,
+                capability::Kind::Clone => kind.clones(),
+                capability::Kind::Send if !kind.sends() => true,
+                capability::Kind::Send | capability::Kind::Static => {
+                    self.type_provides(&inner, capability)
+                }
+                _ => false,
+            },
             Ty::Cell(kind, inner) => {
                 capability != capability::Kind::Copy
                     && capability != capability::Kind::Hash
@@ -18387,7 +18513,7 @@ impl<'a> Parser<'a> {
             }
             // Rawr's iterators are iterators, and `Clone` when their items
             // are.
-            Ty::Iter(item) => {
+            Ty::Iter(item, _) => {
                 capability == capability::Kind::Iterator
                     || capability == capability::Kind::Clone
                         && self.type_provides(&item, capability)
@@ -18476,7 +18602,7 @@ impl<'a> Parser<'a> {
                 intrinsic::Type::array(self.proven_type(&element, operation, span)?, kind.length())
             }
             // An iterator a host gives is the array of its items.
-            Ty::Iter(element) => {
+            Ty::Iter(element, _) => {
                 intrinsic::Type::array(self.proven_type(&element, operation, span)?, None)
             }
             // `None` where the host takes an `Option` of a callable: no item
@@ -18534,6 +18660,7 @@ impl<'a> Parser<'a> {
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
             Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
+            Ty::Thread(..) => return Err(unpassable(ty.name(&self.models), operation, span)),
             Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } | Ty::Callable { .. } => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
@@ -20333,14 +20460,14 @@ impl<'a> Parser<'a> {
                     originating,
                 )?),
             ),
-            Shape::Iter(element) => Ty::Iter(Box::new(self.instantiate_host_type(
+            Shape::Iter(element) => Ty::iter(self.instantiate_host_type(
                 element,
                 parameters,
                 operation,
                 span,
                 owner,
                 originating,
-            )?)),
+            )?),
             Shape::Range(element) => Ty::Range(Box::new(self.instantiate_host_type(
                 element,
                 parameters,
@@ -20819,7 +20946,7 @@ impl<'a> Parser<'a> {
                     kind: sequence::Kind::Vec,
                     ..
                 },
-                Ty::Iter(item),
+                Ty::Iter(item, _),
             ) = (
                 self.inference.resolve(expected),
                 self.inference.resolve(&argument.ty),
@@ -23613,7 +23740,7 @@ impl<'a> Parser<'a> {
                 | Ty::Never
                 | Ty::Reference { .. }
                 | Ty::Dyn(..)
-                | Ty::Iter(_)
+                | Ty::Iter(..)
                 | Ty::Callable { .. }
                 | Ty::Param(_)
                 | Ty::Projection(..)
@@ -24559,7 +24686,7 @@ impl<'a> Parser<'a> {
         // An immutable local iterator stays its chain: what it evaluates is
         // evaluated here, and each use runs it.
         let bound = match self.inference.resolve(&ty) {
-            Ty::Iter(item) if !mutable && value.prelude.is_empty() => self
+            Ty::Iter(item, _) if !mutable && value.prelude.is_empty() => self
                 .pipelines
                 .get(value.source.as_str())
                 .cloned()
@@ -25356,7 +25483,10 @@ impl<'a> Parser<'a> {
             (String::new(), discarded)
         } else {
             let whole = self.temporary("pattern");
-            let mut rendered = origin::Fragment::plain(format!("const {whole} = "));
+            // A value holding a pointer or a channel's handle is no `const`,
+            // whose copy would count (`binding_keyword`).
+            let keyword = self.binding_keyword(false, &ty);
+            let mut rendered = origin::Fragment::plain(format!("{keyword} {whole} = "));
             let temporaries = self.close_temporaries();
             let made = self.with_temporaries(&temporaries, value.rendered_source());
             rendered.push(made);
@@ -29021,7 +29151,9 @@ impl<'a> Parser<'a> {
             if value && self.deferred.contains_key(&binding.declaration) {
                 binding.available = after.is_some_and(|after| after.available);
             } else {
-                binding.available &= inner.get(name).is_some_and(|binding| binding.available);
+                // A local the body shadowed keeps its own state, as
+                // `let tx = tx.clone();` leaves `tx` whole.
+                binding.available &= after.is_none_or(|after| after.available);
             }
         }
         self.require_type(&Ty::Unit, &body.value.ty, body.value.span)?;
@@ -29604,9 +29736,25 @@ impl<'a> Parser<'a> {
         self.loop_element = Some((iterator, element, positions, Vec::new()));
         // A `Box<dyn Iterator>` is its iterator at runtime.
         if let Ty::Boxed(inner) = self.inference.resolve(&lhs.ty)
-            && let iterator @ Ty::Iter(_) = self.inference.resolve(&inner)
+            && let iterator @ Ty::Iter(..) = self.inference.resolve(&inner)
         {
             lhs.ty = iterator;
+        }
+        // `for v in rx` and `for v in &rx`: what the channel receives, each
+        // as it comes, while a sender is left. The first takes `rx`.
+        let receiver = match self.inference.resolve(&lhs.ty) {
+            Ty::Thread(thread::Kind::Receiver, item) => Some((*item, true)),
+            Ty::Reference { target, .. } => match *target {
+                Ty::Thread(thread::Kind::Receiver, item) => Some((*item, false)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((item, owned)) = receiver {
+            if owned {
+                self.move_local(&mut lhs)?;
+            }
+            lhs = self.received(lhs.rendered_source(), item, lhs.span);
         }
         let operator = match self.peek() {
             Token::ExclusiveRange => "..",
@@ -29614,7 +29762,7 @@ impl<'a> Parser<'a> {
             _ => {
                 // An iterator chain of one loop runs the body in it.
                 let iterated = self.inference.resolve(&lhs.ty);
-                if (matches!(iterated, Ty::Iter(_) | Ty::InclusiveRange)
+                if (matches!(iterated, Ty::Iter(..) | Ty::InclusiveRange)
                     || (iterated.script().is_some() || matches!(iterated, Ty::Host { .. }))
                         && self.type_implements(&iterated, "Iterator"))
                     && let Some((pipeline, item)) = self.for_pipeline(&lhs)
@@ -29649,7 +29797,7 @@ impl<'a> Parser<'a> {
                 }
                 // `for x in v` takes each element; `&v` and `v.iter()` borrow it.
                 let ty = match self.inference.resolve(&lhs.ty) {
-                    Ty::Iter(item) => *item,
+                    Ty::Iter(item, _) => *item,
                     Ty::Array { element, .. } => *element,
                     Ty::Keyed(kind, arguments) => keyed::keyed_item(kind, &arguments, None),
                     Ty::Reference { mutable, target } => match *target {
@@ -33899,7 +34047,7 @@ impl<'a> Parser<'a> {
         if parameter
             .iterator_item()
             .is_some_and(|(_, into)| into || iterator(self, &argument.ty))
-            && !matches!(self.inference.resolve(&argument.ty), Ty::Iter(_))
+            && !matches!(self.inference.resolve(&argument.ty), Ty::Iter(..))
             && let Some(iterator) = self.iterator_of(argument)
         {
             *argument = iterator;
@@ -34072,6 +34220,9 @@ impl<'a> Parser<'a> {
                                 // as the expression `name` reads, followed
                                 // by a `,` so nothing after the macro
                                 // continues it.
+                                // A closure around the macro captures a
+                                // local of the name, as one naming it does.
+                                this.record_capture(&name.as_str().into());
                                 let Some(binding) = this.bindings.get(name.as_str()) else {
                                     let at = expression.start();
                                     // `{self:?}` in a method reads its
@@ -37210,8 +37361,24 @@ impl<'a> Parser<'a> {
                 value = self.parse_plain_cell_member(value, inner, member, member_span)?;
                 continue;
             }
+            if let Some((CellKind::Mutex, inner)) = cell {
+                value = self.parse_mutex_member(value, inner, member, member_span)?;
+                continue;
+            }
             if let Some((_, inner)) = cell {
                 value = self.parse_cell_member(value, inner, member, member_span)?;
+                continue;
+            }
+            let thread = match &builtin {
+                Ty::Thread(kind, inner) => Some((*kind, (**inner).clone())),
+                Ty::Reference { target, .. } => match &**target {
+                    Ty::Thread(kind, inner) => Some((*kind, (**inner).clone())),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some((kind, inner)) = thread {
+                value = self.parse_thread_member(value, kind, inner, member, member_span)?;
                 continue;
             }
             let tuple = match &builtin {
@@ -38808,6 +38975,22 @@ impl<'a> Parser<'a> {
             }
             return Ok(self.literal("()", Ty::Unit, span(name_span.start(), end)));
         }
+        // `spawn(f)` and `channel()` imported from `std::thread` and
+        // `std::sync::mpsc`, unless a local or the program names them.
+        if !self.bindings.contains_key(name.as_str())
+            && self.models.function(&name).is_none()
+            && matches!(
+                self.peek(),
+                Token::LeftParen | Token::Unit | Token::DoubleColon
+            )
+            && let Some(binding) = self.models.import(&name)
+        {
+            match binding.qualified.as_str() {
+                "std::thread::spawn" => return self.parse_thread_spawn(name_span.start()),
+                "std::sync::mpsc::channel" => return self.parse_channel(name_span.start()),
+                _ => {}
+            }
+        }
         // `std::thread::sleep(duration)`, `thread::sleep`, `sleep`.
         if let Some(skip) = self.sleep_path(&name) {
             for _ in 0..skip {
@@ -40342,7 +40525,7 @@ impl<'a> Parser<'a> {
                         .extend(bound.names.iter().map(|name| name.as_str().into()));
                 }
             }
-            let ty = Ty::Iter(Box::new(bound.item.clone()));
+            let ty = Ty::iter(bound.item.clone());
             let mut value = self.iterator_expr(bound.pipeline, bound.item, name_span);
             value.lvalue = Some(Lvalue::Binding { binding: name, ty });
             return Ok(value);
@@ -43532,6 +43715,12 @@ impl<'a> Parser<'a> {
                 self.debug_source(inner, unwrapped, span)?
                     .surrounded("(\"Reverse(\" + ", " + \")\")")
             }
+            // std's `Debug` of a `Mutex` no thread poisoned.
+            Ty::Cell(CellKind::Mutex, inner) => {
+                let unwrapped = self.prelude_op(PreludeOp::CellGet, [value]);
+                self.debug_source(inner, unwrapped, span)?
+                    .surrounded("(\"Mutex { data: \" + ", " + \", poisoned: false, .. }\")")
+            }
             Ty::Cell(kind, inner) => {
                 let unwrapped = self.prelude_op(PreludeOp::CellGet, [value]);
                 let open = format!("(\"{} {{ value: \" + ", kind.name());
@@ -43588,6 +43777,7 @@ impl<'a> Parser<'a> {
                 });
                 origin::Fragment::call(&helper, [value])
             }
+            Ty::Thread(..) => self.thread_text(value, true),
             // A local's type nothing has given yet, as the element of a
             // `Vec::new()` only `.into()`s go in: rustc needs it (E0282).
             Ty::Infer(_) if let Some(error) = self.unsettled(&ty, span, None) => {
@@ -43779,7 +43969,7 @@ impl<'a> Parser<'a> {
             operands.push(inclusive.to_string().into());
             let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
             let source = self.mutation_call(&value, &helper, operands)?;
-            let ty = Ty::Iter(Box::new(element));
+            let ty = Ty::iter(element);
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }
         // A deque's `range(r)`: an iterator over references to the
@@ -45224,6 +45414,28 @@ impl<'a> Parser<'a> {
             let mut flow = self.flow();
             flow.set_origins(expression, closure.origins.clone());
             flow.set_closure_keeps(expression, closure.keeps.clone());
+        }
+        if let Some(ty) = scope
+            .captures
+            .iter()
+            .filter_map(|name| self.bindings.get(name.as_str()))
+            .map(|binding| self.inference.resolve(&binding.ty))
+            .find(|ty| self.not_send(ty))
+        {
+            self.unsent_captures.insert(expression, ty);
+        }
+        if !moved
+            && let Some(name) = scope
+                .captures
+                .iter()
+                .find(|name| !scope.consumed.contains(*name))
+        {
+            let name = if name == "this" {
+                "self".into()
+            } else {
+                name.clone()
+            };
+            self.borrowed_captures.insert(expression, name);
         }
         // `move` moves each captured place that is not `Copy` into the
         // closure as it is created, and copies the others: a field leaves
@@ -48130,17 +48342,15 @@ impl<'a> Parser<'a> {
                     source: span(first_span.start(), path_end),
                 });
             }
-            // `std::thread::spawn(f).join()` waits for `f` where it is
-            // called, and Rawr runs a closure off the UI thread only as a
-            // task, whose output reaches `update`.
-            if full == "std::thread::spawn" {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "`std::thread::spawn`, whose `join` waits on the calling thread; \
-                                in an iced program, run blocking work with \
-                                `Task::perform(tokio::task::spawn_blocking(move || ..), ..)`"
-                        .into(),
-                    source: span(first_span.start(), path_end),
-                });
+            // `std::thread::spawn(f)` and `std::sync::mpsc::channel()`.
+            let turbofish = matches!(self.peek(), Token::DoubleColon)
+                && matches!(self.peek_second(), Token::LessThan);
+            if matches!(self.peek(), Token::LeftParen | Token::Unit) || turbofish {
+                match full.as_str() {
+                    "std::thread::spawn" => return self.parse_thread_spawn(first_span.start()),
+                    "std::sync::mpsc::channel" => return self.parse_channel(first_span.start()),
+                    _ => {}
+                }
             }
             // `tokio::time::sleep(d)` without tokio: the facade's own
             // (`resolve::std_reexport`).
@@ -49689,7 +49899,7 @@ impl<'a> Parser<'a> {
         let element = self.parse_local_type()?;
         self.expect_close_angle("'>' after a range type's element")?;
         if range != "RangeInclusive" {
-            return Ok(Ty::Iter(Box::new(element)));
+            return Ok(Ty::iter(element));
         }
         Ok(match element {
             Ty::Float(_) => Ty::FloatRange,
@@ -50473,7 +50683,7 @@ impl<'a> Parser<'a> {
         {
             return match (&positional[..], &mut bindings[..]) {
                 ([], [(name, item)]) if name.as_str() == "Item" => {
-                    Ok(Ty::Iter(Box::new(std::mem::replace(item, Ty::Unknown))))
+                    Ok(Ty::iter(std::mem::replace(item, Ty::Unknown)))
                 }
                 _ => Err(Error::UnsupportedNominalSyntax {
                     construct: format!("`dyn {trait_name}` without its `<Item = T>`").into(),
@@ -51095,7 +51305,7 @@ impl<'a> Parser<'a> {
         };
         let target_element = self.inference.resolve(target_element);
         let source_element = match source {
-            Ty::Array { element, .. } | Ty::Iter(element) => self.inference.resolve(element),
+            Ty::Array { element, .. } | Ty::Iter(element, _) => self.inference.resolve(element),
             _ => return Ok(false),
         };
         let fixed = matches!(
@@ -51105,7 +51315,7 @@ impl<'a> Parser<'a> {
                 ..
             }
         );
-        let iterator = matches!(source, Ty::Iter(_));
+        let iterator = matches!(source, Ty::Iter(..));
         // iced's `keyed_column(pairs)`: an iterator of `(key, Element)`
         // pairs, a facade slice of tuples that hold a widget.
         if iterator
@@ -51954,7 +52164,7 @@ impl<'a> Parser<'a> {
                     && self.unify_type(expected_element, actual_element)
             }
             (Ty::Option(expected_element), Ty::Option(actual_element))
-            | (Ty::Iter(expected_element), Ty::Iter(actual_element))
+            | (Ty::Iter(expected_element, _), Ty::Iter(actual_element, _))
             | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
             | (Ty::Cow(expected_element), Ty::Cow(actual_element))
             | (Ty::Range(expected_element), Ty::Range(actual_element))
@@ -51964,6 +52174,10 @@ impl<'a> Parser<'a> {
             (Ty::Cell(expected_kind, expected_element), Ty::Cell(actual_kind, actual_element)) => {
                 expected_kind == actual_kind && self.unify_type(expected_element, actual_element)
             }
+            (
+                Ty::Thread(expected_kind, expected_element),
+                Ty::Thread(actual_kind, actual_element),
+            ) => expected_kind == actual_kind && self.unify_type(expected_element, actual_element),
             (Ty::Result(expected_ok, expected_err), Ty::Result(actual_ok, actual_err)) => {
                 self.unify_type(expected_ok, actual_ok) && self.unify_type(expected_err, actual_err)
             }
@@ -53306,7 +53520,6 @@ fn contains_inference(ty: &Ty) -> bool {
 
 /// Whether `ty` holds a literal whose kind is still open: `{integer}` or
 /// `{float}`, which only the end of its body settles.
-#[cfg(feature = "rust-import")]
 fn contains_open_literal(ty: &Ty) -> bool {
     contains(ty, &|ty| {
         matches!(ty, Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_)))
@@ -53320,7 +53533,7 @@ fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
         || match ty {
             Ty::Reference { target, .. }
             | Ty::Boxed(target)
-            | Ty::Iter(target)
+            | Ty::Iter(target, _)
             | Ty::Reverse(target)
             | Ty::Cow(target)
             | Ty::Range(target)
@@ -53885,6 +54098,13 @@ fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> Str
         return "(Weak)".into();
     }
     if let Some((name, inner)) = cell::named_value(value) {
+        // std's `Debug` of a `Mutex` no thread poisoned.
+        if cell::is_mutex(value) {
+            return format!(
+                "Mutex {{ data: {}, poisoned: false, .. }}",
+                debug_value_spec(&inner, models, spec)
+            );
+        }
         return format!(
             "{name} {{ value: {} }}",
             debug_value_spec(&inner, models, spec)

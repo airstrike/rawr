@@ -699,8 +699,9 @@ impl Parser<'_> {
             | Ty::Option(inner)
             | Ty::Array { element: inner, .. }
             | Ty::Reverse(inner)
-            | Ty::Iter(inner)
+            | Ty::Iter(inner, _)
             | Ty::Cell(_, inner) => self.not_send_in(&inner, visiting),
+            Ty::Thread(kind, inner) => kind.sends() && self.not_send_in(&inner, visiting),
             Ty::Result(ok, err) => {
                 self.not_send_in(&ok, visiting) || self.not_send_in(&err, visiting)
             }
@@ -745,6 +746,10 @@ impl Parser<'_> {
 
     fn sync_in(&self, ty: &Ty, visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>) -> bool {
         match self.inference.resolve(ty) {
+            // A `Mutex<T>` is `Sync` where `T` is `Send`, as a `Sender`
+            // is; a `Receiver` never is.
+            Ty::Cell(CellKind::Mutex, inner) => !self.not_send(&inner),
+            Ty::Thread(kind, inner) => kind.syncs() && !self.not_send(&inner),
             Ty::Cell(..) | Ty::Counted(Counter::Rc, _) | Ty::Weak(Counter::Rc, _) => false,
             Ty::Counted(Counter::Arc, inner) | Ty::Weak(Counter::Arc, inner) => {
                 self.sync_in(&inner, visiting) && !self.not_send(&inner)
@@ -755,7 +760,7 @@ impl Parser<'_> {
             | Ty::Option(inner)
             | Ty::Array { element: inner, .. }
             | Ty::Reverse(inner)
-            | Ty::Iter(inner) => self.sync_in(&inner, visiting),
+            | Ty::Iter(inner, _) => self.sync_in(&inner, visiting),
             Ty::Result(ok, err) => self.sync_in(&ok, visiting) && self.sync_in(&err, visiting),
             Ty::Tuple(members) | Ty::Keyed(_, members) => {
                 members.iter().all(|member| self.sync_in(member, visiting))
@@ -793,12 +798,14 @@ impl Parser<'_> {
 
     fn holds_counted(&self, ty: &Ty, visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>) -> bool {
         match self.inference.resolve(ty) {
-            Ty::Counted(..) | Ty::Weak(..) => true,
+            // A thread or channel handle is moved on, never copied: a copy of
+            // a `Sender` would keep its channel open.
+            Ty::Counted(..) | Ty::Weak(..) | Ty::Thread(..) => true,
             Ty::Boxed(inner)
             | Ty::Option(inner)
             | Ty::Array { element: inner, .. }
             | Ty::Reverse(inner)
-            | Ty::Iter(inner)
+            | Ty::Iter(inner, _)
             | Ty::Cell(_, inner) => self.holds_counted(&inner, visiting),
             Ty::Result(ok, err) => {
                 self.holds_counted(&ok, visiting) || self.holds_counted(&err, visiting)
