@@ -1458,6 +1458,24 @@ macro_rules! color {
     };
 }
 
+/// A point, as iced's `Point`, whose name a type of `parts` this crate
+/// doesn't re-export shares, as tiny_skia's `Point` does iced's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    /// Its x.
+    pub x: f32,
+    /// Its y.
+    pub y: f32,
+}
+
+/// The soft renderer's point at `point`: the only path to `parts::Point`.
+pub fn soft(point: Point) -> parts::Point {
+    parts::Point {
+        x: point.x,
+        y: point.y,
+    }
+}
+
 /// `color` as a crate takes a color: anything that converts into one, as
 /// iced's `text(..).color(..)` takes `impl Into<Color>`.
 pub fn paint(color: impl Into<Color>) -> String {

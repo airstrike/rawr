@@ -841,6 +841,17 @@ fn a_view_whose_widgets_borrow_nothing_is_made_at_the_views_lifetime() {
     );
 }
 
+/// iced's sierpinski_triangle: the crate's `Point` shares its name with a
+/// type of another crate the root reaches only through a signature, as
+/// iced's does tiny_skia's. Its fields, its pattern and its literal are the
+/// crate's own type's (#954). The output is `cargo run`'s.
+#[test]
+fn a_crate_type_whose_name_another_crates_type_shares_crosses() {
+    let (rawr, cargo) = both_printed("pointed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "1.5 2 1.5 2 1.5 2", "{rawr}");
+}
+
 /// iced's gradient and custom_quad: a crate macro makes a crate struct
 /// through the crate's own path (`$crate::Color`), and the program reads
 /// its fields, destructures it and builds one from it at its public path:
