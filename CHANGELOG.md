@@ -6,6 +6,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.137 (2026-11-05)
+
+- A `let` may leave out its value (`let x;`, `let x: i32;`). A later assignment gives the local its value, and its type if the `let` names none. A use before that is rustc's E0381, also after a branch that may not have assigned it. A second assignment to a local not declared `mut` is E0384. A borrow the assignment stores is checked like any other borrow (E0597). (#149)
+- An integer literal its type can't hold, such as `let x: u8 = 300;` or `-129i8`, is refused with rustc's deny-by-default `overflowing_literals` error, worded as rustc words it. (#932)
+- A path into a module that has no such item, such as `snacks::FRUIT`, is rustc's E0425 "cannot find value `FRUIT` in module `snacks`". It was E0432. (#933)
+- Errors come in the order rustc gives them: impl methods are checked in source order with free functions. A number's `.into()` converts to the type its use needs. A type nothing settles is E0282 or E0283, as for `Vec::new()` with only `.into()`s pushed, or a method of `let x = todo!();`. `Result<T, _>` from `try_into()` takes the impl's error type. `Cow<[T]>` indexes and comes from `&Vec<T>` and `Vec<T>`. `todo!()` in a pattern is E0532. (#934)
+
 ## 0.3.136 (2026-11-05)
 
 - `collect()` into a `Result` or an `Option` works, including when the target comes only from the return type, and stops at the first `Err` or `None` as Rust does. A set or map collected from the return type is built as one. `let Ok(x) = s.parse() else { .. }` with a target a later use gives no longer panics. (#906)
