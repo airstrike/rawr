@@ -667,7 +667,20 @@ fn structural_path<'facade>(
                     }
                     continue;
                 }
-                Some((first_path, _, first)) => panic!("one structural adapter selector names one item: RAWRDEBUG {first_path} {} and {} {} owner {} kind {:?}", first.is_some(), definition.path(), identity.is_some(), row.owner, row.kind),
+                // Two types whose paths end in the owner's, as `iced::Point`
+                // and tiny_skia's `Point` reached through its hidden
+                // segment: the one at the owner's own path below the root
+                // is the one the row names (#954).
+                Some((first_path, _, _)) => {
+                    let named = |path: &host::path::Path| {
+                        path.to_string() == format!("{}::{}", row.root, row.owner)
+                    };
+                    match (named(first_path), named(definition.path_ref())) {
+                        (true, false) => {}
+                        (false, true) => found = Some((definition.path_ref(), kind, identity)),
+                        _ => panic!("one structural adapter selector names one item"),
+                    }
+                }
                 None => found = Some((definition.path_ref(), kind, identity)),
             }
         }
