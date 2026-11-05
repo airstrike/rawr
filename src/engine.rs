@@ -219,6 +219,11 @@ pub struct Engine {
     /// ([`DebuggerEvent::Break`][crate::debugger::DebuggerEvent::Break]).
     #[cfg(feature = "debugging")]
     pub(crate) debugger_breaks: Option<std::sync::Arc<crate::eval::BreakPositions>>,
+
+    /// Whether the engine lives as long as the process ([`Engine::leak`]),
+    /// so an evaluation leaves the threads it spawned running when it
+    /// returns, as a Rust program's `main` does.
+    pub(crate) lasting: bool,
 }
 
 impl fmt::Debug for Engine {
@@ -358,7 +363,19 @@ impl Engine {
         debugger_wake: None,
         #[cfg(feature = "debugging")]
         debugger_breaks: None,
+
+        lasting: false,
     };
+
+    /// The engine for the rest of the process. An evaluation returns as
+    /// soon as it is done, leaving the threads its program spawned
+    /// running, as a Rust program's `main` returns; the process ends them
+    /// when it exits. A borrowed engine's evaluation joins them first.
+    #[must_use]
+    pub fn leak(mut self) -> &'static mut Self {
+        self.lasting = true;
+        Box::leak(Box::new(self))
+    }
 
     /// Create a new [`Engine`].
     #[inline]

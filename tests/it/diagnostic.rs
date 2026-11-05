@@ -116,7 +116,7 @@ fn std_path_errors_carry_rustcs_codes() {
         ("fn f() { core::thread::sleep(); }\n", "E0433", "cannot find `thread` in `core`"),
         ("struct S { at: core::time::Instant }\n", "E0425", "cannot find type `Instant` in module `core::time`"),
         ("use std::intrinsics::abort;\n", "E0658", "use of unstable library feature `core_intrinsics`"),
-        ("struct S { lock: std::sync::Mutex<i64> }\n", "RAWR-NOT-YET", "rawr doesn't run `std::sync::Mutex` yet"),
+        ("struct S { lock: std::sync::RwLock<i64> }\n", "RAWR-NOT-YET", "rawr doesn't run `std::sync::RwLock` yet"),
     ] {
         let error = Engine::new().compile(text).unwrap_err();
         let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();

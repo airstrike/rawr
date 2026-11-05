@@ -176,10 +176,12 @@ pub enum Failed {
 pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     let Loaded { target, graph, .. } = loaded;
     let target = &target;
-    let mut engine = engine(Build::Program);
+    // The process exits when `main` returns, ending the threads the program
+    // left running, as a Rust program's does.
+    let engine = engine(Build::Program).leak();
     // The debugger is registered before the program compiles, so only a
     // program a debugger reads carries what reading needs (#526).
-    let inspector = inspector(&mut engine);
+    let inspector = inspector(engine);
     let (ast, main, positions) = engine
         .compile_package_with_positions(graph)
         .map_err(|error| Failed::Compile(compile_report(&error, target)))?;
