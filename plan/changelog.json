@@ -8,6 +8,16 @@
   },
   "releases": [
     {
+      "version": "0.3.136",
+      "date": "2026-11-05",
+      "entries": [
+        {"text":"`collect()` into a `Result` or an `Option` works, including when the target comes only from the return type, and stops at the first `Err` or `None` as Rust does. A set or map collected from the return type is built as one. `let Ok(x) = s.parse() else { .. }` with a target a later use gives no longer panics.","issues":[906]},
+        {"text":"A `mut self` or `&mut self` method on a std type can change it (`self.push(..)`), and a changing method runs on a temporary (`vec![..].resize(0, 5)`), as in Rust.","issues":[907]},
+        {"text":"A struct or enum that holds itself by value is refused with rustc's E0072, and a `collect()` whose items its target can't be built from gets rustc's E0277, even in a function nothing calls.","issues":[911]},
+        {"text":"Starting rawr is quick again: building the std bindings takes about 20 ms instead of 0.35 s with a release build, so `rawr check`, a restart on save and a program started from `rawr mcp` no longer wait on it.","issues":[931]}
+      ]
+    },
+    {
       "version": "0.3.135",
       "date": "2026-11-05",
       "entries": [
