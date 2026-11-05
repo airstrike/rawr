@@ -11056,10 +11056,10 @@ fn render_scoped_receiver(
             None => return Ok(()),
         },
     };
-    // A boxed receiver's call is its trait's method, which boxes what it
-    // gives in turn when the region holds that boxed too.
-    let (call, boxes) = match call {
-        Some(call) => (call, false),
+    // A boxed receiver's call is its trait's method (`family::Ops`), which
+    // gives its output as the region holds it.
+    let (call, ops) = match call {
+        Some(call) => (call, true),
         None => (
             scoped_receiver_call(
                 plan,
@@ -11069,7 +11069,7 @@ fn render_scoped_receiver(
                 constants,
                 container_parameters,
             )?,
-            true,
+            false,
         ),
     };
     let reach = match receiver {
@@ -11080,14 +11080,14 @@ fn render_scoped_receiver(
     let reached = family.call(reach, "scoped");
     let returned = substituted(signature.output(), signature, substitutions)?;
     // An opaque output Rust code can't name is made through its wrapper
-    // (`family`), whose output the region holds.
-    let given = family_of(&returned)
-        .and_then(|family| Some((family.made()?, family)));
-    let given = match family_of(&returned) {
-        Some(family) if !boxes && family.named().is_some() => Some((call.clone(), family)),
-        _ => given,
+    // (`family`), whose output the region holds, and a trait method's is
+    // what the region holds.
+    let made = match family_of(&returned) {
+        Some(family) if let Some(made) = family.made() => Some((made, family)),
+        Some(family) if ops && family.named().is_some() => Some((call.clone(), family)),
+        _ => None,
     };
-    let (call, converted) = match given {
+    let (call, converted) = match made {
         Some((made, family)) => (
             made,
             format!(
