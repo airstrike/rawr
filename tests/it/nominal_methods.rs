@@ -306,7 +306,12 @@ fn nested_if_scopes_bindings_and_evaluates_only_the_selected_branch() {
 
     assert_eq!(value, 43);
 
-    assert_resolution(&Engine::new(), "pub fn hidden(flag: bool) -> i64 { let result = if flag { let local = 1; local } else { 0 }; local }", Category::UnknownVariable, "cannot find value `local` in this scope");
+    assert_resolution(
+        &Engine::new(),
+        "pub fn hidden(flag: bool) -> i64 { let result = if flag { let local = 1; local } else { 0 }; local }",
+        Category::UnknownVariable,
+        "cannot find value `local` in this scope",
+    );
 }
 
 #[test]

@@ -226,7 +226,12 @@ fn construction_shape_and_types_are_compile_checked() {
 
 #[test]
 fn field_names_types_and_binding_mutability_are_compile_checked() {
-    assert_resolution(&Engine::new(), "struct Counter { value: i64 } let counter = Counter { value: 0 }; counter.value = 1;", Category::BorrowConflict, "cannot assign to `counter.value`, as `counter` is not declared as mutable");
+    assert_resolution(
+        &Engine::new(),
+        "struct Counter { value: i64 } let counter = Counter { value: 0 }; counter.value = 1;",
+        Category::BorrowConflict,
+        "cannot assign to `counter.value`, as `counter` is not declared as mutable",
+    );
     assert_resolution(&Engine::new(), "struct Counter { value: i64 } let mut counter = Counter { value: 0 }; counter.value = true;", Category::TypeMismatch, "expected `i64`, found `bool`");
     assert_resolution(&Engine::new(), "struct Counter { value: i64 } let counter = Counter { value: 0 }; counter.missing", Category::UnknownMember, "Counter::missing");
 }
