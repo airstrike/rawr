@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 108;
+const CLASSIFIER_VERSION: u32 = 107;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8316,7 +8316,6 @@ impl<P: api::Phase> Context<'_, P> {
                 id,
                 bounds,
                 captures,
-                hidden,
             } => {
                 let excluded = self.opaque_output.borrow().clone();
                 let Some(excluded) = excluded else {
@@ -8333,14 +8332,6 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                     arguments.push(self.convert(ty)?);
                 }
-                // The type rustc gives it, at the positions of these
-                // arguments, which a runner names where Rust code must write
-                // the type, as a region of a view's borrows holds a value.
-                let hidden = hidden
-                    .0
-                    .as_deref()
-                    .and_then(|hidden| self.convert(hidden).ok())
-                    .and_then(|hidden| positional(&hidden, &arguments));
                 // Each associated type its bounds bind, as `impl Program<
                 // State = S>` binds `State`, is one more argument, so a
                 // call that takes the opaque type's value reads `P::State`
@@ -8411,21 +8402,18 @@ impl<P: api::Phase> Context<'_, P> {
                 let forwards = (traits.len() == 1)
                     .then(|| self.opaque_forwards(bounds))
                     .flatten();
-                if !associated.is_empty() || !traits.is_empty() || hidden.is_some() {
+                if !associated.is_empty() || !traits.is_empty() {
                     let mut opaques = self.opaque_associated.borrow_mut();
                     if !opaques
                         .iter()
                         .any(|opaque| opaque.definition() == definition.as_bytes())
                     {
-                        opaques.push(
-                            representability::signature::Opaque::new(
-                                *definition.as_bytes(),
-                                associated.into_boxed_slice(),
-                                traits,
-                                forwards,
-                            )
-                            .with_hidden(hidden),
-                        );
+                        opaques.push(representability::signature::Opaque::new(
+                            *definition.as_bytes(),
+                            associated.into_boxed_slice(),
+                            traits,
+                            forwards,
+                        ));
                     }
                 }
                 Type::Nominal {
@@ -9853,73 +9841,6 @@ fn output_binders_early(
     (kept.len() < signature.binders().len()).then(|| early.with_binders(kept.into()))
 }
 
-/// `ty`, a type rustc gives an opaque type, with each of the opaque type's
-/// `arguments` that is a type parameter written as `Parameter` of its
-/// position among them: `Explain<Parameter(0)>` of `Widget::explain`, whose
-/// first argument is the widget. `None` when it names another parameter.
-fn positional(
-    ty: &representability::convert::Type,
-    arguments: &[representability::convert::Type],
-) -> Option<representability::convert::Type> {
-    use representability::convert::Type;
-    if let Some(position) = arguments
-        .iter()
-        .position(|argument| matches!(argument, Type::Parameter(_)) && argument == ty)
-    {
-        return Some(Type::Parameter(u32::try_from(position).ok()?));
-    }
-    let inside = |ty: &Type| positional(ty, arguments).map(Box::new);
-    let all = |types: &[Type]| {
-        types
-            .iter()
-            .map(|ty| positional(ty, arguments))
-            .collect::<Option<Box<[_]>>>()
-    };
-    Some(match ty {
-        Type::Parameter(_) => return None,
-        Type::Nominal {
-            definition,
-            arguments: inner,
-        } => Type::Nominal {
-            definition: *definition,
-            arguments: all(inner)?,
-        },
-        Type::Script {
-            path,
-            arguments: inner,
-        } => Type::Script {
-            path: path.clone(),
-            arguments: all(inner)?,
-        },
-        Type::Tuple(members) => Type::Tuple(all(members)?),
-        Type::Option(inner) => Type::Option(inside(inner)?),
-        Type::Range(inner) => Type::Range(inside(inner)?),
-        Type::Result(ok, err) => Type::Result(inside(ok)?, inside(err)?),
-        Type::Sequence {
-            element,
-            owned,
-            length,
-        } => Type::Sequence {
-            element: inside(element)?,
-            owned: *owned,
-            length: *length,
-        },
-        Type::Borrowed { mutable, ty } => Type::Borrowed {
-            mutable: *mutable,
-            ty: inside(ty)?,
-        },
-        Type::FunctionItem { input, output } => Type::FunctionItem {
-            input: inside(input)?,
-            output: inside(output)?,
-        },
-        Type::ProfileMessage { mapper, payload } => Type::ProfileMessage {
-            mapper: *mapper,
-            payload: inside(payload)?,
-        },
-        Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => ty.clone(),
-    })
-}
-
 /// `ty` with each `from` lifetime in it as `to`, in an opaque type's
 /// captures and bounds too. A function pointer's and a trait object's own
 /// bounds are left as they are.
@@ -10020,17 +9941,10 @@ fn rebind_lifetime(ty: &model::Type, from: &model::Lifetime, to: &model::Lifetim
             id,
             bounds,
             captures,
-            hidden,
         } => model::Type::ImplTrait {
             id: id.clone(),
             bounds: bounds.iter().map(predicate).collect(),
             captures: captures.iter().map(argument).collect(),
-            hidden: model::Hidden(
-                hidden
-                    .0
-                    .as_deref()
-                    .map(|hidden| Box::new(rebind_lifetime(hidden, from, to))),
-            ),
         },
         model::Type::Primitive(_)
         | model::Type::Parameter { .. }
@@ -10385,7 +10299,6 @@ fn relabel_type(
             id,
             bounds,
             captures,
-            hidden,
         } => model::Type::ImplTrait {
             id: id.clone(),
             bounds: bounds
@@ -10393,13 +10306,6 @@ fn relabel_type(
                 .map(|bound| relabel_predicate(bound, from, renamed))
                 .collect::<Option<_>>()?,
             captures: relabel_arguments(captures, from, renamed)?,
-            hidden: model::Hidden(
-                hidden
-                    .0
-                    .as_deref()
-                    .and_then(|hidden| relabel_type(hidden, from, renamed))
-                    .map(Box::new),
-            ),
         },
         model::Type::SelfType(id) if id == from => return None,
         model::Type::FunctionPointer(_) | model::Type::TraitObject { .. } => return None,
@@ -10661,17 +10567,10 @@ fn self_replaced(
             id,
             bounds,
             captures,
-            hidden,
         } => model::Type::ImplTrait {
             id: id.clone(),
             bounds: bounds.clone(),
             captures: arguments(captures),
-            hidden: model::Hidden(
-                hidden
-                    .0
-                    .as_deref()
-                    .map(|hidden| Box::new(self_replaced(hidden, trait_id, this))),
-            ),
         },
         other => other.clone(),
     }
@@ -10922,17 +10821,10 @@ fn substitute_parameters(
             id,
             bounds,
             captures,
-            hidden,
         } => model::Type::ImplTrait {
             id: id.clone(),
             bounds: bounds.clone(),
             captures: captures.iter().map(argument).collect(),
-            hidden: model::Hidden(
-                hidden
-                    .0
-                    .as_deref()
-                    .map(|hidden| Box::new(substitute_parameters(hidden, substitutions))),
-            ),
         },
         other => other.clone(),
     }
@@ -11593,15 +11485,8 @@ fn projected_parameters(ty: &model::Type, projected: &[Projected]) -> model::Typ
             id,
             bounds,
             captures,
-            hidden,
         } => model::Type::ImplTrait {
             id: id.clone(),
-            hidden: model::Hidden(
-                hidden
-                    .0
-                    .as_deref()
-                    .map(|hidden| Box::new(projected_parameters(hidden, projected))),
-            ),
             bounds: bounds
                 .iter()
                 .map(|predicate| match predicate {
@@ -12062,7 +11947,6 @@ mod tests {
         let view = free(
             Box::from([items]),
             model::Type::ImplTrait {
-                hidden: model::Hidden::default(),
                 id: id.clone(),
                 bounds: Box::from([model::Predicate::TypeOutlives {
                     ty: parameter.clone(),
@@ -12556,7 +12440,6 @@ mod tests {
             ),
             (
                 model::Type::ImplTrait {
-                    hidden: model::Hidden::default(),
                     id: id.clone(),
                     bounds: Box::default(),
                     captures: Box::default(),

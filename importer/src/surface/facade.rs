@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 43;
+const SCHEMA: u32 = 42;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -540,10 +540,6 @@ pub struct TypeDefinition {
     /// Opaque`): a call reads `P::State` from the `P` it fills.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     associated: Box<[(representability::signature::Associated, u32)]>,
-    /// The type rustc gives an opaque type, at the positions of its
-    /// parameters (`representability::signature::Opaque::hidden`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    hidden: Option<representability::convert::Type>,
     shape: Shape,
 }
 
@@ -1385,16 +1381,14 @@ impl Plan {
                         }) {
                             continue;
                         }
-                        let record = item
+                        let associated = item
                             .signature
                             .opaques
                             .iter()
-                            .find(|opaque| *opaque.definition() == identity);
-                        let associated = record
+                            .find(|opaque| *opaque.definition() == identity)
                             .map(|opaque| opaque.associated().to_vec())
                             .unwrap_or_default()
                             .into_boxed_slice();
-                        let hidden = record.and_then(|opaque| opaque.hidden().cloned());
                         let parameters = super::opaque::parameters(parameters, &associated);
                         types.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                         types.push(TypeDefinition {
@@ -1416,7 +1410,6 @@ impl Plan {
                             covariant: false,
                             iterator: false,
                             opaque: true,
-                            hidden,
                             shape: Shape::Struct {
                                 form: Form::Record,
                                 constructor: None,
@@ -1892,7 +1885,6 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         covariant: false,
         iterator: false,
         opaque: false,
-        hidden: None,
         associated: Box::default(),
         shape: Shape::Struct {
             form: Form::Unit,
@@ -1973,7 +1965,6 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 covariant: false,
                 iterator: false,
                 opaque: false,
-                hidden: None,
                 associated: Box::default(),
                 shape: Shape::Struct {
                     form: Form::Unit,
@@ -2022,7 +2013,6 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         covariant: false,
         iterator: false,
         opaque: false,
-        hidden: None,
         associated: Box::default(),
         shape: Shape::Struct {
             form: Form::Unit,
@@ -2114,7 +2104,6 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
         covariant: false,
         iterator: false,
         opaque: false,
-        hidden: None,
         shape: Shape::Struct {
             form: Form::Unit,
             constructible: constructor.is_some(),
@@ -3224,12 +3213,6 @@ impl TypeDefinition {
     pub const fn opaque(&self) -> bool {
         self.opaque
     }
-
-    /// The type rustc gives an opaque type, at the positions of its
-    /// parameters.
-    pub const fn hidden(&self) -> Option<&representability::convert::Type> {
-        self.hidden.as_ref()
-    }
     /// Each associated type an opaque type binds, by its trait's identity
     /// and its name, with the position of the parameter that is its value.
     pub fn associated(&self) -> impl Iterator<Item = ([u8; 32], &str, u32)> {
@@ -3509,7 +3492,6 @@ fn type_definition(
         covariant: borrowing.2,
         iterator: borrowing.1,
         opaque: false,
-        hidden: None,
         associated: Box::default(),
         shape,
     }))

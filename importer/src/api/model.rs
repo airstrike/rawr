@@ -478,41 +478,6 @@ pub enum Lifetime {
     Erased,
 }
 
-/// The type rustc gives an opaque type (`Type::ImplTrait`), which is
-/// advisory: it never tells two uses of one opaque type apart, so any two
-/// are equal and order the same.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(transparent)]
-pub struct Hidden(pub Option<Box<Type>>);
-
-impl Hidden {
-    /// Whether rustc gave no type the model holds.
-    #[must_use]
-    pub const fn is_none(&self) -> bool {
-        self.0.is_none()
-    }
-}
-
-impl PartialEq for Hidden {
-    fn eq(&self, _: &Self) -> bool {
-        true
-    }
-}
-
-impl Eq for Hidden {}
-
-impl PartialOrd for Hidden {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Hidden {
-    fn cmp(&self, _: &Self) -> std::cmp::Ordering {
-        std::cmp::Ordering::Equal
-    }
-}
-
 /// A complete compiler type shape.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum Type {
@@ -571,12 +536,6 @@ pub enum Type {
         bounds: Box<[Predicate]>,
         /// Exact compiler arguments captured by this opaque type.
         captures: Box<[Argument]>,
-        /// The type rustc gives it at `captures`, the defining body's type,
-        /// as `Explain<Self>` of iced's `Widget::explain`: what a runner
-        /// names where Rust code must write the type. `None` when the
-        /// compiler gives none or it has no model.
-        #[serde(default, skip_serializing_if = "Hidden::is_none")]
-        hidden: Hidden,
     },
     /// An associated-type projection.
     Projection {
@@ -1069,16 +1028,11 @@ impl Type {
                     id,
                     bounds,
                     captures,
-                    hidden,
                 } => {
                     id.retain(retained)?;
                     retained.slice(bounds)?;
                     for predicate in bounds {
                         predicate.retain(retained)?;
-                    }
-                    if let Hidden(Some(hidden)) = hidden {
-                        retained.boxed::<Type>()?;
-                        hidden.retain(retained)?;
                     }
                     retain_arguments(captures, retained)
                 }
@@ -1954,8 +1908,6 @@ impl Type {
                     .for_each(|bound| bound.collect_references(references));
                 lifetime.collect_references(references);
             }
-            // The type rustc gives it is advisory: what it names need not
-            // be in the graph, as a closure's type isn't.
             Self::ImplTrait {
                 bounds, captures, ..
             } => {

@@ -1866,7 +1866,6 @@ fn install(
                 .collect::<std::collections::BTreeSet<_>>()
         })
         .collect::<Vec<_>>();
-    regions(&facades, &declared, registry);
     let resolution = rawr_import::surface::facade::Resolution::new(
         &declared
             .iter()
@@ -2935,92 +2934,6 @@ type OpaqueType = (
     Box<[ImmutableString]>,
     Box<[host::type_def::Associated]>,
 );
-
-/// Records in `registry` the crate types that have lifetime parameters and
-/// the opaque types the runner names by the type rustc gives them: those
-/// whose every crate type has a path in a facade (`declared`), as iced's
-/// `Widget::explain` gives `iced_widget::Explain<W>`. A value of another
-/// opaque type that borrows can't live in a region (`resolve::
-/// lower_nominal`'s `unheld_opaque`).
-fn regions(
-    facades: &[Facade<'_>],
-    declared: &[std::collections::BTreeSet<rawr_import::surface::identity::Definition>],
-    registry: &mut host::Registry,
-) {
-    fn named(
-        ty: &representability::convert::Type,
-        declared: &[std::collections::BTreeSet<rawr_import::surface::identity::Definition>],
-    ) -> bool {
-        use representability::convert::Type;
-        match ty {
-            Type::Nominal {
-                definition,
-                arguments,
-            } => {
-                (declared.iter().any(|set| set.contains(definition))
-                    || rawr_import::surface::identity::Definition::std_path(definition.as_bytes())
-                        .is_some())
-                    && arguments.iter().all(|argument| named(argument, declared))
-            }
-            Type::Script { arguments, .. } | Type::Tuple(arguments) => {
-                arguments.iter().all(|argument| named(argument, declared))
-            }
-            Type::Option(inner)
-            | Type::Range(inner)
-            | Type::Borrowed { ty: inner, .. }
-            | Type::Sequence { element: inner, .. }
-            | Type::ProfileMessage { payload: inner, .. } => named(inner, declared),
-            Type::Result(ok, err) => named(ok, declared) && named(err, declared),
-            Type::FunctionItem { input, output } => {
-                named(input, declared) && named(output, declared)
-            }
-            Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) | Type::Inferred => {
-                true
-            }
-        }
-    }
-    let entries = || facades.iter().flat_map(|facade| facade.entries.iter());
-    let scoped = entries()
-        .filter(|entry| match entry.outcome.representability() {
-            Representability::Struct(plan) => plan.lifetimes() > 0,
-            Representability::Enum(plan) => plan.lifetimes() > 0,
-            _ => false,
-        })
-        .map(|entry| *entry.definition.as_bytes())
-        .collect::<Vec<_>>();
-    // Each function's and method's signature, as `opaque_types` reads them.
-    let outcomes = facades.iter().flat_map(|facade| {
-        facade
-            .entries
-            .iter()
-            .map(|entry| entry.outcome)
-            .chain(facade.self_members.iter().map(|(_, outcome)| *outcome))
-            .chain(facade.opaque_members.iter().map(|(_, outcome)| *outcome))
-            .chain(facade.entries.iter().flat_map(|entry| {
-                entry
-                    .outcome
-                    .implementations()
-                    .flat_map(rawr_import::classify::ImplementationOutcome::associated)
-            }))
-    });
-    let named_opaques = outcomes
-        .filter_map(|outcome| match outcome.representability() {
-            Representability::Function(plan) => Some(plan.signature()),
-            Representability::FunctionItem(plan) => Some(plan.signature()),
-            Representability::Invocation(plan) => Some(plan.signature()),
-            Representability::Method(plan) => Some(plan.signature()),
-            _ => None,
-        })
-        .flat_map(|signature| signature.opaques().iter())
-        .filter(|opaque| {
-            opaque
-                .hidden()
-                .is_some_and(|hidden| named(hidden, declared))
-        })
-        .map(|opaque| *opaque.definition())
-        .collect::<Vec<_>>();
-    registry.regions(scoped, named_opaques);
-}
 
 /// The opaque `impl Trait` types the facade's functions and methods give:
 /// each one's path beside each function that gives it, its definition,

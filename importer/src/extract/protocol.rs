@@ -14,7 +14,7 @@ std::thread_local! {
 
 /// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 /// `cargo/toolchain.rs`'s `SUPPORTED_PROBE_PROTOCOL` are the same number.
-pub(crate) const SCHEMA: u32 = 50;
+pub(crate) const SCHEMA: u32 = 49;
 
 /// The compiler kind of an unsupported export that is a derive macro, as
 /// serde's `Serialize`: the driver's engine writes it (`engine::DERIVE_MACRO`).
@@ -591,9 +591,6 @@ pub(crate) enum Type {
         id: Id,
         bounds: Vec<Predicate>,
         captures: Vec<Argument>,
-        /// The type rustc gives it at `captures` (`model::Type::ImplTrait`).
-        #[serde(default)]
-        hidden: Option<Box<Type>>,
     },
     Projection {
         trait_id: Id,
@@ -928,19 +925,13 @@ impl Population {
                 }
             }
             Type::ImplTrait {
-                bounds,
-                captures,
-                hidden,
-                ..
+                bounds, captures, ..
             } => {
                 if !captures.is_empty() {
                     self.instantiations = self.instantiations.saturating_add(1);
                 }
                 self.predicates(bounds);
                 self.arguments(captures);
-                if let Some(hidden) = hidden {
-                    self.type_node(hidden);
-                }
             }
             Type::Projection { arguments, .. } => {
                 if !arguments.is_empty() {

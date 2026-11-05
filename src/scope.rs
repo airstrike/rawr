@@ -348,29 +348,6 @@ pub fn lend_ref<F: Family, R>(value: &F::Of<'_>, body: impl FnOnce(Nonce) -> R) 
     )
 }
 
-/// `value`, of a crate's opaque `impl Trait` type `T`, as `H`, the type
-/// rustc gives that opaque type, which a region's family names where Rust
-/// code can't write the opaque type (`surface::opaque`), as a value of
-/// iced's `Widget::explain` on a borrowing element is held. The runner
-/// passes the type rustc gave, so the two are one type. One whose name,
-/// size or alignment differs panics instead.
-#[must_use]
-pub fn reveal<T, H>(value: T) -> H {
-    assert!(
-        std::any::type_name::<T>() == std::any::type_name::<H>()
-            && std::mem::size_of::<T>() == std::mem::size_of::<H>()
-            && std::mem::align_of::<T>() == std::mem::align_of::<H>(),
-        "rawr: `{}` is not the type rustc gives it, `{}`",
-        std::any::type_name::<T>(),
-        std::any::type_name::<H>()
-    );
-    let value = std::mem::ManuallyDrop::new(value);
-    // SAFETY: `T` is an opaque type and `H` the type rustc gives it at the
-    // same arguments, checked by name, size and alignment above, so the
-    // bytes of a `T` are an `H`'s. The original is not dropped.
-    unsafe { std::ptr::read(std::ptr::from_ref::<T>(&value).cast::<H>()) }
-}
-
 /// A lend under a `key` only the code that reaches it knows, as a native
 /// island's trampoline lends its `&mut Frame<'_>` to the thread that runs
 /// script code (`island::__rawr_island_call_v2`). The value is reached by

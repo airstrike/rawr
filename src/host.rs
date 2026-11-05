@@ -171,14 +171,6 @@ pub struct Registry {
     /// Roots an app exported with `#[rawr::export]`. Their types keep
     /// fields and methods apart, as Rust does.
     exported: Vec<ImmutableString>,
-    /// The crates' types that have lifetime parameters, by identity,
-    /// sorted: a value of one may borrow.
-    #[cfg(feature = "rust-import")]
-    scoped: Vec<[u8; 32]>,
-    /// The crates' opaque `impl Trait` types the runner can name by the
-    /// type rustc gives them, by identity, sorted (`surface::opaque`).
-    #[cfg(feature = "rust-import")]
-    named_opaques: Vec<[u8; 32]>,
 }
 
 /// One proof-backed application's host method, owned by its receiver's facade.
@@ -254,10 +246,6 @@ impl Registry {
             impl_headers: Vec::new(),
             derives: Vec::new(),
             exported: Vec::new(),
-            #[cfg(feature = "rust-import")]
-            scoped: Vec::new(),
-            #[cfg(feature = "rust-import")]
-            named_opaques: Vec::new(),
         }
     }
 
@@ -447,38 +435,7 @@ impl Registry {
             clone.derives.push(path.try_clone()?);
         }
         clone.exported.clone_from(&self.exported);
-        clone.scoped.clone_from(&self.scoped);
-        clone.named_opaques.clone_from(&self.named_opaques);
         Ok(clone)
-    }
-
-    /// Records the crate types that have lifetime parameters, and the
-    /// opaque types the runner names by the type rustc gives them.
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn regions(
-        &mut self,
-        scoped: impl IntoIterator<Item = [u8; 32]>,
-        named_opaques: impl IntoIterator<Item = [u8; 32]>,
-    ) {
-        self.scoped.extend(scoped);
-        self.scoped.sort_unstable();
-        self.scoped.dedup();
-        self.named_opaques.extend(named_opaques);
-        self.named_opaques.sort_unstable();
-        self.named_opaques.dedup();
-    }
-
-    /// Whether the crate type `identity` has lifetime parameters.
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn scoped(&self, identity: &[u8; 32]) -> bool {
-        self.scoped.binary_search(identity).is_ok()
-    }
-
-    /// Whether the runner names the opaque type `identity` by the type
-    /// rustc gives it.
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn named_opaque(&self, identity: &[u8; 32]) -> bool {
-        self.named_opaques.binary_search(identity).is_ok()
     }
 
     /// Register a Rust type under a qualified path used in item headers.
