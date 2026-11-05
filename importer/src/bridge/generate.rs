@@ -8619,8 +8619,7 @@ fn region_operand(
                 Receiver::Shared => "&**receiver",
                 Receiver::Mutable => "&mut **receiver",
             };
-            let Some(call) =
-                family::Ops::call(&key, consumer, lent, signature.inputs().len())
+            let Some(call) = family::Ops::call(&key, consumer, lent, signature.inputs().len())
             else {
                 return Ok(String::new());
             };
@@ -17481,14 +17480,16 @@ fn family(text: String, lifetimes: Lifetimes) -> Option<family::Family> {
     if names_inferred(&text) {
         return None;
     }
-    Some(family::Family::Named(FAMILIES.with_borrow_mut(|families| {
-        let next = families.len();
-        families
-            .entry(text)
-            .or_insert_with(|| (format!("RawrFamily{next}"), lifetimes))
-            .0
-            .clone()
-    })))
+    Some(family::Family::Named(FAMILIES.with_borrow_mut(
+        |families| {
+            let next = families.len();
+            families
+                .entry(text)
+                .or_insert_with(|| (format!("RawrFamily{next}"), lifetimes))
+                .0
+                .clone()
+        },
+    )))
 }
 
 /// The type at `'x` of the family struct `name` declares.
