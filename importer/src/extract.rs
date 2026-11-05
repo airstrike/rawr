@@ -5473,10 +5473,13 @@ fn type_of(
             id: shape_id(catalog, id, allocation)?,
             bounds: predicates(raw, catalog, limits, allocation)?,
             captures: arguments_of(captures, catalog, limits, allocation)?,
+            // A type rustc gives it that has no model leaves it opaque.
             hidden: match hidden {
                 Some(hidden) => {
                     allocation.items(1)?;
-                    Some(Box::new(type_of(*hidden, catalog, limits, allocation)?))
+                    type_of(*hidden, catalog, limits, allocation)
+                        .ok()
+                        .map(Box::new)
                 }
                 None => None,
             },

@@ -1919,11 +1919,10 @@ impl Type {
                     .for_each(|bound| bound.collect_references(references));
                 lifetime.collect_references(references);
             }
+            // The type rustc gives it is advisory: what it names need not
+            // be in the graph, as a closure's type isn't.
             Self::ImplTrait {
-                bounds,
-                captures,
-                hidden,
-                ..
+                bounds, captures, ..
             } => {
                 bounds
                     .iter()
@@ -1931,9 +1930,6 @@ impl Type {
                 captures
                     .iter()
                     .for_each(|argument| argument.collect_references(references));
-                if let Some(hidden) = hidden {
-                    hidden.collect_references(references);
-                }
             }
             Self::Projection {
                 trait_id,
