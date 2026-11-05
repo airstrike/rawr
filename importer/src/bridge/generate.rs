@@ -13931,8 +13931,10 @@ fn render_take_input(
     // is the program's own string, pinned per site as a `&'static str` is
     // (D694), with nothing copied, and a type that holds borrows, as
     // fount's `Option<&Catalog>`, leases what it holds, recursively.
+    // So is a type parameter a `&str` fills, as tokio's
+    // `fs::read_to_string(path: impl AsRef<Path>)` takes one.
     let future = is_future(&substituted(signature.output(), signature, substitutions)?);
-    if future && matches!(ty, convert::Type::Builtin(convert::Builtin::Str)) {
+    if future && lends_str(ty, signature, substitutions) {
         return render_take(
             local,
             index,
@@ -14279,6 +14281,11 @@ fn future_borrows(
         let convert::Type::Borrowed { mutable, ty: lent } = substituted else {
             continue;
         };
+        // A `&str` a type parameter takes is pinned, as a `&'static str`
+        // is (`render_take_input`): the future copies the reference.
+        if *lent == convert::Type::Builtin(convert::Builtin::Str) {
+            continue;
+        }
         if !mutable && is_made_for_call(&lent) {
             rebound.push_str(&format!(
                 "        let argument_{local}_made = argument_{local}_made;\n        let argument_{local} = &argument_{local}_made;\n"
