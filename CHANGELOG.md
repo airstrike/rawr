@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.141 (2026-11-05)
+
+- `rawr run` starts with a relative CARGO_TARGET_DIR (and with an absolute one after a relative run): the reload watcher no longer stops at start with "malformed filesystem observation transport". A relative target directory now names the same paths as the absolute one. (#959)
+
 ## 0.3.140 (2026-11-05)
 
 - A crate's `impl Trait` result that borrows, as iced's layout gets from `element.explain(color)`, is held in the scope that lends to it, whether or not a public path names its type, and also through `.explain(a).explain(b)`. Keeping it past the block of a local it borrows is rustc's E0597. (#936)
