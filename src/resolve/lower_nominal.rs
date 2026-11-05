@@ -22,6 +22,7 @@ mod reborrow;
 mod reverse;
 mod std_impl;
 mod std_method;
+pub(crate) mod thread;
 
 #[cfg(test)]
 mod argument_count_tests;
@@ -5697,6 +5698,8 @@ enum PreludeOp {
     /// A `parse` error, whose kind its target's kind code gives, boxed as
     /// `dyn Error` by `?`.
     ErrorParse,
+    /// `Mutex::new`: a cell whose borrow waits for the one held.
+    MutexNew,
     CellBorrow,
     CellGet,
     CellSet,
@@ -5800,6 +5803,9 @@ enum PreludeOp {
     /// A `std::time` function, method or operator of `TIME_METHODS`:
     /// `time(value, code, operand)`.
     Time,
+    /// A `std::thread` or `std::sync::mpsc` function or method of
+    /// `thread::METHODS`: `thread(value, code, operand)` (`thread.rs`).
+    Thread,
     /// A `str` method of `STR_METHODS`: `str(text, code, a, b)`.
     StrMethod,
     /// `s.parse::<T>()` for the target kind (`ExecutableOp::Kinded`): a
@@ -5890,6 +5896,7 @@ impl PreludeOp {
             Self::CowValue => "cow.value",
             Self::DisplayText => "format.display",
             Self::CellNew => "cell.new",
+            Self::MutexNew => "cell.new_mutex",
             Self::PlainCellNew => "cell.new_plain",
             Self::ErrorNew => "error.new",
             Self::ErrorText => "error.text",
@@ -5944,6 +5951,7 @@ impl PreludeOp {
             Self::KeyedRange => "keyed.range",
             Self::IntMethod => "int.method",
             Self::Time => "time.method",
+            Self::Thread => "thread.method",
             Self::Parse => "str.parse",
             Self::StrMethod => "str.method",
             Self::Print => "io.print",
@@ -6025,6 +6033,7 @@ impl PreludeOp {
             | Self::DisplayText
             | Self::CellNew
             | Self::PlainCellNew
+            | Self::MutexNew
             | Self::CellGet
             | Self::CellRelease
             | Self::CellClone
@@ -6177,7 +6186,7 @@ impl PreludeOp {
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
             ],
-            Self::Time => vec![
+            Self::Time | Self::Thread => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
@@ -6536,6 +6545,7 @@ impl PreludeOp {
                     .map_or(Dynamic::UNIT, |opening| opening.copies().get(index)));
             }
             Self::Time => return time_method(args),
+            Self::Thread => return thread::invoke(context, args),
             Self::StrChange => return str_change(context, args),
             Self::StrPieces => return str_pieces(args),
             Self::SliceChunks => {
@@ -6630,6 +6640,7 @@ impl PreludeOp {
             }
             Self::CellNew
             | Self::PlainCellNew
+            | Self::MutexNew
             | Self::CellBorrow
             | Self::CellGet
             | Self::CellSet
@@ -8437,20 +8448,22 @@ impl Time {
 }
 
 /// Which of std's cells a `Ty::Cell` is: `RefCell`, whose value is
-/// borrowed, or `Cell`, whose value is copied in and out.
+/// borrowed, `Cell`, whose value is copied in and out, or `Mutex`, whose
+/// value one thread at a time locks, as a `RefCell` borrows it mutably.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CellKind {
     RefCell,
     Cell,
+    Mutex,
 }
 
 impl CellKind {
     /// The cell `name` is, as `type_ref::Type::cell_element` names it.
     fn named(name: &str) -> Self {
-        if name == "Cell" {
-            Self::Cell
-        } else {
-            Self::RefCell
+        match name {
+            "Cell" => Self::Cell,
+            "Mutex" => Self::Mutex,
+            _ => Self::RefCell,
         }
     }
 
@@ -8458,6 +8471,7 @@ impl CellKind {
         match self {
             Self::RefCell => "RefCell",
             Self::Cell => "Cell",
+            Self::Mutex => "Mutex",
         }
     }
 
@@ -8466,6 +8480,7 @@ impl CellKind {
         match self {
             Self::RefCell => PreludeOp::CellNew,
             Self::Cell => PreludeOp::PlainCellNew,
+            Self::Mutex => PreludeOp::MutexNew,
         }
     }
 }
@@ -8705,6 +8720,10 @@ enum Ty {
     /// `std::cell::RefCell<T>` or `std::cell::Cell<T>`: a `cell::Cell` at
     /// runtime, which every copy of it shares (`cell.rs`).
     Cell(CellKind, Box<Ty>),
+    /// `std::thread::JoinHandle<T>`, `std::sync::mpsc::Sender<T>` or
+    /// `Receiver<T>`: std's own handle at runtime (`thread.rs`), which a
+    /// move hands on and a copy never makes.
+    Thread(thread::Kind, Box<Ty>),
     /// An iterator of `Item` (`impl Iterator<Item = T>`): an adaptor chain
     /// fused into one loop where it is consumed, else the array of its
     /// items at runtime. With the std struct it is, when rawr knows it
@@ -8787,6 +8806,7 @@ impl Ty {
             | Self::Range(target)
             | Self::InclusiveOf(target)
             | Self::Cell(_, target)
+            | Self::Thread(_, target)
             | Self::Projection(target, ..) => {
                 target.collect_dependencies(dependencies);
             }
@@ -8904,6 +8924,11 @@ impl Ty {
         }
         if let Some((kind, inner)) = ty.cell_element() {
             return Self::Cell(CellKind::named(kind), Box::new(Self::from_resolved(inner)));
+        }
+        if let Some((name, inner)) = ty.thread_element()
+            && let Some(kind) = thread::Kind::named(name)
+        {
+            return Self::Thread(kind, Box::new(Self::from_resolved(inner)));
         }
         if let Some((name, arguments)) = ty.keyed_arguments()
             && let Some(kind) = Keyed::from_name(name)
@@ -9082,6 +9107,7 @@ impl Ty {
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
             Self::Cow(borrowed) => format!("Cow<'_, {}>", borrowed.name(models)).into(),
             Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
+            Self::Thread(kind, inner) => kind.name(&inner.name(models)).into(),
             Self::Keyed(kind, arguments) => format!(
                 "{}<{}>",
                 kind.name(),
@@ -9166,6 +9192,16 @@ impl Ty {
             Self::Reverse(_) => Some(TypeId::of::<std::cmp::Reverse<Dynamic>>()),
             Self::Cow(_) => Some(TypeId::of::<cow::Value>()),
             Self::Cell(..) => Some(TypeId::of::<cell::Cell>()),
+            Self::Thread(kind, _) => match kind {
+                #[cfg(feature = "sync")]
+                thread::Kind::JoinHandle => Some(TypeId::of::<crate::eval::threads::Handle>()),
+                #[cfg(not(feature = "sync"))]
+                thread::Kind::JoinHandle => None,
+                thread::Kind::Sender => Some(TypeId::of::<thread::Sender>()),
+                thread::Kind::Receiver => Some(TypeId::of::<thread::Receiver>()),
+                thread::Kind::SendError => Some(TypeId::of::<thread::SendError>()),
+                thread::Kind::RecvError | thread::Kind::Panic => Some(TypeId::of::<()>()),
+            },
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
             #[cfg(feature = "rust-import")]
@@ -9332,6 +9368,7 @@ impl Ty {
             | Self::Reverse(_)
             | Self::Cow(_)
             | Self::Cell(..)
+            | Self::Thread(..)
             | Self::Dyn(..)
             | Self::Infer(_)
             | Self::Unknown => crate::host::usage::Policy::Ordinary,
@@ -9595,6 +9632,9 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
             (Ty::Cell(left_kind, left), Ty::Cell(right_kind, right)) => {
                 left_kind == right_kind && compare(left, right, forward, reverse)
             }
+            (Ty::Thread(left_kind, left), Ty::Thread(right_kind, right)) => {
+                left_kind == right_kind && compare(left, right, forward, reverse)
+            }
             (Ty::Keyed(left_kind, left), Ty::Keyed(right_kind, right)) => {
                 left_kind == right_kind
                     && left.len() == right.len()
@@ -9851,6 +9891,7 @@ impl Inference {
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
             Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(self.resolve(element))),
             Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(self.resolve(inner))),
+            Ty::Thread(kind, inner) => Ty::Thread(*kind, Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
                 *kind,
                 arguments
@@ -11040,6 +11081,7 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
         Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(instantiate(element, substitution))),
         Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(instantiate(inner, substitution))),
+        Ty::Thread(kind, inner) => Ty::Thread(*kind, Box::new(instantiate(inner, substitution))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
             *kind,
             arguments
@@ -11832,6 +11874,10 @@ struct Parser<'a> {
     closures: Vec<ClosureScope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
     moved_at: BTreeMap<Span, Span>,
+    /// The type of a capture rawr knows isn't `Send`, of each closure
+    /// that has one, by the closure's span: what `std::thread::spawn`
+    /// refuses (`thread.rs`).
+    unsent_captures: BTreeMap<Span, Ty>,
     /// Reads of a crate struct's field that leave the struct whole, by
     /// their span: a by-value use moves that field out, as Rust's partial
     /// move (`move_local`).
@@ -12272,6 +12318,7 @@ impl<'a> Parser<'a> {
             loops: Vec::new(),
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
+            unsent_captures: BTreeMap::new(),
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
             owning_closures: BTreeSet::new(),
@@ -14895,6 +14942,9 @@ impl<'a> Parser<'a> {
             ),
             // A `ParseIntError` and kin is its message.
             Ty::ParseError(error) => Some(self.parse_error_display(*error, value)),
+            Ty::Thread(thread::Kind::SendError | thread::Kind::RecvError, _) => {
+                Some(self.thread_text(value, false))
+            }
             // A `Cow` writes what it derefs to.
             Ty::Cow(borrowed) => {
                 let payload = self.prelude_op(PreludeOp::CowValue, [value]);
@@ -18298,6 +18348,29 @@ impl<'a> Parser<'a> {
             // `Eq` when `T` is, and never `Copy`. `Cell<T>` reads its value
             // by copy, so its `Clone`, `Debug`, `PartialEq` and `Eq` also
             // need `T: Copy`.
+            // A `Mutex<T>` is `Default` and `Debug` when `T` is, and
+            // `Send` and `Sync` when `T` is `Send`: it never compares,
+            // hashes or copies, and never `Clone`s.
+            Ty::Cell(CellKind::Mutex, inner) => {
+                matches!(
+                    capability,
+                    capability::Kind::Default
+                        | capability::Kind::Debug
+                        | capability::Kind::Send
+                        | capability::Kind::Static
+                ) && self.type_provides(&inner, capability)
+            }
+            // std's thread and channel handles are `Debug`, `Send` and
+            // `'static` as their values are, and a `Sender` is `Clone`.
+            Ty::Thread(kind, inner) => match capability {
+                capability::Kind::Debug => true,
+                capability::Kind::Clone => kind.clones(),
+                capability::Kind::Send if !kind.sends() => true,
+                capability::Kind::Send | capability::Kind::Static => {
+                    self.type_provides(&inner, capability)
+                }
+                _ => false,
+            },
             Ty::Cell(kind, inner) => {
                 capability != capability::Kind::Copy
                     && capability != capability::Kind::Hash
@@ -18460,6 +18533,7 @@ impl<'a> Parser<'a> {
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
             Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
+            Ty::Thread(..) => return Err(unpassable(ty.name(&self.models), operation, span)),
             Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } | Ty::Callable { .. } => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
@@ -25228,7 +25302,10 @@ impl<'a> Parser<'a> {
             (String::new(), discarded)
         } else {
             let whole = self.temporary("pattern");
-            let mut rendered = origin::Fragment::plain(format!("const {whole} = "));
+            // A value holding a pointer or a channel's handle is no `const`,
+            // whose copy would count (`binding_keyword`).
+            let keyword = self.binding_keyword(false, &ty);
+            let mut rendered = origin::Fragment::plain(format!("{keyword} {whole} = "));
             let temporaries = self.close_temporaries();
             let made = self.with_temporaries(&temporaries, value.rendered_source());
             rendered.push(made);
@@ -28815,9 +28892,9 @@ impl<'a> Parser<'a> {
                 previous_iteration: true,
             });
         }
-        for (name, binding) in &mut self.bindings {
-            binding.available &= inner.get(name).is_some_and(|binding| binding.available);
-        }
+        // What the body moved stays moved; a local the body shadowed keeps
+        // its own state, as `let tx = tx.clone();` leaves `tx` whole.
+        self.keep_moves_from(&inner);
         self.require_type(&Ty::Unit, &body.value.ty, body.value.span)?;
         source.push_text(" ");
         match wrap {
@@ -29401,6 +29478,22 @@ impl<'a> Parser<'a> {
             && let iterator @ Ty::Iter(..) = self.inference.resolve(&inner)
         {
             lhs.ty = iterator;
+        }
+        // `for v in rx` and `for v in &rx`: what the channel receives, each
+        // as it comes, while a sender is left. The first takes `rx`.
+        let receiver = match self.inference.resolve(&lhs.ty) {
+            Ty::Thread(thread::Kind::Receiver, item) => Some((*item, true)),
+            Ty::Reference { target, .. } => match *target {
+                Ty::Thread(thread::Kind::Receiver, item) => Some((*item, false)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((item, owned)) = receiver {
+            if owned {
+                self.move_local(&mut lhs)?;
+            }
+            lhs = self.received(lhs.rendered_source(), item, lhs.span);
         }
         let operator = match self.peek() {
             Token::ExclusiveRange => "..",
@@ -33866,6 +33959,9 @@ impl<'a> Parser<'a> {
                                 // as the expression `name` reads, followed
                                 // by a `,` so nothing after the macro
                                 // continues it.
+                                // A closure around the macro captures a
+                                // local of the name, as one naming it does.
+                                this.record_capture(&name.as_str().into());
                                 let Some(binding) = this.bindings.get(name.as_str()) else {
                                     let at = expression.start();
                                     // `{self:?}` in a method reads its
@@ -36976,8 +37072,24 @@ impl<'a> Parser<'a> {
                 value = self.parse_plain_cell_member(value, inner, member, member_span)?;
                 continue;
             }
+            if let Some((CellKind::Mutex, inner)) = cell {
+                value = self.parse_mutex_member(value, inner, member, member_span)?;
+                continue;
+            }
             if let Some((_, inner)) = cell {
                 value = self.parse_cell_member(value, inner, member, member_span)?;
+                continue;
+            }
+            let thread = match &builtin {
+                Ty::Thread(kind, inner) => Some((*kind, (**inner).clone())),
+                Ty::Reference { target, .. } => match &**target {
+                    Ty::Thread(kind, inner) => Some((*kind, (**inner).clone())),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some((kind, inner)) = thread {
+                value = self.parse_thread_member(value, kind, inner, member, member_span)?;
                 continue;
             }
             let tuple = match &builtin {
@@ -43240,6 +43352,12 @@ impl<'a> Parser<'a> {
                 self.debug_source(inner, unwrapped, span)?
                     .surrounded("(\"Reverse(\" + ", " + \")\")")
             }
+            // std's `Debug` of a `Mutex` no thread poisoned.
+            Ty::Cell(CellKind::Mutex, inner) => {
+                let unwrapped = self.prelude_op(PreludeOp::CellGet, [value]);
+                self.debug_source(inner, unwrapped, span)?
+                    .surrounded("(\"Mutex { data: \" + ", " + \", poisoned: false, .. }\")")
+            }
             Ty::Cell(kind, inner) => {
                 let unwrapped = self.prelude_op(PreludeOp::CellGet, [value]);
                 let open = format!("(\"{} {{ value: \" + ", kind.name());
@@ -43296,6 +43414,7 @@ impl<'a> Parser<'a> {
                 });
                 origin::Fragment::call(&helper, [value])
             }
+            Ty::Thread(..) => self.thread_text(value, true),
             _ => {
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
@@ -44927,6 +45046,15 @@ impl<'a> Parser<'a> {
             let mut flow = self.flow();
             flow.set_origins(expression, closure.origins.clone());
             flow.set_closure_keeps(expression, closure.keeps.clone());
+        }
+        if let Some(ty) = scope
+            .captures
+            .iter()
+            .filter_map(|name| self.bindings.get(name.as_str()))
+            .map(|binding| self.inference.resolve(&binding.ty))
+            .find(|ty| self.not_send(ty))
+        {
+            self.unsent_captures.insert(expression, ty);
         }
         // `move` moves each captured place that is not `Copy` into the
         // closure as it is created, and copies the others: a field leaves
@@ -47728,17 +47856,15 @@ impl<'a> Parser<'a> {
                     source: span(first_span.start(), path_end),
                 });
             }
-            // `std::thread::spawn(f).join()` waits for `f` where it is
-            // called, and Rawr runs a closure off the UI thread only as a
-            // task, whose output reaches `update`.
-            if full == "std::thread::spawn" {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "`std::thread::spawn`, whose `join` waits on the calling thread; \
-                                in an iced program, run blocking work with \
-                                `Task::perform(tokio::task::spawn_blocking(move || ..), ..)`"
-                        .into(),
-                    source: span(first_span.start(), path_end),
-                });
+            // `std::thread::spawn(f)` and `std::sync::mpsc::channel()`.
+            let turbofish = matches!(self.peek(), Token::DoubleColon)
+                && matches!(self.peek_second(), Token::LessThan);
+            if matches!(self.peek(), Token::LeftParen | Token::Unit) || turbofish {
+                match full.as_str() {
+                    "std::thread::spawn" => return self.parse_thread_spawn(first_span.start()),
+                    "std::sync::mpsc::channel" => return self.parse_channel(first_span.start()),
+                    _ => {}
+                }
             }
             // `tokio::time::sleep(d)` without tokio: the facade's own
             // (`resolve::std_reexport`).
@@ -51564,6 +51690,10 @@ impl<'a> Parser<'a> {
             (Ty::Cell(expected_kind, expected_element), Ty::Cell(actual_kind, actual_element)) => {
                 expected_kind == actual_kind && self.unify_type(expected_element, actual_element)
             }
+            (
+                Ty::Thread(expected_kind, expected_element),
+                Ty::Thread(actual_kind, actual_element),
+            ) => expected_kind == actual_kind && self.unify_type(expected_element, actual_element),
             (Ty::Result(expected_ok, expected_err), Ty::Result(actual_ok, actual_err)) => {
                 self.unify_type(expected_ok, actual_ok) && self.unify_type(expected_err, actual_err)
             }
@@ -53484,6 +53614,13 @@ fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> Str
         return "(Weak)".into();
     }
     if let Some((name, inner)) = cell::named_value(value) {
+        // std's `Debug` of a `Mutex` no thread poisoned.
+        if cell::is_mutex(value) {
+            return format!(
+                "Mutex {{ data: {}, poisoned: false, .. }}",
+                debug_value_spec(&inner, models, spec)
+            );
+        }
         return format!(
             "{name} {{ value: {} }}",
             debug_value_spec(&inner, models, spec)

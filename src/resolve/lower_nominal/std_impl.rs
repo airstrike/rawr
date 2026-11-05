@@ -76,6 +76,11 @@ pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
         Ty::Cow(borrowed) => (cow::DEFINITION, one(borrowed)),
         Ty::Cell(CellKind::RefCell, inner) => ("core::cell::RefCell", one(inner)),
         Ty::Cell(CellKind::Cell, inner) => ("core::cell::Cell", one(inner)),
+        Ty::Cell(CellKind::Mutex, inner) => ("std::sync::poison::mutex::Mutex", one(inner)),
+        // `join`'s `Box<dyn Any + Send>` is no std type rawr names.
+        Ty::Thread(thread::Kind::Panic, _) => return None,
+        Ty::Thread(kind @ thread::Kind::RecvError, _) => (kind.definition(), Vec::new()),
+        Ty::Thread(kind, inner) => (kind.definition(), one(inner)),
         Ty::Ordering => ("core::cmp::Ordering", Vec::new()),
         Ty::Time(Time::Duration) => ("core::time::Duration", Vec::new()),
         Ty::Time(Time::Instant) => ("std::time::Instant", Vec::new()),

@@ -84,7 +84,7 @@ fn header(parts: &[Part]) -> origin::Fragment {
 }
 
 #[derive(Clone)]
-enum Source {
+pub(super) enum Source {
     /// A value Rawr's `for` walks: an array (`array`), a string's chars or
     /// a range value.
     Values {
@@ -343,7 +343,7 @@ impl Parser<'_> {
         }
     }
 
-    fn source_pipeline(&mut self, source: Source) -> Pipeline {
+    pub(super) fn source_pipeline(&mut self, source: Source) -> Pipeline {
         let item = self.temporary("item");
         let mut pipeline = Pipeline {
             setup: origin::Fragment::default(),

@@ -488,6 +488,11 @@ def_package! {
         // element's place, or a copy of a `Copy` element, as `v[i]` reads
         // it, never a copy of the sequence.
         lib.set_iter_result(TypeId::of::<crate::place::Place>(), place_elements);
+        // A channel's receiver, as `for v in rx` walks it.
+        lib.set_iter(
+            TypeId::of::<crate::resolve::lower_nominal::thread::Receiver>(),
+            crate::resolve::lower_nominal::thread::Receiver::values,
+        );
 
         // Register iterator types.
         lib.set_iterator::<CharsStream>();
