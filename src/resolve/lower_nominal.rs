@@ -5548,9 +5548,14 @@ enum Op {
     },
     /// Write what a pattern bound by `&mut` back into the place it matched.
     Prelude(PreludeOp),
-    /// `collect()` whose target inference decides: `CollectString` or
-    /// `CollectVec` once the function is checked.
+    /// `collect()` whose target inference decides: `CollectString`,
+    /// `CollectVec` or `CollectTry` once the function is checked.
     Collect {
+        target: Ty,
+    },
+    /// Whether that `collect()` stops at an item: at an `Err` collecting a
+    /// `Result`, at a `None` collecting an `Option` (`CollectStop`).
+    CollectStop {
         target: Ty,
     },
     /// An integer operation of the kinds inference decides once the
@@ -5644,6 +5649,15 @@ enum PreludeOp {
     CollectString,
     /// `collect()` into a `Vec`: the items' array as it is.
     CollectVec,
+    /// Whether `collect()` stops at its item (`ExecutableOp::Kinded`):
+    /// `stop(item)`, for the target's code (`COLLECT_RESULT`,
+    /// `COLLECT_OPTION`, else never).
+    CollectStop,
+    /// `collect()` into a `Result` or an `Option` (`ExecutableOp::Kinded`,
+    /// the target's code and its payload's kind) of the items up to the
+    /// first `Err` or `None`: that one, else the payloads collected into a
+    /// `Vec` or a `String`.
+    CollectTry,
     /// A map's and a set's operations on its sorted entries (`keyed.rs`),
     /// called as methods so the collection is taken by reference.
     MapInsert,
@@ -5862,6 +5876,8 @@ impl PreludeOp {
             Self::PrettyDebug => "format.pretty-debug",
             Self::CollectString => "iter.collect-string",
             Self::CollectVec => "iter.collect-vec",
+            Self::CollectStop => "iter.collect-stop",
+            Self::CollectTry => "iter.collect-try",
             Self::MapInsert => "map.insert",
             Self::MapGet => "map.get",
             Self::MapRemove => "map.remove",
@@ -6189,9 +6205,14 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
             ],
-            Self::CollectString | Self::CollectVec | Self::MapFrom | Self::SetFrom => {
+            Self::CollectString
+            | Self::CollectVec
+            | Self::CollectTry
+            | Self::MapFrom
+            | Self::SetFrom => {
                 vec![TypeId::of::<crate::Array>()]
             }
+            Self::CollectStop => vec![TypeId::of::<Dynamic>()],
             Self::MapGet
             | Self::MapRemove
             | Self::MapContainsKey
@@ -6553,6 +6574,9 @@ impl PreludeOp {
                 return Ok(Dynamic::from_array(slices));
             }
             Self::IntMethod => return int_method([3, 3], args),
+            // Kinded by the target; bare, a `Vec` target's.
+            Self::CollectStop => return Ok(false.into()),
+            Self::CollectTry => return Ok(args[0].take()),
             Self::Parse => return Ok(parse_text(&args[0].clone_cast::<ImmutableString>(), 3)),
             // The engine's output callback needs the call context.
             Self::Print => return Err(invariant("`print!` runs with its call context")),
@@ -7897,6 +7921,19 @@ impl ExecutableOp {
                 &args[0].clone_cast::<ImmutableString>(),
                 kinds[0],
             )),
+            Self::Kinded {
+                op: PreludeOp::CollectStop,
+                kinds,
+            } => Ok(match kinds[0] {
+                COLLECT_RESULT => crate::result::read(args[0]).is_some_and(|item| item.is_err()),
+                COLLECT_OPTION => crate::option::read(args[0]).is_some_and(|item| item.is_none()),
+                _ => false,
+            }
+            .into()),
+            Self::Kinded {
+                op: PreludeOp::CollectTry,
+                kinds,
+            } => collect_try(*kinds, args[0].take()),
             Self::Kinded { kinds, .. } => int_method(*kinds, args),
         }
     }
@@ -8068,31 +8105,6 @@ fn matches_runtime_type(value: &Dynamic, ty: &type_ref::Type, models: &Models) -
         .runtime
         .validate_value(value, &identity, definition.schema())
         .is_ok()
-}
-
-fn nominal_payload_type(
-    ty: &Ty,
-    models: &Models,
-    _span: Span,
-) -> Result<NominalPayloadType, Error> {
-    Ok(match ty.clone() {
-        Ty::Unit => NominalPayloadType::Unit,
-        // A generic payload is erased: any value.
-        Ty::Param(_) => NominalPayloadType::Any,
-        Ty::Script(definition, ..) => {
-            let definition = models.definition(definition).definition();
-            NominalPayloadType::Script {
-                identity: type_def::Identity::Script(definition.key().clone()),
-                schema: definition.schema().clone(),
-            }
-        }
-        // An imported Rust value is a handle the generated runner names:
-        // the pattern takes any value, and the bridge checks the handle
-        // where it is used.
-        other => other
-            .native_type_id(models)
-            .map_or(NominalPayloadType::Any, NominalPayloadType::Host),
-    })
 }
 
 #[cfg(test)]
@@ -12000,6 +12012,10 @@ struct Parser<'a> {
     settled_parses: Vec<(String, String)>,
     /// The `parse` calls read so far, which number their placeholders.
     parse_count: usize,
+    /// Each `collect()` whose target inference gives later: the target,
+    /// the items' type and the call, checked once the body is
+    /// (`collected_into`).
+    pending_collects: Vec<(Ty, Ty, Span)>,
     /// The `text.into()` calls, whose target `Err(..)` may box as `dyn
     /// Error` (`error_object.rs`) and the use site gives.
     text_into: Vec<TextInto>,
@@ -12310,6 +12326,7 @@ impl<'a> Parser<'a> {
             pending_conversions: Vec::new(),
             pending_formats: Vec::new(),
             pending_parses: Vec::new(),
+            pending_collects: Vec::new(),
             settled_parses: Vec::new(),
             parse_count: 0,
             text_into: Vec::new(),
@@ -17496,6 +17513,9 @@ impl<'a> Parser<'a> {
     /// known, and write it over the placeholder (same length, so source
     /// locations stay exact).
     fn finish_conversions(&mut self) -> Result<(), Error> {
+        for (target, item, collect) in std::mem::take(&mut self.pending_collects) {
+            self.collected_into(&target, &item, collect)?;
+        }
         // A `text.into()` no use gives a target: rustc's E0283, as std has
         // many `From<String>` impls. Its target is the text's own type, a
         // `String`, or a std type of std's `From` of text, which an `if`'s
@@ -18064,12 +18084,37 @@ impl<'a> Parser<'a> {
                 ExecutableOp::Sequence(sequence::Constructor::checked(concrete.as_ref(), proof))
             }
             Op::Prelude(op) => ExecutableOp::Prelude(op),
-            Op::Collect { target } => {
-                ExecutableOp::Prelude(match self.inference.resolve(&target) {
-                    Ty::String => PreludeOp::CollectString,
-                    _ => PreludeOp::CollectVec,
-                })
-            }
+            Op::Collect { target } => match self.inference.resolve(&target) {
+                Ty::String => ExecutableOp::Prelude(PreludeOp::CollectString),
+                Ty::Keyed(kind, arguments) => {
+                    let op = if kind.is_map() {
+                        PreludeOp::MapFrom
+                    } else {
+                        PreludeOp::SetFrom
+                    };
+                    return self.prove_executable_op(self.keyed_op(op, kind, &arguments[0]));
+                }
+                Ty::Result(payload, _) => ExecutableOp::Kinded {
+                    op: PreludeOp::CollectTry,
+                    kinds: [COLLECT_RESULT, kind_code(self.inference.resolve(&payload))],
+                },
+                Ty::Option(payload) => ExecutableOp::Kinded {
+                    op: PreludeOp::CollectTry,
+                    kinds: [COLLECT_OPTION, kind_code(self.inference.resolve(&payload))],
+                },
+                _ => ExecutableOp::Prelude(PreludeOp::CollectVec),
+            },
+            Op::CollectStop { target } => ExecutableOp::Kinded {
+                op: PreludeOp::CollectStop,
+                kinds: [
+                    match self.inference.resolve(&target) {
+                        Ty::Result(..) => COLLECT_RESULT,
+                        Ty::Option(_) => COLLECT_OPTION,
+                        _ => 0,
+                    },
+                    0,
+                ],
+            },
             Op::Kinded { op, kinds } => ExecutableOp::Kinded {
                 op,
                 kinds: kinds.map(|kind| kind_code(self.inference.resolve(&kind))),
@@ -26564,6 +26609,30 @@ impl<'a> Parser<'a> {
         resolved
     }
 
+    /// What a pattern's binding or discard checks its part against: the
+    /// part's type as inference has it at the pattern. A type inference
+    /// settles only later (`let Ok(n) = s.parse()`, whose target a later
+    /// use gives), like a generic payload, takes any value.
+    fn payload_type(&self, expected: &Ty) -> NominalPayloadType {
+        match self.inference.resolve(expected) {
+            Ty::Unit => NominalPayloadType::Unit,
+            Ty::Param(_) | Ty::Infer(_) => NominalPayloadType::Any,
+            Ty::Script(definition, ..) => {
+                let definition = self.models.definition(definition).definition();
+                NominalPayloadType::Script {
+                    identity: type_def::Identity::Script(definition.key().clone()),
+                    schema: definition.schema().clone(),
+                }
+            }
+            // An imported Rust value is a handle the generated runner names:
+            // the pattern takes any value, and the bridge checks the handle
+            // where it is used.
+            other => other
+                .native_type_id(&self.models)
+                .map_or(NominalPayloadType::Any, NominalPayloadType::Host),
+        }
+    }
+
     fn resolve_child_pattern_in_mode(
         &self,
         syntax: &PatternSyntax,
@@ -26610,7 +26679,7 @@ impl<'a> Parser<'a> {
             return Ok((
                 NominalPattern::Binding {
                     name,
-                    expected: nominal_payload_type(&expected, &self.models, syntax.span())?,
+                    expected: self.payload_type(&expected),
                 },
                 CoveragePattern::Wildcard,
             ));
@@ -26677,14 +26746,14 @@ impl<'a> Parser<'a> {
                 Ok((
                     NominalPattern::Binding {
                         name: name.clone(),
-                        expected: nominal_payload_type(&expected, &self.models, *span)?,
+                        expected: self.payload_type(&expected),
                     },
                     CoveragePattern::Wildcard,
                 ))
             }
-            PatternSyntax::Discard { span } => Ok((
+            PatternSyntax::Discard { .. } => Ok((
                 NominalPattern::Discard {
-                    expected: nominal_payload_type(&expected, &self.models, *span)?,
+                    expected: self.payload_type(&expected),
                 },
                 CoveragePattern::Wildcard,
             )),
@@ -26692,7 +26761,7 @@ impl<'a> Parser<'a> {
                 self.require_pattern_type(&expected, ty, *span)?;
                 Ok((
                     NominalPattern::Discard {
-                        expected: nominal_payload_type(&expected, &self.models, *span)?,
+                        expected: self.payload_type(&expected),
                     },
                     CoveragePattern::Wildcard,
                 ))
@@ -54587,6 +54656,55 @@ fn parse_text(text: &str, code: INT) -> Dynamic {
             _ => result(text.parse::<i64>(), |value| int(value.into())),
         },
     }
+}
+
+/// `CollectStop`'s and `CollectTry`'s code for a `Result` target.
+const COLLECT_RESULT: INT = 1;
+/// Their code for an `Option` target.
+const COLLECT_OPTION: INT = 2;
+
+/// `collect()` into a `Result` or an `Option` (`kinds[0]`) of `items`, which
+/// end at the first `Err` or `None` (`CollectStop`): that one, else `Ok` or
+/// `Some` of the payloads, concatenated when the payload's kind
+/// (`kinds[1]`) is a `String`'s.
+fn collect_try(kinds: [INT; 2], items: Dynamic) -> RawrResult {
+    let items = items
+        .into_array()
+        .map_err(|_| invariant("collected items are not an array"))?;
+    let mut payloads = crate::Array::with_capacity(items.len());
+    for item in items {
+        let payload = if kinds[0] == COLLECT_RESULT {
+            match crate::result::read(&item) {
+                Some(Ok(payload)) => payload,
+                Some(Err(_)) => return Ok(item),
+                None => return Err(invariant("a collected item is not a `Result`")),
+            }
+        } else {
+            match crate::option::read(&item) {
+                Some(Some(payload)) => payload,
+                Some(None) => return Ok(item),
+                None => return Err(invariant("a collected item is not an `Option`")),
+            }
+        };
+        payloads.push(payload);
+    }
+    let collected = if kinds[1] == kind_code(Ty::String) {
+        let mut text = String::new();
+        for payload in &payloads {
+            match payload.as_char() {
+                Ok(character) => text.push(character),
+                Err(_) => text.push_str(&payload.to_string()),
+            }
+        }
+        Dynamic::from(ImmutableString::from(text))
+    } else {
+        Dynamic::from_array(payloads)
+    };
+    Ok(if kinds[0] == COLLECT_RESULT {
+        crate::result::ok(collected)
+    } else {
+        crate::option::some(collected)
+    })
 }
 
 fn kind_code(ty: Ty) -> INT {

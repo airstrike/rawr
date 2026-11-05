@@ -903,7 +903,7 @@ mod tests {
         let unit = engine
             .parse_unit(
                 "struct Leaf { text: String } \
-                 enum Cycle { End, Next(Cycle) } \
+                 enum Cycle { End, Next(Box<Cycle>) } \
                  struct Root { leaf: Leaf, cycle: Cycle }",
             )
             .unwrap();

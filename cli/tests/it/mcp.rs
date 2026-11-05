@@ -424,7 +424,9 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
     let structured = &read["structuredContent"];
     assert_eq!(structured["file"], json!(main), "{read}");
     assert_eq!(structured["function"], "counter::main", "{read}");
-    assert_eq!(structured["line"], 16, "{read}");
+    // Inspect pauses at whichever step of `main`'s loop comes next.
+    let line = structured["line"].as_u64().unwrap_or_default();
+    assert!((15..=17).contains(&line), "{read}");
     assert_eq!(
         structured["bindings"],
         json!([{ "name": "names", "value": "[\"a\", \"b\"]" }])
@@ -650,7 +652,13 @@ fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_acro
     );
 
     // A line with no statement is refused, as code. The program answers
-    // once its process compiled, which may outlast the default wait.
+    // once its process compiled, so wait for `main` to run first: an
+    // inspect answers as soon as `count` is in scope.
+    let read = client.call(
+        "inspect",
+        json!({ "path": "looper", "name": "count", "timeout_ms": 120000 }),
+    );
+    assert_eq!(read["isError"], false, "{read}");
     let refused = client.call(
         "break",
         json!({ "path": "looper", "file": "looper/src/main.rs", "line": 5, "timeout_ms": 5000 }),
