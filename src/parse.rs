@@ -22,6 +22,8 @@ pub struct Unit {
     imports: Box<[item::Use]>,
     /// Accepted inner attributes of this source file.
     inner_attributes: Box<[item::Attribute]>,
+    /// The `macro_rules!` definitions among the items, in source order.
+    macros: Box<[item::MacroRules]>,
     /// Where the first statement outside the items starts, when there is one.
     statements: Option<Position>,
     /// The source with the items blanked: the statements, which the checker
@@ -41,6 +43,7 @@ impl Unit {
             items,
             imports: Box::default(),
             inner_attributes: Box::default(),
+            macros: Box::default(),
             statements,
             script_source,
         }
@@ -54,6 +57,17 @@ impl Unit {
         self.imports = imports;
         self.inner_attributes = inner_attributes;
         self
+    }
+
+    pub(crate) fn with_macros(mut self, macros: Box<[item::MacroRules]>) -> Self {
+        self.macros = macros;
+        self
+    }
+
+    /// The `macro_rules!` definitions among the items, in source order.
+    #[must_use]
+    pub fn macros(&self) -> &[item::MacroRules] {
+        &self.macros
     }
 
     /// Every original import, with its lexical scope, before hoisting or deduplication.
