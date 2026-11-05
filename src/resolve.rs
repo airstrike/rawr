@@ -3,6 +3,7 @@
 pub(crate) mod borrowck;
 mod error;
 mod forward;
+mod infinite;
 mod intrinsic;
 pub(crate) mod item;
 pub(crate) mod lower_nominal;
@@ -574,6 +575,9 @@ fn resolve_with_evidence_and_namespace(
         lexical,
     };
     validate_invocation_storage(&program).map_err(LocatedError::into_error)?;
+    infinite::Layouts::of(&program)
+        .reject()
+        .map_err(LocatedError::into_error)?;
     Ok(program)
 }
 
@@ -5451,7 +5455,7 @@ mod tests {
         let engine = Engine::new();
         let unit = engine
             .parse_unit(
-                "struct State { event: Event } enum Event { Replace(State) } impl State { fn update(&mut self, event: Event) -> State { () } } pub fn boot(event: Event) -> State { () }",
+                "struct State { event: Event } enum Event { Replace(Box<State>) } impl State { fn update(&mut self, event: Event) -> State { () } } pub fn boot(event: Event) -> State { () }",
             )
             .unwrap();
         let program = resolve(unit, &host::Registry::new()).unwrap();
@@ -5468,10 +5472,13 @@ mod tests {
         let Kind::Enum(event) = &program.items()[1].kind else {
             panic!("expected enum");
         };
-        assert_eq!(
-            path_identity(&event.variants[0].payload[0]),
-            &state_identity
-        );
+        let Type::Path(boxed) = &event.variants[0].payload[0] else {
+            panic!("expected `Box<State>`");
+        };
+        let [super::type_ref::Argument::Type(boxed)] = &*boxed.arguments else {
+            panic!("expected `Box<State>`'s argument");
+        };
+        assert_eq!(path_identity(boxed), &state_identity);
 
         let Kind::Impl(state_impl) = &program.items()[2].kind else {
             panic!("expected impl");
