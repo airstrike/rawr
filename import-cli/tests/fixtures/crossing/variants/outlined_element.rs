@@ -4,7 +4,7 @@
 // its body gives has no public path, so Rust code can't write the opaque
 // type a value borrowing the element is held as.
 use events::widgets::{button, column, rule, text, Element, Widget};
-use events::Framed;
+use events::Outline;
 
 #[derive(Default)]
 struct Counter {
