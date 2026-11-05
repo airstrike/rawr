@@ -432,6 +432,53 @@ fn a_crates_impl_of_a_std_trait_for_a_std_type_is_callable() {
     );
 }
 
+/// iced's ferris: `f32::from(self.rotation.degrees())` converts a method's
+/// output through the crate's `impl From<Turn> for f32`, as the field form
+/// does, and so does `.into()` of a method's output. The output is `cargo
+/// run`'s.
+#[test]
+fn a_crates_from_impl_converts_a_methods_output() {
+    let (rawr, cargo) = both_printed("spun.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 Turn(0.0)..=Turn(1.0)@Turn(0.25)/None \"Rotation: 90\" \"45\"")
+            && rawr.contains(
+                "last view pad 0 Turn(0.0)..=Turn(1.0)@Turn(1.0)/None \"Rotation: 360\" \"180\""
+            ),
+        "{rawr}"
+    );
+}
+
+/// iced's styling: `primary as fn(&Theme, _) -> _` casts a crate function
+/// to a `fn` pointer whose parts inference fills, the array's next crate
+/// function coerces to that pointer, and each toggle takes its style from
+/// the array. The output is `cargo run`'s.
+#[test]
+fn crate_functions_cast_to_an_inferred_fn_pointer_share_an_array() {
+    let (rawr, cargo) = both_printed("styles.rs", "Primary");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 <Primary:1> <Secondary:3>")
+            && rawr.contains("last view pad 0 <x Primary:1> <x Secondary:3>"),
+        "{rawr}"
+    );
+}
+
+/// iced's vectorial_text: a closure's parameter that only a slider's
+/// `RangeInclusive<T>` types takes `T` from the closure's `fn(f32) -> _`,
+/// so the call's `2.0..=80.0` is a range of `f32`, as rustc infers it. The
+/// output is `cargo run`'s.
+#[test]
+fn a_closures_range_parameter_takes_its_element_from_the_other_arguments() {
+    let (rawr, cargo) = both_printed("labeled.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 pad 0 \"Size\" 2.0..=80.0@40.0/None")
+            && rawr.contains("1 message SizeChanged(80.0)"),
+        "{rawr}"
+    );
+}
+
 /// iced's gradient: `slider(Radians::RANGE, ..)` reads an associated
 /// constant whose type is std's `RangeInclusive` of the crate's own type,
 /// and the slider takes it at that type. The output is `cargo run`'s.

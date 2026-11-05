@@ -370,6 +370,15 @@ impl Builder {
         }
     }
 
+    /// The facade's items and its families' methods, each of which a
+    /// generated runner binds by its own selector.
+    #[cfg(feature = "rust-import")]
+    fn imported_items(&self) -> impl Iterator<Item = &host::item::Definition> {
+        self.definition
+            .items()
+            .chain(self.definition.family_methods())
+    }
+
     /// Return whether this exact reconstructed facade retains an imported
     /// selector that is not bound yet. An item reached through two paths
     /// (imported by name and called by its full path) is bound once.
@@ -377,7 +386,7 @@ impl Builder {
     #[doc(hidden)]
     #[must_use]
     pub fn accepts_imported(&self, selector: &[u8; 32]) -> bool {
-        self.definition.items().any(|item| {
+        self.imported_items().any(|item| {
             item.imported_identity()
                 .is_some_and(|identity| identity.fingerprint() == *selector)
                 && !self.bindings.contains_key(&item.fingerprint())
@@ -759,8 +768,7 @@ impl Builder {
         // The same Rust item under several paths (`TimeDelta::num_minutes`
         // and its alias `Duration::num_minutes`) is one binding.
         let definitions = self
-            .definition
-            .items()
+            .imported_items()
             .filter(|definition| {
                 definition
                     .imported_identity()

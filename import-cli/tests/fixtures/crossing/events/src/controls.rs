@@ -284,6 +284,13 @@ impl From<Turn> for f32 {
     }
 }
 
+/// The same in an `f64`, as iced's `impl From<Degrees> for f64`.
+impl From<Turn> for f64 {
+    fn from(turn: Turn) -> f64 {
+        f64::from(turn.0) * 360.0
+    }
+}
+
 /// How a picture turns, as iced's `Rotation`, whose `degrees()` gives a
 /// type the crate converts to `f32`.
 #[derive(Debug, Clone, Copy, PartialEq)]

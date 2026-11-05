@@ -107,6 +107,11 @@ impl Pending {
         self.methods.len()
     }
 
+    /// The candidates, each with its own selector and signature.
+    pub(crate) fn methods(&self) -> &[host::item::Definition] {
+        &self.methods
+    }
+
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         self.methods.iter().try_fold(
             std::mem::size_of::<Self>().checked_add(
