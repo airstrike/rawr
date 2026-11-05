@@ -11,6 +11,7 @@ use crate::classify::representability::ownership::Receiver;
 use crate::surface::adapter::{EntryIdentity, Operation, Plan};
 
 pub(crate) mod cached;
+mod family;
 mod place;
 
 const MANIFEST_PATH: &str = "Cargo.toml";
@@ -6627,6 +6628,27 @@ fn render_source(
     // Each trait the program names is in scope for every adapter, so a
     // method it provides resolves as it does in the program.
     let _type_paths = TypePaths::install(facade.as_ref());
+    // Every adapter that reaches a region's value of an opaque type names
+    // how the region holds it (`family`), so each is declared first: a
+    // call on what another such call gives is declared once that one is.
+    let mut boxed = Vec::new();
+    loop {
+        let mut declared = false;
+        for plan in plans {
+            if let Some(ty) = declare_wrapper(plan)? {
+                declared = true;
+                if scoped_type(&ty).is_some_and(|key| family::Ops::held(&key).is_some()) {
+                    boxed.push(ty);
+                }
+            }
+        }
+        if !declared {
+            break;
+        }
+    }
+    for ty in &boxed {
+        declare_ops(plans, ty)?;
+    }
     if let Some(plan) = &facade {
         for facade in plan.facades() {
             // A macro's `$crate` path to a trait names the crate that
@@ -7849,6 +7871,7 @@ fn render_matcher(
     // A value in a scope frame's region (D558 tier 1): its fields that
     // carry the region's lifetime stay there.
     if let Some(family) = container_family(&path, &ty) {
+        let reached = family.call(family::Reach::Get, "scoped");
         let found = if reads {
             "values.into_iter().next().ok_or(Error::TypeMismatch)"
         } else {
@@ -7868,7 +7891,7 @@ fn render_matcher(
             "    if let Some(scoped) = scoped_value(arguments, 0) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
             #[allow(unreachable_patterns)]
-            let output = match region.get::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))? {{ {pattern} => Some({cloned}), _ => None }};
+            let output = match region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))? {{ {pattern} => Some({cloned}), _ => None }};
             let Some(fields) = output else {{ return {missed}; }};
             let fields = fields?;
             #[allow(unused_mut)]
@@ -8557,6 +8580,76 @@ fn byte_slice(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), request::Error> 
     output.write_all(b"]").map_err(request::unwritable)
 }
 
+/// The receiver of an opaque type's method in a region (`family`): its
+/// family, and the call of it when the region holds it boxed, through its
+/// trait's method.
+struct Operand {
+    family: family::Family,
+    call: Option<String>,
+}
+
+/// The call of an opaque type's method `plan`, the `consumer`-th call on
+/// the type, on a receiver a region holds (`family`): the value isn't in
+/// the arena, where the call that made it set its table. Its type is a
+/// wrapper's output, whose bounds rustc knows, or it is boxed, and the call
+/// is its trait's method. Empty for another call.
+fn region_operand(
+    plan: &Plan,
+    operand: &convert::Type,
+    consumer: usize,
+) -> Result<String, request::Error> {
+    let Operation::Method {
+        receiver,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        ..
+    } = plan.operation()
+    else {
+        return Ok(String::new());
+    };
+    let Some(family) = family_of(operand) else {
+        return Ok(String::new());
+    };
+    let operand = match scoped_type(operand).filter(|key| family::Ops::held(key).is_some()) {
+        Some(key) => {
+            let lent = match receiver {
+                Receiver::Owned => "receiver",
+                Receiver::Shared => "&**receiver",
+                Receiver::Mutable => "&mut **receiver",
+            };
+            let Some(call) = family::Ops::call(&key, consumer, lent, signature.inputs().len())
+            else {
+                return Ok(String::new());
+            };
+            Operand {
+                family,
+                call: Some(call),
+            }
+        }
+        None if family.named().is_none() => Operand { family, call: None },
+        None => return Ok(String::new()),
+    };
+    let mut body = Vec::new();
+    render_arguments_with(signature, substitutions, 1, &mut body)?;
+    render_scoped_receiver(
+        plan,
+        &rust_path(plan),
+        *receiver,
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+        Some(operand),
+        &mut body,
+    )?;
+    let body = String::from_utf8(body).map_err(request::unwritable)?;
+    Ok(format!(
+        "\n    if scoped_value(arguments, 0).is_some() {{\n{body}    }}"
+    ))
+}
+
 fn render_adapter(
     plan: &Plan,
     cohort: &[Plan],
@@ -8590,9 +8683,14 @@ fn render_adapter(
             )
             .map_err(encoding);
         }
+        let scoped = if position == 0 {
+            region_operand(plan, &operand, index)?
+        } else {
+            String::new()
+        };
         return writeln!(
             output,
-            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{{scoped}
     let handle = native_handle(arguments, {position}, false)?;
     let table = arguments.arena.opaque(&handle)?;
     table.call({index}, arguments)
@@ -9354,6 +9452,7 @@ fn render_adapter_body(
             // quick-xml's `Attribute::value`: a copy, which stays in the
             // region when it carries the region's lifetime.
             if let Some(family) = container_family(&path, &path) {
+                let reached = family.call(family::Reach::Get, "scoped");
                 let converted = {
                     let _region = InRegion::enter();
                     let mut converted = String::new();
@@ -9364,7 +9463,7 @@ fn render_adapter_body(
                     output,
                     "    if let Some(scoped) = scoped_value(arguments, 0) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
-            let output = Clone::clone(&region.get::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?.{});
+            let output = Clone::clone(&region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?.{});
             {converted}
         }})
         .map_err(|error| Error::Lent(scoped.name(), error))?;
@@ -10003,6 +10102,7 @@ fn render_adapter_body(
                             substitutions,
                             constants,
                             *container_parameters,
+                            None,
                             output,
                         )?;
                         // A `&str` lent to a receiver out of any region,
@@ -10641,9 +10741,12 @@ fn render_anchored_output(
     if REGION_ARGUMENTS.get() || !matches!(returned, convert::Type::Nominal { .. }) {
         return Ok(());
     }
-    let Some(family) = family_of(returned) else {
+    // An opaque type's wrapper takes the inputs of a call in a region of
+    // values (`render_scoped_receiver`), not this call's.
+    let Some(family) = family_of(returned).filter(|family| family.named().is_some()) else {
         return Ok(());
     };
+    let inserted = family.call(family::Reach::Insert, &held_value(returned, "made"));
     // The crate values the output borrows are shared with the region's
     // pins, which live as long as the view's borrow (`views_natives`).
     let pins = if VIEWED_ARGUMENTS.get() {
@@ -10656,7 +10759,7 @@ fn render_anchored_output(
         "    if let Some(anchor) = __rawr_internal::scope::anchor() {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{pins}
             let made = lend(arguments.arena, || {call});
-            Ok::<Dynamic, Error>(Dynamic::from(region.insert::<{family}>(made)))
+            Ok::<Dynamic, Error>(Dynamic::from(region.{inserted}))
         }})
         .map_err(|error| Error::Lent(\"a slot's region\", error))?;
     }}"
@@ -10789,8 +10892,8 @@ fn render_method_opening(
     call.write_all(b")").map_err(encoding)?;
     let call = String::from_utf8(call).map_err(request::unwritable)?;
     let (access, reach) = match receiver {
-        Receiver::Shared => ("shared", "get"),
-        Receiver::Mutable => ("mutable", "get_mut"),
+        Receiver::Shared => ("shared", family::Reach::Get),
+        Receiver::Mutable => ("mutable", family::Reach::GetMut),
         Receiver::Owned => {
             return Err(request::drift(
                 "a scope frame's call that takes its receiver",
@@ -10801,11 +10904,12 @@ fn render_method_opening(
         Some(family) => format!(
             "Some(scoped) => __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<_, Error> {{
                 #[allow(unused_mut)]
-                let mut receiver = region.{reach}::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;
+                let mut receiver = region.{}.map_err(|error| Error::Lent(scoped.name(), error))?;
                 Ok({call})
             }})
             .map_err(|error| Error::Lent(scoped.name(), error))
-            .and_then(|made| made),"
+            .and_then(|made| made),",
+            family.call(reach, "scoped")
         ),
         None => "Some(scoped) => Err(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch)),".to_owned(),
     };
@@ -10841,18 +10945,19 @@ fn render_method_opening(
         // its region, shared for `&self`, or leased from its arena slot,
         // until the rest of the scope has run.
         let (claim, family_reach) = match receiver {
-            Receiver::Shared => ("with_ref", "get"),
-            _ => ("with", "get_mut"),
+            Receiver::Shared => ("with_ref", family::Reach::Get),
+            _ => ("with", family::Reach::GetMut),
         };
         let scoped = match container_family(path, &container) {
             Some(family) => format!(
                 "Some(scoped) => __rawr_internal::scope::{claim}::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
             #[allow(unused_mut)]
-            let mut receiver = region.{family_reach}::<{family}>(scoped).map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?;
+            let mut receiver = region.{}.map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?;
             let made = {call};
             {frame}
         }})
-        .map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?,"
+        .map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?,",
+                family.call(family_reach, "scoped")
             ),
             None => "Some(scoped) => Err(runtime_error(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch))),".to_owned(),
         };
@@ -10916,7 +11021,9 @@ fn render_method_opening(
 /// The call of a method whose receiver is a value in a scope frame's
 /// region (D558 tier 1), when its type carries lifetimes: the receiver is
 /// reached in its region, and an output that carries the region's
-/// lifetime stays there. Nothing for another receiver type.
+/// lifetime stays there. The receiver's family is `operand`'s, for an
+/// opaque type's method, else its container's. Nothing for another
+/// receiver type.
 #[allow(clippy::too_many_arguments)]
 fn render_scoped_receiver(
     plan: &Plan,
@@ -10926,6 +11033,7 @@ fn render_scoped_receiver(
     substitutions: &[convert::Type],
     constants: &[convert::Constant],
     container_parameters: usize,
+    operand: Option<Operand>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let encoding = request::unwritable;
@@ -10940,46 +11048,58 @@ fn render_scoped_receiver(
         &mut container,
     )?;
     let container = String::from_utf8(container).map_err(request::unwritable)?;
-    let Some(family) = container_family(path, &container) else {
-        return Ok(());
+    let (family, call) = match operand {
+        Some(Operand { family, call }) => (family, call),
+        None => match container_family(path, &container) {
+            Some(family) => (family, None),
+            None => return Ok(()),
+        },
     };
-    let mut call = Vec::new();
-    render_method_head(
-        plan.name(),
-        receiver,
-        signature,
-        substitutions,
-        constants,
-        container_parameters,
-        &mut call,
-    )?;
-    argument_list(signature.inputs().len(), 1, &mut call)?;
-    let mut call = Vec::new();
-    render_method_head(
-        plan.name(),
-        receiver,
-        signature,
-        substitutions,
-        constants,
-        container_parameters,
-        &mut call,
-    )?;
-    argument_list(signature.inputs().len(), 1, &mut call)?;
-    call.write_all(b")").map_err(encoding)?;
-    call.write_all(lent_copy(signature).as_bytes())
-        .map_err(encoding)?;
-    let call = String::from_utf8(call).map_err(request::unwritable)?;
+    // A boxed receiver's call is its trait's method (`family::Ops`), which
+    // gives its output as the region holds it.
+    let (call, ops) = match call {
+        Some(call) => (call, true),
+        None => (
+            scoped_receiver_call(
+                plan,
+                receiver,
+                signature,
+                substitutions,
+                constants,
+                container_parameters,
+            )?,
+            false,
+        ),
+    };
     let reach = match receiver {
-        Receiver::Owned => "take",
-        Receiver::Shared => "get",
-        Receiver::Mutable => "get_mut",
+        Receiver::Owned => family::Reach::Take,
+        Receiver::Shared => family::Reach::Get,
+        Receiver::Mutable => family::Reach::GetMut,
     };
+    let reached = family.call(reach, "scoped");
     let returned = substituted(signature.output(), signature, substitutions)?;
-    let converted = {
-        let _region = InRegion::enter();
-        let mut converted = String::new();
-        render_to_dynamic(&returned, "output", 0, &mut converted)?;
-        converted
+    // An opaque output Rust code can't name is made through its wrapper
+    // (`family`), whose output the region holds, and a trait method's is
+    // what the region holds.
+    let made = match family_of(&returned) {
+        Some(family) if let Some(made) = family.made() => Some((made, family)),
+        Some(family) if ops && family.named().is_some() => Some((call.clone(), family)),
+        _ => None,
+    };
+    let (call, converted) = match made {
+        Some((made, family)) => (
+            made,
+            format!(
+                "Ok::<Dynamic, Error>(Dynamic::from(region.{}))",
+                family.call(family::Reach::Insert, "output")
+            ),
+        ),
+        None => {
+            let _region = InRegion::enter();
+            let mut converted = String::new();
+            render_to_dynamic(&returned, "output", 0, &mut converted)?;
+            (call, converted)
+        }
     };
     // A `&str` the call lends the receiver, as `label(impl IntoFragment<'a>)`
     // takes one, is pinned in the region the receiver is in, at its
@@ -10999,7 +11119,7 @@ fn render_scoped_receiver(
             output,
             "    if let Some(scoped) = scoped_value(arguments, 0) {{
         #[allow(unused_mut)]
-        let mut receiver = region.{reach}::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;{pinned}
+        let mut receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;{pinned}
         let output = {call};
         return {converted};
     }}"
@@ -11011,7 +11131,7 @@ fn render_scoped_receiver(
         "    if let Some(scoped) = scoped_value(arguments, 0) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
             #[allow(unused_mut)]
-            let mut receiver = region.{reach}::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;{pinned}
+            let mut receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;{pinned}
             let output = {call};
             {converted}
         }})
@@ -11019,6 +11139,186 @@ fn render_scoped_receiver(
     }}"
     )
     .map_err(encoding)
+}
+
+/// The call `render_scoped_receiver` makes, of `receiver` and the
+/// arguments `argument_0`, ...
+fn scoped_receiver_call(
+    plan: &Plan,
+    receiver: Receiver,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+) -> Result<String, request::Error> {
+    let encoding = request::unwritable;
+    let mut call = Vec::new();
+    render_method_head(
+        plan.name(),
+        receiver,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    argument_list(signature.inputs().len(), 1, &mut call)?;
+    call.write_all(b")").map_err(encoding)?;
+    call.write_all(lent_copy(signature).as_bytes())
+        .map_err(encoding)?;
+    String::from_utf8(call).map_err(request::unwritable)
+}
+
+/// Declare how a region holds the output of a method `plan` whose receiver
+/// a region holds, `render_scoped_receiver`'s call, when the output is an
+/// opaque type that borrows (`family`), and give it when the declaration is
+/// new. A receiver of a family struct makes the output through a wrapper,
+/// whose inputs are the receiver, at the type its family holds, and each
+/// argument at `'x`, and whose bounds are the opaque type's. A receiver
+/// that is itself such an opaque type makes the output boxed, as no
+/// wrapper over another compiles. None for another method, or one whose
+/// types have no Rust spelling.
+fn declare_wrapper(plan: &Plan) -> Result<Option<convert::Type>, request::Error> {
+    let Operation::Method {
+        receiver: receiver @ Receiver::Owned,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        ..
+    } = plan.operation()
+    else {
+        return Ok(None);
+    };
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let convert::Type::Nominal { definition, .. } = &returned else {
+        return Ok(None);
+    };
+    if !is_opaque(definition) || !carries_lifetime(&returned) {
+        return Ok(None);
+    }
+    let Some(key) = scoped_type(&returned) else {
+        return Ok(None);
+    };
+    let Some(bounds) = opaque_bounds(signature, substitutions)? else {
+        return Ok(None);
+    };
+    if let Some((0, _, operand)) = opaque_operand(plan)? {
+        if family_of(&operand).is_none() || family::Ops::held(&key).is_some() {
+            return Ok(None);
+        }
+        let (held, _) = family::Ops::declare(key, bounds);
+        family(held, BOXED_LIFETIMES);
+        return Ok(Some(returned));
+    }
+    let path = rust_path(plan);
+    let mut container = Vec::new();
+    render_container_path(
+        &path,
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
+    let Some(held) = container_family(&path, &container)
+        .as_ref()
+        .and_then(family::Family::named)
+        .and_then(family_type)
+    else {
+        return Ok(None);
+    };
+    if family::of(&key).is_some() {
+        return Ok(None);
+    }
+    // An input of an opaque type has no Rust spelling.
+    let mut inputs = vec![("receiver".to_owned(), held)];
+    for (position, input) in signature.inputs().iter().enumerate() {
+        let input = substituted(input, signature, substitutions)?;
+        let Some(ty) = scoped_type(&input).filter(|_| !holds_opaque(&input)) else {
+            return Ok(None);
+        };
+        inputs.push((format!("argument_{position}"), ty));
+    }
+    let call = scoped_receiver_call(
+        plan,
+        *receiver,
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+    )?;
+    family::Wrapper::new(inputs, call, bounds).declare(key);
+    Ok(Some(returned))
+}
+
+/// What a region's boxed value of an opaque type (`family::Ops`) is, for its
+/// family struct: it carries one lifetime, in which it is invariant, and
+/// has none of `Debug`, `Clone` and `PartialEq`.
+const BOXED_LIFETIMES: Lifetimes = Lifetimes {
+    count: 1,
+    covariant: false,
+    debug: false,
+    clone: false,
+    partial_eq: false,
+};
+
+/// Each call in `plans` on the opaque type `ty`, which a region holds boxed
+/// (`family::Ops`), as a method of the trait it is held through: its
+/// receiver the value itself, its inputs at `'x`, and its output boxed in
+/// turn when that is such a type too. A call whose types have no Rust
+/// spelling, or whose output is made through a wrapper, has none.
+fn declare_ops(plans: &[Plan], ty: &convert::Type) -> Result<(), request::Error> {
+    let Some(key) = scoped_type(ty) else {
+        return Ok(());
+    };
+    for (consumer, plan) in opaque_consumers(plans, ty)?.into_iter().enumerate() {
+        let Operation::Method {
+            receiver,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            ..
+        } = plan.operation()
+        else {
+            continue;
+        };
+        if !matches!(opaque_operand(plan)?, Some((0, ..))) {
+            continue;
+        }
+        let mut inputs = Vec::new();
+        for (position, input) in signature.inputs().iter().enumerate() {
+            let input = substituted(input, signature, substitutions)?;
+            let Some(rust) = scoped_type(&input).filter(|_| !holds_opaque(&input)) else {
+                return Ok(());
+            };
+            inputs.push((format!("argument_{position}"), rust));
+        }
+        let returned = substituted(signature.output(), signature, substitutions)?;
+        let call = scoped_receiver_call(
+            plan,
+            *receiver,
+            signature,
+            substitutions,
+            constants,
+            *container_parameters,
+        )?;
+        let (output, call) = match scoped_type(&returned) {
+            Some(text) if let Some(held) = family::Ops::held(&text) => {
+                (held, format!("Box::new({call})"))
+            }
+            Some(text) if family::of(&text).is_none() => (text, call),
+            _ => continue,
+        };
+        family::Ops::add(
+            &key,
+            family::Method::new(consumer, *receiver, inputs, output, call),
+        );
+    }
+    Ok(())
 }
 
 /// The call of a method that borrows its receiver, into `output`. The
@@ -11089,6 +11389,7 @@ fn render_borrowed_receiver(
         substitutions,
         constants,
         container_parameters,
+        None,
         output,
     )?;
     let access = if mutable { "mutable" } else { "shared" };
@@ -11336,9 +11637,10 @@ fn render_scoped_guard(
     // The guard on the receiver in its region, inside `with`.
     let reach = format!(
         "__rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<_, Error> {{
-            let receiver = region.get_mut::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))?;
+            let receiver = region.{}.map_err(|error| Error::Lent(scoped.name(), error))?;
             let mut guard = {method};
-            let _ = &mut guard;"
+            let _ = &mut guard;",
+        family.call(family::Reach::GetMut, "scoped")
     );
     let close = "})
         .map_err(|error| Error::Lent(scoped.name(), error))
@@ -12967,7 +13269,9 @@ fn render_slot(
     // type the instance gives a synthetic output is (`W` of iced's
     // `ViewFn`, a `Column<'a, ..>`).
     let family = if call.borrows() || carries_lifetime(&returned) {
-        Some(family_of(&returned).ok_or_else(|| drift("a slot's borrowing output"))?)
+        // The slot's signature names the output's type, which a wrapper's
+        // family can't (`family`).
+        Some(written_family(&returned).ok_or_else(|| drift("a slot's borrowing output"))?)
     } else {
         None
     };
@@ -13868,8 +14172,9 @@ fn render_take_input(
             owned: true,
             length: None,
         } = substituted(ty, signature, substitutions)?
-        && let Some(family) = family_of(&element)
+        && let Some(family) = family_of(&element).filter(|family| family.named().is_some())
     {
+        let taken = family.call(family::Reach::Take, "scoped");
         // An element made outside any region is in the arena, at
         // `'static`, which the region's lifetime shortens when the type is
         // covariant in it, as rustc's variance says. An invariant one, as
@@ -13888,7 +14193,7 @@ fn render_take_input(
         };
         return writeln!(
             output,
-            "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).collect::<Result<Vec<_>, Error>>())?;"
+            "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.{taken}.map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).collect::<Result<Vec<_>, Error>>())?;"
         )
         .map_err(request::unwritable);
     }
@@ -13898,8 +14203,9 @@ fn render_take_input(
     // arena, as an array's element is.
     if REGION_ARGUMENTS.get()
         && let convert::Type::Option(element) = substituted(ty, signature, substitutions)?
-        && let Some(family) = family_of(&element)
+        && let Some(family) = family_of(&element).filter(|family| family.named().is_some())
     {
+        let taken = family.call(family::Reach::Take, "scoped");
         let rust =
             concrete_type(&element).ok_or_else(|| request::drift("a region option's element"))?;
         let arena = if shortens(&element) {
@@ -13912,7 +14218,7 @@ fn render_take_input(
         };
         return writeln!(
             output,
-            "    let argument_{local} = {{ let mut value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)?.map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).transpose()? }};"
+            "    let argument_{local} = {{ let mut value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)?.map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.{taken}.map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).transpose()? }};"
         )
         .map_err(request::unwritable);
     }
@@ -13921,9 +14227,10 @@ fn render_take_input(
     if REGION_ARGUMENTS.get()
         && let Some(family) = family_of(&substituted(ty, signature, substitutions)?)
     {
+        let taken = family.call(family::Reach::Take, "scoped");
         return writeln!(
             output,
-            "    let argument_{local} = {{ let scoped = scoped_value(arguments, {index}).ok_or(Error::TypeMismatch)?; region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))? }};"
+            "    let argument_{local} = {{ let scoped = scoped_value(arguments, {index}).ok_or(Error::TypeMismatch)?; region.{taken}.map_err(|error| Error::Lent(scoped.name(), error))? }};"
         )
         .map_err(request::unwritable);
     }
@@ -14871,11 +15178,12 @@ fn render_give(
         convert::Type::Nominal { .. }
             if IN_REGION.get()
                 && carries_lifetime(ty)
-                && let Some(family) = family_of(ty) =>
+                && let Some(family) = family_of(ty).filter(|family| family.named().is_some()) =>
         {
             writeln!(
                 output,
-                "    Ok(Dynamic::from(region.insert::<{family}>({value})))"
+                "    Ok(Dynamic::from(region.{}))",
+                family.call(family::Reach::Insert, &held_value(ty, value))
             )
         }
         // An `impl Fn(A..) -> B` is held boxed, as a call that takes a
@@ -15371,11 +15679,12 @@ fn render_to_dynamic(
         convert::Type::Nominal { .. }
             if IN_REGION.get()
                 && carries_lifetime(ty)
-                && let Some(family) = family_of(ty) =>
+                && let Some(family) = family_of(ty).filter(|family| family.named().is_some()) =>
         {
             write!(
                 output,
-                "Ok::<Dynamic, Error>(Dynamic::from(region.insert::<{family}>({value})))"
+                "Ok::<Dynamic, Error>(Dynamic::from(region.{}))",
+                family.call(family::Reach::Insert, &held_value(ty, value))
             )
         }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
@@ -16341,23 +16650,28 @@ struct Owned {
     forwards: Option<Forwards>,
 }
 
-/// The value an opaque output that borrows its call's crate values lives
-/// in (`Owned`), or `None` when the output isn't one, or its traits or
-/// arguments have no Rust spelling.
-fn lent_cell(
-    signature: &crate::classify::representability::signature::Signature,
+/// The traits of `returned`, an opaque output of `signature` at
+/// `substitutions`, besides auto traits: each by its identity and path, at
+/// its arguments, with each associated type the bounds bind, as `Item = T`.
+/// `None` when `returned` is no opaque type, or a trait or argument has no
+/// Rust spelling.
+#[allow(clippy::type_complexity)]
+fn opaque_traits<'s>(
+    signature: &'s crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
-) -> Result<Option<Owned>, request::Error> {
-    // Only an output the classifier read as borrowing its inputs, whose
-    // bounds it can write (`Signature::lends`).
-    if signature.lends().is_empty() {
-        return Ok(None);
-    }
-    let returned = substituted(signature.output(), signature, substitutions)?;
+    returned: &convert::Type,
+    trait_path: fn(&[u8; 32]) -> Option<String>,
+) -> Result<
+    Option<(
+        &'s crate::classify::representability::signature::Opaque,
+        Vec<([u8; 32], String, Vec<String>)>,
+    )>,
+    request::Error,
+> {
     let convert::Type::Nominal {
         definition,
         arguments,
-    } = &returned
+    } = returned
     else {
         return Ok(None);
     };
@@ -16381,7 +16695,7 @@ fn lent_cell(
         else {
             return Ok(None);
         };
-        let Some(path) = TYPE_PATHS.with_borrow(|paths| paths.get(id.as_bytes()).cloned()) else {
+        let Some(path) = trait_path(id.as_bytes()) else {
             return Ok(None);
         };
         let mut written = Vec::new();
@@ -16422,15 +16736,75 @@ fn lent_cell(
             written.push(format!("{} = {rust}", associated.name()));
         }
     }
-    let bounds = traits
-        .iter()
-        .map(|(_, path, written)| {
-            if written.is_empty() {
-                path.clone()
-            } else {
-                format!("{path}<{}>", written.join(", "))
-            }
+    Ok(Some((opaque, traits)))
+}
+
+/// The Rust path of the trait `identity` its root names it by.
+fn root_trait_path(identity: &[u8; 32]) -> Option<String> {
+    TYPE_PATHS.with_borrow(|paths| paths.get(identity).cloned())
+}
+
+/// The Rust path of the trait `identity`: its root's, or else the one
+/// through the crate that defines it, which the runner depends on as a
+/// macro's `$crate` reaches it (`hidden_spelling`), as iced's `explain`
+/// gives `impl iced_core::Widget<..>`, which no path of iced's names.
+fn bound_trait_path(identity: &[u8; 32]) -> Option<String> {
+    root_trait_path(identity).or_else(|| {
+        PATH_IDENTITIES.with_borrow(|identities| {
+            identities
+                .iter()
+                .filter(|(_, known)| *known == identity)
+                .find_map(|(path, _)| hidden_spelling(path))
         })
+    })
+}
+
+/// Each of `traits`, as `opaque_traits` gives them, as Rust writes it in a
+/// bound.
+fn written_bounds(traits: &[([u8; 32], String, Vec<String>)]) -> impl Iterator<Item = String> + '_ {
+    traits.iter().map(|(_, path, written)| {
+        if written.is_empty() {
+            path.clone()
+        } else {
+            format!("{path}<{}>", written.join(", "))
+        }
+    })
+}
+
+/// The bounds of the opaque output of `signature` at `substitutions`, as
+/// `Widget<crate::Message, ..>`, when Rust can write them.
+fn opaque_bounds(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<Option<String>, request::Error> {
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let Some((_, traits)) = opaque_traits(signature, substitutions, &returned, bound_trait_path)?
+    else {
+        return Ok(None);
+    };
+    let bounds = written_bounds(&traits).collect::<Vec<_>>();
+    Ok((!bounds.is_empty()).then(|| bounds.join(" + ")))
+}
+
+/// The value an opaque output that borrows its call's crate values lives
+/// in (`Owned`), or `None` when the output isn't one, or its traits or
+/// arguments have no Rust spelling.
+fn lent_cell(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<Option<Owned>, request::Error> {
+    // Only an output the classifier read as borrowing its inputs, whose
+    // bounds it can write (`Signature::lends`).
+    if signature.lends().is_empty() {
+        return Ok(None);
+    }
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let Some((opaque, traits)) =
+        opaque_traits(signature, substitutions, &returned, root_trait_path)?
+    else {
+        return Ok(None);
+    };
+    let bounds = written_bounds(&traits)
         .chain(["'a".to_owned()])
         .collect::<Vec<_>>()
         .join(" + ");
@@ -17126,18 +17500,49 @@ fn carries_lifetime(ty: &convert::Type) -> bool {
 /// family is declared in `rawr_families`. A type that leaves an argument
 /// to rustc's inference, spelled `_`, has none: an associated type names
 /// its type in full, so its value is held as one no region holds.
-fn family(text: String, lifetimes: Lifetimes) -> Option<String> {
+fn family(text: String, lifetimes: Lifetimes) -> Option<family::Family> {
     if names_inferred(&text) {
         return None;
     }
-    Some(FAMILIES.with_borrow_mut(|families| {
-        let next = families.len();
+    Some(family::Family::Named(FAMILIES.with_borrow_mut(
+        |families| {
+            let next = families.len();
+            families
+                .entry(text)
+                .or_insert_with(|| (format!("RawrFamily{next}"), lifetimes))
+                .0
+                .clone()
+        },
+    )))
+}
+
+/// The type at `'x` of the family struct `name` declares.
+fn family_type(name: &str) -> Option<String> {
+    FAMILIES.with_borrow(|families| {
         families
-            .entry(text)
-            .or_insert_with(|| (format!("RawrFamily{next}"), lifetimes))
-            .0
-            .clone()
-    }))
+            .iter()
+            .find(|(_, (known, _))| known == name)
+            .map(|(text, _)| text.clone())
+    })
+}
+
+/// `value`, a Rust value of `ty`, as the region holds it: boxed, when
+/// that is how it holds the opaque type (`family::Ops`).
+fn held_value(ty: &convert::Type, value: &str) -> String {
+    if scoped_type(ty).is_some_and(|key| family::Ops::held(&key).is_some()) {
+        format!("Box::new({value})")
+    } else {
+        value.to_owned()
+    }
+}
+
+/// The family struct of `ty`, when the region holds `ty` itself, so a
+/// signature can name it as `<F as Family>::Of<'x>`: a wrapper's family
+/// names no type, and a boxed one holds another (`family`).
+fn written_family(ty: &convert::Type) -> Option<String> {
+    let name = family_of(ty)?.named()?.to_owned();
+    let boxed = scoped_type(ty).is_some_and(|key| family::Ops::held(&key).is_some());
+    (!boxed).then_some(name)
 }
 
 /// Whether the Rust type spelled `text` has an argument `_`.
@@ -17150,13 +17555,22 @@ fn names_inferred(text: &str) -> bool {
     })
 }
 
-/// The family of `ty`, an imported type that carries lifetimes.
-fn family_of(ty: &convert::Type) -> Option<String> {
+/// The family of `ty`, an imported type that carries lifetimes. An opaque
+/// type's is what the wrapper of the call that makes it gives, when it has
+/// one (`family`).
+fn family_of(ty: &convert::Type) -> Option<family::Family> {
     let convert::Type::Nominal { definition, .. } = ty else {
         return None;
     };
     if !carries_lifetime(ty) {
         return None;
+    }
+    if is_opaque(definition) {
+        let key = scoped_type(ty)?;
+        return match family::Ops::held(&key) {
+            Some(held) => family(held, BOXED_LIFETIMES),
+            None => family::of(&key),
+        };
     }
     let lifetimes = TYPE_TRAITS.with_borrow(|types| types.get(definition.as_bytes()).copied())?;
     family(scoped_type(ty)?, lifetimes)
@@ -17170,7 +17584,7 @@ fn carries_lifetimes(path: &str) -> bool {
 
 /// The family of a method's container, spelled `container` as
 /// `render_container_path` writes it, at `'x`.
-fn container_family(path: &str, container: &str) -> Option<String> {
+fn container_family(path: &str, container: &str) -> Option<family::Family> {
     let lifetimes = SCOPED_PATHS.with_borrow(|paths| paths.get(path).copied())?;
     // A type has one family, by the path its facade names it at, whatever
     // path the adapter reaches it by (`quick_xml::reader::Reader` is
@@ -17661,8 +18075,10 @@ fn render_impl_function(
     // pinned for the runner's life, since the trait may ask the widgets to
     // outlive any lifetime of the impl's, and taken out of it at
     // `'static`.
+    // The member's signature names the output's type, which a wrapper's
+    // family can't (`family`).
     let family = carries_lifetime(returned)
-        .then(|| family_of(returned))
+        .then(|| written_family(returned))
         .flatten();
     let (lifetime, rust, mut call) = match family {
         Some(family) => {
@@ -17822,14 +18238,20 @@ use super::*;
         } else {
             String::new()
         };
-        let shown = text.replace("'x", "'_");
+        let shown = family::Ops::shown(&text)
+            .unwrap_or_else(|| text.clone())
+            .replace("'x", "'_");
         writeln!(
             output,
             "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{clone}{equal}\n}}\n"
         )
         .map_err(request::unwritable)?;
     }
-    Ok(())
+    let mut wrappers = String::new();
+    family::render(&mut wrappers);
+    output
+        .write_all(wrappers.as_bytes())
+        .map_err(request::unwritable)
 }
 
 /// The type `alias` names when it passes its own parameters on, all and
@@ -18075,6 +18497,7 @@ impl TypePaths {
             }
         }
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        family::clear();
         PROXIES.with_borrow_mut(std::collections::BTreeMap::clear);
         PROXY_CRATE.with_borrow_mut(|named| *named = None);
         Self
@@ -18096,6 +18519,7 @@ impl Drop for TypePaths {
         PATH_IDENTITIES.with_borrow_mut(std::collections::BTreeMap::clear);
         ITEM_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
+        family::clear();
         PROXIES.with_borrow_mut(std::collections::BTreeMap::clear);
         PROXY_CRATE.with_borrow_mut(|named| *named = None);
     }

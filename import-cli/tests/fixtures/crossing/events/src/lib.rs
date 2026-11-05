@@ -447,6 +447,10 @@ impl<T, E> Task<Result<T, E>> {
 /// A message no program sends: std's `Infallible`, as iced's `Never` is.
 pub use std::convert::Infallible as Never;
 
+/// `Framed` and `Outline` at the root too, as iced re-exports
+/// `iced_widget::Widget` as `iced::Widget`.
+pub use widgets::{Framed, Outline};
+
 /// iced's `advanced`: iced_graphics's modules, which another crate defines.
 pub mod advanced {
     pub use parts::renderer::{self, Renderer};
@@ -634,6 +638,46 @@ pub mod widgets {
         }
     }
 
+    /// One more method every widget has through a blanket impl: its own
+    /// trait, as one trait's two default methods that give opaque types
+    /// aren't held apart yet.
+    pub trait Outline<Message, Theme = crate::Theme, Renderer = crate::widgets::Renderer>:
+        Widget<Message, Theme, Renderer>
+    {
+        /// The widget, outlined: an opaque type the trait's own default
+        /// body gives, of a type no public path names.
+        fn outlined(self) -> impl Widget<Message, Theme, Renderer>
+        where
+            Self: Sized,
+        {
+            outline::Outlined(self)
+        }
+    }
+
+    impl<T, Message, Theme, Renderer> Outline<Message, Theme, Renderer> for T where
+        T: Widget<Message, Theme, Renderer>
+    {
+    }
+
+    /// The widget `Outline::outlined` gives, which no public path names.
+    mod outline {
+        pub struct Outlined<W>(pub(super) W);
+
+        impl<W, Message, Theme, Renderer> super::Widget<Message, Theme, Renderer> for Outlined<W>
+        where
+            W: super::Widget<Message, Theme, Renderer>,
+        {
+            fn labels(&self, labels: &mut Vec<String>) {
+                labels.push("outlined".to_owned());
+                self.0.labels(labels);
+            }
+
+            fn press(&self, label: &str) -> Option<Message> {
+                self.0.press(label)
+            }
+        }
+    }
+
     /// A line `width` wide that sends a message when pressed, a widget at
     /// the crate's theme and renderer.
     pub struct Rule<Message> {
@@ -656,8 +700,9 @@ pub mod widgets {
         }
     }
 
-    /// The widget `Framed::explain` gives, which no public path names.
-    mod explained {
+    /// The widget `Framed::explain` gives, at a public path the root
+    /// doesn't re-export, as iced's `explain` gives `iced_widget::Explain`.
+    pub mod explained {
         pub struct Explain<W> {
             pub(super) widget: W,
             pub(super) color: u32,

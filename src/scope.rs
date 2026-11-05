@@ -71,6 +71,26 @@
 //!     scope::with::<Words, _>(n, |w| std::thread::spawn(move || w.next().is_some()))
 //! });
 //! ```
+//!
+//! A region's value, named by the function that gives it ([`Given`]),
+//! that borrows a local which ends before the region does:
+//! ```compile_fail,E0597
+//! use rawr::scope::{Family, Inputs, Region};
+//! struct Text;
+//! impl Family for Text { type Of<'x> = (&'x str,); }
+//! impl Inputs for Text { fn name() -> &'static str { "impl Iterator" } }
+//! fn words<'x>((text,): (&'x str,)) -> impl Iterator<Item = &'x str> + use<'x> {
+//!     text.split_whitespace()
+//! }
+//! let long = String::from("a b");
+//! let mut region = Region::new();
+//! region.insert_given(Text, words, words((&long,)));
+//! {
+//!     let short = String::from("c d");
+//!     region.insert_given(Text, words, words((&short,)));
+//! }
+//! drop(region);
+//! ```
 
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
@@ -696,6 +716,50 @@ impl<'r> Region<'r> {
         Ok(slot.0)
     }
 
+    /// Store `value`, which the function `wrapper` gives, under its family
+    /// [`Given`] at `inputs`. Both are taken by value so that rustc infers
+    /// the function's item type, which no Rust code can write.
+    pub fn insert_given<I: Inputs, G: 'static + for<'x> Gives<'x, I>>(
+        &mut self,
+        _inputs: I,
+        _wrapper: G,
+        value: <G as Gives<'r, I>>::Out,
+    ) -> Scoped {
+        self.insert::<Given<G, I>>(value)
+    }
+
+    /// The value `handle` names, as what the function `wrapper` gives.
+    pub fn get_given<I: Inputs, G: 'static + for<'x> Gives<'x, I>>(
+        &self,
+        _inputs: I,
+        _wrapper: G,
+        handle: Scoped,
+    ) -> Result<&<G as Gives<'r, I>>::Out, Error> {
+        self.get::<Given<G, I>>(handle)
+    }
+
+    /// The value `handle` names, mutably, as what the function `wrapper`
+    /// gives.
+    pub fn get_mut_given<I: Inputs, G: 'static + for<'x> Gives<'x, I>>(
+        &mut self,
+        _inputs: I,
+        _wrapper: G,
+        handle: Scoped,
+    ) -> Result<&mut <G as Gives<'r, I>>::Out, Error> {
+        self.get_mut::<Given<G, I>>(handle)
+    }
+
+    /// Move the value `handle` names out of the region, as what the
+    /// function `wrapper` gives.
+    pub fn take_given<I: Inputs, G: 'static + for<'x> Gives<'x, I>>(
+        &mut self,
+        _inputs: I,
+        _wrapper: G,
+        handle: Scoped,
+    ) -> Result<<G as Gives<'r, I>>::Out, Error> {
+        self.take::<Given<G, I>>(handle)
+    }
+
     /// A copy of the value `handle` names, in a new slot, when its type is
     /// `Clone`.
     pub fn duplicate(&mut self, handle: Scoped) -> Result<Option<Scoped>, Error> {
@@ -745,6 +809,48 @@ pub struct RegionF;
 
 impl Family for RegionF {
     type Of<'x> = Region<'x>;
+}
+
+/// The inputs of a function whose output a [`Given`] family names, as one
+/// family of tuples: `(Element<'x, ..>, u32)` of `explain(self, color)`.
+pub trait Inputs: Family {
+    /// The Rust name of the type the function gives, for messages.
+    fn name() -> &'static str;
+}
+
+/// What a function `G` gives for its inputs `I` at `'x`.
+///
+/// A crate's opaque `impl Trait` type that borrows has no Rust name, as
+/// what `element.explain(color)` gives doesn't. A runner names it as the
+/// output of a function of its own, `fn given<'x>(inputs: (Element<'x,
+/// ..>, u32)) -> impl Widget<..> + use<'x>`, whose `'x` is late-bound, so
+/// the function's item type is `'static` and gives a type at each `'x`.
+pub trait Gives<'x, I: Family> {
+    /// The function's output at `'x`.
+    type Out: 'x;
+}
+
+impl<'x, G, I: Family, O: 'x> Gives<'x, I> for G
+where
+    G: FnOnce(I::Of<'x>) -> O,
+{
+    type Out = O;
+}
+
+/// The family of what the function `G` gives for its inputs `I`, at each
+/// lifetime. A runner can't write `G`, so it reaches a region's values of
+/// it through [`Region::insert_given`] and the methods beside it, which
+/// take the inputs' family and the function by value.
+pub struct Given<G, I>(PhantomData<fn() -> (G, I)>);
+
+impl<G: 'static + for<'x> Gives<'x, I>, I: Family> Family for Given<G, I> {
+    type Of<'x> = <G as Gives<'x, I>>::Out;
+}
+
+impl<G: 'static + for<'x> Gives<'x, I>, I: Inputs> Regional for Given<G, I> {
+    fn name() -> &'static str {
+        I::name()
+    }
 }
 
 thread_local! {
@@ -1589,5 +1695,66 @@ mod tests {
         let _ = pins.hold(value.clone());
         std::thread::scope(|scope| scope.spawn(move || drop(pins)).join().unwrap());
         assert_eq!(std::rc::Rc::strong_count(&value), 2);
+    }
+
+    /// The lengths of a text's words, as an opaque type that borrows it:
+    /// what a region holds by [`super::Given`].
+    struct Text;
+
+    impl Family for Text {
+        type Of<'x> = (&'x str,);
+    }
+
+    impl super::Inputs for Text {
+        fn name() -> &'static str {
+            "impl Iterator<Item = usize>"
+        }
+    }
+
+    fn lengths<'x>((text,): (&'x str,)) -> impl Iterator<Item = usize> + use<'x> {
+        text.split_whitespace().map(str::len)
+    }
+
+    /// The first word of a text, as another opaque type of the same inputs.
+    fn first<'x>((text,): (&'x str,)) -> impl Iterator<Item = &'x str> + use<'x> {
+        text.split_whitespace().take(1)
+    }
+
+    /// A region holds what a function of its own gives, at the region's
+    /// lifetime, by the function's item type: reached, stepped and moved
+    /// out through a lent region, refused as another family, and held
+    /// apart from what another function of the same inputs gives.
+    #[test]
+    fn a_region_holds_an_opaque_output_by_the_function_that_gives_it() {
+        use super::{Region, RegionF};
+        let source = String::from("one three fifteen");
+        let mut region = Region::new();
+        let handle = region.insert_given(Text, lengths, lengths((&source,)));
+        let other = region.insert_given(Text, first, first((&source,)));
+        assert_eq!(handle.name(), "impl Iterator<Item = usize>");
+        let rest = super::open(&mut region, || {
+            super::with::<RegionF, _>(handle.nonce(), |region| {
+                let next = region.get_mut_given(Text, lengths, handle).unwrap().next();
+                assert_eq!(next, Some(3));
+                assert_eq!(region.get::<WordF>(handle).err(), Some(Error::Mismatch));
+                assert_eq!(
+                    region.get_given(Text, first, handle).err(),
+                    Some(Error::Mismatch)
+                );
+                let rest = region
+                    .take_given(Text, lengths, handle)
+                    .unwrap()
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    region.get_given(Text, lengths, handle).err(),
+                    Some(Error::Moved)
+                );
+                rest
+            })
+            .unwrap()
+        });
+        assert_eq!(rest, [5, 7]);
+        let other = region.take_given(Text, first, other).unwrap();
+        assert_eq!(other.collect::<Vec<_>>(), ["one"]);
     }
 }
