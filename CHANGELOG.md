@@ -6,6 +6,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.138 (2026-11-05)
+
+- `std::thread::spawn` runs each closure on a thread of its own, in parallel; `join` gives its value or `Err` for a panic, and a program exits when `main` returns. `Arc<Mutex<T>>` locks with `lock().unwrap()`, and `std::sync::mpsc` channels send, receive and end a `for` loop when every sender is gone. A closure that captures an `Rc` is E0277, one that borrows a local without `move` is E0373. (#901)
+- `Chars::as_str` gives the text left in a `chars()` iterator. (#923)
+- `Rc<T>`, `Arc<T>`, `Box<T>` and `&T` meet a `T: Display` bound, as std's impls say, and a generic `{}` writes what they point to. (#928)
+- `let c: Result<Color, _> = x.try_into();` takes its error type from the `TryFrom` impl its target selects, and `Color::try_from(&v[..])` selects the `&[i16]` impl, the one a literal inside its argument fits. (#927, #944)
+
 ## 0.3.137 (2026-11-05)
 
 - A `let` may leave out its value (`let x;`, `let x: i32;`). A later assignment gives the local its value, and its type if the `let` names none. A use before that is rustc's E0381, also after a branch that may not have assigned it. A second assignment to a local not declared `mut` is E0384. A borrow the assignment stores is checked like any other borrow (E0597). (#149)

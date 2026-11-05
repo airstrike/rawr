@@ -469,7 +469,7 @@ impl Parser<'_> {
             source.push(origin::Fragment::join(operands, ", "));
             source.push_text(")");
             let item = keyed_item(kind, &types, Some(false));
-            let ty = Ty::Iter(Box::new(item));
+            let ty = Ty::iter(item);
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }
         let (mut arguments, end) = self.parse_std_arguments(
@@ -515,10 +515,10 @@ impl Parser<'_> {
             arguments.push(self.literal(code.to_string(), Ty::Int(Int::Usize), expression));
             let source = read(self, PreludeOp::SetAlgebra, &arguments);
             let ty = if code < 4 {
-                Ty::Iter(Box::new(Ty::Reference {
+                Ty::iter(Ty::Reference {
                     mutable: false,
                     target: Box::new(key),
-                }))
+                })
             } else {
                 Ty::Bool
             };

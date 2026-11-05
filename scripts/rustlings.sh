@@ -11,7 +11,10 @@
 #   kind  file  rustc  rawr  verdict  detail
 #
 # - `solution` rows run `fn main` both ways. They match when stdout and the
-#   exit status are equal.
+#   exit status are equal. A solution that spawns threads prints in the
+#   order its threads finish, and their timings, which differ between two
+#   runs of one build: its stdout matches as sorted lines with each number
+#   followed by `ms` masked.
 # - `test` rows are one `#[test]` of a solution. Its tests run once each
 #   way, under `rustc --test` and under `rawr test`, and each test's result
 #   in libtest's report (`ok`, `FAILED` or `ignored`) is compared. A test
@@ -89,6 +92,15 @@ marked() {
     { echo '// rawr'; cat "$1"; } >"$2"
 }
 
+# Whether the outputs `$1` and `$2` of the solution `$3` match: equal, or
+# for one that spawns threads, equal as sorted lines with timings masked.
+same_output() {
+    cmp -s "$1" "$2" && return
+    grep -q 'thread::spawn' "$3" || return
+    local masked='s/[0-9][0-9]*ms/<n>ms/g'
+    cmp -s <(sed "$masked" "$1" | sort) <(sed "$masked" "$2" | sort)
+}
+
 # The `#[test]` functions of a file as `module::name`.
 tests_of() {
     perl -ne '
@@ -116,7 +128,7 @@ solution() {
         native="build:$(code "$dir/native.build")"
     fi
     rawr=$(run "$dir/rawr" rawr run "$dir/main.rs")
-    if [ "$native" = "$rawr" ] && cmp -s "$dir/native.out" "$dir/rawr.out"; then
+    if [ "$native" = "$rawr" ] && same_output "$dir/native.out" "$dir/rawr.out" "$source"; then
         verdict=pass
     else
         verdict=fail

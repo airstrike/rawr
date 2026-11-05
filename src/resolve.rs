@@ -1863,6 +1863,28 @@ pub(crate) fn std_pointer(path: &str) -> Option<&'static str> {
     }
 }
 
+/// Rawr's builtin name for `std::sync::mpsc::Sender`, which no program's
+/// or crate's type is named.
+pub(crate) const MPSC_SENDER: &str = "MpscSender";
+/// Rawr's builtin name for `std::sync::mpsc::Receiver`.
+pub(crate) const MPSC_RECEIVER: &str = "MpscReceiver";
+
+/// Rawr's builtin name for the std thread type `path` names: `Mutex`,
+/// `JoinHandle`, or a `Sender` or `Receiver` of `std::sync::mpsc`.
+pub(crate) fn std_thread_type(path: &str) -> Option<&'static str> {
+    match path {
+        "Mutex" | "sync::Mutex" | "std::sync::Mutex" => Some("Mutex"),
+        "JoinHandle" | "thread::JoinHandle" | "std::thread::JoinHandle" => Some("JoinHandle"),
+        "Sender" | "mpsc::Sender" | "sync::mpsc::Sender" | "std::sync::mpsc::Sender" => {
+            Some(MPSC_SENDER)
+        }
+        "Receiver" | "mpsc::Receiver" | "sync::mpsc::Receiver" | "std::sync::mpsc::Receiver" => {
+            Some(MPSC_RECEIVER)
+        }
+        _ => None,
+    }
+}
+
 /// `std::marker::PhantomData` as a path is written.
 pub(crate) fn std_phantom(path: &str) -> bool {
     matches!(

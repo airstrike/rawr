@@ -555,7 +555,7 @@ fn capitalize(word: &str) -> String {
     let mut chars = word.chars();
     match chars.next() {
         None => String::new(),
-        Some(first) => first.to_uppercase().to_string() + &word[first.len_utf8()..],
+        Some(first) => first.to_uppercase().to_string() + chars.as_str(),
     }
 }
 
@@ -619,5 +619,28 @@ fn language_only_a_parse_int_error_has_a_kind() {
     // `ParseFloatError` has no `kind`: rustc's E0599.
     let report =
         refused("fn main() { let e = \"x\".parse::<f64>().unwrap_err(); e.kind(); }\nmain();\n");
+    assert!(report.starts_with("error[E0599]"), "{report}");
+}
+
+#[test]
+fn language_chars_as_str_is_the_text_left() {
+    // `Chars::as_str` is std's own method of the struct `chars` gives
+    // (#923), not of every iterator of chars.
+    let source = r#"
+fn main() {
+    let text = String::from("rawr");
+    let mut it = text.chars();
+    it.next();
+    println!("{} {}", it.as_str(), "abc".chars().as_str());
+    let mut word = "héllo".chars();
+    word.next();
+    word.next();
+    println!("{} {:?}", word.as_str(), word.next());
+}
+main();
+"#;
+    assert_eq!(printed(source), "awr abc\nllo Some('l')\n");
+    let report =
+        refused("fn main() { let s = \"ab\"; let it = s.chars().rev(); it.as_str(); }\nmain();\n");
     assert!(report.starts_with("error[E0599]"), "{report}");
 }
