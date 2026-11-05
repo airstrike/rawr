@@ -39,6 +39,17 @@ pub fn primary(_theme: &crate::Theme, status: Status) -> Style {
     }
 }
 
+/// The secondary style, by the theme and the status, of the same
+/// signature as `primary`, as iced's `button::secondary`.
+pub fn secondary(_theme: &crate::Theme, status: Status) -> Style {
+    Style {
+        tone: match status {
+            Status::Active => 3,
+            Status::Disabled => 4,
+        },
+    }
+}
+
 /// A rounded box, by the theme.
 pub fn rounded_box(_theme: &crate::Theme) -> Style {
     Style { tone: 9 }
@@ -270,6 +281,25 @@ impl From<u8> for Turn {
 impl From<Turn> for f32 {
     fn from(turn: Turn) -> f32 {
         turn.0 * 360.0
+    }
+}
+
+/// How a picture turns, as iced's `Rotation`, whose `degrees()` gives a
+/// type the crate converts to `f32`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Spin {
+    /// It turns and keeps its size.
+    Floating(Turn),
+    /// It turns and grows to fit.
+    Solid(Turn),
+}
+
+impl Spin {
+    /// The part of a turn.
+    pub fn turn(self) -> Turn {
+        match self {
+            Spin::Floating(turn) | Spin::Solid(turn) => turn,
+        }
     }
 }
 
