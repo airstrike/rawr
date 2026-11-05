@@ -447,6 +447,10 @@ impl<T, E> Task<Result<T, E>> {
 /// A message no program sends: std's `Infallible`, as iced's `Never` is.
 pub use std::convert::Infallible as Never;
 
+/// `Framed` at the root too, as iced re-exports `iced_widget::Widget` as
+/// `iced::Widget`.
+pub use widgets::Framed;
+
 /// iced's `advanced`: iced_graphics's modules, which another crate defines.
 pub mod advanced {
     pub use parts::renderer::{self, Renderer};
