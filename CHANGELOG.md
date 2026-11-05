@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.135 (2026-11-05)
+
+- A function of yours can take a parameter such as `impl Into<Length> + Copy` and pass it on to a crate, as iced's layout example's `square` does. The bound holds of each type the crate's `From` impls convert from, and a number literal takes the type of the one impl of its kind, so `square(50)` passes a `u32`, as rustc infers it. (#912)
+
 ## 0.3.134 (2026-11-05)
 
 - Errors use rustc's codes and wording: mismatched types E0308, an `if` without `else` E0317, `return;` E0069, unknown names E0425, E0433 and E0432, E0423, assignments E0384, E0594 and E0596, and `?` or mixed-number arithmetic E0277. Syntax errors and an unknown macro print a plain `error:` as rustc does. (#897, #909, #910)

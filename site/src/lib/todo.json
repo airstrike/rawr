@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-05",
-  "version": "0.3.134",
+  "version": "0.3.135",
   "examples": {
     "running": 37,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.135",
+        "date": "2026-11-05",
+        "entries": [
+          {"text":"A function of yours can take a parameter such as `impl Into<Length> + Copy` and pass it on to a crate, as iced's layout example's `square` does. The bound holds of each type the crate's `From` impls convert from, and a number literal takes the type of the one impl of its kind, so `square(50)` passes a `u32`, as rustc infers it.","issues":[912]}
+        ]
+      },
       {
         "version": "0.3.134",
         "date": "2026-11-05",
@@ -2216,7 +2223,7 @@
     {"issue":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"closed","category":"Divergences from rustc","release":"0.3.134"},
     {"issue":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"closed","category":"Divergences from rustc","release":"0.3.134"},
     {"issue":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"open","category":"Divergences from rustc"},
-    {"issue":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"open","category":"Divergences from rustc"},
+    {"issue":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"closed","category":"Divergences from rustc","release":"0.3.135"},
     {"issue":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"open","category":"Divergences from rustc"},
     {"issue":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open","category":"Health"},
     {"issue":915,"title":"A macro's own-crate segment in the remembered demand walks the whole crate a second time","state":"open","category":"Health"},
@@ -2239,7 +2246,8 @@
     {"issue":932,"title":"Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"open","category":"Divergences from rustc"},
     {"issue":933,"title":"A missing item in a local module is E0432, not rustc's E0425","state":"open","category":"Divergences from rustc"},
     {"issue":934,"title":"rawr infers types where rustc needs an annotation or reports a mismatch","state":"open","category":"Divergences from rustc"},
-    {"issue":935,"title":"rustlings harness compares rustc's first coded error, not its first error","state":"open","category":"Health"}
+    {"issue":935,"title":"rustlings harness compares rustc's first coded error, not its first error","state":"open","category":"Health"},
+    {"issue":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2482,7 +2490,7 @@
     {
       "id": "no-glue",
       "title": "No glue",
-      "subtitle": "Every example through generated bindings",
+      "subtitle": "Every iced example through generated bindings; 0.3 ends when they all run",
       "open": true,
       "rows": [
         {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider and tooltip run","issues":[],"milestone":"0.2"},
@@ -2717,16 +2725,17 @@
           "start": 47,
           "size": 3,
           "state": "now",
-          "note": "loupe's return type, `explain`, later-fixed types and From impls run. #912 and #913 next",
+          "note": "`explain`, later-fixed types, From impls and `impl Into + Copy` arguments run; layout passes check. #936 next",
           "issues": [
             {"number":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"closed"},
             {"number":885,"title":"Run the impl Trait a trait method gives from its default body (iced's Widget::explain)","state":"closed"},
             {"number":886,"title":"A crate opaque value whose type arguments only a later use fixes","state":"closed"},
             {"number":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"closed"},
-            {"number":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"open"},
+            {"number":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"closed"},
             {"number":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"open"},
             {"number":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"open"},
-            {"number":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open"}
+            {"number":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open"},
+            {"number":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"open"}
           ]
         }
       ]
@@ -2769,7 +2778,7 @@
     {
       "id": "parity",
       "title": "Rust as rustc has it",
-      "subtitle": "0.3.6x–0.3.132: std, types, borrows, errors and rustlings",
+      "subtitle": "std, types, borrows and errors; 0.3 ends when all rustlings code works",
       "open": true,
       "rows": [
         {
@@ -2946,7 +2955,7 @@
           "start": 82,
           "size": 2,
           "state": "now",
-          "note": "Each process rebuilds them: 2.1 s debug, 0.35 s release",
+          "note": "0.02 s release startup (#931); one build per machine is 0.4 work",
           "issues": [
             {"number":931,"title":"Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"open"}
           ]
@@ -3022,7 +3031,7 @@
     {
       "id": "debug",
       "title": "Debugger",
-      "subtitle": "D557, toward 0.5",
+      "subtitle": "D557, in 0.4",
       "open": true,
       "rows": [
         {

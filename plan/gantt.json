@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-05",
-  "version": "0.3.134",
+  "version": "0.3.135",
   "examples": {
     "running": 37,
     "total": 56,
@@ -74,7 +74,7 @@
     {
       "id": "no-glue",
       "title": "No glue",
-      "subtitle": "Every example through generated bindings",
+      "subtitle": "Every iced example through generated bindings; 0.3 ends when they all run",
       "open": true,
       "rows": [
         {"id":"no-glue-first-examples","name":"No glue: first examples","start":22,"size":2,"state":"done","note":"counter, checkbox, slider and tooltip run","issues":[],"milestone":"0.2"},
@@ -95,7 +95,7 @@
         {"id":"projections-function-values","name":"Projections and function values","start":44,"size":3,"state":"now","note":"#317 and #319 remain","issues":[317,318,319,327],"milestone":"0.4"},
         {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"Events, exit, theme and modal runners","issues":[335,336,337,339,340,338],"milestone":"0.4"},
         {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"Gaps in about 18 examples","issues":[283,314,328,334,345],"milestone":"0.4"},
-        {"id":"opaque-values","name":"A crate's `impl Trait` values","start":47,"size":3,"state":"now","note":"loupe's return type, `explain`, later-fixed types and From impls run. #912 and #913 next","issues":[845,885,886,887,912,913,916,917]}
+        {"id":"opaque-values","name":"A crate's `impl Trait` values","start":47,"size":3,"state":"now","note":"`explain`, later-fixed types, From impls and `impl Into + Copy` arguments run; layout passes check. #936 next","issues":[845,885,886,887,912,913,916,917,936]}
       ]
     },
     {
@@ -111,7 +111,7 @@
     {
       "id": "parity",
       "title": "Rust as rustc has it",
-      "subtitle": "0.3.6x–0.3.132: std, types, borrows, errors and rustlings",
+      "subtitle": "std, types, borrows and errors; 0.3 ends when all rustlings code works",
       "open": true,
       "rows": [
         {"id":"std-from-std","name":"Std from std's own table","start":66,"size":4,"state":"done","note":"Paths, traits, impls, methods, iterators and the facade from std's declarations","issues":[745,746,747,768],"milestone":"0.3"},
@@ -131,7 +131,7 @@
         {"id":"one-command-install","name":"One-command install","start":70,"size":2,"state":"done","note":"Prebuilt binaries and a self-installed nightly; binaries ship at milestones, the only tagged versions","issues":[797],"milestone":"0.3"},
         {"id":"staged-release","name":"Staged, cached release","start":72,"size":2,"state":"done","note":"Playground, bot and site each gated; the image rebuilds only when its inputs change","issues":[881],"milestone":"0.3"},
         {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"done","note":"Suites share builds and run in parallel; every merge check runs rawr-cli's suite too (#930)","issues":[891,892,893,930],"milestone":"0.3"},
-        {"id":"std-once","name":"std bindings built once","start":82,"size":2,"state":"now","note":"Each process rebuilds them: 2.1 s debug, 0.35 s release","issues":[931]}
+        {"id":"std-once","name":"std bindings built once","start":82,"size":2,"state":"now","note":"0.02 s release startup (#931); one build per machine is 0.4 work","issues":[931]}
       ]
     },
     {
@@ -149,7 +149,7 @@
     {
       "id": "debug",
       "title": "Debugger",
-      "subtitle": "D557, toward 0.5",
+      "subtitle": "D557, in 0.4",
       "open": true,
       "rows": [
         {"id":"read-values","name":"Read a running program's values","start":53,"size":3,"state":"now","note":"rawr mcp inspect works with or without dependencies; frames, types and the editor remain","issues":[488,510,511,512,513,514],"milestone":"0.5"},
