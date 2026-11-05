@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-05",
-  "version": "0.3.138",
+  "version": "0.3.140",
   "examples": {
     "running": 15,
     "total": 56,
@@ -11,6 +11,23 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.140",
+        "date": "2026-11-05",
+        "entries": [
+          {"text":"A crate's `impl Trait` result that borrows, as iced's layout gets from `element.explain(color)`, is held in the scope that lends to it, whether or not a public path names its type, and also through `.explain(a).explain(b)`. Keeping it past the block of a local it borrows is rustc's E0597.","issues":[936]},
+          {"text":"A path to a std type's method is a function value and a call, as in rustc: `.flat_map(HashMap::values)`, `.map(Vec::len)`, `str::trim`, `char::to_ascii_uppercase`, `Iterator::count`, `std::cmp::max`, `String::new`, and `Vec::len(&v)` or `String::push_str(&mut s, ..)` called by path. Each takes its receiver as std declares it, so passing a `&self` method where values are given is rustc's E0631, and a path doesn't reach through `Deref` (`String::trim` is E0599).","issues":[926]},
+          {"text":"A crate type's methods are function values and path calls: `Look::to_string` where `impl Fn(&Look) -> String` is taken, `Look::name` as a `fn` pointer, `Look::mix(a, b)`, `Look::to_string(&x)`, and a crate trait's method as `Tone::tone` or `<Look as Tone>::tone`.","issues":[319]},
+          {"text":"A crate's async function that takes a `&str` through a type parameter, as `tokio::fs::read_to_string(path)` does, runs: rustlings' async1 runs in a Cargo project with tokio.","issues":[970]}
+        ]
+      },
+      {
+        "version": "0.3.139",
+        "date": "2026-11-05",
+        "entries": [
+          {"text":"A program's own `macro_rules!` macros expand as rustc expands them: all fragment specifiers, repetitions with separators, rules tried in order, hygiene for the macro's locals, nested and recursive calls up to the recursion limit, and Rust's textual scope with `#[macro_use]` and `#[macro_export]`. A call used as a statement splices in its statements. The errors are rustc's: `no rules expected`, `cannot find macro`, which points at a definition that comes later or asks for `#[macro_use]`, and its errors for a malformed definition. All of rustlings' macros exercises now match rustc.","issues":[236]}
+        ]
+      },
       {
         "version": "0.3.138",
         "date": "2026-11-05",
@@ -1577,7 +1594,7 @@
     {"issue":233,"title":"The compiler's pending operation grew from 632 to 640 bytes and its executable operation from…","state":"open","category":"No glue (D593)"},
     {"issue":234,"title":"A `$crate` path to an item the root crate doesn't re-export, in a crate the program doesn't…","state":"open","category":"No glue (D593)"},
     {"issue":235,"title":"Errors can show the `iced::__rawr_crate_…` spelling of a type (`…::Button::_boxed`) where the…","state":"open","category":"No glue (D593)"},
-    {"issue":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"open","category":"No glue (D593)"},
+    {"issue":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"closed","category":"No glue (D593)","release":"0.3.139"},
     {"issue":237,"title":"Macro matching is permissive: an `expr` fragment reads to the next top-level `,`, `;` or `=>`…","state":"open","category":"No glue (D593)"},
     {"issue":238,"title":"A `#playground` snippet (2026-10-22) is still refused on the facade path: `.into()` from a…","state":"open","category":"No glue (D593)"},
     {"issue":239,"title":"iced's `text` and `value` functions don't bind","state":"closed","category":"No glue (D593)","release":"0.2.7"},
@@ -1660,7 +1677,7 @@
     {"issue":316,"title":"The import-cli `plain-*` fixtures still carry `rust-toolchain.toml` (the pinned nightly) and a…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.28"},
-    {"issue":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.140"},
     {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.22"},
     {"issue":321,"title":"The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":322,"title":"A script impl generic over a crate-trait bound, such as…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
@@ -2267,7 +2284,7 @@
     {"issue":923,"title":"`Chars::as_str` is E0599","state":"closed","category":"Divergences from rustc","release":"0.3.138"},
     {"issue":924,"title":"Operator traits on a std facade type","state":"open","category":"Divergences from rustc"},
     {"issue":925,"title":"The std table records no constant's type","state":"open","category":"Divergences from rustc"},
-    {"issue":926,"title":"A path to a type's method as a function value: `.flat_map(HashMap::values)`","state":"open","category":"Divergences from rustc"},
+    {"issue":926,"title":"A path to a type's method as a function value: `.flat_map(HashMap::values)`","state":"closed","category":"Divergences from rustc","release":"0.3.140"},
     {"issue":927,"title":"`try_into()` into `Result<Color, _>` leaves the error type uninferred","state":"closed","category":"Divergences from rustc","release":"0.3.138"},
     {"issue":928,"title":"`Rc<T>` doesn't meet a `T: Display` bound","state":"closed","category":"Divergences from rustc","release":"0.3.138"},
     {"issue":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"open","category":"Divergences from rustc"},
@@ -2277,7 +2294,7 @@
     {"issue":933,"title":"A missing item in a local module is E0432, not rustc's E0425","state":"closed","category":"Divergences from rustc","release":"0.3.137"},
     {"issue":934,"title":"rawr infers types where rustc needs an annotation or reports a mismatch","state":"closed","category":"Divergences from rustc","release":"0.3.137"},
     {"issue":935,"title":"rustlings harness compares rustc's first coded error, not its first error","state":"open","category":"Health"},
-    {"issue":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"open","category":"Divergences from rustc"},
+    {"issue":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"closed","category":"Divergences from rustc","release":"0.3.140"},
     {"issue":937,"title":"collect() into a Result or Option of a map or set","state":"open","category":"Divergences from rustc"},
     {"issue":938,"title":"A `&self` method changing a std collection is a type mismatch, not E0596","state":"open","category":"Divergences from rustc"},
     {"issue":939,"title":"mcp inspect test asserts one line of a running loop","state":"closed","category":"Health"},
@@ -2301,7 +2318,17 @@
     {"issue":957,"title":"Generated adapter bounds the program doesn't need: geometry's Shell: Clone, progress_bar's f64, the_matrix's ThreadRng","state":"open","category":"Divergences from rustc"},
     {"issue":958,"title":"changelog's rawr check never completes and fills the disk","state":"open","category":"Health"},
     {"issue":959,"title":"rawr run inside a git worktree under another workspace fails with 'malformed filesystem observation transport'","state":"open","category":"Health"},
-    {"issue":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"open","category":"Health"}
+    {"issue":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"open","category":"Health"},
+    {"issue":961,"title":"Macro calls where an item, a type or a pattern goes","state":"open","category":"Divergences from rustc"},
+    {"issue":962,"title":"Deep macro recursion overflows the debug build's stack before rustc's recursion limit","state":"open","category":"Divergences from rustc"},
+    {"issue":963,"title":"rawr keeps every runtime it ever built in ~/.cargo/rawr/runtime","state":"open","category":"Health"},
+    {"issue":964,"title":"rawr-cli's extension tests fail under load when stand-in binaries miss the manifest deadline","state":"open","category":"Health"},
+    {"issue":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open","category":"Divergences from rustc"},
+    {"issue":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"open","category":"Divergences from rustc"},
+    {"issue":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"open","category":"Divergences from rustc"},
+    {"issue":968,"title":"`async fn` in a program without a Cargo project is unsupported: no core future","state":"open","category":"Divergences from rustc"},
+    {"issue":969,"title":"A panic in a runtime's async main prints \"invocation of symbolic item ... failed: Runtime error:\" instead of Rust's","state":"open","category":"Divergences from rustc"},
+    {"issue":970,"title":"A crate's async fn taking &str through a type parameter generated code that didn't compile","state":"closed","category":"Divergences from rustc","release":"0.3.140"}
   ],
   "groups": [
     {
@@ -2735,7 +2762,7 @@
           "issues": [
             {"number":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open"},
             {"number":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed"},
-            {"number":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open"},
+            {"number":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"closed"},
             {"number":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"closed"}
           ],
           "milestone": "0.4"
@@ -2787,7 +2814,7 @@
           "start": 47,
           "size": 3,
           "state": "now",
-          "note": "`explain`, later-fixed types, From impls and `impl Into + Copy` arguments run; layout passes check. #936 next",
+          "note": "Borrowing opaque outputs live in regions through wrapper fns (#936); layout starts its runner. Slots and members next (#965)",
           "issues": [
             {"number":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"closed"},
             {"number":885,"title":"Run the impl Trait a trait method gives from its default body (iced's Widget::explain)","state":"closed"},
@@ -2797,7 +2824,11 @@
             {"number":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"open"},
             {"number":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"open"},
             {"number":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open"},
-            {"number":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"open"}
+            {"number":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"closed"},
+            {"number":943,"title":"Two default methods of one trait that give opaque types mix up their members","state":"open"},
+            {"number":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open"},
+            {"number":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"open"},
+            {"number":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"open"}
           ]
         }
       ]
@@ -2929,11 +2960,11 @@
         },
         {
           "id": "rustlings",
-          "name": "rustlings: 89 of 95",
+          "name": "rustlings: 94 of 95",
           "start": 74,
           "size": 4,
           "state": "now",
-          "note": "Solutions that run and match rustc (scripts/rustlings.sh, v6.5.0); 87 with every test. Left: macro_rules! (#236), method paths as values (#926), async1",
+          "note": "Solutions that run and match rustc (scripts/rustlings.sh, v6.5.0); async1 runs in its Cargo project, and a lone file of it needs #968",
           "issues": [
             {"number":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"closed"},
             {"number":899,"title":"A private method or associated function isn't visible from a child module","state":"closed"},
@@ -2954,7 +2985,7 @@
             {"number":923,"title":"`Chars::as_str` is E0599","state":"closed"},
             {"number":924,"title":"Operator traits on a std facade type","state":"open"},
             {"number":925,"title":"The std table records no constant's type","state":"open"},
-            {"number":926,"title":"A path to a type's method as a function value: `.flat_map(HashMap::values)`","state":"open"},
+            {"number":926,"title":"A path to a type's method as a function value: `.flat_map(HashMap::values)`","state":"closed"},
             {"number":927,"title":"`try_into()` into `Result<Color, _>` leaves the error type uninferred","state":"closed"},
             {"number":928,"title":"`Rc<T>` doesn't meet a `T: Display` bound","state":"closed"},
             {"number":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"open"},
@@ -2971,7 +3002,12 @@
             {"number":948,"title":"A spawned thread's panic message lacks its file:line:col","state":"open"},
             {"number":949,"title":"Mutex methods besides lock().unwrap(), and LockResult as a value","state":"open"},
             {"number":950,"title":"mpsc try_recv, recv_timeout, sync_channel; thread::scope and Builder","state":"open"},
-            {"number":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"open"}
+            {"number":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"closed"},
+            {"number":961,"title":"Macro calls where an item, a type or a pattern goes","state":"open"},
+            {"number":962,"title":"Deep macro recursion overflows the debug build's stack before rustc's recursion limit","state":"open"},
+            {"number":968,"title":"`async fn` in a program without a Cargo project is unsupported: no core future","state":"open"},
+            {"number":969,"title":"A panic in a runtime's async main prints \"invocation of symbolic item ... failed: Runtime error:\" instead of Rust's","state":"open"},
+            {"number":970,"title":"A crate's async fn taking &str through a type parameter generated code that didn't compile","state":"closed"}
           ]
         }
       ]
@@ -3030,7 +3066,9 @@
           "note": "The store grows 1.5-2 GB per example (#960); worktrees break rawr run (#959)",
           "issues": [
             {"number":959,"title":"rawr run inside a git worktree under another workspace fails with 'malformed filesystem observation transport'","state":"open"},
-            {"number":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"open"}
+            {"number":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"open"},
+            {"number":963,"title":"rawr keeps every runtime it ever built in ~/.cargo/rawr/runtime","state":"open"},
+            {"number":964,"title":"rawr-cli's extension tests fail under load when stand-in binaries miss the manifest deadline","state":"open"}
           ]
         },
         {

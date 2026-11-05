@@ -487,6 +487,9 @@ fn resolution_report_with_sources(
             "binding declared here but left uninitialized".into()
         }
         resolve::Error::LocalTypeNeeded { .. } => "type must be known at this point".into(),
+        resolve::Error::UnknownMacro { .. } => {
+            "a macro with the same name exists, but it appears later".into()
+        }
         _ => crate::ImmutableString::from("first declaration or related definition is here"),
     });
     let mut builder = builder.source(source.clone());
@@ -533,6 +536,11 @@ fn primary_label(
         resolve::Error::Syntax { label, .. } => {
             Some(label.clone()).filter(|label| !label.is_empty())
         }
+        resolve::Error::UnknownMacro {
+            name,
+            scope: resolve::MacroScope::Later(_),
+            ..
+        } => Some(format!("consider moving the definition of `{name}` before this call").into()),
         resolve::Error::UnlabeledJumpInWhileCondition { keyword, .. } => {
             Some(format!("unlabeled `{keyword}` in the condition of a `while` loop").into())
         }
@@ -737,6 +745,10 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnknownFunction {
             import: Some(path), ..
         } => builder.help(format!("consider importing this function: `use {path};`")),
+        resolve::Error::UnknownMacro {
+            scope: resolve::MacroScope::Elsewhere,
+            ..
+        } => builder.help("have you added the `#[macro_use]` on the module/import?"),
         resolve::Error::IfWithoutElse { .. } => builder
             .note("`if` expressions without `else` evaluate to `()`")
             .help("consider adding an `else` block that evaluates to the expected type"),

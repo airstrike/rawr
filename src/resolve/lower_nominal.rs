@@ -14,6 +14,7 @@ mod iterator;
 mod keyed;
 mod literal;
 mod location;
+mod method_path;
 mod origin;
 mod overflow;
 mod places;
@@ -38,6 +39,8 @@ mod copies_tests;
 mod divergence_tests;
 #[cfg(test)]
 mod language_tests;
+#[cfg(test)]
+mod macro_tests;
 #[cfg(test)]
 mod placeholder_tests;
 #[cfg(test)]
@@ -72,7 +75,7 @@ use crate::{
 };
 use compare::{Comparison, Shape};
 use std::any::TypeId;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write;
 use std::iter::Peekable;
 use std::rc::Rc;
@@ -4509,6 +4512,13 @@ struct Tables {
     /// crate's bound selects as rustc selects an impl (D627, D629).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     script_impls: Vec<ScriptTraitImpl>,
+    /// The program's own `macro_rules!` macros and their scopes.
+    macros: crate::resolve::macros::Table,
+    /// Each of `macros`' rules, by its source and span, read once.
+    macro_rules: BTreeMap<
+        (crate::program::source::Id, Span),
+        Result<Shared<crate::resolve::macro_rules::Rules>, crate::resolve::macro_rules::Malformed>,
+    >,
 }
 
 /// A script's impl of a crate's trait for a script type (`Tables::
@@ -5149,6 +5159,22 @@ impl Models {
             sources: program.source.table().clone(),
             entry: program.source.entry(),
             instances: program.instances.clone(),
+            macros: program.macros.clone(),
+            macro_rules: program
+                .macros
+                .definitions()
+                .map(|definition| {
+                    let text = source_span(
+                        program.source.text_at(definition.source()),
+                        definition.span(),
+                    );
+                    let tokens = lex_rust(engine, &text);
+                    (
+                        (definition.source(), definition.span()),
+                        crate::resolve::macro_rules::Rules::from_tokens(&tokens).map(Shared::new),
+                    )
+                })
+                .collect(),
             script_impls: program
                 .items
                 .iter()
@@ -11978,6 +12004,12 @@ struct Parser<'a> {
     bound_lifetimes: Vec<ImmutableString>,
     /// The `macro_rules!` expansions made so far (`expand`).
     expansions: usize,
+    /// For each expansion being parsed, how many tokens follow it: those
+    /// whose tokens are not all read yet nest the next call.
+    expansion_ends: Vec<usize>,
+    /// The `macro_rules!` macros the blocks being parsed define so far,
+    /// the innermost last.
+    local_macros: Vec<(ImmutableString, Shared<crate::resolve::macro_rules::Rules>)>,
     /// The host type a host callable returns, as iced's `Element`, at each
     /// argument: a closure's body is converted into it, as Rust's `Into`.
     closure_outputs: Vec<Option<ClosureOutput>>,
@@ -12149,6 +12181,9 @@ struct Parser<'a> {
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
     pending_turbofish: Option<Vec<Ty>>,
+    /// The closures that stand for a path to a function (`Vec::len`,
+    /// `Look::name`), which rustc's notes call functions.
+    path_values: HashSet<crate::item::Key>,
     /// The crate trait each `Trait::method(receiver, ..)` call names, by
     /// the position of the method it was rewritten to (`path_method_call`):
     /// a text receiver takes the method the trait's impl for `&str` gives.
@@ -12409,6 +12444,8 @@ impl<'a> Parser<'a> {
             closure_hint: None,
             bound_lifetimes: Vec::new(),
             expansions: 0,
+            expansion_ends: Vec::new(),
+            local_macros: Vec::new(),
             closure_outputs: Vec::new(),
             closure_output: None,
             async_step: None,
@@ -12466,6 +12503,7 @@ impl<'a> Parser<'a> {
             text_into: Vec::new(),
             generics: BTreeMap::new(),
             pending_turbofish: None,
+            path_values: HashSet::new(),
             spliced_traits: BTreeMap::new(),
             std_probed: BTreeMap::new(),
             host_turbofish: None,
@@ -12818,6 +12856,8 @@ impl<'a> Parser<'a> {
             let result = match self.peek() {
                 Token::Let => self.parse_binding(true),
                 Token::Const => self.parse_binding(false),
+                _ if self.macro_definition_ahead() => self.parse_local_macro(),
+                _ if self.macro_statement_ahead() => self.parse_macro_statement(),
                 _ => self.parse_statement(),
             };
 
@@ -12870,7 +12910,7 @@ impl<'a> Parser<'a> {
         if let Some(error) = self.std_not_yet(&written, reference) {
             return Some(error);
         }
-        if self.program_macro(name, at.start()) {
+        if self.program_macro(name, at.start()).is_some() {
             return Some(Error::WrongKind {
                 expected: "function",
                 found: "macro",
@@ -13049,6 +13089,8 @@ impl<'a> Parser<'a> {
                 Token::Const => self.parse_binding(false)?,
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
+                _ if self.macro_definition_ahead() => self.parse_local_macro()?,
+                _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
                 _ => self.parse_statement()?,
             }
@@ -13772,6 +13814,8 @@ impl<'a> Parser<'a> {
                 Token::Const => self.parse_binding(false)?,
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
+                _ if self.macro_definition_ahead() => self.parse_local_macro()?,
+                _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
                 _ => self.parse_statement()?,
             }
@@ -15514,9 +15558,10 @@ impl<'a> Parser<'a> {
         Ok(types)
     }
 
-    /// `::ok` after `Result` where it is not called: the method named as a
-    /// value. A variant (`Option::Some`) or a call is not one.
-    fn std_method_value(&self) -> Option<ImmutableString> {
+    /// `::ok` after `Result`, or `::trim` after `str`: the method a path
+    /// names, called or not. A variant (`Option::Some`) or a path that goes
+    /// on (`str::from_utf8::<..>`, `Result::Ok::<..>`) is not one.
+    fn std_method_member(&self) -> Option<ImmutableString> {
         let mut ahead = self.input.clone();
         if !matches!(ahead.next(), Some((Token::DoubleColon, _))) {
             return None;
@@ -15527,10 +15572,7 @@ impl<'a> Parser<'a> {
         if !member.starts_with(|c: char| c.is_ascii_lowercase())
             || matches!(
                 ahead.peek(),
-                Some((
-                    Token::LeftParen | Token::Unit | Token::DoubleColon | Token::LessThan,
-                    _
-                ))
+                Some((Token::DoubleColon | Token::LessThan, _))
             )
         {
             return None;
@@ -15555,16 +15597,6 @@ impl<'a> Parser<'a> {
             }
         }
         let called = matches!(ahead.peek(), Some((Token::LeftParen | Token::Unit, _)));
-        // `From::from` as a value is a closure (`parse_std_trait_call`).
-        if !called
-            && !segments
-                .iter()
-                .rev()
-                .nth(1)
-                .is_some_and(|name| matches!(name.as_str(), "From" | "Into" | "Clone" | "ToString"))
-        {
-            return None;
-        }
         if segments.len() < 2 {
             return None;
         }
@@ -15590,13 +15622,15 @@ impl<'a> Parser<'a> {
         };
         let qualified = format!("{base}{}", &written[first.len()..]);
         let parts = qualified.split("::").collect::<Vec<_>>();
-        let (trait_name, member) =
+        // Whether it is a value when not called: a method, or a function
+        // of `std::cmp`.
+        let (trait_name, member, valued) =
             match crate::std_table::resolve(&parts, crate::std_table::Namespace::Value).ok()? {
                 // `std::cmp::max(a, b)`: a free function of `std::cmp`.
                 crate::std_table::Resolved::Path(path)
                     if path.kind == "fn" && path.definition.starts_with("core::cmp::") =>
                 {
-                    ("cmp", path.definition.rsplit("::").next()?)
+                    ("cmp", path.definition.rsplit("::").next()?, true)
                 }
                 crate::std_table::Resolved::Member {
                     owner,
@@ -15606,10 +15640,19 @@ impl<'a> Parser<'a> {
                     && member.kind == "assoc-fn"
                     && member.stability == crate::std_table::Stability::Stable =>
                 {
-                    (owner.definition.rsplit("::").next()?, member.name())
+                    (
+                        owner.definition.rsplit("::").next()?,
+                        member.name(),
+                        member.receiver().is_some(),
+                    )
                 }
                 _ => return None,
             };
+        // `Iterator::count`, `From::from` as a value is a closure
+        // (`parse_std_trait_call`).
+        if !called && !valued && !matches!(trait_name, "From" | "Into" | "Clone" | "ToString") {
+            return None;
+        }
         if self
             .models
             .traits
@@ -15626,6 +15669,12 @@ impl<'a> Parser<'a> {
     /// `Iterator::next`, `Some(None)` for `FromStr::from_str`, `None` when
     /// the trait has no such function.
     fn std_receiver(&self, trait_name: &str, member: &str) -> Option<Option<&'static str>> {
+        Some(self.std_trait_function(trait_name, member)?.receiver())
+    }
+
+    /// The std trait `trait_name`'s function `member`, as std's table
+    /// declares it.
+    fn std_trait_function(&self, trait_name: &str, member: &str) -> Option<crate::std_table::Item> {
         let uses = self
             .models
             .import(trait_name)
@@ -15633,7 +15682,7 @@ impl<'a> Parser<'a> {
         let definition = crate::resolve::std_trait::named(trait_name, uses)
             .or_else(|| crate::resolve::std_trait::anywhere(trait_name))?;
         let member = crate::std_table::item(&format!("{definition}::{member}"))?;
-        (member.kind == "assoc-fn").then(|| member.receiver())
+        (member.kind == "assoc-fn").then_some(member)
     }
 
     /// The tokens of a call's parenthesised arguments, from its `(` to the
@@ -15831,9 +15880,27 @@ impl<'a> Parser<'a> {
             }
             tokens.push((Token::RightParen, at));
         }
+        // What the value's use gives it (`map`'s items) fixes the inputs the
+        // path leaves open (`Iterator::count`'s `Self`); a mismatch is the
+        // closure's, reported where its use checks it.
+        if let Some(given) = self.closure_hint.take()
+            && given.len() == inputs.len()
+        {
+            let checkpoint = self.inference.checkpoint();
+            if inputs
+                .iter()
+                .zip(&given)
+                .all(|(own, given)| self.unify_type(own, given))
+            {
+                self.inference.commit(checkpoint);
+            } else {
+                self.inference.rollback(checkpoint);
+            }
+        }
         self.splice_tokens(tokens);
         self.closure_hint = Some(inputs);
-        self.parse_closure(Token::Pipe, owner_span, false)
+        let value = self.parse_closure(Token::Pipe, owner_span, false)?;
+        Ok(self.path_value(value))
     }
 
     /// `Type::method(receiver, a, ..)` read from its `(`: the tokens of
@@ -16281,6 +16348,43 @@ impl<'a> Parser<'a> {
             ]);
             return self.parse_closure(Token::Pipe, point_span(at), false);
         }
+        // `.fold(0, std::cmp::max)`: the closure that calls it.
+        if trait_name == "cmp"
+            && !matches!(self.peek(), Token::LeftParen | Token::Unit)
+            && let Some(function) = crate::std_table::item(&format!("core::cmp::{member}"))
+            && let Some(declared) = crate::std_table::Declared::parse(function.declaration())
+        {
+            let arity = crate::std_table::split_list(declared.inputs).len();
+            return self.function_value_closure(
+                &format!("std::cmp::{member}"),
+                arity,
+                None,
+                point_span(start),
+            );
+        }
+        // `.map(Iterator::count)`, `.max_by(Ord::cmp)`: the closure that
+        // calls the method on its first input, which takes `self` as the
+        // trait declares it.
+        if !matches!(self.peek(), Token::LeftParen | Token::Unit)
+            && let Some(function) = self.std_trait_function(trait_name, member)
+            && let Some(mode) = std_method::mode_of(&function)
+            && let Some(declared) = crate::std_table::Declared::parse(function.declaration())
+        {
+            let own = self.inference.fresh();
+            let receiver = match mode {
+                receiver::Mode::Owned => own,
+                mode => Ty::Reference {
+                    mutable: mode == receiver::Mode::Mutable,
+                    target: Box::new(own),
+                },
+            };
+            let count = crate::std_table::split_list(declared.inputs).len();
+            let inputs = std::iter::once(receiver)
+                .chain((1..count).map(|_| self.inference.fresh()))
+                .collect();
+            let at = point_span(start);
+            return self.method_value(member.into(), inputs, at, at);
+        }
         let (arguments, close) = self.take_argument_tokens()?;
         let call = span(start, close);
         let found = argument_count(&arguments);
@@ -16690,6 +16794,48 @@ impl<'a> Parser<'a> {
         start: Position,
     ) -> Result<ParsedExpr, Error> {
         let (member, member_span) = self.expect_member_name()?;
+        // `<Look as Tone>::tone` of a crate's trait a `use` names: the
+        // method on its first input or argument, as `Tone::tone` is.
+        if !self.ufcs_trait(&trait_name)
+            && let Some(binding) = self.models.import(&trait_name).cloned()
+            && matches!(binding.target, item::Import::Module)
+            && self
+                .models
+                .host_items(&format!("{}::{member}", binding.qualified))
+                .is_none()
+        {
+            if matches!(self.peek(), Token::LeftParen) {
+                if let Some(tokens) =
+                    self.path_method_call(&member, member_span, Some(binding.qualified.clone()))
+                {
+                    self.splice_tokens(tokens);
+                    return self.parse_primary();
+                }
+            } else if !matches!(self.peek(), Token::Unit) {
+                let arity = self
+                    .closure_hint
+                    .as_ref()
+                    .map_or(1, |hint| hint.len().max(1));
+                let mut inputs: Vec<Ty> = (0..arity).map(|_| self.inference.fresh()).collect();
+                if let Some(self_ty) = self_ty {
+                    // The written `Self` is the receiver's, through any
+                    // reference the use gives it.
+                    let given = self
+                        .closure_hint
+                        .as_ref()
+                        .and_then(|hint| hint.first().cloned());
+                    let receiver = match given.map(|given| self.inference.resolve(&given)) {
+                        Some(Ty::Reference { mutable, .. }) => Ty::Reference {
+                            mutable,
+                            target: Box::new(self_ty),
+                        },
+                        _ => self_ty,
+                    };
+                    inputs[0] = receiver;
+                }
+                return self.method_value(member, inputs.into(), trait_span, member_span);
+            }
+        }
         if !self.ufcs_trait(&trait_name) {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
@@ -21187,6 +21333,35 @@ impl<'a> Parser<'a> {
         {
             return self.host_function_value(item.clone(), expression);
         }
+        // `let name: fn(&Look) -> &str = Look::name;`: a crate type's
+        // method named without a call anywhere else is the same closure.
+        #[cfg(feature = "rust-import")]
+        if !matches!(self.peek(), Token::LeftParen | Token::Unit)
+            && let [item] = items.as_ref()
+            && item.imported_identity().is_some()
+            && item.kind() == crate::host::item::Kind::Method
+        {
+            return self.host_function_value(item.clone(), expression);
+        }
+        // `Look::mix(a, b)`: a crate type's method called by its path is
+        // the method called on its first argument.
+        if matches!(self.peek(), Token::LeftParen)
+            && let [item] = items.as_ref()
+            && item.kind() == crate::host::item::Kind::Method
+        {
+            let member = item.path_ref().name().to_owned();
+            if let Some(tokens) = self.path_method_call(&member, expression, None) {
+                self.splice_tokens(tokens);
+                return self.parse_primary();
+            }
+            return Err(Error::argument_count(
+                Callee::AssociatedFunction,
+                item.path(),
+                item.signature().parameters().len() + 1,
+                0,
+                expression,
+            ));
+        }
         #[cfg(feature = "rust-import")]
         if !matches!(self.peek(), Token::LeftParen | Token::Unit)
             && items.len() == 1
@@ -21342,7 +21517,16 @@ impl<'a> Parser<'a> {
             .collect::<Vec<_>>()
             .into_iter()
             .peekable();
-        self.parse_primary()
+        let value = self.parse_primary()?;
+        Ok(self.path_value(value))
+    }
+
+    /// `value`, a closure read in place of a path to a function, kept as one.
+    fn path_value(&mut self, value: ParsedExpr) -> ParsedExpr {
+        if let Ty::FnItem { key, .. } = &value.ty {
+            self.path_values.insert((**key).clone());
+        }
+        value
     }
 
     fn parse_host_value(
@@ -22808,7 +22992,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Option<ParsedExpr>, Error> {
         if member != "to_string"
             || !definition.parameters().is_empty()
-            || matches!(self.peek(), Token::LeftParen | Token::Unit)
+            || matches!(self.peek(), Token::Unit)
         {
             return Ok(None);
         }
@@ -22818,6 +23002,20 @@ impl<'a> Parser<'a> {
         };
         if self.imported_member_owner(&ty, member).is_some() {
             return Ok(None);
+        }
+        // `Look::to_string(&look)`: `look.to_string()`.
+        if matches!(self.peek(), Token::LeftParen) {
+            let Some(tokens) = self.path_method_call(member, member_span, None) else {
+                return Err(Error::argument_count(
+                    Callee::AssociatedFunction,
+                    format!("{}::{member}", definition.path()),
+                    1,
+                    0,
+                    span(owner_span.start(), member_span.end()),
+                ));
+            };
+            self.splice_tokens(tokens);
+            return self.parse_primary().map(Some);
         }
         let receiver = Ty::Reference {
             mutable: false,
@@ -24814,6 +25012,45 @@ impl<'a> Parser<'a> {
 
     /// Whether a `struct`, `enum`, `impl`, `trait` or `type` item, or an
     /// attribute, starts here in a body.
+    /// The program's own macro `name` names at `at`: the innermost block's
+    /// that defines one so far, else the one textual scope makes visible.
+    fn program_macro(
+        &self,
+        name: &str,
+        at: Position,
+    ) -> Option<Result<Shared<crate::resolve::macro_rules::Rules>, Error>> {
+        if let Some((_, rules)) = self
+            .local_macros
+            .iter()
+            .rev()
+            .find(|(defined, _)| defined.as_str() == name)
+        {
+            return Some(Ok(rules.clone()));
+        }
+        let crate::resolve::macros::Lookup::Found(definition) =
+            self.models.macros.lookup(name, self.models.context, at)
+        else {
+            return None;
+        };
+        let rules = self
+            .models
+            .macro_rules
+            .get(&(definition.source(), definition.span()))
+            .expect("every definition's rules are read with the tables");
+        Some(rules.clone().map_err(|malformed| Error::Syntax {
+            message: malformed.message().into(),
+            label: malformed.label().into(),
+            help: malformed.help().map(Into::into),
+            at: point_span(malformed.at()),
+        }))
+    }
+
+    /// Whether a `macro_rules!` definition is next.
+    fn macro_definition_ahead(&mut self) -> bool {
+        matches!(self.peek(), Token::Identifier(ref name) if name.as_str() == "macro_rules")
+            && matches!(self.peek_second(), Token::Bang)
+    }
+
     fn nested_item_ahead(&mut self) -> bool {
         if self.attribute_ahead() {
             return true;
@@ -31869,6 +32106,7 @@ impl<'a> Parser<'a> {
             let outer_output = std::mem::take(&mut self.output);
             let outer_last_type = self.last_type.clone();
             let outer_last_expression = self.last_expression.take();
+            let outer_macros = self.local_macros.len();
             self.last_type = Ty::Unit;
             self.open_drops();
             self.flow().open_block();
@@ -31889,10 +32127,14 @@ impl<'a> Parser<'a> {
                     Token::Const => self.parse_binding(false)?,
                     Token::Fn => self.skip_nested_fn()?,
                     Token::Use => self.skip_nested_use()?,
+                    _ if self.macro_definition_ahead() => self.parse_local_macro()?,
+                    _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
                     _ if self.nested_item_ahead() => self.skip_nested_item()?,
                     _ => self.parse_statement()?,
                 }
             }
+            // A block's own macros end with it.
+            self.local_macros.truncate(outer_macros);
             let end = self.expect(Token::RightBrace, "'}' after a match arm block")?;
             // The block's own locals end with it.
             let declared: Vec<Span> = self
@@ -38803,6 +39045,13 @@ impl<'a> Parser<'a> {
             return Ok(value);
         }
 
+        // The program's own macro: textual scope shadows the prelude's.
+        if matches!(self.peek(), Token::Bang)
+            && let Some(rules) = self.program_macro(&name, name_span.start())
+        {
+            let rules = rules?;
+            return self.expand_program_macro(&rules, name_span);
+        }
         if matches!(self.peek(), Token::Bang)
             && name.as_str() == "format"
             && self.models.import(&name).is_none()
@@ -39039,6 +39288,17 @@ impl<'a> Parser<'a> {
         if let Some(kind) = self.growable_path(&name) {
             self.next();
             let (member, member_span) = self.expect_member_name()?;
+            // `Vec::len`, `Vec::is_empty(&v)`.
+            let owner = Ty::sequence(kind, self.inference.fresh());
+            let written = match kind {
+                sequence::Kind::Deque => "VecDeque",
+                _ => "Vec",
+            };
+            if let Some(value) =
+                self.std_method_path(owner, written, &member, name_span, member_span)
+            {
+                return value;
+            }
             let (arguments, end) = self.parse_call_arguments(&format!("`{name}` arguments"))?;
             // `Vec<T>` from `[T; N]`, or `VecDeque<T>` from a `Vec<T>` or
             // `[T; N]`, as std's `From` impls say: the same array at
@@ -39154,15 +39414,27 @@ impl<'a> Parser<'a> {
 
         if matches!(self.peek(), Token::Bang) {
             let Some(binding) = self.models.import(&name).cloned() else {
-                if self.program_macro(&name, name_span.start()) {
-                    return Err(Error::UnsupportedNominalSyntax {
-                        construct: format!("the program's own `macro_rules! {name}`").into(),
-                        source: name_span,
-                    });
-                }
+                let scope =
+                    match self
+                        .models
+                        .macros
+                        .lookup(&name, self.models.context, name_span.start())
+                    {
+                        crate::resolve::macros::Lookup::Later(definition) => {
+                            crate::resolve::MacroScope::Later(definition)
+                        }
+                        crate::resolve::macros::Lookup::Elsewhere => {
+                            crate::resolve::MacroScope::Elsewhere
+                        }
+                        crate::resolve::macros::Lookup::Found(_)
+                        | crate::resolve::macros::Lookup::Missing => {
+                            crate::resolve::MacroScope::Undefined
+                        }
+                    };
                 return Err(Error::UnknownMacro {
                     reference: Span::new(name_span.start(), text_end(name_span.start(), &name)),
                     name,
+                    scope,
                 });
             };
             let (item::Import::Item {
@@ -40247,30 +40519,30 @@ impl<'a> Parser<'a> {
         }
         // `.map(Result::ok)`, `.and_then(Option::as_ref)`: a method of
         // `Option` or `Result` named as a value is the closure that calls it.
-        if matches!(name.as_str(), "Option" | "Result")
+        // `str::trim`, `Option::is_some(&x)`.
+        if matches!(name.as_str(), "Option" | "Result" | "str")
             && self.models.get(&name).is_none()
             && self.models.import(&name).is_none()
             && !self.bindings.contains_key(name.as_str())
-            && let Some(member) = self.std_method_value()
+            && let Some(member) = self.std_method_member()
         {
-            self.next();
-            self.next();
-            let at = name_span.start();
-            let argument = || {
-                (
-                    Token::Identifier(Box::new("__rawr_method_value".into())),
-                    at,
-                )
+            let owner = match name.as_str() {
+                "Option" => Ty::Option(Box::new(self.inference.fresh())),
+                "Result" => Ty::Result(
+                    Box::new(self.inference.fresh()),
+                    Box::new(self.inference.fresh()),
+                ),
+                _ => Ty::Str,
             };
-            self.splice_tokens(vec![
-                argument(),
-                (Token::Pipe, at),
-                argument(),
-                (Token::Period, at),
-                (Token::Identifier(Box::new(member.as_str().into())), at),
-                (Token::Unit, at),
-            ]);
-            return self.parse_closure(Token::Pipe, point_span(at), false);
+            if std_method::path_function(&owner, &member).is_some() {
+                self.next();
+                let (member, member_span) = self.expect_member_name()?;
+                if let Some(value) =
+                    self.std_method_path(owner, &name, &member, name_span, member_span)
+                {
+                    return value;
+                }
+            }
         }
         // `Default::default()`, `From::from(x)`, `std::convert::Into::into(x)`:
         // a std or prelude trait's function called by path.
@@ -47153,38 +47425,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Whether the program defines `macro_rules! name` at a file's top
-    /// level before `at`, where Rust's textual scope makes it visible.
-    fn program_macro(&self, name: &str, at: Position) -> bool {
-        let key = self.models.sources.key(self.models.context.index());
-        let Ok(source) = self.models.sources.resolve(key) else {
-            return false;
-        };
-        let Some(line) = at.line() else {
-            return false;
-        };
-        let mut depth = 0usize;
-        for text in source.text().split('\n').take(line.saturating_sub(1)) {
-            let trimmed = text.trim_start();
-            if depth == 0
-                && let Some(rest) = trimmed.strip_prefix("macro_rules!")
-                && rest.trim_start().strip_prefix(name).is_some_and(|after| {
-                    after.starts_with(|next: char| next.is_whitespace() || next == '{')
-                })
-            {
-                return true;
-            }
-            for character in text.chars() {
-                match character {
-                    '{' => depth += 1,
-                    '}' => depth = depth.saturating_sub(1),
-                    _ => {}
-                }
-            }
-        }
-        false
-    }
-
     /// rustc's error for the inference variable `unknown`, which the use at
     /// `needed` needs known, at the first `let` whose type holds it: E0282
     /// "type annotations needed for `Vec<_>`". A conversion nothing
@@ -47902,6 +48142,17 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         self.next();
         let (member, member_span) = self.expect_member_name()?;
+        // `char::to_ascii_uppercase`, `String::len(&s)`: a method of the
+        // type as std declares it. A call of a number's inherent method is
+        // its own (`parse_number_method`).
+        if (!matches!(builtin, Ty::Int(_) | Ty::Float(_))
+            || !matches!(self.peek(), Token::LeftParen | Token::Unit)
+            || std_method::inherent(&builtin, &member).is_none())
+            && let Some(value) =
+                self.std_method_path(builtin.clone(), &name, &member, name_span, member_span)
+        {
+            return value;
+        }
         // `f64::consts::PI`.
         if member.as_str() == "consts" && matches!(self.peek(), Token::DoubleColon) {
             self.next();
@@ -47955,27 +48206,8 @@ impl<'a> Parser<'a> {
                 (Ty::Float(_), "INFINITY") => "(1.0 / 0.0)".into(),
                 (Ty::Float(_), "NEG_INFINITY") => "(-1.0 / 0.0)".into(),
                 (Ty::Float(_), "NAN") => "(0.0 / 0.0)".into(),
-                // `String::from`, `f64::sqrt`, `char::is_alphanumeric`: a
-                // function as a value.
-                (_, "from" | "try_from") => {
-                    let path = format!("{name}::{member}");
-                    return self.function_value_closure(&path, 1, None, name_span);
-                }
-                (_, member) if member.starts_with(|c: char| c.is_ascii_lowercase()) => {
-                    // `to_string` and `clone` take `&self`, as `i32::to_string`
-                    // is a `fn(&i32) -> String`.
-                    let annotation = match builtin {
-                        Ty::String | Ty::Str => "&str".to_string(),
-                        _ if matches!(member, "to_string" | "clone") => format!("&{name}"),
-                        _ => name.to_string(),
-                    };
-                    return self.function_value_closure(
-                        member,
-                        1,
-                        Some(Some(annotation)),
-                        name_span,
-                    );
-                }
+                // A function as a value is `std_method_path`'s; any other
+                // name std doesn't declare for the type.
                 _ => {
                     return Err(Error::UnknownMember {
                         owner: name,
@@ -48735,14 +48967,15 @@ impl<'a> Parser<'a> {
             // names (`use iced::widget::Widget;` then `Widget::_boxed(w)`),
             // which Rawr names as a module: the method called on its
             // receiver, as through the trait's whole path.
-            if self.models.host_items(&path).is_none()
+            let crate_trait = self.models.host_items(&path).is_none()
                 && matches!(binding.target, item::Import::Module)
                 && binding
                     .qualified
                     .rsplit("::")
                     .next()
                     .and_then(|name| name.chars().next())
-                    .is_some_and(char::is_uppercase)
+                    .is_some_and(char::is_uppercase);
+            if crate_trait
                 && matches!(self.peek(), Token::LeftParen)
                 && let Some(tokens) =
                     self.path_method_call(&member, member_span, Some(binding.qualified.clone()))
@@ -48750,6 +48983,20 @@ impl<'a> Parser<'a> {
                 self.pending_turbofish = None;
                 self.splice_tokens(tokens);
                 return self.parse_primary();
+            }
+            // `.map(Tone::tone)`: the closure that calls the method on its
+            // first input, whose type's impl of the trait gives it. Its
+            // inputs are the ones its use gives it, the receiver first.
+            if crate_trait
+                && !matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && member.starts_with(|c: char| c.is_ascii_lowercase())
+            {
+                let arity = self
+                    .closure_hint
+                    .as_ref()
+                    .map_or(1, |hint| hint.len().max(1));
+                let inputs = (0..arity).map(|_| self.inference.fresh()).collect();
+                return self.method_value(member, inputs, owner_span, member_span);
             }
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                 #[cfg(feature = "rust-import")]
@@ -50844,7 +51091,10 @@ impl<'a> Parser<'a> {
             return None;
         };
         let (closure, have) = match actual {
-            Ty::FnItem { key, inputs, .. } => (key.name().contains("{closure#"), inputs),
+            Ty::FnItem { key, inputs, .. } => (
+                key.name().contains("{closure#") && !self.path_values.contains(&**key),
+                inputs,
+            ),
             // A closure or function the host is given, as its callable.
             Ty::Callable {
                 inputs,

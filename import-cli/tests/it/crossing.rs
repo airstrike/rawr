@@ -1166,6 +1166,61 @@ fn a_trait_methods_opaque_output_from_its_default_body_is_usable() {
     );
 }
 
+/// iced's layout (#936): `self.example().explain(color).boxed()` calls
+/// `explain` on an `Element<'_, ..>` a method of the program gives, so the
+/// opaque type it gives borrows what the element borrows. The runner holds
+/// it in the frame's region by the family a wrapper function's output
+/// projects, as Rust code can't name the type. The output is `cargo run`'s.
+#[test]
+fn an_opaque_output_that_borrows_an_element_is_held_in_its_region() {
+    let (rawr, cargo) = both_printed("explained_element.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 [Increment] 2@50 explain #0000ff rule 4 [Decrement]"),
+        "{rawr}"
+    );
+}
+
+/// `outlined` gives an opaque type of a type no public path names, on an
+/// `Element<'_, ..>`, held in its region as `explain`'s is (#936). The
+/// output is `cargo run`'s.
+#[test]
+fn an_opaque_output_of_a_private_type_that_borrows_an_element_is_held() {
+    let (rawr, cargo) = both_printed("outlined_element.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 [Increment] 2@50 outlined rule 4 [Decrement]"),
+        "{rawr}"
+    );
+}
+
+/// `explain` on what `explain` gives on an `Element<'_, ..>` (#936): the
+/// outer opaque type takes the inner one, and the region holds it boxed
+/// through a trait of the runner's, as no wrapper over another compiles.
+/// The output is `cargo run`'s.
+#[test]
+fn an_opaque_output_of_an_opaque_output_that_borrows_is_held_boxed() {
+    let (rawr, cargo) = both_printed("explained_twice.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with(
+            "last view pad 0 [Increment] 2@50 explain #00ff00 explain #0000ff rule 4 [Decrement]"
+        ),
+        "{rawr}"
+    );
+}
+
+/// What `explain` gives on an element that borrows a local, kept past the
+/// block the local lives in, is rustc's E0597 at the borrow (#936).
+#[test]
+fn an_opaque_output_that_outlives_what_it_borrows_does_not_live_long_enough() {
+    let stderr = checked("explained_outlived.rs");
+    assert!(
+        stderr.contains("error[E0597]: `local` does not live long enough"),
+        "{stderr}"
+    );
+}
+
 /// iced's loupe (#885): the program's own `Zoomed<W>` implements the
 /// crate's `Widget` for any `W: Widget` through `W`'s methods, and holds
 /// what `explain` gives. The runner compiles the impl for each type it is
