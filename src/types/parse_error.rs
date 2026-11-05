@@ -371,6 +371,17 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::OverflowingLiteral { ty, .. } => {
                     write!(f, "literal out of range for `{ty}`")
                 }
+                crate::resolve::Error::LocalTypeNeeded { ty, .. } => {
+                    write!(f, "{}", crate::resolve::TypeNeeded(ty.as_deref()))
+                }
+                crate::resolve::Error::Uninitialized { name, possibly, .. } => write!(
+                    f,
+                    "{}",
+                    crate::resolve::Uninitialized {
+                        name,
+                        possibly: *possibly
+                    }
+                ),
                 crate::resolve::Error::MemberKind {
                     owner, member, field: true, ..
                 } => write!(f, "Field '{owner}::{member}' called like a method"),

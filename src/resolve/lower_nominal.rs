@@ -11844,6 +11844,14 @@ struct Parser<'a> {
     closures: Vec<ClosureScope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
     moved_at: BTreeMap<Span, Span>,
+    /// The locals `let x;` declares without a value, by their declaration,
+    /// with their first assignment once one is parsed: a use before an
+    /// assignment gives one a value is rustc's E0381, and one not declared
+    /// `mut` takes its first assignment.
+    deferred: BTreeMap<Span, Option<Span>>,
+    /// Each use of a `deferred` local before it has a value, reported once
+    /// the body's types are settled (`finish_uninitialized`).
+    uninitialized: Vec<UninitializedUse>,
     /// Reads of a crate struct's field that leave the struct whole, by
     /// their span: a by-value use moves that field out, as Rust's partial
     /// move (`move_local`).
@@ -12287,6 +12295,8 @@ impl<'a> Parser<'a> {
             loops: Vec::new(),
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
+            deferred: BTreeMap::new(),
+            uninitialized: Vec::new(),
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
             owning_closures: BTreeSet::new(),
@@ -12714,6 +12724,8 @@ impl<'a> Parser<'a> {
             result?;
         }
 
+        self.finish_uninitialized()?;
+
         self.check_borrows()?;
         self.finish_conversions()?;
         self.finish_bounds()?;
@@ -12845,6 +12857,7 @@ impl<'a> Parser<'a> {
             }
             let expected = Ty::from_resolved(definition.output());
             self.coerce_tail(&expected, definition.body())?;
+            self.finish_uninitialized()?;
             self.check_borrows()?;
             self.finish_conversions()?;
             self.finish_bounds()?;
@@ -12887,6 +12900,7 @@ impl<'a> Parser<'a> {
                 return Err(self.unsupported("tokens after a method body"));
             }
             self.coerce_tail(&output, definition.body())?;
+            self.finish_uninitialized()?;
             self.check_borrows()?;
             self.finish_conversions()?;
             self.finish_bounds()?;
@@ -12949,6 +12963,8 @@ impl<'a> Parser<'a> {
         self.coerce_tail(&expected, definition.body())?;
         self.close_body_drops()?;
         self.wrap_formatter(definition);
+
+        self.finish_uninitialized()?;
 
         self.check_borrows()?;
         self.finish_conversions()?;
@@ -13538,6 +13554,8 @@ impl<'a> Parser<'a> {
         if !definition.body.constant && !definition.body.asynchronous {
             self.close_body_drops()?;
         }
+
+        self.finish_uninitialized()?;
 
         self.check_borrows()?;
         self.finish_conversions()?;
@@ -24126,6 +24144,9 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        if let_keyword && matches!(self.peek(), Token::SemiColon) {
+            return self.parse_deferred_binding(start, name, name_span, mutable, annotation);
+        }
         // `const X = 3;`: a constant needs its type, as rustc says.
         if !let_keyword && annotation.is_none() {
             return Err(Error::Syntax {
@@ -24497,6 +24518,40 @@ impl<'a> Parser<'a> {
         rendered.push_text(";");
         let rendered = self.with_field_entries(pending, rendered);
         self.write_output(rendered, span(start, value.span.end()));
+        self.last_type = Ty::Unit;
+        self.last_expression = None;
+        self.consume_terminator(start).map(|_| ())
+    }
+
+    /// `let x;`, `let x: i32;`: a local an assignment gives its value
+    /// later. Its type is the annotation's, else the one its assignments
+    /// give it, and it has no value until one does (`deferred`).
+    fn parse_deferred_binding(
+        &mut self,
+        start: Position,
+        name: ImmutableString,
+        name_span: Span,
+        mutable: bool,
+        annotation: Option<Ty>,
+    ) -> Result<(), Error> {
+        let ty = annotation.unwrap_or_else(|| self.inference.fresh());
+        self.entry_aliases.remove(&name);
+        self.flow().local(&name, name_span);
+        self.deferred.insert(name_span, None);
+        self.bindings.insert(
+            name.clone(),
+            Binding {
+                ty,
+                mutable,
+                available: false,
+                declaration: name_span,
+                kind: BindingKind::Local,
+            },
+        );
+        self.write_output(
+            origin::Fragment::plain(format!("let {name};")),
+            span(start, name_span.end()),
+        );
         self.last_type = Ty::Unit;
         self.last_expression = None;
         self.consume_terminator(start).map(|_| ())
@@ -25915,9 +25970,16 @@ impl<'a> Parser<'a> {
         };
         // rustc checks an assignment's types before its mutability: an
         // immutable local is reported once the value's type is.
+        // A `let x;` not declared `mut` takes one assignment, where it has
+        // no value yet; another is E0384 at the first.
+        let deferred = matches!(lvalue, Lvalue::Binding { .. })
+            .then(|| self.deferred.get(&binding.declaration).copied())
+            .flatten();
         let immutable = (!binding.mutable && matches!(binding.kind, BindingKind::Local))
-            .then_some(binding.declaration);
-        if !binding.mutable && immutable.is_none() {
+            .then_some(binding.declaration)
+            .filter(|_| binding.available || deferred.is_none())
+            .map(|declaration| deferred.flatten().unwrap_or(declaration));
+        if !binding.mutable && !matches!(binding.kind, BindingKind::Local) {
             return Err(match &binding.kind {
                 BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
                     owner: owner.clone(),
@@ -26000,6 +26062,9 @@ impl<'a> Parser<'a> {
                 rendered.push_text(";");
                 if let Some(binding) = self.bindings.get_mut(&binding_name) {
                     binding.available = true;
+                    if let Some(first @ None) = self.deferred.get_mut(&binding.declaration) {
+                        *first = Some(span(value.span.start(), replacement.span.end()));
+                    }
                 }
                 rendered
             }
@@ -28779,7 +28844,16 @@ impl<'a> Parser<'a> {
             });
         }
         for (name, binding) in &mut self.bindings {
-            binding.available &= inner.get(name).is_some_and(|binding| binding.available);
+            let after = inner
+                .get(name)
+                .filter(|after| after.declaration == binding.declaration);
+            // A `loop` runs its body before it ends, so a `let x;` it gives
+            // a value has one after it.
+            if value && self.deferred.contains_key(&binding.declaration) {
+                binding.available = after.is_some_and(|after| after.available);
+            } else {
+                binding.available &= inner.get(name).is_some_and(|binding| binding.available);
+            }
         }
         self.require_type(&Ty::Unit, &body.value.ty, body.value.span)?;
         source.push_text(" ");
@@ -35381,6 +35455,16 @@ impl<'a> Parser<'a> {
     /// rustc's E0382 for the local `name`, whose `binding` was moved, at
     /// its use at `reference`, which `borrowed` it or used it by value.
     fn moved_value(&self, name: &str, binding: &Binding, reference: Span, borrowed: bool) -> Error {
+        if let Some(assigned) = self.deferred.get(&binding.declaration)
+            && !self.moved_at.contains_key(&binding.declaration)
+        {
+            return Error::Uninitialized {
+                name: name.into(),
+                possibly: assigned.is_some(),
+                reference: self.name_span(reference, name),
+                declaration: self.name_span(binding.declaration, name),
+            };
+        }
         let moved = self
             .moved_at
             .get(&binding.declaration)
@@ -40060,8 +40144,39 @@ impl<'a> Parser<'a> {
             value.lvalue = Some(Lvalue::Binding { binding: name, ty });
             return Ok(value);
         }
-        // A moved local may be assigned again, as in Rust.
-        if !binding.available && !assigned {
+        // A moved local may be assigned again, as in Rust. A `let x;` used
+        // before it has a value is rustc's E0381, which its borrow check
+        // reports after the body's types.
+        if !binding.available
+            && !assigned
+            && let Some(first) = self.deferred.get(&binding.declaration).copied()
+            && !self.moved_at.contains_key(&binding.declaration)
+        {
+            let (declaration, ty) = (binding.declaration, binding.ty.clone());
+            let unknown = matches!(self.inference.resolve(&ty), Ty::Infer(_));
+            let operator = match self.peek() {
+                Token::EqualsTo
+                | Token::NotEqualsTo
+                | Token::LessThan
+                | Token::LessThanEqualsTo
+                | Token::GreaterThan
+                | Token::GreaterThanEqualsTo => Some("E0283"),
+                Token::Plus | Token::Minus | Token::Multiply | Token::Divide | Token::Modulo => {
+                    Some("E0284")
+                }
+                _ => None,
+            }
+            .filter(|_| unknown)
+            .map(|code| (code, point_span(self.position())));
+            self.uninitialized.push(UninitializedUse {
+                name: name.clone(),
+                declaration,
+                reference: name_span,
+                ty,
+                possibly: first.is_some(),
+                operator,
+            });
+        } else if !binding.available && !assigned {
             return Err(self.moved_value(&name, binding, name_span, false));
         }
         let Some(binding) = self.bindings.get(name.as_str()) else {
@@ -46637,6 +46752,40 @@ impl<'a> Parser<'a> {
             }
         }
         false
+    }
+
+    /// The first use of a `let x;` before it has a value, now the body's
+    /// types are settled: rustc's E0381, or, for a local whose type is
+    /// still unknown, the E0282 its type check reports first (E0283 or
+    /// E0284 where the use is an operator's operand).
+    fn finish_uninitialized(&mut self) -> Result<(), Error> {
+        let Some(first) = std::mem::take(&mut self.uninitialized).into_iter().next() else {
+            return Ok(());
+        };
+        let declaration = self.name_span(first.declaration, &first.name);
+        let unknown = matches!(self.inference.resolve(&first.ty), Ty::Infer(_));
+        Err(match first.operator {
+            Some((code, needed)) => Error::LocalTypeNeeded {
+                code,
+                name: first.name,
+                ty: None,
+                declaration,
+                needed: Some(needed),
+            },
+            None if unknown => Error::LocalTypeNeeded {
+                code: "E0282",
+                name: first.name,
+                ty: None,
+                declaration,
+                needed: None,
+            },
+            None => Error::Uninitialized {
+                reference: self.name_span(first.reference, &first.name),
+                name: first.name,
+                possibly: first.possibly,
+                declaration,
+            },
+        })
     }
 
     /// rustc's `overflowing_literals` error for the integer literal at
@@ -56676,6 +56825,20 @@ struct PendingWide {
     at: Span,
     placeholder: String,
     texts: [String; 3],
+}
+
+/// A use of a `let x;` before an assignment gives it a value
+/// (`Lowering::uninitialized`).
+struct UninitializedUse {
+    name: ImmutableString,
+    declaration: Span,
+    reference: Span,
+    ty: Ty,
+    /// Whether some path to the use gives the local a value.
+    possibly: bool,
+    /// The operator the use is the operand of while its type is unknown,
+    /// which needs the type there: rustc's code for it and its place.
+    operator: Option<(&'static str, Span)>,
 }
 
 /// A float literal or arithmetic result whose kind inference settles

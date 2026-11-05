@@ -112,6 +112,7 @@ codes!(Resolve;
     (BORROW_NOT_MUTABLE, "E0596", "A `&mut` borrow of a local not declared `mut`, as a `&mut self` method takes it, as rustc reports it."),
     (BORROW_ASSIGN_IMMUTABLE, "E0594", "An assignment through a place that isn't mutable, as a dereference of a type with no `DerefMut`, as rustc reports it."),
     (RESOLVE_UNKNOWN_VARIABLE, "E0425", "A name no value in scope has, as rustc reports it."),
+    (RESOLVE_UNINITIALIZED, "E0381", "A local used before it is given a value, as rustc reports it."),
     (RESOLVE_MOVED_VALUE, "E0382", "A use of a value after it was moved, as rustc reports it."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),
     (RESOLVE_OVERFLOWING_LITERAL, "", "An integer literal its type can't hold, rustc's deny-by-default `overflowing_literals` lint, which has no code."),
@@ -143,6 +144,7 @@ codes!(Resolve;
     (RESOLVE_GENERIC_ARGUMENT_COUNT, "E0107", "A path with more or fewer generic arguments than its type takes, as rustc reports it."),
     (RESOLVE_AMBIGUOUS_IMPL, "E0283", "A trait call whose type more than one impl could give, as rustc reports it."),
     (RESOLVE_NOT_YET, "RAWR-NOT-YET", "A std item rawr resolves but doesn't run yet."),
+    (RESOLVE_PROJECTION_ANNOTATIONS, "E0284", "An operator whose output its operand's unknown type leaves open, as rustc reports it."),
     (RESOLVE_TYPE_ANNOTATIONS, "E0282", "A generic parameter whose type nothing gives, as rustc reports it."),
     (RESOLVE_DUPLICATE_GENERIC, "E0403", "A generic parameter name used twice in one item's generics, as rustc reports it."),
     (RESOLVE_PRIVATE_ITEM, "E0603", "A path to an item private to a module it is outside of, as rustc reports it."),
@@ -232,6 +234,15 @@ pub(crate) fn private(item: crate::resolve::Private) -> Code {
 
 /// The code of rustc's error `rustc` that `resolve::Error::StdPath` carries:
 /// a std path's (`resolve::std_path`), or another error in rustc's words.
+/// The code of a local whose type is unknown where rustc needs it.
+pub(crate) fn type_needed(rustc: &str) -> Code {
+    match rustc {
+        "E0283" => RESOLVE_AMBIGUOUS_IMPL,
+        "E0284" => RESOLVE_PROJECTION_ANNOTATIONS,
+        _ => RESOLVE_TYPE_ANNOTATIONS,
+    }
+}
+
 pub(crate) fn std_path(rustc: &str) -> Code {
     match rustc {
         "E0432" => RESOLVE_UNRESOLVED_IMPORT,

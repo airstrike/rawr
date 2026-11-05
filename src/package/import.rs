@@ -1054,7 +1054,9 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::CannotCompare { .. }
         | R::ArgumentSignature { .. }
         | R::MemberKind { .. }
-        | R::OverflowingLiteral { .. } => None,
+        | R::OverflowingLiteral { .. }
+        | R::Uninitialized { .. }
+        | R::LocalTypeNeeded { .. } => None,
     }
 }
 
