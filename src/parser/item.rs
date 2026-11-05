@@ -209,6 +209,15 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
                 }
                 if input.peek().is_some_and(|(token, _)| is_name(token)) {
                     let name = parse_name(input, "after 'const'")?;
+                    if matches!(input.peek(), Some((Token::Equals, _))) {
+                        return Err(PERR::Unexpected {
+                            message: "missing type for `const` item".into(),
+                            label: "provide a type for the constant".into(),
+                            help: None,
+                            span: name.span,
+                        }
+                        .into_err(name.span.start()));
+                    }
                     if matches!(input.peek(), Some((Token::Colon, _))) {
                         let header = crate::item::Header {
                             attributes: Box::default(),
@@ -3629,7 +3638,36 @@ fn parse_type_split(
         None => {}
     }
 
+    expect_type_path(input)?;
     parse_path_split(input, split).map(type_ref::Type::Path)
+}
+
+/// rustc's syntax error where a type's path should start and none does:
+/// "expected type, found `)`". A `?` there starts a bound (`?Sized`), whose
+/// trait is then expected: "expected identifier, found `,`".
+fn expect_type_path(input: &mut TokenStream) -> ParseResult<()> {
+    let mut bound = false;
+    while matches!(input.peek(), Some((Token::DoubleQuestion, _)))
+        || matches!(input.peek(), Some((Token::Reserved(symbol), _)) if symbol.as_str() == "?")
+    {
+        input.next();
+        bound = true;
+    }
+    let (token, position) = input.peek().expect("token streams always end with EOF");
+    let path = is_name(token)
+        || matches!(token, Token::DoubleColon)
+        || matches!(token, Token::Reserved(keyword) if keyword.as_str() == "super");
+    if path || matches!(token, Token::LexError(_)) {
+        return Ok(());
+    }
+    let expected = if bound { "identifier" } else { "type" };
+    Err(unexpected(
+        format!("expected {expected}, found {}", found(token)),
+        &format!("expected {expected}"),
+        None,
+        token,
+        *position,
+    ))
 }
 
 /// `impl Fn(A) -> B + 'a + Send`: the lifetimes and auto traits after a

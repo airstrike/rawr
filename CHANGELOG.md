@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.134 (2026-11-05)
+
+- Errors use rustc's codes and wording: mismatched types E0308, an `if` without `else` E0317, `return;` E0069, unknown names E0425, E0433 and E0432, E0423, assignments E0384, E0594 and E0596, and `?` or mixed-number arithmetic E0277. Syntax errors and an unknown macro print a plain `error:` as rustc does. (#897, #909, #910)
+
 ## 0.3.133 (2026-11-04)
 
 - `rawr test` runs a file's or a crate's `#[test]` functions as `cargo test` does: `cfg(test)` holds under it, `#[should_panic]` (with `expected`) and `#[ignore]` behave as in cargo, it takes cargo's name filters and libtest's options, reports in libtest's format and exits with 101 when a test fails. A syntax error in an item a `#[cfg]` leaves out stops `rawr run` and `rawr check`, as rustc parses every item. (#898)

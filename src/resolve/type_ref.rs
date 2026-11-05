@@ -336,6 +336,7 @@ pub(super) fn resolve(
                 return alias.expand(&arguments, span).ok_or(Error::UnknownType {
                     name: written.into(),
                     reference: span,
+                    path: false,
                 });
             }
             resolve_path(
@@ -698,6 +699,7 @@ fn resolve_path(
         let error = Error::UnknownType {
             name,
             reference: span,
+            path: false,
         };
         #[cfg(feature = "rust-import")]
         if let Some(native) = missing {

@@ -2337,7 +2337,7 @@ impl Resolution {
                     !built[*index] && wanted[*index].iter().all(|(_, provider)| built[*provider])
                 })
                 .or_else(|| (0..declared.len()).find(|index| !built[*index]))
-                .expect("a facade is left to build");
+                .expect("some crate's bindings are left to build");
             through[next] = wanted[next]
                 .iter()
                 .filter(|(_, provider)| built[*provider])

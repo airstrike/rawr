@@ -249,7 +249,7 @@ fn type_errors_are_the_same_diagnostic_for_check_and_run() {
     assert!(!run.status.success());
     assert_eq!(checked.stderr, run.stderr);
     let text = stderr(&checked);
-    assert!(text.starts_with("error[RAWR-RESOLVE-"), "{text}");
+    assert!(text.starts_with("error[E0308]: mismatched types"), "{text}");
     assert!(text.contains(&format!("{}:2:", source.display())), "{text}");
 }
 
@@ -279,7 +279,7 @@ fn a_program_using_iced_goes_to_rawr_import() {
             text.contains("this program uses Rust dependencies in Cargo.toml, which rawr-import serves, and it is not installed"),
             "{text}"
         );
-        assert!(text.contains(" rawr-import-cli"), "{text}");
+        assert_says_how_to_install_rawr_import(&text);
         assert!(!text.contains("rawr-iced"), "{text}");
         assert!(!text.contains("layer"), "{text}");
     }
@@ -375,8 +375,21 @@ fn a_program_with_rust_dependencies_without_rawr_import_says_how_to_install_it()
         text.contains("this program uses Rust dependencies in Cargo.toml, which rawr-import serves, and it is not installed"),
         "{text}"
     );
-    assert!(text.contains(" rawr-import-cli"), "{text}");
+    assert_says_how_to_install_rawr_import(&text);
     assert!(!text.contains("iced"), "{text}");
+}
+
+/// `text` gives each command the catalog installs rawr-import with, so the
+/// hint and this check read the same lines.
+fn assert_says_how_to_install_rawr_import(text: &str) {
+    let known = rawr_cli::layer::catalog()
+        .into_iter()
+        .find(|known| known.manifest.name == "rawr-import")
+        .expect("the catalog lists rawr-import");
+    assert!(!known.install.is_empty());
+    for line in &known.install {
+        assert!(text.contains(line.as_str()), "{text}");
+    }
 }
 
 #[test]
