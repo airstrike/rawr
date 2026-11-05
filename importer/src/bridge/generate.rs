@@ -10747,7 +10747,7 @@ fn render_anchored_output(
     let Some(family) = family_of(returned).filter(|family| family.named().is_some()) else {
         return Ok(());
     };
-    let inserted = family.call(family::Reach::Insert, "made");
+    let inserted = family.call(family::Reach::Insert, &held_value(returned, "made"));
     // The crate values the output borrows are shared with the region's
     // pins, which live as long as the view's borrow (`views_natives`).
     let pins = if VIEWED_ARGUMENTS.get() {
@@ -11083,9 +11083,9 @@ fn render_scoped_receiver(
     // (`family`), whose output the region holds.
     let given = family_of(&returned)
         .and_then(|family| Some((family.made()?, family)));
-    let call = match scoped_type(&returned) {
-        Some(key) if boxes && family::Ops::held(&key).is_some() => format!("Box::new({call})"),
-        _ => call,
+    let given = match family_of(&returned) {
+        Some(family) if !boxes && family.named().is_some() => Some((call.clone(), family)),
+        _ => given,
     };
     let (call, converted) = match given {
         Some((made, family)) => (
@@ -11234,9 +11234,11 @@ fn declare_wrapper(plan: &Plan) -> Result<Option<convert::Type>, request::Error>
     if family::of(&key).is_some() {
         return Ok(None);
     }
+    // An input of an opaque type has no Rust spelling.
     let mut inputs = vec![("receiver".to_owned(), held)];
     for (position, input) in signature.inputs().iter().enumerate() {
-        let Some(ty) = scoped_type(&substituted(input, signature, substitutions)?) else {
+        let input = substituted(input, signature, substitutions)?;
+        let Some(ty) = scoped_type(&input).filter(|_| !holds_opaque(&input)) else {
             return Ok(None);
         };
         inputs.push((format!("argument_{position}"), ty));
@@ -11290,7 +11292,8 @@ fn declare_ops(plans: &[Plan], ty: &convert::Type) -> Result<(), request::Error>
         }
         let mut inputs = Vec::new();
         for (position, input) in signature.inputs().iter().enumerate() {
-            let Some(rust) = scoped_type(&substituted(input, signature, substitutions)?) else {
+            let input = substituted(input, signature, substitutions)?;
+            let Some(rust) = scoped_type(&input).filter(|_| !holds_opaque(&input)) else {
                 return Ok(());
             };
             inputs.push((format!("argument_{position}"), rust));
@@ -13269,11 +13272,7 @@ fn render_slot(
     let family = if call.borrows() || carries_lifetime(&returned) {
         // The slot's signature names the output's type, which a wrapper's
         // family can't (`family`).
-        let family = family_of(&returned)
-            .as_ref()
-            .and_then(family::Family::named)
-            .map(str::to_owned);
-        Some(family.ok_or_else(|| drift("a slot's borrowing output"))?)
+        Some(written_family(&returned).ok_or_else(|| drift("a slot's borrowing output"))?)
     } else {
         None
     };
@@ -15185,7 +15184,7 @@ fn render_give(
             writeln!(
                 output,
                 "    Ok(Dynamic::from(region.{}))",
-                family.call(family::Reach::Insert, value)
+                family.call(family::Reach::Insert, &held_value(ty, value))
             )
         }
         // An `impl Fn(A..) -> B` is held boxed, as a call that takes a
@@ -15686,7 +15685,7 @@ fn render_to_dynamic(
             write!(
                 output,
                 "Ok::<Dynamic, Error>(Dynamic::from(region.{}))",
-                family.call(family::Reach::Insert, value)
+                family.call(family::Reach::Insert, &held_value(ty, value))
             )
         }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
@@ -17502,6 +17501,25 @@ fn family_type(name: &str) -> Option<String> {
     })
 }
 
+/// `value`, a Rust value of `ty`, as the region holds it: boxed, when
+/// that is how it holds the opaque type (`family::Ops`).
+fn held_value(ty: &convert::Type, value: &str) -> String {
+    if scoped_type(ty).is_some_and(|key| family::Ops::held(&key).is_some()) {
+        format!("Box::new({value})")
+    } else {
+        value.to_owned()
+    }
+}
+
+/// The family struct of `ty`, when the region holds `ty` itself, so a
+/// signature can name it as `<F as Family>::Of<'x>`: a wrapper's family
+/// names no type, and a boxed one holds another (`family`).
+fn written_family(ty: &convert::Type) -> Option<String> {
+    let name = family_of(ty)?.named()?.to_owned();
+    let boxed = scoped_type(ty).is_some_and(|key| family::Ops::held(&key).is_some());
+    (!boxed).then_some(name)
+}
+
 /// Whether the Rust type spelled `text` has an argument `_`.
 fn names_inferred(text: &str) -> bool {
     let identifier = |character: Option<char>| {
@@ -18035,11 +18053,8 @@ fn render_impl_function(
     // The member's signature names the output's type, which a wrapper's
     // family can't (`family`).
     let family = carries_lifetime(returned)
-        .then(|| family_of(returned))
-        .flatten()
-        .as_ref()
-        .and_then(family::Family::named)
-        .map(str::to_owned);
+        .then(|| written_family(returned))
+        .flatten();
     let (lifetime, rust, mut call) = match family {
         Some(family) => {
             (
@@ -18198,7 +18213,9 @@ use super::*;
         } else {
             String::new()
         };
-        let shown = text.replace("'x", "'_");
+        let shown = family::Ops::shown(&text)
+            .unwrap_or_else(|| text.clone())
+            .replace("'x", "'_");
         writeln!(
             output,
             "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{clone}{equal}\n}}\n"

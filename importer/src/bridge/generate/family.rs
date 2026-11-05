@@ -193,6 +193,16 @@ impl Ops {
         })
     }
 
+    /// The Rust name of the opaque type a region holds as `held`, as
+    /// `impl Widget<..>`, when it holds one so.
+    pub(super) fn shown(held: &str) -> Option<String> {
+        OPS.with_borrow(|ops| {
+            ops.values()
+                .find(|ops| held == format!("Box<dyn RawrOpaque{}<'x> + 'x>", ops.index))
+                .map(|ops| format!("impl {}", ops.bounds))
+        })
+    }
+
     /// The type a region holds the opaque type spelled `key` at `'x` as,
     /// when it is held boxed.
     pub(super) fn held(key: &str) -> Option<String> {
@@ -343,4 +353,24 @@ impl<'x, W: {bounds} + 'x> RawrOpaque{index}<'x> for W {{{implemented}
             );
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Family, Reach};
+
+    /// A family struct is reached by its type, and a wrapper's family by
+    /// its inputs' family and the wrapper itself, which rustc infers it from.
+    #[test]
+    fn a_wrapper_s_family_is_reached_by_its_inputs_and_function() {
+        assert_eq!(
+            Family::Named("RawrFamily2".to_owned()).call(Reach::Take, "scoped"),
+            "take::<RawrFamily2>(scoped)"
+        );
+        assert_eq!(
+            Family::Given(3).call(Reach::GetMut, "scoped"),
+            "get_mut_given(RawrGiven3, rawr_given_3, scoped)"
+        );
+        assert_eq!(Family::Given(3).named(), None);
+    }
 }
