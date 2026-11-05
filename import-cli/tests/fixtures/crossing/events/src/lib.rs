@@ -636,6 +636,34 @@ pub mod widgets {
                 color: color.into(),
             }
         }
+
+        /// The widget, outlined: an opaque type the trait's own default
+        /// body gives, of a type no public path names.
+        fn outlined(self) -> impl Widget<Message, Theme, Renderer>
+        where
+            Self: Sized,
+        {
+            outline::Outlined(self)
+        }
+    }
+
+    /// The widget `Framed::outlined` gives, which no public path names.
+    mod outline {
+        pub struct Outlined<W>(pub(super) W);
+
+        impl<W, Message, Theme, Renderer> super::Widget<Message, Theme, Renderer> for Outlined<W>
+        where
+            W: super::Widget<Message, Theme, Renderer>,
+        {
+            fn labels(&self, labels: &mut Vec<String>) {
+                labels.push("outlined".to_owned());
+                self.0.labels(labels);
+            }
+
+            fn press(&self, label: &str) -> Option<Message> {
+                self.0.press(label)
+            }
+        }
     }
 
     /// A line `width` wide that sends a message when pressed, a widget at
@@ -660,8 +688,9 @@ pub mod widgets {
         }
     }
 
-    /// The widget `Framed::explain` gives, which no public path names.
-    mod explained {
+    /// The widget `Framed::explain` gives, at a public path the root
+    /// doesn't re-export, as iced's `explain` gives `iced_widget::Explain`.
+    pub mod explained {
         pub struct Explain<W> {
             pub(super) widget: W,
             pub(super) color: u32,

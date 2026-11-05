@@ -97,7 +97,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // method gives from its default body as the trait's opaque type.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 49;
+const PROTOCOL_SCHEMA: u32 = 50;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -734,6 +734,8 @@ enum Type {
         id: Id,
         bounds: Vec<Predicate>,
         captures: Vec<Argument>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hidden: Option<Box<Type>>,
     },
     Projection {
         trait_id: Id,
@@ -4001,6 +4003,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         // actual substitutions in the defining-use context.
                         bounds: self.item_bounds(opaque, opaque)?,
                         captures: self.arguments(alias.args, owner, depth.saturating_add(1))?,
+                        hidden: self.hidden_type(opaque, alias.args, owner, depth),
                     }
                 }
                 ty::AliasTyKind::Free { def_id } => {
@@ -4025,6 +4028,25 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 compiler_kind: self.budget.owned(ty_kind_text(kind))?,
             },
         })
+    }
+
+    /// The type rustc gives the opaque type `opaque` at `args`, its
+    /// defining body's type, as `Explain<Self>` of iced's
+    /// `Widget::explain`. `None` when it has no model.
+    fn hidden_type(
+        &mut self,
+        opaque: DefId,
+        args: crate::compat::GenericArgsRef<'tcx>,
+        owner: DefId,
+        depth: usize,
+    ) -> Option<Box<Type>> {
+        let hidden = self
+            .tcx
+            .type_of(opaque)
+            .instantiate(self.tcx, args)
+            .skip_norm_wip();
+        let hidden = self.type_of(hidden, owner, depth.saturating_add(1)).ok()?;
+        (!matches!(hidden, Type::Unknown { .. })).then(|| Box::new(hidden))
     }
 
     fn arguments(

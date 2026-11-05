@@ -141,6 +141,12 @@ pub struct Opaque {
     /// (#856), as a crate call that takes the value by value needs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     forwards: Option<Box<[Forward]>>,
+    /// The type rustc gives it, its defining body's type, with each of its
+    /// arguments that is a parameter as `Parameter` of its position among
+    /// them, as `Explain<Parameter(0)>` of iced's `Widget::explain`: what a
+    /// runner names where Rust code must write the type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hidden: Option<super::convert::Type>,
 }
 
 /// One method of an opaque type's trait, which the value held through the
@@ -205,7 +211,19 @@ impl Opaque {
             associated,
             traits,
             forwards,
+            hidden: None,
         }
+    }
+
+    pub(crate) fn with_hidden(mut self, hidden: Option<super::convert::Type>) -> Self {
+        self.hidden = hidden;
+        self
+    }
+
+    /// The type rustc gives it, at the positions of its arguments.
+    #[must_use]
+    pub const fn hidden(&self) -> Option<&super::convert::Type> {
+        self.hidden.as_ref()
     }
 
     /// Each method of its one trait the value held through the proxy

@@ -283,6 +283,7 @@ impl<'g> Headers<'g> {
                 id,
                 bounds,
                 captures,
+                ..
             } = opaque
             else {
                 continue;

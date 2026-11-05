@@ -52142,6 +52142,9 @@ impl<'a> Parser<'a> {
                 .resolve(output)
                 .collect_dependencies(dependencies);
         }
+        if let Some(opaque) = unheld_opaque(&self.inference.resolve(output), &self.models.host) {
+            return Err(unheld_opaque_use(&opaque, span));
+        }
         let path_bytes = item
             .imported_path_len()
             .expect("guard proves an imported item path");
@@ -52785,6 +52788,76 @@ fn held_opaque(ty: &Ty) -> Option<String> {
         Ty::Array { element, .. } => held_opaque(element),
         Ty::Result(ok, err) => held_opaque(ok).or_else(|| held_opaque(err)),
         _ => None,
+    }
+}
+
+/// The name of a crate's opaque `impl Trait` type `ty` holds, whose value
+/// borrows what one of its arguments borrows, as iced's `Widget::explain`
+/// on an `Element<'_, ..>` gives, when the runner can't name the type rustc
+/// gives it: such a value lives in a region, whose family names its type.
+#[cfg(feature = "rust-import")]
+fn unheld_opaque(ty: &Ty, host: &crate::host::Registry) -> Option<String> {
+    fn borrows(ty: &Ty, host: &crate::host::Registry) -> bool {
+        match ty {
+            Ty::Reference { .. } | Ty::Str => true,
+            Ty::Host { proof, arguments } => {
+                proof
+                    .definition
+                    .identity()
+                    .imported()
+                    .is_some_and(|identity| host.scoped(identity.as_bytes()))
+                    || arguments.iter().any(|argument| borrows(argument, host))
+            }
+            Ty::Script(_, members) | Ty::Tuple(members) => {
+                members.iter().any(|member| borrows(member, host))
+            }
+            Ty::Boxed(target) | Ty::Option(target) => borrows(target, host),
+            Ty::Array { element, .. } => borrows(element, host),
+            Ty::Result(ok, err) => borrows(ok, host) || borrows(err, host),
+            _ => false,
+        }
+    }
+    match ty {
+        Ty::Host { proof, arguments } => {
+            let path = proof.definition.path_ref().to_string();
+            if rawr_import::surface::opaque::declared(&path)
+                && proof
+                    .definition
+                    .identity()
+                    .imported()
+                    .is_some_and(|identity| !host.named_opaque(identity.as_bytes()))
+                // A `&str` it captures is pinned for the runner's life, as a
+                // string literal is (`opaque_pinned_strings`).
+                && arguments
+                    .iter()
+                    .any(|argument| !matches!(argument, Ty::Str) && borrows(argument, host))
+            {
+                return Some(path);
+            }
+            arguments
+                .iter()
+                .find_map(|argument| unheld_opaque(argument, host))
+        }
+        Ty::Option(target) | Ty::Boxed(target) => unheld_opaque(target, host),
+        Ty::Tuple(members) => members
+            .iter()
+            .find_map(|member| unheld_opaque(member, host)),
+        Ty::Result(ok, err) => unheld_opaque(ok, host).or_else(|| unheld_opaque(err, host)),
+        _ => None,
+    }
+}
+
+/// A crate call that gives the opaque type `opaque` borrowing what it
+/// takes, whose type rustc gives it has no path (`unheld_opaque`).
+#[cfg(feature = "rust-import")]
+fn unheld_opaque_use(opaque: &str, span: Span) -> Error {
+    Error::UnsupportedNominalSyntax {
+        construct: format!(
+            "a value of the crate's `impl Trait` type `{opaque}` that borrows what it was \
+             made from, whose type has no public path,"
+        )
+        .into(),
+        source: span,
     }
 }
 

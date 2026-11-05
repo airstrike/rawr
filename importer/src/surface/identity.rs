@@ -1295,6 +1295,7 @@ impl Framed {
                 id,
                 bounds,
                 captures,
+                ..
             } => {
                 self.byte(11);
                 self.definition(id);

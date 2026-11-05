@@ -1921,6 +1921,7 @@ pub fn native_shapes() -> api::Graph<api::Extracted> {
             true,
             Vec::new(),
             model::Type::ImplTrait {
+                hidden: None,
                 id: opaque,
                 bounds: Box::from([
                     model::Predicate::Bound {
@@ -1954,6 +1955,7 @@ pub fn native_shapes() -> api::Graph<api::Extracted> {
             false,
             Vec::new(),
             model::Type::ImplTrait {
+                hidden: None,
                 id: sipped,
                 bounds: Box::from([model::Predicate::Bound {
                     ty: model::Type::Tuple(Box::default()),

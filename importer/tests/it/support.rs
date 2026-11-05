@@ -1333,6 +1333,7 @@ fn assert_projected_opaque<'a>(
         id,
         bounds,
         captures,
+        ..
     } = signature.output()
     else {
         panic!("{function_name} retains its opaque output");

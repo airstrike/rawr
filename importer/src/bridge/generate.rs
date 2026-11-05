@@ -10644,6 +10644,7 @@ fn render_anchored_output(
     let Some(family) = family_of(returned) else {
         return Ok(());
     };
+    let made = regional(returned, "made");
     // The crate values the output borrows are shared with the region's
     // pins, which live as long as the view's borrow (`views_natives`).
     let pins = if VIEWED_ARGUMENTS.get() {
@@ -10656,7 +10657,7 @@ fn render_anchored_output(
         "    if let Some(anchor) = __rawr_internal::scope::anchor() {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{pins}
             let made = lend(arguments.arena, || {call});
-            Ok::<Dynamic, Error>(Dynamic::from(region.insert::<{family}>(made)))
+            Ok::<Dynamic, Error>(Dynamic::from(region.insert::<{family}>({made})))
         }})
         .map_err(|error| Error::Lent(\"a slot's region\", error))?;
     }}"
@@ -14873,6 +14874,7 @@ fn render_give(
                 && carries_lifetime(ty)
                 && let Some(family) = family_of(ty) =>
         {
+            let value = regional(ty, value);
             writeln!(
                 output,
                 "    Ok(Dynamic::from(region.insert::<{family}>({value})))"
@@ -15373,6 +15375,7 @@ fn render_to_dynamic(
                 && carries_lifetime(ty)
                 && let Some(family) = family_of(ty) =>
         {
+            let value = regional(ty, value);
             write!(
                 output,
                 "Ok::<Dynamic, Error>(Dynamic::from(region.insert::<{family}>({value})))"
@@ -16236,6 +16239,11 @@ thread_local! {
     /// types its bounds bind.
     static OPAQUE_TYPES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], Box<[u32]>>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The type rustc gives each opaque type that has one, by identity, at
+    /// the positions of its parameters: what a region's family names where
+    /// Rust code must write the opaque type.
+    static OPAQUE_HIDDEN: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], convert::Type>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// The opaque types that are futures, as `impl Straw<..>` is through
     /// `Core`, by identity: the position of the argument that is their
     /// `Future::Output`.
@@ -16983,6 +16991,18 @@ fn scoped_definition(definition: &crate::surface::identity::Definition) -> Optio
 /// carries lifetimes takes `'x` for each, as a scope family names it.
 fn scoped_type(ty: &convert::Type) -> Option<String> {
     match ty {
+        // An opaque type, which Rust code can't write, is the type rustc
+        // gives it, as iced's `Widget::explain` on an element gives
+        // `iced_widget::Explain<Element<'x, ..>>`, when every part of that
+        // has a path.
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if is_opaque(definition) => {
+            let hidden =
+                OPAQUE_HIDDEN.with_borrow(|hidden| hidden.get(definition.as_bytes()).cloned())?;
+            scoped_type(&crate::surface::opaque::hidden_at(&hidden, arguments)?)
+        }
         // A boxed script closure (T417), whose inputs and output may name
         // scoped types.
         convert::Type::Nominal {
@@ -17138,6 +17158,18 @@ fn family(text: String, lifetimes: Lifetimes) -> Option<String> {
             .0
             .clone()
     }))
+}
+
+/// `value`, of type `ty`, as its region's family holds it: a value of an
+/// opaque type as the type rustc gives it, which the family names
+/// (`scoped_type`).
+fn regional(ty: &convert::Type, value: impl std::fmt::Display) -> String {
+    match ty {
+        convert::Type::Nominal { definition, .. } if is_opaque(definition) => {
+            format!("__rawr_internal::scope::reveal({value})")
+        }
+        _ => value.to_string(),
+    }
 }
 
 /// Whether the Rust type spelled `text` has an argument `_`.
@@ -17943,6 +17975,19 @@ impl TypePaths {
                 }));
             }
         });
+        OPAQUE_HIDDEN.with_borrow_mut(|hidden| {
+            hidden.clear();
+            for owner in facade
+                .into_iter()
+                .flat_map(crate::surface::facade::Plan::facades)
+            {
+                hidden.extend(
+                    owner
+                        .types()
+                        .filter_map(|ty| Some((*ty.identity(), ty.hidden()?.clone()))),
+                );
+            }
+        });
         OPAQUE_CALLABLES.with_borrow_mut(|callables| {
             callables.clear();
             let callable = *crate::surface::identity::Definition::callable().as_bytes();
@@ -18088,6 +18133,7 @@ impl Drop for TypePaths {
         TRAIT_DEFAULTS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
+        OPAQUE_HIDDEN.with_borrow_mut(std::collections::BTreeMap::clear);
         OPAQUE_FUTURES.with_borrow_mut(std::collections::BTreeMap::clear);
         OPAQUE_CALLABLES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);

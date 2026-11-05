@@ -536,6 +536,12 @@ pub enum Type {
         bounds: Box<[Predicate]>,
         /// Exact compiler arguments captured by this opaque type.
         captures: Box<[Argument]>,
+        /// The type rustc gives it at `captures`, the defining body's type,
+        /// as `Explain<Self>` of iced's `Widget::explain`: what a runner
+        /// names where Rust code must write the type. `None` when the
+        /// compiler gives none or it has no model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hidden: Option<Box<Type>>,
     },
     /// An associated-type projection.
     Projection {
@@ -1028,11 +1034,16 @@ impl Type {
                     id,
                     bounds,
                     captures,
+                    hidden,
                 } => {
                     id.retain(retained)?;
                     retained.slice(bounds)?;
                     for predicate in bounds {
                         predicate.retain(retained)?;
+                    }
+                    if let Some(hidden) = hidden {
+                        retained.boxed::<Type>()?;
+                        hidden.retain(retained)?;
                     }
                     retain_arguments(captures, retained)
                 }
@@ -1909,7 +1920,10 @@ impl Type {
                 lifetime.collect_references(references);
             }
             Self::ImplTrait {
-                bounds, captures, ..
+                bounds,
+                captures,
+                hidden,
+                ..
             } => {
                 bounds
                     .iter()
@@ -1917,6 +1931,9 @@ impl Type {
                 captures
                     .iter()
                     .for_each(|argument| argument.collect_references(references));
+                if let Some(hidden) = hidden {
+                    hidden.collect_references(references);
+                }
             }
             Self::Projection {
                 trait_id,

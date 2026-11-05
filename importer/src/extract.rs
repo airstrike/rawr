@@ -5468,10 +5468,18 @@ fn type_of(
             id,
             bounds: raw,
             captures,
+            hidden,
         } => model::Type::ImplTrait {
             id: shape_id(catalog, id, allocation)?,
             bounds: predicates(raw, catalog, limits, allocation)?,
             captures: arguments_of(captures, catalog, limits, allocation)?,
+            hidden: match hidden {
+                Some(hidden) => {
+                    allocation.items(1)?;
+                    Some(Box::new(type_of(*hidden, catalog, limits, allocation)?))
+                }
+                None => None,
+            },
         },
         protocol::Type::Projection {
             trait_id,
