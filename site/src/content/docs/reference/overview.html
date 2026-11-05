@@ -121,7 +121,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
   <li>Private struct fields can be read and set from another module. Private functions are rejected, as in rustc.</li>
   <li><code>HashMap</code> can be used without a <code>use</code> line.</li>
-  <li>Out-of-range literals such as <code>let x: u8 = 300</code> are accepted.</li>
+  <li>Arithmetic on constants that overflows or divides by zero, as in <code>let x: u8 = 255 + 1;</code>, and an index of an array past its length, as in <code>a[5]</code> of a <code>[i32; 3]</code>, are accepted. rustc refuses them with its deny-by-default <code>arithmetic_overflow</code> and <code>unconditional_panic</code> lints. In rawr they panic when they run. <code>cargo check</code> doesn&rsquo;t report them either, since rustc finds them only when it builds.</li>
   <li><code>Sync</code> bounds are not checked. A <code>Send</code> bound refuses an <code>Rc</code>, an <code>Arc</code> of a <code>RefCell</code> and what holds one, and accepts every other type.</li>
 
   <li>A <code>&amp;str</code>, a <code>String</code> or an error is accepted where a <code>Box&lt;dyn Error&gt;</code> is expected, without <code>Box::new</code> or <code>.into()</code>.</li>

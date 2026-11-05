@@ -255,3 +255,135 @@ fn errors_rustc_gives_without_a_code_print_a_plain_error() {
     assert!(plain("const NUMBER = 3;\nfn main() {}\n")
         .starts_with("error: missing type for `const` item\n"));
 }
+
+#[test]
+fn a_let_used_before_its_assignment_is_e0381() {
+    // rustlings' variables3.
+    assert_eq!(
+        refused("fn main() {\n    let x: i32;\n    println!(\"Number {x}\");\n}\n"),
+        (
+            "E0381".into(),
+            "used binding `x` isn't initialized".into(),
+            label("`x` used here but it isn't initialized")
+        )
+    );
+    // Only one branch gives it a value.
+    assert_eq!(
+        refused(
+            "fn f(c: bool) -> i32 {\n    let x: i32;\n    if c {\n        x = 1;\n    }\n    x\n}\n"
+        ),
+        (
+            "E0381".into(),
+            "used binding `x` is possibly-uninitialized".into(),
+            label("`x` used here but it is possibly-uninitialized")
+        )
+    );
+    // A move after its assignment is E0382 as for any local.
+    let (code, _, _) = refused(
+        "fn main() {\n    let s;\n    s = String::from(\"a\");\n    let t = s;\n    \
+         println!(\"{s} {t}\");\n}\n",
+    );
+    assert_eq!(code, "E0382");
+}
+
+#[test]
+fn a_let_without_a_value_assigned_twice_is_e0384() {
+    assert_eq!(
+        refused("fn main() {\n    let x;\n    x = 1;\n    x = 2;\n    println!(\"{x}\");\n}\n"),
+        (
+            "E0384".into(),
+            "cannot assign twice to immutable variable `x`".into(),
+            label("cannot assign twice to immutable variable")
+        )
+    );
+}
+
+#[test]
+fn a_let_without_a_value_or_a_type_where_one_is_needed_is_e0283() {
+    // rustlings' variables2: the comparison needs `x`'s type.
+    let (code, message, _) = refused(
+        "fn main() {\n    let x;\n    if x == 10 {\n        println!(\"ten\");\n    }\n}\n",
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0283", "type annotations needed")
+    );
+    let (code, _, _) = refused("fn main() {\n    let x;\n    let y = x + 1;\n}\n");
+    assert_eq!(code, "E0284");
+}
+
+#[test]
+fn a_borrow_assigned_to_a_let_without_a_value_is_checked() {
+    // rustlings' lifetimes2: `string2` ends while `result` holds it.
+    let (code, message, _) = refused(
+        "fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {\n    \
+         if x.len() > y.len() { x } else { y }\n}\n\
+         fn main() {\n    let string1 = String::from(\"long string is long\");\n    \
+         let result;\n    {\n        let string2 = String::from(\"xyz\");\n        \
+         result = longest(&string1, &string2);\n    }\n    \
+         println!(\"The longest string is '{result}'\");\n}\n",
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0597", "`string2` does not live long enough")
+    );
+}
+
+#[test]
+fn a_type_nothing_settles_where_rustc_needs_it_is_e0282() {
+    // rustlings' generics1: two `.into()`s give the element no type.
+    assert_eq!(
+        refused(
+            "fn main() {\n    let mut numbers = Vec::new();\n    let n1: u8 = 42;\n    \
+             numbers.push(n1.into());\n    let n2: i8 = -1;\n    numbers.push(n2.into());\n    \
+             println!(\"{numbers:?}\");\n}\n"
+        ),
+        (
+            "E0282".into(),
+            "type annotations needed for `Vec<_>`".into(),
+            None
+        )
+    );
+    // rustlings' iterators1: a method of a local `todo!()` gave.
+    let (code, message, _) = refused(
+        "fn main() {\n    let mut it = todo!();\n    assert_eq!(it.next(), Some(&\"a\"));\n}\n",
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0282", "type annotations needed")
+    );
+    // An `.into()` no use gives a target.
+    let (code, message, _) = refused("fn main() {\n    let n: u8 = 1;\n    let x = n.into();\n}\n");
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0283", "type annotations needed")
+    );
+}
+
+#[test]
+fn a_macro_call_where_a_pattern_goes_is_e0532() {
+    // rustlings' smart_pointers4.
+    assert_eq!(
+        refused("fn main() {\n    let x = Some(1);\n    assert!(matches!(x, todo!()));\n}\n"),
+        (
+            "E0532".into(),
+            "expected a pattern, found a function call".into(),
+            label("not a tuple struct or tuple variant")
+        )
+    );
+}
+
+#[test]
+fn the_first_error_is_the_first_body_the_program_writes() {
+    // rustlings' conversions4: an impl's empty body before `main`.
+    let (code, _, label) = refused(
+        "struct C;\nimpl TryFrom<i16> for C {\n    type Error = ();\n    \
+         fn try_from(t: i16) -> Result<Self, Self::Error> {}\n}\n\
+         fn main() {\n    let y: i32 = \"a\";\n}\n",
+    );
+    assert_eq!(code, "E0308");
+    assert_eq!(
+        label.as_deref(),
+        Some("expected `Result<C, ()>`, found `()`")
+    );
+}

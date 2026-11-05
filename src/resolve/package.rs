@@ -66,6 +66,8 @@ struct QualifiedCall {
     path: Box<[ImmutableString]>,
     path_span: Span,
     owner_span: Span,
+    /// The last segment, the item the path names in its owner.
+    name_span: Span,
 }
 
 #[derive(Clone)]
@@ -471,12 +473,10 @@ impl<'a> Resolver<'a> {
                     }
 
                     let mut active = BTreeSet::new();
-                    match self.resolve_path(
-                        &unit.context,
-                        &call.path,
-                        call.path_span,
-                        &mut active,
-                    )? {
+                    match self
+                        .resolve_path(&unit.context, &call.path, call.path_span, &mut active)
+                        .map_err(|failure| self.not_in_module(&unit.context, &call, failure))?
+                    {
                         Target::Item(key) => {
                             resolved.functions.insert((source, call.path_span), key);
                         }
@@ -1705,6 +1705,30 @@ impl<'a> Resolver<'a> {
         })
     }
 
+    /// A path in a body whose module exists but has no item of its last
+    /// segment's name is rustc's E0425 "cannot find value `X` in module
+    /// `m`", not the E0432 of an unresolved `use`.
+    fn not_in_module(&self, context: &Context, call: &QualifiedCall, failure: Failure) -> Failure {
+        let Error::UnknownImport { .. } = failure.error else {
+            return failure;
+        };
+        let Some((item, owner)) = call.path.split_last() else {
+            return failure;
+        };
+        let mut active = BTreeSet::new();
+        match self.resolve_path(context, owner, call.owner_span, &mut active) {
+            Ok(Target::Module) => Failure {
+                error: Error::NotInModule {
+                    module: owner.join("::").into(),
+                    item: item.clone(),
+                    reference: call.name_span,
+                },
+                ..failure
+            },
+            _ => failure,
+        }
+    }
+
     fn unknown_import(
         &self,
         context: &Context,
@@ -1768,6 +1792,7 @@ fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
                         .into_boxed_slice(),
                     path_span: Span::new(segments[0].1.start(), path_end),
                     owner_span: Span::new(segments[0].1.start(), owner_end),
+                    name_span: segments[segments.len() - 1].1,
                 });
             }
             index = end.saturating_add(1);

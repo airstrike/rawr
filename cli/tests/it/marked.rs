@@ -401,7 +401,7 @@ fn rawr_check_reports_what_only_rustc_rejects() {
         &main,
         text.replace(
             "    println!(\"total: {}\", total(&cart));",
-            "    let shown: u8 = 300;\n    println!(\"total: {} ({shown})\", total(&cart));",
+            "    let n = 3;\n    let shown: &'static i32 = &n;\n    println!(\"total: {} ({shown})\", total(&cart));",
         ),
     )
     .unwrap();
@@ -420,10 +420,12 @@ fn rawr_check_reports_what_only_rustc_rejects() {
     assert_eq!(stdout(&output), format!("Checked {}\n", main.display()));
     let text = stderr(&output);
     assert!(
-        text.starts_with("\ncargo check found 1 error:\n\nerror: literal out of range for `u8`"),
+        text.starts_with(
+            "\ncargo check found 1 error:\n\nerror[E0597]: `n` does not live long enough"
+        ),
         "{text}"
     );
-    assert!(text.contains("src/main.rs:16:21"), "{text}");
+    assert!(text.contains("src/main.rs:17:31"), "{text}");
 }
 
 /// A script gets `cargo check` too, though rustc refuses its frontmatter
@@ -439,7 +441,7 @@ fn rawr_check_reports_what_only_rustc_rejects_in_a_script() {
     fs::write(
         &script,
         "#!/usr/bin/env rawr\n---cargo\n[package]\nedition = \"2024\"\n---\n// rawr\n\
-         fn main() {\n    let x: u8 = 300;\n    println!(\"{x}\");\n}\n",
+         fn main() {\n    let n = 3;\n    let x: &'static i32 = &n;\n    println!(\"{x}\");\n}\n",
     )
     .unwrap();
     let bin = Path::new(&cargo).parent().unwrap();
@@ -457,11 +459,13 @@ fn rawr_check_reports_what_only_rustc_rejects_in_a_script() {
     assert_eq!(stdout(&output), format!("Checked {}\n", script.display()));
     let text = stderr(&output);
     assert!(
-        text.starts_with("\ncargo check found 1 error:\n\nerror: literal out of range for `u8`"),
+        text.starts_with(
+            "\ncargo check found 1 error:\n\nerror[E0597]: `n` does not live long enough"
+        ),
         "{text}"
     );
     assert!(
-        text.contains(&format!("{}:8:17", script.display())),
+        text.contains(&format!("{}:9:27", script.display())),
         "{text}"
     );
     assert_eq!(

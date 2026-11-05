@@ -12583,7 +12583,8 @@ fn language_an_into_whose_target_nothing_fixes_needs_annotations() {
     .expect_err("rustc needs the target of `.into()` (E0283)");
     let message = error.to_string();
     assert!(
-        message.contains("type annotations needed") && message.contains("(E0283)"),
+        message.contains("type annotations needed")
+            && message.contains("the type must implement `From<"),
         "{message}"
     );
     assert_eq!(error.position().line(), Some(3), "{message}");
@@ -13561,4 +13562,117 @@ fn language_string_literals_span_lines() {
         "const RESULTS: &str = \"a,b\nc,d\";\npub fn run() -> i64 {\n    let more = \"e\nf\";\n    (RESULTS.lines().count() + more.len()) as i64\n}\nrun()",
     );
     assert_eq!(value, 5);
+}
+
+#[test]
+fn a_let_without_a_value_takes_its_first_assignment() {
+    // rustlings' lifetimes2, with the borrow kept in its scope.
+    let value = run(r#"
+        fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+            if x.len() > y.len() { x } else { y }
+        }
+        fn pick(c: bool) -> i64 {
+            let x;
+            if c {
+                x = 1;
+            } else {
+                x = 2;
+            }
+            x
+        }
+        pub fn run() -> i64 {
+            let a: i64;
+            a = 5;
+            let mut c;
+            c = 1;
+            c += 2;
+            let s;
+            let t = String::from("long");
+            {
+                s = longest(&t, "xyz");
+            }
+            let n;
+            loop {
+                n = 7;
+                break;
+            }
+            a * 1000 + c * 100 + (s.len() as i64) * 10 + n + pick(true) + pick(false)
+        }
+        run()
+    "#);
+    assert_eq!(value, 5000 + 300 + 40 + 7 + 1 + 2);
+}
+
+#[test]
+fn a_numbers_into_is_the_type_its_use_needs() {
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let n: u8 = 42;
+            let wide: u16 = n.into();
+            let mut numbers: Vec<i16> = Vec::new();
+            numbers.push(n.into());
+            let m: i8 = -1;
+            numbers.push(m.into());
+            (wide as i64) * 100 + numbers.iter().map(|x| *x as i64).sum::<i64>()
+        }
+        run()
+    "#);
+    assert_eq!(value, 4200 + 41);
+}
+
+#[test]
+fn a_cow_of_a_slice_indexes_and_comes_from_a_vec() {
+    // rustlings' smart_pointers4.
+    let value = run(r#"
+        use std::borrow::Cow;
+        fn abs_all(input: &mut Cow<[i32]>) {
+            for ind in 0..input.len() {
+                let value = input[ind];
+                if value < 0 {
+                    input.to_mut()[ind] = -value;
+                }
+            }
+        }
+        pub fn run() -> i64 {
+            let vec = vec![-1, 0, 1];
+            let mut input = Cow::from(&vec);
+            abs_all(&mut input);
+            let owned = matches!(input, Cow::Owned(_));
+            let kept = vec![0, 1, 2];
+            let mut borrowed = Cow::from(&kept);
+            abs_all(&mut borrowed);
+            let still = matches!(borrowed, Cow::Borrowed(_));
+            input.iter().map(|x| *x as i64).sum::<i64>() * 10
+                + if owned { 1 } else { 0 }
+                + if still { 2 } else { 0 }
+        }
+        run()
+    "#);
+    assert_eq!(value, 20 + 1 + 2);
+}
+
+#[test]
+fn a_try_into_annotated_with_an_open_error_takes_its_impls() {
+    // rustlings' conversions4: `Result<Color, _>` is the impl's error.
+    let value = run(r#"
+        #[derive(Debug, PartialEq)]
+        struct Color(u8);
+        #[derive(Debug, PartialEq)]
+        enum Bad { Range }
+        impl TryFrom<[i16; 1]> for Color {
+            type Error = Bad;
+            fn try_from(arr: [i16; 1]) -> Result<Self, Self::Error> {
+                u8::try_from(arr[0]).map(Color).map_err(|_| Bad::Range)
+            }
+        }
+        pub fn run() -> i64 {
+            let c: Result<Color, _> = [183].try_into();
+            let text = format!("{c:?}");
+            let d: Result<Color, _> = [300].try_into();
+            assert_eq!(d, Err(Bad::Range));
+            c.unwrap().0 as i64 + text.len() as i64 * 1000
+        }
+        run()
+    "#);
+    assert_eq!(value, 183 + "Ok(Color(183))".len() as i64 * 1000);
 }

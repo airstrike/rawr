@@ -368,6 +368,24 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::PrivateItem { item, name, .. } => {
                     write!(f, "{} `{name}` is private", item.noun())
                 }
+                crate::resolve::Error::OverflowingLiteral { ty, .. } => {
+                    write!(f, "literal out of range for `{ty}`")
+                }
+                crate::resolve::Error::LocalTypeNeeded { ty, note, .. } => {
+                    write!(f, "{}", crate::resolve::TypeNeeded(ty.as_deref()))?;
+                    match note {
+                        Some(note) => write!(f, ": {note}"),
+                        None => Ok(()),
+                    }
+                }
+                crate::resolve::Error::Uninitialized { name, possibly, .. } => write!(
+                    f,
+                    "{}",
+                    crate::resolve::Uninitialized {
+                        name,
+                        possibly: *possibly
+                    }
+                ),
                 crate::resolve::Error::MemberKind {
                     owner, member, field: true, ..
                 } => write!(f, "Field '{owner}::{member}' called like a method"),

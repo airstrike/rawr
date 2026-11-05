@@ -15,6 +15,7 @@ mod keyed;
 mod literal;
 mod location;
 mod origin;
+mod overflow;
 mod places;
 mod sequence;
 use places::PlacePattern;
@@ -2784,6 +2785,25 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     ))
 }
 
+/// A function's or a method's body, which `lower_with_context` lowers.
+#[derive(Clone, Copy)]
+enum Body<'a> {
+    Function(&'a item::Shell, &'a item::Function),
+    Method(&'a method::Definition),
+}
+
+impl Body<'_> {
+    /// Where the program writes the body: its source, then its place there.
+    fn written_at(&self) -> (usize, Position) {
+        match self {
+            Self::Function(shell, definition) => {
+                (shell.source.index(), definition.body.span.start())
+            }
+            Self::Method(definition) => (definition.source().index(), definition.body().start()),
+        }
+    }
+}
+
 fn lower_with_context(
     engine: &Engine,
     program: &Program,
@@ -2867,134 +2887,152 @@ fn lower_with_context(
             .map_err(|error| LoweringFailure::original(shell.source, error.into()))?;
     }
 
-    for shell in program.items.iter() {
-        let item::Kind::Function(definition) = &shell.kind else {
-            continue;
-        };
-        // A template compiled per instantiation is lowered as its
-        // instances only (D629).
-        if shell
-            .key
-            .as_ref()
-            .is_some_and(|key| program.instances.templates.contains_key(key))
-        {
-            continue;
-        }
-        let body_source = body_source(
-            definition
-                .body
-                .text
-                .as_deref()
-                .unwrap_or_else(|| program.source.text_at(shell.source)),
-            &definition.body,
-        );
-        let mut parser = Parser::for_function(
-            engine,
-            &body_source,
-            models.for_source(shell.source),
-            definition,
-            shell
-                .key
-                .clone()
-                .expect("resolved functions retain stable item keys"),
-            ops.len(),
-            patterns.len(),
-            #[cfg(feature = "rust-import")]
-            imported
-                .as_mut()
-                .map(|context| context.for_source(shell.source)),
-        );
-        let lowered = parser
-            .parse_function_body(definition)
-            .map_err(|error| LoweringFailure::original(shell.source, error.into()))?;
-        let generated_name = function_name(shell.id);
-        if let Some(index) = this_parameter(definition) {
-            receivers.insert(
-                generated_name.as_str().into(),
-                definition.parameters[index].name.text.clone(),
-            );
-        }
-        let body = write_function(
-            &mut generated,
-            shell.source,
-            &generated_name,
-            definition,
-            &lowered,
-            &models,
-        );
-        retain_locations(
-            &mut locations,
-            body,
-            Some(
-                shell
+    // Bodies are checked in the order the program writes them, so the
+    // first error reported is the first rustc reports.
+    let mut bodies = program
+        .items
+        .iter()
+        .filter_map(|shell| match &shell.kind {
+            item::Kind::Function(definition) => Some(Body::Function(shell, definition)),
+            _ => None,
+        })
+        .chain(
+            program
+                .methods
+                .iter()
+                .chain(&program.builtin_methods)
+                .map(Body::Method),
+        )
+        .collect::<Vec<_>>();
+    bodies.sort_by_key(Body::written_at);
+    for body in bodies {
+        match body {
+            Body::Function(shell, definition) => {
+                // A template compiled per instantiation is lowered as its
+                // instances only (D629).
+                if shell
                     .key
                     .as_ref()
-                    .expect("resolved functions retain stable item keys"),
-            ),
-            shell.source,
-            lowered.locations,
-        );
-        ops.extend(lowered.ops);
-        patterns.extend(lowered.patterns);
-        write_closures(
-            &mut generated,
-            &mut locations,
-            shell.source,
-            lowered.closures,
-            &mut closures,
-            &mut symbol_rewrites,
-        );
-    }
-
-    for definition in program.methods.iter().chain(&program.builtin_methods) {
-        // A method compiled per instantiation is lowered as its instances
-        // only (D629).
-        if program.instances.templates.contains_key(definition.key()) {
-            continue;
+                    .is_some_and(|key| program.instances.templates.contains_key(key))
+                {
+                    continue;
+                }
+                let body_source = body_source(
+                    definition
+                        .body
+                        .text
+                        .as_deref()
+                        .unwrap_or_else(|| program.source.text_at(shell.source)),
+                    &definition.body,
+                );
+                let mut parser = Parser::for_function(
+                    engine,
+                    &body_source,
+                    models.for_source(shell.source),
+                    definition,
+                    shell
+                        .key
+                        .clone()
+                        .expect("resolved functions retain stable item keys"),
+                    ops.len(),
+                    patterns.len(),
+                    #[cfg(feature = "rust-import")]
+                    imported
+                        .as_mut()
+                        .map(|context| context.for_source(shell.source)),
+                );
+                let lowered = parser
+                    .parse_function_body(definition)
+                    .map_err(|error| LoweringFailure::original(shell.source, error.into()))?;
+                let generated_name = function_name(shell.id);
+                if let Some(index) = this_parameter(definition) {
+                    receivers.insert(
+                        generated_name.as_str().into(),
+                        definition.parameters[index].name.text.clone(),
+                    );
+                }
+                let body = write_function(
+                    &mut generated,
+                    shell.source,
+                    &generated_name,
+                    definition,
+                    &lowered,
+                    &models,
+                );
+                retain_locations(
+                    &mut locations,
+                    body,
+                    Some(
+                        shell
+                            .key
+                            .as_ref()
+                            .expect("resolved functions retain stable item keys"),
+                    ),
+                    shell.source,
+                    lowered.locations,
+                );
+                ops.extend(lowered.ops);
+                patterns.extend(lowered.patterns);
+                write_closures(
+                    &mut generated,
+                    &mut locations,
+                    shell.source,
+                    lowered.closures,
+                    &mut closures,
+                    &mut symbol_rewrites,
+                );
+            }
+            Body::Method(definition) => {
+                // A method compiled per instantiation is lowered as its instances
+                // only (D629).
+                if program.instances.templates.contains_key(definition.key()) {
+                    continue;
+                }
+                let body_source = source_span(
+                    definition
+                        .body_text()
+                        .unwrap_or_else(|| program.source.text_at(definition.source())),
+                    definition.body(),
+                );
+                let mut parser = Parser::for_method(
+                    engine,
+                    &body_source,
+                    models.for_source(definition.source()),
+                    definition,
+                    ops.len(),
+                    patterns.len(),
+                    #[cfg(feature = "rust-import")]
+                    imported
+                        .as_mut()
+                        .map(|context| context.for_source(definition.source())),
+                )
+                .map_err(|error| LoweringFailure::original(definition.source(), error.into()))?;
+                let lowered = parser.parse_method_body(definition).map_err(|error| {
+                    LoweringFailure::original(definition.source(), error.into())
+                })?;
+                if definition.receiver().is_some() {
+                    receivers.insert(method_name(definition.id()).into(), "self".into());
+                }
+                let body = write_method(&mut generated, definition, &lowered, &models);
+                retain_locations(
+                    &mut locations,
+                    body,
+                    Some(definition.key()),
+                    definition.source(),
+                    lowered.locations,
+                );
+                ops.extend(lowered.ops);
+                patterns.extend(lowered.patterns);
+                write_closures(
+                    &mut generated,
+                    &mut locations,
+                    definition.source(),
+                    lowered.closures,
+                    &mut closures,
+                    &mut symbol_rewrites,
+                );
+            }
         }
-        let body_source = source_span(
-            definition
-                .body_text()
-                .unwrap_or_else(|| program.source.text_at(definition.source())),
-            definition.body(),
-        );
-        let mut parser = Parser::for_method(
-            engine,
-            &body_source,
-            models.for_source(definition.source()),
-            definition,
-            ops.len(),
-            patterns.len(),
-            #[cfg(feature = "rust-import")]
-            imported
-                .as_mut()
-                .map(|context| context.for_source(definition.source())),
-        )
-        .map_err(|error| LoweringFailure::original(definition.source(), error.into()))?;
-        let lowered = parser
-            .parse_method_body(definition)
-            .map_err(|error| LoweringFailure::original(definition.source(), error.into()))?;
-        if definition.receiver().is_some() {
-            receivers.insert(method_name(definition.id()).into(), "self".into());
-        }
-        let body = write_method(&mut generated, definition, &lowered, &models);
-        retain_locations(
-            &mut locations,
-            body,
-            Some(definition.key()),
-            definition.source(),
-            lowered.locations,
-        );
-        ops.extend(lowered.ops);
-        patterns.extend(lowered.patterns);
-        write_closures(
-            &mut generated,
-            &mut locations,
-            definition.source(),
-            lowered.closures,
-            &mut closures,
-            &mut symbol_rewrites,
-        );
     }
 
     write_trait_dispatchers(&mut generated, &models, &mut ops);
@@ -11818,6 +11856,17 @@ struct Parser<'a> {
     closures: Vec<ClosureScope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
     moved_at: BTreeMap<Span, Span>,
+    /// The locals `let x;` declares without a value, by their declaration,
+    /// with their first assignment once one is parsed: a use before an
+    /// assignment gives one a value is rustc's E0381, and one not declared
+    /// `mut` takes its first assignment.
+    deferred: BTreeMap<Span, Option<Span>>,
+    /// Each use of a `deferred` local before it has a value, reported once
+    /// the body's types are settled (`finish_uninitialized`).
+    uninitialized: Vec<UninitializedUse>,
+    /// Each `let`'s local, in the order the body declares them: where an
+    /// inference variable nothing settles is reported (`unsettled`).
+    local_types: Vec<LocalType>,
     /// Reads of a crate struct's field that leave the struct whole, by
     /// their span: a by-value use moves that field out, as Rust's partial
     /// move (`move_local`).
@@ -12075,6 +12124,9 @@ struct Parser<'a> {
     /// The `{integer}` (`true`) and `{float}` literal kinds of this body,
     /// which become `i64` and `f64` where nothing else binds them.
     literal_kinds: Vec<(usize, bool)>,
+    /// Each unsuffixed integer literal's kind, number and place, checked
+    /// against the kind inference settles on (`overflow`).
+    literal_values: Vec<(usize, INT, Span)>,
     /// In an impl of a generic trait, its parameters' arguments: `T` is
     /// `i64` in `impl Convert<i64> for C`'s methods and default bodies.
     trait_parameters: BTreeMap<ImmutableString, Ty>,
@@ -12262,6 +12314,9 @@ impl<'a> Parser<'a> {
             loops: Vec::new(),
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
+            deferred: BTreeMap::new(),
+            uninitialized: Vec::new(),
+            local_types: Vec::new(),
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
             owning_closures: BTreeSet::new(),
@@ -12347,6 +12402,7 @@ impl<'a> Parser<'a> {
             generic_trait_arguments: BTreeMap::new(),
             pending_instances: Vec::new(),
             literal_kinds: Vec::new(),
+            literal_values: Vec::new(),
             trait_parameters: BTreeMap::new(),
             instance_calls: Vec::new(),
             collecting_instances: false,
@@ -12689,6 +12745,8 @@ impl<'a> Parser<'a> {
             result?;
         }
 
+        self.finish_uninitialized()?;
+
         self.check_borrows()?;
         self.finish_conversions()?;
         self.finish_bounds()?;
@@ -12820,6 +12878,7 @@ impl<'a> Parser<'a> {
             }
             let expected = Ty::from_resolved(definition.output());
             self.coerce_tail(&expected, definition.body())?;
+            self.finish_uninitialized()?;
             self.check_borrows()?;
             self.finish_conversions()?;
             self.finish_bounds()?;
@@ -12862,6 +12921,7 @@ impl<'a> Parser<'a> {
                 return Err(self.unsupported("tokens after a method body"));
             }
             self.coerce_tail(&output, definition.body())?;
+            self.finish_uninitialized()?;
             self.check_borrows()?;
             self.finish_conversions()?;
             self.finish_bounds()?;
@@ -12924,6 +12984,8 @@ impl<'a> Parser<'a> {
         self.coerce_tail(&expected, definition.body())?;
         self.close_body_drops()?;
         self.wrap_formatter(definition);
+
+        self.finish_uninitialized()?;
 
         self.check_borrows()?;
         self.finish_conversions()?;
@@ -13514,6 +13576,8 @@ impl<'a> Parser<'a> {
             self.close_body_drops()?;
         }
 
+        self.finish_uninitialized()?;
+
         self.check_borrows()?;
         self.finish_conversions()?;
         self.finish_bounds()?;
@@ -14024,6 +14088,14 @@ impl<'a> Parser<'a> {
                 self.inference.bind(id, default);
             }
         }
+        for (id, value, at) in std::mem::take(&mut self.literal_values) {
+            let value = Wide::Signed(value.into());
+            if let Ty::Int(kind) = self.inference.resolve(&Ty::Int(Int::Var(id)))
+                && value.fits(kind).is_err()
+            {
+                return Err(self.overflowing(kind, value, at));
+            }
+        }
         for pending in std::mem::take(&mut self.pending_wide_literals) {
             let kind = match self.inference.resolve(&pending.ty) {
                 Ty::Int(Int::Var(_)) => Int::I32,
@@ -14031,7 +14103,7 @@ impl<'a> Parser<'a> {
                 _ => continue,
             };
             if pending.value.fits(kind).is_err() {
-                return Err(literal_range(kind, pending.value, pending.at));
+                return Err(self.overflowing(kind, pending.value, pending.at));
             }
             let [signed, unsigned, bits] = &pending.texts;
             let text = match kind {
@@ -17028,6 +17100,44 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// The error type of each pending `try_into()` whose target is known
+    /// by now: its `TryFrom` impl's `Error`, as rustc selects the impl once
+    /// the target is, before the end of the body chooses its helper.
+    fn settle_try_from_errors(&mut self) {
+        let pending = self
+            .pending_conversions
+            .iter()
+            .filter_map(|conversion| {
+                let error = conversion.try_from.as_ref()?;
+                let target = self.inference.resolve(&conversion.target);
+                (!matches!(target, Ty::Infer(_))
+                    && matches!(self.inference.resolve(error), Ty::Infer(_)))
+                .then(|| (target, conversion.source.clone(), error.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (target, source, error) in pending {
+            for (_, from, owner) in self.program_try_froms() {
+                let checkpoint = self.inference.checkpoint();
+                if !(self.unify_type(&owner, &target) && self.unify_type(&from, &source)) {
+                    self.inference.rollback(checkpoint);
+                    continue;
+                }
+                let declared = self.inference.resolve(&Ty::Projection(
+                    Box::new(target.clone()),
+                    "TryFrom".into(),
+                    "Error".into(),
+                ));
+                if matches!(declared, Ty::Projection(..)) {
+                    self.inference.rollback(checkpoint);
+                } else {
+                    self.inference.commit(checkpoint);
+                    self.unify_type(&error, &declared);
+                }
+                break;
+            }
+        }
+    }
+
     /// The helper of `source.try_into()` into `target`: the program's
     /// `TryFrom<source>` for it, its `Error` the call's `error`.
     fn try_from_helper(
@@ -17562,6 +17672,10 @@ impl<'a> Parser<'a> {
             let helper = if let Some(error) = &conversion.try_from {
                 self.try_from_helper(&target, &conversion.source, error, conversion.span)?
             } else if matches!(target, Ty::Infer(_)) {
+                let bound = format!("From<{}>", conversion.source.name(&self.models));
+                if let Some(error) = self.unsettled(&target, conversion.span, Some(bound)) {
+                    return Err(error);
+                }
                 let source = conversion.source.name(&self.models);
                 return Err(Error::InvalidMethodCall {
                     owner: source.clone(),
@@ -24121,6 +24235,9 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        if let_keyword && matches!(self.peek(), Token::SemiColon) {
+            return self.parse_deferred_binding(start, name, name_span, mutable, annotation);
+        }
         // `const X = 3;`: a constant needs its type, as rustc says.
         if !let_keyword && annotation.is_none() {
             return Err(Error::Syntax {
@@ -24433,7 +24550,12 @@ impl<'a> Parser<'a> {
             value.source = self.with_temporaries(&temporaries, value.rendered_source());
             value.prelude = origin::Fragment::default();
         }
-        let ty = annotation.unwrap_or_else(|| value.ty.clone());
+        // `let x = todo!();`: a value that never comes coerces to any
+        // type, so the local's is the one its uses give it.
+        let ty = annotation.unwrap_or_else(|| match self.inference.resolve(&value.ty) {
+            Ty::Never => self.inference.fresh(),
+            _ => value.ty.clone(),
+        });
         // An immutable local iterator stays its chain: what it evaluates is
         // evaluated here, and each use runs it.
         let bound = match self.inference.resolve(&ty) {
@@ -24446,6 +24568,12 @@ impl<'a> Parser<'a> {
         };
         let hold = self.note_drop(&name, name_span, &ty)?;
         self.bound_value(&name, name_span, &value, value_start);
+        self.local_types.push(LocalType {
+            name: name.clone(),
+            declaration: name_span,
+            ty: ty.clone(),
+            value: Some(value.span),
+        });
         let keyword = self.binding_keyword(mutable, &ty);
         self.bindings.insert(
             name.clone(),
@@ -24492,6 +24620,46 @@ impl<'a> Parser<'a> {
         rendered.push_text(";");
         let rendered = self.with_field_entries(pending, rendered);
         self.write_output(rendered, span(start, value.span.end()));
+        self.last_type = Ty::Unit;
+        self.last_expression = None;
+        self.consume_terminator(start).map(|_| ())
+    }
+
+    /// `let x;`, `let x: i32;`: a local an assignment gives its value
+    /// later. Its type is the annotation's, else the one its assignments
+    /// give it, and it has no value until one does (`deferred`).
+    fn parse_deferred_binding(
+        &mut self,
+        start: Position,
+        name: ImmutableString,
+        name_span: Span,
+        mutable: bool,
+        annotation: Option<Ty>,
+    ) -> Result<(), Error> {
+        let ty = annotation.unwrap_or_else(|| self.inference.fresh());
+        self.entry_aliases.remove(&name);
+        self.flow().local(&name, name_span);
+        self.deferred.insert(name_span, None);
+        self.local_types.push(LocalType {
+            name: name.clone(),
+            declaration: name_span,
+            ty: ty.clone(),
+            value: None,
+        });
+        self.bindings.insert(
+            name.clone(),
+            Binding {
+                ty,
+                mutable,
+                available: false,
+                declaration: name_span,
+                kind: BindingKind::Local,
+            },
+        );
+        self.write_output(
+            origin::Fragment::plain(format!("let {name};")),
+            span(start, name_span.end()),
+        );
         self.last_type = Ty::Unit;
         self.last_expression = None;
         self.consume_terminator(start).map(|_| ())
@@ -25910,9 +26078,16 @@ impl<'a> Parser<'a> {
         };
         // rustc checks an assignment's types before its mutability: an
         // immutable local is reported once the value's type is.
+        // A `let x;` not declared `mut` takes one assignment, where it has
+        // no value yet; another is E0384 at the first.
+        let deferred = matches!(lvalue, Lvalue::Binding { .. })
+            .then(|| self.deferred.get(&binding.declaration).copied())
+            .flatten();
         let immutable = (!binding.mutable && matches!(binding.kind, BindingKind::Local))
-            .then_some(binding.declaration);
-        if !binding.mutable && immutable.is_none() {
+            .then_some(binding.declaration)
+            .filter(|_| binding.available || deferred.is_none())
+            .map(|declaration| deferred.flatten().unwrap_or(declaration));
+        if !binding.mutable && !matches!(binding.kind, BindingKind::Local) {
             return Err(match &binding.kind {
                 BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
                     owner: owner.clone(),
@@ -25968,6 +26143,16 @@ impl<'a> Parser<'a> {
             let assignment = span(value.span.start(), replacement.span.end());
             return Err(self.immutable_assignment(&lvalue, declaration, assignment));
         }
+        // A `let x;` drops its value where its scope ends only on the paths
+        // that gave it one, which needs drop flags Rawr doesn't keep.
+        if deferred.is_some() && self.needs_drop(lvalue.ty(), replacement.span)? {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "a `let` without a value whose type implements `Drop`: dropping it \
+                            where Rust does is not supported in Rawr yet"
+                    .into(),
+                source: span(value.span.start(), replacement.span.end()),
+            });
+        }
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
         self.move_local(&mut replacement)?;
         if compound_operator(&assignment).is_none()
@@ -25995,6 +26180,9 @@ impl<'a> Parser<'a> {
                 rendered.push_text(";");
                 if let Some(binding) = self.bindings.get_mut(&binding_name) {
                     binding.available = true;
+                    if let Some(first @ None) = self.deferred.get_mut(&binding.declaration) {
+                        *first = Some(span(value.span.start(), replacement.span.end()));
+                    }
                 }
                 rendered
             }
@@ -26125,6 +26313,29 @@ impl<'a> Parser<'a> {
     /// `let` take.
     fn parse_pattern_no_alt(&mut self) -> Result<PatternSyntax, Error> {
         let start = self.position();
+        // `todo!()` where a pattern goes: std's panicking macros expand to
+        // a call, which no pattern is (E0532).
+        if matches!(self.peek(), Token::Identifier(ref name)
+                if matches!(name.as_str(), "todo" | "unimplemented" | "panic" | "unreachable"))
+            && matches!(self.peek_second(), Token::Bang)
+        {
+            self.next();
+            self.next();
+            let unit = matches!(self.peek(), Token::Unit);
+            let (_, end) = self.take_argument_tokens()?;
+            let end = text_end(end, if unit { "()" } else { ")" });
+            return Err(Error::StdPath {
+                code: "E0532",
+                message: "expected a pattern, found a function call".into(),
+                label: Some("not a tuple struct or tuple variant".into()),
+                note: Some(
+                    "function calls are not allowed in patterns: \
+                     <https://doc.rust-lang.org/book/ch19-00-patterns.html>"
+                        .into(),
+                ),
+                reference: Span::new(start, end),
+            });
+        }
         if matches!(self.peek(), Token::Underscore) {
             self.next();
             let span = Span::new(start, text_end(start, "_"));
@@ -28038,7 +28249,11 @@ impl<'a> Parser<'a> {
                         && self.unit_struct(&name).is_none()
                         && !matches!(
                             self.peek_second(),
-                            Token::DoubleColon | Token::LeftParen | Token::LeftBrace | Token::Pipe
+                            Token::DoubleColon
+                                | Token::LeftParen
+                                | Token::LeftBrace
+                                | Token::Pipe
+                                | Token::Bang
                         )
                         && !matches!(self.peek_second(), Token::Reserved(ref text) if text.as_str() == "@") =>
                 {
@@ -28798,7 +29013,16 @@ impl<'a> Parser<'a> {
             });
         }
         for (name, binding) in &mut self.bindings {
-            binding.available &= inner.get(name).is_some_and(|binding| binding.available);
+            let after = inner
+                .get(name)
+                .filter(|after| after.declaration == binding.declaration);
+            // A `loop` runs its body before it ends, so a `let x;` it gives
+            // a value has one after it.
+            if value && self.deferred.contains_key(&binding.declaration) {
+                binding.available = after.is_some_and(|after| after.available);
+            } else {
+                binding.available &= inner.get(name).is_some_and(|binding| binding.available);
+            }
         }
         self.require_type(&Ty::Unit, &body.value.ty, body.value.span)?;
         source.push_text(" ");
@@ -35400,6 +35624,16 @@ impl<'a> Parser<'a> {
     /// rustc's E0382 for the local `name`, whose `binding` was moved, at
     /// its use at `reference`, which `borrowed` it or used it by value.
     fn moved_value(&self, name: &str, binding: &Binding, reference: Span, borrowed: bool) -> Error {
+        if let Some(assigned) = self.deferred.get(&binding.declaration)
+            && !self.moved_at.contains_key(&binding.declaration)
+        {
+            return Error::Uninitialized {
+                name: name.into(),
+                possibly: assigned.is_some(),
+                reference: self.name_span(reference, name),
+                declaration: self.name_span(binding.declaration, name),
+            };
+        }
         let moved = self
             .moved_at
             .get(&binding.declaration)
@@ -36318,6 +36552,14 @@ impl<'a> Parser<'a> {
                 }
                 continue;
             }
+            // A member of a local whose type nothing has given yet, as
+            // `let mut it = todo!(); it.next()`: rustc needs the type here
+            // (E0282).
+            if matches!(value.lvalue, Some(Lvalue::Binding { .. }))
+                && let Some(error) = self.unsettled(&value.ty, value.span, None)
+            {
+                return Err(error);
+            }
             // A method call borrows its place; a field is a place below it.
             if matches!(self.peek(), Token::LeftParen | Token::Unit) {
                 self.call_on_place(&value);
@@ -36495,6 +36737,16 @@ impl<'a> Parser<'a> {
                     )
                     && !source.is_text()
                     && self.widget_erasure(&source).is_none()
+                    && !self.converts_from(&source)
+                {
+                    value = self.parse_target_into(value, &source, Vec::new(), None, end);
+                    continue;
+                }
+                // A number's `.into()`: the target the use site needs,
+                // through std's `From` of it (`impl From<u8> for u16`), as
+                // rustc infers it, and E0282 or E0283 when no use does.
+                if matches!(source, Ty::Int(_) | Ty::Float(_))
+                    && self.host_witnesses.is_empty()
                     && !self.converts_from(&source)
                 {
                     value = self.parse_target_into(value, &source, Vec::new(), None, end);
@@ -37842,6 +38094,22 @@ impl<'a> Parser<'a> {
                 indexed.span = expression;
                 return Ok(indexed);
             }
+        }
+        // `cow[i]` of a `Cow<[T]>` or a reference to one: through its
+        // `Deref`, as rustc's index auto-derefs.
+        let mut value = value;
+        while let Ty::Cow(_) = self.inference.resolve(&value.ty) {
+            let owner = self.inference.resolve(&value.ty);
+            let Some((target, call)) = self.deref_target(&owner, false) else {
+                break;
+            };
+            self.apply_derefs(&mut value, vec![call], target)?;
+        }
+        if let Ty::Reference { target, .. } = self.inference.resolve(&value.ty)
+            && let Ty::Cow(_) = self.inference.resolve(&target)
+            && let Some((target, call)) = self.deref_target(&target, false)
+        {
+            self.apply_derefs(&mut value, vec![call], target)?;
         }
         if let Some(keyed) = self.keyed_type(&value.ty) {
             return self.keyed_index(value, keyed, index, end);
@@ -40079,8 +40347,39 @@ impl<'a> Parser<'a> {
             value.lvalue = Some(Lvalue::Binding { binding: name, ty });
             return Ok(value);
         }
-        // A moved local may be assigned again, as in Rust.
-        if !binding.available && !assigned {
+        // A moved local may be assigned again, as in Rust. A `let x;` used
+        // before it has a value is rustc's E0381, which its borrow check
+        // reports after the body's types.
+        if !binding.available
+            && !assigned
+            && let Some(first) = self.deferred.get(&binding.declaration).copied()
+            && !self.moved_at.contains_key(&binding.declaration)
+        {
+            let (declaration, ty) = (binding.declaration, binding.ty.clone());
+            let unknown = matches!(self.inference.resolve(&ty), Ty::Infer(_));
+            let operator = match self.peek() {
+                Token::EqualsTo
+                | Token::NotEqualsTo
+                | Token::LessThan
+                | Token::LessThanEqualsTo
+                | Token::GreaterThan
+                | Token::GreaterThanEqualsTo => Some("E0283"),
+                Token::Plus | Token::Minus | Token::Multiply | Token::Divide | Token::Modulo => {
+                    Some("E0284")
+                }
+                _ => None,
+            }
+            .filter(|_| unknown)
+            .map(|code| (code, point_span(self.position())));
+            self.uninitialized.push(UninitializedUse {
+                name: name.clone(),
+                declaration,
+                reference: name_span,
+                ty,
+                possibly: first.is_some(),
+                operator,
+            });
+        } else if !binding.available && !assigned {
             return Err(self.moved_value(&name, binding, name_span, false));
         }
         let Some(binding) = self.bindings.get(name.as_str()) else {
@@ -42310,6 +42609,11 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let owner = Ty::Result(Box::new(ok.clone()), Box::new(err.clone()));
         self.script_callables = true;
+        // The error type of a `try_into()` whose target is known, which
+        // `unwrap` and `expect` show.
+        if matches!(self.inference.resolve(&err), Ty::Infer(_)) {
+            self.settle_try_from_errors();
+        }
         let (mut arguments, end) =
             self.parse_std_arguments(&owner, &member, "`Result` method arguments")?;
         self.builtin_enum_receiver(
@@ -43003,7 +43307,13 @@ impl<'a> Parser<'a> {
         value: origin::Fragment,
         span: Span,
     ) -> Result<origin::Fragment, Error> {
-        let ty = self.inference.resolve(ty);
+        let mut ty = self.inference.resolve(ty);
+        // `let c: Result<Color, _> = v.try_into();`: the error type is the
+        // impl's, which the target the annotation gave selects.
+        if matches!(ty, Ty::Infer(_)) {
+            self.settle_try_from_errors();
+            ty = self.inference.resolve(&ty);
+        }
         if self.std_error(&ty, false) {
             return Ok(self.error_text(value, true));
         }
@@ -43277,6 +43587,11 @@ impl<'a> Parser<'a> {
                     definition: model.definition().clone(),
                 });
                 origin::Fragment::call(&helper, [value])
+            }
+            // A local's type nothing has given yet, as the element of a
+            // `Vec::new()` only `.into()`s go in: rustc needs it (E0282).
+            Ty::Infer(_) if let Some(error) = self.unsettled(&ty, span, None) => {
+                return Err(error);
             }
             _ => {
                 return Err(Error::MissingCapability {
@@ -46658,6 +46973,111 @@ impl<'a> Parser<'a> {
         false
     }
 
+    /// rustc's error for the inference variable `unknown`, which the use at
+    /// `needed` needs known, at the first `let` whose type holds it: E0282
+    /// "type annotations needed for `Vec<_>`". A conversion nothing
+    /// settles, whose trait bound is `ambiguous` (`From<u8>`), is E0283 at
+    /// the `let` of its value, and E0282 at a `let` whose own value made
+    /// the variable (`Vec::new()`), which rustc marks.
+    fn unsettled(&self, unknown: &Ty, needed: Span, ambiguous: Option<String>) -> Option<Error> {
+        let unknown @ Ty::Infer(_) = self.inference.resolve(unknown) else {
+            return None;
+        };
+        let (local, ty) = self.local_types.iter().find_map(|local| {
+            let ty = self.inference.resolve(&local.ty);
+            contains(&ty, &|inner| *inner == unknown).then_some((local, ty))
+        })?;
+        let made = local
+            .value
+            .filter(|value| !(value.start() <= needed.start() && needed.end() <= value.end()))
+            .filter(|_| ty != unknown);
+        Some(Error::LocalTypeNeeded {
+            code: if ambiguous.is_some() && made.is_none() {
+                "E0283"
+            } else {
+                "E0282"
+            },
+            name: local.name.clone(),
+            ty: (ty != unknown).then(|| ty.name(&self.models)),
+            declaration: self.name_span(local.declaration, &local.name),
+            needed: Some(made.unwrap_or(needed)),
+            note: ambiguous
+                .filter(|_| made.is_none())
+                .map(|bound| format!("the type must implement `{bound}`").into()),
+        })
+    }
+
+    /// The first use of a `let x;` before it has a value, now the body's
+    /// types are settled: rustc's E0381, or, for a local whose type is
+    /// still unknown, the E0282 its type check reports first (E0283 or
+    /// E0284 where the use is an operator's operand).
+    fn finish_uninitialized(&mut self) -> Result<(), Error> {
+        let Some(first) = std::mem::take(&mut self.uninitialized).into_iter().next() else {
+            return Ok(());
+        };
+        let declaration = self.name_span(first.declaration, &first.name);
+        let unknown = matches!(self.inference.resolve(&first.ty), Ty::Infer(_));
+        Err(match first.operator {
+            Some((code, needed)) => Error::LocalTypeNeeded {
+                code,
+                name: first.name,
+                ty: None,
+                declaration,
+                needed: Some(needed),
+                note: None,
+            },
+            None if unknown => Error::LocalTypeNeeded {
+                code: "E0282",
+                name: first.name,
+                ty: None,
+                declaration,
+                needed: None,
+                note: None,
+            },
+            None => Error::Uninitialized {
+                reference: self.name_span(first.reference, &first.name),
+                name: first.name,
+                possibly: first.possibly,
+                declaration,
+            },
+        })
+    }
+
+    /// rustc's `overflowing_literals` error for the integer literal at
+    /// `at`, whose number `value` `kind` can't hold: the literal as the
+    /// program writes it, suffix included.
+    fn overflowing(&self, kind: Int, value: Wide, at: Span) -> Error {
+        let written = self
+            .written_from(at.start())
+            .map(|line| {
+                let mut chars = line.char_indices();
+                let start = usize::from(line.starts_with('-'));
+                let end = chars
+                    .find(|&(index, character)| {
+                        index >= start && !(character.is_alphanumeric() || character == '_')
+                    })
+                    .map_or(line.len(), |(index, _)| index);
+                line[..end].to_string()
+            })
+            .filter(|written| {
+                written
+                    .trim_start_matches('-')
+                    .starts_with(|c: char| c.is_ascii_digit())
+            })
+            .unwrap_or_else(|| value.to_string());
+        let literal = span(at.start(), text_end(at.start(), &written));
+        overflow::error(kind, value, &written, literal)
+    }
+
+    /// The rest of the source line from `at`, as the program writes it.
+    fn written_from(&self, at: Position) -> Option<String> {
+        let key = self.models.sources.key(self.models.context.index());
+        let source = self.models.sources.resolve(key).ok()?;
+        let line = source.text().split('\n').nth(at.line()?.checked_sub(1)?)?;
+        let from = at.position()?.checked_sub(1)?;
+        Some(line.chars().skip(from).collect())
+    }
+
     /// The source text at `at`, on one line, as the program writes it.
     fn written(&self, at: Span) -> Option<String> {
         let key = self.models.sources.key(self.models.context.index());
@@ -49155,21 +49575,19 @@ impl<'a> Parser<'a> {
             && (integer || matches!(ty, Ty::Float(_)))
         {
             self.next();
-            if let Ty::Int(kind) = ty {
-                let (low, high) = kind.range();
-                if !(low..=high).contains(&value) {
-                    return Err(Error::TypeMismatch {
-                        expected: format!("a literal in the range of `{}`", kind.name()).into(),
-                        actual: value.to_string().into(),
-                        expression: span,
-                    });
-                }
+            if let Ty::Int(kind) = ty
+                && Wide::Signed(value.into()).fits(kind).is_err()
+            {
+                return Err(self.overflowing(kind, Wide::Signed(value.into()), span));
             }
             let float = integer && matches!(ty, Ty::Float(_));
             return Ok((ty, float));
         }
         let id = self.inference.fresh_id();
         self.literal_kinds.push((id, integer));
+        if integer {
+            self.literal_values.push((id, value, span));
+        }
         Ok((
             if integer {
                 Ty::Int(Int::Var(id))
@@ -49238,7 +49656,7 @@ impl<'a> Parser<'a> {
                 placeholder
             }
             Ty::Int(kind) if value.fits(kind).is_err() => {
-                return Err(literal_range(kind, value, at));
+                return Err(self.overflowing(kind, value, at));
             }
             Ty::Int(Int::U64 | Int::Usize) => bits,
             Ty::Int(kind) => boxed(kind),
@@ -52883,20 +53301,20 @@ fn mentions_script(ty: &Ty) -> bool {
 }
 
 fn contains_inference(ty: &Ty) -> bool {
-    contains(ty, |ty| matches!(ty, Ty::Infer(_)))
+    contains(ty, &|ty| matches!(ty, Ty::Infer(_)))
 }
 
 /// Whether `ty` holds a literal whose kind is still open: `{integer}` or
 /// `{float}`, which only the end of its body settles.
 #[cfg(feature = "rust-import")]
 fn contains_open_literal(ty: &Ty) -> bool {
-    contains(ty, |ty| {
+    contains(ty, &|ty| {
         matches!(ty, Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_)))
     })
 }
 
 /// Whether `ty` or a type inside it is one `leaf` picks.
-fn contains(ty: &Ty, leaf: fn(&Ty) -> bool) -> bool {
+fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
     let inside = |ty: &Ty| contains(ty, leaf);
     leaf(ty)
         || match ty {
@@ -56372,15 +56790,6 @@ fn arithmetic_trait(symbol: &str, left: &str, right: &str) -> Option<(String, &'
     })
 }
 
-/// Rust's error for an integer literal `value` out of `kind`'s range.
-fn literal_range(kind: Int, value: Wide, at: Span) -> Error {
-    Error::TypeMismatch {
-        expected: format!("a literal in the range of `{}`", kind.name()).into(),
-        actual: value.to_string().into(),
-        expression: at,
-    }
-}
-
 /// A runtime integer as the number it is, or `None` for another value.
 fn wide_value(value: &Dynamic) -> Option<Wide> {
     if let Ok(value) = value.as_int() {
@@ -56720,6 +57129,29 @@ struct PendingWide {
     at: Span,
     placeholder: String,
     texts: [String; 3],
+}
+
+/// A `let`'s local and its type (`Lowering::local_types`).
+struct LocalType {
+    name: ImmutableString,
+    declaration: Span,
+    ty: Ty,
+    /// The `let`'s value, when it has one.
+    value: Option<Span>,
+}
+
+/// A use of a `let x;` before an assignment gives it a value
+/// (`Lowering::uninitialized`).
+struct UninitializedUse {
+    name: ImmutableString,
+    declaration: Span,
+    reference: Span,
+    ty: Ty,
+    /// Whether some path to the use gives the local a value.
+    possibly: bool,
+    /// The operator the use is the operand of while its type is unknown,
+    /// which needs the type there: rustc's code for it and its place.
+    operator: Option<(&'static str, Span)>,
 }
 
 /// A float literal or arithmetic result whose kind inference settles

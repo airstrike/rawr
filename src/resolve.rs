@@ -18,7 +18,8 @@ pub(crate) mod type_ref;
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub(crate) use error::{
     derivable, ArgumentCount, ArgumentSignature, AssignTwice, CannotCompare, Described, NotFound,
-    Qualified, Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, RETURN_WITHOUT_VALUE,
+    Qualified, TypeNeeded, Uninitialized, Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE,
+    RETURN_WITHOUT_VALUE,
 };
 pub use error::{Callee, Category, Error, MoveCause, Private};
 use std::collections::BTreeMap;
