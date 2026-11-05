@@ -1866,7 +1866,7 @@ fn install(
                 .collect::<std::collections::BTreeSet<_>>()
         })
         .collect::<Vec<_>>();
-    regions(contract, &facades, &declared, registry);
+    regions(&facades, &declared, registry);
     let resolution = rawr_import::surface::facade::Resolution::new(
         &declared
             .iter()
@@ -2943,7 +2943,6 @@ type OpaqueType = (
 /// opaque type that borrows can't live in a region (`resolve::
 /// lower_nominal`'s `unheld_opaque`).
 fn regions(
-    contract: &rawr_import::Contract<rawr_import::Classified>,
     facades: &[Facade<'_>],
     declared: &[std::collections::BTreeSet<rawr_import::surface::identity::Definition>],
     registry: &mut host::Registry,
@@ -2980,7 +2979,6 @@ fn regions(
             }
         }
     }
-    let _ = contract;
     let entries = || facades.iter().flat_map(|facade| facade.entries.iter());
     let scoped = entries()
         .filter(|entry| match entry.outcome.representability() {
@@ -2990,8 +2988,23 @@ fn regions(
         })
         .map(|entry| *entry.definition.as_bytes())
         .collect::<Vec<_>>();
-    let named_opaques = entries()
-        .filter_map(|entry| match entry.outcome.representability() {
+    // Each function's and method's signature, as `opaque_types` reads them.
+    let outcomes = facades.iter().flat_map(|facade| {
+        facade
+            .entries
+            .iter()
+            .map(|entry| entry.outcome)
+            .chain(facade.self_members.iter().map(|(_, outcome)| *outcome))
+            .chain(facade.opaque_members.iter().map(|(_, outcome)| *outcome))
+            .chain(facade.entries.iter().flat_map(|entry| {
+                entry
+                    .outcome
+                    .implementations()
+                    .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+            }))
+    });
+    let named_opaques = outcomes
+        .filter_map(|outcome| match outcome.representability() {
             Representability::Function(plan) => Some(plan.signature()),
             Representability::FunctionItem(plan) => Some(plan.signature()),
             Representability::Invocation(plan) => Some(plan.signature()),
