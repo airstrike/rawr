@@ -16758,6 +16758,42 @@ impl<'a> Parser<'a> {
         start: Position,
     ) -> Result<ParsedExpr, Error> {
         let (member, member_span) = self.expect_member_name()?;
+        // `<Look as Tone>::tone` of a crate's trait a `use` names: the
+        // method on its first input or argument, as `Tone::tone` is.
+        if !self.ufcs_trait(&trait_name)
+            && let Some(binding) = self.models.import(&trait_name).cloned()
+            && matches!(binding.target, item::Import::Module)
+            && self
+                .models
+                .host_items(&format!("{}::{member}", binding.qualified))
+                .is_none()
+        {
+            if matches!(self.peek(), Token::LeftParen) {
+                if let Some(tokens) =
+                    self.path_method_call(&member, member_span, Some(binding.qualified.clone()))
+                {
+                    self.splice_tokens(tokens);
+                    return self.parse_primary();
+                }
+            } else if !matches!(self.peek(), Token::Unit) {
+                let arity = self.closure_hint.as_ref().map_or(1, |hint| hint.len().max(1));
+                let mut inputs: Vec<Ty> = (0..arity).map(|_| self.inference.fresh()).collect();
+                if let Some(self_ty) = self_ty {
+                    // The written `Self` is the receiver's, through any
+                    // reference the use gives it.
+                    let given = self.closure_hint.as_ref().and_then(|hint| hint.first().cloned());
+                    let receiver = match given.map(|given| self.inference.resolve(&given)) {
+                        Some(Ty::Reference { mutable, .. }) => Ty::Reference {
+                            mutable,
+                            target: Box::new(self_ty),
+                        },
+                        _ => self_ty,
+                    };
+                    inputs[0] = receiver;
+                }
+                return self.method_value(member, inputs.into(), trait_span, member_span);
+            }
+        }
         if !self.ufcs_trait(&trait_name) {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
@@ -21255,6 +21291,16 @@ impl<'a> Parser<'a> {
         {
             return self.host_function_value(item.clone(), expression);
         }
+        // `let name: fn(&Look) -> &str = Look::name;`: a crate type's
+        // method named without a call anywhere else is the same closure.
+        #[cfg(feature = "rust-import")]
+        if !matches!(self.peek(), Token::LeftParen | Token::Unit)
+            && let [item] = items.as_ref()
+            && item.imported_identity().is_some()
+            && item.kind() == crate::host::item::Kind::Method
+        {
+            return self.host_function_value(item.clone(), expression);
+        }
         // `Look::mix(a, b)`: a crate type's method called by its path is
         // the method called on its first argument.
         if matches!(self.peek(), Token::LeftParen)
@@ -22904,7 +22950,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Option<ParsedExpr>, Error> {
         if member != "to_string"
             || !definition.parameters().is_empty()
-            || matches!(self.peek(), Token::LeftParen | Token::Unit)
+            || matches!(self.peek(), Token::Unit)
         {
             return Ok(None);
         }
@@ -22914,6 +22960,20 @@ impl<'a> Parser<'a> {
         };
         if self.imported_member_owner(&ty, member).is_some() {
             return Ok(None);
+        }
+        // `Look::to_string(&look)`: `look.to_string()`.
+        if matches!(self.peek(), Token::LeftParen) {
+            let Some(tokens) = self.path_method_call(member, member_span, None) else {
+                return Err(Error::argument_count(
+                    Callee::AssociatedFunction,
+                    format!("{}::{member}", definition.path()),
+                    1,
+                    0,
+                    span(owner_span.start(), member_span.end()),
+                ));
+            };
+            self.splice_tokens(tokens);
+            return self.parse_primary().map(Some);
         }
         let receiver = Ty::Reference {
             mutable: false,
@@ -48833,14 +48893,15 @@ impl<'a> Parser<'a> {
             // names (`use iced::widget::Widget;` then `Widget::_boxed(w)`),
             // which Rawr names as a module: the method called on its
             // receiver, as through the trait's whole path.
-            if self.models.host_items(&path).is_none()
+            let crate_trait = self.models.host_items(&path).is_none()
                 && matches!(binding.target, item::Import::Module)
                 && binding
                     .qualified
                     .rsplit("::")
                     .next()
                     .and_then(|name| name.chars().next())
-                    .is_some_and(char::is_uppercase)
+                    .is_some_and(char::is_uppercase);
+            if crate_trait
                 && matches!(self.peek(), Token::LeftParen)
                 && let Some(tokens) =
                     self.path_method_call(&member, member_span, Some(binding.qualified.clone()))
@@ -48848,6 +48909,17 @@ impl<'a> Parser<'a> {
                 self.pending_turbofish = None;
                 self.splice_tokens(tokens);
                 return self.parse_primary();
+            }
+            // `.map(Tone::tone)`: the closure that calls the method on its
+            // first input, whose type's impl of the trait gives it. Its
+            // inputs are the ones its use gives it, the receiver first.
+            if crate_trait
+                && !matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && member.starts_with(|c: char| c.is_ascii_lowercase())
+            {
+                let arity = self.closure_hint.as_ref().map_or(1, |hint| hint.len().max(1));
+                let inputs = (0..arity).map(|_| self.inference.fresh()).collect();
+                return self.method_value(member, inputs, owner_span, member_span);
             }
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                 #[cfg(feature = "rust-import")]
