@@ -16660,6 +16660,7 @@ fn opaque_traits<'s>(
     signature: &'s crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
     returned: &convert::Type,
+    trait_path: fn(&[u8; 32]) -> Option<String>,
 ) -> Result<
     Option<(
         &'s crate::classify::representability::signature::Opaque,
@@ -16694,7 +16695,7 @@ fn opaque_traits<'s>(
         else {
             return Ok(None);
         };
-        let Some(path) = TYPE_PATHS.with_borrow(|paths| paths.get(id.as_bytes()).cloned()) else {
+        let Some(path) = trait_path(id.as_bytes()) else {
             return Ok(None);
         };
         let mut written = Vec::new();
@@ -16738,6 +16739,26 @@ fn opaque_traits<'s>(
     Ok(Some((opaque, traits)))
 }
 
+/// The Rust path of the trait `identity` its root names it by.
+fn root_trait_path(identity: &[u8; 32]) -> Option<String> {
+    TYPE_PATHS.with_borrow(|paths| paths.get(identity).cloned())
+}
+
+/// The Rust path of the trait `identity`: its root's, or else the one
+/// through the crate that defines it, which the runner depends on as a
+/// macro's `$crate` reaches it (`hidden_spelling`), as iced's `explain`
+/// gives `impl iced_core::Widget<..>`, which no path of iced's names.
+fn bound_trait_path(identity: &[u8; 32]) -> Option<String> {
+    root_trait_path(identity).or_else(|| {
+        PATH_IDENTITIES.with_borrow(|identities| {
+            identities
+                .iter()
+                .filter(|(_, known)| *known == identity)
+                .find_map(|(path, _)| hidden_spelling(path))
+        })
+    })
+}
+
 /// Each of `traits`, as `opaque_traits` gives them, as Rust writes it in a
 /// bound.
 fn written_bounds(traits: &[([u8; 32], String, Vec<String>)]) -> impl Iterator<Item = String> + '_ {
@@ -16757,7 +16778,8 @@ fn opaque_bounds(
     substitutions: &[convert::Type],
 ) -> Result<Option<String>, request::Error> {
     let returned = substituted(signature.output(), signature, substitutions)?;
-    let Some((_, traits)) = opaque_traits(signature, substitutions, &returned)? else {
+    let Some((_, traits)) = opaque_traits(signature, substitutions, &returned, bound_trait_path)?
+    else {
         return Ok(None);
     };
     let bounds = written_bounds(&traits).collect::<Vec<_>>();
@@ -16777,7 +16799,9 @@ fn lent_cell(
         return Ok(None);
     }
     let returned = substituted(signature.output(), signature, substitutions)?;
-    let Some((opaque, traits)) = opaque_traits(signature, substitutions, &returned)? else {
+    let Some((opaque, traits)) =
+        opaque_traits(signature, substitutions, &returned, root_trait_path)?
+    else {
         return Ok(None);
     };
     let bounds = written_bounds(&traits)
