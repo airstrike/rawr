@@ -414,7 +414,8 @@ pub struct Module {
 /// from its span of the source where the program is lowered.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MacroRules {
-    /// Definition metadata: `#[macro_export]` among its attributes.
+    /// Definition metadata: `#[macro_export]` among its attributes, and
+    /// the span from the first attribute.
     pub header: Header,
     /// The macro's name.
     pub name: Name,

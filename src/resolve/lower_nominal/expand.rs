@@ -53,7 +53,14 @@ impl Parser<'_> {
         let braced = matches!(open, Token::LeftBrace | Token::MapStart);
         tokens.push((open.clone(), position));
         if open != Token::Unit {
-            tokens.extend(self.group_rest(&open, position, "macro_rules!")?.0);
+            let (inner, close) = self.group_rest(&open, position, "macro_rules!")?;
+            tokens.extend(inner);
+            let close_token = match open {
+                Token::LeftParen => Token::RightParen,
+                Token::LeftBracket => Token::RightBracket,
+                _ => Token::RightBrace,
+            };
+            tokens.push((close_token, close));
         }
         // `macro_rules! m (..);` and `macro_rules! m [..];` end with `;`.
         if !braced {

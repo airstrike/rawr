@@ -899,7 +899,9 @@ fn parse_macro_rules(
     visibility: Option<Span>,
     start: Position,
 ) -> ParseResult<crate::item::MacroRules> {
-    let mut tokens = vec![input.next().expect("peeked `macro_rules`")];
+    let keyword = input.next().expect("peeked `macro_rules`");
+    let rules_start = keyword.1;
+    let mut tokens = vec![keyword];
     tokens.push((Token::Bang, expect(input, Token::Bang, "after `macro_rules`")?));
     let name = parse_name(input, "after `macro_rules!`")?;
     tokens.push((
@@ -959,15 +961,15 @@ fn parse_macro_rules(
         }
         .into_err(malformed.at())
     })?;
-    let span = Span::new(start, after(end, 1));
+    let end = after(end, 1);
     Ok(crate::item::MacroRules {
         header: crate::item::Header {
             attributes,
             visibility,
-            span,
+            span: Span::new(start, end),
         },
         name,
-        span,
+        span: Span::new(rules_start, end),
     })
 }
 

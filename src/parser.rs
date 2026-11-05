@@ -526,7 +526,7 @@ impl Engine {
                 .iter()
                 .map(crate::item::Parsed::span)
                 .chain(masked)
-                .chain(macros.iter().map(|definition| definition.span)),
+                .chain(macros.iter().map(|definition| definition.header.span)),
         );
         // The statements outside the items are typed Rust, which the
         // checker reads when it lowers them. Here it is enough to know

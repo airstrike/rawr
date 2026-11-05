@@ -38,6 +38,8 @@ mod divergence_tests;
 #[cfg(test)]
 mod language_tests;
 #[cfg(test)]
+mod macro_tests;
+#[cfg(test)]
 mod placeholder_tests;
 #[cfg(test)]
 mod privacy_tests;
