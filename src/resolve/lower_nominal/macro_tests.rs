@@ -16,8 +16,7 @@ fn printed(source: &str) -> String {
     engine
         .eval::<()>(&format!("{source}\nmain();\n"))
         .unwrap_or_else(|error| panic!("{error}"));
-    let text = written.lock().unwrap().clone();
-    text
+    written.lock().unwrap().clone()
 }
 
 /// rustc's message and primary label for `source`, which rawr refuses.
