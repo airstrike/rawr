@@ -1143,6 +1143,33 @@ fn an_opaque_output_of_a_private_type_that_borrows_an_element_is_held() {
     );
 }
 
+/// `explain` on what `explain` gives on an `Element<'_, ..>` (#936): the
+/// outer opaque type takes the inner one, and the region holds it boxed
+/// through a trait of the runner's, as no wrapper over another compiles.
+/// The output is `cargo run`'s.
+#[test]
+fn an_opaque_output_of_an_opaque_output_that_borrows_is_held_boxed() {
+    let (rawr, cargo) = both_printed("explained_twice.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with(
+            "last view pad 0 [Increment] 2@50 explain #00ff00 explain #0000ff rule 4 [Decrement]"
+        ),
+        "{rawr}"
+    );
+}
+
+/// What `explain` gives on an element that borrows a local, kept past the
+/// block the local lives in, is rustc's E0597 at the borrow (#936).
+#[test]
+fn an_opaque_output_that_outlives_what_it_borrows_does_not_live_long_enough() {
+    let stderr = checked("explained_outlived.rs");
+    assert!(
+        stderr.contains("error[E0597]: `local` does not live long enough"),
+        "{stderr}"
+    );
+}
+
 /// iced's loupe (#885): the program's own `Zoomed<W>` implements the
 /// crate's `Widget` for any `W: Widget` through `W`'s methods, and holds
 /// what `explain` gives. The runner compiles the impl for each type it is

@@ -6629,9 +6629,25 @@ fn render_source(
     // method it provides resolves as it does in the program.
     let _type_paths = TypePaths::install(facade.as_ref());
     // Every adapter that reaches a region's value of an opaque type names
-    // the wrapper that makes it (`family`), so each is declared first.
-    for plan in plans {
-        declare_wrapper(plan)?;
+    // how the region holds it (`family`), so each is declared first: a
+    // call on what another such call gives is declared once that one is.
+    let mut boxed = Vec::new();
+    loop {
+        let mut declared = false;
+        for plan in plans {
+            if let Some(ty) = declare_wrapper(plan)? {
+                declared = true;
+                if scoped_type(&ty).is_some_and(|key| family::Ops::held(&key).is_some()) {
+                    boxed.push(ty);
+                }
+            }
+        }
+        if !declared {
+            break;
+        }
+    }
+    for ty in &boxed {
+        declare_ops(plans, ty)?;
     }
     if let Some(plan) = &facade {
         for facade in plan.facades() {
@@ -8564,11 +8580,24 @@ fn byte_slice(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), request::Error> 
     output.write_all(b"]").map_err(request::unwritable)
 }
 
-/// The call of an opaque type's method `plan` on a receiver a region
-/// holds, when the type's family is a wrapper's (`family`): the value isn't
-/// in the arena, where the call that made it set its table, and its type is
-/// the wrapper's output, whose bounds rustc knows. Empty for another call.
-fn region_operand(plan: &Plan, operand: &convert::Type) -> Result<String, request::Error> {
+/// The receiver of an opaque type's method in a region (`family`): its
+/// family, and the call of it when the region holds it boxed, through its
+/// trait's method.
+struct Operand {
+    family: family::Family,
+    call: Option<String>,
+}
+
+/// The call of an opaque type's method `plan`, the `consumer`-th call on
+/// the type, on a receiver a region holds (`family`): the value isn't in
+/// the arena, where the call that made it set its table. Its type is a
+/// wrapper's output, whose bounds rustc knows, or it is boxed, and the call
+/// is its trait's method. Empty for another call.
+fn region_operand(
+    plan: &Plan,
+    operand: &convert::Type,
+    consumer: usize,
+) -> Result<String, request::Error> {
     let Operation::Method {
         receiver,
         signature,
@@ -8580,8 +8609,28 @@ fn region_operand(plan: &Plan, operand: &convert::Type) -> Result<String, reques
     else {
         return Ok(String::new());
     };
-    let Some(family) = family_of(operand).filter(|family| family.named().is_none()) else {
+    let Some(family) = family_of(operand) else {
         return Ok(String::new());
+    };
+    let operand = match scoped_type(operand).filter(|key| family::Ops::held(key).is_some()) {
+        Some(key) => {
+            let lent = match receiver {
+                Receiver::Owned => "receiver",
+                Receiver::Shared => "&**receiver",
+                Receiver::Mutable => "&mut **receiver",
+            };
+            let Some(call) =
+                family::Ops::call(&key, consumer, lent, signature.inputs().len())
+            else {
+                return Ok(String::new());
+            };
+            Operand {
+                family,
+                call: Some(call),
+            }
+        }
+        None if family.named().is_none() => Operand { family, call: None },
+        None => return Ok(String::new()),
     };
     let mut body = Vec::new();
     render_arguments_with(signature, substitutions, 1, &mut body)?;
@@ -8593,7 +8642,7 @@ fn region_operand(plan: &Plan, operand: &convert::Type) -> Result<String, reques
         substitutions,
         constants,
         *container_parameters,
-        Some(family),
+        Some(operand),
         &mut body,
     )?;
     let body = String::from_utf8(body).map_err(request::unwritable)?;
@@ -8636,7 +8685,7 @@ fn render_adapter(
             .map_err(encoding);
         }
         let scoped = if position == 0 {
-            region_operand(plan, &operand)?
+            region_operand(plan, &operand, index)?
         } else {
             String::new()
         };
@@ -10985,7 +11034,7 @@ fn render_scoped_receiver(
     substitutions: &[convert::Type],
     constants: &[convert::Constant],
     container_parameters: usize,
-    operand: Option<family::Family>,
+    operand: Option<Operand>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let encoding = request::unwritable;
@@ -11000,17 +11049,29 @@ fn render_scoped_receiver(
         &mut container,
     )?;
     let container = String::from_utf8(container).map_err(request::unwritable)?;
-    let Some(family) = operand.or_else(|| container_family(path, &container)) else {
-        return Ok(());
+    let (family, call) = match operand {
+        Some(Operand { family, call }) => (family, call),
+        None => match container_family(path, &container) {
+            Some(family) => (family, None),
+            None => return Ok(()),
+        },
     };
-    let call = scoped_receiver_call(
-        plan,
-        receiver,
-        signature,
-        substitutions,
-        constants,
-        container_parameters,
-    )?;
+    // A boxed receiver's call is its trait's method, which boxes what it
+    // gives in turn when the region holds that boxed too.
+    let (call, boxes) = match call {
+        Some(call) => (call, false),
+        None => (
+            scoped_receiver_call(
+                plan,
+                receiver,
+                signature,
+                substitutions,
+                constants,
+                container_parameters,
+            )?,
+            true,
+        ),
+    };
     let reach = match receiver {
         Receiver::Owned => family::Reach::Take,
         Receiver::Shared => family::Reach::Get,
@@ -11022,6 +11083,10 @@ fn render_scoped_receiver(
     // (`family`), whose output the region holds.
     let given = family_of(&returned)
         .and_then(|family| Some((family.made()?, family)));
+    let call = match scoped_type(&returned) {
+        Some(key) if boxes && family::Ops::held(&key).is_some() => format!("Box::new({call})"),
+        _ => call,
+    };
     let (call, converted) = match given {
         Some((made, family)) => (
             made,
@@ -11105,13 +11170,16 @@ fn scoped_receiver_call(
     String::from_utf8(call).map_err(request::unwritable)
 }
 
-/// Declare the wrapper (`family`) of a method `plan` whose receiver a
-/// region holds, `render_scoped_receiver`'s call, when its output is an
-/// opaque type that borrows: its inputs are the receiver, at the type its
-/// family holds, and each argument at `'x`, and its bounds are the opaque
-/// type's. None for another method, or one whose types have no Rust
-/// spelling.
-fn declare_wrapper(plan: &Plan) -> Result<(), request::Error> {
+/// Declare how a region holds the output of a method `plan` whose receiver
+/// a region holds, `render_scoped_receiver`'s call, when the output is an
+/// opaque type that borrows (`family`), and give it when the declaration is
+/// new. A receiver of a family struct makes the output through a wrapper,
+/// whose inputs are the receiver, at the type its family holds, and each
+/// argument at `'x`, and whose bounds are the opaque type's. A receiver
+/// that is itself such an opaque type makes the output boxed, as no
+/// wrapper over another compiles. None for another method, or one whose
+/// types have no Rust spelling.
+fn declare_wrapper(plan: &Plan) -> Result<Option<convert::Type>, request::Error> {
     let Operation::Method {
         receiver: receiver @ Receiver::Owned,
         signature,
@@ -11121,18 +11189,29 @@ fn declare_wrapper(plan: &Plan) -> Result<(), request::Error> {
         ..
     } = plan.operation()
     else {
-        return Ok(());
+        return Ok(None);
     };
     let returned = substituted(signature.output(), signature, substitutions)?;
     let convert::Type::Nominal { definition, .. } = &returned else {
-        return Ok(());
+        return Ok(None);
     };
     if !is_opaque(definition) || !carries_lifetime(&returned) {
-        return Ok(());
+        return Ok(None);
     }
     let Some(key) = scoped_type(&returned) else {
-        return Ok(());
+        return Ok(None);
     };
+    let Some(bounds) = opaque_bounds(signature, substitutions)? else {
+        return Ok(None);
+    };
+    if let Some((0, _, operand)) = opaque_operand(plan)? {
+        if family_of(&operand).is_none() || family::Ops::held(&key).is_some() {
+            return Ok(None);
+        }
+        let (held, _) = family::Ops::declare(key, bounds);
+        family(held, BOXED_LIFETIMES);
+        return Ok(Some(returned));
+    }
     let path = rust_path(plan);
     let mut container = Vec::new();
     render_container_path(
@@ -11150,18 +11229,18 @@ fn declare_wrapper(plan: &Plan) -> Result<(), request::Error> {
         .and_then(family::Family::named)
         .and_then(family_type)
     else {
-        return Ok(());
+        return Ok(None);
     };
+    if family::of(&key).is_some() {
+        return Ok(None);
+    }
     let mut inputs = vec![("receiver".to_owned(), held)];
     for (position, input) in signature.inputs().iter().enumerate() {
         let Some(ty) = scoped_type(&substituted(input, signature, substitutions)?) else {
-            return Ok(());
+            return Ok(None);
         };
         inputs.push((format!("argument_{position}"), ty));
     }
-    let Some(bounds) = opaque_bounds(signature, substitutions)? else {
-        return Ok(());
-    };
     let call = scoped_receiver_call(
         plan,
         *receiver,
@@ -11171,6 +11250,72 @@ fn declare_wrapper(plan: &Plan) -> Result<(), request::Error> {
         *container_parameters,
     )?;
     family::Wrapper::new(inputs, call, bounds).declare(key);
+    Ok(Some(returned))
+}
+
+/// What a region's boxed value of an opaque type (`family::Ops`) is, for its
+/// family struct: it carries one lifetime, in which it is invariant, and
+/// has none of `Debug`, `Clone` and `PartialEq`.
+const BOXED_LIFETIMES: Lifetimes = Lifetimes {
+    count: 1,
+    covariant: false,
+    debug: false,
+    clone: false,
+    partial_eq: false,
+};
+
+/// Each call in `plans` on the opaque type `ty`, which a region holds boxed
+/// (`family::Ops`), as a method of the trait it is held through: its
+/// receiver the value itself, its inputs at `'x`, and its output boxed in
+/// turn when that is such a type too. A call whose types have no Rust
+/// spelling, or whose output is made through a wrapper, has none.
+fn declare_ops(plans: &[Plan], ty: &convert::Type) -> Result<(), request::Error> {
+    let Some(key) = scoped_type(ty) else {
+        return Ok(());
+    };
+    for (consumer, plan) in opaque_consumers(plans, ty)?.into_iter().enumerate() {
+        let Operation::Method {
+            receiver,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            ..
+        } = plan.operation()
+        else {
+            continue;
+        };
+        if !matches!(opaque_operand(plan)?, Some((0, ..))) {
+            continue;
+        }
+        let mut inputs = Vec::new();
+        for (position, input) in signature.inputs().iter().enumerate() {
+            let Some(rust) = scoped_type(&substituted(input, signature, substitutions)?) else {
+                return Ok(());
+            };
+            inputs.push((format!("argument_{position}"), rust));
+        }
+        let returned = substituted(signature.output(), signature, substitutions)?;
+        let call = scoped_receiver_call(
+            plan,
+            *receiver,
+            signature,
+            substitutions,
+            constants,
+            *container_parameters,
+        )?;
+        let (output, call) = match scoped_type(&returned) {
+            Some(text) if let Some(held) = family::Ops::held(&text) => {
+                (held, format!("Box::new({call})"))
+            }
+            Some(text) if family::of(&text).is_none() => (text, call),
+            _ => continue,
+        };
+        family::Ops::add(
+            &key,
+            family::Method::new(consumer, *receiver, inputs, output, call),
+        );
+    }
     Ok(())
 }
 
@@ -17378,7 +17523,11 @@ fn family_of(ty: &convert::Type) -> Option<family::Family> {
         return None;
     }
     if is_opaque(definition) {
-        return family::of(&scoped_type(ty)?);
+        let key = scoped_type(ty)?;
+        return match family::Ops::held(&key) {
+            Some(held) => family(held, BOXED_LIFETIMES),
+            None => family::of(&key),
+        };
     }
     let lifetimes = TYPE_TRAITS.with_borrow(|types| types.get(definition.as_bytes()).copied())?;
     family(scoped_type(ty)?, lifetimes)
