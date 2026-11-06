@@ -475,6 +475,33 @@ fn type_late_input(
     }
 }
 
+/// Whether `argument` is `'static` or a type that names it, as
+/// `Cow<'static, str>` does.
+fn argument_names_static(argument: &model::Argument) -> bool {
+    match argument {
+        model::Argument::Lifetime(lifetime) => *lifetime == model::Lifetime::Static,
+        model::Argument::Type(ty) => type_names_static(ty),
+        model::Argument::Const(_) => false,
+    }
+}
+
+/// Whether `ty` names `'static`, in a reference or in a type's arguments.
+fn type_names_static(ty: &model::Type) -> bool {
+    match ty {
+        model::Type::Reference { lifetime, ty, .. } => {
+            *lifetime == model::Lifetime::Static || type_names_static(ty)
+        }
+        model::Type::Definition { arguments, .. } | model::Type::Projection { arguments, .. } => {
+            arguments.iter().any(argument_names_static)
+        }
+        model::Type::Tuple(members) => members.iter().any(type_names_static),
+        model::Type::Slice(element) | model::Type::Array { element, .. } => {
+            type_names_static(element)
+        }
+        _ => false,
+    }
+}
+
 /// `ty` with each late-bound lifetime as `'static`: the type a callable's
 /// output names, whose borrow the slot that makes it gives its own
 /// lifetime (D594).
@@ -9384,10 +9411,13 @@ impl<P: api::Phase> Context<'_, P> {
 
     /// The derivable std traits the bounds on type parameter `index` name.
     /// Whether a `&str` fills the type parameter at `index` only at
-    /// `'static`: its bounds say `T: 'static`, or one of its traits is
-    /// implemented for `&'static str`, as iced's `Title<State>` is. A
-    /// trait has at most one impl for a string reference, since two would
-    /// overlap, so that impl is the one a `&str` argument selects.
+    /// `'static`: its bounds say `T: 'static`, one of its traits is
+    /// implemented for `&'static str`, as iced's `Title<State>` is, or one
+    /// names `'static` in its arguments, as iced's `Preset::new(name: impl
+    /// Into<Cow<'static, str>>)` does, whose `From<&'a str> for Cow<'a,
+    /// str>` asks the string for `'static` (#1050). A trait has at most one
+    /// impl for a string reference, since two would overlap, so that impl
+    /// is the one a `&str` argument selects.
     fn static_str_parameter(&self, generics: &model::Generics, index: u32) -> bool {
         let declared = generics
             .parameters()
@@ -9413,25 +9443,28 @@ impl<P: api::Phase> Context<'_, P> {
         declared.chain(predicated).any(|bound| {
             let model::Bound::Trait {
                 trait_id,
+                arguments,
                 polarity: model::Polarity::Positive,
                 ..
             } = bound
             else {
                 return false;
             };
-            self.graph
-                .implementations_of(trait_id)
-                .any(|implementation| {
-                    implementation.polarity() == model::Polarity::Positive
-                        && matches!(
-                            implementation.self_type(),
-                            model::Type::Reference {
-                                lifetime: model::Lifetime::Static,
-                                ..
-                            }
-                        )
-                        && is_str_reference(implementation.self_type())
-                })
+            arguments.iter().any(argument_names_static)
+                || self
+                    .graph
+                    .implementations_of(trait_id)
+                    .any(|implementation| {
+                        implementation.polarity() == model::Polarity::Positive
+                            && matches!(
+                                implementation.self_type(),
+                                model::Type::Reference {
+                                    lifetime: model::Lifetime::Static,
+                                    ..
+                                }
+                            )
+                            && is_str_reference(implementation.self_type())
+                    })
         })
     }
 
