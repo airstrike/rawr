@@ -181,7 +181,7 @@ where
                         .require_selected(
                             contract
                                 .accept(
-                                    &outcome.identity(),
+                                    outcome.identity(),
                                     &selector
                                         .try_clone()
                                         .expect("the constructor selector duplicates"),
@@ -199,7 +199,7 @@ where
                         .require_selected(
                             contract
                                 .accept(
-                                    &outcome.identity(),
+                                    outcome.identity(),
                                     &field
                                         .selector()
                                         .try_clone()
@@ -224,7 +224,7 @@ where
                         .require_selected(
                             contract
                                 .accept(
-                                    &outcome.identity(),
+                                    outcome.identity(),
                                     &variant
                                         .selector()
                                         .try_clone()

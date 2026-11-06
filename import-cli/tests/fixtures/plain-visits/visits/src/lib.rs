@@ -307,7 +307,13 @@ impl<S, L: Layer<S>, I: Layer<S>> Layer<S> for Layered<L, I, S> {
 /// One layer.
 pub struct Plain;
 
-impl<S> Layer<S> for Plain {
+impl Plain {
+    pub fn new() -> Self {
+        Plain
+    }
+}
+
+impl Layer<()> for Plain {
     fn depth(&self) -> u32 {
         1
     }
@@ -315,5 +321,5 @@ impl<S> Layer<S> for Plain {
 
 /// How deep two plain layers stack.
 pub fn stacked() -> u32 {
-    Layer::<()>::depth(&Layer::<()>::and_then(Plain, Plain))
+    Plain.and_then(Plain).depth()
 }

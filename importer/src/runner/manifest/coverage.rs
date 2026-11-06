@@ -940,7 +940,7 @@ mod tests {
         compiler
             .require_selected(
                 contract
-                    .accept(&structure.identity(), &identity::Selector::Declaration)
+                    .accept(structure.identity(), &identity::Selector::Declaration)
                     .unwrap(),
                 "/fixture/main.rs",
                 0,
@@ -992,9 +992,7 @@ mod tests {
         let compile = |start, selected: &identity::Identity| {
             let function = instance::FunctionItem::selected(
                 0,
-                contract
-                    .accept(&selected, &selected.selector().clone())
-                    .unwrap(),
+                contract.accept(selected, selected.selector()).unwrap(),
                 start + 1,
                 start + 2,
             )
@@ -1013,10 +1011,7 @@ mod tests {
             compiler
                 .require_instance(
                     contract
-                        .accept(
-                            &consumer.identity(),
-                            &consumer.identity().selector().clone(),
-                        )
+                        .accept(consumer.identity(), &consumer.identity().selector().clone())
                         .unwrap(),
                     arguments,
                     "/fixture/main.rs",
@@ -1106,10 +1101,7 @@ mod tests {
             compiler
                 .require_instance(
                     contract
-                        .accept(
-                            &selected.identity(),
-                            &selected.identity().selector().clone(),
-                        )
+                        .accept(selected.identity(), &selected.identity().selector().clone())
                         .unwrap(),
                     arguments,
                     "/fixture/main.rs",

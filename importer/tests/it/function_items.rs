@@ -51,7 +51,7 @@ fn concrete_function_item_generates_one_exact_rooted_thunk() {
         .require_instance(
             contract
                 .accept(
-                    &constant.identity(),
+                    constant.identity(),
                     &constant
                         .identity()
                         .selector()

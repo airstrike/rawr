@@ -273,12 +273,6 @@ impl<'contract> Accepted<'contract> {
         &self.selector
     }
 
-    /// The identity the selector names of the outcome's.
-    #[must_use]
-    pub fn identity(&self) -> identity::Identity {
-        self.outcome.identity().selected(self.selector.clone())
-    }
-
     pub(crate) fn into_parts(self) -> (crate::classify::Outcome<'contract>, identity::Selector) {
         (self.outcome, self.selector)
     }
@@ -613,9 +607,10 @@ impl<'contract, B> Compiler<'contract, B> {
     pub fn require_builder(&mut self, plan: builder::Plan) -> Result<(), Error> {
         for step in plan.steps() {
             let identity = step.entry().identity();
-            let outcome = self.contract.admitted(identity);
-            if !self.contract.accepts(identity, identity.selector())
-                || !outcome.representability().is_demandable()
+            if !self
+                .contract
+                .accept(identity, identity.selector())
+                .is_some_and(|accepted| accepted.outcome.representability().is_demandable())
             {
                 return Err(Error::NotDemandable);
             }
@@ -636,6 +631,12 @@ impl<'contract, B> Compiler<'contract, B> {
         origin: Origin,
     ) -> Result<(), Error> {
         let identity = outcome.identity().clone();
+        if !outcome
+            .representability()
+            .contains_selector(identity.selector(), identity.selector())
+        {
+            return Err(Error::NotDemandable);
+        }
         if has_unresolved_structural_parameters(outcome.representability())
             || needs_instance(self.contract, &identity)
         {
@@ -1808,7 +1809,7 @@ pub enum Error {
     Allocation,
     #[error("cannot encode canonical symbolic demand")]
     Encoding,
-    #[error("stored symbolic demand is not canonical")]
+    #[error("a stored demand or facade plan is not canonical")]
     Canonical,
 }
 
@@ -2012,9 +2013,7 @@ mod tests {
             .unwrap();
         compiler
             .require_selected(
-                contract
-                    .accept(&structure.identity(), &constructor)
-                    .unwrap(),
+                contract.accept(structure.identity(), &constructor).unwrap(),
                 "/fixture/main.rs",
                 2,
                 3,
@@ -2022,7 +2021,7 @@ mod tests {
             .unwrap();
         compiler
             .require_selected(
-                contract.accept(&structure.identity(), &field).unwrap(),
+                contract.accept(structure.identity(), &field).unwrap(),
                 "/fixture/main.rs",
                 4,
                 5,
@@ -2030,7 +2029,7 @@ mod tests {
             .unwrap();
         compiler
             .require_selected(
-                contract.accept(&enumeration.identity(), &variant).unwrap(),
+                contract.accept(enumeration.identity(), &variant).unwrap(),
                 "/fixture/main.rs",
                 6,
                 7,
@@ -2172,7 +2171,7 @@ mod tests {
         assert!(matches!(
             compiler.require_selected(
                 contract
-                    .accept(&outcome.identity(), &field.try_clone().unwrap())
+                    .accept(outcome.identity(), &field.try_clone().unwrap())
                     .unwrap(),
                 "/fixture/main.rs",
                 2,
@@ -2191,7 +2190,7 @@ mod tests {
         assert!(matches!(
             compiler.require_instance(
                 contract
-                    .accept(&outcome.identity(), &field.try_clone().unwrap())
+                    .accept(outcome.identity(), &field.try_clone().unwrap())
                     .unwrap(),
                 empty,
                 "/fixture/main.rs",

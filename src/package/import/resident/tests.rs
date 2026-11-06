@@ -517,10 +517,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
     demand
         .require_instance(
             contract
-                .accept(
-                    &selected.identity(),
-                    &selected.identity().selector().clone(),
-                )
+                .accept(selected.identity(), &selected.identity().selector().clone())
                 .unwrap(),
             arguments,
             path,

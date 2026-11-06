@@ -236,7 +236,7 @@ pub fn generation_request(
                 .require_selected(
                     contract
                         .accept(
-                            &outcome.identity(),
+                            outcome.identity(),
                             &selector
                                 .try_clone()
                                 .expect("the anchor constructor selector duplicates"),

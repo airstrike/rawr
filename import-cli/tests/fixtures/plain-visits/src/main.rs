@@ -146,5 +146,5 @@ fn main() {
     println!("{}", visits::named(FIELDS));
     println!("{}", visits::measure(&Length));
     println!("{}", visits::painted(Seven));
-    println!("{} {}", visits::stacked(), Layer::<()>::depth(&visits::Plain));
+    println!("{} {}", visits::stacked(), visits::Plain::new().depth());
 }

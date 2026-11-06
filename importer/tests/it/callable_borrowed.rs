@@ -33,7 +33,7 @@ fn real_input_only_late_bound_fn_is_classified_as_borrowed() {
         .require_instance(
             contract
                 .accept(
-                    &outcome.identity(),
+                    outcome.identity(),
                     &outcome
                         .identity()
                         .selector()
