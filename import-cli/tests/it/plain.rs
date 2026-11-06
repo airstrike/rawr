@@ -1027,7 +1027,7 @@ fn main() {
         Command::new(env!("CARGO_BIN_EXE_rawr-import"))
             .args([action])
             .arg(project)
-            .env("RAWR_HOME", crate::support::scratch().join("rawr-home"))
+            .env("RAWR_HOME", crate::support::runtime_home())
             .env("BINDING_INPUT_FILE", &input)
             .env("BINDING_INPUT_MODE", mode)
             .env_remove("CARGO_TARGET_DIR")
