@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.3.154",
+      "date": "2026-11-06",
+      "entries": [
+        {"text":"Several derives in one file work: a derive's expansion declares its items in a module of its own that sees its item's module, as rustc's expansion does. A `Vec` of your values fills a crate's type parameter, as serde's `serialize_field` and `next_value::<Vec<T>>()` take it, and a crate may call your `Deserialize` on its own threads, as reqwest's `json()` does on tokio's workers.","issues":[593]},
+        {"text":"A member missed on a std type such as `String` no longer makes the next request fail.","issues":[1030],"refs":[593]}
+      ]
+    },
+    {
       "version": "0.3.153",
       "date": "2026-11-06",
       "entries": [

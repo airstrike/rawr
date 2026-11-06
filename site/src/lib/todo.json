@@ -1,12 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.153",
+  "version": "0.3.154",
   "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.154",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"Several derives in one file work: a derive's expansion declares its items in a module of its own that sees its item's module, as rustc's expansion does. A `Vec` of your values fills a crate's type parameter, as serde's `serialize_field` and `next_value::<Vec<T>>()` take it, and a crate may call your `Deserialize` on its own threads, as reqwest's `json()` does on tokio's workers.","issues":[593]},
+          {"text":"A member missed on a std type such as `String` no longer makes the next request fail.","issues":[1030],"refs":[593]}
+        ]
+      },
       {
         "version": "0.3.153",
         "date": "2026-11-06",
@@ -2054,7 +2062,7 @@
     {"issue":590,"title":"qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"closed","category":"No glue (D593)","release":"0.3.64"},
     {"issue":591,"title":"solar_system: pick_list's V can't be a reference to a crate type","state":"closed","category":"No glue (D593)","release":"0.3.64"},
     {"issue":592,"title":"color_palette: an impl header names a crate type without its declared parameter","state":"closed","category":"No glue (D593)","release":"0.3.64"},
-    {"issue":593,"title":"serde's derives on program types","state":"open","category":"No glue (D593)"},
+    {"issue":593,"title":"serde's derives on program types","state":"closed","category":"No glue (D593)","release":"0.3.154"},
     {"issue":594,"title":"color_palette: Hsl::from_color from a blanket impl is E0599","state":"closed","category":"No glue (D593)","release":"0.3.67"},
     {"issue":595,"title":"solar_system: canvas::LineDash { .. } is refused as having private fields","state":"closed","category":"Divergences from rustc","release":"0.3.67"},
     {"issue":596,"title":"A crate value borrowed by a call outside any view stays shared for the rest of the run","state":"open","category":"No glue (D593)"},
@@ -2490,7 +2498,18 @@
     {"issue":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"open","category":"Health"},
     {"issue":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
     {"issue":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"open","category":"Divergences from rustc"},
-    {"issue":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open","category":"Divergences from rustc"}
+    {"issue":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open","category":"Divergences from rustc"},
+    {"issue":1030,"title":"A member missed on a std type such as `String` no longer makes the next request fail","state":"closed","category":"Divergences from rustc","release":"0.3.154"},
+    {"issue":1031,"title":"serde's enum Deserialize: a crate value whose type has a lifetime (de::Unexpected<'a>)","state":"open","category":"Divergences from rustc"},
+    {"issue":1032,"title":"todos: node transform child failed: symbolic surface identity belongs to a different contract","state":"open","category":"Divergences from rustc"},
+    {"issue":1033,"title":"A trait function called by its trait's path infers Self from the expected type","state":"open","category":"Divergences from rustc"},
+    {"issue":1034,"title":"? converts &str to String through From","state":"open","category":"Divergences from rustc"},
+    {"issue":1035,"title":"u128 in a crate signature","state":"open","category":"Divergences from rustc"},
+    {"issue":1036,"title":"Two functions' local items of the same name collide","state":"open","category":"Divergences from rustc"},
+    {"issue":1037,"title":"Infer a generic fn's type parameter from the let it's assigned to","state":"open","category":"Divergences from rustc"},
+    {"issue":1038,"title":"A crossing into a program impl repeats its lookups on every call: interpreted serde is 12x/68x slower than debug Rust","state":"open","category":"Health"},
+    {"issue":1039,"title":"Re-expanding an edited derive resolves the dependencies again (about 3.4 s)","state":"open","category":"Health"},
+    {"issue":1040,"title":"An edit that changes only a derive expansion's bodies (a #[serde(rename)]) reruns instead of hot-swapping","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -2966,7 +2985,7 @@
             {"number":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"open"},
             {"number":334,"title":"No-glue stops after #313","state":"closed"},
             {"number":345,"title":"No-glue stops after #312 and #338","state":"open"},
-            {"number":593,"title":"serde's derives on program types","state":"open"},
+            {"number":593,"title":"serde's derives on program types","state":"closed"},
             {"number":952,"title":"table panics after its first frame: 'a value reached an adapter as a type its signature doesn't take'","state":"closed"},
             {"number":953,"title":"custom_quad and gradient exit with status 101 right after their first frame, with nothing on stderr","state":"closed"},
             {"number":954,"title":"solar_system and sierpinski_triangle panic in the runner at start","state":"closed"},
@@ -3007,7 +3026,10 @@
             {"number":1018,"title":"pokedex: nested Deserialize structs decoded by reqwest's .json().await on tokio's threads","state":"open"},
             {"number":1022,"title":"A generic impl's frame entry takes a projection value from the arena, needing 'static (E0310)","state":"open"},
             {"number":1023,"title":"A crate unit struct used as a value is refused","state":"open"},
-            {"number":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed"}
+            {"number":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed"},
+            {"number":1030,"title":"A member missed on a std type such as `String` no longer makes the next request fail","state":"closed"},
+            {"number":1031,"title":"serde's enum Deserialize: a crate value whose type has a lifetime (de::Unexpected<'a>)","state":"open"},
+            {"number":1032,"title":"todos: node transform child failed: symbolic surface identity belongs to a different contract","state":"open"}
           ],
           "milestone": "0.4"
         },

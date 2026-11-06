@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.154 (2026-11-06)
+
+- Several derives in one file work: a derive's expansion declares its items in a module of its own that sees its item's module, as rustc's expansion does. A `Vec` of your values fills a crate's type parameter, as serde's `serialize_field` and `next_value::<Vec<T>>()` take it, and a crate may call your `Deserialize` on its own threads, as reqwest's `json()` does on tokio's workers. (#593)
+- A member missed on a std type such as `String` no longer makes the next request fail. (#1030; part of #593)
+
 ## 0.3.153 (2026-11-06)
 
 - ?play runs iced's canvas programs. The bot's universe now holds iced's arc, counter and pick_list examples and a solar system drawn with plain shapes, each as a program of its own, so a snippet that makes their calls (a canvas `Program` with its `Cache`, `Frame` fills and strokes, a `LineDash`, rotations and translations, `iced::application::timed` and `.theme(..)`) runs and answers with an animated GIF. (#1000)
