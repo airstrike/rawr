@@ -33,6 +33,7 @@ pub struct Item {
 pub struct Basis {
     pub(crate) selected_target: Box<str>,
     pub(crate) dependency_directories: Box<[PathBuf]>,
+    /// Each alias, the artifact it names and that artifact's digest.
     pub(crate) externs: Box<[Extern]>,
 }
 

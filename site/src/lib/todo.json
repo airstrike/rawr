@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-05",
-  "version": "0.3.145",
+  "version": "0.3.146",
   "examples": {
     "running": 23,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.146",
+        "date": "2026-11-05",
+        "entries": [
+          {"text":"A number on an operator's left with a crate's type on its right, as ferris's `(rotation + step) % (2.0 * Radians::PI)`, calls the crate's impl of the operator for that number (`impl Mul<Radians> for f32`), as rustc selects it. A number whose impls don't take the other type is rustc's E0277.","issues":[974]},
+          {"text":"A program with no dependencies can use `async fn`, `async` blocks and `.await`, which check and run as rustc's do. `#[tokio::main]` or `tokio::join!` there is rustc's E0433, and an `async fn main` is E0752.","issues":[968]},
+          {"text":"A crate value inside an `Option` or `Result` below a variant's fields, a tuple or an array now has its type at any depth, so layout's key press with `text: Option<SmolStr>` no longer fails. A by-value method's `Option` output, such as `Cursor::position_in`, now has its type too. A crate's closure that returns an `Option` now compiles.","issues":[971]}
+        ]
+      },
       {
         "version": "0.3.145",
         "date": "2026-11-05",
@@ -2365,13 +2374,13 @@
     {"issue":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open","category":"Divergences from rustc"},
     {"issue":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"open","category":"Divergences from rustc"},
     {"issue":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"open","category":"Divergences from rustc"},
-    {"issue":968,"title":"`async fn` in a program without a Cargo project is unsupported: no core future","state":"open","category":"Divergences from rustc"},
+    {"issue":968,"title":"`async fn` in a program without a Cargo project is unsupported: no core future","state":"closed","category":"Divergences from rustc","release":"0.3.146"},
     {"issue":969,"title":"A panic in a runtime's async main prints \"invocation of symbolic item ... failed: Runtime error:\" instead of Rust's","state":"open","category":"Divergences from rustc"},
     {"issue":970,"title":"A crate's async fn taking &str through a type parameter generated code that didn't compile","state":"closed","category":"Divergences from rustc","release":"0.3.140"},
-    {"issue":971,"title":"iced layout panics on a keyboard event: keyboard::Event's Key<SmolStr> fails rawr's type check","state":"open","category":"Divergences from rustc"},
+    {"issue":971,"title":"iced layout panics on a keyboard event: keyboard::Event's Key<SmolStr> fails rawr's type check","state":"closed","category":"Divergences from rustc","release":"0.3.146"},
     {"issue":972,"title":"A relative CARGO_TARGET_DIR is taken relative to the project, while Cargo takes it relative to the working directory","state":"open","category":"Health"},
     {"issue":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"open","category":"Divergences from rustc"},
-    {"issue":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"open","category":"Divergences from rustc"},
+    {"issue":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"closed","category":"Divergences from rustc","release":"0.3.146"},
     {"issue":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed","category":"Divergences from rustc","release":"0.3.143"},
     {"issue":976,"title":"A derive expansion's syntax in program code","state":"closed","category":"Divergences from rustc","release":"0.3.144"},
     {"issue":977,"title":"std trait-path calls with a turbofish or a written Self","state":"open","category":"Divergences from rustc"},
@@ -2383,7 +2392,12 @@
     {"issue":983,"title":"A lent struct's field that borrows for the struct can't be read by script code","state":"open","category":"Divergences from rustc"},
     {"issue":984,"title":"A crate derive's expansion from the driver","state":"closed","category":"Divergences from rustc","release":"0.3.145"},
     {"issue":985,"title":"`rawr check` asks for a crate derive's expansion and checks the items","state":"open","category":"Divergences from rustc"},
-    {"issue":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open","category":"Health"}
+    {"issue":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open","category":"Health"},
+    {"issue":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open","category":"Divergences from rustc"},
+    {"issue":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"open","category":"Divergences from rustc"},
+    {"issue":989,"title":"rawr mcp: send input events to a started program","state":"open","category":"Health"},
+    {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open","category":"Divergences from rustc"},
+    {"issue":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2861,9 +2875,9 @@
             {"number":954,"title":"solar_system and sierpinski_triangle panic in the runner at start","state":"closed"},
             {"number":956,"title":"Rawr's types disagree with rustc's in ferris, styling and vectorial_text","state":"closed"},
             {"number":958,"title":"changelog's rawr check never completes and fills the disk","state":"open"},
-            {"number":971,"title":"iced layout panics on a keyboard event: keyboard::Event's Key<SmolStr> fails rawr's type check","state":"open"},
+            {"number":971,"title":"iced layout panics on a keyboard event: keyboard::Event's Key<SmolStr> fails rawr's type check","state":"closed"},
             {"number":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"open"},
-            {"number":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"open"},
+            {"number":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"closed"},
             {"number":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed"},
             {"number":976,"title":"A derive expansion's syntax in program code","state":"closed"},
             {"number":979,"title":"solar_system: iced::application::timed(..).theme(..) fails at runner start with E0282","state":"open"},
@@ -2872,7 +2886,11 @@
             {"number":983,"title":"A lent struct's field that borrows for the struct can't be read by script code","state":"open"},
             {"number":984,"title":"A crate derive's expansion from the driver","state":"closed"},
             {"number":985,"title":"`rawr check` asks for a crate derive's expansion and checks the items","state":"open"},
-            {"number":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open"}
+            {"number":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open"},
+            {"number":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open"},
+            {"number":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"open"},
+            {"number":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open"},
+            {"number":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3032,8 +3050,9 @@
           "start": 74,
           "size": 4,
           "state": "now",
-          "note": "Solutions that run and match rustc (scripts/rustlings.sh, v6.5.0); async1 runs in its Cargo project, and a lone file of it needs #968",
+          "note": "Solutions that run and match rustc (scripts/rustlings.sh, v6.5.0), measured at 0.3.140; async1 alone now gets rustc's E0433 (#968), to be remeasured",
           "issues": [
+            {"number":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"closed"},
             {"number":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"closed"},
             {"number":899,"title":"A private method or associated function isn't visible from a child module","state":"closed"},
             {"number":900,"title":"`use super::*` brings the parent's `use` imports, and a glob-imported name can start a path","state":"closed"},
@@ -3070,10 +3089,9 @@
             {"number":948,"title":"A spawned thread's panic message lacks its file:line:col","state":"open"},
             {"number":949,"title":"Mutex methods besides lock().unwrap(), and LockResult as a value","state":"open"},
             {"number":950,"title":"mpsc try_recv, recv_timeout, sync_channel; thread::scope and Builder","state":"open"},
-            {"number":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"closed"},
             {"number":961,"title":"Macro calls where an item, a type or a pattern goes","state":"open"},
             {"number":962,"title":"Deep macro recursion overflows the debug build's stack before rustc's recursion limit","state":"open"},
-            {"number":968,"title":"`async fn` in a program without a Cargo project is unsupported: no core future","state":"open"},
+            {"number":968,"title":"`async fn` in a program without a Cargo project is unsupported: no core future","state":"closed"},
             {"number":969,"title":"A panic in a runtime's async main prints \"invocation of symbolic item ... failed: Runtime error:\" instead of Rust's","state":"open"},
             {"number":970,"title":"A crate's async fn taking &str through a type parameter generated code that didn't compile","state":"closed"},
             {"number":977,"title":"std trait-path calls with a turbofish or a written Self","state":"open"},
@@ -3140,7 +3158,8 @@
             {"number":963,"title":"rawr keeps every runtime it ever built in ~/.cargo/rawr/runtime","state":"open"},
             {"number":964,"title":"rawr-cli's extension tests fail under load when stand-in binaries miss the manifest deadline","state":"open"},
             {"number":972,"title":"A relative CARGO_TARGET_DIR is taken relative to the project, while Cargo takes it relative to the working directory","state":"open"},
-            {"number":982,"title":"Crossing tests fail with 'runner did not connect before the protocol deadline' under load","state":"open"}
+            {"number":982,"title":"Crossing tests fail with 'runner did not connect before the protocol deadline' under load","state":"open"},
+            {"number":989,"title":"rawr mcp: send input events to a started program","state":"open"}
           ]
         },
         {

@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.146 (2026-11-05)
+
+- A number on an operator's left with a crate's type on its right, as ferris's `(rotation + step) % (2.0 * Radians::PI)`, calls the crate's impl of the operator for that number (`impl Mul<Radians> for f32`), as rustc selects it. A number whose impls don't take the other type is rustc's E0277. (#974)
+- A program with no dependencies can use `async fn`, `async` blocks and `.await`, which check and run as rustc's do. `#[tokio::main]` or `tokio::join!` there is rustc's E0433, and an `async fn main` is E0752. (#968)
+- A crate value inside an `Option` or `Result` below a variant's fields, a tuple or an array now has its type at any depth, so layout's key press with `text: Option<SmolStr>` no longer fails. A by-value method's `Option` output, such as `Cursor::position_in`, now has its type too. A crate's closure that returns an `Option` now compiles. (#971)
+
 ## 0.3.145 (2026-11-05)
 
 - A view's widgets are made at the view's lifetime even when nothing they take borrows, and a call that takes a script closure takes the view's widgets too: iced's table, multi_window and bezier_tool views no longer panic. (#952, #352)

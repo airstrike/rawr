@@ -136,9 +136,6 @@ pub(crate) struct Capture {
     expansion: Expansion,
 }
 
-/// An alias, the artifact it names and that artifact's digest.
-pub(crate) type Extern = (Box<str>, Box<str>, Box<str>);
-
 /// What a derive's expansion needs of the probe's build (#593): the target,
 /// where the selected crates' own dependencies are, and each selected
 /// crate's artifact by the aliases the program names it by. It is no part
@@ -147,7 +144,8 @@ pub(crate) type Extern = (Box<str>, Box<str>, Box<str>);
 pub(crate) struct Expansion {
     pub(crate) selected_target: Box<str>,
     pub(crate) dependency_directories: Box<[PathBuf]>,
-    pub(crate) externs: Box<[Extern]>,
+    /// Each alias, the artifact it names and that artifact's digest.
+    pub(crate) externs: Box<[crate::expand::Extern]>,
 }
 
 impl Expansion {
