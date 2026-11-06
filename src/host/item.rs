@@ -123,6 +123,10 @@ pub struct Definition {
     /// The proof-backed application this imported method stands for: its
     /// call reaches the application's own adapter.
     application: Option<[u8; 32]>,
+    /// The trait's own method this imported impl member is an instance of,
+    /// by its definition identity: each `into` core's blanket `Into` gives
+    /// a type through a crate's `From` impls is `Into::into`.
+    member: Option<[u8; 32]>,
 }
 
 /// How an imported method's borrow guard output is reached: Rawr types the
@@ -212,6 +216,7 @@ impl Definition {
             lent_static: self.lent_static,
             lends: self.lends,
             application: self.application,
+            member: self.member,
             rules: self.rules.clone(),
         })
     }
@@ -236,6 +241,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             application: None,
+            member: None,
             rules: Some(crate::Shared::new(MacroRules {
                 source: source.into(),
                 krate: krate.into(),
@@ -270,6 +276,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             application: None,
+            member: None,
             rules: None,
         })
     }
@@ -294,6 +301,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             application: None,
+            member: None,
             rules: None,
         })
     }
@@ -316,6 +324,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             application: None,
+            member: None,
             rules: None,
         })
     }
@@ -338,6 +347,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             application: None,
+            member: None,
             rules: None,
         })
     }
@@ -363,6 +373,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             application: None,
+            member: None,
             rules: None,
         })
     }
@@ -385,6 +396,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             application: None,
+            member: None,
             rules: None,
         })
     }
@@ -408,6 +420,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             application: None,
+            member: None,
             rules: None,
         })
     }
@@ -431,6 +444,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             application: None,
+            member: None,
             rules: None,
         })
     }
@@ -500,6 +514,21 @@ impl Definition {
     pub(crate) fn applied(mut self, identity: [u8; 32]) -> Self {
         self.application = Some(identity);
         self
+    }
+
+    /// This imported impl member as an instance of the trait's own method
+    /// whose definition identity is `member`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn instancing(mut self, member: Option<[u8; 32]>) -> Self {
+        self.member = member;
+        self
+    }
+
+    /// The trait's own method this imported impl member is an instance of,
+    /// when the trait declares it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn trait_member(&self) -> Option<&[u8; 32]> {
+        self.member.as_ref()
     }
 
     /// The proof-backed application this item stands for, when it is one.
@@ -695,6 +724,7 @@ impl Definition {
             lent_static: self.lent_static,
             lends: self.lends,
             application: self.application,
+            member: self.member,
             rules: self.rules.clone(),
         })
     }
