@@ -32,6 +32,8 @@ const RUST_MIN_STACK_VALUE: &str = "67108864";
 #[cfg(feature = "rustc-driver")]
 const PROBE_ARGUMENT: &str = "--probe";
 #[cfg(feature = "rustc-driver")]
+const EXPAND_ARGUMENT: &str = "--expand";
+#[cfg(feature = "rustc-driver")]
 const DIAGNOSTIC_PROBE_ARGUMENT: &str = "--diagnostic-probe";
 
 mod groups;
@@ -84,6 +86,9 @@ enum CommandKind {
     Preflight(Preflight),
     #[cfg(feature = "rustc-driver")]
     Probe,
+    /// A crate derive's expansion for a program's type (`--expand`, #593).
+    #[cfg(feature = "rustc-driver")]
+    Expand,
 }
 
 /// Opaque capability for one closed local discovery or attestation command.
@@ -338,6 +343,26 @@ impl Command {
         }
     }
 
+    /// `rawr-import-driver --expand RUSTC REQUEST OUT` (#593).
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn expand(
+        arguments: Vec<OsString>,
+        current_dir: PathBuf,
+        environment: Box<[(OsString, OsString)]>,
+    ) -> Self {
+        assert!(
+            arguments.first().map(OsString::as_os_str) == Some(OsStr::new(EXPAND_ARGUMENT)),
+            "an expansion runs in the expand mode"
+        );
+        Self {
+            program: Program::Driver,
+            kind: CommandKind::Expand,
+            arguments: arguments.into_boxed_slice(),
+            current_dir,
+            environment,
+        }
+    }
+
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn probe(
         arguments: Vec<OsString>,
@@ -514,7 +539,7 @@ impl CommandKind {
                 PreflightKind::TargetList => crate::metrics::ProcessKind::TargetList,
             },
             #[cfg(feature = "rustc-driver")]
-            Self::Probe => crate::metrics::ProcessKind::MetadataProbe,
+            Self::Probe | Self::Expand => crate::metrics::ProcessKind::MetadataProbe,
         }
     }
 }
