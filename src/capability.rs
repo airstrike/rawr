@@ -1038,6 +1038,13 @@ mod tests {
                 "use serde::Deserialize as Load;\n#[derive(Load)] enum Shape { Dot }",
                 "Load",
             ),
+            // A `use` in a function's body, as pokedex's `search` names
+            // `Deserialize` beside the structs it derives on.
+            (
+                "fn search() {\n    use serde::Deserialize;\n    \
+                 #[derive(Debug, Deserialize)] struct Entry { name: String }\n}",
+                "Deserialize",
+            ),
             (
                 "#[derive(Debug, serde::Deserialize)] struct Point { x: i64 }",
                 "serde::Deserialize",
