@@ -144,9 +144,6 @@ impl Output {
                     endpoint: None,
                     types: &used.types,
                     slots: &used.slots,
-                    // A closure class, which slots never take, as the
-                    // instance is made (`compile_imported`).
-                    callable: used.callable && used.slots.is_empty(),
                 },
                 used.functions.iter().map(|function| coverage::Function {
                     position: function.position,

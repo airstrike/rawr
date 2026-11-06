@@ -13,7 +13,7 @@ use sha2::{Digest as _, Sha256};
 use crate::classify::representability::convert;
 use crate::surface::{adapter, identity};
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 2;
 
 /// Borrowed compiler facts for one use, without diagnostic source locations.
 /// A selector that names its item is the use's identity: the path, which
@@ -35,11 +35,6 @@ pub struct Use<'a, P = &'a str> {
     /// uses that differ only in them are two instances, as two Rust
     /// function items are two types.
     pub slots: &'a [crate::surface::instance::Slot],
-    /// Whether it takes a script closure for an `F: FnOnce` parameter, as
-    /// canvas's `Cache::draw` and `Path::new` do: the adapter calls
-    /// whichever closure the use passes, so the closure is no part of it
-    /// (#1000).
-    pub callable: bool,
 }
 
 /// Borrowed exact static function operand at one formal position, its path
@@ -148,13 +143,12 @@ where
 impl<P: Serialize> Serialize for Use<'_, P> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct as _;
-        let mut fields = serializer.serialize_struct("Use", 6)?;
+        let mut fields = serializer.serialize_struct("Use", 5)?;
         fields.serialize_field("path", &unnamed(self.selector).then_some(&self.path))?;
         fields.serialize_field("selector", self.selector)?;
         fields.serialize_field("endpoint", &self.endpoint)?;
         fields.serialize_field("types", self.types)?;
         fields.serialize_field("slots", self.slots)?;
-        fields.serialize_field("callable", &self.callable)?;
         fields.end()
     }
 }
@@ -364,11 +358,13 @@ impl Projection<'_> {
             .iter()
             .map(crate::surface::Entry::identity)
             .find(|identity| identity.as_bytes() == plan.identity().as_bytes())?;
-        // The executable collector exposes type substitutions, direct
-        // static operands and whether a script closure fills a callable
-        // parameter. A closure's class and the lifetimes it is generic
-        // over are the item's own, so they follow from the rest. Other
-        // instance dimensions cannot be guessed.
+        // The executable collector exposes type substitutions and direct
+        // static operands. A closure's class and the lifetimes it is
+        // generic over are the item's own, as canvas's `Cache::draw` and
+        // `Path::new` take theirs, so they follow from the rest: the
+        // adapter calls whichever closure the use passes (#1000). Two
+        // instances that differ only in them both match, which covers
+        // neither. Other instance dimensions cannot be guessed.
         if !identity.constants().is_empty()
             || !identity.types().iter().all(|ty| concrete(ty, 0))
         {
@@ -490,7 +486,6 @@ impl Selected<'_> {
                 endpoint: None,
                 types: self.identity.types(),
                 slots: self.identity.slots(),
-                callable: self.identity.callable().is_some(),
             },
             functions: Sequence(
                 self.functions
@@ -593,12 +588,13 @@ where
     for _ in 0..native_count {
         let index = super::take_length(&mut bytes).ok()?;
         let encoded = fact_bytes(&mut bytes).ok()?;
-        // Two adapters a use fits, as two calls that pass different script
-        // functions have, are two Rust types: the use names neither.
-        if equal(&facts, encoded) {
-            if found.is_some() {
-                return None;
-            }
+        // Two adapters with the same facts are one item at the same types,
+        // slots, functions and mappers: they differ only in the path the
+        // program named the item by (`canvas::Stroke` and
+        // `canvas::stroke::Stroke`) or in the closure class the item's
+        // signature gives, and either serves the use (#1000). Two calls
+        // that pass different script functions differ in their slots.
+        if found.is_none() && equal(&facts, encoded) {
             found = Some((Binding::Adapter(carrier.entries.get(index)?), encoded));
         }
     }
@@ -718,7 +714,6 @@ fn endpoint_facts(
             endpoint: Some(endpoint.site().selector()),
             types: &[],
             slots: &[],
-            callable: false,
         },
         functions: Sequence(std::iter::empty::<Function<'_>>()),
         mappers: Sequence(std::iter::empty::<Mapper<'_>>()),
@@ -965,7 +960,6 @@ mod tests {
             endpoint: None,
             types: &[],
             slots: &[],
-            callable: false,
         };
         let matched = carrier
             .cover(used, std::iter::empty(), std::iter::empty())
@@ -975,17 +969,6 @@ mod tests {
             .cover(
                 Use {
                     path: "fixture::item_1",
-                    ..used
-                },
-                std::iter::empty(),
-                std::iter::empty(),
-            )
-            .is_none());
-        // A use that passes a script closure is another instance (#1000).
-        assert!(carrier
-            .cover(
-                Use {
-                    callable: true,
                     ..used
                 },
                 std::iter::empty(),
@@ -1055,7 +1038,6 @@ mod tests {
             endpoint: None,
             types: &[],
             slots: &[],
-            callable: false,
         };
         let moved_functions = moved.entries[0]
             .identity()
@@ -1155,7 +1137,6 @@ mod tests {
             endpoint: None,
             types: &types,
             slots: &[],
-            callable: false,
         };
         let matched = carrier
             .cover(used, std::iter::empty(), std::iter::empty())
@@ -1257,7 +1238,6 @@ mod tests {
             endpoint: None,
             types: &types,
             slots: &[],
-            callable: false,
         };
         let facts = Facts {
             used,
@@ -1334,7 +1314,6 @@ mod tests {
                 endpoint: None,
                 types: &[],
                 slots: &[],
-                callable: false,
             },
             functions: Sequence(std::iter::empty::<Function<'_>>()),
             mappers: Sequence(std::iter::empty::<Mapper<'_>>()),
