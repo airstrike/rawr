@@ -698,8 +698,8 @@ fn a_call_the_universe_does_not_make_does_not_compile() {
         // A widget it doesn't use is not in its bindings at all, as rustc
         // says of a missing item.
         (
-            "column![iced::widget::checkbox(self.count > 0)]",
-            "error[E0425]: cannot find function `checkbox` in module `iced::widget`",
+            "column![iced::widget::toggler(self.count > 0)]",
+            "error[E0425]: cannot find function `toggler` in module `iced::widget`",
         ),
         // A method it doesn't call.
         (

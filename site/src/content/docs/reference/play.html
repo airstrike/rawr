@@ -68,7 +68,7 @@
  --&gt; play.rs:12:17-12:40
  12 |         column![text(self.volume as f64), button("Up").on_press(Message::Up)]
     |                 ^^^^^^^^^^^^^^^^^^^^^^^ the universe&rsquo;s program doesn&rsquo;t make it</code></pre></div>
-<p>A crate item that program doesn&rsquo;t use at all gets rustc&rsquo;s error for a missing item, such as <code>error[E0425]: cannot find function `checkbox` in module `iced::widget`</code>.</p>
+<p>A crate item that program doesn&rsquo;t use at all gets rustc&rsquo;s error for a missing item, such as <code>error[E0425]: cannot find function `toggler` in module `iced::widget`</code>.</p>
 <p>An iced program answers with what it printed and a picture of its window, drawn at the program&rsquo;s own <code>scale_factor</code>. The picture is a PNG of the window once the program has booted and the tasks it started have finished. When the program keeps changing on its own, through a subscription or a widget&rsquo;s animation, the picture is a GIF of each change instead. It shows 20 frames a second, for at most 100 frames and within the snippet&rsquo;s time, and plays once and holds the last frame. It plays at the program&rsquo;s pace, however long the bot takes to draw each frame: a change made on a frame shows for one frame&rsquo;s 50 ms, and a change made on the program&rsquo;s own clock, such as a <code>time::every</code> tick, shows for the time that clock ran. A program that reads <code>Instant::now()</code> on each frame still sees the bot&rsquo;s time, so its animation can move faster in the GIF than on a fast machine. Use <code>rawr run</code> for a program that needs another crate or call. The playground in the browser uses rawr&rsquo;s std and no crates.</p>
 
 
