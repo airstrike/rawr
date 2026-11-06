@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-05",
-  "version": "0.3.142",
+  "version": "0.3.143",
   "examples": {
     "running": 15,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.143",
+        "date": "2026-11-05",
+        "entries": [
+          {"text":"A crate's derive macro on a program type, such as serde's `#[derive(Serialize)]`, resolves through the program's `use`, at the top of the file or in a function body, and is reported at its span as not supported yet, where `rawr check` used to say it couldn't find the derive.","issues":[975],"refs":[593,205]}
+        ]
+      },
       {
         "version": "0.3.142",
         "date": "2026-11-05",
@@ -2346,7 +2353,8 @@
     {"issue":971,"title":"iced layout panics on a keyboard event: keyboard::Event's Key<SmolStr> fails rawr's type check","state":"open","category":"Divergences from rustc"},
     {"issue":972,"title":"A relative CARGO_TARGET_DIR is taken relative to the project, while Cargo takes it relative to the working directory","state":"open","category":"Health"},
     {"issue":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"open","category":"Divergences from rustc"},
-    {"issue":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"open","category":"Divergences from rustc"}
+    {"issue":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"open","category":"Divergences from rustc"},
+    {"issue":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed","category":"Divergences from rustc","release":"0.3.143"}
   ],
   "groups": [
     {
@@ -2825,7 +2833,9 @@
             {"number":958,"title":"changelog's rawr check never completes and fills the disk","state":"open"},
             {"number":971,"title":"iced layout panics on a keyboard event: keyboard::Event's Key<SmolStr> fails rawr's type check","state":"open"},
             {"number":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"open"},
-            {"number":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"open"}
+            {"number":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"open"},
+            {"number":593,"title":"serde's derives on program types","state":"open"},
+            {"number":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed"}
           ],
           "milestone": "0.4"
         },
