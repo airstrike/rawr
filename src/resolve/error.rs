@@ -342,6 +342,9 @@ pub struct MoveCause {
 pub struct Expansion {
     /// The source the item is written in.
     pub(crate) source: crate::program::source::Id,
+    /// The item's path in its crate: its modules, then its name
+    /// (`app::Task`).
+    pub(crate) path: ImmutableString,
     /// The item, its attributes first.
     pub(crate) item: Span,
     /// Each crate derive: as written (`Serialize`), and the macro it

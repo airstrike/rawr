@@ -942,6 +942,18 @@ impl Callable {
         self.invoke_places(&program, arguments, mutable)
     }
 
+    /// [`Callable::call_places`] in `program`, the generation the caller
+    /// entered and found the function in (`crossing::Member`).
+    #[cfg(feature = "sync")]
+    pub(crate) fn call_places_in(
+        &self,
+        program: &Program,
+        arguments: &mut [Dynamic],
+        mutable: &[usize],
+    ) -> RawrResultOf<Dynamic> {
+        self.invoke_places(program, arguments, mutable)
+    }
+
     /// Validate erased inputs and invoke mutable places in one selected
     /// program generation. Validation and reconciliation cannot rebind the call.
     pub fn call_places_checked(

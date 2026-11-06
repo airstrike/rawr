@@ -20,6 +20,7 @@ pub use cell::{Cells, Counts};
 /// The shadow crate's module that holds a marked `async fn main`'s entry.
 pub(crate) const ENTRY_MODULE: &str = entry::MODULE;
 pub use error::{Category, Error};
+pub(crate) use graph::expansion_path;
 pub use graph::{Graph, RustModule};
 pub use island::Shape;
 pub use manifest::script::{script_check, ScriptCheck};

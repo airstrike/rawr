@@ -101,6 +101,11 @@ impl Ready {
     pub(crate) fn node(&self) -> &node::Validated<Product> {
         &self.node
     }
+
+    /// What a derive's expansion needs of this resolution's build (#593).
+    pub(crate) const fn expansion(&self) -> &crate::extract::plan::Expansion {
+        self.replay.capture.expansion()
+    }
     pub(crate) fn publish(
         self,
         limits: &Limits,

@@ -299,6 +299,20 @@ impl Prepared {
         }
     }
 
+    /// What a derive's expansion runs against in this resolution's build
+    /// (#593): its target, its dependencies' directories and the selected
+    /// crates' artifacts. `None` when shared bindings answered it, so no
+    /// nightly build ran, or it selected no crate.
+    pub fn expansion_basis(&self) -> Option<crate::expand::Basis> {
+        match &self.owner {
+            resolution::owner::Resolved::Owner(owner) => {
+                Some(crate::expand::Basis::of(owner.expansion()))
+                    .filter(|basis| !basis.externs.is_empty())
+            }
+            resolution::owner::Resolved::Shared(_) => None,
+        }
+    }
+
     /// Whether every selected crate replayed shared bindings, so no nightly
     /// build or probe ran.
     pub fn is_shared(&self) -> bool {

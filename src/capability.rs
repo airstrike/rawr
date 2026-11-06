@@ -486,6 +486,10 @@ pub(crate) fn resolve(
                 attribute,
                 Expansion {
                     source: shell.source,
+                    path: shell.key.as_ref().map_or_else(
+                        || request.owner.clone(),
+                        |key| crate::package::expansion_path(key.modules(), key.name()),
+                    ),
                     item: header.written_span(shell.span),
                     derives: request
                         .unexpanded

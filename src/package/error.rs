@@ -264,6 +264,7 @@ impl Error {
             .filter_map(|expansion| {
                 let source = self.sources.get(expansion.source.index())?;
                 Some(rawr_import::expand::Item {
+                    path: expansion.path.to_string(),
                     text: expansion.item.text(source.text()).to_owned(),
                     derives: expansion
                         .derives
