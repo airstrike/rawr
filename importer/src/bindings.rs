@@ -6,10 +6,12 @@
 //! there replays them and runs no nightly build (D609.4). A run that misses
 //! extracts on the nightly, and publishes each shared table once the
 //! project's own build has run its build scripts and agrees with the nightly
-//! extraction's results. Drift or missing evidence leaves the table local and
-//! says why. A table used from the home whose build scripts give this project's
-//! build other results stops the run, naming the crate, and is evicted when
-//! no reader holds its lease.
+//! extraction's results. A table whose build scripts gave the nightly other
+//! results than the project's build, whether this run extracted it, staged it
+//! or read it from the home, is a miss once: the nightly's run of the package
+//! is cleaned and extraction runs again (`rerun`, D742). A difference that
+//! survives that run is drift between the toolchains, which leaves the table
+//! local and says why, as missing evidence does.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -20,6 +22,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::extract::engine::home;
+
+mod rerun;
+
+pub(crate) use rerun::Stale;
 
 /// The format of an entry's `meta.json`.
 pub(crate) const META_SCHEMA: u32 = 4;
@@ -339,6 +345,45 @@ impl Settled {
             | Self::InventoryRead { key, .. } => key,
         }
     }
+
+    /// Each build script's outputs this entry was made under, by package.
+    fn recorded(&self) -> Vec<(&str, &[Script])> {
+        match self {
+            Self::Extracted {
+                nightly: Some(scripts),
+                ..
+            }
+            | Self::Read { scripts, .. } => scripts
+                .iter()
+                .map(|(package, outputs)| (package.as_str(), outputs.as_slice()))
+                .collect(),
+            Self::InventoryRead {
+                packages, scripts, ..
+            } => packages
+                .iter()
+                .filter_map(|package| Some((package.as_ref(), scripts.get(package)?)))
+                .collect(),
+            Self::Extracted { nightly: None, .. } | Self::Inventory { .. } => Vec::new(),
+        }
+    }
+
+    /// Whether a package this entry was made under runs again (D742).
+    fn reruns(&self, verdicts: &BTreeMap<String, rerun::Verdict>) -> bool {
+        self.recorded()
+            .iter()
+            .any(|(package, _)| verdicts.get(*package) == Some(&rerun::Verdict::Rerun))
+    }
+
+    /// Remove this entry's table, so preparing again misses it: a table
+    /// this run extracted waits in `staged`.
+    fn evict(&self, staged: &Path) {
+        match self {
+            Self::Extracted { key, .. } => home::evict(staged, key),
+            Self::Read { directory, key, .. } => home::evict(directory, key),
+            Self::InventoryRead { home, key, .. } => home::evict(home, key),
+            Self::Inventory { .. } => {}
+        }
+    }
 }
 
 pub(crate) struct Publish {
@@ -354,38 +399,86 @@ pub struct Settlement {
     pub(crate) bindings: Option<PathBuf>,
     /// The project's Rawr directory, where the runner builds.
     pub(crate) rawr: Option<PathBuf>,
+    /// The shared nightly build directory extraction reads (D700), where a
+    /// stale run of a build script is cleaned (D742).
+    pub(crate) nightly: Option<PathBuf>,
+}
+
+/// Why settling stops the run.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// Build scripts gave rawr's nightly build other outputs than this
+    /// project's build, and the nightly has not run them again since. Their
+    /// runs there are cleaned: preparing again extracts with fresh ones
+    /// (D742).
+    #[error(
+        "the build-script output of {} differs from this project's build. rawr cleaned \
+         its nightly run: run again to extract with this project's output",
+        names(.0)
+    )]
+    Rerun(Box<[Box<str>]>),
+    /// A shared table or fact whose build-script outputs differ from this
+    /// project's build, removed from rawr's home.
+    #[error("{0}")]
+    Refused(String),
+}
+
+impl Error {
+    /// Whether preparing again can succeed: it can after a rerun's clean.
+    #[must_use]
+    pub const fn is_stale(&self) -> bool {
+        matches!(self, Self::Rerun(_))
+    }
 }
 
 impl Settlement {
-    /// Explain a failed adapter build when its script outputs prove that the
-    /// project's toolchain saw a different API from the extraction nightly.
-    pub fn drift_diagnostic(&self) -> Option<String> {
-        let stable = runner_scripts(self.rawr.as_ref()?)?;
+    /// Explain a failed adapter build when its build scripts gave the
+    /// extraction nightly other outputs than the project's build. A
+    /// difference the nightly has not run again since may be a stale run
+    /// in the shared directory: it is cleaned, and the error says to
+    /// prepare again (D742).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Rerun`] when preparing again extracts afresh.
+    pub fn drift_diagnostic(&self) -> Result<Option<String>, Error> {
+        let Some(rawr) = &self.rawr else {
+            return Ok(None);
+        };
+        let Some(stable) = runner_scripts(rawr) else {
+            return Ok(None);
+        };
+        let verdicts = judge(rawr, self.nightly.as_deref(), &self.entries, Some(&stable));
+        let rerun = reruns(&verdicts);
+        if !rerun.is_empty() {
+            for entry in &self.entries {
+                if entry.reruns(&verdicts) {
+                    entry.evict(&staged(rawr));
+                }
+            }
+            return Err(Error::Rerun(rerun));
+        }
         for entry in &self.entries {
-            let (crate_name, scripts) = match entry {
-                Settled::Extracted {
-                    nightly: Some(scripts),
-                    publish,
-                    ..
-                } => (&publish.meta.crate_name, scripts),
-                Settled::Read {
-                    crate_name,
-                    scripts,
-                    ..
-                } => (crate_name, scripts),
-                Settled::Extracted { nightly: None, .. }
-                | Settled::Inventory { .. }
-                | Settled::InventoryRead { .. } => continue,
+            let crate_name = match entry {
+                Settled::Extracted { publish, .. } => &publish.meta.crate_name,
+                Settled::Read { crate_name, .. } => crate_name,
+                Settled::Inventory { .. } | Settled::InventoryRead { .. } => continue,
             };
-            if let Some((package, _)) = scripts.iter().find(|(package, scripts)| {
-                stable
-                    .get(*package)
-                    .is_some_and(|current| current != *scripts)
-            }) {
-                return Some(format!("the API of `{crate_name}` differs between the extraction nightly and the project's toolchain: build script `{}` produced different outputs", package_name(package)));
+            if let Some((package, _)) = entry
+                .recorded()
+                .into_iter()
+                .find(|(package, _)| verdicts.contains_key(*package))
+            {
+                return Ok(Some(format!(
+                    "the build script of `{}` gives the extraction nightly other output than \
+                     this project's build, after running it again too: the API of \
+                     `{crate_name}` differs between the extraction nightly and the project's \
+                     toolchain",
+                    package_name(package),
+                )));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Publish `entry`, a crate's intrinsic facts this run kept with the
@@ -439,17 +532,24 @@ impl Settlement {
         if self.rawr.is_none() {
             self.rawr = other.rawr;
         }
+        if self.nightly.is_none() {
+            self.nightly = other.nightly;
+        }
     }
 
     /// Publish newly extracted tables only when the nightly and project's
-    /// build-script outputs agree. Drift leaves them local and reports the
-    /// affected crate. A shared table must still agree with this project.
+    /// build-script outputs agree. A table whose outputs differ, whether
+    /// extracted, staged or shared, is a miss once (D742); drift after that
+    /// leaves it local and names the package. A shared table must still
+    /// agree with this project.
     ///
     /// # Errors
     ///
-    /// A table read from the home whose build scripts give other results on
-    /// this project's toolchain. Evict the table when its lease is free.
-    pub fn settle(self) -> Result<(), String> {
+    /// [`Error::Rerun`] when a difference is cleaned and preparing again
+    /// extracts afresh. [`Error::Refused`] for a table read from the home
+    /// whose build scripts give this project's build other results, evicted
+    /// when its lease is free.
+    pub fn settle(self) -> Result<(), Error> {
         let Some(rawr) = &self.rawr else {
             return Ok(());
         };
@@ -465,12 +565,12 @@ impl Settlement {
     /// # Errors
     ///
     /// As [`Settlement::settle`].
-    pub fn settle_checked(self, messages: &[u8]) -> Result<(), String> {
+    pub fn settle_checked(self, messages: &[u8]) -> Result<(), Error> {
         let stable = scripts_from_messages(messages);
         self.settle_with(stable)
     }
 
-    fn settle_with(self, stable: Option<BTreeMap<String, Vec<Script>>>) -> Result<(), String> {
+    fn settle_with(self, stable: Option<BTreeMap<String, Vec<Script>>>) -> Result<(), Error> {
         let Some(rawr) = self.rawr.clone() else {
             return Ok(());
         };
@@ -509,7 +609,15 @@ impl Settlement {
                 }
             }
         }
+        let verdicts = judge(&rawr, self.nightly.as_deref(), &entries, stable.as_ref());
+        let rerun = reruns(&verdicts);
+        let staged = staged(&rawr);
+        let project = |package: &str| stable.as_ref().and_then(|stable| stable.get(package));
         for entry in entries {
+            if entry.reruns(&verdicts) {
+                entry.evict(&staged);
+                continue;
+            }
             match entry {
                 Settled::Extracted {
                     key,
@@ -528,11 +636,15 @@ impl Settlement {
                     };
                     let differs = packages.iter().find(|package| {
                         let recorded = nightly.get(*package);
-                        recorded.is_none()
-                            || recorded != stable.as_ref().and_then(|stable| stable.get(*package))
+                        recorded.is_none() || recorded != project(package)
                     });
                     if let Some(package) = differs {
-                        eprintln!("rawr: bindings of `{}` stay in this project: build-script outputs for `{}` differ or are unavailable between the extraction nightly and the project's toolchain", publish.meta.crate_name, package_name(package));
+                        let name = package_name(package);
+                        if verdicts.contains_key(package) {
+                            eprintln!("rawr: bindings of `{}` stay in this project: the build script of `{name}` gives the extraction nightly other output than this project's build, after running it again too, so the nightly and the project's toolchain differ", publish.meta.crate_name);
+                        } else {
+                            eprintln!("rawr: bindings of `{}` stay in this project: the output of the build script of `{name}` is unavailable from the extraction nightly or this project's build", publish.meta.crate_name);
+                        }
                         continue;
                     }
                     publish.meta.scripts = nightly;
@@ -545,26 +657,35 @@ impl Settlement {
                     scripts,
                     ..
                 } => {
-                    // This project's own extraction, as its probe would give
-                    // it again: drift shows in the build, as it does for a
-                    // table the run extracted.
-                    if directory == staged(&rawr) {
+                    // This project's own extraction, with drift its rerun
+                    // confirmed or outputs it cannot compare: extracting
+                    // again would give it back.
+                    if directory == staged {
                         continue;
                     }
-                    let differs = scripts.iter().find(|(package, recorded)| {
-                        stable.as_ref().and_then(|stable| stable.get(*package)) != Some(*recorded)
-                    });
+                    let differs = scripts
+                        .iter()
+                        .find(|(package, recorded)| project(package) != Some(*recorded));
                     let Some((package, _)) = differs else {
                         continue;
                     };
                     home::evict(&directory, &key);
+                    let name = package_name(package);
                     refused.get_or_insert_with(|| {
-                        format!(
-                            "the shared bindings of `{crate_name}` were extracted with different \
-                             or unavailable build-script outputs for `{}` on this project's \
-                             toolchain. rawr refused them: run again to make them here",
-                            package_name(package),
-                        )
+                        if verdicts.contains_key(package) {
+                            format!(
+                                "the shared bindings of `{crate_name}` were extracted where the \
+                                 build script of `{name}` gave other output than this project's \
+                                 build gives, as rawr's nightly build does after running it \
+                                 again. rawr removed them: run again to extract them here",
+                            )
+                        } else {
+                            format!(
+                                "the shared bindings of `{crate_name}` need the output of the \
+                                 build script of `{name}`, which this project's build did not \
+                                 give. rawr removed them: run again to extract them here",
+                            )
+                        }
                     });
                 }
                 Settled::Inventory {
@@ -599,9 +720,9 @@ impl Settlement {
                     home::evict(&home, &key);
                     refused.get_or_insert_with(|| {
                         format!(
-                            "the shared facts of `{crate_name}` were captured with different or \
-                             unavailable build-script outputs on this project's toolchain. rawr \
-                             refused them: run again to capture them here",
+                            "the shared facts of `{crate_name}` were captured with other \
+                             build-script output than this project's build gives, or without \
+                             it. rawr removed them: run again to capture them here",
                         )
                     });
                 }
@@ -611,8 +732,92 @@ impl Settlement {
             let bindings = bindings.clone();
             std::thread::spawn(move || home::prune(&bindings, IDLE));
         }
-        refused.map_or(Ok(()), Err)
+        if !rerun.is_empty() {
+            return Err(Error::Rerun(rerun));
+        }
+        refused.map_or(Ok(()), |refused| Err(Error::Refused(refused)))
     }
+}
+
+/// The verdict on each package whose build script gave one of `entries`
+/// other outputs than the project's build gave (`stable`), judged once each
+/// against the record in `rawr`. A package to run again is marked in the
+/// `nightly` directory, whose next build cleans it; without that directory
+/// nothing runs again.
+fn judge(
+    rawr: &Path,
+    nightly: Option<&Path>,
+    entries: &[Settled],
+    stable: Option<&BTreeMap<String, Vec<Script>>>,
+) -> BTreeMap<String, rerun::Verdict> {
+    let Some(stable) = stable else {
+        return BTreeMap::new();
+    };
+    let mut differ = BTreeMap::<&str, (&[Script], &[Script])>::new();
+    let mut agreed = Vec::new();
+    for entry in entries {
+        for (package, recorded) in entry.recorded() {
+            let Some(project) = stable.get(package) else {
+                continue;
+            };
+            if recorded == project.as_slice() {
+                agreed.push(package);
+            } else {
+                differ.entry(package).or_insert((recorded, project));
+            }
+        }
+    }
+    let mut record = rerun::Record::read(rawr);
+    for package in agreed {
+        if !differ.contains_key(package) {
+            record.agreed(package);
+        }
+    }
+    let stale = nightly.map(rerun::Stale::of);
+    let verdicts = differ
+        .into_iter()
+        .map(|(package, (recorded, project))| {
+            let verdict = match &stale {
+                Some(stale) => {
+                    let verdict = record.judge(package, recorded, project);
+                    if verdict == rerun::Verdict::Rerun {
+                        stale.mark(package);
+                        eprintln!(
+                            "rawr: the build-script output of `{}` differs from this project's \
+                             build: running it again in rawr's nightly build",
+                            package_name(package),
+                        );
+                    }
+                    verdict
+                }
+                None => rerun::Verdict::Drift,
+            };
+            (package.to_owned(), verdict)
+        })
+        .collect();
+    record.write();
+    verdicts
+}
+
+/// The names of the packages `verdicts` runs again.
+fn reruns(verdicts: &BTreeMap<String, rerun::Verdict>) -> Box<[Box<str>]> {
+    let mut names = verdicts
+        .iter()
+        .filter(|(_, verdict)| **verdict == rerun::Verdict::Rerun)
+        .map(|(package, _)| Box::from(package_name(package)))
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    names.into_boxed_slice()
+}
+
+/// `names` as a message lists them.
+fn names(names: &[Box<str>]) -> String {
+    names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn runner_scripts(rawr: &Path) -> Option<BTreeMap<String, Vec<Script>>> {
@@ -939,6 +1144,7 @@ mod tests {
             entries: vec![extracted("first"), extracted("second")],
             bindings: Some(bindings.clone()),
             rawr: Some(first.clone()),
+            nightly: None,
         }
         .settle()
         .unwrap();
@@ -966,6 +1172,7 @@ mod tests {
             entries: vec![read()],
             bindings: Some(bindings.clone()),
             rawr: Some(first),
+            nightly: None,
         }
         .settle()
         .unwrap();
@@ -980,9 +1187,11 @@ mod tests {
             entries: vec![read()],
             bindings: Some(bindings.clone()),
             rawr: Some(second),
+            nightly: None,
         }
         .settle()
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(refused.contains("`demo`"), "{refused}");
         assert!(super::read(&bindings, "demo").is_none());
         fs::remove_dir_all(root).unwrap();
@@ -1063,6 +1272,7 @@ mod tests {
             }],
             bindings: Some(home.clone()),
             rawr: Some(rawr),
+            nightly: None,
         }
         .settle()
         .unwrap();
@@ -1115,8 +1325,9 @@ mod tests {
                 }],
                 bindings: Some(bindings.clone()),
                 rawr: Some(rawr.clone()),
+                nightly: None,
             };
-            let diagnostic = settlement.drift_diagnostic();
+            let diagnostic = settlement.drift_diagnostic().unwrap();
             assert_eq!(diagnostic.is_some(), known_drift);
             if let Some(diagnostic) = diagnostic {
                 assert!(
@@ -1146,6 +1357,7 @@ mod tests {
             }],
             bindings: Some(bindings.clone()),
             rawr: Some(rawr.clone()),
+            nightly: None,
         }
         .settle()
         .unwrap();
@@ -1165,6 +1377,7 @@ mod tests {
             }],
             bindings: Some(bindings.clone()),
             rawr: Some(rawr),
+            nightly: None,
         }
         .settle()
         .unwrap();
@@ -1211,9 +1424,11 @@ mod tests {
                 }],
                 bindings: Some(bindings.clone()),
                 rawr: Some(rawr),
+                nightly: None,
             }
             .settle()
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
             assert!(
                 error.contains("`fixture`") && error.contains("`demo`"),
                 "{error}"
@@ -1347,8 +1562,12 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
                 }],
                 bindings: Some(bindings.clone()),
                 rawr: Some(rawr.clone()),
+                nightly: None,
             };
-            assert_eq!(settlement.drift_diagnostic().is_some(), mode != "match");
+            assert_eq!(
+                settlement.drift_diagnostic().unwrap().is_some(),
+                mode != "match"
+            );
             settlement.settle().unwrap();
             assert_eq!(
                 super::read(&bindings, mode).is_some(),
@@ -1356,6 +1575,98 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
                 "{mode}"
             );
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A table whose build script gave the nightly other outputs than the
+    /// project's build is a miss once: its staged copy goes, the nightly's
+    /// run is marked to clean, and the run prepares again. The same
+    /// difference after that run is drift, reported without another clean,
+    /// and stays so until an output changes (D742).
+    #[test]
+    fn a_difference_cleans_the_nightly_run_once_and_then_is_drift() {
+        let root = scratch("rerun");
+        let bindings = root.join("bindings");
+        let nightly = root.join("nightly");
+        let package = "registry+https://index#demo@1.0.0".to_owned();
+        let rawr = runner(
+            &root,
+            &BTreeMap::from([(package.clone(), vec![script("project")])]),
+        );
+        let staged = super::staged(&rawr);
+        let table = root.join("table");
+        fs::write(&table, b"units").unwrap();
+        let extracted = |output: &str| Settled::Extracted {
+            key: "demo".to_owned(),
+            packages: vec![package.clone()],
+            inputs_packages: vec![package.clone()],
+            nightly: Some(BTreeMap::from([(package.clone(), vec![script(output)])])),
+            publish: Box::new(Publish {
+                bindings: bindings.clone(),
+                table: table.clone(),
+                meta: meta(BTreeMap::new()),
+            }),
+        };
+        let settlement = |entry: Settled| Settlement {
+            entries: vec![entry],
+            bindings: Some(bindings.clone()),
+            rawr: Some(rawr.clone()),
+            nightly: Some(nightly.clone()),
+        };
+        let stale = super::Stale::of(&nightly);
+        super::stage(
+            &staged,
+            &[(
+                &extracted("other"),
+                crate::input::bindings::Inputs::fixture(),
+            )],
+        );
+        assert!(super::read(&staged, "demo").is_some());
+        let rerun = settlement(extracted("other")).settle().unwrap_err();
+        assert!(rerun.is_stale());
+        assert!(rerun.to_string().contains("`demo`"), "{rerun}");
+        assert!(
+            super::read(&staged, "demo").is_none(),
+            "the stale table stayed staged"
+        );
+        assert_eq!(stale.pending(), ["demo"]);
+        stale.cleaned("demo");
+        // The run again gave the same: the toolchains differ. Nothing is
+        // cleaned again, now or in a later run.
+        for _ in 0..2 {
+            settlement(extracted("other")).settle().unwrap();
+            assert!(stale.pending().is_empty());
+            assert!(super::read(&bindings, "demo").is_none());
+        }
+        // A shared table made where the script gave yet another output may
+        // be a stale run: it goes, and the run prepares again.
+        let read = |output: &str| Settled::Read {
+            directory: bindings.clone(),
+            key: "demo".to_owned(),
+            crate_name: "fixture".to_owned(),
+            scripts: BTreeMap::from([(package.clone(), vec![script(output)])]),
+            inputs: crate::input::bindings::Inputs::fixture(),
+        };
+        home::publish(&bindings, "demo", &[("table.json", b"units")]).unwrap();
+        let rerun = settlement(read("third")).settle().unwrap_err();
+        assert!(rerun.is_stale());
+        assert!(!bindings.join("demo").exists());
+        assert_eq!(stale.pending(), ["demo"]);
+        stale.cleaned("demo");
+        // The run again agrees: the table publishes, and the difference
+        // is forgotten.
+        settlement(extracted("project")).settle().unwrap();
+        assert!(super::read(&bindings, "demo").is_some());
+        assert!(!rawr.join(super::rerun::RECORD).exists());
+        // A failed build asks for the rerun once, then names the drift.
+        let failed = settlement(extracted("fourth"));
+        assert!(failed.drift_diagnostic().unwrap_err().is_stale());
+        assert_eq!(stale.pending(), ["demo"]);
+        let drift = failed.drift_diagnostic().unwrap().unwrap();
+        assert!(
+            drift.contains("`demo`") && drift.contains("`fixture`"),
+            "{drift}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

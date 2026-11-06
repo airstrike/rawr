@@ -123,6 +123,11 @@ impl Scripts {
         Self(scripts)
     }
 
+    /// What the build gave `package`'s build script.
+    pub(crate) fn get(&self, package: &str) -> Option<&[crate::bindings::Script]> {
+        self.0.get(package).map(Vec::as_slice)
+    }
+
     /// Whether both gave each of `packages` the same outputs. A package
     /// either lacks is a disagreement.
     pub(crate) fn agree(&self, packages: &[Box<str>], other: &Self) -> bool {

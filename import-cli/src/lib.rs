@@ -192,6 +192,7 @@ macro_rules! stale {
 
 stale!(
     rawr_import::Error,
+    rawr_import::bindings::Error,
     rawr_import::checked::Error,
     rawr_import::node::Error,
     rawr_import::profile::Error,
