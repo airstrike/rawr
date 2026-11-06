@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.151 (2026-11-06)
+
+- Checking a program that needs proved applications no longer fills the disk. Each crate's intrinsic entry keeps only its own facts. The inventory build reuses the nightly's shared build directory, and each loaded artifact is hashed once. iced's changelog example now finishes `rawr check` in about 400 s. (#958)
+
 ## 0.3.150 (2026-11-06)
 
 - A program's impl of a crate trait's generic method runs at each type native code calls it with: the body reads the type parameter as an opaque type bounded by its trait, calls its methods and associated functions, names its associated types, takes it inside another type, and takes a bound at the impl's lifetime. Its values stay native in a frame of the runner's generic impl. (#1003, #1004; part of #593)

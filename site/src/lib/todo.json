@@ -1,12 +1,19 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.150",
+  "version": "0.3.151",
   "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.151",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"Checking a program that needs proved applications no longer fills the disk. Each crate's intrinsic entry keeps only its own facts. The inventory build reuses the nightly's shared build directory, and each loaded artifact is hashed once. iced's changelog example now finishes `rawr check` in about 400 s.","issues":[958]}
+        ]
+      },
       {
         "version": "0.3.150",
         "date": "2026-11-06",
@@ -2395,7 +2402,7 @@
     {"issue":955,"title":"Generated adapters for borrowing widgets miss lifetimes: modal's E0106 and pane_grid's region lifetime","state":"open","category":"Divergences from rustc"},
     {"issue":956,"title":"Rawr's types disagree with rustc's in ferris, styling and vectorial_text","state":"closed","category":"Divergences from rustc","release":"0.3.142"},
     {"issue":957,"title":"Generated adapter bounds the program doesn't need: geometry's Shell: Clone, progress_bar's f64, the_matrix's ThreadRng","state":"open","category":"Divergences from rustc"},
-    {"issue":958,"title":"changelog's rawr check never completes and fills the disk","state":"open","category":"Health"},
+    {"issue":958,"title":"changelog's rawr check never completes and fills the disk","state":"closed","category":"Health","release":"0.3.151"},
     {"issue":959,"title":"rawr run inside a git worktree under another workspace fails with 'malformed filesystem observation transport'","state":"closed","category":"Health","release":"0.3.141"},
     {"issue":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"closed","category":"Health","release":"0.3.149"},
     {"issue":961,"title":"Macro calls where an item, a type or a pattern goes","state":"open","category":"Divergences from rustc"},
@@ -2447,7 +2454,13 @@
     {"issue":1007,"title":"Passing a `fmt` body's formatter to another function","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
     {"issue":1008,"title":"A program value lent `&mut` to a crate's `&mut T` or `&mut dyn Trait` loses native changes","state":"open","category":"Divergences from rustc"},
     {"issue":1009,"title":"A frame method's turbofish type argument (`next_key::<__Field>`) gives an Option the checker can't type","state":"open","category":"Divergences from rustc"},
-    {"issue":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open","category":"Divergences from rustc"}
+    {"issue":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open","category":"Divergences from rustc"},
+    {"issue":1011,"title":"D742: a detected build-script output mismatch reruns that package in the shared directory and re-extracts","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1013,"title":"Intrinsic entries inline each identity's whole Unit; objc2_app_kit's entry is 1.88 GB","state":"open","category":"Health"},
+    {"issue":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"open","category":"iced examples"},
+    {"issue":1015,"title":"The legacy extraction plan hashes every selected artifact in full on each check","state":"open","category":"Health"},
+    {"issue":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -2652,7 +2665,9 @@
             {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"},
             {"number":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed"},
             {"number":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed"},
-            {"number":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open"}
+            {"number":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open"},
+            {"number":1011,"title":"D742: a detected build-script output mismatch reruns that package in the shared directory and re-extracts","state":"open"},
+            {"number":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -2924,7 +2939,7 @@
             {"number":953,"title":"custom_quad and gradient exit with status 101 right after their first frame, with nothing on stderr","state":"closed"},
             {"number":954,"title":"solar_system and sierpinski_triangle panic in the runner at start","state":"closed"},
             {"number":956,"title":"Rawr's types disagree with rustc's in ferris, styling and vectorial_text","state":"closed"},
-            {"number":958,"title":"changelog's rawr check never completes and fills the disk","state":"open"},
+            {"number":958,"title":"changelog's rawr check never completes and fills the disk","state":"closed"},
             {"number":971,"title":"iced layout panics on a keyboard event: keyboard::Event's Key<SmolStr> fails rawr's type check","state":"closed"},
             {"number":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"closed"},
             {"number":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"closed"},
@@ -2954,7 +2969,8 @@
             {"number":1007,"title":"Passing a `fmt` body's formatter to another function","state":"closed"},
             {"number":1008,"title":"A program value lent `&mut` to a crate's `&mut T` or `&mut dyn Trait` loses native changes","state":"open"},
             {"number":1009,"title":"A frame method's turbofish type argument (`next_key::<__Field>`) gives an Option the checker can't type","state":"open"},
-            {"number":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open"}
+            {"number":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open"},
+            {"number":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3227,7 +3243,10 @@
             {"number":982,"title":"Crossing tests fail with 'runner did not connect before the protocol deadline' under load","state":"open"},
             {"number":989,"title":"rawr mcp: send input events to a started program","state":"open"},
             {"number":998,"title":"A check of one iced project makes 4-5 resolution executions of 360-424 MB each","state":"open"},
-            {"number":999,"title":"Every check leaves empty execution-key directories in the store","state":"open"}
+            {"number":999,"title":"Every check leaves empty execution-key directories in the store","state":"open"},
+            {"number":1013,"title":"Intrinsic entries inline each identity's whole Unit; objc2_app_kit's entry is 1.88 GB","state":"open"},
+            {"number":1015,"title":"The legacy extraction plan hashes every selected artifact in full on each check","state":"open"},
+            {"number":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"open"}
           ]
         },
         {

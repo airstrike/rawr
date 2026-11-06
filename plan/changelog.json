@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.151",
+      "date": "2026-11-06",
+      "entries": [
+        {"text":"Checking a program that needs proved applications no longer fills the disk. Each crate's intrinsic entry keeps only its own facts. The inventory build reuses the nightly's shared build directory, and each loaded artifact is hashed once. iced's changelog example now finishes `rawr check` in about 400 s.","issues":[958]}
+      ]
+    },
+    {
       "version": "0.3.150",
       "date": "2026-11-06",
       "entries": [
