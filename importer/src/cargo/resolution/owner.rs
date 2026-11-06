@@ -91,6 +91,9 @@ impl Ready {
                 self.evaluation.cached.context.cargo_home(),
             )),
             rawr: Some(self.evaluation.cached.context.rawr().to_path_buf()),
+            nightly: Some(crate::deps::nightly_directory(&crate::store::home(
+                self.evaluation.cached.context.cargo_home(),
+            ))),
         }
     }
 
@@ -1244,6 +1247,9 @@ impl SharedReady {
                 self.evaluation.cached.context.cargo_home(),
             )),
             rawr: Some(self.evaluation.cached.context.rawr().to_path_buf()),
+            nightly: Some(crate::deps::nightly_directory(&crate::store::home(
+                self.evaluation.cached.context.cargo_home(),
+            ))),
         }
     }
 

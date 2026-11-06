@@ -78,6 +78,9 @@ pub(crate) enum CargoAction {
     RunnerBuild(parallelism::Proof),
     PackagePath,
     PackageGit,
+    /// `cargo clean -p` of a package whose build-script run in the shared
+    /// nightly directory is stale (D742).
+    Clean,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -515,9 +518,8 @@ impl CommandKind {
             Self::Cargo(action) => match action {
                 CargoAction::Metadata
                 | CargoAction::UnitBuild(_)
-                | CargoAction::AuthoritativeBuild(_) => {
-                    crate::metrics::ProcessKind::CargoResolution
-                }
+                | CargoAction::AuthoritativeBuild(_)
+                | CargoAction::Clean => crate::metrics::ProcessKind::CargoResolution,
                 CargoAction::RunnerBuild(_) => crate::metrics::ProcessKind::CargoRunner,
                 CargoAction::PackagePath | CargoAction::PackageGit => {
                     crate::metrics::ProcessKind::PackageList
@@ -548,7 +550,7 @@ impl CommandKind {
     /// The launch progress stage this command belongs to, if any.
     const fn progress_stage(self) -> Option<usize> {
         match self {
-            Self::Cargo(CargoAction::AuthoritativeBuild(_)) => Some(2),
+            Self::Cargo(CargoAction::AuthoritativeBuild(_) | CargoAction::Clean) => Some(2),
             Self::Cargo(CargoAction::RunnerBuild(_)) => Some(3),
             Self::Cargo(_) => Some(1),
             _ => None,
@@ -566,6 +568,7 @@ impl CargoAction {
             Self::UnitBuild(_) | Self::AuthoritativeBuild(_) => "check",
             Self::RunnerBuild(_) => "build",
             Self::PackagePath | Self::PackageGit => "package",
+            Self::Clean => "clean",
         }
     }
 
@@ -574,7 +577,7 @@ impl CargoAction {
             Self::UnitBuild(proof) | Self::AuthoritativeBuild(proof) | Self::RunnerBuild(proof) => {
                 Some(proof)
             }
-            Self::Metadata | Self::PackagePath | Self::PackageGit => None,
+            Self::Metadata | Self::PackagePath | Self::PackageGit | Self::Clean => None,
         }
     }
 }

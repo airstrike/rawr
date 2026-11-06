@@ -3768,6 +3768,35 @@ fn cargo_execute_authoritative_build(
     .map(|(bytes, _)| bytes)
 }
 
+/// `cargo clean -p <package>` for the build `prefix` and `manifest` give, so
+/// the next build there runs the package's build script again (D742).
+/// Cargo cleans every version of a package by its name.
+fn cargo_clean_command(
+    request: &Request,
+    prefix: Vec<OsString>,
+    manifest: &Path,
+    package: &str,
+    environment: Box<[(OsString, OsString)]>,
+) -> Result<process::Command> {
+    process::Command::cargo(
+        prefix,
+        process::CargoAction::Clean,
+        Vec::from([
+            "--manifest-path".into(),
+            manifest.as_os_str().to_owned(),
+            "--target".into(),
+            request.target.as_ref().into(),
+            "--profile".into(),
+            request.profile.as_ref().into(),
+            "--locked".into(),
+            "--package".into(),
+            package.into(),
+        ]),
+        request.project_root.clone(),
+        environment,
+    )
+}
+
 fn cargo_build_command(
     request: &Request,
     prefix: Vec<OsString>,

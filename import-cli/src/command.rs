@@ -117,9 +117,7 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
     if check {
         let checked = owner::check(&target, Some(graph), &Plain);
         let cargo = cargo.map(rawr_cli::cargo::Pending::finish);
-        let checked = checked.and_then(|(source, settlement)| {
-            owner::settle_checked(settlement, cargo.as_ref(), &target).map(|()| source)
-        });
+        let checked = owner::settle_checked(checked, cargo.as_ref(), &target, &Plain);
         return if rawr_cli::cargo::concluded(checked.as_deref(), cargo) {
             ExitCode::SUCCESS
         } else {

@@ -58,21 +58,30 @@ pub fn check(
 /// the project's own `cargo check` has run their build scripts, as a run
 /// does after its runner build (D609.4, #661). A `cargo check` that failed
 /// on its own, or didn't run, gives no evidence, and the tables stay in the
-/// project.
+/// project. A table whose build scripts gave the nightly other outputs is
+/// checked again, once its stale run is cleaned (D742).
 pub fn settle_checked(
-    settlement: rawr_import::bindings::Settlement,
+    mut checked: Result<(PathBuf, rawr_import::bindings::Settlement), diagnostic::Report>,
     cargo: Option<&rawr_cli::cargo::Status>,
     target: &rawr::project::Target,
-) -> Result<(), diagnostic::Report> {
+    profile: &dyn crate::Profile,
+) -> Result<PathBuf, diagnostic::Report> {
     let Some(rawr_cli::cargo::Status::Finished(outcome)) = cargo else {
-        return Ok(());
+        return checked.map(|(source, _)| source);
     };
     if outcome.failure.is_some() {
-        return Ok(());
+        return checked.map(|(source, _)| source);
     }
-    settlement
-        .settle_checked(outcome.build_scripts.join("\n").as_bytes())
-        .map_err(|error| framework(error, fallback(target).ok()))
+    let messages = outcome.build_scripts.join("\n");
+    let mut restarts = crate::Restarts::default();
+    loop {
+        let (source, settlement) = checked?;
+        match settlement.settle_checked(messages.as_bytes()) {
+            Ok(()) => return Ok(source),
+            Err(error) if restarts.again(&error) => checked = check(target, None, profile),
+            Err(error) => return Err(framework(error, fallback(target).ok())),
+        }
+    }
 }
 
 /// Run one imported application or preview under the generated child owner.
@@ -840,16 +849,24 @@ fn prepare_on_lane(
             Err(error) if restarts.again(&error) => continue,
             Err(error) => {
                 return Err(match settlement.drift_diagnostic() {
-                    Some(drift) => framework(format!("{drift}\n\n{error}"), source.clone()),
-                    None => framework(error, source.clone()),
-                })
+                    // A stale build-script run in the shared nightly
+                    // directory may be why: it is cleaned, and preparing
+                    // again extracts afresh (D742).
+                    Err(rerun) if restarts.again(&rerun) => continue,
+                    Err(rerun) => framework(format!("{rerun}\n\n{error}"), source.clone()),
+                    Ok(Some(drift)) => framework(format!("{drift}\n\n{error}"), source.clone()),
+                    Ok(None) => framework(error, source.clone()),
+                });
             }
         };
         // Shared bindings are published, or refused, once the project's
-        // own build has run their build scripts (D609.4).
-        settlement
-            .settle()
-            .map_err(|error| framework(error, source.clone()))?;
+        // own build has run their build scripts (D609.4). A table whose
+        // build scripts gave the nightly other outputs prepares again.
+        match settlement.settle() {
+            Ok(()) => {}
+            Err(error) if restarts.again(&error) => continue,
+            Err(error) => return Err(framework(error, source.clone())),
+        }
         match built.retain_startup(&snapshot) {
             Ok(()) => {
                 return Ok(Initial {

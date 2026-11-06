@@ -632,7 +632,8 @@ pub(in crate::cargo) fn shared_build(
     let shared = crate::deps::nightly_directory(&home);
     prefix.extend(shared_arguments(&shared));
     let tail = cargo::cargo_build_arguments(manifest, &request.target, &request.profile);
-    let command = cargo::cargo_build_command(request, prefix, tail, environment)?;
+    let clean = prefix.clone();
+    let command = cargo::cargo_build_command(request, prefix, tail, environment.clone())?;
     // Held across the Cargo run and the copy of what it wrote: another
     // project's build would rewrite those files, and cleanup skips a held
     // directory. Extraction then reads the bundle's copies.
@@ -641,6 +642,27 @@ pub(in crate::cargo) fn shared_build(
         path: shared.clone(),
         source,
     })?;
+    // A package whose build script gave a project other outputs than its
+    // run here is cleaned first, so Cargo runs the script again with this
+    // build's environment (D742). One this manifest doesn't resolve stays
+    // marked for a build that does.
+    let stale = crate::bindings::Stale::of(&shared);
+    for package in stale.pending() {
+        let command = cargo::cargo_clean_command(
+            request,
+            clean.clone(),
+            manifest,
+            &package,
+            environment.clone(),
+        )?;
+        if native
+            .run(&command, limits.process)
+            .and_then(|output| output.checked(Program::Cargo))
+            .is_ok()
+        {
+            stale.cleaned(&package);
+        }
+    }
     let bytes = native
         .run(&command, limits.process)?
         .checked(Program::Cargo)?;
