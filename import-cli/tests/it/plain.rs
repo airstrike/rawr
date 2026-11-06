@@ -1376,6 +1376,28 @@ fn a_crates_derive_runs_from_its_expansion() {
     assert_eq!(text(&run.stdout), "Square Square\nTile\nCircle\nRing\n");
 }
 
+/// A program's impl of a crate trait's generic method, `fn visit<V:
+/// Visitor>(&self, visitor: V) -> V::Out`, which the crate calls at two
+/// visitors (#593): the body reads `V` as an opaque type bounded by its
+/// trait and `V::Out` as its associated type, and the runner's impl keeps
+/// their values in a frame of its generic function, at each call's types.
+#[test]
+fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
+    const VISITS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-visits");
+    let root = crate::support::scratch().join("plain-visits");
+    let _ = fs::remove_dir_all(&root);
+    copy(Path::new(VISITS), &root);
+
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "14 <7>\n");
+}
+
 /// A crate's whole table, made by a program that called none of its
 /// macros, still answers a later program's macro whose `$crate` names
 /// another crate (#281): the whole walk keeps every crate's `$crate` root.
