@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.155 (2026-11-06)
+
+- A program that uses tracing-subscriber, as iced's clock, gradient, changelog, game_of_life and todos do, no longer stops with "symbolic surface identity belongs to a different contract". That error can no longer happen: an item enters a run's demand only through its own contract. A member whose signature names its trait's own parameter, as `Layer<S>::and_then` does, now says it isn't supported yet, and the rest of the crate works. (#1032)
+
 ## 0.3.154 (2026-11-06)
 
 - Several derives in one file work: a derive's expansion declares its items in a module of its own that sees its item's module, as rustc's expansion does. A `Vec` of your values fills a crate's type parameter, as serde's `serialize_field` and `next_value::<Vec<T>>()` take it, and a crate may call your `Deserialize` on its own threads, as reqwest's `json()` does on tokio's workers. (#593)

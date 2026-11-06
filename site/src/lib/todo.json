@@ -1,12 +1,19 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.154",
+  "version": "0.3.155",
   "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.155",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"A program that uses tracing-subscriber, as iced's clock, gradient, changelog, game_of_life and todos do, no longer stops with \"symbolic surface identity belongs to a different contract\". That error can no longer happen: an item enters a run's demand only through its own contract. A member whose signature names its trait's own parameter, as `Layer<S>::and_then` does, now says it isn't supported yet, and the rest of the crate works.","issues":[1032]}
+        ]
+      },
       {
         "version": "0.3.154",
         "date": "2026-11-06",
@@ -2501,7 +2508,7 @@
     {"issue":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open","category":"Divergences from rustc"},
     {"issue":1030,"title":"A member missed on a std type such as `String` no longer makes the next request fail","state":"closed","category":"Divergences from rustc","release":"0.3.154"},
     {"issue":1031,"title":"serde's enum Deserialize: a crate value whose type has a lifetime (de::Unexpected<'a>)","state":"open","category":"Divergences from rustc"},
-    {"issue":1032,"title":"todos: node transform child failed: symbolic surface identity belongs to a different contract","state":"open","category":"Divergences from rustc"},
+    {"issue":1032,"title":"todos: node transform child failed: symbolic surface identity belongs to a different contract","state":"closed","category":"Divergences from rustc","release":"0.3.155"},
     {"issue":1033,"title":"A trait function called by its trait's path infers Self from the expected type","state":"open","category":"Divergences from rustc"},
     {"issue":1034,"title":"? converts &str to String through From","state":"open","category":"Divergences from rustc"},
     {"issue":1035,"title":"u128 in a crate signature","state":"open","category":"Divergences from rustc"},
@@ -2509,7 +2516,11 @@
     {"issue":1037,"title":"Infer a generic fn's type parameter from the let it's assigned to","state":"open","category":"Divergences from rustc"},
     {"issue":1038,"title":"A crossing into a program impl repeats its lookups on every call: interpreted serde is 12x/68x slower than debug Rust","state":"open","category":"Health"},
     {"issue":1039,"title":"Re-expanding an edited derive resolves the dependencies again (about 3.4 s)","state":"open","category":"Health"},
-    {"issue":1040,"title":"An edit that changes only a derive expansion's bodies (a #[serde(rename)]) reruns instead of hot-swapping","state":"open","category":"Health"}
+    {"issue":1040,"title":"An edit that changes only a derive expansion's bodies (a #[serde(rename)]) reruns instead of hot-swapping","state":"open","category":"Health"},
+    {"issue":1041,"title":"Members of a trait method's parameter type that name the trait's own parameters (tracing's Layer<S>::and_then)","state":"open","category":"Divergences from rustc"},
+    {"issue":1042,"title":"Brand the contract's allocation and accepted outcomes generatively","state":"open","category":"Health"},
+    {"issue":1043,"title":"iced's game_of_life: itertools' cartesian_product on an impl Iterator (E0599)","state":"open","category":"Divergences from rustc"},
+    {"issue":1044,"title":"iced's todos: use keyboard::key inside a function (E0432)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3029,7 +3040,10 @@
             {"number":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed"},
             {"number":1030,"title":"A member missed on a std type such as `String` no longer makes the next request fail","state":"closed"},
             {"number":1031,"title":"serde's enum Deserialize: a crate value whose type has a lifetime (de::Unexpected<'a>)","state":"open"},
-            {"number":1032,"title":"todos: node transform child failed: symbolic surface identity belongs to a different contract","state":"open"}
+            {"number":1032,"title":"todos: node transform child failed: symbolic surface identity belongs to a different contract","state":"closed"},
+            {"number":1041,"title":"Members of a trait method's parameter type that name the trait's own parameters (tracing's Layer<S>::and_then)","state":"open"},
+            {"number":1043,"title":"iced's game_of_life: itertools' cartesian_product on an impl Iterator (E0599)","state":"open"},
+            {"number":1044,"title":"iced's todos: use keyboard::key inside a function (E0432)","state":"open"}
           ],
           "milestone": "0.4"
         },
