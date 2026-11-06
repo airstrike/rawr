@@ -904,21 +904,10 @@ pub struct Pins {
     strings: std::sync::Mutex<Vec<crate::ImmutableString>>,
     values: std::sync::Mutex<Vec<Kept>>,
     /// Slices of pinned strings ([`Pins::pin_strs`]).
-    slices: std::sync::Mutex<Vec<Strs>>,
+    slices: std::sync::Mutex<Vec<&'static [&'static str]>>,
     /// Whether a string equal to one held is that one ([`Pins::constant`]).
     by_text: bool,
 }
-
-/// A slice of strings [`Pins::pin`] pinned in the same pins, which it
-/// points into.
-struct Strs(Box<[*const str]>);
-
-// SAFETY: each pointer is to the text of a string its pins hold, which no
-// thread writes, and which lives until the pins clear or drop, as `Strs`
-// does.
-unsafe impl Send for Strs {}
-// SAFETY: as for `Send`.
-unsafe impl Sync for Strs {}
 
 /// A native value [`Pins::hold`] keeps, with the thread whose `Rc` it is.
 struct Kept {
@@ -1025,39 +1014,36 @@ impl Pins {
         unsafe { &*pointer }
     }
 
-    /// `texts`, each pinned ([`Pins::pin`]), as one slice borrowed for as
-    /// long as these pins are, as a `&'static [&'static str]` a crate takes
-    /// is: serde's `deserialize_struct(name, FIELDS, visitor)` takes the
-    /// field names so. Equal slices of [`Pins::constant`] are one slice.
-    pub fn pin_strs(&self, texts: impl IntoIterator<Item = crate::ImmutableString>) -> &[&str] {
+    /// `texts`, each pinned ([`Pins::pin`]), as one `&'static [&'static
+    /// str]` a crate takes: serde's `deserialize_struct(name, FIELDS,
+    /// visitor)` takes the field names so. Only pins that live as long as
+    /// the runner lend one, as a slot's `static` [`Pins::constant`] does,
+    /// and equal slices of them are one slice, so a view called again
+    /// leaks nothing new.
+    pub fn pin_strs(
+        &'static self,
+        texts: impl IntoIterator<Item = crate::ImmutableString>,
+    ) -> &'static [&'static str] {
         let pinned = texts
             .into_iter()
-            .map(|text| std::ptr::from_ref::<str>(self.pin(text)))
-            .collect::<Box<[_]>>();
+            .map(|text| self.pin(text))
+            .collect::<Vec<&'static str>>();
         let mut slices = self
             .slices
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let index = match slices.iter().position(|held| {
-            held.0.len() == pinned.len()
+        if let Some(held) = slices.iter().find(|held| {
+            held.len() == pinned.len()
                 && held
-                    .0
                     .iter()
                     .zip(&pinned)
                     .all(|(held, text)| std::ptr::eq(*held, *text))
         }) {
-            Some(index) => index,
-            None => {
-                slices.push(Strs(pinned));
-                slices.len() - 1
-            }
-        };
-        let slice: *const [*const str] = &*slices[index].0;
-        // SAFETY: `*const str` and `&str` have one layout, and each pointer
-        // is to a string these pins hold (`Strs`). The boxed slice moves
-        // with no element, and lives until `clear` takes `&mut self` or the
-        // pins drop, neither of which can happen while `&self` is borrowed.
-        unsafe { &*(slice as *const [&str]) }
+            return held;
+        }
+        let slice: &'static [&'static str] = Box::leak(pinned.into_boxed_slice());
+        slices.push(slice);
+        slice
     }
 
     /// Let everything pinned go.
