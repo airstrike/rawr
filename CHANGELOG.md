@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.142 (2026-11-05)
+
+- A crate's From impls for several std types convert through the one the target names: f32::from(rotation.degrees()) and .into() pick From<Degrees> for f32 beside the f64 one. A crate function casts to a fn pointer type with inferred parts, and an array's later crate functions coerce to it. A closure parameter used as a crate's RangeInclusive<T> takes T from the call's other arguments, so 2.0..=80.0 is a range of f32. (#956)
+
 ## 0.3.141 (2026-11-05)
 
 - `rawr run` starts with a relative CARGO_TARGET_DIR (and with an absolute one after a relative run): the reload watcher no longer stops at start with "malformed filesystem observation transport". A relative target directory now names the same paths as the absolute one. (#959)
