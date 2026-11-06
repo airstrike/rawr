@@ -727,6 +727,11 @@ mod tests {
 
     #[test]
     fn an_entry_appears_whole_and_a_lease_blocks_its_replacement() {
+        if !home::alone(
+            "bindings::tests::an_entry_appears_whole_and_a_lease_blocks_its_replacement",
+        ) {
+            return;
+        }
         let root = scratch("lease");
         let bindings = root.join("bindings");
         home::publish(
@@ -762,6 +767,9 @@ mod tests {
 
     #[test]
     fn removal_by_last_use_skips_recent_and_leased_entries() {
+        if !home::alone("bindings::tests::removal_by_last_use_skips_recent_and_leased_entries") {
+            return;
+        }
         let root = scratch("prune");
         let bindings = root.join("bindings");
         for key in ["idle", "leased", "recent"] {
@@ -894,6 +902,9 @@ mod tests {
     #[test]
     fn a_table_publishes_only_with_matching_nightly_scripts_and_an_incompatible_hit_stops_the_run()
     {
+        if !home::alone("bindings::tests::a_table_publishes_only_with_matching_nightly_scripts_and_an_incompatible_hit_stops_the_run") {
+            return;
+        }
         let root = scratch("settle");
         let bindings = root.join("bindings");
         let package = "registry+https://index#demo@1.0.0".to_owned();
@@ -979,6 +990,9 @@ mod tests {
 
     #[test]
     fn an_extracted_table_is_staged_for_the_next_demand_and_settles_where_it_did() {
+        if !home::alone("bindings::tests::an_extracted_table_is_staged_for_the_next_demand_and_settles_where_it_did") {
+            return;
+        }
         let root = scratch("staged");
         let package = "registry+https://index#demo@1.0.0".to_owned();
         let nightly = BTreeMap::from([(package.clone(), vec![script("nightly")])]);
@@ -1059,6 +1073,11 @@ mod tests {
 
     #[test]
     fn nightly_drift_or_missing_evidence_never_publishes_a_table() {
+        if !home::alone(
+            "bindings::tests::nightly_drift_or_missing_evidence_never_publishes_a_table",
+        ) {
+            return;
+        }
         let root = scratch("nightly-drift");
         let bindings = root.join("bindings");
         let package = "registry+https://index#demo@1.0.0".to_owned();
@@ -1155,6 +1174,11 @@ mod tests {
 
     #[test]
     fn missing_project_outputs_refuse_a_shared_table_before_execution() {
+        if !home::alone(
+            "bindings::tests::missing_project_outputs_refuse_a_shared_table_before_execution",
+        ) {
+            return;
+        }
         let root = scratch("missing-output");
         let bindings = root.join("bindings");
         let package = "registry+https://index#demo@1.0.0".to_owned();
@@ -1233,6 +1257,11 @@ mod tests {
 
     #[test]
     fn actual_cargo_outputs_publish_only_when_both_toolchains_agree() {
+        if !home::alone(
+            "bindings::tests::actual_cargo_outputs_publish_only_when_both_toolchains_agree",
+        ) {
+            return;
+        }
         let root = scratch("cargo-outputs");
         let project = root.join("project");
         fs::create_dir_all(project.join("src")).unwrap();

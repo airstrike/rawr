@@ -213,6 +213,34 @@ fn unique() -> String {
     format!("{}-{nanos}-{sequence}", std::process::id())
 }
 
+/// Whether test `name` (its path as the harness lists it) runs in this
+/// process. A process spawned by another thread holds a copy of every open
+/// descriptor until it execs, and with it any lock that descriptor holds,
+/// so a guard this test dropped can still be held for that moment. Outside
+/// its own process, this runs `name` alone in a fresh copy of the test
+/// binary, where no other test spawns, asserts that it passed, and answers
+/// false.
+#[cfg(test)]
+pub(crate) fn alone(name: &str) -> bool {
+    const ALONE: &str = "RAWR_TEST_ALONE";
+    if std::env::var_os(ALONE).is_some_and(|alone| alone == name) {
+        return true;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--test-threads=1"])
+        .env(ALONE, name)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{name} alone:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -230,6 +258,11 @@ mod tests {
 
     #[test]
     fn a_reader_keeps_table_metadata_and_generation_together() {
+        if !super::alone(
+            "extract::engine::home::tests::a_reader_keeps_table_metadata_and_generation_together",
+        ) {
+            return;
+        }
         let root = scratch();
         publish(
             &root,
@@ -273,6 +306,11 @@ mod tests {
 
     #[test]
     fn pruning_and_a_writer_never_remove_a_readers_entry() {
+        if !super::alone(
+            "extract::engine::home::tests::pruning_and_a_writer_never_remove_a_readers_entry",
+        ) {
+            return;
+        }
         let root = scratch();
         publish(&root, "crate", &[(TABLE, b"old")]).unwrap();
         let (lease, _) = read(&root, "crate").unwrap();
