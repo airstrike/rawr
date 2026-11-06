@@ -25,6 +25,7 @@ pub(crate) use lease::Ownership;
 pub(crate) mod path;
 mod pins;
 mod recovery;
+mod session;
 
 pub(crate) use entry::{existing_directory_budgeted, read_file_budgeted};
 
@@ -236,6 +237,7 @@ pub struct Store {
     root: PathBuf,
     project: Digest,
     graph_budget: crate::node::GraphBudget,
+    _session: std::sync::Arc<session::Session>,
 }
 
 // A reservation is matched at once; boxing Publish would allocate on every publication.
@@ -326,16 +328,32 @@ impl Store {
             Ok(())
         })?;
         lease::enroll_project(&root, Digest::from_bytes(project), &mut budget)?;
+        let session = session::Session::enter(&root, Digest::from_bytes(project))?;
         // Entries an older rawr wrote can't be looked up or run again
         // (#577, #630). Without any, this is one ledger read.
         if !fresh {
             while eviction::recover_unreadable(&root, &mut recovery::Budget::new())? {}
         }
+        // The other projects' units go when this process starts on the
+        // store, holding none of them yet. A store only this project uses
+        // costs two directory listings. Unit tests collect explicitly.
+        static COLLECTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !fresh && !cfg!(test) && !COLLECTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eviction::recover_idle(&root, Digest::from_bytes(project))?;
+        }
         Ok(Self {
             root,
             project: Digest::from_bytes(project),
             graph_budget,
+            _session: std::sync::Arc::new(session),
         })
+    }
+
+    /// Collect the projects no process has open, as the first open of the
+    /// store in a process does.
+    #[cfg(test)]
+    pub(crate) fn fixture_collect_idle(&self) -> Result<usize, Error> {
+        eviction::recover_idle(&self.root, self.project)
     }
 
     /// Open the project's store, `<target>/rawr/store`.

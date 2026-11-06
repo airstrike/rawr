@@ -1021,6 +1021,40 @@ pub(crate) fn retire_project_runner(
     Ok(physically_unreferenced)
 }
 
+/// Release every root of a project no process holds: its ledger goes and its
+/// stale pins retire, so what only they reached becomes unrooted. `false`
+/// when a process still pins one of its roots or holds a reservation.
+pub(crate) fn release_project(
+    publication: &super::lease::Publication<'_>,
+    root: &Path,
+    snapshot: lock::Snapshot,
+    project: Digest,
+    registrations: &[accounting::Registered],
+    budget: &mut super::recovery::Budget,
+) -> Result<bool, Error> {
+    if snapshot
+        .active()
+        .iter()
+        .any(|active| active.project() == project)
+    {
+        return Ok(false);
+    }
+    let mut ledger = Ledger::read_or_empty_recovery(root, project, registrations)?;
+    if !ledger.reservations.is_empty() {
+        return Ok(false);
+    }
+    if !ledger.roots.is_empty() {
+        ledger.roots.clear();
+        save_or_retire(publication, root, &ledger)?;
+    }
+    for stale in snapshot.into_stale() {
+        if stale.project() == project {
+            stale.retire(publication, root, budget)?;
+        }
+    }
+    Ok(true)
+}
+
 /// Forget every pin that holds a lost allocation: each project root that
 /// names one, and each stale physical pin that records one (#612). A
 /// running program's pin keeps them, and `false` says so.
@@ -1141,6 +1175,17 @@ fn save_bytes(
         super::control::Plan::replacement(&target, bytes.len()),
     )?;
     super::entry::replace_admitted_file(admitted, publication, root, &target, bytes)
+}
+
+/// Whether a project other than `project` has a ledger: one directory
+/// listing.
+pub(super) fn others(root: &Path, project: Digest) -> bool {
+    let own = project.directory();
+    fs::read_dir(root.join("ledgers/projects")).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.file_name().to_str().is_some_and(|other| other != own))
+    })
 }
 
 fn ledger_path(root: &Path, project: Digest) -> PathBuf {
