@@ -366,9 +366,10 @@ impl Projection<'_> {
             .find(|identity| identity.as_bytes() == plan.identity().as_bytes())?;
         // The executable collector exposes type substitutions, direct
         // static operands and whether a script closure fills a callable
-        // parameter. Other instance dimensions cannot be guessed.
+        // parameter. A closure's class and the lifetimes it is generic
+        // over are the item's own, so they follow from the rest. Other
+        // instance dimensions cannot be guessed.
         if !identity.constants().is_empty()
-            || !identity.binders().is_empty()
             || !identity.types().iter().all(|ty| concrete(ty, 0))
         {
             return None;
