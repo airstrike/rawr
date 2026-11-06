@@ -307,6 +307,8 @@ pub(super) fn resolve(
                     _ => None,
                 })
                 .flatten();
+            #[cfg(feature = "rust-import")]
+            let host_alias = host_alias.or_else(|| parameter_projection(&written, types, host));
             if let Some(Target::Alias(alias)) = host_alias.as_ref().or(types.get(written.as_str()))
             {
                 let span = path.span;
@@ -389,6 +391,53 @@ pub(super) fn resolve(
             span,
         }),
     }
+}
+
+/// `S::Ok` where `S` is a dependency's trait method's type parameter, which
+/// names the opaque type native code fills it with (`resolve::
+/// opaque_generics`): the opaque type of its associated type (#593).
+#[cfg(feature = "rust-import")]
+fn parameter_projection(
+    written: &str,
+    types: &BTreeMap<ImmutableString, Target>,
+    host: &host::Registry,
+) -> Option<Target> {
+    let (base, associated) = written.rsplit_once("::")?;
+    let Some(Target::Alias(Alias {
+        params,
+        target: Some(target),
+        ..
+    })) = types.get(base)
+    else {
+        return None;
+    };
+    let Type::Path(Path {
+        name,
+        target: Target::Host { .. },
+        span,
+        ..
+    }) = &**target
+    else {
+        return None;
+    };
+    if !params.is_empty() {
+        return None;
+    }
+    let path = rawr_import::surface::opaque::parameter_projection(name, associated)?;
+    let definition = host.source_type(&path)?;
+    Some(Target::Alias(Alias {
+        params: Box::default(),
+        target: Some(Box::new(Type::Path(Path {
+            name: path.as_str().into(),
+            target: Target::Host {
+                definition: definition.clone(),
+                owner: host.type_owner(&path).cloned(),
+            },
+            arguments: Box::default(),
+            span: *span,
+        }))),
+        defaults: Box::default(),
+    }))
 }
 
 fn resolve_path(

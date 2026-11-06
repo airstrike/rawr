@@ -1346,7 +1346,19 @@ impl Plan {
         }
         // An opaque `impl Trait` type a function gives is a type of its
         // own, declared beside the function (`surface::opaque`).
-        let opaque = super::opaque::identities(graph);
+        let mut opaque = super::opaque::identities(graph);
+        // So is the opaque type a trait method's type parameter is, which
+        // the function beside the trait's methods over its `Self` gives
+        // (`opaque::parameter_name`).
+        for facade in &facades {
+            for item in facade.items.iter().filter(|item| {
+                super::member::declared(&item.path) && super::opaque::is_parameter(&item.path)
+            }) {
+                if let Type::Nominal { identity, .. } = &item.signature.output {
+                    opaque.insert(*identity);
+                }
+            }
+        }
         if !opaque.is_empty() {
             for facade in &mut facades {
                 let mut types = std::mem::take(&mut facade.types).into_vec();

@@ -83,6 +83,81 @@ pub fn path(function: &str, index: usize) -> String {
     }
 }
 
+/// The start of the name of each function a facade declares beside a
+/// trait's methods over its `Self` (`surface::member`) for a type
+/// parameter of one of its methods, or an associated type of one, as
+/// `serialize<S: Serializer>`'s `S` and `S::Ok` are (#593): a function no
+/// program calls, which gives the opaque type the parameter is where native
+/// code calls the program's impl of the method.
+const PARAMETER: &str = "__rawr_param_";
+
+/// Whether `path` is the function of [`parameter_name`] beside a trait's
+/// methods over its `Self`.
+#[must_use]
+pub fn is_parameter(path: &str) -> bool {
+    path.rsplit("::")
+        .next()
+        .is_some_and(|name| name.starts_with(PARAMETER))
+}
+
+/// The type parameter at `index` among the type parameters of the method
+/// `method`, or its associated type `projection`, as one of a trait's
+/// methods over its `Self` names it (`PARAMETER`).
+#[must_use]
+pub fn parameter_name(method: &str, index: usize, projection: Option<&str>) -> String {
+    match projection {
+        Some(associated) => format!("{PARAMETER}{method}_{index}_{associated}"),
+        None => format!("{PARAMETER}{method}_{index}"),
+    }
+}
+
+/// The path a facade declares the opaque type of the type parameter at
+/// `index` of the method `method` of the trait at `trait_path` under, or
+/// of its associated type `projection` (`parameter_name`).
+#[must_use]
+pub fn parameter_path(
+    trait_path: &str,
+    method: &str,
+    index: usize,
+    projection: Option<&str>,
+) -> String {
+    path(
+        &super::member::path(trait_path, &parameter_name(method, index, projection)),
+        0,
+    )
+}
+
+/// The path of the opaque type `associated` of the type parameter whose
+/// opaque type is at `path` (`parameter_path`), as `S::Ok` of `S`.
+#[must_use]
+pub fn parameter_projection(path: &str, associated: &str) -> Option<String> {
+    let (method, index, None) = parameter_of(path)? else {
+        return None;
+    };
+    let (owner, _) = path.rsplit_once("::")?;
+    let name = parameter_name(method, index, Some(associated));
+    Some(format!("{owner}::{PREFIX}{name}"))
+}
+
+/// The method, the index of the type parameter and the associated type a
+/// facade path of [`parameter_path`] names.
+#[must_use]
+pub fn parameter_of(path: &str) -> Option<(&str, usize, Option<&str>)> {
+    let name = path.rsplit("::").next()?;
+    let rest = name.strip_prefix(PREFIX)?.strip_prefix(PARAMETER)?;
+    // A method's name may hold `_`, so the index is the last segment of
+    // digits that a projection's name or nothing follows.
+    let mut parts = rest.rsplitn(3, '_');
+    let last = parts.next()?;
+    if let Ok(index) = last.parse::<usize>() {
+        let method = rest.strip_suffix(last)?.strip_suffix('_')?;
+        return Some((method, index, None));
+    }
+    let index = parts.next()?.parse::<usize>().ok()?;
+    let method = parts.next()?;
+    Some((method, index, Some(last)))
+}
+
 /// The names of an opaque type's parameters, `named` as the function's
 /// parameters its arguments are, with each that is the value of an
 /// associated type it binds named after that type, as `State` of `impl

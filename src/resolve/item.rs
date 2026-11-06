@@ -321,6 +321,27 @@ pub(crate) struct Function {
     pub parameters: Box<[Parameter]>,
     pub output: Option<type_ref::Type>,
     pub body: Body,
+    /// Each type parameter of a dependency's trait method that native code
+    /// fills, which the signature and body name as an opaque type (#593).
+    pub opaque: Box<[OpaqueGeneric]>,
+}
+
+/// A type parameter of a dependency's trait method that an impl's function
+/// has, which native code fills (`resolve::opaque_generics`): its name, as
+/// the runner's impl writes it, and its bounds.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OpaqueGeneric {
+    pub name: crate::ImmutableString,
+    pub bounds: Box<[OpaqueBound]>,
+}
+
+/// One bound of an [`OpaqueGeneric`]: the trait's path from the crate's
+/// root, the lifetimes it takes by name, and its type arguments.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OpaqueBound {
+    pub path: crate::ImmutableString,
+    pub lifetimes: Box<[crate::ImmutableString]>,
+    pub arguments: Box<[type_ref::Type]>,
 }
 
 /// What the borrow checker reads of a signature's lifetimes (D572.4): the

@@ -2216,6 +2216,17 @@ fn resolve_item(
             }
 
             for function in parsed_functions {
+                // A type parameter of a dependency's trait method is the
+                // opaque type native code fills it with (#593).
+                #[cfg(feature = "rust-import")]
+                let (function, scope, opaque) = match &trait_ {
+                    Some(item::TraitImpl::Native { path, .. }) => {
+                        opaque_generics(function, path, types, host, native)?
+                    }
+                    _ => (function, None, Box::default()),
+                };
+                #[cfg(feature = "rust-import")]
+                let types = scope.as_ref().unwrap_or(types);
                 let mut function = resolve_function(
                     function,
                     types,
@@ -2224,6 +2235,10 @@ fn resolve_item(
                     #[cfg(feature = "rust-import")]
                     native,
                 )?;
+                #[cfg(feature = "rust-import")]
+                {
+                    function.opaque = opaque;
+                }
                 function
                     .lifetimes
                     .within(&parsed.lifetimes, &written, &owner);
@@ -2573,7 +2588,101 @@ fn resolve_function(
             text: None,
             elide: None,
         },
+        opaque: Box::default(),
     })
+}
+
+/// `function`, a function of an impl of the dependency's trait at
+/// `trait_path`, with each of its type parameters that the trait's method
+/// has as an opaque type (`rawr_import::surface::opaque::parameter_path`)
+/// taken off its generics, the scope that names each such parameter that
+/// type, and each one's name and bounds (#593): native code fills the
+/// parameter with a type of its own, which the runner's impl reaches
+/// through the bounds, so the body reads it as an opaque type bounded by
+/// its trait, as it reads an opaque output.
+#[cfg(feature = "rust-import")]
+fn opaque_generics(
+    mut function: crate::item::Function,
+    trait_path: &str,
+    types: &BTreeMap<ImmutableString, type_ref::Target>,
+    host: &host::Registry,
+    native: Option<native::Site<'_>>,
+) -> Result<
+    (
+        crate::item::Function,
+        Option<BTreeMap<ImmutableString, type_ref::Target>>,
+        Box<[item::OpaqueGeneric]>,
+    ),
+    Error,
+> {
+    let mut scope = None::<BTreeMap<ImmutableString, type_ref::Target>>;
+    let mut opaque = Vec::new();
+    let mut kept = Vec::new();
+    for (index, generic) in std::mem::take(&mut function.generics)
+        .into_vec()
+        .into_iter()
+        .enumerate()
+    {
+        let path = rawr_import::surface::opaque::parameter_path(
+            trait_path,
+            &function.name.text,
+            index,
+            None,
+        );
+        let Some(definition) = host.source_type(&path) else {
+            kept.push(generic);
+            continue;
+        };
+        let target = type_ref::Type::Path(type_ref::Path {
+            name: path.as_str().into(),
+            target: type_ref::Target::Host {
+                definition: definition.clone(),
+                owner: host.type_owner(&path).cloned(),
+            },
+            arguments: Box::default(),
+            span: generic.name.span,
+        });
+        let mut bounds = Vec::with_capacity(generic.bounds.len());
+        for bound in generic.bounds.iter() {
+            let item::TraitImpl::Native {
+                path, arguments, ..
+            } = resolve_trait(bound.clone(), types, host, native)?
+            else {
+                continue;
+            };
+            let lifetimes = bound
+                .segments
+                .last()
+                .into_iter()
+                .flat_map(|segment| segment.arguments.iter())
+                .filter_map(|argument| match argument {
+                    crate::item::type_ref::Argument::Lifetime(lifetime) => {
+                        Some(lifetime.name.text.clone())
+                    }
+                    crate::item::type_ref::Argument::Type(_) => None,
+                })
+                .collect();
+            bounds.push(item::OpaqueBound {
+                path,
+                lifetimes,
+                arguments,
+            });
+        }
+        scope.get_or_insert_with(|| types.clone()).insert(
+            generic.name.text.clone(),
+            type_ref::Target::Alias(type_ref::Alias {
+                params: Box::default(),
+                target: Some(Box::new(target)),
+                defaults: Box::default(),
+            }),
+        );
+        opaque.push(item::OpaqueGeneric {
+            name: generic.name.text.clone(),
+            bounds: bounds.into_boxed_slice(),
+        });
+    }
+    function.generics = kept.into_boxed_slice();
+    Ok((function, scope, opaque.into_boxed_slice()))
 }
 
 /// Whether `ty` names the generic parameter `name` as a type argument of a
