@@ -118,7 +118,14 @@ fn demand_more(
         crate_demand.extend(crate::demandable(path, through_alias, request_demand).map(Box::from));
         // A member the type lacks may be its `Deref` target's, which the
         // method probe reaches through its `deref` and `deref_mut` (#762).
-        if let Some(owner) = owner {
+        // Only a crate's type is extracted: std's `String` is no crate.
+        let root = |path: &str| path.split("::").next().map(str::to_owned);
+        if let Some(owner) = owner
+            && (through_alias
+                || request_demand
+                    .iter()
+                    .any(|known| root(known) == root(owner)))
+        {
             crate_demand.extend(
                 graph
                     .rust_method_names()
