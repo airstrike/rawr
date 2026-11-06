@@ -14257,11 +14257,14 @@ fn render_take_input(
     // `&[T]` or `&(A, B)` of Rawr's array or tuple, as voronator's
     // `from_tuple` and image's `save_buffer` take: the Rust value made from
     // it, lent to the call, as a `&str` input is. So is one a borrowed type
-    // parameter takes, as serde's `serialize_field(key, &T)` at `bool`.
-    if let convert::Type::Borrowed {
-        mutable: false,
-        ty: lent,
-    } = &lent
+    // parameter takes, as serde's `serialize_field(key, &T)` at `bool`. A
+    // by-value `T` a borrow fills, as `pick(options: L)` at `&Vec<Language>`,
+    // takes its value as a by-value parameter does.
+    if matches!(ty, convert::Type::Borrowed { mutable: false, .. })
+        && let convert::Type::Borrowed {
+            mutable: false,
+            ty: lent,
+        } = &lent
         && is_made_for_call(lent)
     {
         let mut converted = String::new();
