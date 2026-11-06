@@ -5090,7 +5090,13 @@ impl<P: api::Phase> Context<'_, P> {
                     else {
                         continue;
                     };
-                    if matches!(method_signature.receiver(), model::Receiver::None) {
+                    // An associated function is a member where its signature
+                    // names the trait's `Self`, as `Error::custom(..) ->
+                    // Self` does, which a type parameter's opaque type
+                    // reaches through its frame (#593).
+                    if matches!(method_signature.receiver(), model::Receiver::None)
+                        && !(parameter_opaque_id(id) && names_self(method_signature, trait_id))
+                    {
                         continue;
                     }
                     let name = method.display_path().last().unwrap_or("<unnamed>");
@@ -5792,6 +5798,17 @@ impl<P: api::Phase> Context<'_, P> {
                 Representability::FunctionItem(item) => {
                     Ok(Representability::FunctionItem(item.with_instance(instance)))
                 }
+                // An associated function of the trait, as `Error::custom`.
+                Representability::Function(plan) => Ok(Representability::FunctionItem(
+                    representability::callable::Item::new(
+                        plan.signature().clone(),
+                        None,
+                        None,
+                        Box::default(),
+                        Box::default(),
+                    )
+                    .with_instance(instance),
+                )),
                 // A method of a trait without parameters, on an opaque type
                 // of a function without type parameters, as `fn view<'a>(..)
                 // -> impl Show + 'a` gives: an item of no parameters, whose
@@ -7813,6 +7830,13 @@ impl<P: api::Phase> Context<'_, P> {
                 // An iced view type's constructor, as `PaneGrid::new(&state,
                 // view)`: its value is a recipe, which borrows its inputs
                 // again at each lowering (D558 tier 2).
+                None
+            } else if !names_early_lifetime(signature.output()) {
+                // A lifetime the output doesn't name, as serde_json's
+                // `from_str<'a, T: Deserialize<'a>>(s: &'a str) -> Result<T>`
+                // has, where a bound alone names it: the borrow ends with
+                // the call, as a late-bound one's does, and rustc proves
+                // the bound at the type the call gives (#593).
                 None
             } else {
                 return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
@@ -10826,6 +10850,47 @@ pub(crate) fn impl_traits<'t>(ty: &'t model::Type, found: &mut Vec<&'t model::Ty
 
 /// `ty` with the trait `trait_id`'s `Self` its parameter 0, as a trait's
 /// method is a function of its `Self` (`classify_self_member`).
+/// Whether `id` is the opaque type of a trait method's type parameter or
+/// of one of its associated types (`parameter_opaque`).
+fn parameter_opaque_id(id: &api::identity::Definition) -> bool {
+    id.def_path_hash().contains('#')
+}
+
+/// Whether `signature` names `Self` of the trait `trait_id`.
+fn names_self(signature: &model::Signature, trait_id: &api::identity::Definition) -> bool {
+    let this = model::Type::Parameter {
+        owner: trait_id.clone(),
+        index: 0,
+    };
+    let found = std::cell::Cell::new(false);
+    let _ = map_signature_types(signature, |ty| {
+        let replaced = self_replaced(ty, trait_id, &model::Type::Never);
+        if replaced != *ty || type_names(ty, &this) {
+            found.set(true);
+        }
+        ty.clone()
+    });
+    found.get()
+}
+
+/// Whether `ty` names `target` at any depth.
+fn type_names(ty: &model::Type, target: &model::Type) -> bool {
+    if ty == target {
+        return true;
+    }
+    let replaced = substitute_parameters(
+        ty,
+        &[(
+            match target {
+                model::Type::Parameter { owner, index } => (owner.clone(), *index),
+                _ => return false,
+            },
+            model::Type::Never,
+        )],
+    );
+    replaced != *ty
+}
+
 /// The opaque type the type parameter `parameter` of `method`, whose
 /// generics are `generics`, is where native code calls a program's impl of
 /// the method (`parameter_members`): bounded as the parameter is.

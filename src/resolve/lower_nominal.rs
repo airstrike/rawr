@@ -16848,6 +16848,16 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        // `<S::Error as Error>::custom(..)` of a type parameter native code
+        // fills: the function of its opaque type (#593).
+        #[cfg(feature = "rust-import")]
+        if let Some(Ty::Host { proof, .. }) = self_ty.as_ref().map(|ty| self.inference.resolve(ty))
+            && turbofish.is_none()
+            && rawr_import::surface::opaque::declared(&proof.definition.path())
+        {
+            let owner = proof.definition.path().to_string();
+            return self.opaque_function_call(&owner, &member, member_span);
+        }
         // `<Look as Tone>::tone` of a crate's trait a `use` names: the
         // method on its first input or argument, as `Tone::tone` is.
         if !self.ufcs_trait(&trait_name)
@@ -39204,6 +39214,27 @@ impl<'a> Parser<'a> {
         if crate::std_table::is_root(&name) && matches!(self.peek(), Token::DoubleColon) {
             self.check_std_path(&name, name_span)?;
         }
+        // `S::Error::custom(..)` or `S::f(..)` of a type parameter native
+        // code fills: the function of its opaque type (#593).
+        #[cfg(feature = "rust-import")]
+        if matches!(self.peek(), Token::DoubleColon)
+            && !self.bindings.contains_key(name.as_str())
+            && let Some(path) = self.opaque.get(&name).cloned()
+        {
+            self.next();
+            let (first, first_span) = self.expect_qualified_name()?;
+            let projected = rawr_import::surface::opaque::parameter_projection(&path, &first)
+                .filter(|projected| self.models.host.source_type(projected).is_some());
+            let (owner, member, member_span) = match projected {
+                Some(projected) if matches!(self.peek(), Token::DoubleColon) => {
+                    self.next();
+                    let (member, member_span) = self.expect_qualified_name()?;
+                    (projected, member, member_span)
+                }
+                _ => (path.to_string(), first, first_span),
+            };
+            return self.opaque_function_call(&owner, &member, member_span);
+        }
         if matches!(self.peek(), Token::DoubleColon) && !self.bindings.contains_key(name.as_str()) {
             self.unbound_std_type(&name, true, name_span)?;
         }
@@ -51012,6 +51043,28 @@ impl<'a> Parser<'a> {
     /// The type `name` names before `::Output` in a local type, when it is a
     /// generic parameter, `Self` in a method, or a script type with
     /// associated types.
+    /// The call of the function `member` of the opaque type at the host path
+    /// `owner`, as its path names it.
+    #[cfg(feature = "rust-import")]
+    fn opaque_function_call(
+        &mut self,
+        owner: &str,
+        member: &ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let full = format!("{owner}::{member}");
+        let Some(items) = self.models.host_items(&full).map(<[_]>::to_vec) else {
+            return Err(Error::UnknownMember {
+                owner: owner.into(),
+                member: member.clone(),
+                reference: member_span,
+            });
+        };
+        let item_owner = self.models.item_owner(&full).cloned();
+        let named = span(member_span.start(), text_end(member_span.start(), member));
+        self.parse_host_function_or_item(items.into_boxed_slice(), item_owner, named)
+    }
+
     /// The opaque type of the type parameter `name` native code fills, at
     /// the host path `path`, or of the associated type a `::` after it
     /// names (`resolve::opaque_generics`).
