@@ -2409,7 +2409,8 @@
     {"issue":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open","category":"Divergences from rustc"},
     {"issue":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"open","category":"Divergences from rustc"},
     {"issue":994,"title":"A derive macro's own error is reported at the derive","state":"open","category":"Divergences from rustc"},
-    {"issue":995,"title":"std types written by their std paths and crates' re-exports of std types resolve","state":"closed","category":"Divergences from rustc","release":"0.3.147"}
+    {"issue":995,"title":"std types written by their std paths and crates' re-exports of std types resolve","state":"closed","category":"Divergences from rustc","release":"0.3.147"},
+    {"issue":996,"title":"D741's conditions: a conversion picks a family member only by one trait's type argument, and exactly one fit","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2906,7 +2907,8 @@
             {"number":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open"},
             {"number":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"open"},
             {"number":994,"title":"A derive macro's own error is reported at the derive","state":"open"},
-            {"number":995,"title":"std types written by their std paths and crates' re-exports of std types resolve","state":"closed"}
+            {"number":995,"title":"std types written by their std paths and crates' re-exports of std types resolve","state":"closed"},
+            {"number":996,"title":"D741's conditions: a conversion picks a family member only by one trait's type argument, and exactly one fit","state":"open"}
           ],
           "milestone": "0.4"
         },
