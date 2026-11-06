@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.158 (2026-11-06)
+
+- A method of a crate's trait that only iterators have, or that a blanket impl gives every `Iterator`, works on your iterators when the trait is in scope, as itertools' `rows.cartesian_product(columns)` does. Your iterator crosses as a Rust iterator that runs your chain to its next item on each `next()`, so your closures run as the crate pulls, in Rust's order, and only as far as it pulls. The `Product` it gives back is an iterator you drive with `for`, `next()` and the iterator methods, and one a crate takes as itself, so `a.cartesian_product(b).cartesian_product(c)` works. An array fills `J: IntoIterator`; where a crate takes `I: Iterator` it is rustc's E0277. (#1051, #1043)
+- Program structs a crate decodes on one of tokio's worker threads, such as a reqwest response's `json()`, decode again instead of panicking that a native value was kept past the call. 0.3.156's arena change let one thread's arena clear the mark another thread's releases waited on. (#1058)
+- A crate's facts are the same whether Cargo rebuilt it or reused it, so caches keyed on them no longer miss once after every cold build. (#1059)
+
 ## 0.3.157 (2026-11-06)
 
 - A `use` path can start at a name another `use` brings in, in a function body too, as in `use keyboard::key;` after `use iced::keyboard;`. A derive's expansion and a child module's `use super::*;` reach it as rustc does. (#1044)

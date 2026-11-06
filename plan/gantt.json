@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-06",
-  "version": "0.3.157",
+  "version": "0.3.158",
   "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "groups": [
     {
@@ -90,7 +90,7 @@
         {"id":"struct-literals-live-edits","name":"Struct literals and live edits","start":44,"size":2,"state":"next","note":"Not started","issues":[325,326],"milestone":"0.4"},
         {"id":"projections-function-values","name":"Projections and function values","start":44,"size":3,"state":"now","note":"#317 and #319 remain","issues":[317,318,319,327],"milestone":"0.4"},
         {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"now","note":"17 examples pass check but their runner doesn't build (#951 #955 #957)","issues":[335,336,337,339,340,338,951,955,957],"milestone":"0.4"},
-        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"now","note":"5 crash after a frame, 2 panic at start, 18 fail check (#952 #953 #954 #956 #958)","issues":[283,314,328,334,345,593,952,953,954,956,958,971,973,974,975,976,979,980,981,983,984,985,986,987,988,990,991,992,993,994,995,996,997,1003,1004,1005,1006,1007,1008,1009,1010,1014,1017,1018,1022,1023,1027,1030,1031,1032,1041,1043,1044,1050,1051],"milestone":"0.4"},
+        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"now","note":"5 crash after a frame, 2 panic at start, 18 fail check (#952 #953 #954 #956 #958)","issues":[283,314,328,334,345,593,952,953,954,956,958,971,973,974,975,976,979,980,981,983,984,985,986,987,988,990,991,992,993,994,995,996,997,1003,1004,1005,1006,1007,1008,1009,1010,1014,1017,1018,1022,1023,1027,1030,1031,1032,1041,1043,1044,1050,1051,1055,1058,1059],"milestone":"0.4"},
         {"id":"opaque-values","name":"A crate's `impl Trait` values","start":47,"size":3,"state":"now","note":"Borrowing opaque outputs live in regions through wrapper fns (#936); layout starts its runner. Slots and members next (#965)","issues":[845,885,886,887,912,913,916,917,936,943,965,966,967]}
       ]
     },
