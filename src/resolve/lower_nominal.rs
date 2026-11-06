@@ -21453,9 +21453,12 @@ impl<'a> Parser<'a> {
                 .map(|(name, ty, _)| (name.clone(), ty.clone()))
                 .collect();
         }
+        // A function item takes no space, as in Rust: the proof is its
+        // type's, and its value is `()`, which a tuple or array holding it
+        // reads before a member coerces to a `fn` pointer.
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
-            source: origin::Fragment::plain(item.path()),
+            source: origin::Fragment::plain("()"),
             ty: Ty::ImportedFunctionItem {
                 input: Box::new(input),
                 output: Box::new(signature.output),
