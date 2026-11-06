@@ -2985,7 +2985,19 @@ fn opaque_types(
             _ => {}
         }
     }
-    let opaque = rawr_import::surface::opaque::identities(contract.raw_graph());
+    let mut opaque = rawr_import::surface::opaque::identities(contract.raw_graph());
+    // So is the opaque type a trait method's type parameter is, which the
+    // function beside the trait's methods over its `Self` gives
+    // (`surface::opaque::parameter_name`).
+    for (path, associated) in &facade.self_members {
+        if let Representability::Function(plan) = associated.representability()
+            && rawr_import::surface::opaque::is_parameter(path)
+            && let representability::convert::Type::Nominal { definition, .. } =
+                plan.signature().output()
+        {
+            opaque.insert(*definition.as_bytes());
+        }
+    }
     if opaque.is_empty() {
         return Vec::new();
     }

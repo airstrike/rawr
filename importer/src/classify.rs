@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 110;
+const CLASSIFIER_VERSION: u32 = 111;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -5114,7 +5114,13 @@ impl<P: api::Phase> Context<'_, P> {
                     else {
                         continue;
                     };
-                    if matches!(method_signature.receiver(), model::Receiver::None) {
+                    // An associated function is a member where its signature
+                    // names the trait's `Self`, as `Error::custom(..) ->
+                    // Self` does, which a type parameter's opaque type
+                    // reaches through its frame (#593).
+                    if matches!(method_signature.receiver(), model::Receiver::None)
+                        && !(parameter_opaque_id(id) && names_self(method_signature, trait_id))
+                    {
                         continue;
                     }
                     let name = method.display_path().last().unwrap_or("<unnamed>");
@@ -5122,7 +5128,33 @@ impl<P: api::Phase> Context<'_, P> {
                         continue;
                     }
                     names.push(name.into());
-                    let selector = selector(method)?;
+                    // The trait's type parameters share its export, so each
+                    // one's member is its own by the opaque type's
+                    // definition.
+                    let selector = match selector(method)? {
+                        crate::surface::identity::Selector::Method { receiver, .. }
+                            if parameter_opaque_id(id) =>
+                        {
+                            crate::surface::identity::Selector::Method {
+                                item: crate::surface::identity::Definition::self_member(
+                                    id,
+                                    method.id(),
+                                ),
+                                receiver,
+                            }
+                        }
+                        crate::surface::identity::Selector::AssociatedFunction { .. }
+                            if parameter_opaque_id(id) =>
+                        {
+                            crate::surface::identity::Selector::AssociatedFunction {
+                                item: crate::surface::identity::Definition::self_member(
+                                    id,
+                                    method.id(),
+                                ),
+                            }
+                        }
+                        selector => selector,
+                    };
                     self.retain_selector(&selector)?;
                     let identity =
                         crate::surface::identity::Identity::imported(export, None, selector)?;
@@ -5327,6 +5359,7 @@ impl<P: api::Phase> Context<'_, P> {
                 member: None,
             });
         }
+        outcomes.extend(self.parameter_members(export, definition)?);
         if outcomes.is_empty() {
             return Ok(Vec::new());
         }
@@ -5343,6 +5376,227 @@ impl<P: api::Phase> Context<'_, P> {
             span: definition.span().clone(),
             associated: outcomes.into_boxed_slice(),
         }])
+    }
+
+    /// The opaque type each type parameter of the methods of the trait
+    /// `definition` is where native code calls a program's impl of the
+    /// method, as `S` of serde's `serialize<S: Serializer>`, and each
+    /// associated type of its bounds they leave open, as `S::Ok` (#593):
+    /// each a function of no inputs that gives the type, beside the trait's
+    /// methods over its `Self` (`surface::opaque::parameter_name`), whose
+    /// members are the methods its bounds give it, as an opaque output's
+    /// are. No program calls the function; the program's impl names the
+    /// type.
+    fn parameter_members(
+        &self,
+        export: &ledger::Export,
+        definition: &model::Definition,
+    ) -> Result<Vec<OutcomeRecord>, Error> {
+        let model::Kind::Trait { associated, .. } = definition.kind() else {
+            return Ok(Vec::new());
+        };
+        let mut outcomes = Vec::new();
+        for method_id in associated.iter() {
+            let Some(method) = self
+                .graph
+                .definition_index(method_id)
+                .and_then(|index| self.graph.definitions().nth(index))
+            else {
+                continue;
+            };
+            let model::Kind::Function { generics, .. } = method.kind() else {
+                continue;
+            };
+            let Some(name) = method.display_path().last() else {
+                continue;
+            };
+            let parameters = generics
+                .parameters()
+                .filter(|parameter| matches!(parameter.kind(), model::ParameterKind::Type { .. }));
+            for (position, parameter) in parameters.enumerate() {
+                let opaque = parameter_opaque(method, parameter, generics);
+                let model::Type::ImplTrait { bounds, .. } = &opaque else {
+                    continue;
+                };
+                if self.bound_traits(bounds).is_empty() {
+                    continue;
+                }
+                let mut types = vec![(None, opaque.clone())];
+                for (trait_id, _) in self.bound_traits(bounds) {
+                    let Some(model::Kind::Trait { associated, .. }) = self
+                        .graph
+                        .definition_index(&trait_id)
+                        .and_then(|index| self.graph.definitions().nth(index))
+                        .map(model::Definition::kind)
+                    else {
+                        continue;
+                    };
+                    for item in associated.iter() {
+                        let Some(found) = self
+                            .graph
+                            .definition_index(item)
+                            .and_then(|index| self.graph.definitions().nth(index))
+                        else {
+                            continue;
+                        };
+                        if !matches!(found.kind(), model::Kind::AssociatedType { .. }) {
+                            continue;
+                        }
+                        let Some(associated_name) = found.display_path().last() else {
+                            continue;
+                        };
+                        if types
+                            .iter()
+                            .any(|(known, _)| known.as_deref() == Some(associated_name))
+                        {
+                            continue;
+                        }
+                        let projected = self.opaque_projection(&opaque, item);
+                        if matches!(projected, model::Type::ImplTrait { .. }) {
+                            types.push((Some(associated_name.to_owned()), projected));
+                        }
+                    }
+                }
+                for (projection, ty) in types {
+                    outcomes.push(self.parameter_member(
+                        export,
+                        definition,
+                        method,
+                        &crate::surface::opaque::parameter_name(
+                            name,
+                            position,
+                            projection.as_deref(),
+                        ),
+                        &ty,
+                    )?);
+                }
+            }
+        }
+        Ok(outcomes)
+    }
+
+    /// One function of [`Self::parameter_members`]: `name`, which gives the
+    /// opaque type `opaque` that a type parameter of the trait
+    /// `definition`'s method `method` is, or one of its projections.
+    fn parameter_member(
+        &self,
+        export: &ledger::Export,
+        definition: &model::Definition,
+        method: &model::Definition,
+        name: &str,
+        opaque: &model::Type,
+    ) -> Result<OutcomeRecord, Error> {
+        let model::Type::ImplTrait { id, .. } = opaque else {
+            return Err(Error::Cardinality);
+        };
+        let selector = crate::surface::identity::Selector::AssociatedFunction {
+            item: crate::surface::identity::Definition::self_member(definition.id(), id),
+        };
+        self.retain_selector(&selector)?;
+        let identity = crate::surface::identity::Identity::imported(export, None, selector)?;
+        self.retain_outcome_common(export.key(), name)?;
+        self.retain_span(export.span())?;
+        self.retain_span(method.span())?;
+        let origin =
+            representability::origin::Set::new(export.span().clone(), method.span().clone());
+        let signature = model::Signature::new(
+            model::Safety::Safe,
+            false,
+            false,
+            "\"Rust\"".into(),
+            false,
+            Box::default(),
+            model::Receiver::None,
+            Box::default(),
+            opaque.clone(),
+        );
+        let generics = model::Generics::new(Box::default(), Box::default());
+        let evidence = match self.function(&signature, &generics) {
+            Ok(plan) => {
+                self.retain_inline_representability()?;
+                OutcomeEvidence::Inline(Box::new(plan))
+            }
+            Err(Failure::Reject(kind)) => {
+                self.retain_inline_representability()?;
+                OutcomeEvidence::Inline(Box::new(representability::Representability::Rejected(
+                    representability::reject::Reason::classification(kind, method.span().clone()),
+                )))
+            }
+            Err(Failure::Operational(error)) => return Err(error),
+        };
+        let implementations = self
+            .opaque_records(export, method, &generics, &[opaque])?
+            .into_boxed_slice();
+        Ok(OutcomeRecord {
+            export: export.key().clone(),
+            identity,
+            name: name.into(),
+            origin: Some(origin),
+            evidence,
+            implementations,
+            variant: None,
+            member: None,
+        })
+    }
+
+    /// The type `<opaque as Trait>::associated` is, for an opaque type
+    /// `opaque`: the type its bounds bind it to, as `impl Program<State =
+    /// S>` binds `State`, or else an opaque type of its own, bounded as the
+    /// trait declares the associated type, with the trait's `Self` the
+    /// opaque type, as serde's `S::SerializeStruct` is a `SerializeStruct<
+    /// Ok = S::Ok, ..>` (#593).
+    fn opaque_projection(
+        &self,
+        opaque: &model::Type,
+        associated: &api::identity::Definition,
+    ) -> model::Type {
+        let model::Type::ImplTrait { id, bounds, .. } = opaque else {
+            return opaque.clone();
+        };
+        if let Some((_, _, ty)) = self
+            .bound_associated(bounds)
+            .into_iter()
+            .find(|(_, item, _)| item == associated)
+        {
+            return ty;
+        }
+        let declared = self
+            .graph
+            .definition_index(associated)
+            .and_then(|index| self.graph.definitions().nth(index));
+        let (owner, declared) = match declared.map(|found| (found, found.kind())) {
+            Some((found, model::Kind::AssociatedType { bounds, .. })) => (
+                match found.owner() {
+                    model::Owner::Definition(owner) => Some(owner.clone()),
+                    _ => None,
+                },
+                bounds.clone(),
+            ),
+            _ => (None, Box::default()),
+        };
+        // The declaration's `Self` is the opaque type, and so is the
+        // projection a bound of its own names it by.
+        let bounds = declared
+            .iter()
+            .map(|predicate| {
+                map_predicate_types(predicate, |ty| match &owner {
+                    Some(owner) => substitute_parameters(
+                        &self_replaced(ty, owner, opaque),
+                        &[((owner.clone(), 0), opaque.clone())],
+                    ),
+                    None => ty.clone(),
+                })
+            })
+            .collect();
+        model::Type::ImplTrait {
+            id: api::identity::Definition::new(
+                id.unit().clone(),
+                format!("{}::{}", id.def_path_hash(), associated.def_path_hash()).into(),
+                api::identity::Namespace::Type,
+            ),
+            bounds,
+            captures: Box::default(),
+        }
     }
 
     /// `method` of the trait `definition`, whose generics are `container`,
@@ -5597,6 +5851,17 @@ impl<P: api::Phase> Context<'_, P> {
                 Representability::FunctionItem(item) => {
                     Ok(Representability::FunctionItem(item.with_instance(instance)))
                 }
+                // An associated function of the trait, as `Error::custom`.
+                Representability::Function(plan) => Ok(Representability::FunctionItem(
+                    representability::callable::Item::new(
+                        plan.signature().clone(),
+                        None,
+                        None,
+                        Box::default(),
+                        Box::default(),
+                    )
+                    .with_instance(instance),
+                )),
                 // A method of a trait without parameters, on an opaque type
                 // of a function without type parameters, as `fn view<'a>(..)
                 // -> impl Show + 'a` gives: an item of no parameters, whose
@@ -7619,6 +7884,13 @@ impl<P: api::Phase> Context<'_, P> {
                 // view)`: its value is a recipe, which borrows its inputs
                 // again at each lowering (D558 tier 2).
                 None
+            } else if !names_early_lifetime(signature.output()) {
+                // A lifetime the output doesn't name, as serde_json's
+                // `from_str<'a, T: Deserialize<'a>>(s: &'a str) -> Result<T>`
+                // has, where a bound alone names it: the borrow ends with
+                // the call, as a late-bound one's does, and rustc proves
+                // the bound at the type the call gives (#593).
+                None
             } else {
                 return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
             }
@@ -8547,18 +8819,45 @@ impl<P: api::Phase> Context<'_, P> {
             ) && self.opaque_self.borrow().is_some() =>
             {
                 let opaque = self.opaque_self.borrow().clone();
-                let bound = match opaque {
+                let bound = match &opaque {
                     Some(model::Type::ImplTrait { bounds, .. }) => self
-                        .bound_associated(&bounds)
+                        .bound_associated(bounds)
                         .into_iter()
                         .find(|(_, item, _)| item == associated)
                         .map(|(_, _, ty)| ty),
                     _ => None,
                 };
-                match bound {
-                    Some(ty) => return self.convert(&ty),
-                    None => return Err(representability::reject::Kind::Projection.into()),
-                }
+                // One its bounds leave open is an opaque type of its own
+                // (`opaque_projection`), as `Visitor::Out` of `V: Visitor`.
+                let ty = match (bound, &opaque) {
+                    (Some(ty), _) => ty,
+                    (None, Some(opaque)) => self.opaque_projection(opaque, associated),
+                    (None, None) => return Err(representability::reject::Kind::Projection.into()),
+                };
+                let outer = self.opaque_output.replace(Some(Box::default()));
+                let converted = self.convert(&ty);
+                *self.opaque_output.borrow_mut() = outer;
+                return converted;
+            }
+            // `<S as Serializer>::Ok` of an opaque type `S`, as a type
+            // parameter's bound names it (`parameter_members`).
+            model::Type::Projection {
+                associated,
+                arguments,
+                ..
+            } if matches!(
+                arguments.first(),
+                Some(model::Argument::Type(model::Type::ImplTrait { .. }))
+            ) =>
+            {
+                let Some(model::Argument::Type(opaque)) = arguments.first() else {
+                    return Err(representability::reject::Kind::Projection.into());
+                };
+                let ty = self.opaque_projection(opaque, associated);
+                let outer = self.opaque_output.replace(Some(Box::default()));
+                let converted = self.convert(&ty);
+                *self.opaque_output.borrow_mut() = outer;
+                return converted;
             }
             model::Type::Projection { .. } => match self.projected(ty) {
                 Some(item) => return self.convert(item),
@@ -10607,6 +10906,96 @@ pub(crate) fn impl_traits<'t>(ty: &'t model::Type, found: &mut Vec<&'t model::Ty
 
 /// `ty` with the trait `trait_id`'s `Self` its parameter 0, as a trait's
 /// method is a function of its `Self` (`classify_self_member`).
+/// Whether `id` is the opaque type of a trait method's type parameter or
+/// of one of its associated types (`parameter_opaque`).
+fn parameter_opaque_id(id: &api::identity::Definition) -> bool {
+    id.def_path_hash().contains('#')
+}
+
+/// Whether `signature` names `Self` of the trait `trait_id`.
+fn names_self(signature: &model::Signature, trait_id: &api::identity::Definition) -> bool {
+    let this = model::Type::Parameter {
+        owner: trait_id.clone(),
+        index: 0,
+    };
+    let found = std::cell::Cell::new(false);
+    let _ = map_signature_types(signature, |ty| {
+        let replaced = self_replaced(ty, trait_id, &model::Type::Never);
+        if replaced != *ty || type_names(ty, &this) {
+            found.set(true);
+        }
+        ty.clone()
+    });
+    found.get()
+}
+
+/// Whether `ty` names `target` at any depth.
+fn type_names(ty: &model::Type, target: &model::Type) -> bool {
+    if ty == target {
+        return true;
+    }
+    let replaced = substitute_parameters(
+        ty,
+        &[(
+            match target {
+                model::Type::Parameter { owner, index } => (owner.clone(), *index),
+                _ => return false,
+            },
+            model::Type::Never,
+        )],
+    );
+    replaced != *ty
+}
+
+/// The opaque type the type parameter `parameter` of `method`, whose
+/// generics are `generics`, is where native code calls a program's impl of
+/// the method (`parameter_members`): bounded as the parameter is.
+fn parameter_opaque(
+    method: &model::Definition,
+    parameter: &model::Parameter,
+    generics: &model::Generics,
+) -> model::Type {
+    let this = model::Type::Parameter {
+        owner: parameter.owner().clone(),
+        index: parameter.index(),
+    };
+    let names = |ty: &model::Type| match ty {
+        model::Type::Projection { arguments, .. } => {
+            matches!(arguments.first(), Some(model::Argument::Type(first)) if *first == this)
+        }
+        ty => *ty == this,
+    };
+    let mut bounds = generics
+        .predicates()
+        .filter(|predicate| match predicate {
+            model::Predicate::Bound { ty, .. } => *ty == this,
+            model::Predicate::ProjectionEquality { projection, .. } => names(projection),
+            _ => false,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if let model::ParameterKind::Type { bounds: declared, .. } = parameter.kind() {
+        for bound in declared.iter() {
+            let predicate = model::Predicate::Bound {
+                ty: this.clone(),
+                bound: bound.clone(),
+            };
+            if !bounds.contains(&predicate) {
+                bounds.push(predicate);
+            }
+        }
+    }
+    model::Type::ImplTrait {
+        id: api::identity::Definition::new(
+            method.id().unit().clone(),
+            format!("{}#{}", method.id().def_path_hash(), parameter.index()).into(),
+            api::identity::Namespace::Type,
+        ),
+        bounds: bounds.into_boxed_slice(),
+        captures: Box::default(),
+    }
+}
+
 fn self_as_parameter(ty: &model::Type, trait_id: &api::identity::Definition) -> model::Type {
     self_replaced(
         ty,

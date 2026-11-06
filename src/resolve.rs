@@ -2216,6 +2216,17 @@ fn resolve_item(
             }
 
             for function in parsed_functions {
+                // A type parameter of a dependency's trait method is the
+                // opaque type native code fills it with (#593).
+                #[cfg(feature = "rust-import")]
+                let (function, scope, opaque) = match &trait_ {
+                    Some(item::TraitImpl::Native { path, .. }) => {
+                        opaque_generics(function, path, types, host, native)?
+                    }
+                    _ => (function, None, Box::default()),
+                };
+                #[cfg(feature = "rust-import")]
+                let types = scope.as_ref().unwrap_or(types);
                 let mut function = resolve_function(
                     function,
                     types,
@@ -2224,6 +2235,10 @@ fn resolve_item(
                     #[cfg(feature = "rust-import")]
                     native,
                 )?;
+                #[cfg(feature = "rust-import")]
+                {
+                    function.opaque = opaque;
+                }
                 function
                     .lifetimes
                     .within(&parsed.lifetimes, &written, &owner);
@@ -2493,6 +2508,7 @@ fn resolve_function(
 
     let mut parameters = Vec::with_capacity(parsed.parameters.len());
     let mut parameter_names = BTreeMap::new();
+    let mut formatter = None;
 
     for parameter in parsed.parameters.into_vec() {
         if let Some(previous_declaration) =
@@ -2505,15 +2521,27 @@ fn resolve_function(
                 previous_declaration,
             });
         }
+        let written_formatter = writes_formatter(&parameter.ty);
+        let ty = type_ref::resolve(
+            parameter.ty,
+            types,
+            host,
+            #[cfg(feature = "rust-import")]
+            native,
+        )?;
+        // `f: &mut fmt::Formatter`, as serde's `expecting` takes, is the
+        // text it writes, as a `fmt` body's formatter is.
+        if formatter.is_none()
+            && written_formatter
+            && matches!(&ty, type_ref::Type::Reference { mutable: true, target, .. }
+                if matches!(&**target, type_ref::Type::Path(path)
+                    if path.name == "String" && path.target == type_ref::Target::Builtin))
+        {
+            formatter = Some(parameter.name.text.clone());
+        }
         parameters.push(item::Parameter {
             name: parameter.name,
-            ty: type_ref::resolve(
-                parameter.ty,
-                types,
-                host,
-                #[cfg(feature = "rust-import")]
-                native,
-            )?,
+            ty,
             span: parameter.span,
             pattern: parameter.pattern,
         });
@@ -2573,7 +2601,110 @@ fn resolve_function(
             text: None,
             elide: None,
         },
+        opaque: Box::default(),
+        formatter,
     })
+}
+
+/// Whether `ty` is written `&mut Formatter`, by any path to it.
+fn writes_formatter(ty: &crate::item::type_ref::Type) -> bool {
+    matches!(ty, crate::item::type_ref::Type::Reference { mutable: true, target, .. }
+        if matches!(&**target, crate::item::type_ref::Type::Path(path)
+            if path.segments.last().is_some_and(|last| last.name.text == "Formatter")))
+}
+
+/// `function`, a function of an impl of the dependency's trait at
+/// `trait_path`, with each of its type parameters that the trait's method
+/// has as an opaque type (`rawr_import::surface::opaque::parameter_path`)
+/// taken off its generics, the scope that names each such parameter that
+/// type, and each one's name and bounds (#593): native code fills the
+/// parameter with a type of its own, which the runner's impl reaches
+/// through the bounds, so the body reads it as an opaque type bounded by
+/// its trait, as it reads an opaque output.
+#[cfg(feature = "rust-import")]
+fn opaque_generics(
+    mut function: crate::item::Function,
+    trait_path: &str,
+    types: &BTreeMap<ImmutableString, type_ref::Target>,
+    host: &host::Registry,
+    native: Option<native::Site<'_>>,
+) -> Result<
+    (
+        crate::item::Function,
+        Option<BTreeMap<ImmutableString, type_ref::Target>>,
+        Box<[item::OpaqueGeneric]>,
+    ),
+    Error,
+> {
+    let mut scope = None::<BTreeMap<ImmutableString, type_ref::Target>>;
+    let mut opaque = Vec::new();
+    let mut kept = Vec::new();
+    for (index, generic) in std::mem::take(&mut function.generics)
+        .into_vec()
+        .into_iter()
+        .enumerate()
+    {
+        let path = rawr_import::surface::opaque::parameter_path(
+            trait_path,
+            &function.name.text,
+            index,
+            None,
+        );
+        let Some(definition) = host.source_type(&path) else {
+            kept.push(generic);
+            continue;
+        };
+        let target = type_ref::Type::Path(type_ref::Path {
+            name: path.as_str().into(),
+            target: type_ref::Target::Host {
+                definition: definition.clone(),
+                owner: host.type_owner(&path).cloned(),
+            },
+            arguments: Box::default(),
+            span: generic.name.span,
+        });
+        let mut bounds = Vec::with_capacity(generic.bounds.len());
+        for bound in generic.bounds.iter() {
+            let item::TraitImpl::Native {
+                path, arguments, ..
+            } = resolve_trait(bound.clone(), types, host, native)?
+            else {
+                continue;
+            };
+            let lifetimes = bound
+                .segments
+                .last()
+                .into_iter()
+                .flat_map(|segment| segment.arguments.iter())
+                .filter_map(|argument| match argument {
+                    crate::item::type_ref::Argument::Lifetime(lifetime) => {
+                        Some(lifetime.name.text.clone())
+                    }
+                    crate::item::type_ref::Argument::Type(_) => None,
+                })
+                .collect();
+            bounds.push(item::OpaqueBound {
+                path,
+                lifetimes,
+                arguments,
+            });
+        }
+        scope.get_or_insert_with(|| types.clone()).insert(
+            generic.name.text.clone(),
+            type_ref::Target::Alias(type_ref::Alias {
+                params: Box::default(),
+                target: Some(Box::new(target)),
+                defaults: Box::default(),
+            }),
+        );
+        opaque.push(item::OpaqueGeneric {
+            name: generic.name.text.clone(),
+            path: path.as_str().into(),
+            bounds: bounds.into_boxed_slice(),
+        });
+    }
+    function.generics = kept.into_boxed_slice();
+    Ok((function, scope, opaque.into_boxed_slice()))
 }
 
 /// Whether `ty` names the generic parameter `name` as a type argument of a
@@ -4830,16 +4961,22 @@ fn resolve_trait(
                     crate::item::type_ref::Argument::Lifetime(_) => None,
                 })
                 .collect::<Result<_, _>>()?;
-            let lifetimes = last
+            let lifetime_names = last
                 .arguments
                 .iter()
-                .filter(|argument| matches!(argument, crate::item::type_ref::Argument::Lifetime(_)))
-                .count();
+                .filter_map(|argument| match argument {
+                    crate::item::type_ref::Argument::Lifetime(lifetime) => {
+                        Some(lifetime.name.text.clone())
+                    }
+                    crate::item::type_ref::Argument::Type(_) => None,
+                })
+                .collect::<Box<[_]>>();
             return Ok(item::TraitImpl::Native {
                 path: trait_path.into(),
                 name: last.name.clone(),
                 arguments,
-                lifetimes,
+                lifetimes: lifetime_names.len(),
+                lifetime_names,
             });
         }
         let error = Error::UnknownType {

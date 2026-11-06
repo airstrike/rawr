@@ -1833,17 +1833,49 @@ fn native_impl(
                     },
                 ),
             };
-            functions.push(ScriptImplFunction::new(
-                function.name.text.as_str().into(),
-                format!("{owner_path}::{}", definition.key().name()).into(),
-                receiver,
-                inputs,
-                output,
-            ));
+            // Each type parameter native code fills, with its bounds as
+            // the impl writes them (#593).
+            let mut generics = Vec::with_capacity(function.opaque.len());
+            for generic in function.opaque.iter() {
+                let mut bounds = Vec::with_capacity(generic.bounds.len());
+                for bound in generic.bounds.iter() {
+                    bounds.push(rawr_import::surface::instance::ImplBound::new(
+                        bound.path.as_str().into(),
+                        bound
+                            .lifetimes
+                            .iter()
+                            .map(|lifetime| lifetime_text(lifetime))
+                            .collect(),
+                        bound
+                            .arguments
+                            .iter()
+                            .map(&convert)
+                            .collect::<Result<Box<[_]>, _>>()?,
+                    ));
+                }
+                generics.push(rawr_import::surface::instance::ImplGeneric::new(
+                    generic.name.as_str().into(),
+                    bounds.into_boxed_slice(),
+                ));
+            }
+            functions.push(
+                ScriptImplFunction::new(
+                    function.name.text.as_str().into(),
+                    format!("{owner_path}::{}", definition.key().name()).into(),
+                    receiver,
+                    inputs,
+                    output,
+                )
+                .with_generics(generics.into_boxed_slice()),
+            );
         }
-        let lifetimes = match &implementation.trait_ {
-            Some(item::TraitImpl::Native { lifetimes, .. }) => *lifetimes,
-            _ => 0,
+        let (lifetimes, lifetime_names) = match &implementation.trait_ {
+            Some(item::TraitImpl::Native {
+                lifetimes,
+                lifetime_names,
+                ..
+            }) => (*lifetimes, lifetime_names.clone()),
+            _ => (0, Box::default()),
         };
         Ok(ScriptImpl::new(
             owner,
@@ -1853,7 +1885,23 @@ fn native_impl(
             associated,
             functions.into_boxed_slice(),
         )
-        .with_lifetimes(u32::try_from(lifetimes).unwrap_or(u32::MAX)))
+        .with_lifetimes(u32::try_from(lifetimes).unwrap_or(u32::MAX))
+        .with_lifetime_names(
+            lifetime_names
+                .iter()
+                .map(|name| lifetime_text(name))
+                .collect(),
+        ))
+    }
+}
+
+/// A lifetime's name as Rust writes it, with its `'`.
+#[cfg(feature = "rust-import")]
+fn lifetime_text(name: &ImmutableString) -> Box<str> {
+    if name.starts_with('\'') {
+        name.as_str().into()
+    } else {
+        format!("'{name}").into()
     }
 }
 
@@ -12184,6 +12232,9 @@ struct Parser<'a> {
     text_into: Vec<TextInto>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
+    /// Each type parameter of a dependency's trait method that native code
+    /// fills, with the host path of its opaque type (#593).
+    opaque: BTreeMap<ImmutableString, ImmutableString>,
     /// `::<A, B>` read after a generic function's name, for its call.
     pending_turbofish: Option<Vec<Ty>>,
     /// `::<T>` read after a trait function's name in `Trait::f::<T>(..)`,
@@ -12510,6 +12561,7 @@ impl<'a> Parser<'a> {
             parse_count: 0,
             text_into: Vec::new(),
             generics: BTreeMap::new(),
+            opaque: BTreeMap::new(),
             pending_turbofish: None,
             trait_turbofish: None,
             path_values: HashSet::new(),
@@ -12601,7 +12653,8 @@ impl<'a> Parser<'a> {
                     && parser.models.std_traits.contains(*trait_name)
             })
             .and_then(|_| definition.parameters().first())
-            .map(|parameter| parameter.name.text.clone());
+            .map(|parameter| parameter.name.text.clone())
+            .or_else(|| definition.formatter().cloned());
         parser.return_ty = Some(Ty::from_resolved(definition.output()));
         parser.place_output = definition.name() != "index_mut"
             && matches!(definition.receiver(), Some(receiver::Mode::Mutable))
@@ -12613,6 +12666,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
+        parser.opaque = definition.opaque().clone();
         parser.generic_traits = generic_traits(definition.generics());
         parser.host_witnesses = host_witnesses(definition.generics());
         parser.generic_trait_arguments = generic_trait_arguments(definition.generics());
@@ -16815,6 +16869,16 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        // `<S::Error as Error>::custom(..)` of a type parameter native code
+        // fills: the function of its opaque type (#593).
+        #[cfg(feature = "rust-import")]
+        if let Some(Ty::Host { proof, .. }) = self_ty.as_ref().map(|ty| self.inference.resolve(ty))
+            && turbofish.is_none()
+            && rawr_import::surface::opaque::declared(&proof.definition.path())
+        {
+            let owner = proof.definition.path().to_string();
+            return self.opaque_function_call(&owner, &member, member_span);
+        }
         // `<Look as Tone>::tone` of a crate's trait a `use` names: the
         // method on its first input or argument, as `Tone::tone` is.
         if !self.ufcs_trait(&trait_name)
@@ -26921,6 +26985,7 @@ impl<'a> Parser<'a> {
             let span = Span::new(start, text_end(start, "_"));
             return Ok(PatternSyntax::Discard { span });
         }
+        self.splice_std_alias();
         // `&p`, `&mut p`; `&&p` is two references.
         if matches!(self.peek(), Token::Ampersand | Token::And) {
             let double = matches!(self.next().0, Token::And);
@@ -28816,6 +28881,7 @@ impl<'a> Parser<'a> {
             // subject is left `()` there first.
             self.open_drops();
             let mut clears = String::new();
+            self.splice_std_alias();
             // `_`, or a binding `name` that matches anything and binds it,
             // as in Rust.
             let catch_all = match self.peek() {
@@ -37573,6 +37639,26 @@ impl<'a> Parser<'a> {
                     Err(back) => value = back,
                 }
             }
+            // `Trait::f(0usize, ..)` of a crate's trait, where no type the
+            // call can be on has `f`, as `de::Error::invalid_length(0usize,
+            // ..)` of a type parameter whose `invalid_length` Rawr can't
+            // take: the trait's member is unknown, at the call.
+            #[cfg(feature = "rust-import")]
+            if matches!(
+                without_references(&builtin),
+                Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool
+            ) && let Some(trait_path) = self.spliced_traits.get(&member_span.start()).cloned()
+                && self
+                    .models
+                    .host_items(&format!("{trait_path}::{member}"))
+                    .is_none()
+            {
+                return Err(Error::UnknownMember {
+                    owner: trait_path,
+                    member,
+                    reference: member_span,
+                });
+            }
             // `a.min(b)`, `a.max(b)`, `a.clamp(lo, hi)` through `Ord`, unless
             // the type has its own method of that name.
             if matches!(member.as_str(), "min" | "max" | "clamp")
@@ -39261,6 +39347,27 @@ impl<'a> Parser<'a> {
         if crate::std_table::is_root(&name) && matches!(self.peek(), Token::DoubleColon) {
             self.check_std_path(&name, name_span)?;
         }
+        // `S::Error::custom(..)` or `S::f(..)` of a type parameter native
+        // code fills: the function of its opaque type (#593).
+        #[cfg(feature = "rust-import")]
+        if matches!(self.peek(), Token::DoubleColon)
+            && !self.bindings.contains_key(name.as_str())
+            && let Some(path) = self.opaque.get(&name).cloned()
+        {
+            self.next();
+            let (first, first_span) = self.expect_qualified_name()?;
+            let projected = rawr_import::surface::opaque::parameter_projection(&path, &first)
+                .filter(|projected| self.models.host.source_type(projected).is_some());
+            let (owner, member, member_span) = match projected {
+                Some(projected) if matches!(self.peek(), Token::DoubleColon) => {
+                    self.next();
+                    let (member, member_span) = self.expect_qualified_name()?;
+                    (projected, member, member_span)
+                }
+                _ => (path.to_string(), first, first_span),
+            };
+            return self.opaque_function_call(&owner, &member, member_span);
+        }
         if matches!(self.peek(), Token::DoubleColon) && !self.bindings.contains_key(name.as_str()) {
             self.unbound_std_type(&name, true, name_span)?;
         }
@@ -39913,8 +40020,32 @@ impl<'a> Parser<'a> {
             Some(Token::LeftParen) => "function",
             _ => "value",
         };
-        super::std_path::check(&path, crate::std_table::Namespace::Value, kind, reference)
-            .map(|_| ())
+        let checked =
+            super::std_path::check(&path, crate::std_table::Namespace::Value, kind, reference);
+        // A std type's method Rawr doesn't run by its path is the method on
+        // its first argument, which it may (`std_type_method`).
+        if checked.is_err()
+            && matches!(next, Some(Token::LeftParen))
+            && self.std_type_method(&path, reference)
+        {
+            return Ok(());
+        }
+        checked.map(|_| ())
+    }
+
+    /// Whether `path` names a function of a std type, as
+    /// `std::fmt::Formatter::write_str` does, that Rawr doesn't run by its
+    /// path: the method on its first argument.
+    fn std_type_method(&self, path: &str, reference: Span) -> bool {
+        let Some((owner, _)) = path.rsplit_once("::") else {
+            return false;
+        };
+        super::std_path::check(path, crate::std_table::Namespace::Value, "function", reference)
+            .is_err()
+            && matches!(
+                super::std_path::check(owner, crate::std_table::Namespace::Type, "type", reference),
+                Ok(Some(crate::std_table::Resolved::Path(resolved))) if resolved.is_type()
+            )
     }
 
     /// The path ahead from its first segment `name`, which is read: its
@@ -48801,6 +48932,76 @@ impl<'a> Parser<'a> {
         let path_end = segments.last().map_or(first_span.end(), |(name, span)| {
             text_end(span.start(), name)
         });
+        // `serde::__private::Ok(..)`: a crate's re-export of a std item is
+        // that item (#593).
+        if segments.len() > 1
+            && let Some(std) = self.std_alias(
+                &segments[0].0,
+                &segments
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+            )
+        {
+            let at = segments[0].1.start();
+            let mut tokens = Vec::new();
+            for segment in std.split("::") {
+                if !tokens.is_empty() {
+                    tokens.push((Token::DoubleColon, at));
+                }
+                tokens.push((Token::Identifier(Box::new(segment.into())), at));
+            }
+            self.splice_tokens(tokens);
+            return self.parse_primary();
+        }
+        // `serde::__private::Formatter::write_str(..)`: a crate's re-export
+        // of a std type is that type, and so is its function (#593).
+        if let [owner @ .., (member, member_span)] = &segments[..]
+            && owner.len() > 1
+            && self.pending_turbofish.is_none()
+            && let Some(std) = self.std_alias(
+                &owner[0].0,
+                &owner
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+            )
+        {
+            let at = member_span.start();
+            let mut tokens = Vec::new();
+            for segment in std.split("::").chain([member.as_str()]) {
+                if !tokens.is_empty() {
+                    tokens.push((Token::DoubleColon, at));
+                }
+                tokens.push((Token::Identifier(Box::new(segment.into())), at));
+            }
+            self.splice_tokens(tokens);
+            return self.parse_primary();
+        }
+        // `std::fmt::Formatter::write_str(f, ..)`: a std type's method by its
+        // path is the method on its first argument, as rustc calls it.
+        if let [owner @ .., (member, member_span)] = &segments[..]
+            && owner.len() > 1
+            && self.pending_turbofish.is_none()
+            && matches!(self.peek(), Token::LeftParen)
+            && !self.bindings.contains_key(owner[0].0.as_str())
+            && self.models.get(&owner[0].0).is_none()
+            && self.models.import(&owner[0].0).is_none()
+            && self.std_type_method(
+                &segments
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+                *member_span,
+            )
+            && let Some(tokens) = self.path_method_call(member, *member_span, None)
+        {
+            self.splice_tokens(tokens);
+            return self.parse_primary();
+        }
         // `std::f64::consts::PI`, `f32::consts::TAU`, `consts::E`.
         {
             let written = segments
@@ -49244,6 +49445,16 @@ impl<'a> Parser<'a> {
                     .next()
                     .and_then(|name| name.chars().next())
                     .is_some_and(char::is_uppercase);
+            // A trait's function with no receiver, of the one type parameter
+            // native code fills that has it (`opaque_function_owner`).
+            #[cfg(feature = "rust-import")]
+            if crate_trait
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(opaque) = self.opaque_function_owner(&binding.qualified, &member)
+            {
+                self.pending_turbofish = None;
+                return self.opaque_function_call(&opaque, &member, member_span);
+            }
             if crate_trait
                 && matches!(self.peek(), Token::LeftParen)
                 && let Some(tokens) =
@@ -49567,6 +49778,17 @@ impl<'a> Parser<'a> {
                     && self.models.function(root).is_none()
                     && !self.bindings.contains_key(root)
             });
+            // `de::Error::invalid_length(..)`, a trait's function that takes
+            // no receiver, where one type parameter native code fills, or
+            // one of its associated types, has it: that type's, as rustc
+            // infers `Self` from the one type in scope it can be (#593).
+            #[cfg(feature = "rust-import")]
+            if matches!(self.peek(), Token::LeftParen)
+                && let Some(opaque) = self.opaque_function_owner(&owner, &member)
+            {
+                self.pending_turbofish = None;
+                return self.opaque_function_call(&opaque, &member, member_span);
+            }
             // `Trait::method(receiver, ..)` through a crate's trait, which
             // Rawr names as a module (`iced::advanced::Widget::_boxed(w)`,
             // as a macro writes it): the method called on its receiver.
@@ -50569,6 +50791,12 @@ impl<'a> Parser<'a> {
             }
             _ => self.expect_name("binding type")?,
         };
+        // A type parameter native code fills, and its associated types, as
+        // `S` and `S::Ok`: the opaque types the signature names (#593).
+        #[cfg(feature = "rust-import")]
+        if let Some(path) = self.opaque.get(&name).cloned() {
+            return self.opaque_parameter_type(&name, &path, name_span);
+        }
         // A bare `str`, as `Cow<'_, str>` writes it: rustc's unsized `str`.
         if name.as_str() == "str"
             && !matches!(self.peek(), Token::DoubleColon)
@@ -50670,6 +50898,20 @@ impl<'a> Parser<'a> {
                 let (segment, segment_span) = self.expect_qualified_name()?;
                 name = format!("{name}::{segment}").into();
                 name_span = Span::new(name_span.start(), text_end(segment_span.start(), &segment));
+            }
+            // A crate's re-export of a std type is that type, as serde's
+            // `__private::Formatter` is `core::fmt::Formatter` (#593).
+            if let Some(std) = self.std_alias(&first, &name) {
+                let at = name_span.start();
+                let mut tokens = Vec::new();
+                for (index, segment) in std.split("::").enumerate() {
+                    if index > 0 {
+                        tokens.push((Token::DoubleColon, at));
+                    }
+                    tokens.push((Token::Identifier(Box::new(segment.into())), at));
+                }
+                self.splice_tokens(tokens);
+                return self.parse_local_type();
             }
             if let Some(model) = self.models.qualified_owner(name_span) {
                 return Ok(model.ty());
@@ -51063,6 +51305,185 @@ impl<'a> Parser<'a> {
     /// The type `name` names before `::Output` in a local type, when it is a
     /// generic parameter, `Self` in a method, or a script type with
     /// associated types.
+    /// The one opaque type of a type parameter native code fills, or of one
+    /// of its associated types, that has a function `member` with no
+    /// receiver, for a call through the crate trait at `trait_path`
+    /// (`opaque_parameter_type`).
+    #[cfg(feature = "rust-import")]
+    fn opaque_function_owner(&self, trait_path: &str, member: &str) -> Option<String> {
+        if !matches!(
+            self.models.host.entry(trait_path),
+            Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+        ) {
+            return None;
+        }
+        let mut found = None;
+        for path in self.opaque.values() {
+            let (module, own) = path.rsplit_once("::")?;
+            for child in self.models.host.children(module) {
+                if !child.starts_with(own) {
+                    continue;
+                }
+                let candidate = format!("{module}::{child}");
+                let Some(items) = self.models.host_items(&format!("{candidate}::{member}")) else {
+                    continue;
+                };
+                if !items.iter().any(|item| item.receiver().is_none()) {
+                    continue;
+                }
+                if found.replace(candidate).is_some() {
+                    return None;
+                }
+            }
+        }
+        found
+    }
+
+    /// The call of the function `member` of the opaque type at the host path
+    /// `owner`, as its path names it.
+    #[cfg(feature = "rust-import")]
+    fn opaque_function_call(
+        &mut self,
+        owner: &str,
+        member: &ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let full = format!("{owner}::{member}");
+        let Some(items) = self.models.host_items(&full).map(<[_]>::to_vec) else {
+            return Err(Error::UnknownMember {
+                owner: owner.into(),
+                member: member.clone(),
+                reference: member_span,
+            });
+        };
+        let item_owner = self.models.item_owner(&full).cloned();
+        let named = span(member_span.start(), text_end(member_span.start(), member));
+        self.parse_host_function_or_item(items.into_boxed_slice(), item_owner, named)
+    }
+
+    /// The opaque type of the type parameter `name` native code fills, at
+    /// the host path `path`, or of the associated type a `::` after it
+    /// names (`resolve::opaque_generics`).
+    #[cfg(feature = "rust-import")]
+    fn opaque_parameter_type(
+        &mut self,
+        name: &ImmutableString,
+        path: &str,
+        name_span: Span,
+    ) -> Result<Ty, Error> {
+        let (path, span) = if matches!(self.peek(), Token::DoubleColon)
+            && matches!(self.peek_second(), Token::Identifier(_))
+        {
+            self.next();
+            let (member, member_span) = self.expect_qualified_name()?;
+            let span = Span::new(name_span.start(), text_end(member_span.start(), &member));
+            let projected = rawr_import::surface::opaque::parameter_projection(path, &member)
+                .filter(|projected| self.models.host.source_type(projected).is_some())
+                .ok_or_else(|| Error::UnknownMember {
+                    owner: name.clone(),
+                    member: member.clone(),
+                    reference: span,
+                })?;
+            (projected, span)
+        } else {
+            (path.to_owned(), name_span)
+        };
+        let definition = self
+            .models
+            .host
+            .source_type(&path)
+            .cloned()
+            .ok_or_else(|| Error::UnknownType {
+                name: name.clone(),
+                reference: span,
+                path: false,
+            })?;
+        Ok(Ty::from_resolved(&type_ref::Type::Path(type_ref::Path {
+            name: path.as_str().into(),
+            target: type_ref::Target::Host {
+                definition,
+                owner: self.models.host.type_owner(&path).cloned(),
+            },
+            arguments: Box::default(),
+            span,
+        })))
+    }
+
+    /// The path ahead, when it names a std item through a crate's re-export
+    /// of it, as `serde::__private::Some` does, read as that item's own path
+    /// (`std_alias`), so a pattern or an expression names the item (#593).
+    fn splice_std_alias(&mut self) {
+        let start = self.position();
+        let Token::Identifier(first) = self.peek() else {
+            return;
+        };
+        if !matches!(self.peek_second(), Token::DoubleColon) {
+            return;
+        }
+        let first = ImmutableString::from(first.as_str());
+        let mut ahead = self.input.clone();
+        ahead.next();
+        let mut path = first.to_string();
+        while let Some((Token::DoubleColon, _)) = ahead.next() {
+            let Some((Token::Identifier(segment), _)) = ahead.next() else {
+                break;
+            };
+            path.push_str("::");
+            path.push_str(segment.as_str());
+        }
+        let Some(std) = self.std_alias(&first, &path) else {
+            return;
+        };
+        self.next();
+        for _ in 1..path.split("::").count() {
+            self.next();
+            self.next();
+        }
+        let mut tokens = Vec::new();
+        for segment in std.split("::") {
+            if !tokens.is_empty() {
+                tokens.push((Token::DoubleColon, start));
+            }
+            tokens.push((Token::Identifier(Box::new(segment.into())), start));
+        }
+        self.splice_tokens(tokens);
+    }
+
+    /// The std path `name`, whose first segment is `first`, names through a
+    /// crate's re-export of it, when it is one.
+    fn std_alias(&self, first: &ImmutableString, name: &str) -> Option<ImmutableString> {
+        if self.models.get(first).is_some() || self.bindings.contains_key(first.as_str()) {
+            return None;
+        }
+        let qualified = match self.models.import(first) {
+            Some(binding) => format!("{}{}", binding.qualified, &name[first.len()..]),
+            None => name.to_owned(),
+        };
+        let std = self.models.host.std_alias(&qualified)?;
+        if !crate::std_table::is_root(std.split("::").next()?) || *std == *qualified {
+            return None;
+        }
+        // A variant of a std enum Rawr represents, as `std::result::Result::
+        // Ok`, goes by the enum's own name: `Result::Ok`.
+        let spelled = |path: &str| {
+            crate::resolve::std_path::check(
+                path,
+                crate::std_table::Namespace::Type,
+                "type",
+                Span::NONE,
+            )
+            .ok()
+            .flatten()
+            .and_then(crate::resolve::std_path::spelling)
+        };
+        if let Some((owner, variant)) = std.rsplit_once("::")
+            && let Some(name) = spelled(owner)
+        {
+            return Some(format!("{name}::{variant}").into());
+        }
+        Some(std)
+    }
+
     fn projection_base(&self, name: &str) -> Option<Ty> {
         if self.generics.contains_key(name) {
             return Some(Ty::Param(name.into()));

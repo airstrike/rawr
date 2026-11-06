@@ -1,0 +1,11 @@
+[package]
+name = "plain-visits"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+visits = { path = "visits" }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]
