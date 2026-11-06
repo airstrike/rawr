@@ -11908,6 +11908,49 @@ fn render_guard(
         container_parameters,
         output,
     )?;
+    // A receiver native code lent (D558.3), as iced lends `draw` its
+    // `&Theme`, whose `palette()` the program reads (#954): the method is
+    // called through its accessor, and the copy goes out of it.
+    if matches!(guard, Guard::Shared)
+        && matches!(receiver, Receiver::Shared)
+        && signature.inputs().is_empty()
+    {
+        let mut container = Vec::new();
+        render_container_path(
+            path,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            true,
+            &mut container,
+        )?;
+        let container = String::from_utf8(container).map_err(request::unwritable)?;
+        let mut turbofish = Vec::new();
+        render_item_turbofish(
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            &mut turbofish,
+        )?;
+        let turbofish = String::from_utf8(turbofish).map_err(request::unwritable)?;
+        writeln!(
+            output,
+            "    if let Some(lent) = lent_value(arguments, 0) {{
+        let access: fn(u64, &mut dyn FnMut(&{container})) -> Result<(), u8> = lent
+            .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
+        let mut copied = None;
+        access(lent.nonce().bits(), &mut |receiver| {{ let mut guard = receiver.{name}{turbofish}(); let _ = &mut guard; copied = Some({copy}!(&*guard)); }})
+            .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
+        let output = copied.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))??;
+        return {{",
+            name = plan.name()
+        )
+        .map_err(encoding)?;
+        render_give(&target, "output", output)?;
+        writeln!(output, "    }};\n    }}").map_err(encoding)?;
+    }
     writeln!(
         output,
         "    let receiver = native_handle(arguments, 0, false)?;"
@@ -15101,6 +15144,21 @@ fn render_take(
                 length: None,
             };
             return render_take(local, index, &owned, output);
+        }
+        // A slice of scalars a type parameter takes, as `&[u8]` fills iced's
+        // `image::Handle::from_bytes(impl Into<Bytes>)` (#954): kept for the
+        // runner's life, as a struct's borrowed slice field is.
+        convert::Type::Borrowed { mutable: false, ty: lent }
+            if matches!(lent.as_ref(), convert::Type::Sequence { element, length: None, .. }
+                if matches!(**element, convert::Type::Builtin(builtin) if builtin.rust_name().is_some())) =>
+        {
+            let mut converted = String::new();
+            render_from_dynamic(ty, "value", 0, &mut converted)?;
+            return writeln!(
+                output,
+                "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
+            )
+            .map_err(request::unwritable);
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::drift(

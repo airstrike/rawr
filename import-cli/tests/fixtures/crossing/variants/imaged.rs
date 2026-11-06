@@ -19,4 +19,8 @@ fn main() {
     println!("{}", image::draw(&state.sun));
     println!("{}", image::draw(Image::new(&state.earth).rotation(2.5)));
     println!("{}", image::draw(&state.sun));
+    // Bytes the program includes, as `Handle::from_bytes(include_bytes!(..)
+    // .as_slice())`.
+    let moon = Handle::from_bytes(include_bytes!("main.rs").as_slice());
+    println!("{}", image::draw(&moon) == image::draw(Image::new(&moon)));
 }

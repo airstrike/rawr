@@ -884,7 +884,7 @@ fn a_crate_value_a_macro_made_crosses_at_its_public_path() {
 fn a_borrowed_crate_value_fills_an_impl_into_parameter() {
     let (rawr, cargo) = both_printed("imaged.rs", "");
     assert_eq!(rawr, cargo);
-    assert_eq!(rawr, "sun turned 0\nearth turned 2.5\nsun turned 0", "{rawr}");
+    assert_eq!(rawr, "sun turned 0\nearth turned 2.5\nsun turned 0\ntrue", "{rawr}");
 }
 
 /// iced's canvas aliases: `canvas::Cache` passes its parameter on to a

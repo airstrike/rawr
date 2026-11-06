@@ -17,6 +17,26 @@ impl Handle {
     }
 }
 
+/// Bytes an image is made of, as iced's `Bytes`, which a `&'static [u8]`
+/// converts into.
+pub struct Bytes(&'static [u8]);
+
+impl From<&'static [u8]> for Bytes {
+    fn from(bytes: &'static [u8]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl Handle {
+    /// The image of `bytes`, named by their count, as iced's
+    /// `Handle::from_bytes(impl Into<Bytes>)`.
+    pub fn from_bytes(bytes: impl Into<Bytes>) -> Self {
+        Self {
+            name: format!("{} bytes", bytes.into().0.len()),
+        }
+    }
+}
+
 /// A borrowed handle is a handle, as iced's `impl From<&Handle> for Handle`.
 impl From<&Handle> for Handle {
     fn from(handle: &Handle) -> Self {
