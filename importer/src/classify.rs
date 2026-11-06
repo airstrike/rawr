@@ -8703,7 +8703,10 @@ impl<P: api::Phase> Context<'_, P> {
                     ) {
                         continue;
                     }
-                    let Ok(value) = self.convert(&ty) else {
+                    // A value that is a tuple, as `timed(..)`'s `impl
+                    // Program<Message = (Message, Instant)>` binds, is one
+                    // as a call's value is.
+                    let Ok(value) = self.convert_value(&ty) else {
                         continue;
                     };
                     let Ok(position) = u32::try_from(arguments.len()) else {

@@ -600,10 +600,18 @@ impl<T> Subscription<T> {
         }
     }
 
-    /// The subscription with each message turned into another by `f`.
-    pub fn map<A>(self, f: impl Fn(T) -> A + 'static) -> Subscription<A> {
+    /// The subscription with each message turned into another by `f`,
+    /// which `f` makes on another thread, as iced's executor runs
+    /// `Subscription::map`'s function.
+    pub fn map<A>(self, f: impl Fn(T) -> A + crate::MaybeSend + 'static) -> Subscription<A>
+    where
+        T: crate::MaybeSend + 'static,
+        A: crate::MaybeSend + 'static,
+    {
         Subscription {
-            messages: self.messages.into_iter().map(f).collect(),
+            messages: std::thread::spawn(move || self.messages.into_iter().map(f).collect())
+                .join()
+                .expect("the mapping thread finishes"),
         }
     }
 }
@@ -653,6 +661,24 @@ pub mod time {
     /// `millis` milliseconds, as iced's `time::milliseconds`.
     pub fn milliseconds(millis: u64) -> Duration {
         Duration::from_millis(millis)
+    }
+
+    /// A moment of the local clock, as chrono's `DateTime<Local>`: the
+    /// count of moments read before it, so each run reads the same.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Stamp(u64);
+
+    impl Stamp {
+        /// The clock's next moment, as chrono's `Local::now()`.
+        pub fn now() -> Self {
+            static READ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            Stamp(READ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1)
+        }
+
+        /// The moment's second, as chrono's `Timelike::second`.
+        pub fn second(&self) -> u64 {
+            self.0
+        }
     }
 
     /// The first three ticks of a clock every `duration`, each the instant
@@ -745,6 +771,90 @@ impl<State, Message> IntoBoot<State, Message> for (State, crate::Task<Message>) 
 pub struct Application<P: Program> {
     program: P,
     fonts: Vec<Cow<'static, [u8]>>,
+}
+
+/// The application of `boot`, `update`, `subscription` and `view` whose
+/// update also takes the instant of each message, as iced's
+/// `application::timed(..)`: its program's message is the pair of the
+/// two.
+pub fn timed<State, Message, Theme, Renderer>(
+    boot: impl BootFn<State, Message>,
+    update: impl Fn(&mut State, Message, time::Instant),
+    subscription: impl Fn(&State) -> Subscription<Message>,
+    view: impl for<'a> crate::widgets::ViewFn<'a, State, Message, Theme, Renderer>,
+) -> Application<impl Program<State = State, Message = (Message, time::Instant)>>
+where
+    State: 'static,
+    Message: Debug + 'static,
+    Theme: 'static,
+    Renderer: 'static,
+{
+    struct Timed<State, Message, Theme, Renderer, B, U, S, V> {
+        boot: B,
+        update: U,
+        subscription: S,
+        view: V,
+        types: std::marker::PhantomData<(State, Message, Theme, Renderer)>,
+    }
+
+    impl<State, Message, Theme, Renderer, B, U, S, V> Program
+        for Timed<State, Message, Theme, Renderer, B, U, S, V>
+    where
+        Message: Debug,
+        B: BootFn<State, Message>,
+        U: Fn(&mut State, Message, time::Instant),
+        S: Fn(&State) -> Subscription<Message>,
+        V: for<'a> crate::widgets::ViewFn<'a, State, Message, Theme, Renderer>,
+    {
+        type State = State;
+        type Message = (Message, time::Instant);
+
+        fn boot(&self) -> (State, crate::Task<Self::Message>) {
+            let (state, task) = self.boot.boot();
+            let task = task.0.map(|message| (message, time::Instant::now()));
+            (state, crate::Task(task))
+        }
+
+        fn update(&self, state: &mut State, message: Self::Message) -> Option<Self::Message> {
+            let (message, now) = message;
+            (self.update)(state, message, now);
+            None
+        }
+
+        fn view(
+            &self,
+            state: &State,
+            label: &str,
+            labels: &mut Vec<String>,
+        ) -> Option<Self::Message> {
+            let widget = self.view.view(state);
+            widget.labels(labels);
+            widget
+                .press(label)
+                .map(|message| (message, time::Instant::now()))
+        }
+
+        fn subscription(&self, state: &State) -> Subscription<Self::Message> {
+            Subscription {
+                messages: (self.subscription)(state)
+                    .messages
+                    .into_iter()
+                    .map(|message| (message, time::Instant::now()))
+                    .collect(),
+            }
+        }
+    }
+
+    Application {
+        program: Timed {
+            boot,
+            update,
+            subscription,
+            view,
+            types: std::marker::PhantomData,
+        },
+        fonts: Vec::new(),
+    }
 }
 
 /// The application of `boot`, `update` and `view`, as iced's

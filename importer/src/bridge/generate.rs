@@ -215,12 +215,12 @@ impl<T> WithoutDebug for &DebugProbe<T> {
     }
 }
 
-/// The inputs of a script function native code calls on a thread with no
-/// arena for the native values among them, as iced's executor calls
-/// `Message::Loaded` for `Task::map`. When they are `Send`, the call is
-/// made on the owner thread where its value is first used
-/// (`Proxy::deferred`); else it fails there, by method resolution on a
-/// concrete `T`.
+/// The inputs of a script function or closure native code calls on a
+/// thread with no arena for the native values it takes or makes, as iced's
+/// executor calls `Message::Loaded` for `Task::map`. When they are `Send`,
+/// the call is made on the owner thread where its value is first used
+/// (`Proxy::deferred`); else it runs where it is called, by method
+/// resolution on a concrete `T`.
 #[allow(dead_code)]
 struct DeferProbe<T>(std::cell::Cell<Option<T>>);
 
@@ -13600,10 +13600,11 @@ fn render_slot(
             let mut converted = String::new();
             render_from_dynamic(&returned, "value", 0, &mut converted)?;
             let native_output = holds_native(&returned);
-            // A script value made from native inputs on a thread with no
-            // arena is made where it is first used (`DeferProbe`).
-            let deferred = if native
-                && matches!(returned, convert::Type::Script { .. })
+            // A script value made on a thread with no arena is made where
+            // it is first used (`DeferProbe`): its function may make native
+            // values, as `Message::Tick(Local::now())` does, which only the
+            // owner's arena holds.
+            let deferred = if matches!(returned, convert::Type::Script { .. })
                 && !inputs
                     .iter()
                     .any(|input| matches!(input, convert::Type::Borrowed { .. }))
@@ -15054,6 +15055,21 @@ fn render_callable_closure(
         ""
     };
     let body = format!("{call_arena}let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));{restores}\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))");
+    // A script value the closure gives on a thread with no arena, as
+    // iced's executor runs `Subscription::map`'s closure, is made on the
+    // owner thread where it is first used (`DeferProbe`), as a slot's is:
+    // its body may make native values, which only the owner's arena holds.
+    let deferred = matches!(returned, convert::Type::Script { .. })
+        && places.is_empty()
+        && lends.is_empty()
+        && !inputs
+            .iter()
+            .any(|input| matches!(input, convert::Type::Borrowed { .. }));
+    let body = if deferred {
+        deferred_closure_body(inputs.len(), !witnesses.is_empty(), &rust, &body)
+    } else {
+        body
+    };
     let body = place::around(&places, "witnesses.clone()", body);
     let (items, body) = lent_around(&lends, body);
     let body = format!("{items}{body}");
@@ -15061,6 +15077,41 @@ fn render_callable_closure(
         "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            {body}\n        }}\n    }}",
         parameters.join(", "),
     ))
+}
+
+/// `body`, a closure's call of its script callable giving the proxy type
+/// `rust`, made where its value is first used when the closure runs on a
+/// thread with no arena: the callable, the witnesses when `witnessed`, and
+/// the `count` inputs move to the owner thread with the call.
+fn deferred_closure_body(count: usize, witnessed: bool, rust: &str, body: &str) -> String {
+    let names = (0..count)
+        .map(|position| format!("input_{position},"))
+        .collect::<String>();
+    let (taken, kept, dropped) = if witnessed {
+        (
+            "callable.clone(), witnesses.clone(),",
+            "callable, witnesses,",
+            "_, _,",
+        )
+    } else {
+        ("callable.clone(),", "callable,", "_,")
+    };
+    format!(
+        "let ({names}) = if arena_access(|_| ()).is_none() {{
+                let probe = DeferProbe(std::cell::Cell::new(Some(({taken} {names}))));
+                if let Some(proxy) = (&probe).defer(|({kept} {names})| {{
+                    let value: {rust} = {{ {body} }};
+                    value.0.into_dynamic()
+                }}) {{
+                    return <{rust}>::from_proxy(proxy);
+                }}
+                let ({dropped} {names}) = probe.0.take().expect(\"rawr: a closure's inputs are kept until deferred\");
+                ({names})
+            }} else {{
+                ({names})
+            }};
+            {body}"
+    )
 }
 
 fn render_fields(

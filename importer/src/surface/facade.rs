@@ -3872,30 +3872,42 @@ fn callable_signature(
 /// The receiver's type a method's impl fixes, when one of its arguments
 /// holds the impl's own parameter, as `impl<T> Task<Option<T>>` fixes
 /// `Task<Option<T>>`: which form of an overloaded method a receiver takes.
+/// A receiver that names a parameter the signature declares no type
+/// parameter for, as an opaque program's members name the callables
+/// `timed(..)` captured, fixes no form a call can name.
 fn fixed_instance(
     source: &representability::signature::Signature,
 ) -> Result<Option<Type>, super::Error> {
     use representability::convert::Type as Converted;
-    fn names_parameter(ty: &Converted) -> bool {
+    fn names_parameter(ty: &Converted, matching: &dyn Fn(u32) -> bool) -> bool {
+        let names = |ty: &Converted| names_parameter(ty, matching);
         match ty {
-            Converted::Parameter(_) => true,
+            Converted::Parameter(index) => matching(*index),
             Converted::Nominal { arguments, .. }
             | Converted::Tuple(arguments)
-            | Converted::Script { arguments, .. } => arguments.iter().any(names_parameter),
+            | Converted::Script { arguments, .. } => arguments.iter().any(names),
             Converted::Option(element)
             | Converted::Borrowed { ty: element, .. }
             | Converted::Range(element)
-            | Converted::Sequence { element, .. } => names_parameter(element),
-            Converted::Result(ok, err) => names_parameter(ok) || names_parameter(err),
+            | Converted::Sequence { element, .. } => names(element),
+            Converted::Result(ok, err) => names(ok) || names(err),
             _ => false,
         }
     }
     let Some(instance @ Converted::Nominal { arguments, .. }) = source.instance() else {
         return Ok(None);
     };
-    if !arguments
-        .iter()
-        .any(|argument| !matches!(argument, Converted::Parameter(_)) && names_parameter(argument))
+    let any = |_: u32| true;
+    let undeclared = |index: u32| {
+        !source.parameters().iter().any(|parameter| {
+            parameter.index() == index
+                && parameter.kind() == representability::signature::Kind::Type
+        })
+    };
+    if names_parameter(instance, &undeclared)
+        || !arguments.iter().any(|argument| {
+            !matches!(argument, Converted::Parameter(_)) && names_parameter(argument, &any)
+        })
     {
         return Ok(None);
     }
