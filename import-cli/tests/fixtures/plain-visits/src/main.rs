@@ -1,5 +1,7 @@
 // rawr
-use visits::{Expected, FromKeys, Keys, Problem, Read, Reader, Tally, Visit, Visitor};
+use visits::{
+    Expected, FromKeys, Keys, Paint, Painter, Problem, Read, Reader, Tally, Visit, Visitor,
+};
 
 struct Seven;
 
@@ -13,6 +15,13 @@ impl Visit for Seven {
             Some(visitor) => Some(visitor.int(5)),
             None => None,
         }
+    }
+}
+
+impl Paint for Seven {
+    fn paint<P: Painter>(&self, painter: P) -> bool {
+        let _font = painter.font();
+        painter.size() == 12
     }
 }
 
@@ -136,4 +145,5 @@ fn main() {
     println!("{}", visits::from_keys::<Counts>(&[1, 2, 3]));
     println!("{}", visits::named(FIELDS));
     println!("{}", visits::measure(&Length));
+    println!("{}", visits::painted(Seven));
 }

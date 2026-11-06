@@ -222,8 +222,9 @@ deadline checked from the progress callback. Each limit gets a plain reply
 such as `operation limit exceeded: more than 1000000 operations (an endless
 loop?)`.
 
-A snippet reads no file. `include_str!`, `include_bytes!` and `std::fs` fail
-with `?play has no files`. The Engine disables `eval` and `import`, installs
+A snippet reads no file and sees no environment (D683.4). `std::fs` fails
+with `PermissionDenied`, `include_str!` and `include_bytes!` don't compile,
+and `std::env::args()` yields no arguments. The Engine disables `eval` and `import`, installs
 a module resolver that loads nothing, and replaces `sleep` with an error.
 
 ## Run locally
