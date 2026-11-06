@@ -826,6 +826,19 @@ fn a_view_of_only_a_lifetime_free_widget_runs() {
     );
 }
 
+/// iced's table and arc: rows of script values whose fields hold std's
+/// `Duration` and `Instant` cross to the crate, which checks each as Rust's
+/// own type. The output is `cargo run`'s.
+#[test]
+fn script_rows_holding_std_time_values_cross() {
+    let (rawr, cargo) = both_printed("table_timed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("|Name|Time|Talk|45 min true|Workshop|120 min true|"),
+        "{rawr}"
+    );
+}
+
 /// iced's bezier_tool: the view is a container, invariant in its lifetime,
 /// of a hover whose base has no lifetime and whose top is `None` at first,
 /// so nothing the view passes the hover borrows. It is made at the view's

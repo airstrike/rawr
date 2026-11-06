@@ -800,6 +800,16 @@ impl Type {
                     TypeId::of::<crate::ImmutableString>(),
                 )),
                 "f64" => Ok(Self::builtin("f64", TypeId::of::<crate::FLOAT>())),
+                // `std::time`'s types are Rust's at runtime, as a script
+                // struct's `Instant` or `Duration` field holds them.
+                "Duration" => Ok(Self::builtin(
+                    "Duration",
+                    TypeId::of::<std::time::Duration>(),
+                )),
+                "Instant" => Ok(Self::builtin(
+                    "Instant",
+                    TypeId::of::<std::time::Instant>(),
+                )),
                 // A function type: any callable (`validate`).
                 name if crate::item::type_ref::is_fn_type(name) => Ok(Self::Object(name.into())),
                 name => Err(Error::Unsupported { ty: name.into() }),
