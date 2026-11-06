@@ -5464,7 +5464,7 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                 }
                 for (projection, ty) in types {
-                    outcomes.push(self.parameter_member(
+                    outcomes.extend(self.parameter_member(
                         export,
                         definition,
                         method,
@@ -5483,7 +5483,12 @@ impl<P: api::Phase> Context<'_, P> {
 
     /// One function of [`Self::parameter_members`]: `name`, which gives the
     /// opaque type `opaque` that a type parameter of the trait
-    /// `definition`'s method `method` is, or one of its projections.
+    /// `definition`'s method `method` is, or one of its projections. `None`
+    /// when Rawr reads the type as a value of its own kind rather than as
+    /// that opaque type, as iced's `Executor::spawn`'s `impl Future<Output =
+    /// ()>` is the core future: the function would name the core future's
+    /// identity as the parameter's, and every call that gives or takes a
+    /// future would run in a frame of the parameter.
     fn parameter_member(
         &self,
         export: &ledger::Export,
@@ -5491,20 +5496,10 @@ impl<P: api::Phase> Context<'_, P> {
         method: &model::Definition,
         name: &str,
         opaque: &model::Type,
-    ) -> Result<OutcomeRecord, Error> {
+    ) -> Result<Option<OutcomeRecord>, Error> {
         let model::Type::ImplTrait { id, .. } = opaque else {
             return Err(Error::Cardinality);
         };
-        let selector = crate::surface::identity::Selector::AssociatedFunction {
-            item: crate::surface::identity::Definition::self_member(definition.id(), id),
-        };
-        self.retain_selector(&selector)?;
-        let identity = crate::surface::identity::Identity::imported(export, None, selector)?;
-        self.retain_outcome_common(export.key(), name)?;
-        self.retain_span(export.span())?;
-        self.retain_span(method.span())?;
-        let origin =
-            representability::origin::Set::new(export.span().clone(), method.span().clone());
         let signature = model::Signature::new(
             model::Safety::Safe,
             false,
@@ -5517,23 +5512,41 @@ impl<P: api::Phase> Context<'_, P> {
             opaque.clone(),
         );
         let generics = model::Generics::new(Box::default(), Box::default());
-        let evidence = match self.function(&signature, &generics) {
+        let converted = match self.function(&signature, &generics) {
             Ok(plan) => {
-                self.retain_inline_representability()?;
-                OutcomeEvidence::Inline(Box::new(plan))
+                let own = crate::surface::identity::Definition::of(id);
+                let gives_own = matches!(&plan, representability::Representability::Function(function)
+                    if matches!(function.signature().output(),
+                        representability::convert::Type::Nominal { definition, .. }
+                            if *definition == own));
+                if !gives_own {
+                    return Ok(None);
+                }
+                Ok(plan)
             }
-            Err(Failure::Reject(kind)) => {
-                self.retain_inline_representability()?;
-                OutcomeEvidence::Inline(Box::new(representability::Representability::Rejected(
-                    representability::reject::Reason::classification(kind, method.span().clone()),
-                )))
-            }
+            Err(Failure::Reject(kind)) => Err(kind),
             Err(Failure::Operational(error)) => return Err(error),
         };
+        let selector = crate::surface::identity::Selector::AssociatedFunction {
+            item: crate::surface::identity::Definition::self_member(definition.id(), id),
+        };
+        self.retain_selector(&selector)?;
+        let identity = crate::surface::identity::Identity::imported(export, None, selector)?;
+        self.retain_outcome_common(export.key(), name)?;
+        self.retain_span(export.span())?;
+        self.retain_span(method.span())?;
+        let origin =
+            representability::origin::Set::new(export.span().clone(), method.span().clone());
+        self.retain_inline_representability()?;
+        let evidence = OutcomeEvidence::Inline(Box::new(converted.unwrap_or_else(|kind| {
+            representability::Representability::Rejected(
+                representability::reject::Reason::classification(kind, method.span().clone()),
+            )
+        })));
         let implementations = self
             .opaque_records(export, method, &generics, &[opaque])?
             .into_boxed_slice();
-        Ok(OutcomeRecord {
+        Ok(Some(OutcomeRecord {
             export: export.key().clone(),
             identity,
             name: name.into(),
@@ -5542,7 +5555,7 @@ impl<P: api::Phase> Context<'_, P> {
             implementations,
             variant: None,
             member: None,
-        })
+        }))
     }
 
     /// The type `<opaque as Trait>::associated` is, for an opaque type

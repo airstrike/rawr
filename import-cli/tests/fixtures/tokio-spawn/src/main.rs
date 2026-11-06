@@ -1,11 +1,13 @@
 // rawr
 // D527's falsifying program: a spawned script future runs though nobody
 // awaits it, a spawned one gives its value to `.await`, and an unawaited
-// `spawn_blocking` runs too, as under `cargo run`.
+// `spawn_blocking` runs too, as under `cargo run`. A crate trait's method
+// that takes a future, as iced's `Executor::spawn` does, changes none of it.
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
+    let _executor = exec::Dropping;
     tokio::spawn(async { println!("ran") });
     tokio::time::sleep(Duration::from_millis(50)).await;
     let handle = tokio::spawn(async { 6 * 7 });

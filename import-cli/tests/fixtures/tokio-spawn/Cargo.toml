@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+exec = { path = "exec" }
 
 # Its own workspace: it is not a member of Rawr's.
 [workspace]
