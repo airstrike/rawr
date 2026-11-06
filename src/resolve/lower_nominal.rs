@@ -19416,7 +19416,10 @@ impl<'a> Parser<'a> {
         let mut iterator = false;
         let mut into_iter = false;
         let mut taken = false;
-        for item in items.iter().filter(|item| item.imported_identity().is_some()) {
+        for item in items
+            .iter()
+            .filter(|item| item.imported_identity().is_some())
+        {
             let signature = item.signature();
             let Some(crate::host::type_ref::Shape::Parameter(name)) = signature
                 .parameters()
@@ -20441,6 +20444,7 @@ impl<'a> Parser<'a> {
                     && let [declared] = relation.arguments()
                     && let Some(item) = match (name.as_str(), &actual) {
                         ("Item", Ty::Iter(item, _)) => Some((**item).clone()),
+                        ("Item", Ty::Host { .. }) => self.host_iterator_item(&actual, span),
                         ("IntoIter", Ty::Iter(..)) => Some(actual.clone()),
                         ("IntoIter", Ty::Host { .. })
                             if self.type_implements(&actual, "Iterator") =>
@@ -23630,6 +23634,35 @@ impl<'a> Parser<'a> {
             })
             .map(|(_, binding)| rawr_import::surface::member::path(&binding.qualified, member))
             .find(|path| self.models.host_items(path).is_some())
+    }
+
+    /// The item of the crate iterator `ty`: its `next`'s `Option<T>`'s `T`,
+    /// as `Product<I, J>`'s `next` gives `(I::Item, J::Item)`. `None` when
+    /// `ty` has no `next` Rawr has.
+    #[cfg(feature = "rust-import")]
+    fn host_iterator_item(&mut self, ty: &Ty, span: Span) -> Option<Ty> {
+        if !self.type_implements(ty, "Iterator") {
+            return None;
+        }
+        let definition = ty
+            .host_alias()
+            .cloned()
+            .or_else(|| self.imported_member_owner(ty, "next"))?;
+        let next = self
+            .models
+            .host_items(&format!("{}::next", definition.path()))?
+            .first()?
+            .clone();
+        let checkpoint = self.inference.checkpoint();
+        let Ok(signature) = self.instantiate_host_signature(&next, Some(ty), None, span) else {
+            self.inference.rollback(checkpoint);
+            return None;
+        };
+        self.inference.commit(checkpoint);
+        match self.inference.resolve(&signature.output) {
+            Ty::Option(item) => Some(*item),
+            _ => None,
+        }
     }
 
     /// Whether `ty` is an iterator: the program's own (`program_iterator`)
