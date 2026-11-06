@@ -316,9 +316,12 @@ mod tests {
 
     #[test]
     fn run_plain_endless_loop_hits_the_time_limit() {
+        // The budget counts the snippet's compile too, which takes more
+        // than a tenth of a second while the other tests run beside it: the
+        // program has two seconds to print before its loop.
         let limits = Limits {
             operations: u64::MAX,
-            time: std::time::Duration::from_millis(100),
+            time: std::time::Duration::from_secs(2),
             ..Limits::default()
         };
         let source =
@@ -424,9 +427,14 @@ mod tests {
     }
 }"#,
         );
+        // ?play grants no environment or files (D683.4): `args` yields no
+        // arguments, and a read is refused as the operating system would.
         assert_eq!(
             (output.text().as_str(), output.status),
-            ("[\"play\"]\n?play has no files\n", 0)
+            (
+                "[]\npermission denied: this program may not read this path\n",
+                0
+            )
         );
     }
 
