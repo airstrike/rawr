@@ -19399,9 +19399,6 @@ impl<'a> Parser<'a> {
         fits
     }
 
-    /// Whether an item's parameter at `index` is a type parameter that a
-    /// bound fills with a `Range<T>`, as rand's `random_range` has
-    /// `R: SampleRange<T>` implemented for `Range<T>`.
     /// Whether an imported item takes an iterator at its input `index`, as
     /// itertools' `cartesian_product(self, other: J)` over `Self: Iterator`
     /// and `J: IntoIterator` does at both.
@@ -19419,6 +19416,9 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Whether an item's parameter at `index` is a type parameter that a
+    /// bound fills with a `Range<T>`, as rand's `random_range` has
+    /// `R: SampleRange<T>` implemented for `Range<T>`.
     fn takes_range(&self, items: &[crate::host::item::Definition], index: usize) -> bool {
         items.iter().any(|item| {
             let signature = item.signature();
@@ -23343,6 +23343,12 @@ impl<'a> Parser<'a> {
             return None;
         }
         if !method && self.imported_field_owner(ty, member).is_some() {
+            return None;
+        }
+        // An adaptor of std's `Iterator` on a crate's iterator, as `map` of
+        // itertools' `Product`, is the program's own chain over its `next`
+        // (`iterator_receiver`).
+        if method && self.iterator_receiver(ty, member) {
             return None;
         }
         let paths = self

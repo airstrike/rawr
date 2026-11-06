@@ -180,8 +180,17 @@ impl Parser<'_> {
         value: &ParsedExpr,
         id: Option<type_def::Id>,
     ) -> Result<(Pipeline, Ty), Error> {
-        let iterator = self.temporary("iterator");
         let ty = self.inference.resolve(&value.ty);
+        // The `next` of a crate type several paths name, as itertools'
+        // `Product`, which no alias has yet: the miss the importer answers
+        // by bringing it.
+        #[cfg(feature = "rust-import")]
+        if id.is_none()
+            && let Some(error) = self.ambiguous_imported_member(&ty, "next", value.span, true)
+        {
+            return Err(error);
+        }
+        let iterator = self.temporary("iterator");
         self.bindings.insert(
             iterator.as_str().into(),
             Binding {
