@@ -19250,45 +19250,6 @@ impl<'a> Parser<'a> {
             .then_some(path)
     }
 
-    /// The closure `move |a, ..| name(a, ..)` over the local function
-    /// pointer `name` of `arity` inputs.
-    fn eta_expand(&mut self, name: &str, arity: usize, at: Span) -> Result<ParsedExpr, Error> {
-        let position = at.start();
-        let identifier = |text: &str| (Token::Identifier(Box::new(text.into())), position);
-        let parameters = (0..arity)
-            .map(|_| self.temporary("eta"))
-            .collect::<Vec<_>>();
-        let mut tokens = Vec::new();
-        for (index, parameter) in parameters.iter().enumerate() {
-            if index > 0 {
-                tokens.push((Token::Comma, position));
-            }
-            tokens.push(identifier(parameter));
-        }
-        tokens.extend([
-            (Token::Pipe, position),
-            (Token::LeftBrace, position),
-            identifier(name),
-            (Token::LeftParen, position),
-        ]);
-        for (index, parameter) in parameters.iter().enumerate() {
-            if index > 0 {
-                tokens.push((Token::Comma, position));
-            }
-            tokens.push(identifier(parameter));
-        }
-        tokens.extend([(Token::RightParen, position), (Token::RightBrace, position)]);
-        self.splice_tokens(tokens);
-        let hint = self.closure_hint.take();
-        let output = self.closure_output.take();
-        let closure = self.parse_closure(Token::Pipe, at, true);
-        self.closure_hint = hint;
-        self.closure_output = output;
-        let mut closure = closure?;
-        closure.span = at;
-        Ok(closure)
-    }
-
     /// Whether `argument`, as written, fits the callable parameter at
     /// `index` of the one item, with the receiver's types. Nothing is bound.
     fn callable_fits(
@@ -19391,15 +19352,6 @@ impl<'a> Parser<'a> {
                 argument.source = value;
                 argument.prelude = origin::Fragment::default();
                 argument.ty = ty;
-            }
-            // A local `fn` pointer, as `message: fn(f32) -> _`, is passed
-            // as the closure that calls it.
-            if facade
-                && let Ty::Fn { inputs, .. } = self.inference.resolve(&argument.ty)
-                && let Some(name) = variable_name(argument.source.as_str())
-                && self.bindings.contains_key(name.as_str())
-            {
-                *argument = self.eta_expand(&name, inputs.len(), argument.span)?;
             }
             self.host_callable_of(argument, !facade)?;
             self.option_host_callable(argument)?;
@@ -21565,9 +21517,12 @@ impl<'a> Parser<'a> {
                 .map(|(name, ty, _)| (name.clone(), ty.clone()))
                 .collect();
         }
+        // A function item takes no space, as in Rust: the proof is its
+        // type's, and its value is `()`, which a tuple or array holding it
+        // reads before a member coerces to a `fn` pointer.
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
-            source: origin::Fragment::plain(item.path()),
+            source: origin::Fragment::plain("()"),
             ty: Ty::ImportedFunctionItem {
                 input: Box::new(input),
                 output: Box::new(signature.output),
@@ -41494,6 +41449,7 @@ impl<'a> Parser<'a> {
     /// inputs is a callable too when `nullary`: an imported item takes
     /// Freya's `fn app()` as the closure that calls it (D551.6).
     fn host_callable_of(&mut self, value: &mut ParsedExpr, nullary: bool) -> Result<(), Error> {
+        self.lift_fn_pointer(value);
         let Ty::FnItem {
             key,
             inputs,
@@ -41618,6 +41574,60 @@ impl<'a> Parser<'a> {
         value.prelude = prelude;
         value.ty = symbolic.ty;
         Ok(())
+    }
+
+    /// A `fn` pointer value passed to the host, as a style read from an
+    /// array of them or a closure's `message: fn(f32) -> _`: the closure
+    /// `move |a, ..| pointer(a, ..)`, lifted as a written closure is, which
+    /// captures the pointer where it is passed. The host takes its
+    /// generated function as it takes any closure's.
+    fn lift_fn_pointer(&mut self, value: &mut ParsedExpr) {
+        let Ty::Fn { inputs, output } = self.inference.resolve(&value.ty) else {
+            return;
+        };
+        // A `&mut` input a closure copies back after its call (`copied`)
+        // has no place to go through a pointer's call.
+        if inputs.iter().any(|input| {
+            matches!(
+                self.inference.resolve(input),
+                Ty::Reference { mutable: true, .. }
+            )
+        }) {
+            return;
+        }
+        let Some(callable) = &self.callable else {
+            return;
+        };
+        self.closure_count += 1;
+        let key = crate::item::Key::closure(callable, self.closure_count);
+        let pointer = ImmutableString::from(self.temporary("pointer"));
+        let arguments = (0..inputs.len())
+            .map(|_| ImmutableString::from(self.temporary("eta")))
+            .collect::<Vec<_>>();
+        let mut body =
+            origin::Fragment::plain(format!("{{ {pointer}.call({}) }}", arguments.join(", ")));
+        body.cover(value.span);
+        let mut parameters = vec![pointer];
+        parameters.extend(arguments);
+        self.lifted.push(LiftedClosure {
+            key: key.clone(),
+            value: None,
+            parameters,
+            captures: vec![value.rendered_source()],
+            body,
+            span: value.span,
+            header: value.span,
+            held: false,
+        });
+        value.prelude = origin::Fragment::default();
+        value.source = origin::Fragment::plain("()");
+        value.source.cover(value.span);
+        value.ty = Ty::FnItem {
+            key: Box::new(key),
+            inputs,
+            output,
+        };
+        value.lvalue = None;
     }
 
     /// Before parsing a single-signature host call's arguments, the input
