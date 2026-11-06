@@ -4797,15 +4797,6 @@ impl<P: api::Phase> Context<'_, P> {
                             receiver,
                         }
                     }
-                    // A method of a crate's operator impl for a number,
-                    // as `impl Mul<Radians> for f32`, is a function of the
-                    // number (`classify_operand_member`).
-                    crate::surface::identity::Selector::Method { item, .. }
-                        if is_number(implementation.self_type())
-                            && matches!(implementation.trait_ref(), model::Trait::Trait { .. }) =>
-                    {
-                        crate::surface::identity::Selector::AssociatedFunction { item }
-                    }
                     // A trait's provided method that two of the type's own
                     // impls of the trait share, as `PartialOrd::lt` of
                     // `Degrees`'s `PartialOrd` and `PartialOrd<f32>` (T412):
@@ -5758,7 +5749,11 @@ impl<P: api::Phase> Context<'_, P> {
             else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
-            if !matches!(signature.receiver(), model::Receiver::Value { .. })
+            // A number's `self` is its type written out: the function's
+            // first input.
+            let by_value = matches!(signature.receiver(),
+                model::Receiver::Explicit { ty } if ty == implementation.self_type());
+            if !by_value
                 || implementation.generics().parameters().next().is_some()
                 || generics.parameters().next().is_some()
             {
