@@ -31,6 +31,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=RUSTDOC");
     println!("cargo:rerun-if-env-changed=CARGO_TARGET_DIR");
     println!("cargo:rerun-if-env-changed=CARGO_INCREMENTAL");
+    println!("cargo:rerun-if-env-changed=FRESH_EMBED_OUT_DIR");
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
     let generated = if env::var_os("FRESH_EMBED_OUT_DIR").is_some() {
         format!(

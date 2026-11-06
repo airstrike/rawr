@@ -112,7 +112,10 @@ fn authoritative_build_captures_out_dir_semantics_once_and_never_reuses_sidecars
     let canonical =
         std::str::from_utf8(first.canonical_bytes()).expect("the canonical graph is UTF-8 JSON");
     assert!(canonical.contains("IMPORT_OUT_DIR"));
-    assert!(canonical.contains("authoritative-target"));
+    // The build ran in the nightly's shared build directory, so its OUT_DIR
+    // is there; extraction read the copy under the authoritative target.
+    let nightly = rawr_import::store::isolate_for_tests().join("nightly");
+    assert!(canonical.contains(nightly.to_str().expect("UTF-8 path")));
 }
 
 #[test]
@@ -195,6 +198,9 @@ fn generated_out_directory_mutation_cannot_construct_extracted_graph() {
         &project.cache().join("resolution/authoritative-target"),
         "generated.rs",
     );
+    // The copy is frozen as the build leaves it; a writer that thaws it first
+    // still changes what extraction reads.
+    thaw(&generated);
     fs::write(
         generated,
         b"pub const GENERATED: &str = \"changed output\";\n",
@@ -372,6 +378,13 @@ fn undeclared_external_state_never_yields_a_warm_reuse_decision() {
     let error = cache::undeclared_external(Undeclared::Reject)
         .expect_err("the strict policy rejects non-hermetic state");
     assert!(format!("{error}").contains("non-hermetic-external-state"));
+}
+
+/// Make a frozen build output writable again.
+fn thaw(path: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o644))
+        .expect("the frozen output can be thawed");
 }
 
 fn extract(

@@ -123,6 +123,13 @@ fn selected_rmeta_mutation_rejects_publication() {
     let mut bytes = fs::read(&artifact).expect("the selected rmeta is readable");
     let byte = bytes.first_mut().expect("the selected rmeta is nonempty");
     *byte ^= 1;
+    // The copy is frozen as the build leaves it; a writer that thaws it first
+    // still changes what extraction reads.
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&artifact, fs::Permissions::from_mode(0o644))
+            .expect("the selected rmeta can be thawed");
+    }
     fs::write(&artifact, bytes).expect("the isolated selected rmeta can be mutated");
 
     let error = match rawr_import::extract::from_resolution(resolution, &native, &limits) {
