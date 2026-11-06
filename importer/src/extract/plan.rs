@@ -136,12 +136,12 @@ pub(crate) struct Capture {
     expansion: Expansion,
 }
 
-/// What a derive's expansion needs of the probe's build (#593): the target,
-/// where the selected crates' own dependencies are, and each selected
-/// crate's artifact by the aliases the program names it by. It is no part
 /// An alias, the artifact it names and that artifact's digest.
 pub(crate) type Extern = (Box<str>, Box<str>, Box<str>);
 
+/// What a derive's expansion needs of the probe's build (#593): the target,
+/// where the selected crates' own dependencies are, and each selected
+/// crate's artifact by the aliases the program names it by. It is no part
 /// of the API ledger.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Expansion {

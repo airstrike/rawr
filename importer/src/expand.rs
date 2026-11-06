@@ -24,9 +24,6 @@ pub struct Item {
 
 /// What an expansion needs of the probe's build: the target, where the
 /// selected crates' own dependencies are, and each selected crate's
-/// An alias, the artifact it names and that artifact's digest.
-pub(crate) type Extern = (Box<str>, Box<str>, Box<str>);
-
 /// artifact by the aliases the program names it by.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(
