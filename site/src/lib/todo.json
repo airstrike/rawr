@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.148",
+  "version": "0.3.149",
   "examples": {
     "running": 24,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.149",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"A conversion's target chooses among a crate's `From` impls only when every candidate `into` is the same trait method, by the importer's identity. Exactly one impl must fit. A target the program leaves open, as in `let y = degrees.into(); y * 2.0`, or one no use fixes, is rustc's E0283. A crate trait's own `into` imported beside `Into::into` is rustc's E0034.","issues":[996]},
+          {"text":"Projects that share one target directory no longer fill it: when rawr starts a check or run there, it removes what the other projects left, unless one of them is being checked or run at that moment.","issues":[960]},
+          {"text":"rawr removes a compiled runtime that no installed rawr uses and no build used in the last hour, when it compiles a new one.","issues":[963]}
+        ]
+      },
       {
         "version": "0.3.148",
         "date": "2026-11-06",
@@ -2382,10 +2391,10 @@
     {"issue":957,"title":"Generated adapter bounds the program doesn't need: geometry's Shell: Clone, progress_bar's f64, the_matrix's ThreadRng","state":"open","category":"Divergences from rustc"},
     {"issue":958,"title":"changelog's rawr check never completes and fills the disk","state":"open","category":"Health"},
     {"issue":959,"title":"rawr run inside a git worktree under another workspace fails with 'malformed filesystem observation transport'","state":"closed","category":"Health","release":"0.3.141"},
-    {"issue":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"open","category":"Health"},
+    {"issue":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"closed","category":"Health","release":"0.3.149"},
     {"issue":961,"title":"Macro calls where an item, a type or a pattern goes","state":"open","category":"Divergences from rustc"},
     {"issue":962,"title":"Deep macro recursion overflows the debug build's stack before rustc's recursion limit","state":"open","category":"Divergences from rustc"},
-    {"issue":963,"title":"rawr keeps every runtime it ever built in ~/.cargo/rawr/runtime","state":"open","category":"Health"},
+    {"issue":963,"title":"rawr keeps every runtime it ever built in ~/.cargo/rawr/runtime","state":"closed","category":"Health","release":"0.3.149"},
     {"issue":964,"title":"rawr-cli's extension tests fail under load when stand-in binaries miss the manifest deadline","state":"open","category":"Health"},
     {"issue":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open","category":"Divergences from rustc"},
     {"issue":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"open","category":"Divergences from rustc"},
@@ -2418,7 +2427,10 @@
     {"issue":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"open","category":"Divergences from rustc"},
     {"issue":994,"title":"A derive macro's own error is reported at the derive","state":"open","category":"Divergences from rustc"},
     {"issue":995,"title":"std types written by their std paths and crates' re-exports of std types resolve","state":"closed","category":"Divergences from rustc","release":"0.3.147"},
-    {"issue":996,"title":"D741's conditions: a conversion picks a family member only by one trait's type argument, and exactly one fit","state":"open","category":"Divergences from rustc"}
+    {"issue":996,"title":"D741's conditions: a conversion picks a family member only by one trait's type argument, and exactly one fit","state":"closed","category":"Divergences from rustc","release":"0.3.149"},
+    {"issue":997,"title":"Application path: `x.into()` beside an unimported crate trait's own `into`","state":"open","category":"Divergences from rustc"},
+    {"issue":998,"title":"A check of one iced project makes 4-5 resolution executions of 360-424 MB each","state":"open","category":"Health"},
+    {"issue":999,"title":"Every check leaves empty execution-key directories in the store","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -2916,7 +2928,8 @@
             {"number":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"open"},
             {"number":994,"title":"A derive macro's own error is reported at the derive","state":"open"},
             {"number":995,"title":"std types written by their std paths and crates' re-exports of std types resolve","state":"closed"},
-            {"number":996,"title":"D741's conditions: a conversion picks a family member only by one trait's type argument, and exactly one fit","state":"open"}
+            {"number":996,"title":"D741's conditions: a conversion picks a family member only by one trait's type argument, and exactly one fit","state":"closed"},
+            {"number":997,"title":"Application path: `x.into()` beside an unimported crate trait's own `into`","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3176,16 +3189,18 @@
           "name": "Example sweeps fit on the machine",
           "start": 84,
           "size": 2,
-          "state": "next",
-          "note": "The store grows 1.5-2 GB per example (#960); worktrees break rawr run (#959)",
+          "state": "now",
+          "note": "A shared store keeps only the projects in use (#960); runtimes no installed rawr links are collected (#963)",
           "issues": [
             {"number":959,"title":"rawr run inside a git worktree under another workspace fails with 'malformed filesystem observation transport'","state":"closed"},
-            {"number":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"open"},
-            {"number":963,"title":"rawr keeps every runtime it ever built in ~/.cargo/rawr/runtime","state":"open"},
+            {"number":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"closed"},
+            {"number":963,"title":"rawr keeps every runtime it ever built in ~/.cargo/rawr/runtime","state":"closed"},
             {"number":964,"title":"rawr-cli's extension tests fail under load when stand-in binaries miss the manifest deadline","state":"open"},
             {"number":972,"title":"A relative CARGO_TARGET_DIR is taken relative to the project, while Cargo takes it relative to the working directory","state":"open"},
             {"number":982,"title":"Crossing tests fail with 'runner did not connect before the protocol deadline' under load","state":"open"},
-            {"number":989,"title":"rawr mcp: send input events to a started program","state":"open"}
+            {"number":989,"title":"rawr mcp: send input events to a started program","state":"open"},
+            {"number":998,"title":"A check of one iced project makes 4-5 resolution executions of 360-424 MB each","state":"open"},
+            {"number":999,"title":"Every check leaves empty execution-key directories in the store","state":"open"}
           ]
         },
         {

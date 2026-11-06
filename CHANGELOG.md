@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.149 (2026-11-06)
+
+- A conversion's target chooses among a crate's `From` impls only when every candidate `into` is the same trait method, by the importer's identity. Exactly one impl must fit. A target the program leaves open, as in `let y = degrees.into(); y * 2.0`, or one no use fixes, is rustc's E0283. A crate trait's own `into` imported beside `Into::into` is rustc's E0034. (#996)
+- Projects that share one target directory no longer fill it: when rawr starts a check or run there, it removes what the other projects left, unless one of them is being checked or run at that moment. (#960)
+- rawr removes a compiled runtime that no installed rawr uses and no build used in the last hour, when it compiles a new one. (#963)
+
 ## 0.3.148 (2026-11-06)
 
 - A function or closure that native code calls on another thread and that gives a value of a program type, as iced's `Subscription::map(|_| Message::Tick(Local::now()))`, now runs on the program's thread where its value is first used, so it can make imported values. iced's clock runs. (#981)
