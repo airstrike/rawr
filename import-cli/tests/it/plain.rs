@@ -1233,6 +1233,21 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
         "{diagnostic}"
     );
     assert!(diagnostic.contains("mismatched types"), "{diagnostic}");
+    // The first failure may be a stale run in the shared nightly directory:
+    // it runs again once, and the same difference after that is drift
+    // (D742), reported once.
+    assert_eq!(
+        diagnostic
+            .matches("differs from this project's build: running it again")
+            .count(),
+        1,
+        "{diagnostic}"
+    );
+    assert_eq!(
+        diagnostic.matches("after running it again too").count(),
+        1,
+        "{diagnostic}"
+    );
     let published = fs::read_dir(home.join("bindings"))
         .into_iter()
         .flatten()
@@ -1243,6 +1258,134 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
         })
         .count();
     assert_eq!(published, 0, "a divergent API was shared");
+}
+
+/// A dependency's build script that reads an environment variable it never
+/// declares keeps, in the shared nightly directory, the output of whichever
+/// project last ran it (Cargo's rule). A project whose own build gives the
+/// script other output runs it again there once, and its program prints its
+/// own value, as `cargo run` does (D742). `check` does the same.
+#[test]
+fn an_undeclared_build_script_input_runs_again_for_the_project_whose_build_differs() {
+    let root = crate::support::scratch().join("shared-undeclared-env");
+    let _ = fs::remove_dir_all(&root);
+    let dependency = root.join("dependency");
+    fs::create_dir_all(dependency.join("src")).unwrap();
+    fs::write(
+        dependency.join("Cargo.toml"),
+        "[workspace]\n[package]\nname='undeclared-env-fixture'\nversion='0.1.0'\nedition='2021'\n",
+    )
+    .unwrap();
+    fs::write(
+        dependency.join("src/lib.rs"),
+        "const fn parse(text: &str) -> u32 {\n    let bytes = text.as_bytes();\n    let mut value = 0;\n    let mut index = 0;\n    while index < bytes.len() {\n        value = value * 10 + (bytes[index] - b'0') as u32;\n        index += 1;\n    }\n    value\n}\npub const VALUE: u32 = parse(env!(\"UNDECLARED_VALUE\"));\n",
+    )
+    .unwrap();
+    // Declares only itself: the variable it reads is an undeclared input.
+    fs::write(
+        dependency.join("build.rs"),
+        r#"fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    let value = std::env::var("RAWR_UNDECLARED_VALUE").unwrap();
+    println!("cargo:rustc-env=UNDECLARED_VALUE={value}");
+}
+"#,
+    )
+    .unwrap();
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "undeclared environment fixture",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dependency)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let revision = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&dependency)
+        .output()
+        .unwrap();
+    assert!(revision.status.success());
+    let revision = text(&revision.stdout);
+    let projects = ["first", "second", "checked"].map(|name| root.join(name));
+    for project in &projects {
+        fs::create_dir_all(project.join("src")).unwrap();
+        fs::write(
+            project.join("Cargo.toml"),
+            format!("[workspace]\n[package]\nname='undeclared-env-app'\nversion='0.1.0'\nedition='2021'\n[dependencies]\nundeclared-env-fixture={{git='file://{}',rev='{}'}}\n", dependency.display(), revision.trim()),
+        )
+        .unwrap();
+        fs::write(
+            project.join("src/main.rs"),
+            "// rawr\nfn main() {\n    println!(\"value {}\", undeclared_env_fixture::VALUE);\n}\n",
+        )
+        .unwrap();
+    }
+    let home = root.join("rawr-home");
+    let run = |project: &Path, action: &str, value: &str| {
+        Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .arg(action)
+            .arg(project)
+            .env("RAWR_HOME", &home)
+            .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
+            .env("RAWR_UNDECLARED_VALUE", value)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap()
+    };
+    let reruns = |output: &Output| {
+        text(&output.stderr)
+            .matches("differs from this project's build: running it again")
+            .count()
+    };
+    let first = run(&projects[0], "run", "1");
+    assert!(first.status.success(), "{}", text(&first.stderr));
+    assert_eq!(text(&first.stdout), "value 1\n");
+    assert_eq!(reruns(&first), 0, "{}", text(&first.stderr));
+    // The nightly's run of the script holds the first project's value; the
+    // second project's build gives its own.
+    let second = run(&projects[1], "run", "2");
+    assert!(second.status.success(), "{}", text(&second.stderr));
+    assert_eq!(
+        text(&second.stdout),
+        "value 2\n",
+        "{}",
+        text(&second.stderr)
+    );
+    assert_eq!(reruns(&second), 1, "{}", text(&second.stderr));
+    assert!(
+        !text(&second.stderr).contains("toolchain"),
+        "a stale shared run was blamed on the toolchain: {}",
+        text(&second.stderr)
+    );
+    // What it extracted is shared under its value: its next run replays it.
+    let again = run(&projects[1], "run", "2");
+    assert!(again.status.success(), "{}", text(&again.stderr));
+    assert_eq!(text(&again.stdout), "value 2\n");
+    assert_eq!(reruns(&again), 0, "{}", text(&again.stderr));
+    let checked = run(&projects[2], "check", "3");
+    assert!(checked.status.success(), "{}", text(&checked.stderr));
+    assert_eq!(reruns(&checked), 1, "{}", text(&checked.stderr));
+    let ran = run(&projects[2], "run", "3");
+    assert!(ran.status.success(), "{}", text(&ran.stderr));
+    assert_eq!(text(&ran.stdout), "value 3\n", "{}", text(&ran.stderr));
+    assert_eq!(reruns(&ran), 0, "{}", text(&ran.stderr));
+    let _ = fs::remove_dir_all(&root);
 }
 
 /// A marked `main` gets the arguments after `--` and stdin, as under
@@ -1333,9 +1476,8 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
 /// are program code (D740, #593). A local proc-macro crate's derive,
 /// re-exported beside its trait as serde's is, runs on a top-level struct
 /// and enum, a struct in a function's body and one in an inline module
-/// named by its path, and prints what `cargo run` prints. serde's
-/// expansion is checked as program code too, and what rawr doesn't run in
-/// it yet is reported at the derive, never inside the expansion.
+/// named by its path, and prints what `cargo run` prints. So do serde's
+/// `Serialize` and `Deserialize` through serde_json.
 #[test]
 fn a_crates_derive_runs_from_its_expansion() {
     const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
@@ -1343,25 +1485,19 @@ fn a_crates_derive_runs_from_its_expansion() {
     let _ = fs::remove_dir_all(&root);
     copy(Path::new(DERIVES), &root);
 
-    // The program serializes alone, so the first error is the
-    // `Deserialize` expansion's, at its derive.
-    let program = fs::read_to_string(root.join("src/main.rs")).unwrap();
-    let serializing = program
-        .lines()
-        .filter(|line| !line.contains("back"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(root.join("src/main.rs"), serializing).unwrap();
-    let checked = rawr_import(&root, &["check"]);
-    let stderr = text(&checked.stderr);
-    assert!(!checked.status.success(), "stderr:\n{stderr}");
-    assert!(stderr.contains("main.rs:4:35"), "stderr:\n{stderr}");
+    // serde's `Serialize` and `Deserialize`, from their expansions, run
+    // as `cargo run` runs them.
+    let run = rawr_import(&root, &["run"]);
     assert!(
-        stderr.contains("this error originates in the derive macro `Deserialize`"),
-        "stderr:\n{stderr}"
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
     );
-    assert!(!stderr.contains("target/rawr/expand"), "stderr:\n{stderr}");
-    assert!(!stderr.contains("panicked"), "stderr:\n{stderr}");
+    assert_eq!(
+        text(&run.stdout),
+        "{\"description\":\"write\",\"done\":false}\nTask { description: \"write\", done: false }\n"
+    );
 
     fs::write(
         root.join("src/main.rs"),
@@ -1424,7 +1560,8 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     assert_eq!(
         text(&run.stdout),
         "Some(5) a pair\n14 <7> Some(10) None\n<7>\nPair(3, 4)\n1 read, expected two numbers\n\
-         expected a str\nexpected 2 numbers\nexpected what I wanted\n6\ntrue\n"
+         expected a str\nexpected 2 numbers\nexpected what I wanted\n6 3\n\
+         Counts { odd: 2, even: 1 }\nodd even\n6\ntrue\n"
     );
 }
 

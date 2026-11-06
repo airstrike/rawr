@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 112;
+const CLASSIFIER_VERSION: u32 = 114;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -9820,6 +9820,31 @@ impl<P: api::Phase> Context<'_, P> {
         } = ty
         {
             match target.as_ref() {
+                // `&[&'static str]`, as serde's `deserialize_struct(name,
+                // fields: &'static [&'static str], ..)` takes: Rawr's array
+                // of strings, each pinned, as one slice the runner pins for
+                // as long as it lives.
+                model::Type::Slice(element)
+                    if is_str_reference(element)
+                        && matches!(
+                            element.as_ref(),
+                            model::Type::Reference {
+                                lifetime: model::Lifetime::Static,
+                                ..
+                            }
+                        ) =>
+                {
+                    return Ok(representability::convert::Type::Borrowed {
+                        mutable: false,
+                        ty: Box::new(representability::convert::Type::Sequence {
+                            element: Box::new(representability::convert::Type::Builtin(
+                                representability::convert::Builtin::StaticStr,
+                            )),
+                            owned: false,
+                            length: None,
+                        }),
+                    });
+                }
                 model::Type::Slice(element) => {
                     return Ok(representability::convert::Type::Borrowed {
                         mutable: false,

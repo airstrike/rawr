@@ -311,6 +311,19 @@ pub fn lend_ref<E: Policy>(
     })
 }
 
+/// Lend the actual shared native slice to `rest`, as a script function
+/// native code calls with a `&[T]` takes it: the place `rest` reads is the
+/// slice itself, for as long as `rest` runs.
+pub fn borrow_ref<E: Policy, R>(
+    value: &[E::Value],
+    witness: &Witness,
+    rest: impl FnOnce(Dynamic) -> R,
+) -> RawrResultOf<R> {
+    crate::scope::lend_ref::<ReadOnly<E>, _>(&value, |nonce| {
+        Ok(rest(checked::<E>(nonce, false, witness)?))
+    })
+}
+
 /// Reach either a native vector or an already lent slice as a slice, without
 /// changing its structural permissions or ownership representation.
 pub fn reach<E: Policy, R>(
