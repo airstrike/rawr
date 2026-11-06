@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 pub mod alone;
 pub mod fixture;
+pub mod runtime;
 
 pub use alone::alone;
 pub use fixture::Fixture;
@@ -79,12 +80,13 @@ pub fn scratch() -> PathBuf {
         .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
 }
 
-/// The suite's one `RAWR_RUNTIME_HOME`, the shared `RAWR_HOME`: a test
-/// with a home of its own still starts cold, but for rawr's host sources
-/// and compiled runtime, which no such test is about and which would
-/// otherwise compile again for each such home.
+/// The suite's one `RAWR_RUNTIME_HOME`, the shared `RAWR_HOME`, with
+/// rawr's runtime already compiled in it ([`runtime::home`]): a test with a
+/// home of its own still starts cold, but for rawr's host sources and
+/// compiled runtime, which no such test is about and which would otherwise
+/// compile again for each such home.
 pub fn runtime_home() -> PathBuf {
-    scratch().join("rawr-home")
+    runtime::home()
 }
 
 /// `rawr-import run root`, with `variables` in its environment.
@@ -100,7 +102,6 @@ pub fn start_with(
     arguments: &[&str],
     stdin: Stdio,
 ) -> Run {
-    let directory = scratch();
     let mut child = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
     child
         .arg("run")
@@ -108,7 +109,7 @@ pub fn start_with(
         .arg("--")
         .args(arguments)
         .stdin(stdin)
-        .env("RAWR_HOME", directory.join("rawr-home"));
+        .env("RAWR_HOME", runtime_home());
     for (name, value) in variables {
         child.env(name, value);
     }
