@@ -3684,18 +3684,11 @@ fn item_signature(plan: &representability::callable::Item) -> Result<Signature, 
 
 fn signature(source: &representability::signature::Signature) -> Result<Signature, Unwritten> {
     // A future parameter is no type parameter of Rawr's signature: its
-    // input is the core future of its synthetic output (D527). Nor is an
-    // iterator parameter: its input is an iterator of its synthetic item.
+    // input is the core future of its synthetic output (D527).
     let kept = source
         .parameters()
         .iter()
-        .filter(|parameter| {
-            !matches!(
-                parameter.kind(),
-                representability::signature::Kind::Future
-                    | representability::signature::Kind::Iterator
-            )
-        })
+        .filter(|parameter| parameter.kind() != representability::signature::Kind::Future)
         .cloned()
         .collect::<Vec<_>>();
     let parameters = parameters(&kept)?;

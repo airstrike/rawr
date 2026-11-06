@@ -1527,8 +1527,9 @@ fn a_trait_method_over_fn_runs_on_functions_and_its_callable_crosses() {
 /// mapped iterator's closure runs as the crate pulls, an unbounded one is
 /// pulled only as far as `take` asks, and the `Product` the crate gives
 /// back is an iterator the program drives, with a `for` loop, `map` and
-/// `filter`. The output, and so the order of each side effect, is `cargo
-/// run`'s.
+/// `filter`. That crate iterator fills the trait's `Self` and a crate
+/// function's `I: Iterator` as itself. The output, and so the order of
+/// each side effect, is `cargo run`'s.
 #[test]
 fn a_program_iterator_crosses_lazily_into_a_crate_traits_blanket_method() {
     let (rawr, cargo) = both_printed("paired.rs", "");
@@ -1537,8 +1538,17 @@ fn a_program_iterator_crosses_lazily_into_a_crate_traits_blanket_method() {
         rawr,
         "8 Some(Cell { i: -1, j: 4 })\nmade\ncolumn a\nrow 0\nSome((0, 'a'))\ncolumn b\n0b\n\
          column a\nrow 1\n10a\ncolumn b\n10b\ncolumn a\npull 1\npull 2\n\
-         [(1, 0), (1, 1), (2, 0)]\n5"
+         [(1, 0), (1, 1), (2, 0)]\n05x 05y 06x 06y 15x 15y 16x 16y \n6 4\n5"
     );
+}
+
+/// A crate function over `I: Iterator` (#1051) takes an iterator: an
+/// array there is rustc's E0277, as `cargo build` reports it, where a `J:
+/// IntoIterator` takes one.
+#[test]
+fn an_array_where_a_crate_takes_an_iterator_is_e0277() {
+    let stderr = rejected_as_cargo("paired_array.rs", "E0277");
+    assert!(stderr.contains("Iterator"), "{stderr}");
 }
 
 /// fount's loading program: iced's `Task::future(impl Future<Output = T>)`

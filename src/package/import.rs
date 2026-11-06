@@ -3126,19 +3126,15 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
                     parameter.kind(),
                     representability::signature::Kind::Type
                         | representability::signature::Kind::Future
-                        | representability::signature::Kind::Iterator
                         | representability::signature::Kind::Callable
                 )
             })
         }
-        // `F: Future` takes a script future (D527), and `I: Iterator` a
-        // program's iterator.
+        // `F: Future` takes a script future (D527).
         None => plan.signature().parameters().iter().all(|parameter| {
             matches!(
                 parameter.kind(),
-                representability::signature::Kind::Type
-                    | representability::signature::Kind::Future
-                    | representability::signature::Kind::Iterator
+                representability::signature::Kind::Type | representability::signature::Kind::Future
             )
         }),
         // `F: FnOnce(..) -> R`, as `spawn_blocking` takes: a script closure
@@ -3497,12 +3493,16 @@ impl Types {
 
 /// What the type that fills an imported type parameter must implement: the
 /// derivable std traits its bounds name, which a script type filling it as
-/// `Value` is checked for (review 3). `Copy` and `Eq` bring the traits they
-/// extend.
+/// `Value` is checked for (review 3), and `Iterator`, which an array
+/// doesn't fill (E0277). `Copy` and `Eq` bring the traits they extend.
 pub(crate) fn requirements(bounds: &[Box<str>]) -> Vec<capability::Kind> {
     let mut kinds = Vec::new();
     for name in bounds {
-        let Some(kind) = capability::Kind::from_derive(name) else {
+        let kind = match &**name {
+            "Iterator" => Some(capability::Kind::Iterator),
+            name => capability::Kind::from_derive(name),
+        };
+        let Some(kind) = kind else {
             continue;
         };
         let implied = match kind {

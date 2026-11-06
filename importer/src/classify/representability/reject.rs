@@ -50,11 +50,6 @@ pub enum Kind {
     /// `LocalKey::scope` returns a `TaskLocalFuture<T, F>`. A script
     /// future fills `F` with a type Rawr has no name for (D527).
     ScriptFutureType,
-    /// A signature gives back an iterator parameter `I` as itself, as
-    /// `fn by_ref<I: Iterator>(i: I) -> I` would: a program's iterator fills
-    /// `I` as a native iterator that pulls from it, which Rawr's own
-    /// iterators can't stand for.
-    ScriptIteratorType,
     /// A closure parameter whose output is a future or a sipper, as
     /// `sipper(f: F)` with `F: FnOnce(Sender<P>) -> Fut, Fut: Future` takes:
     /// a script's `async` block has no Rust type to give it (#545).
@@ -134,7 +129,6 @@ impl Kind {
             Self::UnsupportedConstant => "it is a constant of a type that isn't supported",
             Self::Extraction => "it is a kind of Rust item that isn't supported",
             Self::ScriptFutureType => "its signature names the type of the future it takes",
-            Self::ScriptIteratorType => "it gives back the iterator it takes as itself",
             Self::FutureClosure => "it takes a closure that returns a future",
             Self::MacroRules => "it is a `macro_rules!` macro",
             Self::ProjectedClosureInput => {
@@ -262,14 +256,13 @@ mod tests {
             Kind::UnsupportedConstant,
             Kind::Extraction,
             Kind::ScriptFutureType,
-            Kind::ScriptIteratorType,
             Kind::FutureClosure,
             Kind::MacroRules,
             Kind::ProjectedClosureInput,
             Kind::StdNotRun(crate::classify::std_binding::Unrun::Rc),
             Kind::StdNotRun(crate::classify::std_binding::Unrun::Other),
         ];
-        assert_eq!(kinds.len(), 48);
+        assert_eq!(kinds.len(), 47);
         let encoded = kinds
             .iter()
             .map(|kind| serde_json::to_string(kind).expect("rejection kind encodes"))

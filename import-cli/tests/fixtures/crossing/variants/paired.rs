@@ -60,6 +60,19 @@ fn main() {
         .collect::<Vec<_>>();
     println!("{firsts:?}");
 
+    // The crate's own iterator is an iterator too: its product with
+    // another, and a crate function over any iterator, take it as itself.
+    let triples = (0..2).cartesian_product(5..7).cartesian_product(['x', 'y']);
+    for ((a, b), c) in triples {
+        print!("{a}{b}{c} ");
+    }
+    println!();
+    println!(
+        "{} {}",
+        events::paired::length((0..3).cartesian_product(0..2)),
+        events::paired::length((0..4).map(|n| n * 2))
+    );
+
     // A chain of adaptors, and a provided method that consumes.
     let evens = (1..=6).filter(|n| n % 2 == 0).chain(10..12);
     println!("{}", evens.tally());

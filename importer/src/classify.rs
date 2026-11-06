@@ -1726,7 +1726,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         &self,
         generics: &model::Generics,
         signature: &model::Signature,
-        iterators: &[u32],
     ) -> Vec<Projected> {
         use representability::signature;
         /// `deep`: also inside a type's arguments, as a callable's
@@ -1793,20 +1792,20 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         for input in signature.inputs() {
             find(input, true, &mut deep);
         }
-        // So is an iterator's `I::Item`, as `Product<I, J>::next` gives
-        // `Option<(I::Item, J::Item)>`, where no program's iterator fills
-        // `I`: the type the receiver holds gives it.
-        let item = |index: u32, chain: &Chain| {
-            !iterators.contains(&index)
-                && matches!(&chain[..], [(trait_id, associated)]
-                    if self.is_core_trait(trait_id, "Iterator")
-                        && self.definition_name(associated) == Some("Item"))
+        // So is an iterator's `I::Item` and `J::IntoIter`, as
+        // `Product<I, J>::next` gives `Option<(I::Item, J::Item)>` and
+        // itertools' `cartesian_product` gives `Product<Self, J::IntoIter>`:
+        // the type that fills the parameter gives it.
+        let item = |chain: &Chain| {
+            matches!(&chain[..], [(trait_id, _)]
+                if self.is_core_trait(trait_id, "Iterator")
+                    || self.is_core_trait(trait_id, "IntoIterator"))
         };
         for (index, chain) in deep {
             if (chain
                 .iter()
                 .all(|(trait_id, _)| trait_id.unit().authority().sysroot().is_none())
-                || item(index, &chain))
+                || item(&chain))
                 && chain.iter().all(|(_, associated)| {
                     self.definition_name(associated)
                         .is_some_and(|name| name.chars().all(|c| c.is_alphanumeric() || c == '_'))
@@ -1867,15 +1866,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             // `Task::sip` takes `impl FnOnce(<S as Future>::Output) -> T`
             // with `S: sipper::Core`.
             let called = position >= declared;
-            // An iterator parameter's items and `IntoIter` are its own
-            // (`iterator_projections`).
-            if iterators.contains(&index)
-                && matches!(&chain[..], [(trait_id, _)]
-                    if self.is_core_trait(trait_id, "Iterator")
-                        || self.is_core_trait(trait_id, "IntoIterator"))
-            {
-                continue;
-            }
             if (!called
                 && (self.is_core_trait(&trait_id, "Future")
                     || generics.predicates().any(|predicate| {
@@ -1927,60 +1917,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// `generics` with each projection of `projected` its bounds name
     /// written as its synthetic parameter, as a callable's `Fn(&P::State)`
     /// is `Fn(&PState)`. `None` when there is none.
-    /// `generics` with each `I::Item` and `I::IntoIter` of an iterator
-    /// parameter in its bounds' arguments read as `iterator_projections`
-    /// reads them, as `F: FnMut(Self::Item) -> bool` names the item: the
-    /// callable a script closure fills takes the program's items.
-    fn iterator_generics(
-        &self,
-        generics: &model::Generics,
-        iterators: &[u32],
-    ) -> Option<model::Generics> {
-        if iterators.is_empty() {
-            return None;
-        }
-        let argument = |argument: &model::Argument| match argument {
-            model::Argument::Type(ty) => {
-                model::Argument::Type(self.iterator_projections(ty, iterators))
-            }
-            other => other.clone(),
-        };
-        let predicates = generics
-            .predicates()
-            .map(|predicate| match predicate {
-                model::Predicate::Bound {
-                    ty,
-                    bound:
-                        model::Bound::Trait {
-                            trait_id,
-                            arguments,
-                            polarity,
-                            binders,
-                        },
-                } => model::Predicate::Bound {
-                    ty: ty.clone(),
-                    bound: model::Bound::Trait {
-                        trait_id: trait_id.clone(),
-                        arguments: arguments.iter().map(argument).collect(),
-                        polarity: *polarity,
-                        binders: binders.clone(),
-                    },
-                },
-                model::Predicate::ProjectionEquality { projection, ty } => {
-                    model::Predicate::ProjectionEquality {
-                        projection: projection.clone(),
-                        ty: self.iterator_projections(ty, iterators),
-                    }
-                }
-                other => other.clone(),
-            })
-            .collect();
-        Some(model::Generics::new(
-            generics.parameters().cloned().collect(),
-            predicates,
-        ))
-    }
-
     fn projected_generics(
         generics: &model::Generics,
         projected: &[Projected],
@@ -2528,245 +2464,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }
         }
         outputs
-    }
-
-    /// The type parameters a program's iterator fills: each an input takes
-    /// by value, bounded by `core::iter::Iterator`, or by `IntoIterator`
-    /// with no `Item` a bound fixes, as `Self` and `J` of itertools'
-    /// `cartesian_product<J: IntoIterator>(self, other: J)` over `Self:
-    /// Iterator` are. An `impl IntoIterator<Item = X>` argument stays the
-    /// `Vec<X>` it crosses as (`iterated_item`). A parameter only a
-    /// receiver's type names, as `I` of `Product<I, J>::next`, is the type
-    /// the receiver holds.
-    fn iterator_indices(
-        &self,
-        generics: &model::Generics,
-        signature: &model::Signature,
-    ) -> Vec<u32> {
-        let mut iterators = Vec::new();
-        for predicate in generics.predicates() {
-            let model::Predicate::Bound {
-                ty: model::Type::Parameter { index, .. },
-                bound:
-                    model::Bound::Trait {
-                        trait_id,
-                        polarity: model::Polarity::Positive,
-                        ..
-                    },
-            } = predicate
-            else {
-                continue;
-            };
-            if iterators.contains(index)
-                || !(self.is_core_trait(trait_id, "Iterator")
-                    || self.is_core_trait(trait_id, "IntoIterator"))
-                || self.iterated_item(generics, *index).is_some()
-                || !signature.inputs().any(|input| {
-                    matches!(input, model::Type::Parameter { index: taken, .. } if taken == index)
-                })
-                || !self.iterator_fills(generics, *index)
-            {
-                continue;
-            }
-            iterators.push(*index);
-        }
-        iterators
-    }
-
-    /// Whether `rawr::future::Items<T>` meets each bound `generics` puts on
-    /// the parameter at `index` and on its `IntoIter`: `Iterator`,
-    /// `IntoIterator`, `Clone`, `Debug`, `Sized`, and a crate trait a
-    /// blanket impl gives every iterator, as `Self: Itertools` is. One only
-    /// `IntoIterator` bounds whose items a bound names, as ratatui's
-    /// `List::new(impl IntoIterator<Item: Into<ListItem>>)` takes, stays the
-    /// type the call gives, as a `Vec` of an array's items.
-    fn iterator_fills(&self, generics: &model::Generics, index: u32) -> bool {
-        let met = |trait_id: &api::identity::Definition| {
-            ["Iterator", "IntoIterator", "Clone", "Debug"]
-                .iter()
-                .any(|name| self.is_core_trait(trait_id, name))
-                || self.definition_name(trait_id) == Some("Sized")
-                || self.iterator_blanket(trait_id).is_some()
-        };
-        let of_parameter = |ty: &model::Type, associated: &str| match ty {
-            model::Type::Projection {
-                trait_id,
-                associated: name,
-                arguments,
-            } => {
-                self.is_core_trait(trait_id, "IntoIterator")
-                    && self.definition_name(name) == Some(associated)
-                    && matches!(arguments.first(),
-                        Some(model::Argument::Type(model::Type::Parameter { index: of, .. }))
-                            if *of == index)
-            }
-            _ => false,
-        };
-        let mut iterator = false;
-        let mut items_bounded = false;
-        for predicate in generics.predicates() {
-            let model::Predicate::Bound { ty, bound } = predicate else {
-                continue;
-            };
-            let model::Bound::Trait { trait_id, .. } = bound else {
-                continue;
-            };
-            match ty {
-                model::Type::Parameter { index: bounded, .. } if *bounded == index => {
-                    iterator |= self.is_core_trait(trait_id, "Iterator");
-                    if !met(trait_id) {
-                        return false;
-                    }
-                }
-                ty if of_parameter(ty, "IntoIter") && !met(trait_id) => return false,
-                ty if of_parameter(ty, "Item") => items_bounded = true,
-                _ => {}
-            }
-        }
-        iterator || !items_bounded
-    }
-
-    /// `parameters` with each of `iterators` (`iterator_indices`) marked an
-    /// iterator parameter, with a synthetic `I::Item` parameter appended
-    /// (`signature::iterator_item`): those a parameter a callable or a
-    /// future fills leaves out.
-    fn iterator_parameters(
-        mut iterators: Vec<u32>,
-        parameters: &mut Box<[representability::signature::Parameter]>,
-    ) -> Vec<u32> {
-        use representability::signature;
-        let mut extended = parameters.to_vec();
-        iterators.retain(|index| {
-            let Some(parameter) = extended.iter_mut().find(|parameter| {
-                parameter.index() == *index && parameter.kind() == signature::Kind::Type
-            }) else {
-                return false;
-            };
-            parameter.mark_iterator();
-            let name = format!("{}Item", parameter.name().trim_start_matches("impl "));
-            extended.push(signature::Parameter::new(
-                signature::iterator_item(*index),
-                name.into_boxed_str(),
-                signature::Kind::Type,
-            ));
-            true
-        });
-        *parameters = extended.into_boxed_slice();
-        iterators
-    }
-
-    /// The type a bound fixes the item of the iterator parameter at `index`
-    /// to, as `u32` of `I: Iterator<Item = u32>`: `None` when the call
-    /// infers it.
-    fn iterator_item(
-        &self,
-        generics: &model::Generics,
-        index: u32,
-        rewrite: impl Fn(&model::Type) -> model::Type,
-    ) -> Option<representability::convert::Type> {
-        let synthetic = representability::signature::iterator_item(index);
-        generics.predicates().find_map(|predicate| {
-            let model::Predicate::ProjectionEquality {
-                projection:
-                    model::Type::Projection {
-                        trait_id,
-                        associated,
-                        arguments,
-                    },
-                ty,
-            } = predicate
-            else {
-                return None;
-            };
-            let Some(model::Argument::Type(model::Type::Parameter { index: bounded, .. })) =
-                arguments.first()
-            else {
-                return None;
-            };
-            if *bounded != index
-                || !(self.is_core_trait(trait_id, "Iterator")
-                    || self.is_core_trait(trait_id, "IntoIterator"))
-                || self.definition_name(associated) != Some("Item")
-            {
-                return None;
-            }
-            self.convert_input(&rewrite(ty))
-                .ok()
-                .filter(|fixed| !names_parameter(fixed, synthetic))
-        })
-    }
-
-    /// `ty` with each `<I as Iterator>::Item` and `<I as IntoIterator>::Item`
-    /// of an iterator parameter `I` (`iterator_parameters`) its synthetic
-    /// item parameter, and each `<I as IntoIterator>::IntoIter` `I` itself:
-    /// the iterator that fills `I` is its own `IntoIterator`, as std's
-    /// `impl<I: Iterator> IntoIterator for I` makes it.
-    fn iterator_projections(&self, ty: &model::Type, iterators: &[u32]) -> model::Type {
-        if iterators.is_empty() {
-            return ty.clone();
-        }
-        let argument = |argument: &model::Argument| match argument {
-            model::Argument::Type(ty) => {
-                model::Argument::Type(self.iterator_projections(ty, iterators))
-            }
-            other => other.clone(),
-        };
-        match ty {
-            model::Type::Projection {
-                trait_id,
-                associated,
-                arguments,
-            } => {
-                let arguments = arguments.iter().map(argument).collect::<Box<[_]>>();
-                if let Some(model::Argument::Type(model::Type::Parameter { owner, index })) =
-                    arguments.first()
-                    && iterators.contains(index)
-                {
-                    let iterator = self.is_core_trait(trait_id, "Iterator");
-                    let into = self.is_core_trait(trait_id, "IntoIterator");
-                    match self.definition_name(associated) {
-                        Some("Item") if iterator || into => {
-                            return model::Type::Parameter {
-                                owner: owner.clone(),
-                                index: representability::signature::iterator_item(*index),
-                            };
-                        }
-                        Some("IntoIter") if into => {
-                            return model::Type::Parameter {
-                                owner: owner.clone(),
-                                index: *index,
-                            };
-                        }
-                        _ => {}
-                    }
-                }
-                model::Type::Projection {
-                    trait_id: trait_id.clone(),
-                    associated: associated.clone(),
-                    arguments,
-                }
-            }
-            model::Type::Definition { id, arguments } => model::Type::Definition {
-                id: id.clone(),
-                arguments: arguments.iter().map(argument).collect(),
-            },
-            model::Type::Tuple(members) => model::Type::Tuple(
-                members
-                    .iter()
-                    .map(|member| self.iterator_projections(member, iterators))
-                    .collect(),
-            ),
-            model::Type::Reference {
-                lifetime,
-                mutability,
-                ty,
-            } => model::Type::Reference {
-                lifetime: lifetime.clone(),
-                mutability: *mutability,
-                ty: Box::new(self.iterator_projections(ty, iterators)),
-            },
-            other => other.clone(),
-        }
     }
 
     /// Each bound `R: Trait<A..>` that names another type parameter in
@@ -6142,7 +5839,7 @@ impl<P: api::Phase> Context<'_, P> {
             }
             // A trait every iterator has through a blanket impl, as
             // itertools' `impl<T: Iterator + ?Sized> Itertools for T`: a
-            // program's iterator is its `Self` (`iterator_parameters`).
+            // program's iterator is its `Self`, as a type of the call's.
             if let Some(iterator) = self.iterator_blanket(trait_id)
                 && !predicates.iter().any(|predicate| {
                     matches!(
@@ -8469,12 +8166,9 @@ impl<P: api::Phase> Context<'_, P> {
         // type parameter the call infers from `W`'s implementation (D558.5),
         // and so is `P::State` where a callable's bound names it, and
         // `I::Item` of a type parameter a program's iterator doesn't fill.
-        let iterated = self.iterator_indices(generics, signature);
-        let projected = self.projections(generics, signature, &iterated);
+        let projected = self.projections(generics, signature);
         let rewritten = Self::projected_generics(generics, &projected);
         let generics = rewritten.as_ref().unwrap_or(generics);
-        let items = self.iterator_generics(generics, &iterated);
-        let generics = items.as_ref().unwrap_or(generics);
         let FunctionParameters {
             mut parameters,
             callable: callable_class,
@@ -8493,9 +8187,6 @@ impl<P: api::Phase> Context<'_, P> {
         // `F: Future` takes a script future as `rawr::future::Script`, and
         // `F::Output` is a synthetic type parameter the script infers (D527).
         let futures = self.future_parameters(generics, &mut parameters, callable_class.is_some());
-        // `I: Iterator` takes a program's iterator as `rawr::future::Items<T>`,
-        // and `I::Item` is a synthetic type parameter the call infers.
-        let iterators = Self::iterator_parameters(iterated, &mut parameters);
         // `T: Clone` keeps `Clone`: a script type fills `T` as `Value`,
         // which implements it, so Rawr checks the script type (review 3).
         parameters = parameters
@@ -8507,24 +8198,19 @@ impl<P: api::Phase> Context<'_, P> {
                 parameter.with_bounds(bounds).with_static_str(static_str)
             })
             .collect();
-        if !futures.is_empty() || !iterators.is_empty() {
+        if !futures.is_empty() {
             predicates = predicates
                 .iter()
                 .copied()
-                .filter(|bound| {
-                    !futures.iter().any(|(index, _)| *index == bound.parameter())
-                        && !iterators.contains(&bound.parameter())
-                })
+                .filter(|bound| !futures.iter().any(|(index, _)| *index == bound.parameter()))
                 .collect();
         }
         Self::declare_projected(&projected, &mut parameters);
         let rewrite = |ty: &model::Type| {
             projected_parameters(
-                &future_projections(
-                    &self.iterator_projections(ty, &iterators),
-                    &futures,
-                    |trait_id| self.is_core_trait(trait_id, "Future"),
-                ),
+                &future_projections(ty, &futures, |trait_id| {
+                    self.is_core_trait(trait_id, "Future")
+                }),
                 &projected,
             )
         };
@@ -8761,29 +8447,6 @@ impl<P: api::Phase> Context<'_, P> {
                 .map(|ty| replace_parameter(ty, synthetic, &fixed))
                 .collect();
             output = replace_parameter(output, synthetic, &fixed);
-        }
-        // A program's iterator fills `I` as `rawr::future::Items<I::Item>`
-        // wherever the signature names `I`, as itertools' `Product<Self,
-        // J::IntoIter>` does, and `I::Item` is a type a bound fixes, as
-        // `I: Iterator<Item = u32>` does, or the one the call infers.
-        for &iterator in &iterators {
-            if output == representability::convert::Type::Parameter(iterator) {
-                return Err(representability::reject::Kind::ScriptIteratorType.into());
-            }
-            let item = self.iterator_item(generics, iterator, rewrite).unwrap_or(
-                representability::convert::Type::Parameter(
-                    representability::signature::iterator_item(iterator),
-                ),
-            );
-            let items = representability::convert::Type::Nominal {
-                definition: crate::surface::identity::Definition::iterator(),
-                arguments: Box::new([item]),
-            };
-            inputs = inputs
-                .into_iter()
-                .map(|ty| replace_parameter(ty, iterator, &items))
-                .collect();
-            output = replace_parameter(output, iterator, &items);
         }
         let mut relations = self.relations(generics)?.into_vec();
         relations.extend(self.projection_relations(&projected)?);
@@ -9757,6 +9420,9 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
+    /// The derivable std traits the bounds of the parameter at `index` name,
+    /// and `Iterator`, which a crate's iterator value or a program's
+    /// iterator fills and an array doesn't (E0277).
     fn derivable_bounds(&self, generics: &model::Generics, index: u32) -> Box<[Box<str>]> {
         let declared = generics
             .parameters()
@@ -9786,6 +9452,7 @@ impl<P: api::Phase> Context<'_, P> {
             };
             let Some(name) = representability::signature::DERIVABLE
                 .into_iter()
+                .chain(["Iterator"])
                 .find(|name| self.is_core_trait(trait_id, name))
             else {
                 continue;

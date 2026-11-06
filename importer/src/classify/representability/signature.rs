@@ -58,11 +58,6 @@ pub enum Kind {
     /// the instance writes it `_` (D527). Its `F::Output` is the synthetic
     /// type parameter [`future_output`] names.
     Future,
-    /// `I: Iterator`, or `J: IntoIterator` of no fixed `Item`: a program's
-    /// iterator fills it as `rawr::future::Items<T>`, which pulls from it
-    /// on each `next()`, as a script closure fills a callable parameter.
-    /// Its `Item` is the synthetic type parameter [`iterator_item`] names.
-    Iterator,
 }
 
 /// The bit that marks a synthetic type parameter: the `Output` of the
@@ -74,14 +69,6 @@ pub const FUTURE_OUTPUT: u32 = 0x8000_0000;
 #[must_use]
 pub const fn future_output(index: u32) -> u32 {
     FUTURE_OUTPUT | index
-}
-
-/// The synthetic parameter that stands for `I::Item` of the iterator
-/// parameter at `index`: the type the program's iterator yields, which the
-/// call infers. Its ordinal is past those [`projection_output`] counts.
-#[must_use]
-pub const fn iterator_item(index: u32) -> u32 {
-    projection_output(index, 0x7FF)
 }
 
 /// The synthetic parameter that stands for the `ordinal`th associated type
@@ -512,10 +499,6 @@ impl Parameter {
 
     pub(crate) fn mark_future(&mut self) {
         self.kind = Kind::Future;
-    }
-
-    pub(crate) fn mark_iterator(&mut self) {
-        self.kind = Kind::Iterator;
     }
 
     /// Whether this is the synthetic `F::Output` of a future parameter.

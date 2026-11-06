@@ -16813,7 +16813,7 @@ fn render_container_path(
                 use crate::classify::representability::signature::Kind;
                 match parameter.kind() {
                     Kind::Type => given.next().map(|ty| (parameter.index(), ty)),
-                    Kind::Callable | Kind::Future | Kind::Iterator => {
+                    Kind::Callable | Kind::Future => {
                         Some((parameter.index(), &convert::Type::Inferred))
                     }
                     Kind::Constant => None,
@@ -19712,8 +19712,7 @@ fn render_generic_arguments(
                 render_constant(constant, output)?;
             }
             crate::classify::representability::signature::Kind::Callable
-            | crate::classify::representability::signature::Kind::Future
-            | crate::classify::representability::signature::Kind::Iterator => {
+            | crate::classify::representability::signature::Kind::Future => {
                 output.write_all(b"_").map_err(request::unwritable)?;
             }
         }

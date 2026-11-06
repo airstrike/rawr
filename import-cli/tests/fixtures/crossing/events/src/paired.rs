@@ -34,6 +34,11 @@ pub trait Paired: Iterator {
 
 impl<T: Iterator + ?Sized> Paired for T {}
 
+/// How many items `items` gives, as a crate function over any iterator.
+pub fn length<I: Iterator>(items: I) -> usize {
+    items.count()
+}
+
 /// The cartesian product of two iterators, as itertools' `Product`.
 #[derive(Debug, Clone)]
 pub struct Product<I, J>
