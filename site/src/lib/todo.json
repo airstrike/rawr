@@ -1,16 +1,22 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.149",
-  "examples": {
-    "running": 24,
-    "total": 56,
-    "note": "0.3.148: 15 ran at the 0.3.135 survey, plus table, custom_quad, gradient, sierpinski_triangle, multi_window, arc, multitouch, clock and solar_system"
-  },
+  "version": "0.3.150",
+  "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.150",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"A program's impl of a crate trait's generic method runs at each type native code calls it with: the body reads the type parameter as an opaque type bounded by its trait, calls its methods and associated functions, names its associated types, takes it inside another type, and takes a bound at the impl's lifetime. Its values stay native in a frame of the runner's generic impl.","issues":[1003,1004],"refs":[593]},
+          {"text":"A borrow of your own value fills a crate function's `&T`, as `name_of(&Square)` for `fn name_of(shape: &impl Shape)`; it no longer panics.","issues":[993]},
+          {"text":"A crate's re-export of a std item is that item, a std type's method can be called by its path (`Formatter::write_str(f, ..)`), and a crate function that takes `&dyn Trait` takes a crate value, a std value the crate implements the trait for, or a borrow of your value. A `fmt` body can pass its formatter on to a function of yours.","issues":[1005,1006,1007],"refs":[593]},
+          {"text":"A `fn` pointer value passes where a crate takes `impl Fn(..)`, `FnMut` or `FnOnce`, wherever it comes from: an array element, as iced's styling passes `.style(style)`, a parameter, or a field. iced's styling and vectorial_text run.","issues":[973]}
+        ]
+      },
       {
         "version": "0.3.149",
         "date": "2026-11-06",
@@ -2404,7 +2410,7 @@
     {"issue":970,"title":"A crate's async fn taking &str through a type parameter generated code that didn't compile","state":"closed","category":"Divergences from rustc","release":"0.3.140"},
     {"issue":971,"title":"iced layout panics on a keyboard event: keyboard::Event's Key<SmolStr> fails rawr's type check","state":"closed","category":"Divergences from rustc","release":"0.3.146"},
     {"issue":972,"title":"A relative CARGO_TARGET_DIR is taken relative to the project, while Cargo takes it relative to the working directory","state":"open","category":"Health"},
-    {"issue":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"open","category":"Divergences from rustc"},
+    {"issue":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
     {"issue":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"closed","category":"Divergences from rustc","release":"0.3.146"},
     {"issue":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed","category":"Divergences from rustc","release":"0.3.143"},
     {"issue":976,"title":"A derive expansion's syntax in program code","state":"closed","category":"Divergences from rustc","release":"0.3.144"},
@@ -2424,13 +2430,24 @@
     {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open","category":"Divergences from rustc"},
     {"issue":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open","category":"Divergences from rustc"},
     {"issue":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open","category":"Divergences from rustc"},
-    {"issue":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"open","category":"Divergences from rustc"},
+    {"issue":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
     {"issue":994,"title":"A derive macro's own error is reported at the derive","state":"open","category":"Divergences from rustc"},
     {"issue":995,"title":"std types written by their std paths and crates' re-exports of std types resolve","state":"closed","category":"Divergences from rustc","release":"0.3.147"},
     {"issue":996,"title":"D741's conditions: a conversion picks a family member only by one trait's type argument, and exactly one fit","state":"closed","category":"Divergences from rustc","release":"0.3.149"},
     {"issue":997,"title":"Application path: `x.into()` beside an unimported crate trait's own `into`","state":"open","category":"Divergences from rustc"},
     {"issue":998,"title":"A check of one iced project makes 4-5 resolution executions of 360-424 MB each","state":"open","category":"Health"},
-    {"issue":999,"title":"Every check leaves empty execution-key directories in the store","state":"open","category":"Health"}
+    {"issue":999,"title":"Every check leaves empty execution-key directories in the store","state":"open","category":"Health"},
+    {"issue":1000,"title":"?play's universe has no canvas, application::timed or Application::theme","state":"open","category":"iced examples"},
+    {"issue":1001,"title":"`Option::get_or_insert_with` and `Option::insert` don't run yet","state":"open","category":"Divergences from rustc"},
+    {"issue":1002,"title":"A std associated function's path as a value: `get_or_insert_with(Instant::now)`","state":"open","category":"Divergences from rustc"},
+    {"issue":1003,"title":"Generic trait methods: a program's impl of a crate trait's generic method (#593 step 0)","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
+    {"issue":1004,"title":"Generic trait methods: static calls, lifetime bounds and nested opaque inputs (#593 step 1)","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
+    {"issue":1005,"title":"`fmt::Formatter` in program code","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
+    {"issue":1006,"title":"`&dyn Trait` of a crate's trait as an input","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
+    {"issue":1007,"title":"Passing a `fmt` body's formatter to another function","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
+    {"issue":1008,"title":"A program value lent `&mut` to a crate's `&mut T` or `&mut dyn Trait` loses native changes","state":"open","category":"Divergences from rustc"},
+    {"issue":1009,"title":"A frame method's turbofish type argument (`next_key::<__Field>`) gives an Option the checker can't type","state":"open","category":"Divergences from rustc"},
+    {"issue":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2909,7 +2926,7 @@
             {"number":956,"title":"Rawr's types disagree with rustc's in ferris, styling and vectorial_text","state":"closed"},
             {"number":958,"title":"changelog's rawr check never completes and fills the disk","state":"open"},
             {"number":971,"title":"iced layout panics on a keyboard event: keyboard::Event's Key<SmolStr> fails rawr's type check","state":"closed"},
-            {"number":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"open"},
+            {"number":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"closed"},
             {"number":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"closed"},
             {"number":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed"},
             {"number":976,"title":"A derive expansion's syntax in program code","state":"closed"},
@@ -2925,11 +2942,19 @@
             {"number":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open"},
             {"number":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open"},
             {"number":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open"},
-            {"number":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"open"},
+            {"number":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"closed"},
             {"number":994,"title":"A derive macro's own error is reported at the derive","state":"open"},
             {"number":995,"title":"std types written by their std paths and crates' re-exports of std types resolve","state":"closed"},
             {"number":996,"title":"D741's conditions: a conversion picks a family member only by one trait's type argument, and exactly one fit","state":"closed"},
-            {"number":997,"title":"Application path: `x.into()` beside an unimported crate trait's own `into`","state":"open"}
+            {"number":997,"title":"Application path: `x.into()` beside an unimported crate trait's own `into`","state":"open"},
+            {"number":1003,"title":"Generic trait methods: a program's impl of a crate trait's generic method (#593 step 0)","state":"closed"},
+            {"number":1004,"title":"Generic trait methods: static calls, lifetime bounds and nested opaque inputs (#593 step 1)","state":"closed"},
+            {"number":1005,"title":"`fmt::Formatter` in program code","state":"closed"},
+            {"number":1006,"title":"`&dyn Trait` of a crate's trait as an input","state":"closed"},
+            {"number":1007,"title":"Passing a `fmt` body's formatter to another function","state":"closed"},
+            {"number":1008,"title":"A program value lent `&mut` to a crate's `&mut T` or `&mut dyn Trait` loses native changes","state":"open"},
+            {"number":1009,"title":"A frame method's turbofish type argument (`next_key::<__Field>`) gives an Option the checker can't type","state":"open"},
+            {"number":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3134,7 +3159,9 @@
             {"number":969,"title":"A panic in a runtime's async main prints \"invocation of symbolic item ... failed: Runtime error:\" instead of Rust's","state":"open"},
             {"number":970,"title":"A crate's async fn taking &str through a type parameter generated code that didn't compile","state":"closed"},
             {"number":977,"title":"std trait-path calls with a turbofish or a written Self","state":"open"},
-            {"number":978,"title":"`fmt::Formatter::write_str(f, s)` by its path in a fmt body","state":"open"}
+            {"number":978,"title":"`fmt::Formatter::write_str(f, s)` by its path in a fmt body","state":"open"},
+            {"number":1001,"title":"`Option::get_or_insert_with` and `Option::insert` don't run yet","state":"open"},
+            {"number":1002,"title":"A std associated function's path as a value: `get_or_insert_with(Instant::now)`","state":"open"}
           ]
         }
       ]
@@ -3282,6 +3309,17 @@
             {"number":920,"title":"Restore the test that every playground example prints what rustc's build prints","state":"closed"}
           ],
           "milestone": "0.3"
+        },
+        {
+          "id": "universe-coverage",
+          "name": "?play covers what the examples use",
+          "start": 86,
+          "size": 2,
+          "state": "now",
+          "note": "Canvas, timed(..) and theme(..) for solar_system (#1000)",
+          "issues": [
+            {"number":1000,"title":"?play's universe has no canvas, application::timed or Application::theme","state":"open"}
+          ]
         }
       ]
     },

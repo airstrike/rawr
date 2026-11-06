@@ -210,9 +210,14 @@ mod tests {
             projected,
             parameter_path("visits::Visit", "visit_map", 0, Some("Out"))
         );
-        assert_eq!(parameter_of(&projected), Some(("visit_map", 0, Some("Out"))));
+        assert_eq!(
+            parameter_of(&projected),
+            Some(("visit_map", 0, Some("Out")))
+        );
         assert_eq!(parameter_projection(&projected, "Other"), None);
-        assert!(is_parameter("visits::Visit::__rawr_self::__rawr_param_visit_0"));
+        assert!(is_parameter(
+            "visits::Visit::__rawr_self::__rawr_param_visit_0"
+        ));
         assert!(!is_parameter("visits::Visit::__rawr_self::visit"));
     }
 }

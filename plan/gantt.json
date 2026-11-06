@@ -1,12 +1,8 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-06",
-  "version": "0.3.149",
-  "examples": {
-    "running": 24,
-    "total": 56,
-    "note": "0.3.148: 15 ran at the 0.3.135 survey, plus table, custom_quad, gradient, sierpinski_triangle, multi_window, arc, multitouch, clock and solar_system"
-  },
+  "version": "0.3.150",
+  "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "groups": [
     {
       "id": "foundations",
@@ -94,7 +90,7 @@
         {"id":"struct-literals-live-edits","name":"Struct literals and live edits","start":44,"size":2,"state":"next","note":"Not started","issues":[325,326],"milestone":"0.4"},
         {"id":"projections-function-values","name":"Projections and function values","start":44,"size":3,"state":"now","note":"#317 and #319 remain","issues":[317,318,319,327],"milestone":"0.4"},
         {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"now","note":"17 examples pass check but their runner doesn't build (#951 #955 #957)","issues":[335,336,337,339,340,338,951,955,957],"milestone":"0.4"},
-        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"now","note":"5 crash after a frame, 2 panic at start, 18 fail check (#952 #953 #954 #956 #958)","issues":[283,314,328,334,345,593,952,953,954,956,958,971,973,974,975,976,979,980,981,983,984,985,986,987,988,990,991,992,993,994,995,996,997],"milestone":"0.4"},
+        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"now","note":"5 crash after a frame, 2 panic at start, 18 fail check (#952 #953 #954 #956 #958)","issues":[283,314,328,334,345,593,952,953,954,956,958,971,973,974,975,976,979,980,981,983,984,985,986,987,988,990,991,992,993,994,995,996,997,1003,1004,1005,1006,1007,1008,1009,1010],"milestone":"0.4"},
         {"id":"opaque-values","name":"A crate's `impl Trait` values","start":47,"size":3,"state":"now","note":"Borrowing opaque outputs live in regions through wrapper fns (#936); layout starts its runner. Slots and members next (#965)","issues":[845,885,886,887,912,913,916,917,936,943,965,966,967]}
       ]
     },
@@ -119,7 +115,7 @@
         {"id":"borrowed-values","name":"Borrowed values","start":69,"size":4,"state":"done","note":"Variant fields move or lend; opaque results borrow their inputs for their whole life","issues":[678,783,782,846,849],"milestone":"0.3"},
         {"id":"rustc-errors","name":"rustc's errors","start":68,"size":3,"state":"done","note":"E0107, E0283, E0369, E0425, E0433, E0596, E0658 and more, worded as rustc words them","issues":[772,774,733,736,752,771,751,858,859,860,861,862,896],"milestone":"0.3"},
         {"id":"any-nightly","name":"Any nightly","start":72,"size":2,"state":"done","note":"The project's nightly reads crate APIs; a daily job moves the window","issues":[692,864],"milestone":"0.3"},
-        {"id":"rustlings","name":"rustlings: 94 of 95","start":74,"size":4,"state":"now","note":"Solutions that run and match rustc (scripts/rustlings.sh, v6.5.0), measured at 0.3.140; async1 alone now gets rustc's E0433 (#968), to be remeasured","issues":[236,898,899,900,901,902,903,904,905,906,907,908,909,910,911,921,922,923,924,925,926,927,928,929,932,933,934,935,937,938,944,945,946,947,948,949,950,961,962,968,969,970,977,978]}
+        {"id":"rustlings","name":"rustlings: 94 of 95","start":74,"size":4,"state":"now","note":"Solutions that run and match rustc (scripts/rustlings.sh, v6.5.0), measured at 0.3.140; async1 alone now gets rustc's E0433 (#968), to be remeasured","issues":[236,898,899,900,901,902,903,904,905,906,907,908,909,910,911,921,922,923,924,925,926,927,928,929,932,933,934,935,937,938,944,945,946,947,948,949,950,961,962,968,969,970,977,978,1001,1002]}
       ]
     },
     {
@@ -144,7 +140,8 @@
         {"id":"deploy-gate","name":"Deploy gate","start":36,"size":1,"state":"done","note":"Waits for Cloudflare's rollout","issues":[321],"milestone":"0.3"},
         {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"done","note":"iced snippets render frames, tokio runs, and GIFs play at the program's pace","issues":[434,436,465,507,515]},
         {"id":"browser-wasm-bindings","name":"wasm bindings for the browser","start":58,"size":5,"state":"next","note":"rawr-web","issues":[435]},
-        {"id":"play-universe-limits","name":"?play on a small CPU","start":71,"size":3,"state":"done","note":"Check-time errors, a wider universe, no deadline while idle, every frame drawn at the program's pace","issues":[863,872,880,888,889,890,918,919,920],"milestone":"0.3"}
+        {"id":"play-universe-limits","name":"?play on a small CPU","start":71,"size":3,"state":"done","note":"Check-time errors, a wider universe, no deadline while idle, every frame drawn at the program's pace","issues":[863,872,880,888,889,890,918,919,920],"milestone":"0.3"},
+        {"id":"universe-coverage","name":"?play covers what the examples use","start":86,"size":2,"state":"now","note":"Canvas, timed(..) and theme(..) for solar_system (#1000)","issues":[1000]}
       ]
     },
     {

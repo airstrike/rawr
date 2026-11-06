@@ -6,6 +6,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.150 (2026-11-06)
+
+- A program's impl of a crate trait's generic method runs at each type native code calls it with: the body reads the type parameter as an opaque type bounded by its trait, calls its methods and associated functions, names its associated types, takes it inside another type, and takes a bound at the impl's lifetime. Its values stay native in a frame of the runner's generic impl. (#1003, #1004; part of #593)
+- A borrow of your own value fills a crate function's `&T`, as `name_of(&Square)` for `fn name_of(shape: &impl Shape)`; it no longer panics. (#993)
+- A crate's re-export of a std item is that item, a std type's method can be called by its path (`Formatter::write_str(f, ..)`), and a crate function that takes `&dyn Trait` takes a crate value, a std value the crate implements the trait for, or a borrow of your value. A `fmt` body can pass its formatter on to a function of yours. (#1005, #1006, #1007; part of #593)
+- A `fn` pointer value passes where a crate takes `impl Fn(..)`, `FnMut` or `FnOnce`, wherever it comes from: an array element, as iced's styling passes `.style(style)`, a parameter, or a field. iced's styling and vectorial_text run. (#973)
+
 ## 0.3.149 (2026-11-06)
 
 - A conversion's target chooses among a crate's `From` impls only when every candidate `into` is the same trait method, by the importer's identity. Exactly one impl must fit. A target the program leaves open, as in `let y = degrees.into(); y * 2.0`, or one no use fixes, is rustc's E0283. A crate trait's own `into` imported beside `Into::into` is rustc's E0034. (#996)
