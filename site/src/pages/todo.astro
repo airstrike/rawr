@@ -109,6 +109,16 @@ const tally = (rows: Row[]) => {
       ? hash
       : /^v\d/.test(hash) ? "changelog" : "gantt";
   })();
+  // The page shows once its font has loaded, so the data never redraws in
+  // a fallback face first. A font that hasn't come in 3 s shows the page
+  // in the fallback.
+  (() => {
+    const root = document.documentElement;
+    root.dataset.font = "wait";
+    const show = () => delete root.dataset.font;
+    setTimeout(show, 3000);
+    document.fonts?.load('450 14px "Abitaro Sans"').then(show, show) ?? show();
+  })();
 </script>
 <style is:inline>
   :root {
@@ -124,6 +134,7 @@ const tally = (rows: Row[]) => {
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   [hidden] { display: none !important; }
+  html[data-font="wait"] body { visibility: hidden; }
   html { background: var(--paper); color: var(--ink); }
   body {
     font-family: "Abitaro Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
