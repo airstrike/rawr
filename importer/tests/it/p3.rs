@@ -179,10 +179,14 @@ where
                 if let Some(selector) = plan.constructor() {
                     compiler
                         .require_selected(
-                            outcome.identity(),
-                            selector
-                                .try_clone()
-                                .expect("the constructor selector duplicates"),
+                            contract
+                                .accept(
+                                    &outcome.identity(),
+                                    &selector
+                                        .try_clone()
+                                        .expect("the constructor selector duplicates"),
+                                )
+                                .unwrap(),
                             &entry,
                             position,
                             position + 1,
@@ -193,11 +197,15 @@ where
                 for field in plan.fields() {
                     compiler
                         .require_selected(
-                            outcome.identity(),
-                            field
-                                .selector()
-                                .try_clone()
-                                .expect("the field selector duplicates"),
+                            contract
+                                .accept(
+                                    &outcome.identity(),
+                                    &field
+                                        .selector()
+                                        .try_clone()
+                                        .expect("the field selector duplicates"),
+                                )
+                                .unwrap(),
                             &entry,
                             position,
                             position + 1,
@@ -214,11 +222,15 @@ where
                 {
                     compiler
                         .require_selected(
-                            outcome.identity(),
-                            variant
-                                .selector()
-                                .try_clone()
-                                .expect("the variant selector duplicates"),
+                            contract
+                                .accept(
+                                    &outcome.identity(),
+                                    &variant
+                                        .selector()
+                                        .try_clone()
+                                        .expect("the variant selector duplicates"),
+                                )
+                                .unwrap(),
                             &entry,
                             position,
                             position + 1,
@@ -294,9 +306,9 @@ fn snapshot_with(limits: &rawr_import::cargo::Limits, entry: &str, source: &[u8]
     snapshot.seal().expect("the source snapshot seals")
 }
 
-fn require_outcome<B>(
-    compiler: &mut rawr_import::surface::Compiler<'_, B>,
-    outcome: rawr_import::classify::Outcome<'_>,
+fn require_outcome<'contract, B>(
+    compiler: &mut rawr_import::surface::Compiler<'contract, B>,
+    outcome: rawr_import::classify::Outcome<'contract>,
     entry: &str,
     position: &mut u32,
     skip: &mut Option<usize>,
@@ -316,7 +328,7 @@ fn require_outcome<B>(
     }
     compiler
         .require(
-            outcome.identity().clone(),
+            outcome,
             Origin::checked(entry, *position, *position + 1).expect("the Rawr origin is bounded"),
         )
         .expect("the admitted outcome is demanded");

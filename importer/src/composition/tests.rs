@@ -191,7 +191,7 @@ pub(super) fn demand(
     let mut compiler = contract.compiler((), source, limits).expect("compiler");
     compiler
         .require(
-            identity,
+            contract.outcome(&identity).unwrap(),
             crate::surface::Origin::checked("/fixture/main.rs", 0, 4).expect("origin"),
         )
         .expect("require");

@@ -516,8 +516,12 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
     let start = original.find("fixture::family_2").unwrap() as u32;
     demand
         .require_instance(
-            selected.identity(),
-            selected.identity().selector().clone(),
+            contract
+                .accept(
+                    &selected.identity(),
+                    &selected.identity().selector().clone(),
+                )
+                .unwrap(),
             arguments,
             path,
             start,

@@ -31,12 +31,16 @@ fn real_input_only_late_bound_fn_is_classified_as_borrowed() {
         .expect("the callable demand compiler starts");
     compiler
         .require_instance(
-            outcome.identity(),
-            outcome
-                .identity()
-                .selector()
-                .try_clone()
-                .expect("the callable selector duplicates"),
+            contract
+                .accept(
+                    &outcome.identity(),
+                    &outcome
+                        .identity()
+                        .selector()
+                        .try_clone()
+                        .expect("the callable selector duplicates"),
+                )
+                .unwrap(),
             Arguments::borrowed(
                 Box::from([Type::Builtin(Builtin::I64)]),
                 Box::default(),

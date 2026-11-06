@@ -541,13 +541,7 @@ impl crate::Engine {
             .map_err(Error::from)
             .map_err(super::Error::import)?;
             compiler
-                .require_instance(
-                    accepted,
-                    instance,
-                    source.identity(),
-                    start,
-                    end,
-                )
+                .require_instance(accepted, instance, source.identity(), start, end)
                 .map_err(|error| {
                     unsupported_use(
                         error,

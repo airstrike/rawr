@@ -939,8 +939,9 @@ mod tests {
         let mut compiler = contract.compiler((), snapshot(), &limits).unwrap();
         compiler
             .require_selected(
-                structure.identity(),
-                identity::Selector::Declaration,
+                contract
+                    .accept(&structure.identity(), &identity::Selector::Declaration)
+                    .unwrap(),
                 "/fixture/main.rs",
                 0,
                 1,
@@ -991,8 +992,9 @@ mod tests {
         let compile = |start, selected: &identity::Identity| {
             let function = instance::FunctionItem::selected(
                 0,
-                selected,
-                selected.selector().clone(),
+                contract
+                    .accept(&selected, &selected.selector().clone())
+                    .unwrap(),
                 start + 1,
                 start + 2,
             )
@@ -1010,8 +1012,12 @@ mod tests {
             let mut compiler = contract.compiler((), snapshot(), &limits).unwrap();
             compiler
                 .require_instance(
-                    consumer.identity(),
-                    consumer.identity().selector().clone(),
+                    contract
+                        .accept(
+                            &consumer.identity(),
+                            &consumer.identity().selector().clone(),
+                        )
+                        .unwrap(),
                     arguments,
                     "/fixture/main.rs",
                     start,
@@ -1099,8 +1105,12 @@ mod tests {
             .unwrap();
             compiler
                 .require_instance(
-                    selected.identity(),
-                    selected.identity().selector().clone(),
+                    contract
+                        .accept(
+                            &selected.identity(),
+                            &selected.identity().selector().clone(),
+                        )
+                        .unwrap(),
                     arguments,
                     "/fixture/main.rs",
                     start,

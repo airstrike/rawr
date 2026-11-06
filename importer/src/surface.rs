@@ -1916,14 +1916,14 @@ mod tests {
             .compiler((), snapshot(b"Pair", &limits), &limits)
             .expect("compiler binds first snapshot");
         first
-            .require(identity.clone(), origin.clone())
+            .require(contract.outcome(&identity).unwrap(), origin.clone())
             .expect("struct demand is admitted");
         let first = first.seal().expect("first demand seals");
         let mut changed = contract
             .compiler((), snapshot(b"Pair // body", &limits), &limits)
             .expect("compiler binds changed snapshot");
         changed
-            .require(identity, origin)
+            .require(contract.outcome(&identity).unwrap(), origin)
             .expect("same surface demand is admitted");
         let changed = changed.seal().expect("changed demand seals");
 
@@ -1948,7 +1948,7 @@ mod tests {
             .compiler((), source, &limits)
             .expect("the fixture compiler starts");
         compiler
-            .require(identity, origin)
+            .require(contract.outcome(&identity).unwrap(), origin)
             .expect("the fixture demand is retained");
         let demand = compiler.seal().expect("the fixture demand seals");
         let canonical = demand.canonical_bytes().to_vec();
@@ -2006,23 +2006,40 @@ mod tests {
             .expect("adapter-plan compiler starts");
         compiler
             .require(
-                structure.identity().clone(),
+                structure,
                 Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
             )
             .unwrap();
         compiler
-            .require_selected(structure.identity(), constructor, "/fixture/main.rs", 2, 3)
+            .require_selected(
+                contract
+                    .accept(&structure.identity(), &constructor)
+                    .unwrap(),
+                "/fixture/main.rs",
+                2,
+                3,
+            )
             .unwrap();
         compiler
-            .require_selected(structure.identity(), field, "/fixture/main.rs", 4, 5)
+            .require_selected(
+                contract.accept(&structure.identity(), &field).unwrap(),
+                "/fixture/main.rs",
+                4,
+                5,
+            )
             .unwrap();
         compiler
-            .require_selected(enumeration.identity(), variant, "/fixture/main.rs", 6, 7)
+            .require_selected(
+                contract.accept(&enumeration.identity(), &variant).unwrap(),
+                "/fixture/main.rs",
+                6,
+                7,
+            )
             .unwrap();
         for (index, outcome) in [constant, function].into_iter().enumerate() {
             compiler
                 .require(
-                    outcome.identity().clone(),
+                    outcome,
                     Origin::checked("/fixture/main.rs", 8 + index as u32, 9 + index as u32)
                         .unwrap(),
                 )
@@ -2030,7 +2047,7 @@ mod tests {
         }
         compiler
             .require(
-                function.identity().clone(),
+                function,
                 Origin::checked("/fixture/main.rs", 20, 21).unwrap(),
             )
             .unwrap();
@@ -2121,7 +2138,7 @@ mod tests {
             .expect("defaulted-structure compiler starts");
         compiler
             .require(
-                rectangle.identity().clone(),
+                rectangle,
                 Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
             )
             .expect("a defaulted generic struct is demandable");
@@ -2149,19 +2166,17 @@ mod tests {
             .expect("generic-structure compiler starts");
 
         assert!(matches!(
-            compiler.require(
-                outcome.identity().clone(),
-                Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
-            ),
+            compiler.require(outcome, Origin::checked("/fixture/main.rs", 0, 1).unwrap()),
             Err(Error::UnconstrainedGeneric)
         ));
         assert!(matches!(
             compiler.require_selected(
-                outcome.identity(),
-                field.try_clone().unwrap(),
+                contract
+                    .accept(&outcome.identity(), &field.try_clone().unwrap())
+                    .unwrap(),
                 "/fixture/main.rs",
                 2,
-                3,
+                3
             ),
             Err(Error::UnconstrainedGeneric)
         ));
@@ -2175,12 +2190,13 @@ mod tests {
         .expect("empty arguments are bounded");
         assert!(matches!(
             compiler.require_instance(
-                outcome.identity(),
-                field.try_clone().unwrap(),
+                contract
+                    .accept(&outcome.identity(), &field.try_clone().unwrap())
+                    .unwrap(),
                 empty,
                 "/fixture/main.rs",
                 4,
-                5,
+                5
             ),
             Err(Error::UnconstrainedGeneric)
         ));
@@ -2205,7 +2221,7 @@ mod tests {
                 .expect("receiver compiler starts");
             compiler
                 .require(
-                    method.identity().clone(),
+                    method,
                     Origin::checked("/fixture/main.rs", range.start, range.end).unwrap(),
                 )
                 .unwrap();
@@ -2242,7 +2258,7 @@ mod tests {
                 .expect("allocation compiler starts");
             compiler
                 .require(
-                    identity.clone(),
+                    contract.outcome(&identity).unwrap(),
                     Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
                 )
                 .expect("one function use is retained");
@@ -2268,11 +2284,15 @@ mod tests {
         let mut compiler = contract
             .compiler((), snapshot(b"Pair Choice", &limits), &limits)
             .unwrap();
-        compiler.require(identities[1].clone(), late).unwrap();
         compiler
-            .require(identities[0].clone(), early.clone())
+            .require(contract.outcome(&identities[1]).unwrap(), late)
             .unwrap();
-        compiler.require(identities[0].clone(), early).unwrap();
+        compiler
+            .require(contract.outcome(&identities[0]).unwrap(), early.clone())
+            .unwrap();
+        compiler
+            .require(contract.outcome(&identities[0]).unwrap(), early)
+            .unwrap();
         let demand = compiler.seal().unwrap();
         assert_eq!(demand.entries().len(), 2);
         assert!(demand.entries().is_sorted());

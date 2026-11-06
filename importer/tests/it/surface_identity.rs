@@ -27,8 +27,12 @@ fn equal_instances_dedupe_but_distinct_types_remain_distinct() {
     for position in [0, 1] {
         compiler
             .require_instance(
-                &base,
-                selector.try_clone().expect("the selector duplicates"),
+                contract
+                    .accept(
+                        &base,
+                        &selector.try_clone().expect("the selector duplicates"),
+                    )
+                    .unwrap(),
                 arguments(convert::Builtin::I64, &limits),
                 "application.rs",
                 position,
@@ -38,8 +42,7 @@ fn equal_instances_dedupe_but_distinct_types_remain_distinct() {
     }
     compiler
         .require_instance(
-            &base,
-            selector,
+            contract.accept(&base, &selector).unwrap(),
             arguments(convert::Builtin::String, &limits),
             "application.rs",
             2,

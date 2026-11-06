@@ -511,7 +511,7 @@ mod tests {
             .expect("the checked fixture compiler starts");
         compiler
             .require(
-                identity,
+                contract.outcome(&identity).unwrap(),
                 crate::surface::Origin::checked("/fixture/main.rs", 0, 4)
                     .expect("the checked fixture origin is bounded"),
             )

@@ -271,3 +271,49 @@ impl Painter for Pen {
 pub fn painted<T: Paint>(value: T) -> bool {
     value.paint(Pen)
 }
+
+/// A layer over a subscriber `S`, as tracing-subscriber's `Layer<S>` is:
+/// the opaque type of `and_then`'s `L: Layer<S>` has an `and_then` of its
+/// own, whose output names `S`, the trait's own parameter, which each impl
+/// of the trait fixes (#1032).
+pub trait Layer<S> {
+    fn depth(&self) -> u32;
+
+    fn and_then<L: Layer<S>>(self, layer: L) -> Layered<L, Self, S>
+    where
+        Self: Sized,
+    {
+        Layered {
+            outer: layer,
+            inner: self,
+            subscriber: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Two layers, one over the other.
+pub struct Layered<L, I, S> {
+    outer: L,
+    inner: I,
+    subscriber: std::marker::PhantomData<S>,
+}
+
+impl<S, L: Layer<S>, I: Layer<S>> Layer<S> for Layered<L, I, S> {
+    fn depth(&self) -> u32 {
+        self.outer.depth() + self.inner.depth()
+    }
+}
+
+/// One layer.
+pub struct Plain;
+
+impl<S> Layer<S> for Plain {
+    fn depth(&self) -> u32 {
+        1
+    }
+}
+
+/// How deep two plain layers stack.
+pub fn stacked() -> u32 {
+    Layer::<()>::depth(&Layer::<()>::and_then(Plain, Plain))
+}

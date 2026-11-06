@@ -234,10 +234,14 @@ pub fn generation_request(
         {
             compiler
                 .require_selected(
-                    outcome.identity(),
-                    selector
-                        .try_clone()
-                        .expect("the anchor constructor selector duplicates"),
+                    contract
+                        .accept(
+                            &outcome.identity(),
+                            &selector
+                                .try_clone()
+                                .expect("the anchor constructor selector duplicates"),
+                        )
+                        .unwrap(),
                     &entry,
                     position,
                     position + 1,
@@ -268,9 +272,9 @@ pub fn generation_request(
     (request, snapshot_transport(&limits, &entry, source))
 }
 
-fn require_outcome<B>(
-    compiler: &mut rawr_import::surface::Compiler<'_, B>,
-    outcome: rawr_import::classify::Outcome<'_>,
+fn require_outcome<'contract, B>(
+    compiler: &mut rawr_import::surface::Compiler<'contract, B>,
+    outcome: rawr_import::classify::Outcome<'contract>,
     entry: &str,
     position: &mut u32,
 ) {
@@ -285,7 +289,7 @@ fn require_outcome<B>(
     }
     compiler
         .require(
-            outcome.identity().clone(),
+            outcome,
             Origin::checked(entry, *position, *position + 1)
                 .expect("the synthetic Rawr origin is bounded"),
         )

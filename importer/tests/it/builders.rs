@@ -17,9 +17,9 @@ fn consuming_builder_generates_one_ordered_single_invocation_replay() {
     for implementation in builder.implementations() {
         for associated in implementation.associated() {
             match associated.name() {
-                "new" => new = Some(associated.identity().clone()),
-                "add" => add = Some(associated.identity().clone()),
-                "finish" => finish = Some(associated.identity().clone()),
+                "new" => new = Some(associated),
+                "add" => add = Some(associated),
+                "finish" => finish = Some(associated),
                 _ => {}
             }
         }
@@ -28,7 +28,7 @@ fn consuming_builder_generates_one_ordered_single_invocation_replay() {
     let add = add.expect("Builder::add is classified");
     let finish = finish.expect("Builder::finish is classified");
     assert!(matches!(
-        add.selector(),
+        add.identity().selector(),
         rawr_import::surface::identity::Selector::Method {
             receiver: Receiver::Owned,
             ..
@@ -38,7 +38,7 @@ fn consuming_builder_generates_one_ordered_single_invocation_replay() {
         Origin::checked("application.rs", start, start + 1).expect("the builder origin is bounded")
     };
     let plan = Plan::new(
-        finish.clone(),
+        finish.identity().clone(),
         Box::from([
             Step::construct(new, origin(0), Box::from([Value::argument(0)])),
             Step::consume(add, origin(1), Box::from([Value::argument(1)])),
