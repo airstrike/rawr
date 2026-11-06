@@ -370,7 +370,7 @@ pub fn macros(
         macros.push((
             copy(key.root_alias())?,
             Macro {
-                path: path(key.path())?,
+                path: path(key.path()),
                 source: copy(source)?,
                 krate: copy(krate)?,
             },
@@ -422,7 +422,7 @@ pub fn derives(
             .map_err(|_| super::Error::Allocation)?;
         derives.push(Derive {
             root: copy(key.root_alias())?,
-            path: path(key.path())?,
+            path: path(key.path()),
         });
     }
     derives.sort_unstable();
@@ -489,7 +489,7 @@ pub fn std_reexports(
             .map_err(|_| super::Error::Allocation)?;
         reexports.push(StdReexport {
             root: copy(key.root_alias())?,
-            path: path(key.path())?,
+            path: path(key.path()),
             std,
         });
     }
@@ -1035,7 +1035,7 @@ impl Plan {
                     index
                 }
             };
-            let relative = path(outcome.export().path())?;
+            let relative = path(outcome.export().path());
             let facade = &mut facades[index];
             if named_trait {
                 if let Some(definition) = outcome.identity().definition() {
@@ -1147,11 +1147,17 @@ impl Plan {
             // Any other type alias, as `pub type Result = std::result::Result<
             // (), Error>;`, names its target with its own parameters.
             if let Representability::Value(plan) = outcome.representability() {
+                let (Some(defaults), Some(target)) = (
+                    declared(defaults(plan.parameters()))?,
+                    declared(ty(plan.ty(), plan.parameters()))?,
+                ) else {
+                    continue;
+                };
                 let alias = TypeAlias {
                     path: copy(&relative)?,
                     parameters: parameters(plan.parameters())?,
-                    defaults: defaults(plan.parameters())?,
-                    target: ty(plan.ty(), plan.parameters())?,
+                    defaults,
+                    target,
                 };
                 let mut aliases = std::mem::take(&mut facade.type_aliases).into_vec();
                 if let Err(position) =
@@ -1601,7 +1607,9 @@ impl Plan {
             };
             if let Some(site) = abi_site(graph, export)? {
                 match abis.binary_search_by_key(&site.selector, |candidate| candidate.selector) {
-                    Ok(_) => return Err(super::Error::ForeignIdentity),
+                    // A selector digests the whole site: an equal one is
+                    // the same site, which two exports of one item give.
+                    Ok(_) => {}
                     Err(position) => {
                         abis.try_reserve_exact(1)
                             .map_err(|_| super::Error::Allocation)?;
@@ -1613,7 +1621,7 @@ impl Plan {
                 match operations
                     .binary_search_by_key(&site.selector, |candidate| candidate.selector)
                 {
-                    Ok(_) => return Err(super::Error::ForeignIdentity),
+                    Ok(_) => {}
                     Err(position) => {
                         operations
                             .try_reserve_exact(1)
@@ -1628,7 +1636,7 @@ impl Plan {
             match aliases
                 .binary_search_by_key(&alias.selector, |candidate: &AliasSite| candidate.selector)
             {
-                Ok(_) => return Err(super::Error::ForeignIdentity),
+                Ok(_) => {}
                 Err(position) => {
                     aliases
                         .try_reserve_exact(1)
@@ -1639,7 +1647,7 @@ impl Plan {
             if let Some(source) = projection_source_site(graph, export)? {
                 match sources.binary_search_by_key(&source.selector, |candidate| candidate.selector)
                 {
-                    Ok(_) => return Err(super::Error::ForeignIdentity),
+                    Ok(_) => {}
                     Err(position) => {
                         sources
                             .try_reserve_exact(1)
@@ -1774,7 +1782,7 @@ impl Plan {
                 .windows(2)
                 .all(|pair| pair[0].selector < pair[1].selector)
         {
-            return Err(super::Error::ForeignIdentity);
+            return Err(super::Error::Canonical);
         }
         for facade in &self.facades {
             if facade.root.is_empty()
@@ -1787,7 +1795,7 @@ impl Plan {
                     .windows(2)
                     .all(|pair| pair[0].path <= pair[1].path)
             {
-                return Err(super::Error::ForeignIdentity);
+                return Err(super::Error::Canonical);
             }
         }
         for alias in &self.aliases {
@@ -1808,7 +1816,7 @@ impl Plan {
                     .count()
                     != 1
             {
-                return Err(super::Error::ForeignIdentity);
+                return Err(super::Error::Canonical);
             }
         }
         for source in &self.sources {
@@ -1831,7 +1839,7 @@ impl Plan {
                     .count()
                     != 1
             {
-                return Err(super::Error::ForeignIdentity);
+                return Err(super::Error::Canonical);
             }
         }
         for site in &self.abis {
@@ -1843,7 +1851,7 @@ impl Plan {
                 || site.shape == [0; 32]
                 || site.selector != abi_selector(site)
             {
-                return Err(super::Error::ForeignIdentity);
+                return Err(super::Error::Canonical);
             }
         }
         for site in &self.operations {
@@ -1863,7 +1871,7 @@ impl Plan {
                     .iter()
                     .any(|formal| formal.owner != site.definition)
             {
-                return Err(super::Error::ForeignIdentity);
+                return Err(super::Error::Canonical);
             }
         }
         Ok(())
@@ -2515,7 +2523,7 @@ impl AliasSite {
         };
         let mut site = Self {
             root: copy(export.key().root_alias())?,
-            path: path(export.key().path())?,
+            path: path(export.key().path()),
             namespace: Namespace::Type,
             export: *super::identity::Export::imported(export).as_bytes(),
             alias: *super::identity::Definition::of(alias.id()).as_bytes(),
@@ -2804,19 +2812,24 @@ impl AliasParameter {
     }
 }
 
+/// The definition `graph` declares at `id`: one, as the graph keeps its
+/// definitions sorted by identity.
+fn definition<'graph>(
+    graph: &'graph crate::api::Graph<impl crate::api::Phase>,
+    id: &crate::api::identity::Definition,
+) -> Option<&'graph crate::api::model::Definition> {
+    graph
+        .definition_index(id)
+        .and_then(|index| graph.definitions().nth(index))
+}
+
 fn alias_site(
     graph: &crate::api::Graph<impl crate::api::Phase>,
     export: &crate::api::ledger::Export,
 ) -> Result<Option<AliasSite>, super::Error> {
-    let mut aliases = graph
-        .definitions()
-        .filter(|definition| definition.id() == export.target());
-    let Some(alias) = aliases.next() else {
+    let Some(alias) = definition(graph, export.target()) else {
         return Ok(None);
     };
-    if aliases.next().is_some() {
-        return Err(super::Error::ForeignIdentity);
-    }
     let crate::api::model::Kind::TypeAlias {
         ty: crate::api::model::Type::Definition { id, .. },
         ..
@@ -2824,15 +2837,9 @@ fn alias_site(
     else {
         return Ok(None);
     };
-    let mut targets = graph
-        .definitions()
-        .filter(|definition| definition.id() == id);
-    let Some(target) = targets.next() else {
+    let Some(target) = definition(graph, id) else {
         return Ok(None);
     };
-    if targets.next().is_some() {
-        return Err(super::Error::ForeignIdentity);
-    }
     AliasSite::checked(export, alias, target)
 }
 
@@ -2840,15 +2847,9 @@ fn abi_site(
     graph: &crate::api::Graph<impl crate::api::Phase>,
     export: &crate::api::ledger::Export,
 ) -> Result<Option<AbiSite>, super::Error> {
-    let mut definitions = graph
-        .definitions()
-        .filter(|definition| definition.id() == export.target());
-    let Some(definition) = definitions.next() else {
+    let Some(definition) = definition(graph, export.target()) else {
         return Ok(None);
     };
-    if definitions.next().is_some() {
-        return Err(super::Error::ForeignIdentity);
-    }
     abi_site_from_definition(export, definition)
 }
 
@@ -2856,15 +2857,9 @@ fn operation_site(
     graph: &crate::api::Graph<impl crate::api::Phase>,
     export: &crate::api::ledger::Export,
 ) -> Result<Option<OperationSite>, super::Error> {
-    let mut definitions = graph
-        .definitions()
-        .filter(|definition| definition.id() == export.target());
-    let Some(definition) = definitions.next() else {
+    let Some(definition) = definition(graph, export.target()) else {
         return Ok(None);
     };
-    if definitions.next().is_some() {
-        return Err(super::Error::ForeignIdentity);
-    }
     operation_site_from_definition(export, definition)
 }
 
@@ -2893,24 +2888,19 @@ fn operation_site_from_definition(
     formals
         .try_reserve_exact(generics.parameters().len())
         .map_err(|_| super::Error::Allocation)?;
+    // A free function's parameters are its own.
     for parameter in generics.parameters() {
-        let owner = *super::identity::Definition::of(parameter.owner()).as_bytes();
-        if owner != definition_identity {
-            return Err(super::Error::ForeignIdentity);
-        }
         formals.push(OperationParameter {
-            owner,
+            owner: definition_identity,
             index: parameter.index(),
             kind: parameter_kind(parameter.kind()),
         });
     }
-    if !formals.windows(2).all(|pair| pair[0].index < pair[1].index) {
-        return Err(super::Error::ForeignIdentity);
-    }
+    formals.sort_unstable_by_key(|formal| formal.index);
     let canonical = serde_json::to_vec(definition).map_err(|_| super::Error::Encoding)?;
     let mut site = OperationSite {
         root: copy(export.key().root_alias())?,
-        path: path(export.key().path())?,
+        path: path(export.key().path()),
         namespace: Namespace::Value,
         export: *super::identity::Export::imported(export).as_bytes(),
         definition: definition_identity,
@@ -2947,7 +2937,7 @@ fn abi_site_from_definition(
     .map_err(|_| super::Error::Encoding)?;
     let mut site = AbiSite {
         root: copy(export.key().root_alias())?,
-        path: path(export.key().path())?,
+        path: path(export.key().path()),
         namespace: Namespace::Type,
         export: *super::identity::Export::imported(export).as_bytes(),
         definition: *super::identity::Definition::of(definition.id()).as_bytes(),
@@ -2962,15 +2952,9 @@ fn projection_source_site(
     graph: &crate::api::Graph<impl crate::api::Phase>,
     export: &crate::api::ledger::Export,
 ) -> Result<Option<ProjectionSourceSite>, super::Error> {
-    let mut aliases = graph
-        .definitions()
-        .filter(|definition| definition.id() == export.target());
-    let Some(alias) = aliases.next() else {
+    let Some(alias) = definition(graph, export.target()) else {
         return Ok(None);
     };
-    if aliases.next().is_some() {
-        return Err(super::Error::ForeignIdentity);
-    }
     let crate::api::model::Kind::TypeAlias {
         ty: crate::api::model::Type::Definition { id, .. },
         ..
@@ -2978,15 +2962,9 @@ fn projection_source_site(
     else {
         return Ok(None);
     };
-    let mut sources = graph
-        .definitions()
-        .filter(|definition| definition.id() == id);
-    let Some(source) = sources.next() else {
+    let Some(source) = definition(graph, id) else {
         return Ok(None);
     };
-    if sources.next().is_some() {
-        return Err(super::Error::ForeignIdentity);
-    }
     ProjectionSourceSite::checked(export, alias, source)
 }
 
@@ -3417,14 +3395,21 @@ fn bounds(source: &[representability::signature::Parameter]) -> Result<Bounds, s
     Ok(output.into_boxed_slice())
 }
 
+/// The facade type `outcome` declares at `path`, if any.
 fn type_definition(
     path: &str,
     outcome: crate::classify::Outcome<'_>,
 ) -> Result<Option<TypeDefinition>, super::Error> {
-    let definition = outcome
-        .identity()
-        .definition()
-        .ok_or(super::Error::ForeignIdentity)?;
+    declared(written_type_definition(path, outcome)).map(Option::flatten)
+}
+
+fn written_type_definition(
+    path: &str,
+    outcome: crate::classify::Outcome<'_>,
+) -> Result<Option<TypeDefinition>, Unwritten> {
+    let Some(definition) = outcome.identity().definition() else {
+        return Ok(None);
+    };
     let borrowing = match outcome.representability() {
         Representability::Struct(plan) => (plan.lifetimes(), plan.iterator(), plan.covariant()),
         Representability::Enum(plan) => (plan.lifetimes(), plan.iterator(), plan.covariant()),
@@ -3522,14 +3507,22 @@ fn type_definition(
     }))
 }
 
+/// The facade item `outcome` declares at `path`, if any.
 fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item>, super::Error> {
+    declared(written_item(path, outcome)).map(Option::flatten)
+}
+
+fn written_item(
+    path: &str,
+    outcome: crate::classify::Outcome<'_>,
+) -> Result<Option<Item>, Unwritten> {
     use super::identity::Selector;
     let (kind, signature) = match outcome.representability() {
         Representability::Function(plan) => (
             match outcome.identity().selector() {
                 Selector::Function { .. } => ItemKind::Function,
                 Selector::AssociatedFunction { .. } => ItemKind::AssociatedFunction,
-                _ => return Err(super::Error::ForeignIdentity),
+                _ => return Ok(None),
             },
             signature(plan.signature())?,
         ),
@@ -3545,7 +3538,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
             match outcome.identity().selector() {
                 Selector::Constant { .. } => ItemKind::Constant,
                 Selector::AssociatedConstant { .. } => ItemKind::AssociatedConstant,
-                _ => return Err(super::Error::ForeignIdentity),
+                _ => return Ok(None),
             },
             Signature {
                 parameters: Box::default(),
@@ -3599,7 +3592,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                     }
                 }
                 Selector::Method { .. } => return Ok(None),
-                _ => return Err(super::Error::ForeignIdentity),
+                _ => return Ok(None),
             },
             // A script function fills each callable as a slot (D594).
             item_signature(plan)?,
@@ -3624,9 +3617,9 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                     Some(representability::ownership::Receiver::Owned) => ItemKind::OwnedMethod,
                     Some(representability::ownership::Receiver::Shared) => ItemKind::SharedMethod,
                     Some(representability::ownership::Receiver::Mutable) => ItemKind::MutableMethod,
-                    None => return Err(super::Error::InstanceMismatch),
+                    None => return Ok(None),
                 },
-                _ => return Err(super::Error::ForeignIdentity),
+                _ => return Ok(None),
             },
             // A closure the item takes, as `PaneGrid::new(&state, view)`'s,
             // is the closure's type, as a function item's is, and a script
@@ -3675,7 +3668,7 @@ fn unfilled_callable(plan: &representability::callable::Item) -> bool {
 
 /// The signature of a generic item: a closure it takes is the closure's
 /// type, and a script function fills each callable as a slot (D594).
-fn item_signature(plan: &representability::callable::Item) -> Result<Signature, super::Error> {
+fn item_signature(plan: &representability::callable::Item) -> Result<Signature, Unwritten> {
     if plan.crossings().is_empty() {
         match plan.call() {
             Some(call) => callable_signature(plan.signature(), &[call]),
@@ -3689,7 +3682,7 @@ fn item_signature(plan: &representability::callable::Item) -> Result<Signature, 
     }
 }
 
-fn signature(source: &representability::signature::Signature) -> Result<Signature, super::Error> {
+fn signature(source: &representability::signature::Signature) -> Result<Signature, Unwritten> {
     // A future parameter is no type parameter of Rawr's signature: its
     // input is the core future of its synthetic output (D527).
     let kept = source
@@ -3725,12 +3718,12 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
 /// relation on a parameter the signature does not keep is dropped.
 fn relations(
     source: &representability::signature::Signature,
-) -> Result<Box<[Relation]>, super::Error> {
+) -> Result<Box<[Relation]>, Unwritten> {
     use representability::signature::IMPL_PARAMETER;
     fn pattern(
         source: &representability::convert::Type,
         parameters: &[representability::signature::Parameter],
-    ) -> Result<Type, super::Error> {
+    ) -> Result<Type, Unwritten> {
         Ok(match source {
             representability::convert::Type::Parameter(index) if index & IMPL_PARAMETER != 0 => {
                 Type::Variable(index & !IMPL_PARAMETER)
@@ -3819,7 +3812,7 @@ fn relations(
 fn callable_signature(
     source: &representability::signature::Signature,
     calls: &[&representability::callable::Call],
-) -> Result<Signature, super::Error> {
+) -> Result<Signature, Unwritten> {
     let kept = source
         .parameters()
         .iter()
@@ -3833,7 +3826,7 @@ fn callable_signature(
     let parameters = parameters(&kept)?;
     let bounds = bounds(&kept)?;
     let all = source.parameters();
-    let closure = |call: &representability::callable::Call| -> Result<Type, super::Error> {
+    let closure = |call: &representability::callable::Call| -> Result<Type, Unwritten> {
         let input = match call.inputs() {
             [] => Type::Unit,
             [single] => ty(single, all)?,
@@ -3891,7 +3884,7 @@ fn callable_signature(
 /// `timed(..)` captured, fixes no form a call can name.
 fn fixed_instance(
     source: &representability::signature::Signature,
-) -> Result<Option<Type>, super::Error> {
+) -> Result<Option<Type>, Unwritten> {
     use representability::convert::Type as Converted;
     fn names_parameter(ty: &Converted, matching: &dyn Fn(u32) -> bool) -> bool {
         let names = |ty: &Converted| names_parameter(ty, matching);
@@ -3931,7 +3924,7 @@ fn fixed_instance(
 fn fields(
     source: &[representability::structure::Field],
     parameters: &[representability::signature::Parameter],
-) -> Result<Box<[Field]>, super::Error> {
+) -> Result<Box<[Field]>, Unwritten> {
     let mut output = Vec::new();
     output
         .try_reserve_exact(source.len())
@@ -3962,7 +3955,7 @@ fn parameters(
 /// Each parameter's default type, or none when no parameter has one.
 fn defaults(
     source: &[representability::signature::Parameter],
-) -> Result<Box<[Option<Type>]>, super::Error> {
+) -> Result<Box<[Option<Type>]>, Unwritten> {
     if source.iter().all(|parameter| parameter.default().is_none()) {
         return Ok(Box::default());
     }
@@ -3989,7 +3982,7 @@ fn defaults(
 fn input_ty(
     source: &representability::convert::Type,
     parameters: &[representability::signature::Parameter],
-) -> Result<Type, super::Error> {
+) -> Result<Type, Unwritten> {
     use representability::convert::{Builtin, Type as Source};
     Ok(match source {
         Source::Builtin(Builtin::Str | Builtin::StaticStr) => Type::Reference {
@@ -4011,13 +4004,38 @@ fn input_ty(
     })
 }
 
+/// Why a type isn't written into a facade declaration.
+enum Unwritten {
+    /// A type no declaration names, as a type rustc infers at a call, a
+    /// script type's proxy, or a parameter the declaration doesn't
+    /// declare: the facade leaves the declaration out.
+    Type,
+    Failed(super::Error),
+}
+
+impl From<super::Error> for Unwritten {
+    fn from(error: super::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// The declaration `written` gives, or none when it names a type no
+/// declaration names (`Unwritten::Type`).
+fn declared<T>(written: Result<T, Unwritten>) -> Result<Option<T>, super::Error> {
+    match written {
+        Ok(declaration) => Ok(Some(declaration)),
+        Err(Unwritten::Type) => Ok(None),
+        Err(Unwritten::Failed(error)) => Err(error),
+    }
+}
+
 fn ty(
     source: &representability::convert::Type,
     parameters: &[representability::signature::Parameter],
-) -> Result<Type, super::Error> {
+) -> Result<Type, Unwritten> {
     use representability::convert::{Builtin, Type as Source};
     Ok(match source {
-        Source::Inferred => return Err(super::Error::ForeignIdentity),
+        Source::Inferred => return Err(Unwritten::Type),
         Source::Unit => Type::Unit,
         Source::Never => Type::Never,
         Source::Builtin(Builtin::Bool) => Type::Bool,
@@ -4103,12 +4121,12 @@ fn ty(
             let parameter = parameters
                 .iter()
                 .find(|parameter| parameter.index() == *index)
-                .ok_or(super::Error::ForeignIdentity)?;
+                .ok_or(Unwritten::Type)?;
             Type::Parameter(copy(parameter.name())?)
         }
         // A script type's proxy fills a call's instance, never a facade's
         // declaration.
-        Source::Script { .. } => return Err(super::Error::ForeignIdentity),
+        Source::Script { .. } => return Err(Unwritten::Type),
     })
 }
 
@@ -4120,7 +4138,9 @@ fn form(source: crate::api::model::FieldForm) -> Form {
     }
 }
 
-fn path<'a>(segments: impl ExactSizeIterator<Item = &'a str>) -> Result<Box<str>, super::Error> {
+/// `segments` joined by `::`. An export's path has at least one, as
+/// extraction admits only such exports.
+fn path<'a>(segments: impl ExactSizeIterator<Item = &'a str>) -> Box<str> {
     let mut output = String::new();
     for segment in segments {
         if !output.is_empty() {
@@ -4128,10 +4148,7 @@ fn path<'a>(segments: impl ExactSizeIterator<Item = &'a str>) -> Result<Box<str>
         }
         output.push_str(segment);
     }
-    if output.is_empty() {
-        return Err(super::Error::ForeignIdentity);
-    }
-    Ok(output.into_boxed_str())
+    output.into_boxed_str()
 }
 
 fn copy(source: &str) -> Result<Box<str>, super::Error> {

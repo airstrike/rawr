@@ -341,18 +341,18 @@ impl crate::Engine {
                     .map_err(super::Error::import)?;
                 continue;
             }
-            let mut identity = None;
+            let mut accepted = None;
             for outcome in paths.outcomes(used.path.as_str()) {
-                if !contract.accepts(outcome.identity(), &used.selector) {
+                let Some(found) = contract.accept(outcome.identity(), &used.selector) else {
                     continue;
-                }
+                };
                 assert!(
-                    identity.replace(outcome.identity()).is_none(),
+                    accepted.replace(found).is_none(),
                     "one crate item at a path accepts a use's selector"
                 );
             }
-            let identity = match identity {
-                Some(identity) => identity,
+            let accepted = match accepted {
+                Some(accepted) => accepted,
                 None => {
                     let report = diagnostic::Report::error(
                         diagnostic::code::RESOLVE_HOST_OPERATION,
@@ -385,7 +385,7 @@ impl crate::Engine {
             let (start, end) = range(used.span);
             if used.types.is_empty() && used.functions.is_empty() && used.slots.is_empty() {
                 compiler
-                    .require_selected(identity, used.selector, source.identity(), start, end)
+                    .require_selected(accepted, source.identity(), start, end)
                     .map_err(|error| {
                         unsupported_use(
                             error,
@@ -404,11 +404,12 @@ impl crate::Engine {
             for function in used.functions {
                 let mut selected = None;
                 for outcome in paths.outcomes(function.path.as_str()) {
-                    if !contract.accepts(outcome.identity(), &function.selector) {
+                    let Some(found) = contract.accept(outcome.identity(), &function.selector)
+                    else {
                         continue;
-                    }
+                    };
                     assert!(
-                        selected.replace(outcome.identity()).is_none(),
+                        selected.replace(found).is_none(),
                         "one crate item at a path accepts a use's selector"
                     );
                 }
@@ -424,7 +425,6 @@ impl crate::Engine {
                     rawr_import::surface::instance::FunctionItem::selected(
                         function.position,
                         selected,
-                        function.selector,
                         function_start,
                         function_end,
                     )
@@ -440,7 +440,6 @@ impl crate::Engine {
                         rawr_import::surface::instance::FunctionItem::instantiated(
                             function.position,
                             selected,
-                            function.selector,
                             instance,
                             function_start,
                             function_end,
@@ -469,25 +468,22 @@ impl crate::Engine {
             // A closure argument is a one-shot callable (D513.7 b), or a
             // `'static` one native code may call again, shared or mutable
             // (D551.6).
-            let class = contract
-                .outcome(identity)
-                .and_then(|outcome| match outcome.representability() {
-                    Representability::FunctionItem(plan) => plan.class(),
-                    Representability::Invocation(plan) => plan.class(),
-                    _ => None,
-                })
-                .filter(|_| used.callable);
+            let outcome = accepted.outcome();
+            let class = match outcome.representability() {
+                Representability::FunctionItem(plan) => plan.class(),
+                Representability::Invocation(plan) => plan.class(),
+                _ => None,
+            }
+            .filter(|_| used.callable);
             // A closure the native call runs only while it runs, as
             // `PaneGrid::new`'s pane closure is (D558 tier 2).
-            let binders = contract
-                .outcome(identity)
-                .and_then(|outcome| match outcome.representability() {
-                    Representability::FunctionItem(plan) => Some(plan.binders()),
-                    Representability::Invocation(plan) => Some(plan.binders()),
-                    _ => None,
-                })
-                .map(|binders| binders.to_vec().into_boxed_slice())
-                .unwrap_or_default();
+            let binders = match outcome.representability() {
+                Representability::FunctionItem(plan) => Some(plan.binders()),
+                Representability::Invocation(plan) => Some(plan.binders()),
+                _ => None,
+            }
+            .map(|binders| binders.to_vec().into_boxed_slice())
+            .unwrap_or_default();
             // Script functions that fill callables as slots (D594) take
             // no closure class.
             let class = class.filter(|_| used.slots.is_empty());
@@ -546,8 +542,7 @@ impl crate::Engine {
             .map_err(super::Error::import)?;
             compiler
                 .require_instance(
-                    identity,
-                    used.selector,
+                    accepted,
                     instance,
                     source.identity(),
                     start,

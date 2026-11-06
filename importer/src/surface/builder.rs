@@ -47,21 +47,23 @@ impl Value {
 impl Step {
     /// Transform one selected constructor use into the first replay step.
     #[must_use]
-    pub const fn construct(
-        identity: identity::Identity,
+    pub fn construct(
+        outcome: crate::classify::Outcome<'_>,
         origin: super::Origin,
         arguments: Box<[Value]>,
     ) -> Self {
+        let identity = outcome.identity().clone();
         Self::Construct(super::Entry { identity, origin }, arguments)
     }
 
     /// Transform one selected owned-method use into a consuming replay step.
     #[must_use]
-    pub const fn consume(
-        identity: identity::Identity,
+    pub fn consume(
+        outcome: crate::classify::Outcome<'_>,
         origin: super::Origin,
         arguments: Box<[Value]>,
     ) -> Self {
+        let identity = outcome.identity().clone();
         Self::Consume {
             entry: super::Entry { identity, origin },
             arguments,

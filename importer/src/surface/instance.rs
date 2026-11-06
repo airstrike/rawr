@@ -790,17 +790,17 @@ impl FunctionItem {
     #[doc(hidden)]
     pub fn selected(
         position: u32,
-        base: &super::identity::Identity,
-        selector: super::identity::Selector,
+        accepted: super::Accepted<'_>,
         byte_start: u32,
         byte_end: u32,
     ) -> Result<Self, super::Error> {
         if byte_start >= byte_end {
             return Err(super::Error::InstanceMismatch);
         }
+        let (outcome, selector) = accepted.into_parts();
         Ok(Self {
             position,
-            identity: Box::new(base.selected(selector)),
+            identity: Box::new(outcome.identity().selected(selector)),
             byte_start,
             byte_end,
         })
@@ -812,8 +812,7 @@ impl FunctionItem {
     #[doc(hidden)]
     pub fn instantiated(
         position: u32,
-        base: &super::identity::Identity,
-        selector: super::identity::Selector,
+        accepted: super::Accepted<'_>,
         instance: Arguments,
         byte_start: u32,
         byte_end: u32,
@@ -821,9 +820,10 @@ impl FunctionItem {
         if byte_start >= byte_end {
             return Err(super::Error::InstanceMismatch);
         }
+        let (outcome, selector) = accepted.into_parts();
         Ok(Self {
             position,
-            identity: Box::new(base.instantiated(selector, instance)),
+            identity: Box::new(outcome.identity().instantiated(selector, instance)),
             byte_start,
             byte_end,
         })

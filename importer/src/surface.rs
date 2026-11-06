@@ -250,6 +250,40 @@ pub struct Compiler<'contract, B> {
     byte_limit: usize,
 }
 
+/// A classified outcome of a contract and a selector it takes, as only
+/// [`Contract::accept`] makes: the one way an imported item enters a
+/// demand. Every identity a [`Compiler`] holds is made from one, so each
+/// names an outcome of the compiler's own contract.
+#[derive(Clone, Debug)]
+pub struct Accepted<'contract> {
+    outcome: crate::classify::Outcome<'contract>,
+    selector: identity::Selector,
+}
+
+impl<'contract> Accepted<'contract> {
+    /// The classified outcome.
+    #[must_use]
+    pub const fn outcome(&self) -> crate::classify::Outcome<'contract> {
+        self.outcome
+    }
+
+    /// The selector the outcome takes.
+    #[must_use]
+    pub const fn selector(&self) -> &identity::Selector {
+        &self.selector
+    }
+
+    /// The identity the selector names of the outcome's.
+    #[must_use]
+    pub fn identity(&self) -> identity::Identity {
+        self.outcome.identity().selected(self.selector.clone())
+    }
+
+    pub(crate) fn into_parts(self) -> (crate::classify::Outcome<'contract>, identity::Selector) {
+        (self.outcome, self.selector)
+    }
+}
+
 #[derive(Serialize)]
 struct Canonical<'a> {
     schema: u32,
@@ -493,6 +527,32 @@ fn entry_retained_bytes(identity: Option<usize>, source_bytes: usize) -> Option<
 }
 
 impl Contract<Classified> {
+    /// The outcome `base` names, when it takes `selector`.
+    #[must_use]
+    pub fn accept(
+        &self,
+        base: &identity::Identity,
+        selector: &identity::Selector,
+    ) -> Option<Accepted<'_>> {
+        let outcome = self.outcome(base)?;
+        outcome
+            .representability()
+            .contains_selector(outcome.identity().selector(), selector)
+            .then(|| Accepted {
+                outcome,
+                selector: selector.clone(),
+            })
+    }
+
+    /// The outcome an identity a [`Compiler`] admitted names. Each was made
+    /// from one of this contract's outcomes ([`Accepted`],
+    /// [`Compiler::require`]), or replayed from a demand whose identities
+    /// were each found here first ([`Demand::replay_cached`]).
+    pub(crate) fn admitted(&self, identity: &identity::Identity) -> crate::classify::Outcome<'_> {
+        self.outcome(identity)
+            .expect("an admitted identity names an outcome of its own contract")
+    }
+
     /// Bind symbolic demand collection to this contract and one exact snapshot.
     #[doc(hidden)]
     pub fn compiler<B>(
@@ -533,7 +593,7 @@ impl Contract<Classified> {
     }
 }
 
-impl<B> Compiler<'_, B> {
+impl<'contract, B> Compiler<'contract, B> {
     /// Bind the exact selected profile projection rule used only to prove a
     /// mapper-bearing invocation. This does not install a facade projection.
     #[doc(hidden)]
@@ -553,10 +613,7 @@ impl<B> Compiler<'_, B> {
     pub fn require_builder(&mut self, plan: builder::Plan) -> Result<(), Error> {
         for step in plan.steps() {
             let identity = step.entry().identity();
-            let outcome = self
-                .contract
-                .outcome(identity)
-                .ok_or(Error::ForeignIdentity)?;
+            let outcome = self.contract.admitted(identity);
             if !self.contract.accepts(identity, identity.selector())
                 || !outcome.representability().is_demandable()
             {
@@ -572,12 +629,13 @@ impl<B> Compiler<'_, B> {
         Ok(())
     }
 
-    /// Retain one compiler-checked symbolic entry.
-    pub fn require(&mut self, identity: identity::Identity, origin: Origin) -> Result<(), Error> {
-        let outcome = self
-            .contract
-            .outcome(&identity)
-            .ok_or(Error::ForeignIdentity)?;
+    /// Retain one compiler-checked symbolic entry: `outcome` itself.
+    pub fn require(
+        &mut self,
+        outcome: crate::classify::Outcome<'contract>,
+        origin: Origin,
+    ) -> Result<(), Error> {
+        let identity = outcome.identity().clone();
         if has_unresolved_structural_parameters(outcome.representability())
             || needs_instance(self.contract, &identity)
         {
@@ -622,16 +680,13 @@ impl<B> Compiler<'_, B> {
     #[doc(hidden)]
     pub fn require_selected(
         &mut self,
-        base: &identity::Identity,
-        selector: identity::Selector,
+        accepted: Accepted<'contract>,
         source: &str,
         byte_start: u32,
         byte_end: u32,
     ) -> Result<(), Error> {
-        if !self.contract.accepts(base, &selector) {
-            return Err(Error::ForeignIdentity);
-        }
-        let outcome = self.contract.outcome(base).ok_or(Error::ForeignIdentity)?;
+        let (outcome, selector) = accepted.into_parts();
+        let base = outcome.identity();
         if has_unresolved_structural_parameters(outcome.representability())
             || needs_instance(self.contract, base)
         {
@@ -651,17 +706,14 @@ impl<B> Compiler<'_, B> {
     #[doc(hidden)]
     pub fn require_instance(
         &mut self,
-        base: &identity::Identity,
-        selector: identity::Selector,
+        accepted: Accepted<'contract>,
         mut instance: instance::Arguments,
         source: &str,
         byte_start: u32,
         byte_end: u32,
     ) -> Result<(), Error> {
-        if !self.contract.accepts(base, &selector) {
-            return Err(Error::ForeignIdentity);
-        }
-        let outcome = self.contract.outcome(base).ok_or(Error::ForeignIdentity)?;
+        let (outcome, selector) = accepted.into_parts();
+        let base = outcome.identity();
         // A generic struct's constructor at the types its use infers, and
         // a generic enum's variant at the types of the value it matches.
         let structure = matches!(
@@ -756,10 +808,7 @@ impl<B> Compiler<'_, B> {
             })?;
         let plan_bytes =
             unique_identities(&self.entries).try_fold(0_usize, |bytes, identity| {
-                let outcome = self
-                    .contract
-                    .outcome(identity)
-                    .ok_or(Error::ForeignIdentity)?;
+                let outcome = self.contract.admitted(identity);
                 let retained = adapter::Plan::retained_bytes(self.contract, outcome, identity)?
                     .ok_or(Error::Limit {
                         resource: "adapter plan retained bytes",
@@ -794,10 +843,7 @@ impl<B> Compiler<'_, B> {
             .try_reserve_exact(unique)
             .map_err(|_| Error::Allocation)?;
         for identity in unique_identities(&self.entries) {
-            let outcome = self
-                .contract
-                .outcome(identity)
-                .ok_or(Error::ForeignIdentity)?;
+            let outcome = self.contract.admitted(identity);
             plans.push(adapter::Plan::try_new(self.contract, outcome, identity)?);
         }
         for builder in &self.builders {
@@ -903,9 +949,7 @@ fn validate_function_items(
             continue;
         }
         let call = call.ok_or(Error::InstanceMismatch)?;
-        let selected_outcome = contract
-            .outcome(selected.identity())
-            .ok_or(Error::ForeignIdentity)?;
+        let selected_outcome = contract.admitted(selected.identity());
         // A generic function is selected at its instance's types, one per
         // type parameter, as `window::close::<Message>` is. Its bounds, as
         // `Task::done`'s `T: MaybeSend + 'static`, hold or fail where rustc
@@ -1014,9 +1058,7 @@ fn validate_function_items(
             continue;
         }
         let selected = functions.next().ok_or(Error::InstanceMismatch)?;
-        let selected_outcome = contract
-            .outcome(selected.identity())
-            .ok_or(Error::ForeignIdentity)?;
+        let selected_outcome = contract.admitted(selected.identity());
         let selected_signature = match selected_outcome.representability() {
             Representability::Function(plan) => plan.signature(),
             Representability::FunctionItem(plan)
@@ -1469,8 +1511,19 @@ impl<B> Demand<Sealed, B> {
             snapshot,
             limits,
             |stored, plans| {
+                // A stored demand whose identities aren't each this
+                // contract's is not this contract's demand.
+                let steps = stored.builders.iter().flat_map(builder::Plan::steps);
+                if !stored
+                    .entries
+                    .iter()
+                    .chain(steps.map(builder::Step::entry))
+                    .all(|entry| names_its_outcomes(contract, entry.identity()))
+                {
+                    return Err(Error::Canonical);
+                }
                 for identity in unique_identities(&stored.entries) {
-                    let outcome = contract.outcome(identity).ok_or(Error::ForeignIdentity)?;
+                    let outcome = contract.admitted(identity);
                     plans.push(adapter::Plan::try_new(contract, outcome, identity)?);
                 }
                 for builder in &stored.builders {
@@ -1706,13 +1759,21 @@ impl Entry {
     }
 }
 
+/// Whether `identity`, and each function item it passes, names an outcome
+/// of `contract`.
+fn names_its_outcomes(contract: &Contract<Classified>, identity: &identity::Identity) -> bool {
+    contract.outcome(identity).is_some()
+        && identity
+            .function_items()
+            .iter()
+            .all(|function| names_its_outcomes(contract, function.identity()))
+}
+
 /// Demand sealing failure that cannot mint a partial proof.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("owned runner inputs do not match the exact authenticated demand ancestry")]
     ForeignRunner,
-    #[error("symbolic surface identity belongs to a different contract")]
-    ForeignIdentity,
     #[error("symbolic allocation proof belongs to a different contract")]
     ForeignAllocation,
     #[error("classified item is excluded, rejected, or declaration-only")]
