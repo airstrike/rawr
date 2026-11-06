@@ -724,6 +724,13 @@ mod seed {
                 _ => index += 1,
             }
         }
+        // A `use` path starts at any name in scope, as rustc resolves it:
+        // `use keyboard::key;` beside `use iced::keyboard;`, at module level
+        // or in a block, names `iced::keyboard::key`.
+        let bindings = bindings
+            .iter()
+            .map(|(local, full)| (*local, through_bindings(full, &bindings, &modules)))
+            .collect::<Vec<_>>();
         let mut paths = bindings
             .iter()
             .map(|(_, full)| full.iter().map(|segment| (*segment).to_owned()).collect())
@@ -738,6 +745,36 @@ mod seed {
             paths.push(full.into_iter().map(str::to_owned).collect());
         }
         paths
+    }
+
+    /// `full` with its first segment, while another `use` binds it, written
+    /// as that binding's path: `iced::keyboard::key` for `keyboard::key`
+    /// after `use iced::keyboard;`. A `mod` of that name is the module, and a
+    /// binding's own name (`use serde::serde;`) is the crate's.
+    fn through_bindings<'a>(
+        full: &[&'a str],
+        bindings: &[(&'a str, Vec<&'a str>)],
+        modules: &[&'a str],
+    ) -> Vec<&'a str> {
+        let mut full = full.to_vec();
+        // Each step expands through a binding not taken yet, so a cycle of
+        // imports ends.
+        let mut taken = vec![false; bindings.len()];
+        while full.len() >= 2
+            && !modules.contains(&full[0])
+            && let Some(index) = (0..bindings.len()).rev().find(|&index| {
+                let (local, path) = &bindings[index];
+                !taken[index] && *local == full[0] && path.as_slice() != full.as_slice()
+            })
+        {
+            taken[index] = true;
+            let path = &bindings[index].1;
+            if path[0] == full[0] {
+                break;
+            }
+            full.splice(..1, path.iter().copied());
+        }
+        full
     }
 
     /// Every method the text calls by name (`.name(` or `.name::<`).
@@ -779,6 +816,26 @@ mod seed {
             let text = "mod download;\nuse download::download;\n\
                 enum Update { Downloading(download::Progress) }\n";
             assert_eq!(joined(text), ["download::Progress", "download::download"]);
+        }
+
+        /// iced's todos: a block's `use keyboard::key;` starts at the
+        /// module's `use iced::keyboard;`, and `key::Named::Tab` through
+        /// both (#1044).
+        #[test]
+        fn seed_starts_a_use_at_another_use_binding() {
+            let text = "use iced::keyboard;\n\
+                fn subscription() { use keyboard::key; use key::{Named}; \
+                let _ = key::Named::Tab; Named::Enter; }\n";
+            assert_eq!(
+                joined(text),
+                [
+                    "iced::keyboard",
+                    "iced::keyboard::key",
+                    "iced::keyboard::key::Named",
+                    "iced::keyboard::key::Named::Enter",
+                    "iced::keyboard::key::Named::Tab",
+                ]
+            );
         }
 
         #[test]
