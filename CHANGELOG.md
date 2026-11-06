@@ -6,6 +6,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.152 (2026-11-06)
+
+- serde's `#[derive(Serialize, Deserialize)]` on your types runs from its expansion: `serde_json::to_string(&task)` and `serde_json::from_str::<Task>(..)` print what `cargo run` prints. A generic method of a type native code fills takes a turbofish, as `map.next_key::<Field>()` does, and a function that takes `&'static [&'static str]` takes an array of your strings. (#1009; part of #593)
+- Your value lent `&mut` to a crate function that takes `&mut T` or `&mut dyn Trait` keeps what the crate changed in it. (#1008)
+- The ?play universe builds again, after an associated type whose bound names itself (iced's `type Font: Copy + PartialEq`) overflowed rawr's stack, and a crate trait method that takes a future no longer captures every tokio call. A `let` of a value that never comes, as a snippet ending in an endless `loop`, compiles again: it falls back to `!` as rustc 2024 does. (#1027, #1019, #1020, #1021)
+- A dependency whose build script reads an environment variable it doesn't declare gives each project its own output: when the script's output in rawr's shared build differs from the project's own build, rawr cleans that package there once and reads the crate again, so the program sees the value `cargo run` gives. The imports docs explain Cargo's rule and the lasting fix, `cargo:rerun-if-env-changed`. (#1011)
+
 ## 0.3.151 (2026-11-06)
 
 - Checking a program that needs proved applications no longer fills the disk. Each crate's intrinsic entry keeps only its own facts. The inventory build reuses the nightly's shared build directory, and each loaded artifact is hashed once. iced's changelog example now finishes `rawr check` in about 400 s. (#958)

@@ -1,12 +1,22 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.151",
+  "version": "0.3.152",
   "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.152",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"serde's `#[derive(Serialize, Deserialize)]` on your types runs from its expansion: `serde_json::to_string(&task)` and `serde_json::from_str::<Task>(..)` print what `cargo run` prints. A generic method of a type native code fills takes a turbofish, as `map.next_key::<Field>()` does, and a function that takes `&'static [&'static str]` takes an array of your strings.","issues":[1009],"refs":[593]},
+          {"text":"Your value lent `&mut` to a crate function that takes `&mut T` or `&mut dyn Trait` keeps what the crate changed in it.","issues":[1008]},
+          {"text":"The ?play universe builds again, after an associated type whose bound names itself (iced's `type Font: Copy + PartialEq`) overflowed rawr's stack, and a crate trait method that takes a future no longer captures every tokio call. A `let` of a value that never comes, as a snippet ending in an endless `loop`, compiles again: it falls back to `!` as rustc 2024 does.","issues":[1027,1019,1020,1021]},
+          {"text":"A dependency whose build script reads an environment variable it doesn't declare gives each project its own output: when the script's output in rawr's shared build differs from the project's own build, rawr cleans that package there once and reads the crate again, so the program sees the value `cargo run` gives. The imports docs explain Cargo's rule and the lasting fix, `cargo:rerun-if-env-changed`.","issues":[1011]}
+        ]
+      },
       {
         "version": "0.3.151",
         "date": "2026-11-06",
@@ -2452,15 +2462,26 @@
     {"issue":1005,"title":"`fmt::Formatter` in program code","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
     {"issue":1006,"title":"`&dyn Trait` of a crate's trait as an input","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
     {"issue":1007,"title":"Passing a `fmt` body's formatter to another function","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
-    {"issue":1008,"title":"A program value lent `&mut` to a crate's `&mut T` or `&mut dyn Trait` loses native changes","state":"open","category":"Divergences from rustc"},
-    {"issue":1009,"title":"A frame method's turbofish type argument (`next_key::<__Field>`) gives an Option the checker can't type","state":"open","category":"Divergences from rustc"},
+    {"issue":1008,"title":"A program value lent `&mut` to a crate's `&mut T` or `&mut dyn Trait` loses native changes","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
+    {"issue":1009,"title":"A frame method's turbofish type argument (`next_key::<__Field>`) gives an Option the checker can't type","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
     {"issue":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open","category":"Divergences from rustc"},
-    {"issue":1011,"title":"D742: a detected build-script output mismatch reruns that package in the shared directory and re-extracts","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1011,"title":"D742: a detected build-script output mismatch reruns that package in the shared directory and re-extracts","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.152"},
     {"issue":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1013,"title":"Intrinsic entries inline each identity's whole Unit; objc2_app_kit's entry is 1.88 GB","state":"open","category":"Health"},
     {"issue":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"open","category":"iced examples"},
     {"issue":1015,"title":"The legacy extraction plan hashes every selected artifact in full on each check","state":"open","category":"Health"},
-    {"issue":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"open","category":"Health"}
+    {"issue":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"closed","category":"Health"},
+    {"issue":1017,"title":"serde attributes and types todos needs: default = path, skip, uuid, unit enums, Vec fields, to_string_pretty","state":"open","category":"iced examples"},
+    {"issue":1018,"title":"pokedex: nested Deserialize structs decoded by reqwest's .json().await on tokio's threads","state":"open","category":"iced examples"},
+    {"issue":1019,"title":"Universe build overflows the stack at \"building API\" since 0.3.150","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
+    {"issue":1020,"title":"Universe main panics: a value reached an adapter as a type its signature doesn't take","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
+    {"issue":1021,"title":"rawr-play lib tests fail: endless-loop snippets, D683.4 refusals, a 100 ms budget","state":"closed","category":"Health","release":"0.3.152"},
+    {"issue":1022,"title":"A generic impl's frame entry takes a projection value from the arena, needing 'static (E0310)","state":"open","category":"Divergences from rustc"},
+    {"issue":1023,"title":"A crate unit struct used as a value is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open","category":"Health"},
+    {"issue":1025,"title":"Intrinsic facts captured this run under a stale nightly build-script output aren't recaptured after the clean","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"open","category":"Health"},
+    {"issue":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed","category":"Divergences from rustc","release":"0.3.152"}
   ],
   "groups": [
     {
@@ -2666,8 +2687,10 @@
             {"number":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed"},
             {"number":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed"},
             {"number":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open"},
-            {"number":1011,"title":"D742: a detected build-script output mismatch reruns that package in the shared directory and re-extracts","state":"open"},
-            {"number":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"open"}
+            {"number":1011,"title":"D742: a detected build-script output mismatch reruns that package in the shared directory and re-extracts","state":"closed"},
+            {"number":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"open"},
+            {"number":1025,"title":"Intrinsic facts captured this run under a stale nightly build-script output aren't recaptured after the clean","state":"open"},
+            {"number":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -2967,10 +2990,15 @@
             {"number":1005,"title":"`fmt::Formatter` in program code","state":"closed"},
             {"number":1006,"title":"`&dyn Trait` of a crate's trait as an input","state":"closed"},
             {"number":1007,"title":"Passing a `fmt` body's formatter to another function","state":"closed"},
-            {"number":1008,"title":"A program value lent `&mut` to a crate's `&mut T` or `&mut dyn Trait` loses native changes","state":"open"},
-            {"number":1009,"title":"A frame method's turbofish type argument (`next_key::<__Field>`) gives an Option the checker can't type","state":"open"},
+            {"number":1008,"title":"A program value lent `&mut` to a crate's `&mut T` or `&mut dyn Trait` loses native changes","state":"closed"},
+            {"number":1009,"title":"A frame method's turbofish type argument (`next_key::<__Field>`) gives an Option the checker can't type","state":"closed"},
             {"number":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open"},
-            {"number":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"open"}
+            {"number":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"open"},
+            {"number":1017,"title":"serde attributes and types todos needs: default = path, skip, uuid, unit enums, Vec fields, to_string_pretty","state":"open"},
+            {"number":1018,"title":"pokedex: nested Deserialize structs decoded by reqwest's .json().await on tokio's threads","state":"open"},
+            {"number":1022,"title":"A generic impl's frame entry takes a projection value from the arena, needing 'static (E0310)","state":"open"},
+            {"number":1023,"title":"A crate unit struct used as a value is refused","state":"open"},
+            {"number":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed"}
           ],
           "milestone": "0.4"
         },
@@ -3246,7 +3274,7 @@
             {"number":999,"title":"Every check leaves empty execution-key directories in the store","state":"open"},
             {"number":1013,"title":"Intrinsic entries inline each identity's whole Unit; objc2_app_kit's entry is 1.88 GB","state":"open"},
             {"number":1015,"title":"The legacy extraction plan hashes every selected artifact in full on each check","state":"open"},
-            {"number":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"open"}
+            {"number":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"closed"}
           ]
         },
         {
@@ -3337,7 +3365,11 @@
           "state": "now",
           "note": "Canvas, timed(..) and theme(..) for solar_system (#1000)",
           "issues": [
-            {"number":1000,"title":"?play's universe has no canvas, application::timed or Application::theme","state":"open"}
+            {"number":1000,"title":"?play's universe has no canvas, application::timed or Application::theme","state":"open"},
+            {"number":1019,"title":"Universe build overflows the stack at \"building API\" since 0.3.150","state":"closed"},
+            {"number":1020,"title":"Universe main panics: a value reached an adapter as a type its signature doesn't take","state":"closed"},
+            {"number":1021,"title":"rawr-play lib tests fail: endless-loop snippets, D683.4 refusals, a 100 ms budget","state":"closed"},
+            {"number":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open"}
           ]
         }
       ]
