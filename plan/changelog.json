@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.141",
+      "date": "2026-11-05",
+      "entries": [
+        {"text":"`rawr run` starts with a relative CARGO_TARGET_DIR (and with an absolute one after a relative run): the reload watcher no longer stops at start with \"malformed filesystem observation transport\". A relative target directory now names the same paths as the absolute one.","issues":[959]}
+      ]
+    },
+    {
       "version": "0.3.140",
       "date": "2026-11-05",
       "entries": [
