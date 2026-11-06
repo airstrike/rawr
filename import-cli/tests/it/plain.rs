@@ -1421,7 +1421,8 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     assert_eq!(
         text(&run.stdout),
         "Some(5) a pair\n14 <7> Some(10) None\n<7>\nPair(3, 4)\n1 read, expected two numbers\n\
-         expected a str\nexpected 2 numbers\nexpected what I wanted\n6\n"
+         expected a str\nexpected 2 numbers\nexpected what I wanted\n6\n\
+         Counts { odd: 2, even: 1 }\nodd even\n"
     );
 }
 

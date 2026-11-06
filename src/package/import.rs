@@ -3463,6 +3463,14 @@ impl Types {
                 usize::try_from(*length).expect("an array length fits in usize"),
             ),
             // A crate's `[T]`, whose elements a call copies, or its `Vec<T>`.
+            // `&[&'static str]`: a slice of `&str`.
+            Type::Sequence {
+                element,
+                owned: false,
+                ..
+            } if matches!(**element, Type::Builtin(Builtin::Str | Builtin::StaticStr)) => {
+                host::type_ref::Type::slice(Self::input_charged(element, parameters)?)
+            }
             Type::Sequence {
                 element,
                 owned: false,

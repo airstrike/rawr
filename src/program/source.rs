@@ -114,6 +114,24 @@ impl Source {
     pub(crate) const fn table(&self) -> &Table {
         &self.table
     }
+
+    /// Each derive's expansion with the source its item is in: the
+    /// expansion's items are the item's module's, as rustc reads them, so
+    /// they name what that source does (#593).
+    pub(crate) fn expansions(&self) -> Vec<(Id, Id)> {
+        let sources = &self.table.0.sources;
+        sources
+            .iter()
+            .enumerate()
+            .filter_map(|(index, source)| {
+                let origin = source.origin()?;
+                let item = sources.iter().position(|candidate| {
+                    candidate.origin().is_none() && candidate.identity() == origin.source.identity()
+                })?;
+                Some((Id(index), Id(item)))
+            })
+            .collect()
+    }
 }
 
 impl TableId {

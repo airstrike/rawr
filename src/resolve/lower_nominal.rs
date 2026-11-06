@@ -3990,6 +3990,23 @@ pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> 
 /// A free function's first `&mut` parameter, which a call passes as its
 /// receiver's place. Not its `&mut fmt::Formatter`, whose text the body
 /// gives back (`wrap_formatter`).
+/// `names` with each of `from`'s names also in `to`, where `to` names
+/// nothing of its own by that name.
+fn inherit_names<V: Clone>(
+    names: &mut BTreeMap<(crate::program::source::Id, ImmutableString), V>,
+    from: crate::program::source::Id,
+    to: crate::program::source::Id,
+) {
+    let inherited = names
+        .iter()
+        .filter(|((source, _), _)| *source == from)
+        .map(|((_, name), value)| (name.clone(), value.clone()))
+        .collect::<Vec<_>>();
+    for (name, value) in inherited {
+        names.entry((to, name)).or_insert(value);
+    }
+}
+
 pub(crate) fn this_parameter(definition: &item::Function) -> Option<usize> {
     definition.parameters.iter().position(|parameter| {
         matches!(
@@ -4957,7 +4974,7 @@ impl Models {
                 Box::from([hidden, ImmutableString::from(variant)]),
             );
         }
-        let host_variants: BTreeMap<_, Box<[ImmutableString]>> = host_variants_by_name;
+        let mut host_variants: BTreeMap<_, Box<[ImmutableString]>> = host_variants_by_name;
 
         let mut associated = AssociatedTypes::default();
         let mut impl_arguments = BTreeMap::<(ImmutableString, type_def::Id), ImplArguments>::new();
@@ -5147,6 +5164,16 @@ impl Models {
                     .or_insert_with(|| Nominal::clone(nominal));
             }
         }
+        // A derive's expansion names what its item's source does (#593).
+        let mut aliases = program.aliases.clone();
+        for (expansion, item) in program.source.expansions() {
+            inherit_names(&mut by_name, item, expansion);
+            inherit_names(&mut functions, item, expansion);
+            inherit_names(&mut imports, item, expansion);
+            inherit_names(&mut variants, item, expansion);
+            inherit_names(&mut host_variants, item, expansion);
+            inherit_names(&mut aliases, item, expansion);
+        }
         let tables = Tables {
             runtime,
             host,
@@ -5166,7 +5193,7 @@ impl Models {
             qualified_rust: program.qualified_rust.clone(),
             entry_crate: program.entry_crate.clone(),
             crates: program.crates.clone(),
-            aliases: program.aliases.clone(),
+            aliases,
             namespaces: program
                 .scripts
                 .iter()
@@ -12260,6 +12287,10 @@ struct Parser<'a> {
     /// the position of the method it was rewritten to (`path_method_call`):
     /// a text receiver takes the method the trait's impl for `&str` gives.
     spliced_traits: BTreeMap<Position, ImmutableString>,
+    /// The turbofish of each `Trait::method::<T>(receiver, ..)` call, by
+    /// the position of the method it was rewritten to (`path_method_call`),
+    /// which the method's own parameters take.
+    spliced_turbofish: BTreeMap<Position, Vec<Ty>>,
     /// Each method call's native receiver type, by its member's position:
     /// what a method std declares and rawr doesn't run yet is looked up
     /// on (`inherent_not_yet`).
@@ -12579,6 +12610,7 @@ impl<'a> Parser<'a> {
             trait_turbofish: None,
             path_values: HashSet::new(),
             spliced_traits: BTreeMap::new(),
+            spliced_turbofish: BTreeMap::new(),
             std_probed: BTreeMap::new(),
             host_turbofish: None,
             explicit_trait_arguments: None,
@@ -16054,6 +16086,9 @@ impl<'a> Parser<'a> {
         let after = receiver.last().map_or(end, |(_, position)| *position);
         if let Some(trait_path) = trait_path {
             self.spliced_traits.insert(after, trait_path);
+        }
+        if let Some(turbofish) = self.pending_turbofish.take() {
+            self.spliced_turbofish.insert(after, turbofish);
         }
         let mut tokens = vec![(Token::LeftParen, at)];
         if !plain {
@@ -22009,6 +22044,7 @@ impl<'a> Parser<'a> {
             std::borrow::Cow::Owned(name) => name.into(),
         };
 
+        let turbofish = self.pending_turbofish.take();
         let resolved = self.inference.resolve(&receiver.ty);
         // `value.to_string()` of an imported type: Rust's blanket
         // `ToString` through its `Display`, which `cargo check` holds the
@@ -22258,8 +22294,11 @@ impl<'a> Parser<'a> {
         let choice = arguments.iter().position(|argument| {
             matches!(self.inference.resolve(&argument.ty), Ty::FnChoice { .. })
         });
-        if let Some(index) = choice {
-            return self.dispatch_host_method(
+        // `value.method::<T>(..)`: the method's own parameters take the
+        // turbofish, as a host function's do.
+        let outer = std::mem::replace(&mut self.host_turbofish, turbofish);
+        let finished = match choice {
+            Some(index) => self.dispatch_host_method(
                 receiver,
                 &definition,
                 &items,
@@ -22269,18 +22308,20 @@ impl<'a> Parser<'a> {
                 arguments,
                 index,
                 call,
-            );
-        }
-        self.finish_host_method(
-            receiver,
-            &definition,
-            &items,
-            owner,
-            scoped,
-            member_span,
-            arguments,
-            call,
-        )
+            ),
+            None => self.finish_host_method(
+                receiver,
+                &definition,
+                &items,
+                owner,
+                scoped,
+                member_span,
+                arguments,
+                call,
+            ),
+        };
+        self.host_turbofish = outer;
+        finished
     }
 
     /// An app's exported type keeps fields and methods apart, as Rust does:
@@ -37241,11 +37282,16 @@ impl<'a> Parser<'a> {
             // which its generic parameters take, as `f::<T>(..)`'s do.
             if matches!(self.peek(), Token::DoubleColon)
                 && matches!(self.peek_second(), Token::LessThan)
-                && self.program_method(&value.ty, &member)
+                && (self.program_method(&value.ty, &member) || self.host_method(&value.ty, &member))
             {
                 self.next();
                 self.next();
                 self.pending_turbofish = Some(self.parse_turbofish_types()?);
+            }
+            // `Trait::method::<T>(receiver)` rewritten to a method call
+            // (`path_method_call`) keeps its turbofish.
+            if let Some(turbofish) = self.spliced_turbofish.remove(&member_span.start()) {
+                self.pending_turbofish = Some(turbofish);
             }
             // A method call borrows its place; a field is a place below it.
             if matches!(self.peek(), Token::LeftParen | Token::Unit) {
@@ -39133,13 +39179,19 @@ impl<'a> Parser<'a> {
                 self.expect(Token::As, "'as' in a qualified path")?;
                 let (mut trait_name, mut trait_span) =
                     self.expect_name("trait in a qualified path")?;
+                let root = trait_name.clone();
+                let mut segments = 1_usize;
                 // `<T as std::default::Default>`: the path's last segment.
                 while matches!(self.peek(), Token::DoubleColon)
                     && matches!(self.peek_second(), Token::Identifier(_))
                 {
                     self.next();
                     (trait_name, trait_span) = self.expect_name("trait in a qualified path")?;
+                    segments += 1;
                 }
+                // A path through a crate, as `serde::de::Error`, names the
+                // crate's trait, never std's of the same name.
+                let through_crate = segments > 1 && !crate::std_table::is_root(&root);
                 let explicit = if matches!(self.peek(), Token::LessThan) {
                     Some(self.parse_trait_path_arguments()?)
                 } else {
@@ -39147,7 +39199,8 @@ impl<'a> Parser<'a> {
                 };
                 self.expect_close_angle("'>' after a qualified path's trait")?;
                 self.expect(Token::DoubleColon, "'::' after a qualified path")?;
-                if !self.ufcs_trait(&trait_name)
+                if !through_crate
+                    && !self.ufcs_trait(&trait_name)
                     && let Some(std_name) = crate::resolve::std_trait::anywhere(&trait_name)
                         .and_then(|definition| definition.rsplit("::").next())
                 {
@@ -54355,6 +54408,17 @@ impl<'a> Parser<'a> {
 
     /// Whether `member` is a method the program declares for the type
     /// `receiver` names through its references: its own, or its trait's.
+    /// Whether `member` is a method the crate gives `receiver`'s host type.
+    fn host_method(&self, receiver: &Ty, member: &ImmutableString) -> bool {
+        #[cfg(feature = "rust-import")]
+        return self.host_has_member(receiver, member);
+        #[cfg(not(feature = "rust-import"))]
+        {
+            let _ = (receiver, member);
+            false
+        }
+    }
+
     fn program_method(&self, receiver: &Ty, member: &ImmutableString) -> bool {
         let mut receiver = self.inference.resolve(receiver);
         while let Ty::Reference { target, .. } | Ty::Boxed(target) = receiver {

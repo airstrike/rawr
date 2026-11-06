@@ -14238,6 +14238,22 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // `&'static [&'static str]`, as serde's `deserialize_struct` takes its
+    // fields: Rawr's array of strings, pinned as one slice for as long as
+    // the runner lives, which equal arrays share.
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: lent,
+    } = &lent
+        && matches!(&**lent, convert::Type::Sequence { element, .. }
+            if **element == convert::Type::Builtin(convert::Builtin::StaticStr))
+    {
+        return writeln!(
+            output,
+            "    let argument_{local} = {{ static PINS: __rawr_internal::scope::Pins = __rawr_internal::scope::Pins::constant(); let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let texts = value.into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|text| text.into_immutable_string().map_err(|_| Error::TypeMismatch)).collect::<Result<Vec<_>, Error>>()?; PINS.pin_strs(texts) }};"
+        )
+        .map_err(request::unwritable);
+    }
     // `&[T]` or `&(A, B)` of Rawr's array or tuple, as voronator's
     // `from_tuple` and image's `save_buffer` take: the Rust value made from
     // it, lent to the call, as a `&str` input is.

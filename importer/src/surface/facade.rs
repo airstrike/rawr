@@ -4071,6 +4071,18 @@ fn ty(
             element: Box::new(ty(element, parameters)?),
             length: *length,
         },
+        // `&[&'static str]`: a slice of `&str`.
+        Source::Sequence {
+            element,
+            owned: false,
+            ..
+        } if matches!(
+            **element,
+            Source::Builtin(Builtin::Str | Builtin::StaticStr)
+        ) =>
+        {
+            Type::Slice(Box::new(input_ty(element, parameters)?))
+        }
         Source::Sequence {
             element,
             owned: false,
