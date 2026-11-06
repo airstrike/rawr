@@ -180,3 +180,35 @@ pub fn read<'a, T: Read<'a> + std::fmt::Debug>(items: &'a [i64]) -> String {
         Err(problem) => problem.describe(),
     }
 }
+
+/// What draws in a font that compares with itself, as iced's
+/// `text::Renderer::Font` is `Copy + PartialEq`: the font's `PartialEq` is
+/// `PartialEq<Self>`.
+pub trait Painter {
+    type Font: Copy + PartialEq;
+    fn font(&self) -> Self::Font;
+    fn fits(&self, font: Self::Font) -> bool;
+}
+
+/// A value that paints itself with any painter.
+pub trait Paint {
+    fn paint<P: Painter>(&self, painter: P) -> bool;
+}
+
+/// A painter whose font is a size.
+pub struct Pen;
+
+impl Painter for Pen {
+    type Font = u8;
+    fn font(&self) -> u8 {
+        12
+    }
+    fn fits(&self, font: u8) -> bool {
+        font == 12
+    }
+}
+
+/// Whether `value` paints with a pen.
+pub fn painted<T: Paint>(value: T) -> bool {
+    value.paint(Pen)
+}

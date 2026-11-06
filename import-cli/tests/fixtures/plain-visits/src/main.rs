@@ -1,5 +1,5 @@
 // rawr
-use visits::{Expected, Problem, Read, Reader, Visit, Visitor};
+use visits::{Expected, Paint, Painter, Problem, Read, Reader, Visit, Visitor};
 
 struct Seven;
 
@@ -13,6 +13,12 @@ impl Visit for Seven {
             Some(visitor) => Some(visitor.int(5)),
             None => None,
         }
+    }
+}
+
+impl Paint for Seven {
+    fn paint<P: Painter>(&self, painter: P) -> bool {
+        painter.fits(painter.font())
     }
 }
 
@@ -74,4 +80,5 @@ fn main() {
     let mut sum = visits::Sum::default();
     visits::tally(&[1, 2, 3], &mut sum);
     println!("{}", sum.total());
+    println!("{}", visits::painted(Seven));
 }

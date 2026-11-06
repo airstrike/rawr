@@ -1403,7 +1403,10 @@ fn a_crates_derive_runs_from_its_expansion() {
 /// proxy, in a free function and in a trait's provided function of an
 /// opaque type, as serde's `de::Error::invalid_length` takes `&dyn
 /// Expected`. The program's impl writes into the `&mut fmt::Formatter` native
-/// code passes it, and passes it on to a function of its own.
+/// code passes it, and passes it on to a function of its own. An opaque
+/// parameter's associated type whose bound names it again, as
+/// `PartialEq<Self>` of iced's `type Font: Copy + PartialEq` does, is read
+/// once, not without end.
 #[test]
 fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     const VISITS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-visits");
@@ -1421,7 +1424,7 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     assert_eq!(
         text(&run.stdout),
         "Some(5) a pair\n14 <7> Some(10) None\n<7>\nPair(3, 4)\n1 read, expected two numbers\n\
-         expected a str\nexpected 2 numbers\nexpected what I wanted\n6\n"
+         expected a str\nexpected 2 numbers\nexpected what I wanted\n6\ntrue\n"
     );
 }
 
