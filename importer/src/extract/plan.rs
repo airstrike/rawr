@@ -145,7 +145,7 @@ pub(crate) struct Expansion {
     pub(crate) selected_target: Box<str>,
     pub(crate) dependency_directories: Box<[PathBuf]>,
     /// Each alias, the artifact it names and that artifact's digest.
-    pub(crate) externs: Box<[(Box<str>, Box<str>, Box<str>)]>,
+    pub(crate) externs: Box<[crate::expand::Extern]>,
 }
 
 impl Expansion {

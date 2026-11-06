@@ -1,6 +1,6 @@
 //! Compile-time capabilities promised by resolved nominal types.
 
-use crate::resolve::{item, std_path, type_ref, Error, LocatedError};
+use crate::resolve::{item, std_path, type_ref, Error, Expansion, LocatedError};
 use crate::{program, std_table, type_def, ImmutableString, Span};
 use std::collections::BTreeMap;
 
@@ -291,6 +291,9 @@ struct Request {
     /// An enum's derived `Default`: `Ok` with one `#[default]` unit
     /// variant, else Rust's reason.
     enum_default: Result<(), &'static str>,
+    /// Each crate derive whose expansion isn't loaded: as written, the
+    /// macro it names, and where it is written.
+    unexpanded: Vec<(ImmutableString, ImmutableString, Span)>,
 }
 
 /// What a `#[derive(..)]` path names, resolved as rustc resolves it in the
@@ -302,6 +305,9 @@ enum Derive {
     /// A crate's derive macro, at the path the program's `use` or path
     /// names it by (`serde::Serialize`).
     Crate(ImmutableString),
+    /// A crate's derive macro whose expansion is loaded beside the item:
+    /// its items are the program's own.
+    Expanded,
     /// Nothing in scope.
     Unknown,
 }
@@ -380,9 +386,14 @@ fn derive_target(
     }
 }
 
+/// Each crate derive whose expansion a program loaded, by the source and
+/// span of the derive as written: the macro the expansion came from.
+pub(crate) type Expanded = BTreeMap<(program::source::Id, Span), ImmutableString>;
+
 pub(crate) fn resolve(
     items: &[item::Shell],
     host: &crate::host::Registry,
+    expanded: &Expanded,
 ) -> Result<BTreeMap<type_def::Id, Set>, LocatedError> {
     let mut requests = BTreeMap::new();
     let mut uses = BTreeMap::<program::source::Id, Vec<&item::Use>>::new();
@@ -391,9 +402,18 @@ pub(crate) fn resolve(
             uses.entry(shell.source).or_default().push(used);
         }
     }
-    let derive = |source: program::source::Id, path: &crate::item::type_ref::Path| {
-        derive_target(path, uses.get(&source).map_or(&[][..], Vec::as_slice), host)
-    };
+    let derive =
+        |source: program::source::Id, path: &crate::item::type_ref::Path| match derive_target(
+            path,
+            uses.get(&source).map_or(&[][..], Vec::as_slice),
+            host,
+        ) {
+            Derive::Crate(resolved) if expanded.get(&(source, path.span)) == Some(&resolved) => {
+                Derive::Expanded
+            }
+            target => target,
+        };
+    let mut unexpanded = Vec::new();
 
     for shell in items {
         let request = match &shell.kind {
@@ -455,6 +475,26 @@ pub(crate) fn resolve(
             | item::Kind::Trait(_)
             | item::Kind::Function(_) => continue,
         };
+        if let Some(&(_, _, attribute)) = request.unexpanded.first() {
+            let header = match &shell.kind {
+                item::Kind::Struct(item) => &item.header,
+                item::Kind::Enum(item) => &item.header,
+                _ => unreachable!("only nominal items create capability requests"),
+            };
+            unexpanded.push((
+                request.owner.clone(),
+                attribute,
+                Expansion {
+                    source: shell.source,
+                    item: header.written_span(shell.span),
+                    derives: request
+                        .unexpanded
+                        .iter()
+                        .map(|(written, resolved, _)| (written.clone(), resolved.clone()))
+                        .collect(),
+                },
+            ));
+        }
 
         let definition = match &shell.kind {
             item::Kind::Struct(item) => item.definition,
@@ -467,6 +507,21 @@ pub(crate) fn resolve(
             }
         };
         requests.insert(definition, request);
+    }
+    // rustc expands every crate derive at once, so each is asked for in one
+    // failure, at the first.
+    if let Some((owner, attribute, first)) = unexpanded.first() {
+        return Err(LocatedError::primary(
+            first.source,
+            Error::ExpansionRequired {
+                owner: owner.clone(),
+                attribute: *attribute,
+                items: unexpanded
+                    .iter()
+                    .map(|(_, _, expansion)| expansion.clone())
+                    .collect(),
+            },
+        ));
     }
 
     // Structural capabilities are coinductive: a recursive enum can provide
@@ -610,6 +665,7 @@ impl Request {
     ) -> Result<Self, Error> {
         let mut requested = Set::default();
         let mut spans = BTreeMap::new();
+        let mut unexpanded = Vec::new();
 
         for attribute in &header.attributes {
             if attribute.path.segments.len() != 1
@@ -627,19 +683,17 @@ impl Request {
                     .join("::");
                 let capability = match derive(source, argument) {
                     Derive::Std(capability) => capability,
+                    // rustc expands it, and its items are the program's
+                    // (D740).
                     Derive::Crate(path) => {
-                        return Err(Error::InvalidDerive {
-                            owner: owner.into(),
-                            capability: name.into(),
-                            reason: format!(
-                                "deriving the crate's macro `{path}` on a type of this program \
-                                 isn't supported yet"
-                            )
-                            .into(),
-                            attribute: argument.span,
-                            declaration: owner_span,
-                        });
+                        unexpanded.push((
+                            crate::item::written_path(argument).into(),
+                            path,
+                            argument.span,
+                        ));
+                        continue;
                     }
+                    Derive::Expanded => continue,
                     Derive::Unknown => {
                         return Err(Error::Syntax {
                             message: format!("cannot find derive macro `{name}` in this scope")
@@ -672,6 +726,7 @@ impl Request {
             requested,
             spans,
             enum_default: Ok(()),
+            unexpanded,
         })
     }
 
@@ -893,7 +948,7 @@ pub(crate) fn builtin_supports(name: &str, capability: Kind) -> bool {
 mod tests {
     use super::Kind;
     use crate::host::facade;
-    use crate::{capability, resolve, Engine};
+    use crate::{capability, resolve, Engine, ImmutableString};
 
     struct Opaque;
 
@@ -1026,17 +1081,19 @@ mod tests {
     }
 
     #[test]
-    fn a_crates_derive_resolves_through_use_or_its_path_and_is_not_supported_yet() {
+    fn a_crates_derive_resolves_through_use_or_its_path_and_asks_for_its_expansion() {
         let engine = serde();
-        for (source, written) in [
+        for (source, written, resolved) in [
             (
                 "use serde::{Deserialize, Serialize};\n\
                  #[derive(Debug, Clone, Serialize)] struct Point { x: i64 }",
                 "Serialize",
+                "serde::Serialize",
             ),
             (
                 "use serde::Deserialize as Load;\n#[derive(Load)] enum Shape { Dot }",
                 "Load",
+                "serde::Deserialize",
             ),
             // A `use` in a function's body, as pokedex's `search` names
             // `Deserialize` beside the structs it derives on.
@@ -1044,25 +1101,45 @@ mod tests {
                 "fn search() {\n    use serde::Deserialize;\n    \
                  #[derive(Debug, Deserialize)] struct Entry { name: String }\n}",
                 "Deserialize",
+                "serde::Deserialize",
             ),
             (
                 "#[derive(Debug, serde::Deserialize)] struct Point { x: i64 }",
                 "serde::Deserialize",
+                "serde::Deserialize",
             ),
         ] {
             let (error, text) = derive_error(&engine, source);
-            let resolve::Error::InvalidDerive {
-                capability, reason, ..
-            } = &error
-            else {
+            let resolve::Error::ExpansionRequired { items, .. } = &error else {
                 panic!("{error:?}");
             };
-            assert_eq!(capability.as_str(), written);
-            assert!(
-                reason.contains("crate's macro `serde::") && reason.contains("isn't supported yet"),
-                "{reason}"
+            let [item] = items.as_ref() else {
+                panic!("{items:?}");
+            };
+            // Only the crate's derive is rustc's to expand; the item's text
+            // starts at its attributes.
+            assert_eq!(
+                &*item.derives,
+                [(
+                    ImmutableString::from(written),
+                    ImmutableString::from(resolved)
+                )]
             );
+            assert!(item.item.text(source).starts_with("#[derive("), "{source}");
             assert_eq!(text, written);
         }
+    }
+
+    #[test]
+    fn every_unexpanded_item_is_asked_for_at_once() {
+        let source = "use serde::Serialize;\n\
+                      #[derive(Serialize)] struct A;\n\
+                      #[derive(Debug, Serialize)] enum B { C }";
+        let (error, text) = derive_error(&serde(), source);
+        let resolve::Error::ExpansionRequired { items, .. } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(text, "Serialize");
     }
 }

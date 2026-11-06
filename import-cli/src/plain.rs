@@ -339,6 +339,48 @@ fn prove(
     Ok(())
 }
 
+/// Expand through rustc each crate derive `error` asks for, keeping each
+/// expansion where loading the program reads it beside its item (#593).
+/// `false` when each is kept already, so loading again can't help.
+fn expand(
+    graph: &rawr::package::Graph,
+    error: &rawr::package::Error,
+    limits: &rawr_import::cargo::Limits,
+) -> Result<bool, crate::Error> {
+    use crate::Error;
+    use rawr_import::expand;
+    let project = graph.entry_package().root();
+    let pending = error
+        .rust_expansions()
+        .into_iter()
+        .filter(|item| {
+            item.derives.iter().any(|(written, resolved)| {
+                let kept =
+                    std::fs::read_to_string(expand::source_path(project, &item.text, written));
+                kept.ok().as_deref().and_then(expand::source_macro) != Some(resolved.as_str())
+            })
+        })
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return Ok(false);
+    }
+    let environment = Environment::capture().map_err(Error::other)?;
+    let request = graph
+        .rust_inventory_plain(environment, &[], limits)
+        .map_err(Error::other)?
+        .ok_or_else(|| Error::other("a crate derive with no Rust dependency"))?;
+    let native = request.pinned_native(limits).map_err(Error::other)?;
+    let basis = expand::Basis::capture(request, &native, limits).map_err(Error::other)?;
+    let edition = graph.rust_edition();
+    let directory = expand::directory(project);
+    for item in &pending {
+        let expanded = expand::expand(item, &basis, &edition, &directory, &native, limits)
+            .map_err(Error::other)?;
+        expand::keep_sources(project, item, &expanded).map_err(Error::other)?;
+    }
+    Ok(true)
+}
+
 /// Resolve, extract, check and seal a program's runner with no host profile.
 fn prepare(
     target: &rawr::project::Target,
@@ -451,6 +493,17 @@ fn prepare(
                 );
                 let completed = match completed {
                     Ok(completed) => completed,
+                    // rustc expands a crate's derive on a program type, and
+                    // the expansion is program code (D740): kept beside its
+                    // item, the next load reads it.
+                    Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
+                        if !error.rust_expansions().is_empty() =>
+                    {
+                        if !expand(&graph, &error, &limits)? {
+                            return Err(Error::Rawr(error));
+                        }
+                        return prepare(target, None, revision, scope);
+                    }
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if error.rust_application().is_some() =>
                     {

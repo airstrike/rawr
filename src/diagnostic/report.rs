@@ -301,6 +301,11 @@ impl Builder {
     /// Retain one exact source snapshot as report context.
     #[must_use]
     pub fn source(mut self, source: Source) -> Self {
+        // An expansion's positions are its derive's, in the item's source.
+        let source = match source.origin() {
+            Some(origin) => origin.source.clone(),
+            None => source,
+        };
         if !self.report.sources.contains(&source) {
             self.report.sources.push(source);
         }
@@ -320,6 +325,22 @@ impl Builder {
         if span.start() > span.end() {
             return Err(Error::ReversedSpan(span));
         }
+        // A position in a derive's expansion is the derive's, as rustc
+        // reports it, with rustc's note naming the macro.
+        let (source, span) = match source.origin() {
+            Some(origin) => {
+                let note: ImmutableString = format!(
+                    "this error originates in the derive macro `{}`",
+                    origin.name
+                )
+                .into();
+                if !self.report.notes.contains(&note) {
+                    self.report.notes.push(note);
+                }
+                (origin.source.clone(), origin.span)
+            }
+            None => (source, span),
+        };
         // A span of tokens a macro expansion made from one written token
         // can run past the written one's line: it starts where they were
         // written.

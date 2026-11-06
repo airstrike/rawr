@@ -245,6 +245,36 @@ impl Error {
         serde_json::from_slice(self.rust_application.as_deref()?).ok()
     }
 
+    /// Each program item whose crate derives this failure needs rustc to
+    /// expand (#593): its text as written and its derives. Checking again
+    /// with their expansions kept loads them beside their items.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rust_expansions(&self) -> Vec<rawr_import::expand::Item> {
+        let Kind::Resolution {
+            error: crate::resolve::Error::ExpansionRequired { items, .. },
+            ..
+        } = &self.kind
+        else {
+            return Vec::new();
+        };
+        items
+            .iter()
+            .filter_map(|expansion| {
+                let source = self.sources.get(expansion.source.index())?;
+                Some(rawr_import::expand::Item {
+                    text: expansion.item.text(source.text()).to_owned(),
+                    derives: expansion
+                        .derives
+                        .iter()
+                        .map(|(written, resolved)| (written.to_string(), resolved.to_string()))
+                        .collect(),
+                })
+            })
+            .collect()
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn with_rust_demand(
         mut self,

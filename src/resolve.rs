@@ -22,7 +22,7 @@ pub(crate) use error::{
     Qualified, TypeNeeded, Uninitialized, Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE,
     RETURN_WITHOUT_VALUE,
 };
-pub use error::{Callee, Category, Error, MacroScope, MoveCause, Private};
+pub use error::{Callee, Category, Error, Expansion, MacroScope, MoveCause, Private};
 use std::collections::BTreeMap;
 
 pub(crate) struct LocatedError {
@@ -965,7 +965,8 @@ impl Symbols {
         host: &host::Registry,
     ) -> Result<Vec<type_def::Definition>, LocatedError> {
         let mut schemas = BTreeMap::new();
-        let capabilities = crate::capability::resolve(items, host)?;
+        let capabilities =
+            crate::capability::resolve(items, host, &crate::capability::Expanded::new())?;
 
         for shell in items {
             match &shell.kind {

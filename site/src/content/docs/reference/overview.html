@@ -56,7 +56,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 <ul>
   <li>A <code>static mut</code>.</li>
   <li>A macro call where an item, a type or a pattern goes. <a href="/docs/reference/macros#macro-rules">Macros</a> in expressions and statements expand.</li>
-  <li>A crate&rsquo;s derive macro on your own types, such as serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code>. The check names the derive at its span.</li>
+  <li>A crate&rsquo;s derive whose expansion is generic over the crate&rsquo;s traits, such as serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code>. The check reports the expansion&rsquo;s error at the derive. A derive whose expansion is a plain impl, such as one that names the type, works.</li>
+  <li>Passing your own type to a crate function that is generic over the crate&rsquo;s trait, as in <code>shapes::name_of(&amp;square)</code>. Call the trait&rsquo;s methods on it directly.</li>
   <li><code>async</code> and <code>.await</code> outside iced, except under a runtime&rsquo;s <code>async fn main</code> in a crate.</li>
   <li><code>try_join!</code> and <code>select!</code>.</li>
   <li>A <code>const</code> captured in a format string, as in <code>"{LIMIT}"</code>. Pass it as an argument instead.</li>

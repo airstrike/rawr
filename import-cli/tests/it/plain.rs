@@ -1329,47 +1329,51 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
     );
 }
 
-/// A crate's derive re-exported from its proc-macro crate, as serde's
-/// `Serialize` from serde_derive beside the trait of the same name,
-/// resolves through the program's `use`, at the top of the file or in a
-/// function's body, and is refused at its span (D681.5, #593). The fixture's
-/// `shapes` re-exports `shapes_derive::Shape` as serde does.
+/// A crate's derive on a program type is expanded by rustc and its items
+/// are program code (D740, #593). A local proc-macro crate's derive,
+/// re-exported beside its trait as serde's is, runs on a top-level struct
+/// and enum, a struct in a function's body and one in an inline module
+/// named by its path, and prints what `cargo run` prints. serde's
+/// expansion is checked as program code too, and what rawr doesn't run in
+/// it yet is reported at the derive, never inside the expansion.
 #[test]
-fn a_crates_reexported_derive_resolves_and_is_refused_at_its_span() {
+fn a_crates_derive_runs_from_its_expansion() {
     const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
     let root = crate::support::scratch().join("plain-derives");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let _ = fs::remove_dir_all(&root);
     copy(Path::new(DERIVES), &root);
-    let check = |source: Option<&str>, derive: &str, at: &str| {
-        if let Some(source) = source {
-            fs::write(root.join("src/main.rs"), source).unwrap();
-        }
-        let checked = rawr_import(&root, &["check"]);
-        let stderr = text(&checked.stderr);
-        assert!(!checked.status.success(), "stderr:\n{stderr}");
-        assert!(
-            stderr.contains(&format!(
-                "deriving the crate's macro `{derive}` on a type of this program isn't \
-                 supported yet"
-            )),
-            "stderr:\n{stderr}"
-        );
-        assert!(stderr.contains(at), "stderr:\n{stderr}");
-        assert!(
-            !stderr.contains("cannot find derive macro"),
-            "stderr:\n{stderr}"
-        );
-    };
-    check(None, "serde::Serialize", "main.rs:4:24");
-    check(
-        Some(
-            "// rawr\nfn main() {\n    use shapes::Shape;\n\n    \
-             #[derive(Shape)]\n    struct Square;\n\n    \
-             println!(\"{}\", shapes::name_of(&Square));\n}\n",
-        ),
-        "shapes::Shape",
-        "main.rs:5:14",
+
+    let checked = rawr_import(&root, &["check"]);
+    let stderr = text(&checked.stderr);
+    assert!(!checked.status.success(), "stderr:\n{stderr}");
+    assert!(stderr.contains("main.rs:4:24"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("this error originates in the derive macro `Serialize`"),
+        "stderr:\n{stderr}"
     );
+    assert!(!stderr.contains("target/rawr/expand"), "stderr:\n{stderr}");
+    assert!(!stderr.contains("panicked"), "stderr:\n{stderr}");
+
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nuse shapes::Shape;\n\n#[derive(Debug, Shape)]\nstruct Square;\n\n\
+         #[derive(Shape)]\nenum Tile {\n    Floor,\n}\n\n\
+         mod round {\n    #[derive(shapes::Shape)]\n    pub struct Ring;\n}\n\n\
+         fn main() {\n    #[derive(Shape)]\n    struct Circle;\n\n    \
+         println!(\"{} {:?}\", Square.name(), Square);\n    \
+         println!(\"{}\", Tile::Floor.name());\n    \
+         println!(\"{}\", Circle.name());\n    \
+         println!(\"{}\", round::Ring.name());\n}\n",
+    )
+    .unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "Square Square\nTile\nCircle\nRing\n");
 }
 
 /// A crate's whole table, made by a program that called none of its

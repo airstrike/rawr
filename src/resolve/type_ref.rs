@@ -262,7 +262,7 @@ pub(super) fn resolve(
             span,
         }),
         item::type_ref::Type::Path(path) => {
-            let path = through_scope(path, types)?;
+            let path = std_reexported(through_scope(path, types)?, host);
             let written = path
                 .segments
                 .iter()
@@ -674,6 +674,8 @@ fn resolve_path(
         target.clone()
     } else if host.is_builtin(name.as_str())
         || prelude_arity(&parsed).is_some()
+        // `std::result::Result`, `core::option::Option`: the prelude's.
+        || std.is_some() && matches!(name.as_str(), "Option" | "Result" | "Box")
         || super::std_collection(&name).is_some()
         || name.as_str() == "Reverse"
         || name.as_str() == "Cow"
@@ -1061,6 +1063,49 @@ fn content_messages(
             kept <= definition.parameters().len()
         })
         .collect();
+}
+
+/// `path` as std writes it when it names a crate's re-export of a std type,
+/// as serde's `__private::Result` in a derive's expansion is std's
+/// `Result`: the type is std's, and the path reads as std's does.
+fn std_reexported(path: item::type_ref::Path, host: &host::Registry) -> item::type_ref::Path {
+    let Some(last) = path.segments.last().filter(|_| path.segments.len() > 1) else {
+        return path;
+    };
+    let written = path
+        .segments
+        .iter()
+        .map(|segment| segment.name.text.as_str())
+        .collect::<Vec<_>>()
+        .join("::");
+    let std = super::std_reexport(&written, host);
+    let names_std = std.as_str() != written
+        && super::std_path::check(&std, crate::std_table::Namespace::Type, "type", path.span)
+            .ok()
+            .flatten()
+            .is_some();
+    if !names_std {
+        return path;
+    }
+    let mut segments = std
+        .split("::")
+        .map(|segment| item::type_ref::Segment {
+            name: item::Name {
+                text: segment.into(),
+                span: last.name.span,
+            },
+            arguments: Box::default(),
+            span: last.span,
+        })
+        .collect::<Vec<_>>();
+    if let Some(end) = segments.last_mut() {
+        end.arguments = last.arguments.clone();
+    }
+    item::type_ref::Path {
+        segments: segments.into_boxed_slice(),
+        span: path.span,
+        global: false,
+    }
 }
 
 /// `path` as its scope binds its first segment: a `use` of a std type

@@ -18190,6 +18190,19 @@ fn render_impl_function(
             let mut converted = String::new();
             render_from_dynamic(returned, "value", 0, &mut converted)?;
             let converted = in_arena(&converted);
+            // A `&str` comes back pinned for the runner's life, so it
+            // meets a trait that asks for `&'static str`, as a derive's
+            // `fn name(&self) -> &'static str` does, and one that asks for
+            // less.
+            let rust = if matches!(
+                returned,
+                convert::Type::Borrowed { mutable: false, ty }
+                    if matches!(**ty, convert::Type::Builtin(convert::Builtin::Str))
+            ) {
+                "&'static str".to_owned()
+            } else {
+                rust
+            };
             (
                 "",
                 rust,

@@ -950,6 +950,9 @@ fn resolution_message(error: &resolve::Error) -> String {
             reason,
             ..
         } => format!("cannot derive `{capability}` for `{owner}`: {reason}"),
+        resolve::Error::ExpansionRequired { owner, .. } => {
+            format!("the derives on `{owner}` have not been expanded")
+        }
         resolve::Error::DuplicateMember { owner, member, .. } if owner.is_empty() => {
             format!("the name `{member}` is already used for a generic parameter")
         }

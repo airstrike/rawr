@@ -344,6 +344,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::LoweringUnavailable { item, .. } => {
                     write!(f, "Item body for '{item}' cannot be lowered yet")
                 }
+                crate::resolve::Error::ExpansionRequired { owner, .. } => {
+                    write!(f, "The derives on '{owner}' have not been expanded")
+                }
                 crate::resolve::Error::InvalidDerive {
                     owner,
                     capability,

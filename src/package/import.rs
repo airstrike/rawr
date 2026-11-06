@@ -1037,6 +1037,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::InvalidImport { .. }
         | R::LoweringUnavailable { .. }
         | R::InvalidDerive { .. }
+        | R::ExpansionRequired { .. }
         | R::DuplicateMember { .. }
         | R::ImmutableBinding { .. }
         | R::InvalidImplOwner { .. }
