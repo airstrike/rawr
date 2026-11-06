@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 43;
+const SCHEMA: u32 = 44;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -3684,11 +3684,18 @@ fn item_signature(plan: &representability::callable::Item) -> Result<Signature, 
 
 fn signature(source: &representability::signature::Signature) -> Result<Signature, Unwritten> {
     // A future parameter is no type parameter of Rawr's signature: its
-    // input is the core future of its synthetic output (D527).
+    // input is the core future of its synthetic output (D527). Nor is an
+    // iterator parameter: its input is an iterator of its synthetic item.
     let kept = source
         .parameters()
         .iter()
-        .filter(|parameter| parameter.kind() != representability::signature::Kind::Future)
+        .filter(|parameter| {
+            !matches!(
+                parameter.kind(),
+                representability::signature::Kind::Future
+                    | representability::signature::Kind::Iterator
+            )
+        })
         .cloned()
         .collect::<Vec<_>>();
     let parameters = parameters(&kept)?;

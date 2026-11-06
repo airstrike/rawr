@@ -22,6 +22,7 @@ pub mod matched;
 pub mod named;
 pub mod nested;
 pub mod ordered;
+pub mod paired;
 pub mod plane;
 pub mod pointers;
 pub mod results;

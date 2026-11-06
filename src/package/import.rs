@@ -3126,15 +3126,19 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
                     parameter.kind(),
                     representability::signature::Kind::Type
                         | representability::signature::Kind::Future
+                        | representability::signature::Kind::Iterator
                         | representability::signature::Kind::Callable
                 )
             })
         }
-        // `F: Future` takes a script future (D527).
+        // `F: Future` takes a script future (D527), and `I: Iterator` a
+        // program's iterator.
         None => plan.signature().parameters().iter().all(|parameter| {
             matches!(
                 parameter.kind(),
-                representability::signature::Kind::Type | representability::signature::Kind::Future
+                representability::signature::Kind::Type
+                    | representability::signature::Kind::Future
+                    | representability::signature::Kind::Iterator
             )
         }),
         // `F: FnOnce(..) -> R`, as `spawn_blocking` takes: a script closure
@@ -3343,6 +3347,16 @@ impl Types {
                     let future =
                         crate::future::facade::definition()?.export_type("future::Future")?;
                     return Ok(host::type_ref::Type::external(future, converted)?);
+                }
+                // A program's iterator where a crate takes one, as
+                // itertools' `cartesian_product(self, other: J)`: an iterator
+                // of its item, which a program's iterator fills, as it is in
+                // the `Product<Self, J::IntoIter>` the call gives.
+                if *definition == rawr_import::surface::identity::Definition::iterator()
+                    && converted.len() == 1
+                    && let Some(item) = converted.pop()
+                {
+                    return Ok(host::type_ref::Type::iterator(item));
                 }
                 // A script closure where a signature names its type, as
                 // iced's `Widget::map` gives `Map<Self, F, Message>`: the
