@@ -697,6 +697,16 @@ impl Evaluation {
                 "complete current input entries differ".into(),
             ));
         }
+        // A resolution made before the nightly's stale build-script run is
+        // cleaned holds that run's outputs: it is a miss, so the cold build
+        // cleans and runs the script again (D742).
+        let nightly =
+            crate::deps::nightly_directory(&crate::store::home(self.cached.context.cargo_home()));
+        if crate::bindings::Stale::of(&nightly).awaits(self.cached.context.rawr()) {
+            return Err(node::Error::Transform(
+                "a build script's run in the nightly directory is stale".into(),
+            ));
+        }
         let outcome = self.accounts.with(
             graph,
             || Ok(self.initial_accounts()),

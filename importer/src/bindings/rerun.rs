@@ -60,6 +60,23 @@ impl Stale {
         names
     }
 
+    /// Whether a package the project in `rawr` sent to run again is still
+    /// to be cleaned here: what the project resolved before holds its stale
+    /// run.
+    pub(crate) fn awaits(&self, rawr: &Path) -> bool {
+        let record = Record::read(rawr);
+        if !record.packages.values().any(|seen| *seen == Seen::Rerun) {
+            return false;
+        }
+        let pending = self.pending();
+        record.packages.iter().any(|(package, seen)| {
+            *seen == Seen::Rerun
+                && pending
+                    .iter()
+                    .any(|name| name == super::package_name(package))
+        })
+    }
+
     /// `name` is clean: Cargo runs its build script at the next build.
     pub(crate) fn cleaned(&self, name: &str) {
         let _ = fs::remove_file(self.0.join(name));
@@ -218,6 +235,20 @@ mod tests {
         assert_eq!(stale.pending(), ["local", "undeclared-env"]);
         stale.cleaned("local");
         assert_eq!(stale.pending(), ["undeclared-env"]);
+        // A project awaits only the clean of a package it sent to run again.
+        let package = "git+file:///fixture/dependency?rev=abc#undeclared-env@0.1.0";
+        let rawr = root.join("rawr");
+        fs::create_dir_all(&rawr).unwrap();
+        assert!(!stale.awaits(&rawr));
+        let mut record = Record::read(&rawr);
+        assert_eq!(
+            record.judge(package, &script("one"), &script("two")),
+            Verdict::Rerun
+        );
+        record.write();
+        assert!(stale.awaits(&rawr));
+        stale.cleaned("undeclared-env");
+        assert!(!stale.awaits(&rawr));
         fs::remove_dir_all(root).unwrap();
     }
 }
