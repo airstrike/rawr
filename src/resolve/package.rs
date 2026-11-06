@@ -595,7 +595,6 @@ impl<'a> Resolver<'a> {
             let (uses, types, _occupied) = self.resolve_unit_bindings(&context, &parsed_items)?;
             // The host modules this unit's `use`s bind, by name: an imported
             // trait is one (`use freya::prelude::IntoElement;`).
-            #[cfg(feature = "rust-import")]
             let modules = uses
                 .iter()
                 .flatten()
@@ -616,10 +615,10 @@ impl<'a> Resolver<'a> {
                 let Some(slot) = &slots[index] else {
                     continue;
                 };
-                #[cfg(feature = "rust-import")]
                 let parsed = {
                     let mut parsed = parsed;
                     qualify_opaque_bounds(&mut parsed, &modules);
+                    write_renamed_modules(&mut parsed, &modules);
                     parsed
                 };
                 let shell = super::resolve_item(
@@ -2072,7 +2071,6 @@ fn host_target(
 /// written out from the crate's root, `impl freya::prelude::IntoElement`,
 /// so the resolver finds the imported trait by its path
 /// (`type_ref::OPAQUE_PREFIX`).
-#[cfg(feature = "rust-import")]
 fn qualify_opaque_bounds(
     item: &mut crate::item::Parsed,
     modules: &BTreeMap<ImmutableString, ImmutableString>,
@@ -2188,10 +2186,126 @@ fn qualify_opaque_bounds(
     }
 }
 
+/// Each path of `item`'s signatures that starts at a module a `use` binds
+/// under another name, as `_serde::Serialize` after `extern crate serde as
+/// _serde;` or `s::fmt::Formatter` after `use std as s;`, written from the
+/// module's own path, as rustc reads it through the binding.
+pub(super) fn write_renamed_modules(
+    item: &mut crate::item::Parsed,
+    modules: &BTreeMap<ImmutableString, ImmutableString>,
+) {
+    use crate::item::type_ref::{Argument, Path, Segment, Type};
+    let renamed = modules
+        .iter()
+        .filter(|(name, qualified)| qualified.rsplit("::").next() != Some(name.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    if renamed.is_empty() {
+        return;
+    }
+    let path = |path: &mut Path| {
+        if path.global {
+            return;
+        }
+        let Some(module) = path
+            .segments
+            .first()
+            .filter(|first| first.arguments.is_empty())
+            .and_then(|first| renamed.get(&first.name.text))
+        else {
+            return;
+        };
+        let (at, span) = (path.segments[0].name.span, path.segments[0].span);
+        path.segments = module
+            .split("::")
+            .map(|text| Segment {
+                name: crate::item::Name {
+                    text: text.into(),
+                    span: at,
+                },
+                arguments: Box::default(),
+                span,
+            })
+            .chain(path.segments.iter().skip(1).cloned())
+            .collect();
+    };
+    fn ty(written: &mut Type, path: &impl Fn(&mut Path)) {
+        match written {
+            Type::Unit(_) => {}
+            Type::Tuple { members, .. } => {
+                for member in members.iter_mut() {
+                    ty(member, path);
+                }
+            }
+            Type::Path(written) => {
+                path(written);
+                for segment in written.segments.iter_mut() {
+                    for argument in segment.arguments.iter_mut() {
+                        if let Argument::Type(argument) = argument {
+                            ty(argument, path);
+                        }
+                    }
+                }
+            }
+            Type::Reference { target, .. } => ty(target, path),
+        }
+    }
+    let generics = |generics: &mut [crate::item::GenericParam]| {
+        for generic in generics.iter_mut() {
+            let mut bounds = generic.bounds.to_vec();
+            for bound in &mut bounds {
+                path(bound);
+            }
+            generic.bounds = bounds.into_boxed_slice();
+        }
+    };
+    let function = |function: &mut crate::item::Function| {
+        generics(&mut function.generics);
+        for parameter in function.parameters.iter_mut() {
+            ty(&mut parameter.ty, &path);
+        }
+        if let Some(output) = &mut function.output {
+            ty(output, &path);
+        }
+    };
+    match item {
+        crate::item::Parsed::Struct(item) => {
+            generics(&mut item.generics);
+            for field in item.fields.iter_mut() {
+                ty(&mut field.ty, &path);
+            }
+        }
+        crate::item::Parsed::Enum(item) => {
+            generics(&mut item.generics);
+            for variant in item.variants.iter_mut() {
+                for payload in variant.payload.iter_mut() {
+                    ty(payload, &path);
+                }
+            }
+        }
+        crate::item::Parsed::Impl(item) => {
+            generics(&mut item.generics);
+            ty(&mut item.owner, &path);
+            if let Some(trait_) = &mut item.trait_ {
+                path(trait_);
+            }
+            for member in item.functions.iter_mut() {
+                function(member);
+            }
+        }
+        crate::item::Parsed::Trait(item) => {
+            for member in item.functions.iter_mut() {
+                function(member);
+            }
+        }
+        crate::item::Parsed::Function(item) => function(item),
+        crate::item::Parsed::TypeAlias(item) => ty(&mut item.target, &path),
+        crate::item::Parsed::Module(_) | crate::item::Parsed::Use(_) => {}
+    }
+}
+
 /// Each bound of `generics` that names a dependency's trait by a module the
 /// unit's `use`s bind (`Renderer: renderer::Renderer`), written from the
 /// crate's root.
-#[cfg(feature = "rust-import")]
 fn qualify_bounds(
     generics: &mut [crate::item::GenericParam],
     modules: &BTreeMap<ImmutableString, ImmutableString>,

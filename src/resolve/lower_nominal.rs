@@ -36,6 +36,8 @@ mod comparison_tests;
 #[cfg(test)]
 mod copies_tests;
 #[cfg(test)]
+mod derive_shape_tests;
+#[cfg(test)]
 mod divergence_tests;
 #[cfg(test)]
 mod language_tests;
@@ -12181,6 +12183,9 @@ struct Parser<'a> {
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
     pending_turbofish: Option<Vec<Ty>>,
+    /// `::<T>` read after a trait function's name in `Trait::f::<T>(..)`,
+    /// for the call of that function once its arguments are read.
+    trait_turbofish: Option<Vec<Ty>>,
     /// The closures that stand for a path to a function (`Vec::len`,
     /// `Look::name`), which rustc's notes call functions.
     path_values: HashSet<crate::item::Key>,
@@ -12503,6 +12508,7 @@ impl<'a> Parser<'a> {
             text_into: Vec::new(),
             generics: BTreeMap::new(),
             pending_turbofish: None,
+            trait_turbofish: None,
             path_values: HashSet::new(),
             spliced_traits: BTreeMap::new(),
             std_probed: BTreeMap::new(),
@@ -15448,6 +15454,7 @@ impl<'a> Parser<'a> {
         call: Span,
     ) -> Result<ParsedExpr, Error> {
         let mut substitution = self.fresh_generics(&function.generics, call);
+        self.apply_trait_turbofish(&function.generics, &substitution, call)?;
         substitution.insert("Self".into(), self_ty.clone());
         let parameters = self
             .models
@@ -16794,6 +16801,17 @@ impl<'a> Parser<'a> {
         start: Position,
     ) -> Result<ParsedExpr, Error> {
         let (member, member_span) = self.expect_member_name()?;
+        // `Trait::f::<T>(..)`: the function's own type arguments.
+        let turbofish = if matches!(self.peek(), Token::DoubleColon)
+            && matches!(self.peek_second(), Token::LessThan)
+            && self.ufcs_trait(&trait_name)
+        {
+            self.next();
+            self.next();
+            Some(self.parse_turbofish_types()?)
+        } else {
+            None
+        };
         // `<Look as Tone>::tone` of a crate's trait a `use` names: the
         // method on its first input or argument, as `Tone::tone` is.
         if !self.ufcs_trait(&trait_name)
@@ -16979,6 +16997,7 @@ impl<'a> Parser<'a> {
                 },
             };
             self.explicit_trait_arguments = explicit;
+            self.trait_turbofish = turbofish;
             return self.call_static_trait_function(
                 self_ty,
                 witness,
@@ -17031,7 +17050,37 @@ impl<'a> Parser<'a> {
             return Err(missing(self, &receiver_ty));
         }
         receiver.span = span(start, receiver.span.end());
+        // `Pick::pick::<i64>(&s)` of a generic function on a program type:
+        // the type's own impl's method, called as `s.pick::<i64>()` is,
+        // which is compiled for the call's types.
+        if !function.generics.is_empty()
+            && explicit.is_none()
+            && let Some(owner) = owner_id(&receiver_ty)
+            && self.models.method(owner, &member).is_some()
+        {
+            let owner_name = receiver_ty.name(&self.models);
+            self.pending_turbofish = turbofish;
+            let called = self.call_owner_method(
+                receiver,
+                owner,
+                owner_name,
+                &member,
+                member_span,
+                arguments,
+                end,
+            )?;
+            let Ok(mut value) = called else {
+                return Err(Error::UnknownMember {
+                    owner: trait_name,
+                    member,
+                    reference: member_span,
+                });
+            };
+            value.span = call;
+            return Ok(value);
+        }
         self.explicit_trait_arguments = explicit;
+        self.trait_turbofish = turbofish;
         let mut value = self.call_trait_method(
             receiver,
             receiver_ty,
@@ -17097,6 +17146,7 @@ impl<'a> Parser<'a> {
             });
         }
         let mut substitution = self.fresh_generics(&function.generics, call);
+        self.apply_trait_turbofish(&function.generics, &substitution, call)?;
         substitution.insert("Self".into(), self_ty.clone());
         // `Convert<i64>`: the trait's arguments, from the trait object, the
         // bound, or the receiver type's one impl; else inferred.
@@ -36953,6 +37003,16 @@ impl<'a> Parser<'a> {
             {
                 return Err(error);
             }
+            // `visitor.by_name::<String>(v)`: a program method's turbofish,
+            // which its generic parameters take, as `f::<T>(..)`'s do.
+            if matches!(self.peek(), Token::DoubleColon)
+                && matches!(self.peek_second(), Token::LessThan)
+                && self.program_method(&value.ty, &member)
+            {
+                self.next();
+                self.next();
+                self.pending_turbofish = Some(self.parse_turbofish_types()?);
+            }
             // A method call borrows its place; a field is a place below it.
             if matches!(self.peek(), Token::LeftParen | Token::Unit) {
                 self.call_on_place(&value);
@@ -47362,6 +47422,23 @@ impl<'a> Parser<'a> {
             let owner = impl_self_ty(definition, &substitution);
             self.require_type(&owner, &receiver, call)?;
         }
+        // `v.by_name::<String>(..)`: the method's own parameters take its
+        // turbofish, as rustc's E0107 counts them.
+        if let Some(arguments) = self.pending_turbofish.take() {
+            let own = definition.own_generics();
+            if arguments.len() != own.len() {
+                return Err(Error::InvalidTypeArguments {
+                    ty: "method".into(),
+                    expected: own.len(),
+                    actual: arguments.len(),
+                    reference: call,
+                });
+            }
+            for (generic, argument) in own.iter().zip(arguments) {
+                let fresh = substitution[&generic.name.text].clone();
+                self.require_type(&fresh, &argument, call)?;
+            }
+        }
         Ok(substitution)
     }
 
@@ -53492,6 +53569,62 @@ impl<'a> Parser<'a> {
             construct: construct.into(),
             source: point_span(self.position()),
         }
+    }
+
+    /// `Trait::f::<T>(..)`'s turbofish, given to `f`'s own parameters
+    /// `generics` in `substitution`, as rustc's E0107 counts them.
+    fn apply_trait_turbofish(
+        &mut self,
+        generics: &[item::Generic],
+        substitution: &BTreeMap<ImmutableString, Ty>,
+        call: Span,
+    ) -> Result<(), Error> {
+        let Some(arguments) = self.trait_turbofish.take() else {
+            return Ok(());
+        };
+        if arguments.len() != generics.len() {
+            return Err(Error::InvalidTypeArguments {
+                ty: "function".into(),
+                expected: generics.len(),
+                actual: arguments.len(),
+                reference: call,
+            });
+        }
+        for (generic, argument) in generics.iter().zip(arguments) {
+            let fresh = substitution[&generic.name.text].clone();
+            self.require_type(&fresh, &argument, call)?;
+        }
+        Ok(())
+    }
+
+    /// The types of a turbofish after its `::<`, through its `>`.
+    fn parse_turbofish_types(&mut self) -> Result<Vec<Ty>, Error> {
+        let mut types = vec![self.parse_local_type()?];
+        while matches!(self.peek(), Token::Comma) {
+            self.next();
+            if matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                break;
+            }
+            types.push(self.parse_local_type()?);
+        }
+        self.expect_close_angle("'>' after turbofish type arguments")?;
+        Ok(types)
+    }
+
+    /// Whether `member` is a method the program declares for the type
+    /// `receiver` names through its references: its own, or its trait's.
+    fn program_method(&self, receiver: &Ty, member: &ImmutableString) -> bool {
+        let mut receiver = self.inference.resolve(receiver);
+        while let Ty::Reference { target, .. } | Ty::Boxed(target) = receiver {
+            receiver = self.inference.resolve(&target);
+        }
+        owner_id(&receiver).is_some_and(|id| {
+            self.models.method(id, member).is_some()
+                || self
+                    .models
+                    .trait_methods
+                    .contains_key(&(id, member.clone()))
+        })
     }
 
     /// The `>` closing generic arguments, splitting a `>>`.
