@@ -170,3 +170,16 @@ fn an_opaque_types_members_import() {
 fn a_trait_impl_on_a_const_argument_leaves_the_crate_importable() {
     runs_as_cargo_does("table", "3\n");
 }
+
+/// A number on an operator's left with a crate's type on its right, as
+/// iced's ferris writes `(rotation + step) % (2.0 * Radians::PI)`, selects
+/// the crate's impl of the operator for that number (`impl Mul<Turn> for
+/// f32`), beside the type's own `Mul<f32>` and `Mul`: its `Output`, and the
+/// kind a literal takes from it, as rustc selects (#974).
+#[test]
+fn a_number_on_the_left_selects_the_crates_impl_for_it() {
+    runs_as_cargo_does(
+        "operators",
+        "Turn(1.4) Turn(14.0) Turn(48.999996)\nTurn(0.8)\n9.300000011920929 Turn(1.5)\nTurn(1.05)\n",
+    );
+}
