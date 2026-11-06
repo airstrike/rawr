@@ -422,7 +422,10 @@ impl Error {
     /// (`crate::Error::is_stale`).
     #[must_use]
     pub fn is_stale(&self) -> bool {
+        // A stored product whose demand is not this contract's is a cache
+        // entry from another build: preparing again rebuilds it (D744).
         matches!(self, Self::Node(error) if error.is_stale())
+            || matches!(self, Self::Surface(crate::surface::Error::Canonical))
     }
 }
 

@@ -1809,7 +1809,7 @@ pub enum Error {
     Allocation,
     #[error("cannot encode canonical symbolic demand")]
     Encoding,
-    #[error("a stored demand or facade plan is not canonical")]
+    #[error("a stored demand or plan is not canonical")]
     Canonical,
 }
 
