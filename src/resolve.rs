@@ -536,10 +536,24 @@ fn resolve_with_evidence_and_namespace(
     let mut items = Vec::with_capacity(parsed_items.len());
 
     let aliases = source_aliases(program::source::Id::ROOT, &symbols.types);
-    for (source_index, parsed) in parsed_items.into_vec().into_iter().enumerate() {
+    // The modules the unit's `use`s bind, by name, as a package's units
+    // read them (`package::write_renamed_modules`).
+    let modules = (0..parsed_items.len())
+        .filter_map(|index| symbols.resolved_use(index))
+        .flat_map(|used| used.bindings.iter())
+        .filter(|binding| {
+            matches!(
+                binding.target,
+                item::Import::Module | item::Import::ModuleItem { .. }
+            )
+        })
+        .map(|binding| (binding.name.text.clone(), binding.qualified.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for (source_index, mut parsed) in parsed_items.into_vec().into_iter().enumerate() {
         if matches!(parsed, crate::item::Parsed::TypeAlias(_)) {
             continue;
         }
+        package::write_renamed_modules(&mut parsed, &modules);
         items.push(resolve_item(
             symbols.item_id(source_index),
             program::source::Id::ROOT,

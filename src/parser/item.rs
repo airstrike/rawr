@@ -207,6 +207,10 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
                 // `const NAME: T = value;` is an item; untyped `const` stays
                 // a legacy script statement.
                 let start = expect(input, Token::Const, "to start a constant")?;
+                if matches!(input.peek(), Some((Token::Underscore, _))) {
+                    parse_anonymous_const(input, &tokenizer_control, start)?;
+                    continue;
+                }
                 // `const fn f()` is a function rawr may also call at run time.
                 if matches!(input.peek(), Some((Token::Fn, _))) {
                     items.push(crate::item::Parsed::Function(parse_function(
@@ -272,6 +276,22 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
                     None,
                     start,
                 )?);
+            }
+            (token, position) if scan.delimiter_depth == 0 && is_word(token, "extern") => {
+                let start = *position;
+                scan.next(input, &tokenizer_control);
+                // `extern "C" ..` is passed over as before.
+                if input
+                    .peek()
+                    .is_some_and(|(token, _)| is_word(token, "crate"))
+                {
+                    items.push(crate::item::Parsed::Use(parse_extern_crate(
+                        input,
+                        Box::default(),
+                        None,
+                        start,
+                    )?));
+                }
             }
             (token, _) if scan.delimiter_depth == 0 && begins_item(token) => {
                 items.extend(parse_item(input, &tokenizer_control)?);
@@ -709,6 +729,22 @@ fn parse_item_with_leading(
         MACROS.with_borrow_mut(|macros| macros.push(definition));
         return Ok(None);
     }
+    if input
+        .peek()
+        .is_some_and(|(token, _)| is_word(token, "extern"))
+    {
+        input.next();
+        return parse_extern_crate(input, attributes, visibility, start)
+            .map(|used| Some(crate::item::Parsed::Use(used)));
+    }
+    if matches!(input.peek(), Some((Token::Const, _))) {
+        input.next();
+        if matches!(input.peek(), Some((Token::Underscore, _))) {
+            parse_anonymous_const(input, tokenizer_control, start)?;
+            return Ok(None);
+        }
+        return parse_const_item(input, tokenizer_control, attributes, visibility, start).map(Some);
+    }
     match parse_enabled_item(input, tokenizer_control, attributes, visibility, start)? {
         crate::item::Parsed::Impl(item) => marker_impl(item, None),
         item => Ok(Some(item)),
@@ -854,31 +890,7 @@ fn parse_enabled_item(
         }
         (Token::Const, _) => {
             input.next();
-            // `pub const fn f()` is a function rawr may also call at run time.
-            if matches!(input.peek(), Some((Token::Fn, _))) {
-                return parse_function(
-                    input,
-                    tokenizer_control,
-                    attributes,
-                    visibility,
-                    start,
-                    false,
-                )
-                .map(crate::item::Parsed::Function);
-            }
-            let name = parse_name(input, "after 'const'")?;
-            parse_const_rest(
-                input,
-                tokenizer_control,
-                crate::item::Header {
-                    attributes,
-                    visibility,
-                    span: Span::NONE,
-                },
-                start,
-                name,
-            )
-            .map(crate::item::Parsed::Function)
+            parse_const_item(input, tokenizer_control, attributes, visibility, start)
         }
         (Token::Reserved(text), _) if text.as_str() == "static" => {
             parse_static(input, tokenizer_control, attributes, visibility, start)
@@ -1039,6 +1051,123 @@ fn parse_static(
         )
         .map(crate::item::Parsed::Function)
     }
+}
+
+/// The rest of a named `const` item after `const`: `const NAME: T = v;`,
+/// or `const fn f()`, a function rawr may also call at run time.
+fn parse_const_item(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<crate::item::Parsed> {
+    if matches!(input.peek(), Some((Token::Fn, _))) {
+        return parse_function(
+            input,
+            tokenizer_control,
+            attributes,
+            visibility,
+            start,
+            false,
+        )
+        .map(crate::item::Parsed::Function);
+    }
+    let name = parse_name(input, "after 'const'")?;
+    parse_const_rest(
+        input,
+        tokenizer_control,
+        crate::item::Header {
+            attributes,
+            visibility,
+            span: Span::NONE,
+        },
+        start,
+        name,
+    )
+    .map(crate::item::Parsed::Function)
+}
+
+/// Whether `token` is the word `word`, as the lexer reads `crate` and
+/// `extern`: an identifier or a reserved word.
+fn is_word(token: &Token, word: &str) -> bool {
+    matches!(token, Token::Identifier(text) | Token::Reserved(text) if text.as_str() == word)
+}
+
+/// The rest of `extern crate name;` or `extern crate name as alias;`, after
+/// `extern`: an import of the crate's root, as `use name as alias;` is.
+fn parse_extern_crate(
+    input: &mut TokenStream,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<crate::item::Use> {
+    let (token, position) = input.next().expect("token streams always end with EOF");
+    if !is_word(&token, "crate") {
+        return Err(PERR::MissingToken("crate".into(), "after `extern`".into()).into_err(position));
+    }
+    let name = parse_name(input, "after `extern crate`")?;
+    let alias = parse_use_alias(input)?;
+    let semicolon = expect(input, Token::SemiColon, "after an `extern crate` item")?;
+    let span = Span::new(start, after(semicolon, 1));
+    Ok(crate::item::Use {
+        scope: None,
+        header: crate::item::Header {
+            attributes,
+            visibility,
+            span,
+        },
+        tree: crate::item::UseTree::Path(
+            type_ref::Path {
+                span: name.span,
+                segments: Box::new([type_ref::Segment {
+                    span: name.span,
+                    name,
+                    arguments: Box::default(),
+                }]),
+                global: true,
+            },
+            alias,
+        ),
+        span,
+    })
+}
+
+/// The rest of `const _: T = { .. };` after `const`: an unnamed constant,
+/// as a derive writes to hold its impls. The block's items join the file's
+/// items as a function body's do, its imports scoped to the block
+/// (`extern crate serde as _serde;`). Rust evaluates the block once and
+/// nothing names it, so a block of items alone has nothing to run.
+fn parse_anonymous_const(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    start: Position,
+) -> ParseResult<()> {
+    expect(input, Token::Underscore, "to name an unnamed constant")?;
+    expect(input, Token::Colon, "after `const _`")?;
+    // The constant's type, which nothing the block holds names.
+    while !matches!(input.peek(), Some((Token::Equals | Token::EOF, _))) {
+        input.next();
+    }
+    expect(input, Token::Equals, "after the type of `const _`")?;
+    let open = expect(input, Token::LeftBrace, "to start the block of `const _`")?;
+    let (_, body) = parse_body_syntax(input, tokenizer_control, open)?;
+    if let Some(token) = body
+        .tokens()
+        .iter()
+        .find(|token| !matches!(token.kind(), crate::item::BodyTokenKind::Semicolon))
+    {
+        return Err(PERR::Unexpected {
+            message: "a statement in the block of `const _` is not supported yet".into(),
+            label: "only items are supported here".into(),
+            help: None,
+            span: token.span(),
+        }
+        .into_err(token.span().start()));
+    }
+    let semicolon = expect(input, Token::SemiColon, "after the block of `const _`")?;
+    SKIPPED.with_borrow_mut(|skipped| skipped.push(Span::new(start, after(semicolon, 1))));
+    Ok(())
 }
 
 fn parse_module(
@@ -4586,6 +4715,32 @@ fn parse_body_syntax(
             let position = *position;
             let used = parse_use(input, Box::default(), None, position)?;
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Use(used)));
+            continue;
+        }
+        // `extern crate serde as _serde;` in a block imports the crate's
+        // root there, as a `use` does.
+        if boundary
+            && let Some((token, position)) = input.peek()
+            && is_word(token, "extern")
+        {
+            let start = *position;
+            let (token, position) = scan
+                .next(input, tokenizer_control)
+                .expect("peeked extern must exist");
+            if input
+                .peek()
+                .is_some_and(|(token, _)| is_word(token, "crate"))
+            {
+                let used = parse_extern_crate(input, Box::default(), None, start)?;
+                NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Use(used)));
+                continue;
+            }
+            tokens.push(body_token(token, position));
+            boundary = false;
+            ends_expression = false;
+            after_name = false;
+            after_pub = false;
+            after_extern = true;
             continue;
         }
         // `{ 2 fn f() {} }`: an expression that is not block-like needs a

@@ -8,6 +8,20 @@
   },
   "releases": [
     {
+      "version": "0.3.143",
+      "date": "2026-11-05",
+      "entries": [
+        {"text":"A crate's derive macro on a program type, such as serde's `#[derive(Serialize)]`, resolves through the program's `use`, at the top of the file or in a function body, and is reported at its span as not supported yet, where `rawr check` used to say it couldn't find the derive.","issues":[975],"refs":[593,205]}
+      ]
+    },
+    {
+      "version": "0.3.142",
+      "date": "2026-11-05",
+      "entries": [
+        {"text":"A crate's From impls for several std types convert through the one the target names: f32::from(rotation.degrees()) and .into() pick From<Degrees> for f32 beside the f64 one. A crate function casts to a fn pointer type with inferred parts, and an array's later crate functions coerce to it. A closure parameter used as a crate's RangeInclusive<T> takes T from the call's other arguments, so 2.0..=80.0 is a range of f32.","issues":[956]}
+      ]
+    },
+    {
       "version": "0.3.141",
       "date": "2026-11-05",
       "entries": [

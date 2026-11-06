@@ -53,7 +53,7 @@ mod attempt_protocol;
 const PLAN_SCHEMA: u32 = 9;
 // One number in four places: `driver/compiler.rs`, `cargo/toolchain.rs`
 // (`SUPPORTED_PROBE_PROTOCOL`) and `extract/protocol.rs` (`SCHEMA`) move with it.
-const PROTOCOL_SCHEMA: u32 = 49;
+const PROTOCOL_SCHEMA: u32 = 50;
 /// The commit of the nightly this driver was built with, which it reads
 /// metadata of and names in its version.
 const COMPILER_COMMIT: &str = env!("RAWR_RUSTC_COMMIT");

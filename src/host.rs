@@ -1254,6 +1254,9 @@ impl Registry {
             || self
                 .canonical(path)
                 .is_some_and(|canonical| self.item_slice(&canonical).is_some());
+        #[cfg(feature = "rust-import")]
+        let exact_facade_entry =
+            exact_facade_entry || self.pending_family(&path.to_string()).is_some();
         if !exact_facade_entry {
             return None;
         }

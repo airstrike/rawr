@@ -61,6 +61,8 @@ pub(crate) struct Definition {
     integer: Option<crate::INT>,
     /// The impl's generic parameters, then the method's own.
     generics: Box<[resolve::item::Generic]>,
+    /// How many of `generics` are the impl's.
+    impl_generics: usize,
     /// The owner's type arguments in the impl header: `T` of `impl<T> Pair<T>`.
     owner_arguments: Box<[type_ref::Type]>,
     /// The owner type of an impl for a builtin type (`i64`, `Vec<T>`);
@@ -135,6 +137,7 @@ impl Definition {
                 .integer()
                 .filter(|_| function.body.constant),
             generics: function.generics.clone(),
+            impl_generics: 0,
             owner_arguments: Box::default(),
             builtin_owner: None,
             body_text: None,
@@ -173,6 +176,7 @@ impl Definition {
         let mut generics = impl_generics.to_vec();
         generics.extend(self.generics.iter().cloned());
         self.generics = generics.into_boxed_slice();
+        self.impl_generics = impl_generics.len();
         self.owner_arguments = owner_arguments;
         self
     }
@@ -180,6 +184,11 @@ impl Definition {
     /// The impl's generic parameters, then the method's own.
     pub(crate) fn generics(&self) -> &[resolve::item::Generic] {
         &self.generics
+    }
+
+    /// The method's own generic parameters, which its turbofish names.
+    pub(crate) fn own_generics(&self) -> &[resolve::item::Generic] {
+        &self.generics[self.impl_generics..]
     }
 
     /// The owner's type arguments in the impl header.

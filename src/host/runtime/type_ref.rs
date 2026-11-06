@@ -435,7 +435,11 @@ impl Type {
                     owner: other_owner,
                     ..
                 },
-            ) => identity == other_identity && owner == other_owner && all(arguments, other_arguments),
+            ) => {
+                identity == other_identity
+                    && owner == other_owner
+                    && all(arguments, other_arguments)
+            }
             (own, other) => own == other,
         }
     }
@@ -806,10 +810,7 @@ impl Type {
                     "Duration",
                     TypeId::of::<std::time::Duration>(),
                 )),
-                "Instant" => Ok(Self::builtin(
-                    "Instant",
-                    TypeId::of::<std::time::Instant>(),
-                )),
+                "Instant" => Ok(Self::builtin("Instant", TypeId::of::<std::time::Instant>())),
                 // A function type: any callable (`validate`).
                 name if crate::item::type_ref::is_fn_type(name) => Ok(Self::Object(name.into())),
                 name => Err(Error::Unsupported { ty: name.into() }),

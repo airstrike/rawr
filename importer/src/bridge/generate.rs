@@ -15148,8 +15148,10 @@ fn render_take(
         // A slice of scalars a type parameter takes, as `&[u8]` fills iced's
         // `image::Handle::from_bytes(impl Into<Bytes>)` (#954): kept for the
         // runner's life, as a struct's borrowed slice field is.
-        convert::Type::Borrowed { mutable: false, ty: lent }
-            if matches!(lent.as_ref(), convert::Type::Sequence { element, length: None, .. }
+        convert::Type::Borrowed {
+            mutable: false,
+            ty: lent,
+        } if matches!(lent.as_ref(), convert::Type::Sequence { element, length: None, .. }
                 if matches!(**element, convert::Type::Builtin(builtin) if builtin.rust_name().is_some())) =>
         {
             let mut converted = String::new();
