@@ -79,6 +79,10 @@ pub struct Graph {
     /// Each crate derive whose expansion was loaded beside its item, by the
     /// derive's source and span: the macro the expansion came from (#593).
     expanded: BTreeMap<(source::Id, Span), ImmutableString>,
+    /// Each item whose kept expansion is of its text before an edit
+    /// (#1040), with the derives that are due again.
+    #[cfg(feature = "rust-import")]
+    stale: Vec<rawr_import::expand::Item>,
 }
 
 impl Id {
@@ -346,6 +350,16 @@ impl Graph {
             .map(|unit| (&self.sources[unit.source.index()], unit.parsed.items()))
     }
 
+    /// Each item whose kept expansion is of its text before an edit: rustc
+    /// expands it again, and the expansion's source changes in place, so an
+    /// edit that changes only the expansion's bodies is a body edit (#1040).
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn stale_expansions(&self) -> &[rawr_import::expand::Item] {
+        &self.stale
+    }
+
     /// Each crate derive whose expansion was loaded beside its item, by the
     /// derive's source and span as written: the macro it came from.
     pub(crate) fn expanded(&self) -> crate::capability::Expanded {
@@ -412,6 +426,8 @@ struct Builder<'a> {
     module_targets: BTreeMap<PathBuf, error::Label>,
     active_modules: Vec<PathBuf>,
     expanded: BTreeMap<(source::Id, Span), ImmutableString>,
+    #[cfg(feature = "rust-import")]
+    stale: Vec<rawr_import::expand::Item>,
 }
 
 struct Request {
@@ -432,6 +448,8 @@ impl<'a> Builder<'a> {
             module_targets: BTreeMap::new(),
             active_modules: Vec::new(),
             expanded: BTreeMap::new(),
+            #[cfg(feature = "rust-import")]
+            stale: Vec::new(),
         }
     }
 
@@ -461,6 +479,8 @@ impl<'a> Builder<'a> {
             entry_package,
             entry_source,
             expanded: self.expanded,
+            #[cfg(feature = "rust-import")]
+            stale: self.stale,
         })
     }
 
@@ -486,6 +506,8 @@ impl<'a> Builder<'a> {
             entry_package,
             entry_source,
             expanded: self.expanded,
+            #[cfg(feature = "rust-import")]
+            stale: self.stale,
         })
     }
 
@@ -855,16 +877,31 @@ impl<'a> Builder<'a> {
         let Some(project) = self.packages.first().map(|package| package.root.clone()) else {
             return Ok(());
         };
-        let path = rawr_import::expand::source_path(&project, &derived.text, &derived.written);
+        let item_path = expansion_path(modules, &derived.item).to_string();
+        let path = rawr_import::expand::source_path(&project, &item_path, &derived.written);
         if !self.is_file(&path) {
             return Ok(());
         }
         let Ok(text) = self.read_to_string(&path) else {
             return Ok(());
         };
-        let Some(resolved) = rawr_import::expand::source_macro(&text).map(ImmutableString::from)
-        else {
-            return Ok(());
+        let resolved = match rawr_import::expand::kept(&text, &derived.text) {
+            Some(rawr_import::expand::Kept::Current(resolved)) => ImmutableString::from(resolved),
+            // The item changed since it was expanded: the derive is a
+            // crate's, and its expansion is due again.
+            Some(rawr_import::expand::Kept::Stale(resolved)) => {
+                let derive = (derived.written, resolved.to_owned());
+                match self.stale.iter_mut().find(|stale| stale.path == item_path) {
+                    Some(stale) => stale.derives.push(derive),
+                    None => self.stale.push(rawr_import::expand::Item {
+                        path: item_path,
+                        text: derived.text,
+                        derives: vec![derive],
+                    }),
+                }
+                return Ok(());
+            }
+            None => return Ok(()),
         };
         let name: ImmutableString = derived
             .written
@@ -1416,6 +1453,18 @@ struct Derived {
 #[cfg(feature = "rust-import")]
 fn expansion_module(item: &str, derive: &str) -> ImmutableString {
     format!("__rawr_derive_{item}_{derive}").into()
+}
+
+/// The path of the item `name` in the module `modules`, as its kept
+/// expansion is found by (`app::Task`).
+pub(crate) fn expansion_path(modules: &[ImmutableString], name: &str) -> ImmutableString {
+    let mut path = String::new();
+    for module in modules {
+        path.push_str(module);
+        path.push_str("::");
+    }
+    path.push_str(name);
+    path.into()
 }
 
 /// Each derive of `items` (written in `text`) that isn't one of std's by

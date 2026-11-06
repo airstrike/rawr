@@ -111,12 +111,34 @@ thread_local! {
 /// time it has the arena.
 static RELEASES: std::sync::Mutex<Vec<([u8; 32], u32, u64)>> = std::sync::Mutex::new(Vec::new());
 
+/// Whether [`RESTORES`] or [`RELEASES`] may hold an entry: an arena that
+/// finds neither this nor this thread's own [`QUEUED_HERE`] marked releases
+/// nothing, and looks at no queue.
+static QUEUED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+thread_local! {
+    /// Whether this thread's [`REHOMES`], [`RELENDS`] or [`UNLENDS`] may
+    /// hold an entry.
+    static QUEUED_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Mark [`QUEUED`] after an entry joins a queue every thread shares.
+fn queued() {
+    QUEUED.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// Mark [`QUEUED_HERE`] after an entry joins one of this thread's queues.
+fn queued_here() {
+    let _ = QUEUED_HERE.try_with(|queued| queued.set(true));
+}
+
 impl Drop for Release {
     fn drop(&mut self) {
         RELEASES
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push((self.epoch, self.slot, self.generation));
+        queued();
         // A handle may be dropped on any thread; the arena is the owner's.
         __rawr_internal::future::on_owner(|| {
             let _ = with_arena(|_| Ok(()));
@@ -670,6 +692,7 @@ impl<M: LentMap> Drop for MapLent<M> {
                     relends.push((handle, Box::new(value) as Box<dyn Any>));
                 }
             }
+            queued_here();
         });
         let _ = with_arena(|_| Ok(()));
     }
@@ -701,6 +724,7 @@ impl<T: 'static> Drop for SliceLent<T> {
         }
         let unlend = SliceUnlend { items: self.items.clone(), handles: self.handles.clone() };
         UNLENDS.with_borrow_mut(|unlends| unlends.push(Box::new(unlend)));
+        queued_here();
         let _ = with_arena(|_| Ok(()));
     }
 }
@@ -972,6 +996,7 @@ impl<P: Pointer> Drop for PointerLent<P> {
             // The call that borrowed it may still hold the arena: the home
             // waits for its next use.
             REHOMES.with_borrow_mut(|rehomes| rehomes.push((self.handle.clone(), lent.homed)));
+            queued_here();
             let _ = with_arena(|_| Ok(()));
         }
     }
@@ -1834,6 +1859,11 @@ impl Arena {
     /// Free each slot whose last handle was dropped. Dropping a native value
     /// may drop handles it holds, which are freed in the next round.
     fn release_dropped(&mut self) {
+        // Nothing queued since the last look: nothing to release.
+        let here = QUEUED_HERE.try_with(|queued| queued.replace(false)).unwrap_or(false);
+        if !QUEUED.swap(false, std::sync::atomic::Ordering::AcqRel) && !here {
+            return;
+        }
         // Another arena's values wait for their own arena.
         let restores = {
             let mut queued = RESTORES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1847,14 +1877,16 @@ impl Arena {
             self.restore(handle, value);
         }
         // A thread that ends has nothing left to give back.
-        for (handle, homed) in REHOMES.try_with(RefCell::take).unwrap_or_default() {
-            self.rehome(handle, homed);
-        }
-        for (handle, value) in RELENDS.try_with(RefCell::take).unwrap_or_default() {
-            self.restore(handle, value);
-        }
-        for unlend in UNLENDS.try_with(RefCell::take).unwrap_or_default() {
-            unlend.unlend(self);
+        if here {
+            for (handle, homed) in REHOMES.try_with(RefCell::take).unwrap_or_default() {
+                self.rehome(handle, homed);
+            }
+            for (handle, value) in RELENDS.try_with(RefCell::take).unwrap_or_default() {
+                self.restore(handle, value);
+            }
+            for unlend in UNLENDS.try_with(RefCell::take).unwrap_or_default() {
+                unlend.unlend(self);
+            }
         }
         // Another live arena's releases wait for it: the owner's for the
         // owner, and a call arena's for that call (`CallArena`). Those of a
@@ -1882,6 +1914,12 @@ impl Arena {
                     .retain(|(epoch, ..)| live(epoch));
             }
             if batch.is_empty() {
+                // What waits for another arena keeps the queues marked.
+                if !RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
+                    || !RESTORES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
+                {
+                    queued();
+                }
                 return;
             }
             let mut dropped = Vec::with_capacity(batch.len());
@@ -2224,6 +2262,7 @@ impl<T: Send + 'static> Drop for Held<T> {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push((handle.clone(), Box::new(value)));
+            queued();
             __rawr_internal::future::on_owner(|| {
                 let _ = with_arena(|_| Ok(()));
             });
@@ -18510,7 +18549,13 @@ fn render_impl_function(
             values.iter().map(|value| crossed(value)).collect::<Vec<_>>().join(", ")
         ))
     );
-    let member = function.member();
+    // The member is found once per generation, with its witnesses, and
+    // each call enters that generation (`crossing::Member`).
+    let entered = format!(
+        "static MEMBER: __rawr_internal::crossing::Member = __rawr_internal::crossing::Member::new({:?});
+        let member = MEMBER.enter();",
+        function.member()
+    );
     let mutable = mutable.join(", ");
     // An output that borrows, as a `view(&self) -> impl Widget<..> + 'a`'s
     // widgets do: made in a region, as a slot's is, anchored on the strings
@@ -18538,7 +18583,7 @@ fn render_impl_function(
         let converted = in_arena(&converted);
         let call = format!(
             "let mut frame = {made};
-        let witnesses = __rawr_internal::crossing::member_witnesses({member:?});
+        let witnesses = member.witnesses();
         let mut values: [Dynamic; {count}] = {values};
         let fresh = std::mem::take(&mut frame.fresh);
         let (value, nonce) = {{
@@ -18547,7 +18592,7 @@ fn render_impl_function(
                 let nonce = nonce.bits();
                 frame_lent(&fresh, nonce);
                 let _current = FrameCurrent::enter(nonce, {keys});
-                let value = __rawr_internal::crossing::call_member({member:?}, &mut values, &[{mutable}]);{restores}
+                let value = member.call(&mut values, &[{mutable}]);{restores}
                 (value, nonce)
             }})
         }};
@@ -18557,19 +18602,12 @@ fn render_impl_function(
             keys = frame.keys(),
         );
         let (items, call) = lent_around(&lends, call);
-        let call = place::around(
-            &places,
-            &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
-            call,
-        );
-        let call = place::around_slices(
-            &slices,
-            &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
-            call,
-        );
+        let call = place::around(&places, "member.witnesses()", call);
+        let call = place::around_slices(&slices, "member.witnesses()", call);
         return Ok(format!(
             "    fn {}{}({}) -> {rust} {{
 {items}        let _arena = CallArena::enter();
+        {entered}
         {call}
     }}
 ",
@@ -18584,10 +18622,10 @@ fn render_impl_function(
                 "",
                 format!("<{family} as __rawr_internal::scope::Family>::Of<'static>"),
                 format!(
-                    "let witnesses = __rawr_internal::crossing::member_witnesses({member:?});
+                    "let witnesses = member.witnesses();
         let mut values: [Dynamic; {count}] = {values};
         let mut region = __rawr_internal::scope::Region::anchored(static_pins());
-        let value = __rawr_internal::scope::open_anchored(&mut region, || __rawr_internal::crossing::call_member({member:?}, &mut values, &[{mutable}]));{restores}
+        let value = __rawr_internal::scope::open_anchored(&mut region, || member.call(&mut values, &[{mutable}]));{restores}
         let scoped = value
             .read_lock::<__rawr_internal::scope::Scoped>()
             .map(|scoped| *scoped)
@@ -18619,9 +18657,9 @@ fn render_impl_function(
                 "",
                 rust,
                 format!(
-                    "let witnesses = __rawr_internal::crossing::member_witnesses({member:?});
+                    "let witnesses = member.witnesses();
         let mut values: [Dynamic; {count}] = {values};
-        let value = __rawr_internal::crossing::call_member({member:?}, &mut values, &[{mutable}]);{restores}
+        let value = member.call(&mut values, &[{mutable}]);{restores}
         {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))"
                 ),
             )
@@ -18630,19 +18668,12 @@ fn render_impl_function(
     // Each borrowed native value is lent around the call, innermost last.
     let (items, wrapped) = lent_around(&lends, call);
     call = wrapped;
-    call = place::around(
-        &places,
-        &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
-        call,
-    );
-    call = place::around_slices(
-        &slices,
-        &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
-        call,
-    );
+    call = place::around(&places, "member.witnesses()", call);
+    call = place::around_slices(&slices, "member.witnesses()", call);
     Ok(format!(
         "    fn {}{lifetime}({}) -> {rust} {{
 {items}        let _arena = CallArena::enter();
+        {entered}
         {call}
     }}
 ",

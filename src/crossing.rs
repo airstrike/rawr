@@ -347,36 +347,110 @@ pub fn default_of(path: &str) -> RawrResultOf<Dynamic> {
     })
 }
 
-/// Call the function the running program holds at `path`, its owner's
-/// path and the member (`Arc::Program<Message>::draw`), with `arguments`:
-/// a function of a script impl, which a runner's impl for the owner's proxy
-/// calls where native code calls it (D594). It runs in the generation
-/// current on this thread, so an edit to its body takes effect at the next
-/// call. Each index in `mutable` is an argument it takes `&mut`, as in
-/// [`Slot::call`]. A panic with the reason when it fails, as a Rust
-/// function that fails does.
-pub fn call_member(path: &str, arguments: &mut [Dynamic], mutable: &[usize]) -> Dynamic {
-    let _entry = crate::future::entry();
-    let called = crate::future::current_program()
-        .ok_or_else(|| crate::future::error("rawr: no program runs script code on this thread"))
-        .and_then(|program| {
-            let function = program.member(path).ok_or_else(|| {
-                crate::future::error(format!("rawr: the running program has no `{path}`"))
-            })?;
-            crate::future::Callable::of_item(function, program).call_places(arguments, mutable)
-        });
-    called.unwrap_or_else(|error| panic!("{}", crate::future::message(&error)))
+/// A function of a script impl where a runner's impl for the owner's proxy
+/// calls it (D594): the function the running program holds at its path,
+/// its owner's path and the member (`Arc::Program<Message>::draw`). It is
+/// found once per generation, with the witness of each parameter, as a
+/// [`Slot`] holds a function item's callable, so a call looks nothing up.
+pub struct Member {
+    path: &'static str,
+    found: std::sync::RwLock<Option<std::sync::Arc<Found>>>,
 }
 
-/// The witness of each parameter of the function the running program
-/// holds at `path`, as [`call_member`] calls it, where it has one: a native
-/// value native code gives the function is attested as its parameter's type,
-/// so script code reads it as that type.
-#[must_use]
-pub fn member_witnesses(path: &str) -> Vec<Option<crate::host::runtime::Witness>> {
-    crate::future::current_program()
-        .map(|program| program.member_witnesses(path))
-        .unwrap_or_default()
+/// What a [`Member`] found in one generation.
+struct Found {
+    program: crate::future::Program,
+    callable: crate::future::Callable,
+    witnesses: Box<[Option<crate::host::runtime::Witness>]>,
+}
+
+impl Member {
+    /// The member at `path`, found at its first call.
+    #[must_use]
+    pub const fn new(path: &'static str) -> Self {
+        Self {
+            path,
+            found: std::sync::RwLock::new(None),
+        }
+    }
+
+    /// Begin a call from native code into the member, in the generation
+    /// current on this thread once a newer one offered is admitted, so an
+    /// edit to its body takes effect at the next call. A panic with the
+    /// reason when no program holds it, as a Rust function that fails does.
+    pub fn enter(&self) -> Call {
+        let _entry = crate::future::entry();
+        let found = self
+            .found()
+            .unwrap_or_else(|error| panic!("{}", crate::future::message(&error)));
+        Call { found }
+    }
+
+    /// The member in the generation current on this thread, found again
+    /// only when that generation is another.
+    fn found(&self) -> RawrResultOf<std::sync::Arc<Found>> {
+        let program = crate::future::current_program().ok_or_else(|| {
+            crate::future::error("rawr: no program runs script code on this thread")
+        })?;
+        let read = |found: &Option<std::sync::Arc<Found>>| {
+            found
+                .as_ref()
+                .filter(|found| {
+                    std::ptr::addr_eq(
+                        std::sync::Arc::as_ptr(&found.program),
+                        std::sync::Arc::as_ptr(&program),
+                    )
+                })
+                .cloned()
+        };
+        if let Some(found) = read(
+            &self
+                .found
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ) {
+            return Ok(found);
+        }
+        let function = program.member(self.path).ok_or_else(|| {
+            crate::future::error(format!("rawr: the running program has no `{}`", self.path))
+        })?;
+        let found = std::sync::Arc::new(Found {
+            witnesses: program.member_witnesses(self.path).into_boxed_slice(),
+            callable: crate::future::Callable::of_item(function, program.clone()),
+            program,
+        });
+        *self
+            .found
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(found.clone());
+        Ok(found)
+    }
+}
+
+/// One call from native code into a [`Member`], in one generation.
+pub struct Call {
+    found: std::sync::Arc<Found>,
+}
+
+impl Call {
+    /// The witness of each parameter of the member, where it has one: a
+    /// native value native code gives it is attested as its parameter's
+    /// type, so script code reads it as that type.
+    #[must_use]
+    pub fn witnesses(&self) -> &[Option<crate::host::runtime::Witness>] {
+        &self.found.witnesses
+    }
+
+    /// Call the member with `arguments`. Each index in `mutable` is an
+    /// argument it takes `&mut`, as in [`Slot::call`]. A panic with the
+    /// reason when it fails, as a Rust function that fails does.
+    pub fn call(&self, arguments: &mut [Dynamic], mutable: &[usize]) -> Dynamic {
+        let _entry = crate::future::entry();
+        self.found
+            .callable
+            .call_places_in(&self.found.program, arguments, mutable)
+            .unwrap_or_else(|error| panic!("{}", crate::future::message(&error)))
+    }
 }
 
 /// A script function where native generic code takes a callable: what a

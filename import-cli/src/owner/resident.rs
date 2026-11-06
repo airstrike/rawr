@@ -110,8 +110,18 @@ pub(super) fn attempt(
 ) -> Result<Attempt, rawr::diagnostic::Report> {
     let native_current = adapter.resident_eligible(native_baseline);
     let capture = (|| {
-        let graph = rawr::package::Graph::load(&rawr::Engine::new(), target)
-            .map_err(|error| crate::report::package(&error, diagnostic.clone()))?;
+        let load = || {
+            rawr::package::Graph::load(&rawr::Engine::new(), target)
+                .map_err(|error| crate::report::package(&error, diagnostic.clone()))
+        };
+        let mut graph = load()?;
+        // An edit to an item a crate derive expanded expands it again here,
+        // so its expansion's source changes in place and an edit to its
+        // bodies alone swaps in (#1040). One that fails prepares, which
+        // expands it again and says why.
+        if crate::plain::refresh_expansions(&graph).unwrap_or(false) {
+            graph = load()?;
+        }
         // The resident route uses the same limits profile.
         let limits = graph.rust_limits();
         let eligible =

@@ -69,6 +69,7 @@ fn expand_in(root: &Path) {
     let native = request.pinned_native(&limits).unwrap();
     let basis = Basis::capture(request, &native, &limits).unwrap();
     let item = Item {
+        path: "Task".to_owned(),
         text: "#[derive(Debug, Clone, Serialize, Deserialize)]\nstruct Task {\n    \
                #[serde(rename = \"text\")]\n    description: String,\n    done: bool,\n}"
             .to_owned(),
@@ -77,29 +78,46 @@ fn expand_in(root: &Path) {
             ("Deserialize".to_owned(), "serde::Deserialize".to_owned()),
         ],
     };
+    // Another item, which writes its derive by another name: both expand
+    // in one driver run, each with its own `use`.
+    let filter = Item {
+        path: "app::Filter".to_owned(),
+        text: "#[derive(Debug, Save)]\nenum Filter { All, Active }".to_owned(),
+        derives: vec![("Save".to_owned(), "serde::Serialize".to_owned())],
+    };
     let kept = directory(root);
-    let expanded = expand(&item, &basis, "2024", &kept, &native, &limits).unwrap();
-    let derives = expanded
-        .expansions
-        .iter()
-        .map(|expansion| expansion.derive.as_str())
-        .collect::<Vec<_>>();
+    let items = [item, filter];
+    let expanded = expand(&items, &basis, "2024", &kept, &native, &limits).unwrap();
+    assert_eq!(expanded.len(), 2);
+    let derives = |index: usize| {
+        expanded[index]
+            .expansions
+            .iter()
+            .map(|expansion| expansion.derive.as_str())
+            .collect::<Vec<_>>()
+    };
     // std's `Debug` and `Clone` are not the crate's.
-    assert_eq!(derives, ["Serialize", "Deserialize"]);
-    let text = |index: usize| expanded.expansions[index].items.join("\n");
+    assert_eq!(derives(0), ["Serialize", "Deserialize"]);
+    assert_eq!(derives(1), ["Save"]);
+    let text = |item: usize, index: usize| expanded[item].expansions[index].items.join("\n");
     assert!(
-        text(0).contains("impl _serde::Serialize for Task"),
+        text(0, 0).contains("impl _serde::Serialize for Task"),
         "{}",
-        text(0)
+        text(0, 0)
     );
     // The helper attribute reached the macro.
-    assert!(text(0).contains("\"text\""), "{}", text(0));
+    assert!(text(0, 0).contains("\"text\""), "{}", text(0, 0));
     assert!(
-        text(1).contains("impl<'de> _serde::Deserialize<'de> for Task"),
+        text(0, 1).contains("impl<'de> _serde::Deserialize<'de> for Task"),
         "{}",
-        text(1)
+        text(0, 1)
     );
-    // The expansion is kept, and the next one reads it with no compiler.
+    assert!(
+        text(1, 0).contains("impl _serde::Serialize for Filter"),
+        "{}",
+        text(1, 0)
+    );
+    // Each expansion is kept, and the next one reads them with no compiler.
     let files = fs::read_dir(&kept)
         .unwrap()
         .filter_map(Result::ok)
@@ -110,7 +128,8 @@ fn expand_in(root: &Path) {
                 .is_some_and(|extension| extension == "json")
         })
         .count();
-    assert_eq!(files, 1);
-    let again = expand(&item, &basis, "2024", &kept, &native, &limits).unwrap();
-    assert_eq!(again.expansions.len(), 2);
+    assert_eq!(files, 2);
+    let again = expand(&items, &basis, "2024", &kept, &native, &limits).unwrap();
+    assert_eq!(again[0].expansions.len(), 2);
+    assert_eq!(again[1].expansions.len(), 1);
 }

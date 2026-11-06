@@ -229,7 +229,7 @@ let b = a.clone();
 println!("{a:?} {}", a == b);</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-derive" data-out="out-derive" aria-label="Run derive.rs" hidden></button><b>rawr run derive.rs</b><span id="out-derive" aria-live="polite">Order { id: 1, note: "" } true</span></div>
 </div>
-<p>A crate&rsquo;s derive macro works on your own types too. rustc expands it with the crate your <code>Cargo.toml</code> names, and rawr runs the expanded code as part of your program. The expansion is kept in <code>target/rawr/expand/</code> and runs again only when the type changes. An error in the expanded code is reported at the derive, as rustc reports it.</p>
+<p>A crate&rsquo;s derive macro works on your own types too. rustc expands it with the crate your <code>Cargo.toml</code> names, and rawr runs the expanded code as part of your program. The expansion is kept in <code>target/rawr/expand/</code> and runs again only when the type changes. An edit that changes only the expanded code&rsquo;s bodies, as a new <code>#[serde(rename)]</code> does, swaps into the running program as an edit to a function body does, and the program keeps its state. An error in the expanded code is reported at the derive, as rustc reports it.</p>
 <div class="block">
   <pre><code data-lang="rust">use shapes::Shape;
 

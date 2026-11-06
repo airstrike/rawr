@@ -30,15 +30,21 @@ impl Callbacks for Expand {
 }
 
 /// Each item of the crate a derive produced, grouped by the derive's name
-/// where the source writes it, into `out`.
+/// where the source writes it, into `out`. The crate holds each program
+/// item in a module of its own, whose items are read too.
 fn write(tcx: TyCtxt<'_>, out: &Path, protocol: u32) -> Result<(), String> {
     let (_, krate) = tcx.resolver_for_lowering();
     let krate = krate.borrow();
     let source_map = tcx.sess.source_map();
     let mut expansions: Vec<Expansion> = Vec::new();
-    for item in &krate.items {
+    let mut pending = krate.items.iter().map(|item| &**item).collect::<Vec<_>>();
+    while let Some(item) = pending.pop() {
         let data = item.span.ctxt().outer_expn_data();
         let ExpnKind::Macro(MacroKind::Derive, name) = data.kind else {
+            if let rustc_ast::ItemKind::Mod(.., rustc_ast::ModKind::Loaded(items, ..)) = &item.kind
+            {
+                pending.extend(items.iter().map(|item| &**item));
+            }
             continue;
         };
         let at = source_map.lookup_byte_offset(data.call_site.lo()).pos.0;
@@ -55,6 +61,11 @@ fn write(tcx: TyCtxt<'_>, out: &Path, protocol: u32) -> Result<(), String> {
                 items: vec![text],
             }),
         }
+    }
+    // Each derive's items in the order rustc wrote them, which the stack
+    // above reads backwards.
+    for expansion in &mut expansions {
+        expansion.items.reverse();
     }
     expansions.sort_by_key(|expansion| expansion.at);
     let bytes = serde_json::to_vec(&Expanded {

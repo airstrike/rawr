@@ -348,13 +348,14 @@ fn prove(
 
 /// Expand through rustc each crate derive `error` asks for, keeping each
 /// expansion where loading the program reads it beside its item (#593).
+/// `basis` is what the run's own resolution built, when it built one.
 /// `false` when each is kept already, so loading again can't help.
 fn expand(
     graph: &rawr::package::Graph,
     error: &rawr::package::Error,
+    basis: Option<rawr_import::expand::Basis>,
     limits: &rawr_import::cargo::Limits,
 ) -> Result<bool, crate::Error> {
-    use crate::Error;
     use rawr_import::expand;
     let project = graph.entry_package().root();
     let pending = error
@@ -363,29 +364,70 @@ fn expand(
         .filter(|item| {
             item.derives.iter().any(|(written, resolved)| {
                 let kept =
-                    std::fs::read_to_string(expand::source_path(project, &item.text, written));
-                kept.ok().as_deref().and_then(expand::source_macro) != Some(resolved.as_str())
+                    std::fs::read_to_string(expand::source_path(project, &item.path, written));
+                kept.ok()
+                    .as_deref()
+                    .and_then(|text| expand::kept(text, &item.text))
+                    != Some(expand::Kept::Current(resolved.as_str()))
             })
         })
         .collect::<Vec<_>>();
     if pending.is_empty() {
         return Ok(false);
     }
+    keep_expansions(graph, &pending, basis, limits)?;
+    Ok(true)
+}
+
+/// Expand again each item of `graph` whose kept expansion is of its text
+/// before an edit (#1040), against the basis the last expansion kept, so the
+/// edit's expansion changes its source in place. `false` when there is none,
+/// or no basis is kept: preparing the program expands it then.
+pub fn refresh_expansions(graph: &rawr::package::Graph) -> Result<bool, crate::Error> {
+    let stale = graph.stale_expansions();
+    if stale.is_empty() {
+        return Ok(false);
+    }
+    let directory = rawr_import::expand::directory(graph.entry_package().root());
+    let Some(basis) = rawr_import::expand::Basis::kept(&directory) else {
+        return Ok(false);
+    };
+    keep_expansions(graph, stale, Some(basis), &graph.rust_limits())?;
+    Ok(true)
+}
+
+/// rustc's expansion of each of `items`, in one driver run, kept as its
+/// source beside its item. The basis is `basis`, else the one the last
+/// expansion kept, else a resolution's of its own, which is kept for the
+/// next.
+fn keep_expansions(
+    graph: &rawr::package::Graph,
+    items: &[rawr_import::expand::Item],
+    basis: Option<rawr_import::expand::Basis>,
+    limits: &rawr_import::cargo::Limits,
+) -> Result<(), crate::Error> {
+    use crate::Error;
+    use rawr_import::expand;
+    let project = graph.entry_package().root();
+    let directory = expand::directory(project);
     let environment = Environment::capture().map_err(Error::other)?;
     let request = graph
         .rust_inventory_plain(environment, &[], limits)
         .map_err(Error::other)?
         .ok_or_else(|| Error::other("a crate derive with no Rust dependency"))?;
     let native = request.pinned_native(limits).map_err(Error::other)?;
-    let basis = expand::Basis::capture(request, &native, limits).map_err(Error::other)?;
+    let basis = match basis.or_else(|| expand::Basis::kept(&directory)) {
+        Some(basis) => basis,
+        None => expand::Basis::capture(request, &native, limits).map_err(Error::other)?,
+    };
+    basis.keep(&directory).map_err(Error::other)?;
     let edition = graph.rust_edition();
-    let directory = expand::directory(project);
-    for item in &pending {
-        let expanded = expand::expand(item, &basis, &edition, &directory, &native, limits)
-            .map_err(Error::other)?;
-        expand::keep_sources(project, item, &expanded).map_err(Error::other)?;
+    let expanded = expand::expand(items, &basis, &edition, &directory, &native, limits)
+        .map_err(Error::other)?;
+    for (item, expanded) in items.iter().zip(&expanded) {
+        expand::keep_sources(project, item, expanded).map_err(Error::other)?;
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Resolve, extract, check and seal a program's runner with no host profile.
@@ -455,6 +497,8 @@ fn prepare(
             .prepare_cached_in(&limits, scope)
             .map_err(Error::cache)?;
         settlement.absorb(prepared.settlement());
+        // What a crate derive's expansion runs against: this run's own build.
+        let basis = prepared.expansion_basis();
         let api = prepared.retain_api(&limits).map_err(Error::cache)?;
         let input = api.input_identity();
         keyed = applied.is_file().then_some(input);
@@ -506,7 +550,7 @@ fn prepare(
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if !error.rust_expansions().is_empty() =>
                     {
-                        if !expand(&graph, &error, &limits)? {
+                        if !expand(&graph, &error, basis, &limits)? {
                             return Err(Error::Rawr(error));
                         }
                         return prepare(target, None, revision, scope);

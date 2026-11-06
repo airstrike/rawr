@@ -1558,6 +1558,54 @@ fn a_crates_derive_runs_from_its_expansion() {
     assert_eq!(text(&run.stdout), "Square Square\nTile\nCircle\nRing\n");
 }
 
+/// An edit that changes only a derive's expansion's bodies, as a new
+/// `#[serde(rename)]` does, swaps into the running program (#1040): rustc
+/// expands the item again, its expansion's source changes in place, and the
+/// loop that serializes keeps counting.
+#[test]
+fn a_rename_in_a_derived_type_swaps_into_the_running_program() {
+    use std::time::Duration;
+
+    const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
+    let root = crate::support::scratch().join("plain-derives-swap");
+    let _ = fs::remove_dir_all(&root);
+    copy(Path::new(DERIVES), &root);
+    let main = root.join("src/main.rs");
+    let program = |attribute: &str| {
+        format!(
+            "// rawr\nuse serde::{{Deserialize, Serialize}};\n\n\
+             #[derive(Debug, Serialize, Deserialize)]\nstruct Task {{\n    {attribute}\n    \
+             description: String,\n}}\n\n\
+             fn main() {{\n    let mut count = 0;\n    loop {{\n        \
+             let task = Task {{ description: \"write\".to_string() }};\n        \
+             let json = serde_json::to_string(&task).unwrap();\n        \
+             let back: Task = serde_json::from_str(&json).unwrap();\n        \
+             count += 1;\n        println!(\"{{count}} {{json}} {{}}\", back.description);\n        \
+             std::thread::sleep(std::time::Duration::from_millis(50));\n    }}\n}}\n"
+        )
+    };
+    fs::write(&main, program("")).unwrap();
+    let mut run = crate::support::start(&root, &[]);
+    let before = run.until(Duration::from_secs(900), |line| {
+        line.ends_with("{\"description\":\"write\"} write")
+    });
+    let counted = |line: &str| line.split(' ').next().unwrap().parse::<u64>().unwrap();
+    let before = counted(&before);
+    fs::write(&main, program("#[serde(rename = \"text\")]")).unwrap();
+    let after = run.until(Duration::from_secs(120), |line| {
+        line.ends_with("{\"text\":\"write\"} write")
+    });
+    // The loop went on: the edit swapped in, and the program never ran again.
+    assert!(counted(&after) > before, "{}", run.seen.join("\n"));
+    assert!(
+        !run.seen
+            .iter()
+            .any(|line| line.starts_with("1 ") && !line.contains("description")),
+        "{}",
+        run.seen.join("\n")
+    );
+}
+
 /// A program's impl of a crate trait's generic method, `fn visit<V:
 /// Visitor>(&self, visitor: V) -> V::Out`, which the crate calls at two
 /// visitors (#593): the body reads `V` as an opaque type bounded by its
