@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 42;
+const SCHEMA: u32 = 43;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -635,6 +635,10 @@ pub struct Item {
     /// implements for a type of its own (`callable::Item::values`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     values: Option<Signature>,
+    /// The trait's own method the item is an instance of, when the trait
+    /// declares it (`classify::Outcome::member`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    member: Option<super::identity::Definition>,
 }
 
 /// Closed static item family.
@@ -2149,6 +2153,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
             opaques: Box::default(),
         },
         values: None,
+        member: None,
     };
     let plan = Plan {
         schema: SCHEMA,
@@ -3318,6 +3323,11 @@ impl Item {
     pub const fn values(&self) -> Option<&Signature> {
         self.values.as_ref()
     }
+    /// Return the trait's own method the item is an instance of, when the
+    /// trait declares it.
+    pub const fn member(&self) -> Option<super::identity::Definition> {
+        self.member
+    }
 }
 
 impl Signature {
@@ -3632,6 +3642,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
         selector: outcome.identity().selector().try_clone()?,
         signature,
         values,
+        member: outcome.member(),
     }))
 }
 

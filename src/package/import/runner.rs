@@ -1114,6 +1114,7 @@ fn item_definition(
     });
     Ok(definition
         .imported(item.selector().try_clone()?)
+        .instancing(item.member().map(|member| *member.as_bytes()))
         .guarded(guard)
         .opening(form.scope().is_some()))
 }

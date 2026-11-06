@@ -291,6 +291,36 @@ impl From<Turn> for f64 {
     }
 }
 
+/// A reading that the crate converts to `f32` and `f64`, and that its own
+/// trait `Halve` gives an `into` of its own besides `Into`'s.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Gauge(pub f32);
+
+impl From<Gauge> for f32 {
+    fn from(gauge: Gauge) -> f32 {
+        gauge.0 * 10.0
+    }
+}
+
+impl From<Gauge> for f64 {
+    fn from(gauge: Gauge) -> f64 {
+        f64::from(gauge.0) * 100.0
+    }
+}
+
+/// A crate trait whose method is named as `Into`'s: where it is in scope,
+/// rustc finds both for `gauge.into()` (E0034).
+pub trait Halve {
+    /// Half the reading.
+    fn into(self) -> f32;
+}
+
+impl Halve for Gauge {
+    fn into(self) -> f32 {
+        self.0 / 2.0
+    }
+}
+
 /// How a picture turns, as iced's `Rotation`, whose `degrees()` gives a
 /// type the crate converts to `f32`.
 #[derive(Debug, Clone, Copy, PartialEq)]

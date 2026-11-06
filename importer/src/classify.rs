@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 108;
+const CLASSIFIER_VERSION: u32 = 109;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -62,6 +62,10 @@ pub(crate) struct OutcomeRecord {
     /// The variant of its enum this path re-exports, as `pub use
     /// Alignment::Center;` does.
     variant: Option<Box<str>>,
+    /// The trait's own method an impl's member is an instance of, as each
+    /// `into` of `Degrees` that core's blanket `Into` gives through a
+    /// crate's `From<Degrees>` is `Into::into`, whatever its selector.
+    member: Option<crate::surface::identity::Definition>,
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -224,6 +228,8 @@ struct StoredOutcome {
     implementations: Box<[StoredImplementation]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     variant: Option<Box<str>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    member: Option<crate::surface::identity::Definition>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2738,6 +2744,14 @@ impl<'contract> Outcome<'contract> {
         self.record.variant.as_deref()
     }
 
+    /// The trait's own method this impl member is an instance of, when the
+    /// trait declares it: each `into` core's blanket `Into` gives a type
+    /// through a crate's `From` impls is `Into::into`.
+    #[must_use]
+    pub const fn member(&self) -> Option<crate::surface::identity::Definition> {
+        self.record.member
+    }
+
     /// Return the export/declaration positions for a definition-backed outcome.
     #[must_use]
     pub const fn origin(&self) -> Option<&'contract representability::origin::Set> {
@@ -3294,7 +3308,7 @@ impl Serialize for OutcomeRecord {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("Outcome", 8)?;
+        let mut state = serializer.serialize_struct("Outcome", 9)?;
         state.serialize_field("export", &self.export)?;
         state.serialize_field("identity", &self.identity)?;
         state.serialize_field("name", &self.name)?;
@@ -3313,6 +3327,10 @@ impl Serialize for OutcomeRecord {
         match &self.variant {
             Some(variant) => state.serialize_field("variant", variant)?,
             None => state.skip_field("variant")?,
+        }
+        match &self.member {
+            Some(member) => state.serialize_field("member", member)?,
+            None => state.skip_field("member")?,
         }
         state.end()
     }
@@ -3624,6 +3642,7 @@ impl StoredOutcome {
             evidence,
             implementations: implementations.into_boxed_slice(),
             variant: self.variant,
+            member: self.member,
         })
     }
 }
@@ -4502,6 +4521,7 @@ impl<P: api::Phase> Context<'_, P> {
                     )),
                     implementations: Box::default(),
                     variant: None,
+                    member: None,
                 })
             }
             ledger::Path::Rejected { reason, span, .. } => {
@@ -4522,6 +4542,7 @@ impl<P: api::Phase> Context<'_, P> {
                     )),
                     implementations: Box::default(),
                     variant: None,
+                    member: None,
                 })
             }
             ledger::Path::Imported(export) => {
@@ -4614,6 +4635,7 @@ impl<P: api::Phase> Context<'_, P> {
                     evidence,
                     implementations,
                     variant,
+                    member: None,
                 })
             }
         }
@@ -4863,6 +4885,8 @@ impl<P: api::Phase> Context<'_, P> {
                     evidence,
                     implementations: Box::default(),
                     variant: None,
+                    member: trait_member(implementation, definition)
+                        .then(|| crate::surface::identity::Definition::of(definition.id())),
                 });
             }
             self.retain_span(implementation.span())?;
@@ -5126,6 +5150,7 @@ impl<P: api::Phase> Context<'_, P> {
                         evidence,
                         implementations: Box::default(),
                         variant: None,
+                        member: None,
                     });
                 }
                 // Charged as `implementations` charges a crate's own.
@@ -5299,6 +5324,7 @@ impl<P: api::Phase> Context<'_, P> {
                 evidence,
                 implementations,
                 variant: None,
+                member: None,
             });
         }
         if outcomes.is_empty() {
