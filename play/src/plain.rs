@@ -367,7 +367,7 @@ fn diagnostic(program: &str) -> Option<rawr::diagnostic::Source> {
 /// A base Engine with the untrusted-snippet limits whose output goes to
 /// `sink`; it stops a program at the deadline or once `sink` is full.
 fn engine(limits: &Limits, deadline: deadline::Watch, sink: &Arc<Mutex<Output>>) -> Engine {
-    let mut engine = Engine::new();
+    let mut engine = rawr::future::facade::engine();
     sandbox(&mut engine, limits, deadline, sink);
     engine
 }

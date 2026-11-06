@@ -2,6 +2,7 @@
 
 pub(crate) mod borrowck;
 mod error;
+pub(crate) mod extern_prelude;
 mod forward;
 mod infinite;
 mod intrinsic;
@@ -90,6 +91,11 @@ pub struct Program {
     /// The app crate's name, when a marked root's `async fn main` names a
     /// runtime's entry, which the shadow crate holds (D513.4).
     entry_crate: Option<ImmutableString>,
+    /// The crates a package's manifest names, which its paths may start
+    /// with as rustc's extern prelude has them: none for a lone file.
+    /// `None` for a source compiled alone, whose host decides what it
+    /// reaches.
+    crates: Option<extern_prelude::Prelude>,
     /// The type aliases each source names, declared or imported, which a
     /// body reads as the item headers do.
     aliases: BTreeMap<(program::source::Id, ImmutableString), type_ref::Alias>,
@@ -470,8 +476,24 @@ pub(crate) fn resolve_with_evidence(
 }
 
 /// rustc's E0752: the program's `main` is `async` with no runtime's entry,
-/// such as `#[tokio::main]`, to run its future.
-fn async_main(items: &[crate::item::Parsed]) -> Result<(), Error> {
+/// such as `#[tokio::main]`, to run its future. A runtime's entry names a
+/// crate `crates` holds, else it is E0433 as rustc resolves it first.
+fn async_main(
+    items: &[crate::item::Parsed],
+    crates: Option<&extern_prelude::Prelude>,
+) -> Result<(), Error> {
+    for item in items {
+        if let (crate::item::Parsed::Function(function), Some(crates)) = (item, crates)
+            && function.name.text == "main"
+        {
+            for attribute in &function.header.attributes {
+                if lower_nominal::runtime_entry(&attribute.path) {
+                    let first = &attribute.path.segments[0].name;
+                    crates.reach(&first.text, first.span)?;
+                }
+            }
+        }
+    }
     let refused = items.iter().find_map(|item| match item {
         crate::item::Parsed::Function(function)
             if function.name.text == "main"
@@ -531,7 +553,7 @@ fn resolve_with_evidence_and_namespace(
             source: module.span,
         });
     }
-    async_main(&parsed_items)?;
+    async_main(&parsed_items, None)?;
     let symbols = Symbols::predeclare(&parsed_items, namespace, allocation_order, host)?;
     let mut items = Vec::with_capacity(parsed_items.len());
 
@@ -589,6 +611,7 @@ fn resolve_with_evidence_and_namespace(
         qualified_pattern_owners: BTreeMap::new(),
         qualified_rust: BTreeMap::new(),
         entry_crate: None,
+        crates: None,
         aliases,
         scripts: vec![Script {
             source: program::source::Id::ROOT,

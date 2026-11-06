@@ -4474,6 +4474,8 @@ struct Tables {
     qualified_rust: BTreeMap<(crate::program::source::Id, Span), Box<[ImmutableString]>>,
     /// The app crate whose shadow holds an async `main`'s entry (D513.4).
     entry_crate: Option<ImmutableString>,
+    /// The crates the program's paths may start with (`Program::crates`).
+    crates: Option<crate::resolve::extern_prelude::Prelude>,
     /// The type aliases each source names, resolved once with the headers.
     aliases: BTreeMap<(crate::program::source::Id, ImmutableString), type_ref::Alias>,
     /// The module each source is, which decides what it sees of another
@@ -5102,6 +5104,7 @@ impl Models {
             qualified_pattern_owners: program.qualified_pattern_owners.clone(),
             qualified_rust: program.qualified_rust.clone(),
             entry_crate: program.entry_crate.clone(),
+            crates: program.crates.clone(),
             aliases: program.aliases.clone(),
             namespaces: program
                 .scripts
@@ -33249,11 +33252,16 @@ impl<'a> Parser<'a> {
                     reference: operator_at.unwrap_or(span(lhs.span.start(), rhs.span.end())),
                 });
             }
-            // Two numeric types, as `f64 / usize`: the left's impl of the
-            // operator's trait takes only its own type, rustc's E0277.
+            // A number with another type, as `f64 / usize` or `2.0 *
+            // angle` with no crate's `impl Mul<Angle> for f64`: std's impls
+            // of the operator's trait for the number take only its own
+            // type, rustc's E0277.
             let right = self.inference.resolve(&rhs.ty);
             if matches!(left, Ty::Int(_) | Ty::Float(_))
-                && matches!(right, Ty::Int(_) | Ty::Float(_))
+                && !matches!(
+                    right,
+                    Ty::Infer(_) | Ty::Param(_) | Ty::Projection(..) | Ty::Unknown
+                )
                 && !self.unifies(&left, &right)
             {
                 let (left, right) = (left.name(&self.models), right.name(&self.models));
@@ -33671,38 +33679,50 @@ impl<'a> Parser<'a> {
             Ty::Reference { target, .. } => self.inference.resolve(target),
             ty => ty.clone(),
         };
-        // `2.0 * angle` through `impl Mul<Radians> for f32`: the library
-        // type's own `mul` of the number, as multiplying commutes.
-        if symbol == "*"
-            && matches!(host, Ty::Float(_) | Ty::Int(_) | Ty::Unknown)
+        // `2.0 * angle` through a crate's `impl Mul<Radians> for f32`: the
+        // operand type's function of the number (`Radians::mul(f32,
+        // Radians)`), among which the number's kind selects one as rustc
+        // selects the impl.
+        if !symbol.ends_with('=')
+            && matches!(host, Ty::Float(_) | Ty::Int(_) | Ty::Bool | Ty::Char)
             && let Some(rhs) = rhs.as_deref()
             && let Ty::Host { proof, .. } = self.inference.resolve(&rhs.ty)
         {
-            let path = format!("{}::mul", proof.definition.path());
-            if self.models.host_items(&path).is_some_and(|items| {
-                items.iter().any(|item| {
-                    item.kind() == crate::host::item::Kind::Method
-                        && item
-                            .signature()
-                            .parameters()
-                            .first()
-                            .is_some_and(|parameter| {
-                                matches!(
-                                    parameter.shape(),
-                                    crate::host::type_ref::Shape::Builtin(
-                                        crate::host::type_ref::Builtin::F64
-                                            | crate::host::type_ref::Builtin::F32
-                                    )
-                                )
-                            })
+            let path = format!("{}::{member}", proof.definition.path());
+            let operands = self
+                .models
+                .host_items(&path)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|item| {
+                            item.kind() == crate::host::item::Kind::AssociatedFunction
+                                && item.signature().parameters().len() == 2
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
                 })
-            }) {
-                let ty = self.inference.resolve(&rhs.ty);
-                let receiver = self.operator_expr(rhs.rendered_source(), ty, rhs.span);
-                self.pending_arguments = Some((vec![lhs.clone()], expression.end()));
-                let mut value = self.parse_host_method(receiver, "mul".into(), expression)?;
-                value.span = expression;
-                return Ok(Some(value));
+                .unwrap_or_default();
+            if !operands.is_empty() {
+                let owner = self.models.item_owner(&path).cloned();
+                let arguments = vec![lhs.clone(), rhs.clone()];
+                return self
+                    .call_host_function(&operands, owner, arguments, expression)
+                    .map(Some);
+            }
+            // The importer answers a miss with each impl of the operator's
+            // trait that takes the type, its own and a number's.
+            #[cfg(feature = "rust-import")]
+            if proof.definition.identity().imported().is_some()
+                && self.models.host_items(&path).is_none()
+                && self.models.host.entry(&path).is_none()
+            {
+                let error = Error::UnknownMember {
+                    owner: host_type_name(&proof, &self.models),
+                    member: (*member).into(),
+                    reference: expression,
+                };
+                return Err(self.native_miss(true, error));
             }
         }
         if let Ty::Host { proof, .. } = &host
@@ -33842,6 +33862,13 @@ impl<'a> Parser<'a> {
                 chosen = Some(candidate);
                 break;
             }
+        }
+        // A number whose kind no impl is for, as `x * angle` with `x: f64`
+        // and only `impl Mul<Angle> for f32`: std's impls of the trait for
+        // the number, which take only its own type (rustc's E0277).
+        if chosen.is_none() && matches!(lhs_ty, Ty::Int(_) | Ty::Float(_)) && !symbol.ends_with('=')
+        {
+            return Ok(None);
         }
         let Some(definition) = chosen else {
             let operation =
@@ -48701,6 +48728,11 @@ impl<'a> Parser<'a> {
             if matches!(self.peek(), Token::Bang)
                 && let Some(name) = crate::resolve::tokio_macro(&full, &self.models.host)
             {
+                if let Some(crates) = &self.models.crates {
+                    let (written, _) = &segments[0];
+                    let at = span(first_span.start(), text_end(first_span.start(), written));
+                    crates.reach(full.split("::").next().unwrap_or_default(), at)?;
+                }
                 return self.parse_tokio_macro(name, first_span);
             }
             // `tokio::spawn` has no place to run without tokio.

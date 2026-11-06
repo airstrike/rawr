@@ -1588,7 +1588,9 @@ fn same_namespace(left: &host::item::Definition, right: &host::item::Definition)
 /// `button::primary(theme, status)` calls. A field reader (a shared method
 /// without parameters) may share its name with owned builder methods, as
 /// iced's `style.border` and `style.border(..)`. A tuple variant's
-/// constructor may share its name with the shared reader of its field.
+/// constructor may share its name with the shared reader of its field. An
+/// operator a crate implements for a number, a function of the number and
+/// the type, may share its name with the type's own operator methods.
 pub(super) fn compatible_overload(
     existing: &host::item::Definition,
     item: &host::item::Definition,
@@ -1608,7 +1610,19 @@ pub(super) fn compatible_overload(
     // A tuple variant's constructor and the reader of its field in a
     // pattern, as iced's `Key::Named`.
     let constructor = |item: &host::item::Definition| item.kind() == Kind::AssociatedFunction;
+    // An operator of a crate's impl for a number, as `<f32 as Mul<Radians>>
+    // ::mul`, beside the type's own `Mul` impls' `mul(self, ..)`.
+    let operand = |item: &host::item::Definition| {
+        constructor(item)
+            && item
+                .signature()
+                .parameters()
+                .first()
+                .is_some_and(|first| matches!(first.shape(), host::type_ref::Shape::Builtin(_)))
+    };
     existing.kind() == item.kind() && existing.receiver() == item.receiver()
+        || builder(existing) && operand(item)
+        || operand(existing) && builder(item)
         || value(existing) && function(item)
         || function(existing) && value(item)
         || reader(existing) && builder(item)

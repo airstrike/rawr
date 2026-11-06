@@ -6,6 +6,14 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.145 (2026-11-05)
+
+- A view's widgets are made at the view's lifetime even when nothing they take borrows, and a call that takes a script closure takes the view's widgets too: iced's table, multi_window and bezier_tool views no longer panic. (#952, #352)
+- A crate type named at two paths, as a macro's `$crate` names it, is one type when a value crosses: custom_quad and gradient run. (#953)
+- Two crate types sharing a name no longer stop a runner at start, and a borrow of a crate value or a byte slice fills an `impl Into<_>` parameter: sierpinski_triangle, arc, clock and multitouch run, and solar_system builds. (#954)
+- The generated runner builds when a program reads a field that borrows for its struct's lifetime, as iced's `Stroke { width, ..Stroke::default() }` reads `line_dash`: the read no longer gives the borrow out of a lend (E0521). (#951)
+- rawr-import-driver can expand a crate's derive macro on a program's type with the pinned nightly, and keeps each expansion in the project's target/rawr/expand/. (#984; part of #593)
+
 ## 0.3.144 (2026-11-05)
 
 - Programs can write the items a derive expands to: `const _: () = { .. };` blocks of items, `extern crate x as y;`, paths through a renamed module (`use std as s;`), a turbofish on a program method or a trait's path (`v.f::<T>()`, `Trait::f::<T>(&v)`), and a generic trait function called by its path. (#976; part of #593)

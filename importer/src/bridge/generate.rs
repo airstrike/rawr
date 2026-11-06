@@ -3071,13 +3071,7 @@ fn attest_read(
     witness: &Option<__rawr_internal::host::runtime::Witness>,
 ) -> Result<Dynamic, Error> {
     if let Some(witness) = witness {
-        match value.read_lock::<NativeHandle>().map(|handle| handle.clone()) {
-            Some(handle) => arena.attest(handle, witness.clone())?,
-            None => {
-                attest_inner(&value, witness, arena)?;
-                attest_elements(&value, witness, arena)?;
-            }
-        }
+        attest_within(&value, witness, arena)?;
     }
     Ok(value)
 }
@@ -3096,52 +3090,59 @@ fn attest_input(
     }
 }
 
-/// `value` with each native value in it attested, as its place in
-/// `witness` gives: inside an `Option`, a `Result` or an array too, as the
-/// `Vec<Family>` of iced's `Result<Vec<Family>, Error>` is.
+/// `value` with each native value in it attested, as [`attest_within`]
+/// attests them.
 #[allow(dead_code)]
 fn attest_nested(
     arena: &mut Arena,
-    mut value: Dynamic,
+    value: Dynamic,
     witness: &__rawr_internal::host::runtime::Witness,
 ) -> Result<Dynamic, Error> {
-    if let Some(handle) = value.read_lock::<NativeHandle>().map(|handle| handle.clone()) {
-        arena.attest(handle, witness.clone())?;
-        return Ok(value);
-    }
-    if __rawr_internal::option::is(&value) {
-        return Ok(match __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)? {
-            Some(inner) => match witness.argument_witness(0) {
-                Some(element) => __rawr_internal::option::some(attest_nested(arena, inner, &element)?),
-                None => __rawr_internal::option::some(inner),
-            },
-            None => __rawr_internal::option::none(),
-        });
-    }
-    if __rawr_internal::result::is(&value) {
-        return Ok(match __rawr_internal::result::take(&mut value).ok_or(Error::TypeMismatch)? {
-            Ok(inner) => __rawr_internal::result::ok(match witness.argument_witness(0) {
-                Some(ok) => attest_nested(arena, inner, &ok)?,
-                None => inner,
-            }),
-            Err(inner) => __rawr_internal::result::err(match witness.argument_witness(1) {
-                Some(err) => attest_nested(arena, inner, &err)?,
-                None => inner,
-            }),
-        });
-    }
-    if value.is_array() {
-        let Some(element) = witness.argument_witness(0) else {
-            return Ok(value);
-        };
-        let items = value.into_array().map_err(|_| Error::TypeMismatch)?;
-        return items
-            .into_iter()
-            .map(|item| attest_nested(arena, item, &element))
-            .collect::<Result<Vec<_>, Error>>()
-            .map(Dynamic::from_array);
-    }
+    attest_within(&value, witness, arena)?;
     Ok(value)
+}
+
+/// Each native value in `value` attested with the witness of its place in
+/// `witness`: `value` itself, or one inside an `Option`, a `Result`, an
+/// `Rc` or an `Arc`, a tuple or an array, at any depth, as the
+/// `Option<SmolStr>` among a key press's fields or the `Vec<Family>` of
+/// iced's `Result<Vec<Family>, Error>` is.
+fn attest_within(
+    value: &Dynamic,
+    witness: &__rawr_internal::host::runtime::Witness,
+    arena: &mut Arena,
+) -> Result<(), Error> {
+    if let Some(handle) = value.read_lock::<NativeHandle>().map(|handle| handle.clone()) {
+        return arena.attest(handle, witness.clone());
+    }
+    let inner = |at: usize| witness.argument_witness(at);
+    if let Some(option) = value.read_lock::<__rawr_internal::option::Value>() {
+        return match (&*option, inner(0)) {
+            (Some(some), Some(witness)) => attest_within(some, &witness, arena),
+            _ => Ok(()),
+        };
+    }
+    if let Some(result) = value.read_lock::<__rawr_internal::result::Value>() {
+        return match &*result {
+            Ok(ok) => inner(0).map_or(Ok(()), |witness| attest_within(ok, &witness, arena)),
+            Err(err) => inner(1).map_or(Ok(()), |witness| attest_within(err, &witness, arena)),
+        };
+    }
+    if let Some((pointee, _, _)) = __rawr_internal::crossing::pointee(value) {
+        // The value an `Rc` or `Arc` a crate gave points to, as its type.
+        return inner(0).map_or(Ok(()), |witness| attest_within(&pointee, &witness, arena));
+    }
+    let Ok(elements) = value.as_array_ref() else {
+        return Ok(());
+    };
+    for (index, element) in elements.iter().enumerate() {
+        // A tuple's members have a witness each; an array's elements share
+        // its argument's.
+        if let Some(witness) = inner(index).or_else(|| inner(0)) {
+            attest_within(element, &witness, arena)?;
+        }
+    }
+    Ok(())
 }
 
 /// The witness of operand `index` of the running call: the exact type of
@@ -3230,23 +3231,23 @@ fn invoke_in_arena(
             .and_then(|handle| arena.witness(handle).cloned());
         let mut arguments = Arguments { values, arena };
         let output = (adapter.invoke)(&mut arguments)?;
+        // The witness of the call's declared output: a function's, a
+        // method's that takes its receiver by value, from its receiver's,
+        // or a method's that borrows its receiver, as an async method's
+        // future (D513.6).
+        let declared = || {
+            call.output_witness()
+                .ok()
+                .or_else(|| {
+                    receiver
+                        .as_ref()
+                        .and_then(|witness| call.transform_native_witness(witness).ok())
+                })
+                .or_else(|| call.borrowed_output_witness().ok())
+        };
         // A projected iced Task takes this call's output witness.
         let output = match output.try_cast_result::<__rawr_internal::host::runtime::Unwitnessed>() {
-            Ok(pending) => {
-                // A method's task takes its witness from its receiver's.
-                let witness = call
-                    .output_witness()
-                    .ok()
-                    .or_else(|| {
-                        receiver
-                            .as_ref()
-                            .and_then(|witness| call.transform_native_witness(witness).ok())
-                    })
-                    // An async method that borrows its receiver (D513.6).
-                    .or_else(|| call.borrowed_output_witness().ok())
-                    .ok_or(Error::Stale)?;
-                pending.witness(witness).ok_or(Error::Stale)?
-            }
+            Ok(pending) => pending.witness(declared().ok_or(Error::Stale)?).ok_or(Error::Stale)?,
             Err(output) => output,
         };
         if let Some(handle) = output.read_lock::<NativeHandle>().map(|value| value.clone()) {
@@ -3262,104 +3263,14 @@ fn invoke_in_arena(
             if let Some(witness) = witness {
                 arguments.arena.attest(handle, witness)?;
             }
-        } else if let Ok(witness) = call
-            .output_witness()
-            .or_else(|_| call.borrowed_output_witness())
-        {
+        } else if let Some(witness) = declared() {
             // A Rust value inside an `Option` or a `Result` takes the
             // witness of its own type argument.
-            attest_inner(&output, &witness, arguments.arena)?;
-            attest_elements(&output, &witness, arguments.arena)?;
+            attest_within(&output, &witness, arguments.arena)?;
         }
         Ok(output)
     })
     .map_err(runtime_error)
-}
-
-fn attest_inner(
-    value: &Dynamic,
-    witness: &__rawr_internal::host::runtime::Witness,
-    arena: &mut Arena,
-) -> Result<(), Error> {
-    let mut copy = value.clone();
-    let inner = if __rawr_internal::option::is(value) {
-        __rawr_internal::option::take(&mut copy).flatten().map(|inner| (inner, 0))
-    } else if __rawr_internal::result::is(value) {
-        match __rawr_internal::result::take(&mut copy) {
-            Some(Ok(inner)) => Some((inner, 0)),
-            Some(Err(inner)) => Some((inner, 1)),
-            None => None,
-        }
-    } else {
-        None
-    };
-    if let Some((inner, index)) = &inner
-        && let Some(handle) = inner.read_lock::<NativeHandle>().map(|value| value.clone())
-        && let Some(witness) = witness.argument_witness(*index)
-    {
-        arena.attest(handle, witness)?;
-    } else if let Some((pointee, _, _)) = __rawr_internal::crossing::pointee(value)
-        && let Some(handle) = pointee.read_lock::<NativeHandle>().map(|value| value.clone())
-        && let Some(witness) = witness.argument_witness(0)
-    {
-        // The value an `Rc` or `Arc` a crate gave points to, as its type.
-        arena.attest(handle, witness)?;
-    } else if let Some((inner, index)) = inner_tuple(value)
-        && let Some(tuple) = witness.argument_witness(index)
-    {
-        // A variant's fields, as its matcher gives them.
-        for (member, element) in inner.iter().enumerate() {
-            if let Some(handle) = element.read_lock::<NativeHandle>().map(|value| value.clone())
-                && let Some(witness) = tuple.argument_witness(member)
-            {
-                arena.attest(handle, witness)?;
-            }
-        }
-    } else if let Some((inner, index)) = &inner
-        && inner.as_array_ref().is_ok()
-        && let Some(witness) = witness.argument_witness(*index)
-    {
-        // A tuple or a `Vec` inside a `Result`, as changelog's `Result<(Self,
-        // Vec<Contribution>), Error>`: each Rust value in it takes the
-        // witness of its own type.
-        attest_elements(inner, &witness, arena)?;
-    }
-    Ok(())
-}
-
-/// The Rust values inside an array or tuple, as a `Vec`, a slice or a
-/// tuple output gives them, each with the witness of its own type.
-fn attest_elements(
-    value: &Dynamic,
-    witness: &__rawr_internal::host::runtime::Witness,
-    arena: &mut Arena,
-) -> Result<(), Error> {
-    let Ok(elements) = value.as_array_ref() else {
-        return Ok(());
-    };
-    for (index, element) in elements.iter().enumerate() {
-        // An array's elements share its argument; a tuple's members have
-        // one each.
-        let Some(witness) = witness
-            .argument_witness(index)
-            .or_else(|| witness.argument_witness(0))
-        else {
-            continue;
-        };
-        match element.read_lock::<NativeHandle>().map(|value| value.clone()) {
-            Some(handle) => arena.attest(handle, witness)?,
-            None => attest_elements(element, &witness, arena)?,
-        }
-    }
-    Ok(())
-}
-
-/// The members of the tuple inside an `Option`'s `Some`.
-fn inner_tuple(value: &Dynamic) -> Option<(Vec<Dynamic>, usize)> {
-    let mut copy = value.clone();
-    let inner = __rawr_internal::option::take(&mut copy).flatten()?;
-    let members = inner.as_array_ref().ok()?.to_vec();
-    Some((members, 0))
 }
 
 fn runtime_project(
@@ -14957,10 +14868,12 @@ fn render_callable_closure(
     } else {
         format!("[{}]", values.join(", "))
     };
+    // The conversion's `?` is its own, not the closure's, whose output may
+    // be an `Option`.
     let converted = if native_output {
         in_arena(&converted)
     } else {
-        format!("({converted})")
+        format!("(|| {converted})()")
     };
     // An arena of the call's own on a thread with none (`CallArena`).
     let call_arena = if native_inputs || native_output {
@@ -19906,7 +19819,9 @@ mod tests {
         }
         let runtime = std::str::from_utf8(RUNTIME_SOURCE).unwrap();
         assert!(
-            runtime.contains("attest_elements(inner, &witness, arena)?;"),
+            runtime.contains(
+                "Ok(ok) => inner(0).map_or(Ok(()), |witness| attest_within(ok, &witness, arena))"
+            ),
             "a tuple inside a Result is attested"
         );
     }

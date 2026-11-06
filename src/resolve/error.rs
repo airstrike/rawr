@@ -1296,6 +1296,14 @@ impl fmt::Display for Described<'_> {
         match self.0 {
             "{integer}" => formatter.write_str("integer"),
             "{float}" => formatter.write_str("floating-point number"),
+            // The core's future is the opaque `impl Future` an async body
+            // gives, which rustc calls a future.
+            ty if ty
+                .strip_prefix(crate::future::facade::FUTURE)
+                .is_some_and(|rest| rest.starts_with('<')) =>
+            {
+                formatter.write_str("future")
+            }
             ty => write!(formatter, "`{ty}`"),
         }
     }
