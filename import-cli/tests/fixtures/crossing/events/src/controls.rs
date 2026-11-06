@@ -600,10 +600,18 @@ impl<T> Subscription<T> {
         }
     }
 
-    /// The subscription with each message turned into another by `f`.
-    pub fn map<A>(self, f: impl Fn(T) -> A + 'static) -> Subscription<A> {
+    /// The subscription with each message turned into another by `f`,
+    /// which `f` makes on another thread, as iced's executor runs
+    /// `Subscription::map`'s function.
+    pub fn map<A>(self, f: impl Fn(T) -> A + crate::MaybeSend + 'static) -> Subscription<A>
+    where
+        T: crate::MaybeSend + 'static,
+        A: crate::MaybeSend + 'static,
+    {
         Subscription {
-            messages: self.messages.into_iter().map(f).collect(),
+            messages: std::thread::spawn(move || self.messages.into_iter().map(f).collect())
+                .join()
+                .expect("the mapping thread finishes"),
         }
     }
 }
@@ -653,6 +661,24 @@ pub mod time {
     /// `millis` milliseconds, as iced's `time::milliseconds`.
     pub fn milliseconds(millis: u64) -> Duration {
         Duration::from_millis(millis)
+    }
+
+    /// A moment of the local clock, as chrono's `DateTime<Local>`: the
+    /// count of moments read before it, so each run reads the same.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Stamp(u64);
+
+    impl Stamp {
+        /// The clock's next moment, as chrono's `Local::now()`.
+        pub fn now() -> Self {
+            static READ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            Stamp(READ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1)
+        }
+
+        /// The moment's second, as chrono's `Timelike::second`.
+        pub fn second(&self) -> u64 {
+            self.0
+        }
     }
 
     /// The first three ticks of a clock every `duration`, each the instant

@@ -778,6 +778,22 @@ fn std_types_a_crate_re_exports_cross_by_value() {
     );
 }
 
+/// iced's clock (#981): native code calls the subscription's closure,
+/// `|_| Message::Tick(Stamp::now())`, and the boot task's function on
+/// another thread, and each reads the crate's clock into the message. The
+/// message is made where it is delivered, where the owner's arena holds
+/// the crate value. The output is `cargo run`'s.
+#[test]
+fn a_closure_native_code_calls_on_another_thread_makes_a_crate_value() {
+    let (rawr, cargo) = both_printed("clock.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("boot message Tick(Stamp(2))\nheard Tick(Stamp(3))")
+            && rawr.ends_with("last view pad 0 '4 ticks at 5'@16"),
+        "{rawr}"
+    );
+}
+
 /// iced's exit and events: `latest().and_then(..)` takes a script closure,
 /// or the generic crate function `close` as `and_then(window::close)` does,
 /// on a `Task<Option<u32>>`. The crate overloads `and_then` by the task's
