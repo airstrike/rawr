@@ -15,3 +15,7 @@ doc/rawr.json
 src/eval/chaining.rs
 .zed/
 .Codex/
+
+# ?play universe programs, written by play/universe/examples.sh.
+play/universe/src/examples/
+play/universe/src/examples.rs

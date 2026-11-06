@@ -1,0 +1,10 @@
+# iced's examples the universe covers (#1000), by name, at the universe's
+# pinned rev: each one that runs under `rawr run` and needs no files, no
+# network and no crate beyond the universe's own. examples.sh copies them
+# into the universe program, and a snippet that makes the native calls one
+# of them makes runs on the runner.
+arc
+counter
+pick_list
+progress_bar
+tooltip

@@ -7,6 +7,7 @@
 //! They need the runner built first, so they are ignored by default:
 //!
 //! ```sh
+//! sh play/universe/examples.sh
 //! RAWR_UNIVERSE_RUNNER=1 rawr-import run play/universe
 //! cargo test -p rawr-play --test universe -- --ignored
 //! ```
@@ -14,7 +15,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-const NEEDS_RUNNER: &str = "needs the runner: RAWR_UNIVERSE_RUNNER=1 rawr-import run play/universe";
+const NEEDS_RUNNER: &str = "needs the runner: sh play/universe/examples.sh, then RAWR_UNIVERSE_RUNNER=1 rawr-import run play/universe";
 
 /// Run `source` through the CLI on the universe runner.
 fn run(source: &str) -> std::process::Output {
@@ -649,6 +650,35 @@ fn keys_and_frames_with_a_scale_factor_answer_with_a_gif() {
         .read_info(image.as_slice())
         .unwrap();
     assert_eq!((decoder.width(), decoder.height()), (1536, 1152));
+}
+
+/// The universe's programs run as snippets (#1000): iced's arc draws on a
+/// canvas of a `.theme(..)`, and ?play's solar system, iced's drawn with
+/// plain shapes, is `application::timed` with a theme function, a cache's
+/// fills, a dashed stroke, rotations and translations. Each animates.
+#[test]
+#[ignore = "needs the universe runner"]
+fn the_universes_canvas_programs_answer_with_a_gif() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("universe");
+    for program in [
+        root.join("src/examples/arc.rs"),
+        root.join("programs/solar_system.rs"),
+    ] {
+        let source = std::fs::read_to_string(&program).unwrap();
+        let output = output(&run(&source).stdout);
+        assert_eq!(output.status, 0, "{}: {}", program.display(), output.text());
+        let image = output.frame.expect("the canvas drew");
+        assert_eq!(rawr_play::plain::image_kind(&image), Some("gif"));
+        let mut decoder = gif::DecodeOptions::new()
+            .read_info(image.as_slice())
+            .unwrap();
+        assert_eq!((decoder.width(), decoder.height()), (1024, 768));
+        let mut frames = 0;
+        while decoder.read_next_frame().unwrap().is_some() {
+            frames += 1;
+        }
+        assert!(frames > 1, "{}: {frames} frames", program.display());
+    }
 }
 
 /// A call the universe program doesn't make, at the types it makes it or

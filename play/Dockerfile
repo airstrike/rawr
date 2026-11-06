@@ -63,7 +63,9 @@ RUN --mount=type=cache,id=rawr-play-build-registry,target=/usr/local/cargo/regis
 
 # The universe runner (#434, #436): rawr-import builds generated bindings
 # for play/universe (iced at the pinned rev, iced_test and tokio) and the
-# runner that links them, once, here. iced's shell there is ?play's own
+# runner that links them, once, here. examples.sh first copies the iced
+# examples play/universe/examples.txt names, from iced's checkout at that
+# rev, into the universe program (#1000). iced's shell there is ?play's own
 # (play/universe/shell), which draws an iced program's first settled frame
 # to a PNG instead of opening a window. The bot runs each snippet on that
 # runner with no Cargo and no nightly. This stage runs on the target
@@ -99,6 +101,7 @@ RUN --mount=type=cache,id=rawr-play-universe-registry,target=/usr/local/cargo/re
     && CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
       cargo build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver \
     && cp -r play/universe/. /universe/ \
+    && sh /universe/examples.sh \
     && RAWR_UNIVERSE_RUNNER=1 /src/target/release/rawr-import run /universe \
     && install -D -m 0755 /universe/target/rawr/runner/target/debug/play /out/universe/runner \
     && install -D -m 0644 /universe/Cargo.toml /out/universe/Cargo.toml

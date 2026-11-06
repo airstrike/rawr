@@ -13,6 +13,14 @@
 //! scale factor (#863). A script function a call
 //! takes fills it by its place, whatever it is named, so a snippet's
 //! `view` or message meets this program's.
+//!
+//! Its `examples` are programs of their own (#1000): iced's examples that
+//! `examples.txt` names and ?play's own in `programs/`, which
+//! `examples.sh` copies here. Each has its own `main`, so the runner counts
+//! its types from zero, as a snippet's are, and a snippet that makes the
+//! native calls one of them makes runs as it does.
+
+mod examples;
 
 use iced::keyboard::{self, key};
 use iced::widget::{button, column, pick_list, row, slider, text, Widget};
