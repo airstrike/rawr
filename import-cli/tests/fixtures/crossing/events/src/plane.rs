@@ -76,3 +76,50 @@ impl<T: Mul<Output = T> + Copy> Mul<T> for Vector<T> {
         Self::new(self.x * scale, self.y * scale)
     }
 }
+
+/// An area, as iced's `Rectangle`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Rectangle<T = f32> {
+    /// Its left edge.
+    pub x: T,
+    /// Its top edge.
+    pub y: T,
+    /// Across.
+    pub width: T,
+    /// Down.
+    pub height: T,
+}
+
+/// Where the mouse is, as iced's `mouse::Cursor`: `Copy`, and its methods
+/// take it by value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Cursor {
+    /// Over the window, at a point.
+    Available(Point),
+    /// Outside it.
+    Unavailable,
+}
+
+impl Cursor {
+    /// The cursor's point from the corner of `bounds`, when it is over
+    /// them, as iced's `Cursor::position_in`.
+    pub fn position_in(self, bounds: Rectangle) -> Option<Point> {
+        match self {
+            Self::Available(point)
+                if point.x >= bounds.x
+                    && point.y >= bounds.y
+                    && point.x <= bounds.x + bounds.width
+                    && point.y <= bounds.y + bounds.height =>
+            {
+                Some(point - Vector::new(bounds.x, bounds.y))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// What `update` gives for `cursor`, as a canvas program's `update` is
+/// handed the cursor by native code.
+pub fn hover<T>(cursor: Cursor, update: impl Fn(Cursor) -> Option<T>) -> Option<T> {
+    update(cursor)
+}
