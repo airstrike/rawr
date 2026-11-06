@@ -275,12 +275,12 @@ impl Frame {
         self.out_{slot}(arguments.arena, handle)
     }}
 
-    fn shared_{slot}<R>(&self, arena: &Arena, handle: NativeHandle, call: impl FnOnce(&{rust}) -> R) -> Result<R, Error> {{
+    fn shared_{slot}<RawrOutput>(&self, arena: &Arena, handle: NativeHandle, call: impl FnOnce(&{rust}) -> RawrOutput) -> Result<RawrOutput, Error> {{
         let at = frame_index(arena, handle, self.nonce, {slot})?;
         self.s{slot}.get(at).and_then(Option::as_ref).map(call).ok_or(Error::StaleHandle)
     }}
 
-    fn mutable_{slot}<R>(&mut self, arena: &mut Arena, handle: NativeHandle, call: impl FnOnce(&mut {rust}) -> R) -> Result<R, Error> {{
+    fn mutable_{slot}<RawrOutput>(&mut self, arena: &mut Arena, handle: NativeHandle, call: impl FnOnce(&mut {rust}) -> RawrOutput) -> Result<RawrOutput, Error> {{
         let at = frame_index(arena, handle, self.nonce, {slot})?;
         self.s{slot}.get_mut(at).and_then(Option::as_mut).map(call).ok_or(Error::StaleHandle)
     }}

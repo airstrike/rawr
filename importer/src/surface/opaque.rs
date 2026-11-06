@@ -192,3 +192,27 @@ pub fn parameters(
     }
     names.into_boxed_slice()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{is_parameter, parameter_of, parameter_path, parameter_projection};
+
+    #[test]
+    fn a_parameter_path_names_its_method_index_and_projection() {
+        let path = parameter_path("visits::Visit", "visit_map", 0, None);
+        assert_eq!(
+            path,
+            "visits::Visit::__rawr_self::__rawr_opaque___rawr_param_visit_map_0"
+        );
+        assert_eq!(parameter_of(&path), Some(("visit_map", 0, None)));
+        let projected = parameter_projection(&path, "Out").expect("a projection's path");
+        assert_eq!(
+            projected,
+            parameter_path("visits::Visit", "visit_map", 0, Some("Out"))
+        );
+        assert_eq!(parameter_of(&projected), Some(("visit_map", 0, Some("Out"))));
+        assert_eq!(parameter_projection(&projected, "Other"), None);
+        assert!(is_parameter("visits::Visit::__rawr_self::__rawr_param_visit_0"));
+        assert!(!is_parameter("visits::Visit::__rawr_self::visit"));
+    }
+}

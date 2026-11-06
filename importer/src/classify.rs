@@ -5104,7 +5104,33 @@ impl<P: api::Phase> Context<'_, P> {
                         continue;
                     }
                     names.push(name.into());
-                    let selector = selector(method)?;
+                    // The trait's type parameters share its export, so each
+                    // one's member is its own by the opaque type's
+                    // definition.
+                    let selector = match selector(method)? {
+                        crate::surface::identity::Selector::Method { receiver, .. }
+                            if parameter_opaque_id(id) =>
+                        {
+                            crate::surface::identity::Selector::Method {
+                                item: crate::surface::identity::Definition::self_member(
+                                    id,
+                                    method.id(),
+                                ),
+                                receiver,
+                            }
+                        }
+                        crate::surface::identity::Selector::AssociatedFunction { .. }
+                            if parameter_opaque_id(id) =>
+                        {
+                            crate::surface::identity::Selector::AssociatedFunction {
+                                item: crate::surface::identity::Definition::self_member(
+                                    id,
+                                    method.id(),
+                                ),
+                            }
+                        }
+                        selector => selector,
+                    };
                     self.retain_selector(&selector)?;
                     let identity =
                         crate::surface::identity::Identity::imported(export, None, selector)?;
