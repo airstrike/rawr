@@ -18423,14 +18423,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 let item_path = item.path();
-                let output = self
-                    .proven_type(&output, &item_path, span)
-                    .inspect_err(|_| {
-                        eprintln!(
-                            "RAWRDEBUG output {item_path}: {}",
-                            self.inference.resolve(&output).name(&self.models)
-                        )
-                    })?;
+                let output = self.proven_type(&output, &item_path, span)?;
                 // A host call gives back each `&mut` array and string it
                 // copies in after its value (`copied_places`).
                 let copies = operands
@@ -18460,12 +18453,6 @@ impl<'a> Parser<'a> {
                     .filter(|(ty, _, _)| !ty.is_imported_static_operand())
                     .map(|(ty, operand, receiver)| {
                         self.proven_type(ty, &item_path, *operand)
-                            .inspect_err(|_| {
-                                eprintln!(
-                                    "RAWRDEBUG operand {item_path}: {}",
-                                    self.inference.resolve(ty).name(&self.models)
-                                )
-                            })
                             .map(|ty| intrinsic::Operand::new(ty, *operand, *receiver))
                     })
                     .collect::<Result<Vec<_>, _>>()?
