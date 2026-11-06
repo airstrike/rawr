@@ -1511,7 +1511,9 @@ impl<'o, O: Oracle> Engine<'o, O> {
                 ));
             }
             let mut reexports = inherited.to_vec();
-            if names_only {
+            // A derive names no definition, so the crates its re-export
+            // passes through, a proc macro's among them, aren't loaded.
+            if names_only && !matches!(export.target, ChildTarget::Derive) {
                 for hop in &export.hops {
                     self.register(hop.clone())?;
                 }
@@ -2298,7 +2300,13 @@ mod tests {
                 variant: None,
                 span: span(),
                 reexports: Vec::new(),
-                hops: Vec::new(),
+                // Through the proc-macro crate that defines it, which the
+                // walk doesn't load.
+                hops: vec![super::Crate {
+                    sysroot: false,
+                    crate_name: "fixture_derive".to_owned(),
+                    stable_crate_id: "fedcba9876543210".to_owned(),
+                }],
                 target: ChildTarget::Derive,
             }),
         });
@@ -2324,6 +2332,14 @@ mod tests {
             super::ExportTarget::Unsupported { compiler_kind }
                 if compiler_kind == super::DERIVE_MACRO
         ));
+        assert!(
+            extracted
+                .crates
+                .iter()
+                .all(|krate| krate.crate_name != "fixture_derive"),
+            "{:?}",
+            extracted.crates
+        );
     }
 
     /// A type a demanded item's signature names that no public path of the
