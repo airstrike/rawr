@@ -13,7 +13,7 @@ use sha2::{Digest as _, Sha256};
 use crate::classify::representability::convert;
 use crate::surface::{adapter, identity};
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// Borrowed compiler facts for one use, without diagnostic source locations.
 /// A selector that names its item is the use's identity: the path, which
@@ -35,6 +35,11 @@ pub struct Use<'a, P = &'a str> {
     /// uses that differ only in them are two instances, as two Rust
     /// function items are two types.
     pub slots: &'a [crate::surface::instance::Slot],
+    /// Whether it takes a script closure for an `F: FnOnce` parameter, as
+    /// canvas's `Cache::draw` and `Path::new` do: the adapter calls
+    /// whichever closure the use passes, so the closure is no part of it
+    /// (#1000).
+    pub callable: bool,
 }
 
 /// Borrowed exact static function operand at one formal position, its path
@@ -143,12 +148,13 @@ where
 impl<P: Serialize> Serialize for Use<'_, P> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct as _;
-        let mut fields = serializer.serialize_struct("Use", 5)?;
+        let mut fields = serializer.serialize_struct("Use", 6)?;
         fields.serialize_field("path", &unnamed(self.selector).then_some(&self.path))?;
         fields.serialize_field("selector", self.selector)?;
         fields.serialize_field("endpoint", &self.endpoint)?;
         fields.serialize_field("types", self.types)?;
         fields.serialize_field("slots", self.slots)?;
+        fields.serialize_field("callable", &self.callable)?;
         fields.end()
     }
 }
@@ -358,11 +364,11 @@ impl Projection<'_> {
             .iter()
             .map(crate::surface::Entry::identity)
             .find(|identity| identity.as_bytes() == plan.identity().as_bytes())?;
-        // The executable collector currently exposes type substitutions and
-        // direct static operands. Other instance dimensions cannot be guessed.
+        // The executable collector exposes type substitutions, direct
+        // static operands and whether a script closure fills a callable
+        // parameter. Other instance dimensions cannot be guessed.
         if !identity.constants().is_empty()
             || !identity.binders().is_empty()
-            || identity.callable().is_some()
             || !identity.types().iter().all(|ty| concrete(ty, 0))
         {
             return None;
@@ -483,6 +489,7 @@ impl Selected<'_> {
                 endpoint: None,
                 types: self.identity.types(),
                 slots: self.identity.slots(),
+                callable: self.identity.callable().is_some(),
             },
             functions: Sequence(
                 self.functions
@@ -710,6 +717,7 @@ fn endpoint_facts(
             endpoint: Some(endpoint.site().selector()),
             types: &[],
             slots: &[],
+            callable: false,
         },
         functions: Sequence(std::iter::empty::<Function<'_>>()),
         mappers: Sequence(std::iter::empty::<Mapper<'_>>()),
@@ -732,7 +740,11 @@ fn concrete(ty: &convert::Type, depth: usize) -> bool {
         return false;
     }
     match ty {
-        convert::Type::Parameter(_) | convert::Type::FunctionItem { .. } => false,
+        convert::Type::Parameter(_) => false,
+        // A crate's function item, which the use's functions name.
+        convert::Type::FunctionItem { input, output } => {
+            concrete(input, depth + 1) && concrete(output, depth + 1)
+        }
         convert::Type::Nominal { arguments, .. } => {
             arguments.iter().all(|ty| concrete(ty, depth + 1))
         }
@@ -952,6 +964,7 @@ mod tests {
             endpoint: None,
             types: &[],
             slots: &[],
+            callable: false,
         };
         let matched = carrier
             .cover(used, std::iter::empty(), std::iter::empty())
@@ -961,6 +974,17 @@ mod tests {
             .cover(
                 Use {
                     path: "fixture::item_1",
+                    ..used
+                },
+                std::iter::empty(),
+                std::iter::empty(),
+            )
+            .is_none());
+        // A use that passes a script closure is another instance (#1000).
+        assert!(carrier
+            .cover(
+                Use {
+                    callable: true,
                     ..used
                 },
                 std::iter::empty(),
@@ -1030,6 +1054,7 @@ mod tests {
             endpoint: None,
             types: &[],
             slots: &[],
+            callable: false,
         };
         let moved_functions = moved.entries[0]
             .identity()
@@ -1129,6 +1154,7 @@ mod tests {
             endpoint: None,
             types: &types,
             slots: &[],
+            callable: false,
         };
         let matched = carrier
             .cover(used, std::iter::empty(), std::iter::empty())
@@ -1230,6 +1256,7 @@ mod tests {
             endpoint: None,
             types: &types,
             slots: &[],
+            callable: false,
         };
         let facts = Facts {
             used,
@@ -1306,6 +1333,7 @@ mod tests {
                 endpoint: None,
                 types: &[],
                 slots: &[],
+                callable: false,
             },
             functions: Sequence(std::iter::empty::<Function<'_>>()),
             mappers: Sequence(std::iter::empty::<Mapper<'_>>()),

@@ -5,8 +5,11 @@
 //! It names each script type by its index in the program's definition
 //! order (`__RawrScript0`, `__RawrScript1`, ..), so the runner names no
 //! script type and two programs that differ only in their type names run
-//! on one binary. A project's runner names script types as the program
-//! does, so `type_name` and iced's window title are the program's (D594).
+//! on one binary. A module with its own `main` is a program of its own
+//! there, and counts its types from zero, so one runner serves each of
+//! the programs it holds as it serves a snippet that is one of them
+//! (#1000). A project's runner names script types as the program does,
+//! so `type_name` and iced's window title are the program's (D594).
 //!
 //! The setting is one per process. `rawr-import` takes it from
 //! `RAWR_UNIVERSE_RUNNER=1` when it builds the runner; the generated runner

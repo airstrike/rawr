@@ -6,5 +6,4 @@
 arc
 counter
 pick_list
-progress_bar
 tooltip

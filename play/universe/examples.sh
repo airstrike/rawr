@@ -1,9 +1,10 @@
 #!/bin/sh
 # The universe's programs (#1000): each iced example `examples.txt` names,
 # from iced at the universe's pinned rev, and each of ?play's own in
-# `programs/`, as a module of the universe program (`src/examples/`). A
-# module with its own `main` is a program of its own to the runner, so a
-# snippet that makes the native calls one of them makes runs as it does.
+# `programs/`, as a module of the universe program (`src/examples/`),
+# marked `// rawr` as Rawr source. A module with its own `main` is a
+# program of its own to the runner, so a snippet that makes the native
+# calls one of them makes runs as it does.
 #
 # The image's universe stage runs it before it builds the runner. Locally:
 #   sh play/universe/examples.sh
@@ -27,12 +28,18 @@ out="$universe/src/examples"
 rm -rf "$out"
 mkdir -p "$out"
 {
+  echo "// rawr"
   echo "//! The universe's programs, written by examples.sh: each module is"
   echo "//! iced's example of its name, or ?play's own (programs/)."
 } > "$universe/src/examples.rs"
 
 add() {
   echo "mod $1;" >> "$universe/src/examples.rs"
+}
+
+# `$1` copied to `$2` as Rawr source.
+marked() {
+  { echo "// rawr"; cat "$1"; } > "$2"
 }
 
 # One name per line; `#` starts a comment.
@@ -43,14 +50,14 @@ sed -e 's/#.*//' -e 's/[[:space:]]//g' "$universe/examples.txt" | while read -r 
     echo "examples.sh: iced has no example '$name'" >&2
     exit 1
   fi
-  cp "$source/main.rs" "$out/$name.rs"
+  marked "$source/main.rs" "$out/$name.rs"
   # An example's other files are its main module's, below its name.
   for file in "$source"/*; do
     case "$file" in
       "$source/main.rs") ;;
       *)
         mkdir -p "$out/$name"
-        cp -R "$file" "$out/$name/"
+        marked "$file" "$out/$name/$(basename "$file")"
         ;;
     esac
   done
@@ -59,6 +66,6 @@ done
 
 for program in "$universe"/programs/*.rs; do
   name="$(basename "$program" .rs)"
-  cp "$program" "$out/$name.rs"
+  marked "$program" "$out/$name.rs"
   add "$name"
 done

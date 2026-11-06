@@ -98,7 +98,22 @@ that passes two different functions to calls of one shape, such as two
 cover another call, make it in that program; the runner binds what its
 program uses.
 
-Locally, after `RAWR_UNIVERSE_RUNNER=1 rawr-import run play/universe`:
+The universe program also holds whole programs (#1000): every iced
+example that `play/universe/examples.txt` names, at the universe's pinned
+rev, and ?play's own in `play/universe/programs` (iced's solar_system drawn
+with plain shapes, since iced's own reads image files).
+`play/universe/examples.sh` copies them into `src/examples/`, each a
+module with its own `main`, from iced's checkout as Cargo resolved the
+universe's iced; the image runs it before it builds the runner. A module
+with its own `main` is a program of its own to a universe runner, so it
+counts its script types from zero, as a snippet does. A snippet that is
+one of them, or makes the calls one of them makes, runs whatever its types
+are called. The list names each iced example that runs under `rawr run`
+and needs no files, no network and no crate beyond the universe's; add one
+to it as it starts to run.
+
+Locally, after `sh play/universe/examples.sh` and
+`RAWR_UNIVERSE_RUNNER=1 rawr-import run play/universe`:
 
 ```sh
 PLAY_UNIVERSE=$PWD/play/universe \

@@ -144,6 +144,7 @@ impl Output {
                     endpoint: None,
                     types: &used.types,
                     slots: &used.slots,
+                    callable: used.callable,
                 },
                 used.functions.iter().map(|function| coverage::Function {
                     position: function.position,

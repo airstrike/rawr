@@ -11,7 +11,8 @@
 //!   bound such as `Default` is its own implementation's. A universe
 //!   runner (`rawr_import::universe`), which serves many programs, names it
 //!   by its index in the program's definition order (`__RawrScript0`, ..)
-//!   instead, and finds its `Default` by that index. The proxy holds a
+//!   instead, and finds its `Default` by that index. A module with its own
+//!   `main` is a program of its own there, whose types count from zero. The proxy holds a
 //!   shared handle to the script value, so native code that lends it to
 //!   script code lends the value itself, and nothing is copied.
 //! - A script function is a [`Slot`]: a function item the runner
