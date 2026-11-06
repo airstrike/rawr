@@ -1,16 +1,24 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-05",
-  "version": "0.3.147",
+  "updated": "2026-11-06",
+  "version": "0.3.148",
   "examples": {
-    "running": 23,
+    "running": 24,
     "total": 56,
-    "note": "0.3.145: 15 ran at the 0.3.135 survey, plus table, custom_quad, gradient, sierpinski_triangle, multi_window, arc, multitouch and clock (#951-#954, #352)"
+    "note": "0.3.148: 15 ran at the 0.3.135 survey, plus table, custom_quad, gradient, sierpinski_triangle, multi_window, arc, multitouch, clock and solar_system"
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.148",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"A function or closure that native code calls on another thread and that gives a value of a program type, as iced's `Subscription::map(|_| Message::Tick(Local::now()))`, now runs on the program's thread where its value is first used, so it can make imported values. iced's clock runs.","issues":[981]},
+          {"text":"An opaque program whose bound binds an associated type to a tuple, as `application::timed(..)`'s `Message = (Message, Instant)`, keeps that binding, so `.theme(..)` and the other builder methods read it. iced's solar_system runs.","issues":[979]}
+        ]
+      },
       {
         "version": "0.3.147",
         "date": "2026-11-05",
@@ -2393,9 +2401,9 @@
     {"issue":976,"title":"A derive expansion's syntax in program code","state":"closed","category":"Divergences from rustc","release":"0.3.144"},
     {"issue":977,"title":"std trait-path calls with a turbofish or a written Self","state":"open","category":"Divergences from rustc"},
     {"issue":978,"title":"`fmt::Formatter::write_str(f, s)` by its path in a fmt body","state":"open","category":"Divergences from rustc"},
-    {"issue":979,"title":"solar_system: iced::application::timed(..).theme(..) fails at runner start with E0282","state":"open","category":"Divergences from rustc"},
+    {"issue":979,"title":"solar_system: iced::application::timed(..).theme(..) fails at runner start with E0282","state":"closed","category":"Divergences from rustc","release":"0.3.148"},
     {"issue":980,"title":"bezier_tool: Cursor::position_in gives an Option<Point> that fails attestation against Option<iced::Point<f64>>","state":"open","category":"Divergences from rustc"},
-    {"issue":981,"title":"clock: subscription closure panics with Stale on a tokio worker","state":"open","category":"Divergences from rustc"},
+    {"issue":981,"title":"clock: subscription closure panics with Stale on a tokio worker","state":"closed","category":"Divergences from rustc","release":"0.3.148"},
     {"issue":982,"title":"Crossing tests fail with 'runner did not connect before the protocol deadline' under load","state":"open","category":"Health"},
     {"issue":983,"title":"A lent struct's field that borrows for the struct can't be read by script code","state":"open","category":"Divergences from rustc"},
     {"issue":984,"title":"A crate derive's expansion from the driver","state":"closed","category":"Divergences from rustc","release":"0.3.145"},
@@ -2893,9 +2901,9 @@
             {"number":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"closed"},
             {"number":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed"},
             {"number":976,"title":"A derive expansion's syntax in program code","state":"closed"},
-            {"number":979,"title":"solar_system: iced::application::timed(..).theme(..) fails at runner start with E0282","state":"open"},
+            {"number":979,"title":"solar_system: iced::application::timed(..).theme(..) fails at runner start with E0282","state":"closed"},
             {"number":980,"title":"bezier_tool: Cursor::position_in gives an Option<Point> that fails attestation against Option<iced::Point<f64>>","state":"open"},
-            {"number":981,"title":"clock: subscription closure panics with Stale on a tokio worker","state":"open"},
+            {"number":981,"title":"clock: subscription closure panics with Stale on a tokio worker","state":"closed"},
             {"number":983,"title":"A lent struct's field that borrows for the struct can't be read by script code","state":"open"},
             {"number":984,"title":"A crate derive's expansion from the driver","state":"closed"},
             {"number":985,"title":"`rawr check` asks for a crate derive's expansion and checks the items","state":"closed"},

@@ -1,11 +1,11 @@
 {
   "$schema": "schema/gantt.schema.json",
-  "updated": "2026-11-05",
-  "version": "0.3.147",
+  "updated": "2026-11-06",
+  "version": "0.3.148",
   "examples": {
-    "running": 23,
+    "running": 24,
     "total": 56,
-    "note": "0.3.145: 15 ran at the 0.3.135 survey, plus table, custom_quad, gradient, sierpinski_triangle, multi_window, arc, multitouch and clock (#951-#954, #352)"
+    "note": "0.3.148: 15 ran at the 0.3.135 survey, plus table, custom_quad, gradient, sierpinski_triangle, multi_window, arc, multitouch, clock and solar_system"
   },
   "groups": [
     {
