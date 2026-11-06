@@ -3229,7 +3229,7 @@ fn invoke_in_arena(
             .and_then(|value| value.read_lock::<NativeHandle>().map(|value| value.clone()))
             .and_then(|handle| arena.witness(handle).cloned());
         let mut arguments = Arguments { values, arena };
-        let output = (adapter.invoke)(&mut arguments).inspect_err(|error| { if error.bug().is_some() { eprintln!("RAWRDEBUG identity {:#04x?} signature {:#04x?}", &adapter.identity[..4], &adapter.signature[..4]); } })?;
+        let output = (adapter.invoke)(&mut arguments)?;
         // A projected iced Task takes this call's output witness.
         let output = match output.try_cast_result::<__rawr_internal::host::runtime::Unwitnessed>() {
             Ok(pending) => {
