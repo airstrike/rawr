@@ -1,12 +1,19 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.152",
+  "version": "0.3.153",
   "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.153",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"?play runs iced's canvas programs. The bot's universe now holds iced's arc, counter and pick_list examples and a solar system drawn with plain shapes, each as a program of its own, so a snippet that makes their calls (a canvas `Program` with its `Cache`, `Frame` fills and strokes, a `LineDash`, rotations and translations, `iced::application::timed` and `.theme(..)`) runs and answers with an animated GIF.","issues":[1000]}
+        ]
+      },
       {
         "version": "0.3.152",
         "date": "2026-11-06",
@@ -2454,7 +2461,7 @@
     {"issue":997,"title":"Application path: `x.into()` beside an unimported crate trait's own `into`","state":"open","category":"Divergences from rustc"},
     {"issue":998,"title":"A check of one iced project makes 4-5 resolution executions of 360-424 MB each","state":"open","category":"Health"},
     {"issue":999,"title":"Every check leaves empty execution-key directories in the store","state":"open","category":"Health"},
-    {"issue":1000,"title":"?play's universe has no canvas, application::timed or Application::theme","state":"open","category":"iced examples"},
+    {"issue":1000,"title":"?play's universe has no canvas, application::timed or Application::theme","state":"closed","category":"iced examples","release":"0.3.153"},
     {"issue":1001,"title":"`Option::get_or_insert_with` and `Option::insert` don't run yet","state":"open","category":"Divergences from rustc"},
     {"issue":1002,"title":"A std associated function's path as a value: `get_or_insert_with(Instant::now)`","state":"open","category":"Divergences from rustc"},
     {"issue":1003,"title":"Generic trait methods: a program's impl of a crate trait's generic method (#593 step 0)","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
@@ -2481,7 +2488,9 @@
     {"issue":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open","category":"Health"},
     {"issue":1025,"title":"Intrinsic facts captured this run under a stale nightly build-script output aren't recaptured after the clean","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"open","category":"Health"},
-    {"issue":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed","category":"Divergences from rustc","release":"0.3.152"}
+    {"issue":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
+    {"issue":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"open","category":"Divergences from rustc"},
+    {"issue":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3365,11 +3374,13 @@
           "state": "now",
           "note": "Canvas, timed(..) and theme(..) for solar_system (#1000)",
           "issues": [
-            {"number":1000,"title":"?play's universe has no canvas, application::timed or Application::theme","state":"open"},
+            {"number":1000,"title":"?play's universe has no canvas, application::timed or Application::theme","state":"closed"},
             {"number":1019,"title":"Universe build overflows the stack at \"building API\" since 0.3.150","state":"closed"},
             {"number":1020,"title":"Universe main panics: a value reached an adapter as a type its signature doesn't take","state":"closed"},
             {"number":1021,"title":"rawr-play lib tests fail: endless-loop snippets, D683.4 refusals, a 100 ms budget","state":"closed"},
-            {"number":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open"}
+            {"number":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open"},
+            {"number":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"open"},
+            {"number":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open"}
           ]
         }
       ]

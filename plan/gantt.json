@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-06",
-  "version": "0.3.152",
+  "version": "0.3.153",
   "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "groups": [
     {
@@ -141,7 +141,7 @@
         {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"done","note":"iced snippets render frames, tokio runs, and GIFs play at the program's pace","issues":[434,436,465,507,515]},
         {"id":"browser-wasm-bindings","name":"wasm bindings for the browser","start":58,"size":5,"state":"next","note":"rawr-web","issues":[435]},
         {"id":"play-universe-limits","name":"?play on a small CPU","start":71,"size":3,"state":"done","note":"Check-time errors, a wider universe, no deadline while idle, every frame drawn at the program's pace","issues":[863,872,880,888,889,890,918,919,920],"milestone":"0.3"},
-        {"id":"universe-coverage","name":"?play covers what the examples use","start":86,"size":2,"state":"now","note":"Canvas, timed(..) and theme(..) for solar_system (#1000)","issues":[1000,1019,1020,1021,1024]}
+        {"id":"universe-coverage","name":"?play covers what the examples use","start":86,"size":2,"state":"now","note":"Canvas, timed(..) and theme(..) for solar_system (#1000)","issues":[1000,1019,1020,1021,1024,1028,1029]}
       ]
     },
     {
