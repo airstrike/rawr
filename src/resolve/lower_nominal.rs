@@ -12036,6 +12036,10 @@ struct Parser<'a> {
     /// Each `let`'s local, in the order the body declares them: where an
     /// inference variable nothing settles is reported (`unsettled`).
     local_types: Vec<LocalType>,
+    /// The type of each local whose value never comes (`let v = loop {}`):
+    /// one its uses leave open is `!` once the body is read, as rustc's
+    /// fallback of a diverging type (`fall_back_diverging`).
+    diverging: Vec<Ty>,
     /// Reads of a crate struct's field that leave the struct whole, by
     /// their span: a by-value use moves that field out, as Rust's partial
     /// move (`move_local`).
@@ -12503,6 +12507,7 @@ impl<'a> Parser<'a> {
             deferred: BTreeMap::new(),
             uninitialized: Vec::new(),
             local_types: Vec::new(),
+            diverging: Vec::new(),
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
             owning_closures: BTreeSet::new(),
@@ -15049,6 +15054,17 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Each local whose value never comes and whose uses gave it no type
+    /// is `!`, as rustc's 2024 fallback makes it: `format!("{v:?}")` of
+    /// `let v = loop {}` checks, and never runs.
+    fn fall_back_diverging(&mut self) {
+        for open in std::mem::take(&mut self.diverging) {
+            if let Ty::Infer(id) = self.inference.resolve(&open) {
+                self.inference.bind(id, Ty::Never);
+            }
+        }
+    }
+
     /// Write each pending `format!` piece over its placeholder, now that
     /// its value's type is known.
     fn finish_formats(&mut self) -> Result<(), Error> {
@@ -15083,6 +15099,8 @@ impl<'a> Parser<'a> {
             };
             let rendered = match &ty {
                 Ty::Infer(_) => return Err(mismatch(expected)),
+                // A value that never comes is never written.
+                Ty::Never => name,
                 Ty::Float(kind) => {
                     let mode = i64::from(pending.debug) + if *kind == Float::F32 { 2 } else { 0 };
                     let precision = pending.precision.clone().unwrap_or_else(|| "-1".into());
@@ -18114,6 +18132,7 @@ impl<'a> Parser<'a> {
     /// known, and write it over the placeholder (same length, so source
     /// locations stay exact).
     fn finish_conversions(&mut self) -> Result<(), Error> {
+        self.fall_back_diverging();
         for (target, item, collect) in std::mem::take(&mut self.pending_collects) {
             self.collected_into(&target, &item, collect)?;
         }
@@ -25136,7 +25155,11 @@ impl<'a> Parser<'a> {
         // `let x = todo!();`: a value that never comes coerces to any
         // type, so the local's is the one its uses give it.
         let ty = annotation.unwrap_or_else(|| match self.inference.resolve(&value.ty) {
-            Ty::Never => self.inference.fresh(),
+            Ty::Never => {
+                let open = self.inference.fresh();
+                self.diverging.push(open.clone());
+                open
+            }
             _ => value.ty.clone(),
         });
         // An immutable local iterator stays its chain: what it evaluates is

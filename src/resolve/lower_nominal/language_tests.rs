@@ -13858,3 +13858,22 @@ fn a_path_to_a_std_method_is_refused_where_rustc_refuses_it() {
         "{message}"
     );
 }
+
+#[test]
+fn a_let_of_a_value_that_never_comes_takes_any_use() {
+    // ?play's wrapping of a snippet that ends in an endless loop: the
+    // block's value never comes, so its local is any type its uses need,
+    // and nothing settling it is no error, as rustc falls back on `!`.
+    let value = run(r#"
+        fn block(n: i64) -> i64 {
+            let mut n = n;
+            let v = { if n > 0 { return n * 2; } loop { n += 1; } };
+            let d = format!("{:?}", v);
+            if d != "()" { println!("{}", d); }
+            0
+        }
+        pub fn run() -> i64 { block(21) }
+        run()
+    "#);
+    assert_eq!(value, 42);
+}
