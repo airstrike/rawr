@@ -2225,9 +2225,11 @@ fn imported_surface_type(
             Type::Tuple(converted.into_boxed_slice())
         }
         // An array of Rust's own types is a `Vec` of them, as ratatui's
-        // `List::new(rows)` takes `impl IntoIterator<Item: Into<ListItem>>`.
+        // `List::new(rows)` takes `impl IntoIterator<Item: Into<ListItem>>`,
+        // and so is one of script values (`instance_surface_type`).
         Ty::Array { element, .. }
-            if instance_surface_type(inference, models, ty).is_some_and(|ty| !is_erased(&ty)) =>
+            if instance_surface_type(inference, models, ty)
+                .is_some_and(|ty| matches!(ty, Type::Sequence { .. })) =>
         {
             imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
             Type::Sequence {
@@ -2653,9 +2655,14 @@ fn instance_surface_type(
         {
             Type::Result(Box::new(ok), Box::new(err))
         }
+        // An array of Rust's own types, or of a script type's proxies as a
+        // slice of them is, is a `Vec` of them, as serde's
+        // `serialize_field` takes `&Vec<Task>` for its `T: Serialize`.
         Ty::Array { element, .. }
-            if let Some(element) = instance_surface_type(inference, models, element)
-                .filter(|element| !is_erased(element)) =>
+            if let Some(element) =
+                instance_surface_type(inference, models, element).filter(|element| {
+                    !is_erased(element) || matches!(element, Type::Script { .. })
+                }) =>
         {
             Type::Sequence {
                 element: Box::new(element),

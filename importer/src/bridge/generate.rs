@@ -18021,7 +18021,7 @@ fn render_proxies(output: &mut Vec<u8>) -> Result<(), request::Error> {
         for module in &modules[open.len()..] {
             writeln!(
                 output,
-                "pub mod {module} {{\n#[allow(unused_imports)]\nuse super::*;"
+                "#[allow(non_snake_case)]\npub mod {module} {{\n#[allow(unused_imports)]\nuse super::*;"
             )
             .map_err(request::unwritable)?;
             open.push(module.clone());
@@ -18522,6 +18522,10 @@ fn render_impl_function(
     let family = carries_lifetime(returned)
         .then(|| written_family(returned))
         .flatten();
+    // Native code may call the impl on a thread with no arena, as tokio's
+    // workers run reqwest's `json()` and its `Deserialize` (D740.3): the
+    // values it gives and takes move through an arena of the call's own
+    // (`CallArena`).
     if let Some(frame) = frame {
         if family.is_some() {
             return Err(drift("a generic script impl function whose output borrows"));
@@ -18565,7 +18569,8 @@ fn render_impl_function(
         );
         return Ok(format!(
             "    fn {}{}({}) -> {rust} {{
-{items}        {call}
+{items}        let _arena = CallArena::enter();
+        {call}
     }}
 ",
             function.name(),
@@ -18637,7 +18642,8 @@ fn render_impl_function(
     );
     Ok(format!(
         "    fn {}{lifetime}({}) -> {rust} {{
-{items}        {call}
+{items}        let _arena = CallArena::enter();
+        {call}
     }}
 ",
         function.name(),
@@ -19556,8 +19562,13 @@ fn render_generic_arguments(
                     // In a type, which a scope family's declaration can't
                     // leave to inference: the `Vec` a crate's `&[T]`
                     // constant crosses as, as `pick_list(.., Backend::ALL,
-                    // ..)`'s `L` is.
-                    convert::Type::Sequence { length: None, .. } if opening == b"<" => {
+                    // ..)`'s `L` is. So is a `Vec` of script values' proxies,
+                    // which nothing else infers, as `next_value::<Vec<T>>`'s.
+                    convert::Type::Sequence {
+                        length: None,
+                        element,
+                        ..
+                    } if opening == b"<" || matches!(**element, convert::Type::Script { .. }) => {
                         concrete_type(ty)
                     }
                     _ => None,

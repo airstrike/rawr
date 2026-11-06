@@ -836,8 +836,12 @@ impl<'a> Builder<'a> {
     }
 
     /// The expansion kept for one crate derive of an item in the module
-    /// `modules`, when the program has one: a source of its own in the
-    /// item's module, whose positions are reported at the derive (#593).
+    /// `modules`, when the program has one: a source of its own, whose
+    /// positions are reported at the derive (#593). Its items are in a
+    /// module of their own below the item's, whose `use super::*;` sees
+    /// every name the item's module binds, as the block of rustc's
+    /// `const _: () = { .. }` does: two derives' `__Field` types are two
+    /// items.
     #[cfg(feature = "rust-import")]
     fn load_expansion(
         &mut self,
@@ -862,18 +866,19 @@ impl<'a> Builder<'a> {
         else {
             return Ok(());
         };
-        let name = derived
+        let name: ImmutableString = derived
             .written
             .rsplit("::")
             .next()
             .unwrap_or_default()
             .into();
+        let block = expansion_module(&derived.item, &name);
         let id = source::Id::from_index(self.sources.len());
         let source = source::Source::expansion(
             id,
             path,
             package_name.into(),
-            modules.into(),
+            modules.iter().cloned().chain([block]).collect(),
             text,
             diagnostic::source::Origin {
                 source: item_evidence.clone(),
@@ -883,10 +888,13 @@ impl<'a> Builder<'a> {
         )
         .map_err(Error::diagnostic)?;
         let evidence = self.push_evidence(source.diagnostic().clone());
-        let parsed = self
-            .engine
-            .parse_unit(source.text())
-            .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?;
+        let parse = |text: &str| {
+            self.engine
+                .parse_unit(text)
+                .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))
+        };
+        let parent = parse("use super::*;")?;
+        let parsed = parse(source.text())?.with_items(parent.items());
         self.sources.push(source);
         self.units.push(Unit { source: id, parsed });
         self.expanded
@@ -1395,10 +1403,19 @@ impl<'a> Builder<'a> {
 struct Derived {
     /// The item as written, its attributes first.
     text: String,
+    /// The item's name.
+    item: ImmutableString,
     /// The derive as written, as `Serialize`.
     written: String,
     /// Where the derive is written.
     attribute: Span,
+}
+
+/// The module below an item's that the expansion of its derive `derive`
+/// declares its items in, named so that no program item names it.
+#[cfg(feature = "rust-import")]
+fn expansion_module(item: &str, derive: &str) -> ImmutableString {
+    format!("__rawr_derive_{item}_{derive}").into()
 }
 
 /// Each derive of `items` (written in `text`) that isn't one of std's by
@@ -1407,9 +1424,9 @@ struct Derived {
 fn derived_items(text: &str, items: &[item::Parsed]) -> Vec<Derived> {
     let mut derived = Vec::new();
     for parsed in items {
-        let (header, span) = match parsed {
-            item::Parsed::Struct(item) => (&item.header, item.span),
-            item::Parsed::Enum(item) => (&item.header, item.span),
+        let (header, span, name) = match parsed {
+            item::Parsed::Struct(declared) => (&declared.header, declared.span, &declared.name),
+            item::Parsed::Enum(declared) => (&declared.header, declared.span, &declared.name),
             _ => continue,
         };
         let mut arguments = header
@@ -1426,6 +1443,7 @@ fn derived_items(text: &str, items: &[item::Parsed]) -> Vec<Derived> {
         for argument in arguments {
             derived.push(Derived {
                 text: written.to_owned(),
+                item: name.text.clone(),
                 written: item::written_path(argument),
                 attribute: argument.span,
             });

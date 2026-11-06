@@ -14,6 +14,7 @@ static ASYNC: Fixture = Fixture::new("tokio-async");
 static BORROWED: Fixture = Fixture::new("tokio-borrowed");
 static TICKS: Fixture = Fixture::new("tokio-ticks");
 static SPAWN: Fixture = Fixture::new("tokio-spawn");
+static DERIVES: Fixture = Fixture::new("tokio-derives");
 
 /// `job N at T ms: ..`: `N` and `T`.
 fn job(line: &str) -> Option<(u64, u64)> {
@@ -241,4 +242,32 @@ fn a_spawned_script_future_runs_unawaited_and_its_handle_gives_its_value() {
             "{attribute}"
         );
     }
+}
+
+/// Program structs a crate decodes on one of tokio's worker threads, as
+/// reqwest's `Response::json()` decodes iced's pokedex's `Entry` (D740.3):
+/// nested `Deserialize` structs with a `Vec` field, defined in an async
+/// fn's body, whose visitors run off the owner thread, and the error one
+/// of them gives. The output is `cargo run`'s.
+#[test]
+fn a_crate_decodes_program_structs_on_a_worker_thread() {
+    let root = DERIVES.lease(&[]);
+    let directory = crate::support::scratch();
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "Err(\"invalid type: integer `1`, expected a string at line 1 column 9\")\n\
+         Ok(\"BULBASAUR A strange seed true\")\n"
+    );
 }

@@ -1477,7 +1477,8 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
 /// re-exported beside its trait as serde's is, runs on a top-level struct
 /// and enum, a struct in a function's body and one in an inline module
 /// named by its path, and prints what `cargo run` prints. So do serde's
-/// `Serialize` and `Deserialize` through serde_json.
+/// `Serialize` and `Deserialize` through serde_json, on the saved state of
+/// iced's todos too.
 #[test]
 fn a_crates_derive_runs_from_its_expansion() {
     const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
@@ -1497,6 +1498,42 @@ fn a_crates_derive_runs_from_its_expansion() {
     assert_eq!(
         text(&run.stdout),
         "{\"description\":\"write\",\"done\":false}\nTask { description: \"write\", done: false }\n"
+    );
+
+    // iced's todos' saved state: a field `#[serde(default = "..")]` fills
+    // and one `#[serde(skip)]` leaves, uuid's own impls, a unit-variant
+    // enum that serializes, a `Vec` of a program struct, and
+    // `to_string_pretty`. Each derive's `__Field` is an item of its own.
+    // The enum's `Deserialize` names `de::Unexpected<'_>`, a crate value
+    // with a lifetime, which Rawr doesn't take yet, so the field skips it.
+    fs::copy(root.join("programs/saved.rs"), root.join("src/main.rs")).unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(
+        text(&run.stdout),
+        concat!(
+            "{\n",
+            "  \"input_value\": \"pie\",\n",
+            "  \"filter\": \"Active\",\n",
+            "  \"tasks\": [\n",
+            "    {\n",
+            "      \"id\": \"67e55044-10b1-426f-9247-bb680e5fe0c8\",\n",
+            "      \"description\": \"write\",\n",
+            "      \"completed\": true\n",
+            "    }\n",
+            "  ]\n",
+            "}\n",
+            "SavedState { input_value: \"pie\", filter: All, tasks: [Task { id: ",
+            "67e55044-10b1-426f-9247-bb680e5fe0c8, description: \"write\", completed: true, ",
+            "state: Idle }] }\n",
+            "true Idle new\n",
+            "\"All\"\n",
+        )
     );
 
     fs::write(
