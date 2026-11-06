@@ -133,6 +133,42 @@ pub(crate) struct Capture {
     graph_budget: Option<crate::node::GraphBudget>,
     sharing: Sharing,
     reuse: Option<PathBuf>,
+    expansion: Expansion,
+}
+
+/// What a derive's expansion needs of the probe's build (#593): the target,
+/// where the selected crates' own dependencies are, and each selected
+/// crate's artifact by the aliases the program names it by. It is no part
+/// of the API ledger.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Expansion {
+    pub(crate) selected_target: Box<str>,
+    pub(crate) dependency_directories: Box<[PathBuf]>,
+    /// Each alias, the artifact it names and that artifact's digest.
+    pub(crate) externs: Box<[(Box<str>, Box<str>, Box<str>)]>,
+}
+
+impl Expansion {
+    fn of(selected_target: &str, directories: &[PathBuf], entries: &[Entry<Sealed>]) -> Self {
+        let externs = entries
+            .iter()
+            .flat_map(|entry| {
+                let Root::Selected { aliases } = &entry.root;
+                aliases.iter().map(|alias| {
+                    (
+                        alias.clone(),
+                        entry.state.artifact.path.clone(),
+                        entry.state.artifact.digest.clone(),
+                    )
+                })
+            })
+            .collect();
+        Self {
+            selected_target: selected_target.into(),
+            dependency_directories: directories.into(),
+            externs,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -1096,6 +1132,11 @@ impl Probe {
         evidence: Option<&process::EvidenceSession>,
         inventory: Option<(&Path, &resolution::bundle::Inventory<'_>)>,
     ) -> Result<Capture> {
+        let expansion = Expansion::of(
+            &self.selected_target,
+            &self.dependency_directories,
+            &self.entries,
+        );
         let mut allocation = self.allocation;
         let entries = self.entries;
         let mut artifacts = self.artifacts;
@@ -1414,6 +1455,7 @@ impl Probe {
             graph_budget: self.graph_budget,
             sharing: self.sharing,
             reuse: self.reuse,
+            expansion,
         })
     }
 }
@@ -1590,6 +1632,11 @@ impl Write for CountedBytes {
 }
 
 impl Capture {
+    /// What a derive's expansion needs of this build (#593).
+    pub(crate) const fn expansion(&self) -> &Expansion {
+        &self.expansion
+    }
+
     pub(crate) fn namespace(&self) -> Option<&namespace::Retained> {
         self.namespace.as_deref()
     }
@@ -2790,6 +2837,7 @@ mod tests {
             graph_budget: Some(graph.clone()),
             sharing: super::Sharing::default(),
             reuse: None,
+            expansion: super::Expansion::default(),
         };
         capture.revalidate(&limits).unwrap();
         capture.revalidate(&limits).unwrap();
@@ -2836,6 +2884,7 @@ mod tests {
             graph_budget: None,
             sharing: super::Sharing::default(),
             reuse: None,
+            expansion: super::Expansion::default(),
         };
 
         capture()
@@ -2927,6 +2976,7 @@ mod tests {
             graph_budget: None,
             sharing: super::Sharing::default(),
             reuse: None,
+            expansion: super::Expansion::default(),
         };
         let digest = <[u8; 32]>::from(Sha256::digest(&bytes));
         let (decoded, _) = capture(digest).into_parts(&limits).unwrap();
@@ -2996,6 +3046,7 @@ mod tests {
                 graph_budget: None,
                 sharing: super::Sharing::default(),
                 reuse: None,
+                expansion: super::Expansion::default(),
             }
             .semantic_sidecars()
         };

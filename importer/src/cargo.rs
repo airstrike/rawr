@@ -2491,6 +2491,14 @@ impl Builder {
 }
 
 impl Resolution {
+    /// What a derive's expansion needs of this resolution's build (#593).
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn expansion(&self) -> Option<&crate::extract::plan::Expansion> {
+        self.capture
+            .as_ref()
+            .map(crate::extract::plan::Capture::expansion)
+    }
+
     /// What the nightly's build scripts gave a capture of intrinsic facts.
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn take_nightly_scripts(&mut self) -> crate::applicability::store::Scripts {

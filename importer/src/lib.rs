@@ -28,6 +28,7 @@ pub mod contract;
 pub mod crate_demand;
 pub mod deps;
 mod error;
+pub mod expand;
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub mod extract;
 mod file_digest;

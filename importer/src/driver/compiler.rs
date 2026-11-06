@@ -50,6 +50,10 @@ pub(super) mod std_catalog;
 #[path = "compiler/std_table.rs"]
 pub(super) mod std_table;
 
+/// A crate derive's items for a program's type (`--expand`, #593).
+#[path = "compiler/expand.rs"]
+pub(super) mod expand;
+
 use engine::model::{
     Authority, Binding, Id, Namespace, Reexport, ReexportEvidence, ReexportId, ReexportKind,
     Scalar, ScalarPredicateOutcome, ScalarPredicateProof, Span,
@@ -97,7 +101,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // method gives from its default body as the trait's opaque type.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 50;
+const PROTOCOL_SCHEMA: u32 = 51;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,

@@ -12,6 +12,8 @@ compile_error!(concat!(
 #[cfg(rawr_rustc_attr_ir)]
 extern crate rustc_attr_ir;
 
+extern crate rustc_ast;
+extern crate rustc_ast_pretty;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
@@ -25,6 +27,10 @@ extern crate rustc_trait_selection;
 
 #[path = "driver/compat.rs"]
 mod compat;
+
+/// The request `--expand` reads, which the library writes.
+#[path = "expand/request.rs"]
+mod expand_request;
 
 use std::collections::BTreeSet;
 use std::env;
@@ -53,7 +59,7 @@ mod attempt_protocol;
 const PLAN_SCHEMA: u32 = 9;
 // One number in four places: `driver/compiler.rs`, `cargo/toolchain.rs`
 // (`SUPPORTED_PROBE_PROTOCOL`) and `extract/protocol.rs` (`SCHEMA`) move with it.
-const PROTOCOL_SCHEMA: u32 = 50;
+const PROTOCOL_SCHEMA: u32 = 51;
 /// The commit of the nightly this driver was built with, which it reads
 /// metadata of and names in its version.
 const COMPILER_COMMIT: &str = env!("RAWR_RUSTC_COMMIT");
@@ -157,6 +163,9 @@ fn execute() -> Result<ExitCode, String> {
     }
     if arguments.get(1).is_some_and(|mode| mode == "--std-table") {
         return std_table(&arguments);
+    }
+    if arguments.get(1).is_some_and(|mode| mode == "--expand") {
+        return expand(&arguments);
     }
     if !(6..=7).contains(&arguments.len()) {
         return Err(
@@ -429,6 +438,59 @@ fn std_table(arguments: &[String]) -> Result<ExitCode, String> {
         crate::compat::compiler_entrypoint(&compiler_arguments, &mut callbacks);
     });
     let _ = fs::remove_dir_all(&scratch);
+    match callbacks.result {
+        Some(Err(error)) => Err(error),
+        Some(Ok(())) => Ok(ExitCode::SUCCESS),
+        None => Ok(exit),
+    }
+}
+
+/// `--expand RUSTC REQUEST OUT` (#593): the items each crate derive in the
+/// request's source produces, written to `OUT` (`compiler::expand`).
+fn expand(arguments: &[String]) -> Result<ExitCode, String> {
+    let [_, _, rustc, request, out] = arguments else {
+        return Err("usage: rawr-import-driver --expand RUSTC REQUEST OUT".to_owned());
+    };
+    let bytes = fs::read(request).map_err(|error| format!("reading {request}: {error}"))?;
+    let request: expand_request::Request = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("invalid expansion request: {error}"))?;
+    if request.protocol != PROTOCOL_SCHEMA {
+        return Err(format!(
+            "expansion request protocol {} is not the driver's {PROTOCOL_SCHEMA}",
+            request.protocol
+        ));
+    }
+    let rustc = PathBuf::from(rustc);
+    let sysroot = rustc
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "pinned rustc has no sysroot parent".to_owned())?;
+    let mut compiler_arguments = vec![
+        rustc.display().to_string(),
+        "--crate-name=rawr_expand".to_owned(),
+        format!("--edition={}", request.edition),
+        "--crate-type=rlib".to_owned(),
+        format!("--target={}", request.selected_target),
+        format!("--sysroot={}", sysroot.display()),
+        "--emit=metadata".to_owned(),
+        "--cap-lints=allow".to_owned(),
+    ];
+    for directory in &request.dependency_directories {
+        compiler_arguments.push(format!("-Ldependency={directory}"));
+    }
+    for crate_ in &request.externs {
+        compiler_arguments.push("--extern".to_owned());
+        compiler_arguments.push(format!("{}={}", crate_.alias, crate_.path));
+    }
+    compiler_arguments.push(request.source.clone());
+    let mut callbacks = compiler::expand::Expand {
+        out: PathBuf::from(out),
+        protocol: PROTOCOL_SCHEMA,
+        result: None,
+    };
+    let exit = rustc_driver::catch_with_exit_code(|| {
+        crate::compat::compiler_entrypoint(&compiler_arguments, &mut callbacks);
+    });
     match callbacks.result {
         Some(Err(error)) => Err(error),
         Some(Ok(())) => Ok(ExitCode::SUCCESS),
