@@ -19399,6 +19399,22 @@ impl<'a> Parser<'a> {
         fits
     }
 
+    /// Whether an imported item takes a type parameter of its own at its
+    /// input `index`.
+    #[cfg(feature = "rust-import")]
+    fn takes_parameter(&self, items: &[crate::host::item::Definition], index: usize) -> bool {
+        items.iter().any(|item| {
+            item.imported_identity().is_some()
+                && matches!(
+                    item.signature()
+                        .parameters()
+                        .get(index)
+                        .map(crate::host::type_ref::Type::shape),
+                    Some(crate::host::type_ref::Shape::Parameter(_))
+                )
+        })
+    }
+
     /// Whether an imported item takes an iterator at its input `index`, as
     /// itertools' `cartesian_product(self, other: J)` over `Self: Iterator`
     /// and `J: IntoIterator` does at both.
@@ -19495,9 +19511,14 @@ impl<'a> Parser<'a> {
                 argument.ty = ty;
             }
             // A program's iterator where the crate takes an iterator, which
-            // pulls from it (`step_iterator`).
+            // pulls from it (`step_iterator`), and an adaptor chain that
+            // fills a type parameter, which the runner takes as the same
+            // native iterator (`future::Items`).
             #[cfg(feature = "rust-import")]
-            if self.takes_iterator(items, index) {
+            if self.takes_iterator(items, index)
+                || matches!(self.inference.resolve(&argument.ty), Ty::Iter(..))
+                    && self.takes_parameter(items, index)
+            {
                 self.step_iterator(argument)?;
             }
             self.host_callable_of(argument, !facade)?;

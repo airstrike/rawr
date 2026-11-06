@@ -1465,13 +1465,39 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         Some(implementation)
     }
 
-    /// `core::iter::Iterator`, when the crate trait `trait_id` has an
-    /// implementation for every type parameter bounded by it, as itertools'
-    /// `impl<T: Iterator + ?Sized> Itertools for T`.
+    /// `core::iter::Iterator`, when the crate trait `trait_id` is one only
+    /// iterators have, as itertools' `trait Itertools: Iterator`, or has an
+    /// implementation for every type parameter bounded by it, as its
+    /// `impl<T: Iterator + ?Sized> Itertools for T`. rustc holds the
+    /// program's iterator to the trait where the runner calls its method.
     fn iterator_blanket(
         &self,
         trait_id: &api::identity::Definition,
     ) -> Option<api::identity::Definition> {
+        let supertrait = self
+            .graph
+            .definition_index(trait_id)
+            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|definition| match definition.kind() {
+                model::Kind::Trait { supertraits, .. } => {
+                    supertraits.iter().find_map(|predicate| match predicate {
+                        model::Predicate::Bound {
+                            bound:
+                                model::Bound::Trait {
+                                    trait_id: bound,
+                                    polarity: model::Polarity::Positive,
+                                    ..
+                                },
+                            ..
+                        } if self.is_core_trait(bound, "Iterator") => Some(bound.clone()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            });
+        if supertrait.is_some() {
+            return supertrait;
+        }
         self.graph
             .implementations_of(trait_id)
             .find_map(|implementation| {
