@@ -1347,6 +1347,7 @@ impl Probe {
         for entry in &entries {
             selected_roots.insert(entry.unit_key.as_ref());
         }
+        let mut loaded_digests = BTreeSet::new();
         for fragment in &decoded.fragments {
             for loaded in &fragment.handshake.loaded_crates {
                 let mut authority = None;
@@ -1381,9 +1382,15 @@ impl Probe {
                         Some(_) => {}
                         None => authority = Some(resolved),
                     }
-                    let (length, digest) =
-                        artifact_digest(&path, &mut allocation, self.graph_budget.as_ref())?;
-                    insert_artifact(&mut artifacts, path, length, digest, &mut allocation)?;
+                    // Every crate that loads an artifact names it: it is read
+                    // once, and checked against the selected artifact it is.
+                    if !loaded_digests.contains(&path) {
+                        let (length, digest) =
+                            artifact_digest(&path, &mut allocation, self.graph_budget.as_ref())?;
+                        allocation.items(1)?;
+                        loaded_digests.insert(allocation.clone_path(&path)?);
+                        insert_artifact(&mut artifacts, path, length, digest, &mut allocation)?;
+                    }
                 }
                 let record = crate::bindings::External {
                     crate_name: loaded.crate_name.clone(),
