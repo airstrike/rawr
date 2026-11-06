@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.148 (2026-11-06)
+
+- A function or closure that native code calls on another thread and that gives a value of a program type, as iced's `Subscription::map(|_| Message::Tick(Local::now()))`, now runs on the program's thread where its value is first used, so it can make imported values. iced's clock runs. (#981)
+- An opaque program whose bound binds an associated type to a tuple, as `application::timed(..)`'s `Message = (Message, Instant)`, keeps that binding, so `.theme(..)` and the other builder methods read it. iced's solar_system runs. (#979)
+
 ## 0.3.147 (2026-11-05)
 
 - A crate's derive macro on a program type is expanded by rustc and runs as part of the program. A derive whose expansion is a plain impl runs as `cargo run` does, and an error in an expansion is reported at the derive with rustc's note. serde's `Serialize` and `Deserialize` now reach their expansion's generic methods, which aren't supported yet. (#985; part of #593)

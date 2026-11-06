@@ -84,13 +84,13 @@ pub(crate) fn retire_nightly(home: &Path, current: &Path) {
     let (root, current) = (home.join(NIGHTLY), current.to_path_buf());
     let _ = std::thread::Builder::new()
         .name("rawr-nightly-cleanup".into())
-        .spawn(move || crate::runner::runtime::prune(&root, &[current.as_path()], DAY, 0));
+        .spawn(move || crate::runner::runtime::prune(&root, &[current.as_path()], DAY));
 }
 
 /// `rawr cache clean`: remove every nightly directory unused for an hour,
 /// the current pin's included, unless a build holds it.
 pub fn clean_nightly(home: &Path) {
-    crate::runner::runtime::prune(&home.join(NIGHTLY), &[], HOUR, 0);
+    crate::runner::runtime::prune(&home.join(NIGHTLY), &[], HOUR);
 }
 
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
@@ -664,7 +664,7 @@ mod tests {
             names
         };
         // Each build: other pins idle for a day, the current one kept.
-        crate::runner::runtime::prune(&root, &[current.as_path()], super::DAY, 0);
+        crate::runner::runtime::prune(&root, &[current.as_path()], super::DAY);
         assert_eq!(
             left(),
             [

@@ -449,6 +449,51 @@ fn a_crates_from_impl_converts_a_methods_output() {
     );
 }
 
+/// A crate trait's own `into` out of scope leaves `gauge.into()` the
+/// `Into::into` of the crate's `From<Gauge>` impls, which the target picks
+/// (D741). The output is `cargo run`'s.
+#[test]
+#[ignore = "blocked: the Application path can't yet prove that only `Into::into` is in scope and leave its instance to the target (`gauge.into()` beside an unimported crate trait's `into`)"]
+fn a_crate_traits_own_into_out_of_scope_leaves_into_to_the_target() {
+    let (rawr, cargo) = both_printed("gauged.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.contains("150 15"), "{rawr}");
+}
+
+/// A crate trait's own `into` in scope beside `Into::into` is rustc's
+/// E0034: the target never chooses between two traits' methods (D741).
+#[test]
+fn a_crate_traits_own_into_in_scope_is_ambiguous_with_into() {
+    let stderr = rejected_as_cargo("gauged_halved.rs", "E0034");
+    assert!(
+        stderr.contains("multiple applicable items in scope"),
+        "{stderr}"
+    );
+}
+
+/// `let y = turn.into(); y * 2.0` fixes only that `y` is a float, and the
+/// crate converts a `Turn` to `f32` and to `f64`: rustc's E0283 at `y`,
+/// never the first impl that fits (D741).
+#[test]
+fn a_target_known_only_as_a_float_is_ambiguous_between_from_impls() {
+    let stderr = rejected_as_cargo("turned_open.rs", "E0283");
+    assert!(
+        stderr.contains("type annotations needed") && stderr.contains("main.rs:10:9"),
+        "{stderr}"
+    );
+}
+
+/// `let _unused = turn.into();` with nothing fixing the target is rustc's
+/// E0283 (D741).
+#[test]
+fn a_target_no_use_fixes_is_ambiguous_between_from_impls() {
+    let stderr = rejected_as_cargo("turned_unfixed.rs", "E0283");
+    assert!(
+        stderr.contains("type annotations needed") && stderr.contains("main.rs:9:9"),
+        "{stderr}"
+    );
+}
+
 /// iced's styling: `primary as fn(&Theme, _) -> _` casts a crate function
 /// to a `fn` pointer whose parts inference fills, and the array's next
 /// crate function coerces to that pointer, so the types agree with
@@ -1791,6 +1836,26 @@ fn passes_check(variant: &str) {
         "{}",
         String::from_utf8_lossy(&check.stderr)
     );
+}
+
+/// `rawr-import check` of a lane of the fixture with `variant` as its
+/// `main.rs`, which fails with rustc's `code`, as `cargo build` of the
+/// same lane does: rawr's stderr.
+fn rejected_as_cargo(variant: &str, code: &str) -> String {
+    let root = lane(Some(variant));
+    let stderr = checked_in(&root);
+    let build = Command::new("cargo")
+        .args(["build", "-q"])
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let rustc = String::from_utf8_lossy(&build.stderr);
+    let error = format!("error[{code}]");
+    assert!(!build.status.success() && rustc.contains(&error), "{rustc}");
+    assert!(stderr.contains(&error), "{stderr}\nrustc:\n{rustc}");
+    stderr
 }
 
 /// `rawr-import check` of the project at `root`, as `checked` gives it.

@@ -2770,7 +2770,8 @@ fn imported_item(
         | Representability::Excluded(_)
         | Representability::Rejected(_) => None,
     };
-    Ok(item)
+    let member = outcome.member().map(|member| *member.as_bytes());
+    Ok(item.map(|item| item.instancing(member)))
 }
 
 /// The inputs of `signature`, by bit, whose borrows the output keeps for

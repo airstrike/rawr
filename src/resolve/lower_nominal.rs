@@ -17704,27 +17704,41 @@ impl<'a> Parser<'a> {
     /// forms: a conversion chosen once the target is known
     /// (`finish_conversions`), by an `into` form's output or the target's
     /// `from` of the value, as Rust's `Into` comes from `From`.
-    fn parse_host_into(&mut self, value: ParsedExpr, source: &Ty, end: Position) -> ParsedExpr {
+    ///
+    /// Candidates of different traits, or a trait's and an impl's own,
+    /// are not chosen by the target: the call is the method call it is,
+    /// which the receiver and lexical scope settle (D741).
+    fn parse_host_into(
+        &mut self,
+        value: ParsedExpr,
+        source: &Ty,
+        end: Position,
+    ) -> Result<ParsedExpr, Error> {
         if !matches!(source, Ty::Host { .. }) {
-            return value;
+            return Ok(value);
         }
-        let (forms, owner) = self.conversion_forms(source);
-        self.parse_target_into(value, source, forms, owner, end)
+        let Some((forms, owner)) = self.conversion_forms(source) else {
+            let at = span(value.span.start(), end);
+            self.pending_arguments = Some((Vec::new(), end));
+            return self.parse_host_method(value, "into".into(), at);
+        };
+        Ok(self.parse_target_into(value, source, forms, owner, end))
     }
 
     /// The `into` forms of a facade value's type, each a method without
     /// inputs, and their owner: at the path its alias names, or for an
     /// imported type no alias of the program names, at one of its crate's
-    /// paths that has them.
+    /// paths that has them. `None` where the crate's impls give the type
+    /// `into`s of more than one method, which no target chooses among.
     fn conversion_forms(
         &self,
         source: &Ty,
-    ) -> (
+    ) -> Option<(
         Vec<crate::host::item::Definition>,
         Option<crate::host::facade::Dependency>,
-    ) {
+    )> {
         let Ty::Host { proof, .. } = source else {
-            return (Vec::new(), None);
+            return Some((Vec::new(), None));
         };
         let path = format!("{}::into", proof.definition.path());
         #[cfg(feature = "rust-import")]
@@ -17737,15 +17751,27 @@ impl<'a> Parser<'a> {
         let forms = self.models.host_items(&path).map(<[_]>::to_vec);
         // A crate's `From<Degrees>` for both `f32` and `f64` gives
         // `Degrees` an `into` of each, alike in their inputs, so they are a
-        // family. The conversion's target picks one, as rustc selects the
-        // target's `From<Degrees>` impl.
+        // family. Each is an instance of `Into::into`, by the importer's
+        // identity of the trait's method, so the conversion's target picks
+        // one, as rustc infers `Into`'s argument and selects the target's
+        // `From<Degrees>` impl. A crate trait's own `into` among them is
+        // another method, which only the call's scope tells apart.
         #[cfg(feature = "rust-import")]
-        let forms = forms.or_else(|| {
-            self.models
-                .host
-                .pending_family(&path)
-                .map(|family| family.methods().to_vec())
-        });
+        let forms = match forms {
+            Some(forms) => Some(forms),
+            None => match self.models.host.pending_family(&path) {
+                Some(family) => {
+                    let methods = family.methods();
+                    let member = methods.first().and_then(|item| item.trait_member());
+                    if member.is_none() || methods.iter().any(|item| item.trait_member() != member)
+                    {
+                        return None;
+                    }
+                    Some(methods.to_vec())
+                }
+                None => None,
+            },
+        };
         let forms = forms
             .unwrap_or_default()
             .into_iter()
@@ -17754,7 +17780,7 @@ impl<'a> Parser<'a> {
                     && item.signature().parameters().is_empty()
             })
             .collect();
-        (forms, self.models.item_owner(&path).cloned())
+        Some((forms, self.models.item_owner(&path).cloned()))
     }
 
     /// Keep the `into` of the imported type `ty` as a miss when none of
@@ -17810,9 +17836,12 @@ impl<'a> Parser<'a> {
         self.operator_expr(rendered, target, expression)
     }
 
-    /// The helper of a facade value's `.into()` into `target`: an `into`
-    /// form of its type whose output is `target`, or `target`'s `from` that
-    /// takes it. `None` when neither converts it.
+    /// The helper of a facade value's `.into()` into `target`: the one
+    /// `into` form of its type whose output is `target`, or `target`'s one
+    /// `from` that takes it. `None` when neither converts it. More than one
+    /// that fits, or a target the program has not fixed where the forms
+    /// are a trait method's instances, is rustc's E0283: rustc infers
+    /// `Into<U>`'s `U` before it selects an impl, never a first fit.
     fn host_into_helper(
         &mut self,
         host: &HostInto,
@@ -17820,31 +17849,43 @@ impl<'a> Parser<'a> {
         target: &Ty,
         call: Span,
     ) -> Result<Option<String>, Error> {
+        let mut fitting = Vec::new();
         for item in &host.forms {
             let checkpoint = self.inference.checkpoint();
-            let fits = self
+            if self
                 .instantiate_host_signature(item, Some(source), Some(&[]), Span::NONE)
-                .ok()
-                .filter(|signature| self.unify_type(&signature.output, target));
-            let Some(signature) = fits else {
-                self.inference.rollback(checkpoint);
-                continue;
-            };
-            self.inference.commit(checkpoint);
-            let receiver =
-                self.operator_expr(origin::Fragment::default(), source.clone(), host.receiver);
-            let output = self.inference.resolve(&signature.output);
-            return self
-                .push_intrinsic(
-                    item.clone(),
-                    host.owner.clone(),
-                    Some(&receiver),
-                    &mut Vec::new(),
-                    output,
-                    signature.requirements,
-                    call,
-                )
-                .map(Some);
+                .is_ok_and(|signature| self.unify_type(&signature.output, target))
+            {
+                fitting.push(item);
+            }
+            self.inference.rollback(checkpoint);
+        }
+        #[cfg(feature = "rust-import")]
+        let instances = fitting.iter().all(|item| item.trait_member().is_some());
+        #[cfg(not(feature = "rust-import"))]
+        let instances = false;
+        match fitting[..] {
+            [] => {}
+            [item] if !(instances && contains_unsettled(&self.inference.resolve(target))) => {
+                let signature =
+                    self.instantiate_host_signature(item, Some(source), Some(&[]), Span::NONE)?;
+                self.unify_type(&signature.output, target);
+                let receiver =
+                    self.operator_expr(origin::Fragment::default(), source.clone(), host.receiver);
+                let output = self.inference.resolve(&signature.output);
+                return self
+                    .push_intrinsic(
+                        item.clone(),
+                        host.owner.clone(),
+                        Some(&receiver),
+                        &mut Vec::new(),
+                        output,
+                        signature.requirements,
+                        call,
+                    )
+                    .map(Some);
+            }
+            _ => return Err(self.ambiguous_conversion(target, source, call, fitting.len())),
         }
         let Ty::Host { proof, .. } = target else {
             return Ok(None);
@@ -17865,42 +17906,91 @@ impl<'a> Parser<'a> {
         let owner = self.models.item_owner(&path).cloned();
         let argument =
             self.operator_expr(origin::Fragment::default(), source.clone(), host.receiver);
-        for item in items {
-            if item.kind() != crate::host::item::Kind::AssociatedFunction {
-                continue;
-            }
-            let checkpoint = self.inference.checkpoint();
-            let fits = self
+        let fits = |parser: &mut Self, item: &crate::host::item::Definition| {
+            parser
                 .instantiate_host_signature(
-                    &item,
+                    item,
                     None,
                     Some(std::slice::from_ref(&argument)),
                     Span::NONE,
                 )
                 .ok()
                 .filter(|signature| {
-                    matches!(&signature.inputs[..], [input] if self.unify_type(input, source))
-                        && self.unify_type(&signature.output, target)
-                });
-            let Some(signature) = fits else {
-                self.inference.rollback(checkpoint);
-                continue;
-            };
-            self.inference.commit(checkpoint);
-            let output = self.inference.resolve(&signature.output);
-            return self
-                .push_intrinsic(
-                    item,
-                    owner,
-                    None,
-                    &mut vec![argument],
-                    output,
-                    signature.requirements,
-                    call,
-                )
-                .map(Some);
+                    matches!(&signature.inputs[..], [input] if parser.unify_type(input, source))
+                        && parser.unify_type(&signature.output, target)
+                })
+        };
+        let mut fitting = Vec::new();
+        for item in items
+            .into_iter()
+            .filter(|item| item.kind() == crate::host::item::Kind::AssociatedFunction)
+        {
+            let checkpoint = self.inference.checkpoint();
+            if fits(self, &item).is_some() {
+                fitting.push(item);
+            }
+            self.inference.rollback(checkpoint);
         }
-        Ok(None)
+        let item = match <[_; 1]>::try_from(fitting) {
+            Ok([item]) => item,
+            Err(fitting) if fitting.is_empty() => return Ok(None),
+            Err(fitting) => {
+                return Err(self.ambiguous_conversion(target, source, call, fitting.len()));
+            }
+        };
+        let signature =
+            fits(self, &item).ok_or_else(|| self.ambiguous_conversion(target, source, call, 1))?;
+        let output = self.inference.resolve(&signature.output);
+        self.push_intrinsic(
+            item,
+            owner,
+            None,
+            &mut vec![argument],
+            output,
+            signature.requirements,
+            call,
+        )
+        .map(Some)
+    }
+
+    /// rustc's E0283 for a conversion of `source` whose target the program
+    /// leaves open, or that `impls` impls fit: at the local whose type it
+    /// is, as rustc asks for that local's type, or at the call.
+    fn ambiguous_conversion(&self, target: &Ty, source: &Ty, call: Span, impls: usize) -> Error {
+        let target = self.inference.resolve(target);
+        let bound = format!("From<{}>", source.name(&self.models));
+        let note = if impls > 1 {
+            format!("multiple `impl`s satisfying `_: {bound}` found")
+        } else {
+            format!("the type must implement `{bound}`")
+        };
+        let open = |ty: &Ty| {
+            matches!(
+                ty,
+                Ty::Infer(_) | Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_))
+            ) && contains(&target, &|inner| inner == ty)
+        };
+        let local = self.local_types.iter().find_map(|local| {
+            let ty = self.inference.resolve(&local.ty);
+            contains(&ty, &open).then_some((local, ty))
+        });
+        match local {
+            Some((local, ty)) => Error::LocalTypeNeeded {
+                code: "E0283",
+                name: local.name.clone(),
+                ty: (!open(&ty)).then(|| ty.name(&self.models)),
+                declaration: self.name_span(local.declaration, &local.name),
+                needed: Some(call),
+                note: Some(note.into()),
+            },
+            None => Error::StdPath {
+                code: "E0283",
+                message: "type annotations needed".into(),
+                label: Some("type must be known at this point".into()),
+                note: Some(note.into()),
+                reference: call,
+            },
+        }
     }
 
     /// Whether the library type `target` has a `from` that takes `source`,
@@ -37318,7 +37408,7 @@ impl<'a> Parser<'a> {
                     // A generic body's facade calls carry witnesses, so it
                     // calls the type's own `into`.
                     if self.host_witnesses.is_empty() {
-                        value = self.parse_host_into(value, &source, end);
+                        value = self.parse_host_into(value, &source, end)?;
                     } else {
                         self.pending_arguments = Some((Vec::new(), end));
                         value = self.parse_host_method(value, "into".into(), member_span)?;
@@ -37335,7 +37425,7 @@ impl<'a> Parser<'a> {
                     && self.host_witnesses.is_empty()
                     && self.projected_host_types(&source).is_empty()
                 {
-                    value = self.parse_host_into(value, &source, end);
+                    value = self.parse_host_into(value, &source, end)?;
                     continue;
                 }
                 // A value no `From` of the program takes, as a number: the
@@ -48666,7 +48756,7 @@ impl<'a> Parser<'a> {
             // facade calls carry witnesses, so it calls the type's own
             // `into`.
             if let Ty::Host { .. } = &source {
-                let (forms, owner) = self.conversion_forms(&source);
+                let (forms, owner) = self.conversion_forms(&source).unwrap_or_default();
                 let gives = forms.iter().any(|item| {
                     let checkpoint = self.inference.checkpoint();
                     let fits = self
@@ -54183,6 +54273,12 @@ fn contains_open_literal(ty: &Ty) -> bool {
     contains(ty, &|ty| {
         matches!(ty, Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_)))
     })
+}
+
+/// Whether `ty` holds a variable inference has not settled: an unknown
+/// type, or a literal whose kind is still open.
+fn contains_unsettled(ty: &Ty) -> bool {
+    contains_inference(ty) || contains_open_literal(ty)
 }
 
 /// Whether `ty` or a type inside it is one `leaf` picks.
