@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::layout;
 use crate::cargo::{self, Limits, Request};
-use crate::process::{ProductionReplay, Program};
+use crate::process::{ProductionReplay, Program, ToolPaths};
 use crate::{Error, Result};
 
 impl Request {
@@ -593,17 +593,45 @@ pub(in crate::cargo) fn build(
 ) -> Result<(Box<[u8]>, Box<[(OsString, OsString)]>)> {
     require_configs(layout)?;
     let paths = layout.final_form();
+    // The shared directory overrides the reserved config's bundle build root;
+    // relocation then fills that root with the files this resolution reads.
+    let prefix = prefix(request, paths.config())?;
+    shared_build(
+        native,
+        request,
+        prefix,
+        paths.manifest(),
+        environment,
+        (paths.target(), paths.build()),
+        limits,
+    )
+}
+
+/// Build `manifest` in the pinned nightly's build directory and copy what
+/// Cargo's messages name into `build`, the build root the unit graph names;
+/// the messages returned name the copies. `target` is the Cargo target
+/// directory, whose outputs are made the build's own (`relocate::unshare`).
+#[allow(
+    clippy::type_complexity,
+    reason = "Build parsing retains the exact successful command environment"
+)]
+pub(in crate::cargo) fn shared_build(
+    native: &impl ToolPaths,
+    request: &Request,
+    mut prefix: Vec<OsString>,
+    manifest: &Path,
+    environment: Box<[(OsString, OsString)]>,
+    (target, build): (&Path, &Path),
+    limits: &Limits,
+) -> Result<(Box<[u8]>, Box<[(OsString, OsString)]>)> {
     // One build directory per machine per pinned toolchain, in rawr's home
     // (D700). Only this pinned nightly build uses it, so Cargo's freshness
     // there is this build's alone, `cargo build` never sees its units, and a
     // second project rechecks only what its own closure adds.
     let home = home(request)?;
     let shared = crate::deps::nightly_directory(&home);
-    let mut prefix = prefix(request, paths.config())?;
-    // The shared directory overrides the reserved config's bundle build root;
-    // relocation then fills that root with the files this resolution reads.
     prefix.extend(shared_arguments(&shared));
-    let tail = cargo::cargo_build_arguments(paths.manifest(), &request.target, &request.profile);
+    let tail = cargo::cargo_build_arguments(manifest, &request.target, &request.profile);
     let command = cargo::cargo_build_command(request, prefix, tail, environment)?;
     // Held across the Cargo run and the copy of what it wrote: another
     // project's build would rewrite those files, and cleanup skips a held
@@ -616,8 +644,8 @@ pub(in crate::cargo) fn build(
     let bytes = native
         .run(&command, limits.process)?
         .checked(Program::Cargo)?;
-    super::relocate::unshare(paths.target())?;
-    let bytes = super::relocate::relocate(&bytes, &shared, paths.build())?;
+    super::relocate::unshare(target)?;
+    let bytes = super::relocate::relocate(&bytes, &shared, build)?;
     drop(lock);
     crate::deps::retire_nightly(&home, &shared);
     Ok((bytes, command.into_environment()))

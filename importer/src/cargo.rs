@@ -1906,6 +1906,7 @@ impl Request {
                         native,
                         &self,
                         &manifest_path,
+                        extraction_plan.target_directory(),
                         execution_environment,
                         limits,
                     )?;
@@ -1926,6 +1927,7 @@ impl Request {
                         native,
                         &self,
                         &manifest_path,
+                        extraction_plan.target_directory(),
                         environment.clone(),
                         limits,
                     )
@@ -3741,19 +3743,29 @@ fn cargo_package_files(
 }
 
 #[cfg(feature = "rustc-driver")]
+/// The extraction plan's build, in the pinned nightly's shared build
+/// directory as a resolution's is: its target directory starts empty each
+/// time, and only the copies of what this build reads fill it, so a crate
+/// any earlier build compiled is not compiled again.
 fn cargo_execute_authoritative_build(
     native: &impl ToolPaths,
     request: &Request,
     manifest: &Path,
+    target: &Path,
     environment: Box<[(OsString, OsString)]>,
     limits: &Limits,
 ) -> Result<Box<[u8]>> {
     let prefix = config_arguments(request.config.explicit_configs());
-    let tail = cargo_build_arguments(manifest, &request.target, &request.profile);
-    let command = cargo_build_command(request, prefix, tail, environment)?;
-    native
-        .run(&command, limits.process)?
-        .checked(Program::Cargo)
+    resolution::cold::shared_build(
+        native,
+        request,
+        prefix,
+        manifest,
+        environment,
+        (target, target),
+        limits,
+    )
+    .map(|(bytes, _)| bytes)
 }
 
 fn cargo_build_command(
