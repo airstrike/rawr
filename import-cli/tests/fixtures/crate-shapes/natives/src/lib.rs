@@ -576,7 +576,7 @@ pub mod angle {
     impl Mul<Turn> for f32 {
         type Output = Turn;
 
-        fn mul(self, rhs: Turn) -> Turn {
+        fn mul(self, rhs: Turn) -> Self::Output {
             Turn(self * rhs.0)
         }
     }
@@ -617,7 +617,7 @@ pub mod angle {
     impl Sub<Turn> for f64 {
         type Output = f64;
 
-        fn sub(self, rhs: Turn) -> f64 {
+        fn sub(self, rhs: Turn) -> Self::Output {
             self - f64::from(rhs.0)
         }
     }
