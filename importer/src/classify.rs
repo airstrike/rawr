@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 114;
+const CLASSIFIER_VERSION: u32 = 115;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7687,7 +7687,14 @@ impl<P: api::Phase> Context<'_, P> {
             .replace(opens_copies || borrows_receiver);
         let classified = self.function_with(signature, generics, opens_copies, borrows_receiver);
         self.scope_lifetimes.set(outer_scope);
-        classified
+        // A plan's signature names only the type parameters it declares, so
+        // the facade writes each by its name (#1032).
+        match classified {
+            Ok(plan) if !declares_its_parameters(&plan) => {
+                Err(representability::reject::Kind::UndeclaredParameter.into())
+            }
+            classified => classified,
+        }
     }
 
     /// `signature` and `generics` with each input that is a safe Rust
@@ -11103,6 +11110,52 @@ pub(crate) fn impl_traits<'t>(ty: &'t model::Type, found: &mut Vec<&'t model::Ty
 
 /// `ty` with the trait `trait_id`'s `Self` its parameter 0, as a trait's
 /// method is a function of its `Self` (`classify_self_member`).
+/// Whether each type parameter the inputs and output of `plan`'s signature
+/// name is one the signature declares.
+fn declares_its_parameters(plan: &representability::Representability) -> bool {
+    use representability::Representability;
+    fn declared(
+        ty: &representability::convert::Type,
+        parameters: &[representability::signature::Parameter],
+    ) -> bool {
+        use representability::convert::Type;
+        match ty {
+            Type::Parameter(index) => parameters
+                .iter()
+                .any(|parameter| parameter.index() == *index),
+            Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => true,
+            Type::Nominal { arguments, .. } | Type::Script { arguments, .. } => arguments
+                .iter()
+                .all(|argument| declared(argument, parameters)),
+            Type::Tuple(members) => members.iter().all(|member| declared(member, parameters)),
+            Type::Option(element)
+            | Type::Range(element)
+            | Type::Borrowed { ty: element, .. }
+            | Type::Sequence { element, .. }
+            | Type::ProfileMessage {
+                payload: element, ..
+            } => declared(element, parameters),
+            Type::Result(ok, err) => declared(ok, parameters) && declared(err, parameters),
+            Type::FunctionItem { input, output } => {
+                declared(input, parameters) && declared(output, parameters)
+            }
+        }
+    }
+    let signature = match plan {
+        Representability::Function(plan) => plan.signature(),
+        Representability::Method(plan) => plan.signature(),
+        Representability::FunctionItem(item) => item.signature(),
+        Representability::Invocation(plan) => plan.item().signature(),
+        _ => return true,
+    };
+    let parameters = signature.parameters();
+    signature
+        .inputs()
+        .iter()
+        .chain(std::iter::once(signature.output()))
+        .all(|ty| declared(ty, parameters))
+}
+
 /// Whether `id` is the opaque type of a trait method's type parameter or
 /// of one of its associated types (`parameter_opaque`).
 fn parameter_opaque_id(id: &api::identity::Definition) -> bool {

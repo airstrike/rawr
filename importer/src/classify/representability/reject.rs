@@ -66,6 +66,11 @@ pub enum Kind {
     /// bounds is higher-ranked, negative, or at types Rawr can't write
     /// (#846, #849).
     OpaqueBounds,
+    /// A signature names a type parameter it doesn't declare, as the
+    /// methods of `impl Layer<S>` name `S`, the trait's own parameter that
+    /// each impl of the trait fixes, where `L: Layer<S>` of tracing's
+    /// `Layer::and_then` is a type of its own (#1032).
+    UndeclaredParameter,
     /// A signature names a std type rawr doesn't take from or give to a
     /// crate yet (D711 step 5, D712.1).
     StdNotRun(crate::classify::std_binding::Unrun),
@@ -132,6 +137,9 @@ impl Kind {
             Self::OpaqueBounds => {
                 "it gives an `impl Trait` that borrows its arguments, with bounds rawr can't \
                  write yet"
+            }
+            Self::UndeclaredParameter => {
+                "its signature names a type parameter of its trait that each impl fixes"
             }
             Self::StdNotRun(unrun) => unrun.describe(),
         }
