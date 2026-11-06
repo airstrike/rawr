@@ -300,10 +300,9 @@ fn expected_reply(
         }
         Command::Build => (
             {
-                if bound {
-                    let shared = crate::deps::nightly_directory(&super::home(request).unwrap());
-                    prefix.extend(super::shared_arguments(&shared));
-                }
+                // Bound or not, a build runs in the nightly's shared directory.
+                let shared = crate::deps::nightly_directory(&super::home(request).unwrap());
+                prefix.extend(super::shared_arguments(&shared));
                 process::CargoAction::AuthoritativeBuild(request.parallelism)
             },
             vec![
@@ -441,6 +440,7 @@ fn fixed_commands_share_legacy_construction_and_preserve_exact_build_environment
                     &production,
                     request,
                     layout.final_form().manifest(),
+                    layout.final_form().target(),
                     retained,
                     &limits,
                 )?;
