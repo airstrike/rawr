@@ -33,7 +33,7 @@ async fn search() -> Result<String, String> {
         .flavor_text_entries
         .iter()
         .find(|text| text.language.name == "en")
-        .ok_or("no English text")?;
+        .ok_or(String::from("no English text"))?;
     let text: String = text
         .flavor_text
         .chars()

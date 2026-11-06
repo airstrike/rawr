@@ -838,9 +838,10 @@ impl<'a> Builder<'a> {
     /// The expansion kept for one crate derive of an item in the module
     /// `modules`, when the program has one: a source of its own, whose
     /// positions are reported at the derive (#593). Its items are in a
-    /// module of their own below the item's, which sees every name the
-    /// item's module binds, as the block of rustc's `const _: () = { .. }`
-    /// does: two derives' `__Field` types are two items.
+    /// module of their own below the item's, whose `use super::*;` sees
+    /// every name the item's module binds, as the block of rustc's
+    /// `const _: () = { .. }` does: two derives' `__Field` types are two
+    /// items.
     #[cfg(feature = "rust-import")]
     fn load_expansion(
         &mut self,
@@ -887,10 +888,13 @@ impl<'a> Builder<'a> {
         )
         .map_err(Error::diagnostic)?;
         let evidence = self.push_evidence(source.diagnostic().clone());
-        let parsed = self
-            .engine
-            .parse_unit(source.text())
-            .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?;
+        let parse = |text: &str| {
+            self.engine
+                .parse_unit(text)
+                .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))
+        };
+        let parent = parse("use super::*;")?;
+        let parsed = parse(source.text())?.with_items(parent.items());
         self.sources.push(source);
         self.units.push(Unit { source: id, parsed });
         self.expanded

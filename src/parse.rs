@@ -64,6 +64,13 @@ impl Unit {
         self
     }
 
+    /// This unit with `items` after its own, which its text doesn't hold.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn with_items(mut self, items: &[item::Parsed]) -> Self {
+        self.items = self.items.iter().chain(items).cloned().collect();
+        self
+    }
+
     /// The `macro_rules!` definitions among the items, in source order.
     #[must_use]
     pub fn macros(&self) -> &[item::MacroRules] {
