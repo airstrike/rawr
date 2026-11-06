@@ -1579,7 +1579,10 @@ fn a_crates_derive_runs_from_its_expansion() {
 /// code passes it, and passes it on to a function of its own. An opaque
 /// parameter's associated type whose bound names it again, as
 /// `PartialEq<Self>` of iced's `type Font: Copy + PartialEq` does, is read
-/// once, not without end.
+/// once, not without end. A member of such a parameter's opaque type whose
+/// signature names the trait's own parameter, as tracing-subscriber's
+/// `Layer<S>::and_then` gives `Layered<L, Self, S>`, isn't written into the
+/// crate's facade, and the rest of the crate runs (#1032).
 #[test]
 fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     const VISITS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-visits");
@@ -1598,7 +1601,7 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
         text(&run.stdout),
         "Some(5) a pair\n14 <7> Some(10) None\n<7>\nPair(3, 4)\n1 read, expected two numbers\n\
          expected a str\nexpected 2 numbers\nexpected what I wanted\n6 3\n\
-         Counts { odd: 2, even: 1 }\nodd even\n6\ntrue\n"
+         Counts { odd: 2, even: 1 }\nodd even\n6\ntrue\n2 1\n"
     );
 }
 

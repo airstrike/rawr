@@ -166,9 +166,7 @@ impl Plan {
     ) -> Result<Option<usize>, Error> {
         let mut retained = mem::size_of::<Self>();
         for step in builder.steps() {
-            let outcome = contract
-                .outcome(step.entry().identity())
-                .ok_or(Error::ForeignIdentity)?;
+            let outcome = contract.admitted(step.entry().identity());
             let nested = Self::retained_bytes(contract, outcome, step.entry().identity())?.ok_or(
                 Error::Limit {
                     resource: "builder adapter retained bytes",
@@ -201,9 +199,7 @@ impl Plan {
             .try_reserve_exact(builder.steps().len())
             .map_err(|_| Error::Allocation)?;
         for step in builder.steps() {
-            let outcome = contract
-                .outcome(step.entry().identity())
-                .ok_or(Error::ForeignIdentity)?;
+            let outcome = contract.admitted(step.entry().identity());
             let nested = Self::try_new(contract, outcome, step.entry().identity())?;
             let arity = match nested.operation() {
                 Operation::StructConstructor { fields, .. } => fields.len(),
@@ -976,9 +972,7 @@ fn clone_function_items(
         .try_reserve_exact(selected.function_items().len())
         .map_err(|_| Error::Allocation)?;
     for function in selected.function_items() {
-        let outcome = contract
-            .outcome(function.identity())
-            .ok_or(Error::ForeignIdentity)?;
+        let outcome = contract.admitted(function.identity());
         let plan = Plan::try_new(contract, outcome, function.identity())?;
         // A generic function is reached at its instance's types, as
         // `window::close::<Message>` is.

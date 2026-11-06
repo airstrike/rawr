@@ -1,6 +1,6 @@
 // rawr
 use visits::{
-    Expected, FromKeys, Keys, Paint, Painter, Problem, Read, Reader, Tally, Visit, Visitor,
+    Expected, FromKeys, Keys, Layer, Paint, Painter, Problem, Read, Reader, Tally, Visit, Visitor,
 };
 
 struct Seven;
@@ -146,4 +146,5 @@ fn main() {
     println!("{}", visits::named(FIELDS));
     println!("{}", visits::measure(&Length));
     println!("{}", visits::painted(Seven));
+    println!("{} {}", visits::stacked(), visits::Plain::new().depth());
 }

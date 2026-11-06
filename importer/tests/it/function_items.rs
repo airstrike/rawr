@@ -21,8 +21,7 @@ fn concrete_function_item_generates_one_exact_rooted_thunk() {
         .expect("the concrete compiler starts");
     compiler
         .require_instance(
-            &base,
-            selector,
+            contract.accept(&base, &selector).unwrap(),
             Arguments::new(
                 Box::from([Type::Builtin(Builtin::I64)]),
                 Box::default(),
@@ -50,12 +49,16 @@ fn concrete_function_item_generates_one_exact_rooted_thunk() {
     );
     compiler
         .require_instance(
-            constant.identity(),
-            constant
-                .identity()
-                .selector()
-                .try_clone()
-                .expect("the const selector duplicates"),
+            contract
+                .accept(
+                    constant.identity(),
+                    &constant
+                        .identity()
+                        .selector()
+                        .try_clone()
+                        .expect("the const selector duplicates"),
+                )
+                .unwrap(),
             Arguments::new(
                 Box::default(),
                 Box::from([

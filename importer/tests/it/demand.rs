@@ -90,11 +90,11 @@ fn demand(
         .compiler((), snapshot, limits)
         .expect("the exact contract allocation transfers");
     compiler
-        .require(identity.clone(), origin.clone())
+        .require(contract.outcome(&identity).unwrap(), origin.clone())
         .expect("the exact use is demandable");
     if duplicate {
         compiler
-            .require(identity, origin)
+            .require(contract.outcome(&identity).unwrap(), origin)
             .expect("the duplicate use remains bounded");
     }
     compiler.seal().expect("the symbolic demand seals")

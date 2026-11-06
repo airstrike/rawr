@@ -250,6 +250,34 @@ pub struct Compiler<'contract, B> {
     byte_limit: usize,
 }
 
+/// A classified outcome of a contract and a selector it takes, as only
+/// [`Contract::accept`] makes: the one way an imported item enters a
+/// demand. Every identity a [`Compiler`] holds is made from one, so each
+/// names an outcome of the compiler's own contract.
+#[derive(Clone, Debug)]
+pub struct Accepted<'contract> {
+    outcome: crate::classify::Outcome<'contract>,
+    selector: identity::Selector,
+}
+
+impl<'contract> Accepted<'contract> {
+    /// The classified outcome.
+    #[must_use]
+    pub const fn outcome(&self) -> crate::classify::Outcome<'contract> {
+        self.outcome
+    }
+
+    /// The selector the outcome takes.
+    #[must_use]
+    pub const fn selector(&self) -> &identity::Selector {
+        &self.selector
+    }
+
+    pub(crate) fn into_parts(self) -> (crate::classify::Outcome<'contract>, identity::Selector) {
+        (self.outcome, self.selector)
+    }
+}
+
 #[derive(Serialize)]
 struct Canonical<'a> {
     schema: u32,
@@ -493,6 +521,32 @@ fn entry_retained_bytes(identity: Option<usize>, source_bytes: usize) -> Option<
 }
 
 impl Contract<Classified> {
+    /// The outcome `base` names, when it takes `selector`.
+    #[must_use]
+    pub fn accept(
+        &self,
+        base: &identity::Identity,
+        selector: &identity::Selector,
+    ) -> Option<Accepted<'_>> {
+        let outcome = self.outcome(base)?;
+        outcome
+            .representability()
+            .contains_selector(outcome.identity().selector(), selector)
+            .then(|| Accepted {
+                outcome,
+                selector: selector.clone(),
+            })
+    }
+
+    /// The outcome an identity a [`Compiler`] admitted names. Each was made
+    /// from one of this contract's outcomes ([`Accepted`],
+    /// [`Compiler::require`]), or replayed from a demand whose identities
+    /// were each found here first ([`Demand::replay_cached`]).
+    pub(crate) fn admitted(&self, identity: &identity::Identity) -> crate::classify::Outcome<'_> {
+        self.outcome(identity)
+            .expect("an admitted identity names an outcome of its own contract")
+    }
+
     /// Bind symbolic demand collection to this contract and one exact snapshot.
     #[doc(hidden)]
     pub fn compiler<B>(
@@ -533,7 +587,7 @@ impl Contract<Classified> {
     }
 }
 
-impl<B> Compiler<'_, B> {
+impl<'contract, B> Compiler<'contract, B> {
     /// Bind the exact selected profile projection rule used only to prove a
     /// mapper-bearing invocation. This does not install a facade projection.
     #[doc(hidden)]
@@ -553,12 +607,10 @@ impl<B> Compiler<'_, B> {
     pub fn require_builder(&mut self, plan: builder::Plan) -> Result<(), Error> {
         for step in plan.steps() {
             let identity = step.entry().identity();
-            let outcome = self
+            if !self
                 .contract
-                .outcome(identity)
-                .ok_or(Error::ForeignIdentity)?;
-            if !self.contract.accepts(identity, identity.selector())
-                || !outcome.representability().is_demandable()
+                .accept(identity, identity.selector())
+                .is_some_and(|accepted| accepted.outcome.representability().is_demandable())
             {
                 return Err(Error::NotDemandable);
             }
@@ -572,12 +624,19 @@ impl<B> Compiler<'_, B> {
         Ok(())
     }
 
-    /// Retain one compiler-checked symbolic entry.
-    pub fn require(&mut self, identity: identity::Identity, origin: Origin) -> Result<(), Error> {
-        let outcome = self
-            .contract
-            .outcome(&identity)
-            .ok_or(Error::ForeignIdentity)?;
+    /// Retain one compiler-checked symbolic entry: `outcome` itself.
+    pub fn require(
+        &mut self,
+        outcome: crate::classify::Outcome<'contract>,
+        origin: Origin,
+    ) -> Result<(), Error> {
+        let identity = outcome.identity().clone();
+        if !outcome
+            .representability()
+            .contains_selector(identity.selector(), identity.selector())
+        {
+            return Err(Error::NotDemandable);
+        }
         if has_unresolved_structural_parameters(outcome.representability())
             || needs_instance(self.contract, &identity)
         {
@@ -622,16 +681,13 @@ impl<B> Compiler<'_, B> {
     #[doc(hidden)]
     pub fn require_selected(
         &mut self,
-        base: &identity::Identity,
-        selector: identity::Selector,
+        accepted: Accepted<'contract>,
         source: &str,
         byte_start: u32,
         byte_end: u32,
     ) -> Result<(), Error> {
-        if !self.contract.accepts(base, &selector) {
-            return Err(Error::ForeignIdentity);
-        }
-        let outcome = self.contract.outcome(base).ok_or(Error::ForeignIdentity)?;
+        let (outcome, selector) = accepted.into_parts();
+        let base = outcome.identity();
         if has_unresolved_structural_parameters(outcome.representability())
             || needs_instance(self.contract, base)
         {
@@ -651,17 +707,14 @@ impl<B> Compiler<'_, B> {
     #[doc(hidden)]
     pub fn require_instance(
         &mut self,
-        base: &identity::Identity,
-        selector: identity::Selector,
+        accepted: Accepted<'contract>,
         mut instance: instance::Arguments,
         source: &str,
         byte_start: u32,
         byte_end: u32,
     ) -> Result<(), Error> {
-        if !self.contract.accepts(base, &selector) {
-            return Err(Error::ForeignIdentity);
-        }
-        let outcome = self.contract.outcome(base).ok_or(Error::ForeignIdentity)?;
+        let (outcome, selector) = accepted.into_parts();
+        let base = outcome.identity();
         // A generic struct's constructor at the types its use infers, and
         // a generic enum's variant at the types of the value it matches.
         let structure = matches!(
@@ -756,10 +809,7 @@ impl<B> Compiler<'_, B> {
             })?;
         let plan_bytes =
             unique_identities(&self.entries).try_fold(0_usize, |bytes, identity| {
-                let outcome = self
-                    .contract
-                    .outcome(identity)
-                    .ok_or(Error::ForeignIdentity)?;
+                let outcome = self.contract.admitted(identity);
                 let retained = adapter::Plan::retained_bytes(self.contract, outcome, identity)?
                     .ok_or(Error::Limit {
                         resource: "adapter plan retained bytes",
@@ -794,10 +844,7 @@ impl<B> Compiler<'_, B> {
             .try_reserve_exact(unique)
             .map_err(|_| Error::Allocation)?;
         for identity in unique_identities(&self.entries) {
-            let outcome = self
-                .contract
-                .outcome(identity)
-                .ok_or(Error::ForeignIdentity)?;
+            let outcome = self.contract.admitted(identity);
             plans.push(adapter::Plan::try_new(self.contract, outcome, identity)?);
         }
         for builder in &self.builders {
@@ -903,9 +950,7 @@ fn validate_function_items(
             continue;
         }
         let call = call.ok_or(Error::InstanceMismatch)?;
-        let selected_outcome = contract
-            .outcome(selected.identity())
-            .ok_or(Error::ForeignIdentity)?;
+        let selected_outcome = contract.admitted(selected.identity());
         // A generic function is selected at its instance's types, one per
         // type parameter, as `window::close::<Message>` is. Its bounds, as
         // `Task::done`'s `T: MaybeSend + 'static`, hold or fail where rustc
@@ -1014,9 +1059,7 @@ fn validate_function_items(
             continue;
         }
         let selected = functions.next().ok_or(Error::InstanceMismatch)?;
-        let selected_outcome = contract
-            .outcome(selected.identity())
-            .ok_or(Error::ForeignIdentity)?;
+        let selected_outcome = contract.admitted(selected.identity());
         let selected_signature = match selected_outcome.representability() {
             Representability::Function(plan) => plan.signature(),
             Representability::FunctionItem(plan)
@@ -1469,8 +1512,19 @@ impl<B> Demand<Sealed, B> {
             snapshot,
             limits,
             |stored, plans| {
+                // A stored demand whose identities aren't each this
+                // contract's is not this contract's demand.
+                let steps = stored.builders.iter().flat_map(builder::Plan::steps);
+                if !stored
+                    .entries
+                    .iter()
+                    .chain(steps.map(builder::Step::entry))
+                    .all(|entry| names_its_outcomes(contract, entry.identity()))
+                {
+                    return Err(Error::Canonical);
+                }
                 for identity in unique_identities(&stored.entries) {
-                    let outcome = contract.outcome(identity).ok_or(Error::ForeignIdentity)?;
+                    let outcome = contract.admitted(identity);
                     plans.push(adapter::Plan::try_new(contract, outcome, identity)?);
                 }
                 for builder in &stored.builders {
@@ -1706,13 +1760,21 @@ impl Entry {
     }
 }
 
+/// Whether `identity`, and each function item it passes, names an outcome
+/// of `contract`.
+fn names_its_outcomes(contract: &Contract<Classified>, identity: &identity::Identity) -> bool {
+    contract.outcome(identity).is_some()
+        && identity
+            .function_items()
+            .iter()
+            .all(|function| names_its_outcomes(contract, function.identity()))
+}
+
 /// Demand sealing failure that cannot mint a partial proof.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("owned runner inputs do not match the exact authenticated demand ancestry")]
     ForeignRunner,
-    #[error("symbolic surface identity belongs to a different contract")]
-    ForeignIdentity,
     #[error("symbolic allocation proof belongs to a different contract")]
     ForeignAllocation,
     #[error("classified item is excluded, rejected, or declaration-only")]
@@ -1747,7 +1809,7 @@ pub enum Error {
     Allocation,
     #[error("cannot encode canonical symbolic demand")]
     Encoding,
-    #[error("stored symbolic demand is not canonical")]
+    #[error("a stored demand or facade plan is not canonical")]
     Canonical,
 }
 
@@ -1855,14 +1917,14 @@ mod tests {
             .compiler((), snapshot(b"Pair", &limits), &limits)
             .expect("compiler binds first snapshot");
         first
-            .require(identity.clone(), origin.clone())
+            .require(contract.outcome(&identity).unwrap(), origin.clone())
             .expect("struct demand is admitted");
         let first = first.seal().expect("first demand seals");
         let mut changed = contract
             .compiler((), snapshot(b"Pair // body", &limits), &limits)
             .expect("compiler binds changed snapshot");
         changed
-            .require(identity, origin)
+            .require(contract.outcome(&identity).unwrap(), origin)
             .expect("same surface demand is admitted");
         let changed = changed.seal().expect("changed demand seals");
 
@@ -1887,7 +1949,7 @@ mod tests {
             .compiler((), source, &limits)
             .expect("the fixture compiler starts");
         compiler
-            .require(identity, origin)
+            .require(contract.outcome(&identity).unwrap(), origin)
             .expect("the fixture demand is retained");
         let demand = compiler.seal().expect("the fixture demand seals");
         let canonical = demand.canonical_bytes().to_vec();
@@ -1945,23 +2007,38 @@ mod tests {
             .expect("adapter-plan compiler starts");
         compiler
             .require(
-                structure.identity().clone(),
+                structure,
                 Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
             )
             .unwrap();
         compiler
-            .require_selected(structure.identity(), constructor, "/fixture/main.rs", 2, 3)
+            .require_selected(
+                contract.accept(structure.identity(), &constructor).unwrap(),
+                "/fixture/main.rs",
+                2,
+                3,
+            )
             .unwrap();
         compiler
-            .require_selected(structure.identity(), field, "/fixture/main.rs", 4, 5)
+            .require_selected(
+                contract.accept(structure.identity(), &field).unwrap(),
+                "/fixture/main.rs",
+                4,
+                5,
+            )
             .unwrap();
         compiler
-            .require_selected(enumeration.identity(), variant, "/fixture/main.rs", 6, 7)
+            .require_selected(
+                contract.accept(enumeration.identity(), &variant).unwrap(),
+                "/fixture/main.rs",
+                6,
+                7,
+            )
             .unwrap();
         for (index, outcome) in [constant, function].into_iter().enumerate() {
             compiler
                 .require(
-                    outcome.identity().clone(),
+                    outcome,
                     Origin::checked("/fixture/main.rs", 8 + index as u32, 9 + index as u32)
                         .unwrap(),
                 )
@@ -1969,7 +2046,7 @@ mod tests {
         }
         compiler
             .require(
-                function.identity().clone(),
+                function,
                 Origin::checked("/fixture/main.rs", 20, 21).unwrap(),
             )
             .unwrap();
@@ -2060,7 +2137,7 @@ mod tests {
             .expect("defaulted-structure compiler starts");
         compiler
             .require(
-                rectangle.identity().clone(),
+                rectangle,
                 Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
             )
             .expect("a defaulted generic struct is demandable");
@@ -2088,19 +2165,17 @@ mod tests {
             .expect("generic-structure compiler starts");
 
         assert!(matches!(
-            compiler.require(
-                outcome.identity().clone(),
-                Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
-            ),
+            compiler.require(outcome, Origin::checked("/fixture/main.rs", 0, 1).unwrap()),
             Err(Error::UnconstrainedGeneric)
         ));
         assert!(matches!(
             compiler.require_selected(
-                outcome.identity(),
-                field.try_clone().unwrap(),
+                contract
+                    .accept(outcome.identity(), &field.try_clone().unwrap())
+                    .unwrap(),
                 "/fixture/main.rs",
                 2,
-                3,
+                3
             ),
             Err(Error::UnconstrainedGeneric)
         ));
@@ -2114,12 +2189,13 @@ mod tests {
         .expect("empty arguments are bounded");
         assert!(matches!(
             compiler.require_instance(
-                outcome.identity(),
-                field.try_clone().unwrap(),
+                contract
+                    .accept(outcome.identity(), &field.try_clone().unwrap())
+                    .unwrap(),
                 empty,
                 "/fixture/main.rs",
                 4,
-                5,
+                5
             ),
             Err(Error::UnconstrainedGeneric)
         ));
@@ -2144,7 +2220,7 @@ mod tests {
                 .expect("receiver compiler starts");
             compiler
                 .require(
-                    method.identity().clone(),
+                    method,
                     Origin::checked("/fixture/main.rs", range.start, range.end).unwrap(),
                 )
                 .unwrap();
@@ -2181,7 +2257,7 @@ mod tests {
                 .expect("allocation compiler starts");
             compiler
                 .require(
-                    identity.clone(),
+                    contract.outcome(&identity).unwrap(),
                     Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
                 )
                 .expect("one function use is retained");
@@ -2207,11 +2283,15 @@ mod tests {
         let mut compiler = contract
             .compiler((), snapshot(b"Pair Choice", &limits), &limits)
             .unwrap();
-        compiler.require(identities[1].clone(), late).unwrap();
         compiler
-            .require(identities[0].clone(), early.clone())
+            .require(contract.outcome(&identities[1]).unwrap(), late)
             .unwrap();
-        compiler.require(identities[0].clone(), early).unwrap();
+        compiler
+            .require(contract.outcome(&identities[0]).unwrap(), early.clone())
+            .unwrap();
+        compiler
+            .require(contract.outcome(&identities[0]).unwrap(), early)
+            .unwrap();
         let demand = compiler.seal().unwrap();
         assert_eq!(demand.entries().len(), 2);
         assert!(demand.entries().is_sorted());
