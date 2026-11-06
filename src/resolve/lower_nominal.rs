@@ -12212,6 +12212,9 @@ struct Parser<'a> {
     text_into: Vec<TextInto>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
+    /// Each type parameter of a dependency's trait method that native code
+    /// fills, with the host path of its opaque type (#593).
+    opaque: BTreeMap<ImmutableString, ImmutableString>,
     /// `::<A, B>` read after a generic function's name, for its call.
     pending_turbofish: Option<Vec<Ty>>,
     /// `::<T>` read after a trait function's name in `Trait::f::<T>(..)`,
@@ -12538,6 +12541,7 @@ impl<'a> Parser<'a> {
             parse_count: 0,
             text_into: Vec::new(),
             generics: BTreeMap::new(),
+            opaque: BTreeMap::new(),
             pending_turbofish: None,
             trait_turbofish: None,
             path_values: HashSet::new(),
@@ -12641,6 +12645,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
+        parser.opaque = definition.opaque().clone();
         parser.generic_traits = generic_traits(definition.generics());
         parser.host_witnesses = host_witnesses(definition.generics());
         parser.generic_trait_arguments = generic_trait_arguments(definition.generics());
@@ -50507,6 +50512,12 @@ impl<'a> Parser<'a> {
             }
             _ => self.expect_name("binding type")?,
         };
+        // A type parameter native code fills, and its associated types, as
+        // `S` and `S::Ok`: the opaque types the signature names (#593).
+        #[cfg(feature = "rust-import")]
+        if let Some(path) = self.opaque.get(&name).cloned() {
+            return self.opaque_parameter_type(&name, &path, name_span);
+        }
         // A bare `str`, as `Cow<'_, str>` writes it: rustc's unsized `str`.
         if name.as_str() == "str"
             && !matches!(self.peek(), Token::DoubleColon)
@@ -51001,6 +51012,54 @@ impl<'a> Parser<'a> {
     /// The type `name` names before `::Output` in a local type, when it is a
     /// generic parameter, `Self` in a method, or a script type with
     /// associated types.
+    /// The opaque type of the type parameter `name` native code fills, at
+    /// the host path `path`, or of the associated type a `::` after it
+    /// names (`resolve::opaque_generics`).
+    #[cfg(feature = "rust-import")]
+    fn opaque_parameter_type(
+        &mut self,
+        name: &ImmutableString,
+        path: &str,
+        name_span: Span,
+    ) -> Result<Ty, Error> {
+        let (path, span) = if matches!(self.peek(), Token::DoubleColon)
+            && matches!(self.peek_second(), Token::Identifier(_))
+        {
+            self.next();
+            let (member, member_span) = self.expect_qualified_name()?;
+            let span = Span::new(name_span.start(), text_end(member_span.start(), &member));
+            let projected = rawr_import::surface::opaque::parameter_projection(path, &member)
+                .filter(|projected| self.models.host.source_type(projected).is_some())
+                .ok_or_else(|| Error::UnknownMember {
+                    owner: name.clone(),
+                    member: member.clone(),
+                    reference: span,
+                })?;
+            (projected, span)
+        } else {
+            (path.to_owned(), name_span)
+        };
+        let definition = self
+            .models
+            .host
+            .source_type(&path)
+            .cloned()
+            .ok_or_else(|| Error::UnknownType {
+                name: name.clone(),
+                reference: span,
+                path: false,
+            })?;
+        Ok(Ty::from_resolved(&type_ref::Type::Path(type_ref::Path {
+            name: path.as_str().into(),
+            target: type_ref::Target::Host {
+                definition,
+                owner: self.models.host.type_owner(&path).cloned(),
+            },
+            arguments: Box::default(),
+            span,
+        })))
+    }
+
     fn projection_base(&self, name: &str) -> Option<Ty> {
         if self.generics.contains_key(name) {
             return Some(Ty::Param(name.into()));

@@ -1343,12 +1343,21 @@ fn a_crates_derive_runs_from_its_expansion() {
     let _ = fs::remove_dir_all(&root);
     copy(Path::new(DERIVES), &root);
 
+    // The program serializes alone, so the first error is the
+    // `Deserialize` expansion's, at its derive.
+    let program = fs::read_to_string(root.join("src/main.rs")).unwrap();
+    let serializing = program
+        .lines()
+        .filter(|line| !line.contains("back"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(root.join("src/main.rs"), serializing).unwrap();
     let checked = rawr_import(&root, &["check"]);
     let stderr = text(&checked.stderr);
     assert!(!checked.status.success(), "stderr:\n{stderr}");
-    assert!(stderr.contains("main.rs:4:24"), "stderr:\n{stderr}");
+    assert!(stderr.contains("main.rs:4:35"), "stderr:\n{stderr}");
     assert!(
-        stderr.contains("this error originates in the derive macro `Serialize`"),
+        stderr.contains("this error originates in the derive macro `Deserialize`"),
         "stderr:\n{stderr}"
     );
     assert!(!stderr.contains("target/rawr/expand"), "stderr:\n{stderr}");

@@ -332,6 +332,8 @@ pub(crate) struct Function {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OpaqueGeneric {
     pub name: crate::ImmutableString,
+    /// The host path of its opaque type.
+    pub path: crate::ImmutableString,
     pub bounds: Box<[OpaqueBound]>,
 }
 

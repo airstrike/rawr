@@ -61,6 +61,8 @@ pub(crate) struct Definition {
     integer: Option<crate::INT>,
     /// The impl's generic parameters, then the method's own.
     generics: Box<[resolve::item::Generic]>,
+    /// The type parameters native code fills (`opaque`).
+    opaque: std::collections::BTreeMap<ImmutableString, ImmutableString>,
     /// How many of `generics` are the impl's.
     impl_generics: usize,
     /// The owner's type arguments in the impl header: `T` of `impl<T> Pair<T>`.
@@ -137,6 +139,11 @@ impl Definition {
                 .integer()
                 .filter(|_| function.body.constant),
             generics: function.generics.clone(),
+            opaque: function
+                .opaque
+                .iter()
+                .map(|generic| (generic.name.clone(), generic.path.clone()))
+                .collect(),
             impl_generics: 0,
             owner_arguments: Box::default(),
             builtin_owner: None,
@@ -184,6 +191,12 @@ impl Definition {
     /// The impl's generic parameters, then the method's own.
     pub(crate) fn generics(&self) -> &[resolve::item::Generic] {
         &self.generics
+    }
+
+    /// Each type parameter of a dependency's trait method native code fills,
+    /// by name, with the host path of its opaque type (#593).
+    pub(crate) fn opaque(&self) -> &std::collections::BTreeMap<ImmutableString, ImmutableString> {
+        &self.opaque
     }
 
     /// The method's own generic parameters, which its turbofish names.

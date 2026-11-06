@@ -2678,6 +2678,7 @@ fn opaque_generics(
         );
         opaque.push(item::OpaqueGeneric {
             name: generic.name.text.clone(),
+            path: path.as_str().into(),
             bounds: bounds.into_boxed_slice(),
         });
     }
