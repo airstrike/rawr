@@ -62,6 +62,15 @@ fn describe(formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
     write!(formatter, "I {}", "wanted")
 }
 
+/// The length of what it reads.
+struct Length;
+
+impl visits::Bytes for Length {
+    fn bytes(&self, data: &[u8]) -> usize {
+        data.len() + usize::from(data[2])
+    }
+}
+
 /// Numbers counted, not added.
 struct Counter {
     count: i64,
@@ -126,4 +135,5 @@ fn main() {
     println!("{} {}", sum.total(), counter.count);
     println!("{}", visits::from_keys::<Counts>(&[1, 2, 3]));
     println!("{}", visits::named(FIELDS));
+    println!("{}", visits::measure(&Length));
 }

@@ -225,3 +225,13 @@ pub fn from_keys<'a, T: FromKeys<'a> + std::fmt::Debug>(items: &'a [i64]) -> Str
 pub fn named(fields: &'static [&'static str]) -> String {
     fields.join(" ")
 }
+
+/// What reads bytes native code lends it, as serde's `visit_bytes` does.
+pub trait Bytes {
+    fn bytes(&self, data: &[u8]) -> usize;
+}
+
+/// What `bytes` makes of three bytes.
+pub fn measure<T: Bytes>(bytes: &T) -> usize {
+    bytes.bytes(&[1, 2, 3])
+}
