@@ -733,9 +733,6 @@ impl Settlement {
             std::thread::spawn(move || home::prune(&bindings, IDLE));
         }
         if !rerun.is_empty() {
-            for name in &rerun {
-                eprintln!("rawr: the build-script output of `{name}` differs from this project's build: running it again in rawr's nightly build");
-            }
             return Err(Error::Rerun(rerun));
         }
         refused.map_or(Ok(()), |refused| Err(Error::Refused(refused)))
@@ -785,6 +782,11 @@ fn judge(
                     let verdict = record.judge(package, recorded, project);
                     if verdict == rerun::Verdict::Rerun {
                         stale.mark(package);
+                        eprintln!(
+                            "rawr: the build-script output of `{}` differs from this project's \
+                             build: running it again in rawr's nightly build",
+                            package_name(package),
+                        );
                     }
                     verdict
                 }
