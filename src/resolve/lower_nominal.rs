@@ -17618,10 +17618,19 @@ impl<'a> Parser<'a> {
             }
             _ => path,
         };
-        let forms = self
-            .models
-            .host_items(&path)
-            .map(<[_]>::to_vec)
+        let forms = self.models.host_items(&path).map(<[_]>::to_vec);
+        // A crate's `From<Degrees>` for both `f32` and `f64` gives
+        // `Degrees` an `into` of each, alike in their inputs, so they are a
+        // family. The conversion's target picks one, as rustc selects the
+        // target's `From<Degrees>` impl.
+        #[cfg(feature = "rust-import")]
+        let forms = forms.or_else(|| {
+            self.models
+                .host
+                .pending_family(&path)
+                .map(|family| family.methods().to_vec())
+        });
+        let forms = forms
             .unwrap_or_default()
             .into_iter()
             .filter(|item| {
@@ -19690,7 +19699,10 @@ impl<'a> Parser<'a> {
                 });
             }
         }
-        let inputs =
+        // A `RangeInclusive<T>` whose argument is not known yet, as a
+        // closure's parameter, and whose `T` the other arguments fix.
+        let mut open_ranges = Vec::<(usize, Ty)>::new();
+        let mut inputs =
             item.signature()
                 .parameters()
                 .iter()
@@ -19700,6 +19712,27 @@ impl<'a> Parser<'a> {
                         .get(index)
                         .and_then(Option::as_ref)
                         .or(associated_origin.as_ref());
+                    if let Some(element) = range_inclusive_element(ty)
+                        && arguments
+                            .and_then(|arguments| arguments.get(index))
+                            .is_some_and(|argument| {
+                                matches!(self.inference.resolve(&argument.ty), Ty::Infer(_))
+                            })
+                    {
+                        let element = self.instantiate_host_type(
+                            element,
+                            &mut parameters,
+                            &item_path,
+                            operation,
+                            item_owner.as_ref(),
+                            originating,
+                        )?;
+                        if matches!(self.inference.resolve(&element), Ty::Infer(_)) {
+                            open_ranges.push((index, element));
+                            return Ok(Ty::Unknown);
+                        }
+                        return Ok(self.inclusive_range_of(&element, None));
+                    }
                     // A crate's `RangeInclusive<T>` takes the argument's range,
                     // of floats or of integers, and `T` that kind of number, as
                     // rustc infers `T` from `1.0..=30.0`. A range of a crate's
@@ -19799,6 +19832,11 @@ impl<'a> Parser<'a> {
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+        if let Some(arguments) = arguments {
+            for (index, element) in open_ranges {
+                inputs[index] = self.range_fixed_by_arguments(&inputs, arguments, index, &element);
+            }
+        }
         #[cfg(feature = "rust-import")]
         let output_origin = match item.signature().output().shape() {
             crate::host::type_ref::Shape::Imported { identity, .. } => receiver_origin
@@ -19895,6 +19933,38 @@ impl<'a> Parser<'a> {
             })
             .then(|| u32::try_from(*length).ok())
             .flatten()
+    }
+
+    /// The `RangeInclusive<T>` input at `index`, whose argument is not known
+    /// yet, of the kind the call's other arguments make `element`: `T` of
+    /// `slider(range, value, message)` is the `f32` of a closure's
+    /// `message: fn(f32) -> _`, as rustc infers `T` from every argument
+    /// before the closure's call gives `range` its `2.0..=80.0`.
+    fn range_fixed_by_arguments(
+        &mut self,
+        inputs: &[Ty],
+        arguments: &[ParsedExpr],
+        index: usize,
+        element: &Ty,
+    ) -> Ty {
+        let checkpoint = self.inference.checkpoint();
+        for (other, (input, argument)) in inputs.iter().zip(arguments).enumerate() {
+            if other != index && *input != Ty::Unknown {
+                let _ = self.unify_type(input, &argument.ty);
+            }
+        }
+        let fixed = self.inference.resolve(element);
+        self.inference.rollback(checkpoint);
+        let float = match fixed {
+            Ty::Float(_) => Some(true),
+            Ty::Int(_) => Some(false),
+            Ty::Host { .. } => {
+                let _ = self.unify_type(element, &fixed);
+                None
+            }
+            _ => None,
+        };
+        self.inclusive_range_of(element, float)
     }
 
     /// Rawr's inclusive range where a crate takes `RangeInclusive<T>` of
@@ -51245,6 +51315,20 @@ impl<'a> Parser<'a> {
             }
             value.ty = target;
             return Ok(None);
+        }
+        // A crate function where a `fn` pointer is expected, as the array
+        // `[primary as fn(&Theme, _) -> _, secondary]` holds two: the
+        // closure that calls it, a function value at runtime.
+        #[cfg(feature = "rust-import")]
+        if matches!(target, Ty::Fn { .. })
+            && let Ty::ImportedFunctionItem {
+                item: Some(proof), ..
+            } = &source
+        {
+            let at = value.span;
+            *value = self.host_function_value(proof.item.clone(), at)?;
+            value.span = at;
+            source = self.inference.resolve(&value.ty);
         }
         // `&F` where `F: Fn` is itself `Fn`: a borrowed closure passed as a
         // function, as `.map(self.on_change.as_ref())`.

@@ -54,6 +54,11 @@ pub struct Body {
     impl_headers: Box<[ImplHeader]>,
     /// The crate's derive macros, as serde's `Serialize`, sorted.
     derives: Box<[host::path::Path]>,
+    /// The imported methods that share a path and inputs, kept apart from
+    /// the items until a use settles one (`host::family`). A generated
+    /// runner binds each by its own selector.
+    #[cfg(feature = "rust-import")]
+    families: Box<[host::family::Pending]>,
     fingerprint: Fingerprint,
 }
 
@@ -1227,6 +1232,8 @@ impl Builder {
                 derives.dedup();
                 derives.into_boxed_slice()
             },
+            #[cfg(feature = "rust-import")]
+            families: Box::default(),
             fingerprint,
         })))
     }
@@ -1481,6 +1488,7 @@ impl Builder {
                     self.derives.dedup();
                     self.derives.into_boxed_slice()
                 },
+                families: families.clone().into_boxed_slice(),
                 fingerprint,
             })),
             families,
@@ -1636,6 +1644,15 @@ impl Definition {
     /// Iterate over the facade's registered items in canonical path order.
     pub fn items(&self) -> impl ExactSizeIterator<Item = &host::item::Definition> {
         self.items.iter()
+    }
+
+    /// Iterate over the methods of the facade's families, which share a
+    /// path and inputs and so are not among its items.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn family_methods(&self) -> impl Iterator<Item = &host::item::Definition> {
+        self.families
+            .iter()
+            .flat_map(host::family::Pending::methods)
     }
 
     pub(crate) fn overloads(&self, path: &str) -> Option<&[host::item::Definition]> {

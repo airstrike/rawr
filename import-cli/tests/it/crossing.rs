@@ -432,6 +432,69 @@ fn a_crates_impl_of_a_std_trait_for_a_std_type_is_callable() {
     );
 }
 
+/// iced's ferris: `f32::from(self.rotation.degrees())` converts a method's
+/// output through the crate's `impl From<Turn> for f32`, as the field form
+/// does, and so does `.into()` of a method's output. The output is `cargo
+/// run`'s.
+#[test]
+fn a_crates_from_impl_converts_a_methods_output() {
+    let (rawr, cargo) = both_printed("spun.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 Turn(0.0)..=Turn(1.0)@Turn(0.25)/None \"Rotation: 90\" \"45\"")
+            && rawr.contains(
+                "last view pad 0 Turn(0.0)..=Turn(1.0)@Turn(1.0)/None \"Rotation: 360\" \"180\""
+            ),
+        "{rawr}"
+    );
+}
+
+/// iced's styling: `primary as fn(&Theme, _) -> _` casts a crate function
+/// to a `fn` pointer whose parts inference fills, and the array's next
+/// crate function coerces to that pointer, so the types agree with
+/// rustc's and `rawr-import check` passes.
+#[test]
+fn crate_functions_cast_to_an_inferred_fn_pointer_share_an_array() {
+    passes_check("styles.rs");
+}
+
+/// iced's styling, run: each toggle takes its style from the array. The
+/// output is `cargo run`'s.
+#[test]
+#[ignore = "blocked: a `fn` pointer value passed to a crate's `impl Fn` parameter is not supported yet (`Toggle::style(style)`)"]
+fn crate_functions_in_a_fn_pointer_array_style_their_toggles() {
+    let (rawr, cargo) = both_printed("styles.rs", "Primary");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 pad 0 <Primary:1> <Secondary:3>")
+            && rawr.contains("last view pad 0 pad 0 <x Primary:1> <x Secondary:3>"),
+        "{rawr}"
+    );
+}
+
+/// iced's vectorial_text: a closure's parameter that only a slider's
+/// `RangeInclusive<T>` types takes `T` from the closure's `fn(f32) -> _`,
+/// so the call's `2.0..=80.0` is a range of `f32`, as rustc infers it, and
+/// `rawr-import check` passes.
+#[test]
+fn a_closures_range_parameter_takes_its_element_from_the_other_arguments() {
+    passes_check("labeled.rs");
+}
+
+/// iced's vectorial_text, run: the closure passes its `fn(f32) -> _`
+/// parameter on to the slider. The output is `cargo run`'s.
+#[test]
+#[ignore = "blocked: a `fn` pointer value passed to a crate's `impl Fn` parameter is not supported yet (`slider(range, value, message)`)"]
+fn a_closure_passes_its_range_and_fn_pointer_to_a_slider() {
+    let (rawr, cargo) = both_printed("labeled.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 pad 0 \"Size\" 2.0..=80.0@40.0/None")
+            && rawr.contains("1 message SizeChanged(80.0)"),
+        "{rawr}"
+    );
+}
+
 /// iced's gradient: `slider(Radians::RANGE, ..)` reads an associated
 /// constant whose type is std's `RangeInclusive` of the crate's own type,
 /// and the slider takes it at that type. The output is `cargo run`'s.
@@ -1595,6 +1658,27 @@ fn a_function_in_a_module_nested_under_an_imported_module_runs() {
 /// `main.rs`, which fails: its stderr.
 fn checked(variant: &str) -> String {
     checked_in(&lane(Some(variant)))
+}
+
+/// `rawr-import check` of a lane of the fixture with `variant` as its
+/// `main.rs`, which passes.
+fn passes_check(variant: &str) {
+    let root = lane(Some(variant));
+    let directory = crate::support::scratch();
+    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
 }
 
 /// `rawr-import check` of the project at `root`, as `checked` gives it.
