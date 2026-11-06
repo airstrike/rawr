@@ -12,6 +12,7 @@ use crate::surface::adapter::{EntryIdentity, Operation, Plan};
 
 pub(crate) mod cached;
 mod family;
+mod frame;
 mod place;
 
 const MANIFEST_PATH: &str = "Cargo.toml";
@@ -2799,6 +2800,60 @@ fn opaque_table<T: 'static, const N: usize>(
             }) as OpaqueEntry
         })
         .collect()
+}
+
+/// The values of the opaque types of a script impl function's own type
+/// parameters, which native code fills, as `S` and `S::Ok` of a
+/// `serialize<S: Serializer>` (#593): kept for the call in a frame of the
+/// runner's generic impl function, where rustc knows their types, and
+/// reached through it. A call that takes one runs the entry the frame
+/// compiled for it, at the frame's types.
+trait Frame {
+    fn call(&mut self, nonce: u64, slot: u32, entry: usize, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>;
+}
+
+/// A frame as its call lends it to the script function it runs.
+struct FrameF;
+
+impl __rawr_internal::scope::Family for FrameF {
+    type Of<'x> = &'x mut (dyn Frame + 'x);
+}
+
+/// A value a frame keeps, as script code holds it in the arena: the lend
+/// of its frame, the slot of its type and its index there.
+#[derive(Clone, Copy, Debug)]
+struct FrameRef { nonce: u64, slot: u32, index: usize }
+
+/// The script value of the value at `index` in `slot` of the frame lent as
+/// `nonce`, which calls that take it reach through `table`.
+#[allow(dead_code)]
+fn frame_handle(arena: &mut Arena, nonce: u64, slot: u32, index: usize, table: OpaqueTable) -> Result<Dynamic, Error> {
+    let handle = arena.insert(FrameRef { nonce, slot, index })?;
+    arena.set_opaque(&handle, table);
+    Ok(Dynamic::from(handle))
+}
+
+/// The index in `slot` of the value `handle` names in the frame lent as
+/// `nonce`.
+#[allow(dead_code)]
+fn frame_index(arena: &Arena, handle: NativeHandle, nonce: u64, slot: u32) -> Result<usize, Error> {
+    let reference = arena.shared::<FrameRef, _>(handle, |reference| *reference)?;
+    if reference.nonce != nonce || reference.slot != slot {
+        return Err(Error::Lent("a value native code gave a generic function", __rawr_internal::scope::Error::Mismatch));
+    }
+    Ok(reference.index)
+}
+
+/// The call `entry` of the frame that keeps the value at argument
+/// `position`, at its slot's type.
+#[allow(dead_code)]
+fn frame_dispatch(arguments: &mut Arguments<'_, '_, '_>, position: usize, slot: u32, entry: usize) -> Result<Dynamic, Error> {
+    let handle = native_handle(arguments, position, false)?;
+    let reference = arguments.arena.shared::<FrameRef, _>(handle, |reference| *reference)?;
+    __rawr_internal::scope::with::<FrameF, _>(__rawr_internal::scope::nonce(reference.nonce), |frame| {
+        frame.call(reference.nonce, slot, entry, arguments)
+    })
+    .map_err(|error| Error::Lent("a value native code gave a generic function", error))?
 }
 
 /// Strings a call takes as `&'static str`, as iced's `Font::new` does,
@@ -6900,7 +6955,7 @@ fn render_source(
     sources.push((FAMILIES_PATH.into(), families));
     // The impls name the proxies of their owners, so they come first.
     let mut impls = Vec::new();
-    render_impls(plans, &mut impls)?;
+    render_impls(plans, profile, facade.as_ref(), &mut impls)?;
     place::render(&mut impls);
     let mut proxies = Vec::new();
     render_proxies(&mut proxies)?;
@@ -8797,6 +8852,39 @@ fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
         }
     }
     Ok(region)
+}
+
+thread_local! {
+    /// While a generic script impl function's frame is rendered
+    /// (`render_frame`): the slot of each opaque type of its own
+    /// parameters, by identity, and how the code being written names the
+    /// frame.
+    static FRAME: std::cell::RefCell<Option<(std::collections::BTreeMap<[u8; 32], usize>, &'static str)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Sets `FRAME` for as long as it lives.
+struct InFrame(Option<(std::collections::BTreeMap<[u8; 32], usize>, &'static str)>);
+
+impl InFrame {
+    fn enter(slots: &std::collections::BTreeMap<[u8; 32], usize>, name: &'static str) -> Self {
+        Self(FRAME.replace(Some((slots.clone(), name))))
+    }
+}
+
+impl Drop for InFrame {
+    fn drop(&mut self) {
+        FRAME.set(self.0.take());
+    }
+}
+
+/// How the code being written names the frame that keeps values of the
+/// opaque type `definition`, and its slot there (`FRAME`).
+fn frame_slot(definition: &crate::surface::identity::Definition) -> Option<(&'static str, usize)> {
+    FRAME.with_borrow(|frame| {
+        let (slots, name) = frame.as_ref()?;
+        Some((*name, *slots.get(definition.as_bytes())?))
+    })
 }
 
 thread_local! {
@@ -15130,6 +15218,11 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
+        // A value of a generic impl function's own parameter's opaque type
+        // stays in its frame (`render_frame`).
+        convert::Type::Nominal { definition, .. } if let Some((frame, slot)) = frame_slot(definition) => {
+            writeln!(output, "    {frame}.give_{slot}(arguments.arena, {value})")
+        }
         ty if boxed_element(ty).is_some()
             || counted_element(ty).is_some()
             || keyed_element(ty).is_some()
@@ -15289,6 +15382,10 @@ fn render_from_dynamic(
         )
     };
     match ty {
+        convert::Type::Nominal { definition, .. } if let Some((frame, slot)) = frame_slot(definition) => write!(
+            output,
+            "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| {frame}.out_{slot}(arguments.arena, handle))"
+        ),
         convert::Type::Inferred => return Err(request::drift("an inferred type parameter reached a runtime value")),
         convert::Type::Unit | convert::Type::Never => cast(output, "()"),
         convert::Type::Builtin(convert::Builtin::Bool) => cast(output, "bool"),
@@ -15578,6 +15675,9 @@ fn render_to_dynamic(
 ) -> Result<(), request::Error> {
     use std::fmt::Write as _;
     match ty {
+        convert::Type::Nominal { definition, .. } if let Some((frame, slot)) = frame_slot(definition) => {
+            write!(output, "{frame}.give_{slot}(arguments.arena, {value})")
+        }
         // Rust's `Box`, as rawr's, which holds its value as itself.
         ty if let Some(element) = boxed_element(ty) => {
             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
@@ -17853,19 +17953,38 @@ fn names_parameter(ty: &convert::Type) -> bool {
 /// value by its handle, a native value it borrows for the call alone,
 /// through a lend whose accessors the runner's adapters reach it by
 /// (D558.3), and a native value it owns through the arena.
-fn render_impls(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), request::Error> {
+fn render_impls(
+    plans: &[Plan],
+    profile: &crate::profile::Proof,
+    facade: Option<&crate::surface::facade::Plan>,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
     let impls = plans
         .iter()
         .flat_map(Plan::impls)
         .collect::<std::collections::BTreeSet<_>>();
+    let cohort = Cohort {
+        plans,
+        profile,
+        facade,
+    };
     for script in impls {
-        render_impl(script, output)?;
+        render_impl(script, &cohort, output)?;
     }
     Ok(())
 }
 
+/// What a script impl's generic function compiles its frame's calls from
+/// (`render_frame`): the runner's plans and what renders them.
+struct Cohort<'a> {
+    plans: &'a [Plan],
+    profile: &'a crate::profile::Proof,
+    facade: Option<&'a crate::surface::facade::Plan>,
+}
+
 fn render_impl(
     script: &crate::surface::instance::ScriptImpl,
+    cohort: &Cohort<'_>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let drift = request::drift;
@@ -17905,8 +18024,16 @@ fn render_impl(
         let ty = impl_type(ty, generics).ok_or_else(|| drift("a script impl's associated type"))?;
         body.push_str(&format!("    type {name} = {ty};\n"));
     }
+    let mut items = String::new();
     for function in script.functions() {
-        body.push_str(&render_impl_function(function, generics)?);
+        let frame = if function.generics().is_empty() {
+            None
+        } else {
+            let frame = frame::Frame::of(script, function, cohort)?;
+            items.push_str(&frame.render(script, cohort)?);
+            Some(frame)
+        };
+        body.push_str(&render_impl_function(function, generics, frame.as_ref())?);
     }
     writeln!(
         output,
@@ -17914,7 +18041,7 @@ fn render_impl(
 #[allow(unused_mut, unused_variables, refining_impl_trait, clippy::all)]
 impl{parameters} {trait_} for {owner} {{
 {body}}}
-"
+{items}"
     )
     .map_err(request::unwritable)
 }
@@ -17923,6 +18050,7 @@ impl{parameters} {trait_} for {owner} {{
 fn render_impl_function(
     function: &crate::surface::instance::ScriptImplFunction,
     generics: &[Box<str>],
+    frame: Option<&frame::Frame>,
 ) -> Result<String, request::Error> {
     use crate::surface::instance::ImplReceiver;
     let drift = request::drift;
@@ -17932,6 +18060,7 @@ fn render_impl_function(
     let mut restores = String::new();
     let mut lends = Vec::new();
     let mut places = Vec::new();
+    let mut keeps = String::new();
     match function.receiver() {
         ImplReceiver::None => {}
         ImplReceiver::Shared => {
@@ -17952,9 +18081,24 @@ fn render_impl_function(
     for (position, input) in function.inputs().iter().enumerate() {
         let name = format!("input_{position}");
         let at = values.len();
-        let rust =
-            impl_type(input, generics).ok_or_else(|| drift("a script impl function's input"))?;
+        let rust = match frame {
+            Some(frame) => frame.spell(input, generics),
+            None => impl_type(input, generics),
+        }
+        .ok_or_else(|| drift("a script impl function's input"))?;
         parameters.push(format!("{name}: {rust}"));
+        // A value of an opaque type the frame keeps is kept there, and
+        // script code holds it by a handle into the frame.
+        if let Some((frame, slot)) = frame.and_then(|frame| Some((frame, frame.slot(input)?))) {
+            keeps.push_str(&format!(
+                "\n        let at_{position} = frame.keep_{slot}({name});"
+            ));
+            values.push(format!(
+                "(frame_handle(arguments.arena, nonce, {slot}, at_{position}, {}_table_{slot}()).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position}))))",
+                frame.name()
+            ));
+            continue;
+        }
         if names_parameter(input) {
             return Err(drift(
                 "a script impl function's input names a type parameter of the impl",
@@ -18044,8 +18188,11 @@ fn render_impl_function(
             "a script impl function's output names a type parameter of the impl",
         ));
     }
-    let rust =
-        impl_type(returned, generics).ok_or_else(|| drift("a script impl function's output"))?;
+    let rust = match frame {
+        Some(frame) => frame.spell(returned, generics),
+        None => impl_type(returned, generics),
+    }
+    .ok_or_else(|| drift("a script impl function's output"))?;
     let in_arena = |body: &str| {
         format!(
             "with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {body} }})"
@@ -18079,6 +18226,48 @@ fn render_impl_function(
     let family = carries_lifetime(returned)
         .then(|| written_family(returned))
         .flatten();
+    if let Some(frame) = frame {
+        if family.is_some() {
+            return Err(drift("a generic script impl function whose output borrows"));
+        }
+        let mut converted = String::new();
+        {
+            let _frame = InFrame::enter(frame.slots(), "frame");
+            render_from_dynamic(returned, "value", 0, &mut converted)?;
+        }
+        let converted = in_arena(&converted);
+        let call = format!(
+            "let mut frame = {made};{keeps}
+        let (value, nonce) = {{
+            let mut erased: &mut (dyn Frame + '_) = &mut frame;
+            __rawr_internal::scope::lend::<FrameF, _>(&mut erased, |nonce| {{
+                let nonce = nonce.bits();
+                let witnesses = __rawr_internal::crossing::member_witnesses({member:?});
+                let mut values: [Dynamic; {count}] = {values};
+                let value = __rawr_internal::crossing::call_member({member:?}, &mut values, &[{mutable}]);{restores}
+                (value, nonce)
+            }})
+        }};
+        frame.nonce = nonce;
+        {converted}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\"))",
+            made = frame.made(),
+        );
+        let (items, call) = lent_around(&lends, call);
+        let call = place::around(
+            &places,
+            &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
+            call,
+        );
+        return Ok(format!(
+            "    fn {}{}({}) -> {rust} {{
+{items}        {call}
+    }}
+",
+            function.name(),
+            frame.function_header(),
+            parameters.join(", ")
+        ));
+    }
     let (lifetime, rust, mut call) = match family {
         Some(family) => {
             (

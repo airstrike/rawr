@@ -1833,13 +1833,41 @@ fn native_impl(
                     },
                 ),
             };
-            functions.push(ScriptImplFunction::new(
-                function.name.text.as_str().into(),
-                format!("{owner_path}::{}", definition.key().name()).into(),
-                receiver,
-                inputs,
-                output,
-            ));
+            // Each type parameter native code fills, with its bounds as
+            // the impl writes them (#593).
+            let mut generics = Vec::with_capacity(function.opaque.len());
+            for generic in function.opaque.iter() {
+                let mut bounds = Vec::with_capacity(generic.bounds.len());
+                for bound in generic.bounds.iter() {
+                    bounds.push(rawr_import::surface::instance::ImplBound::new(
+                        bound.path.as_str().into(),
+                        bound
+                            .lifetimes
+                            .iter()
+                            .map(|lifetime| lifetime.as_str().into())
+                            .collect(),
+                        bound
+                            .arguments
+                            .iter()
+                            .map(&convert)
+                            .collect::<Result<Box<[_]>, _>>()?,
+                    ));
+                }
+                generics.push(rawr_import::surface::instance::ImplGeneric::new(
+                    generic.name.as_str().into(),
+                    bounds.into_boxed_slice(),
+                ));
+            }
+            functions.push(
+                ScriptImplFunction::new(
+                    function.name.text.as_str().into(),
+                    format!("{owner_path}::{}", definition.key().name()).into(),
+                    receiver,
+                    inputs,
+                    output,
+                )
+                .with_generics(generics.into_boxed_slice()),
+            );
         }
         let lifetimes = match &implementation.trait_ {
             Some(item::TraitImpl::Native { lifetimes, .. }) => *lifetimes,
