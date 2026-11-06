@@ -647,6 +647,24 @@ mod seed {
                     }
                     index += 2;
                 }
+                // `extern crate serde as _serde;`: `_serde` names the crate,
+                // as a derive's expansion writes it.
+                Token::Ident("extern")
+                    if tokens.get(index + 1) == Some(&Token::Ident("crate"))
+                        && let Some(Token::Ident(name)) = tokens.get(index + 2) =>
+                {
+                    let mut local = *name;
+                    index += 3;
+                    if tokens.get(index) == Some(&Token::Ident("as"))
+                        && let Some(Token::Ident(alias)) = tokens.get(index + 1)
+                    {
+                        local = alias;
+                        index += 2;
+                    }
+                    if local != *name {
+                        bindings.push((local, vec![*name]));
+                    }
+                }
                 Token::Ident("use") => {
                     let (prefix, next) = path(&tokens, index + 1);
                     index = next;

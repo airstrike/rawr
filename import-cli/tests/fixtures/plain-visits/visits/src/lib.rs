@@ -180,3 +180,58 @@ pub fn read<'a, T: Read<'a> + std::fmt::Debug>(items: &'a [i64]) -> String {
         Err(problem) => problem.describe(),
     }
 }
+
+/// Keys read one at a time, each a value of the caller's type, as serde's
+/// `MapAccess::next_key` reads them.
+pub trait Keys<'a> {
+    type Error: Problem;
+    fn next_key<K: Read<'a>>(&mut self) -> Result<Option<K>, Self::Error>;
+}
+
+/// A value made from keys, as a derive's `visit_map` makes one.
+pub trait FromKeys<'a>: Sized {
+    fn from_keys<M: Keys<'a>>(keys: M) -> Result<Self, M::Error>;
+}
+
+/// The keys of a borrowed slice, one number each.
+pub struct Slots<'a> {
+    items: &'a [i64],
+}
+
+impl<'a> Keys<'a> for Slots<'a> {
+    type Error = Text;
+    fn next_key<K: Read<'a>>(&mut self) -> Result<Option<K>, Text> {
+        let Some((first, rest)) = self.items.split_first() else {
+            return Ok(None);
+        };
+        self.items = rest;
+        K::read(Numbers {
+            items: std::slice::from_ref(first),
+        })
+        .map(Some)
+    }
+}
+
+/// A `T` made from the keys of `items`, or the problem its keys report.
+pub fn from_keys<'a, T: FromKeys<'a> + std::fmt::Debug>(items: &'a [i64]) -> String {
+    match T::from_keys(Slots { items }) {
+        Ok(value) => format!("{value:?}"),
+        Err(problem) => problem.describe(),
+    }
+}
+
+/// The names a reader expects, kept for as long as the program runs, as
+/// serde's `deserialize_struct` takes its `fields`.
+pub fn named(fields: &'static [&'static str]) -> String {
+    fields.join(" ")
+}
+
+/// What reads bytes native code lends it, as serde's `visit_bytes` does.
+pub trait Bytes {
+    fn bytes(&self, data: &[u8]) -> usize;
+}
+
+/// What `bytes` makes of three bytes.
+pub fn measure<T: Bytes>(bytes: &T) -> usize {
+    bytes.bytes(&[1, 2, 3])
+}

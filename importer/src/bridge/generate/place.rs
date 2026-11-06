@@ -118,6 +118,25 @@ pub(super) fn around(
     format!("let place_witnesses = {witnesses};\n        {call}")
 }
 
+/// `call` inside a lend of each `&[T]` of `slices` (its input's position
+/// and its element's descriptor), as the place `place_{position}` the call
+/// reads: the slice itself, for as long as the call runs.
+pub(super) fn around_slices(
+    slices: &[(usize, String)],
+    witnesses: &str,
+    mut call: String,
+) -> String {
+    if slices.is_empty() {
+        return call;
+    }
+    for (position, element) in slices.iter().rev() {
+        call = format!(
+            "__rawr_internal::place::slice::borrow_ref::<{element}, _>(input_{position}, slice_witnesses.get({position}).and_then(Option::as_ref).expect(\"checked native slice parameter witness\"), |place_{position}| {{ {call} }}).unwrap_or_else(|error| panic!(\"rawr: native place: {{error}}\"))"
+        );
+    }
+    format!("let slice_witnesses = {witnesses};\n        {call}")
+}
+
 /// The descriptor for an exact native value, with generated codecs only for
 /// real ownership transfers. Merely lending its storage invokes neither codec.
 pub(super) fn policy(ty: &convert::Type) -> Result<String, request::Error> {

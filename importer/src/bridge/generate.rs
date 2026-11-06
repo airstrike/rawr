@@ -14238,13 +14238,30 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
-    // `&[T]` or `&(A, B)` of Rawr's array or tuple, as voronator's
-    // `from_tuple` and image's `save_buffer` take: the Rust value made from
-    // it, lent to the call, as a `&str` input is.
+    // `&'static [&'static str]`, as serde's `deserialize_struct` takes its
+    // fields: Rawr's array of strings, pinned as one slice for as long as
+    // the runner lives, which equal arrays share.
     if let convert::Type::Borrowed {
         mutable: false,
         ty: lent,
-    } = ty
+    } = &lent
+        && matches!(&**lent, convert::Type::Sequence { element, .. }
+            if **element == convert::Type::Builtin(convert::Builtin::StaticStr))
+    {
+        return writeln!(
+            output,
+            "    let argument_{local} = {{ static PINS: __rawr_internal::scope::Pins = __rawr_internal::scope::Pins::constant(); let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let texts = value.into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|text| text.into_immutable_string().map_err(|_| Error::TypeMismatch)).collect::<Result<Vec<_>, Error>>()?; PINS.pin_strs(texts) }};"
+        )
+        .map_err(request::unwritable);
+    }
+    // `&[T]` or `&(A, B)` of Rawr's array or tuple, as voronator's
+    // `from_tuple` and image's `save_buffer` take: the Rust value made from
+    // it, lent to the call, as a `&str` input is. So is one a borrowed type
+    // parameter takes, as serde's `serialize_field(key, &T)` at `bool`.
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: lent,
+    } = &lent
         && is_made_for_call(lent)
     {
         let mut converted = String::new();
@@ -16304,7 +16321,20 @@ fn render_give_with(
     value: &str,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let copies = copied_inputs(signature);
+    let mut copies = copied_inputs(signature);
+    // A program value lent `&mut` where a generic call takes `&mut T` moves
+    // into the call through its proxy and goes back after the call's value,
+    // with what native code changed in it (#1008).
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if let convert::Type::Borrowed { mutable: true, ty } =
+            substituted(input, signature, substitutions)?
+            && matches!(*ty, convert::Type::Script { .. })
+            && !copies.iter().any(|(copied, _)| *copied == position)
+        {
+            copies.push((position, *ty));
+        }
+    }
+    copies.sort_by_key(|(position, _)| *position);
     if copies.is_empty() {
         return render_give(
             &substituted(signature.output(), signature, substitutions)?,
@@ -16322,6 +16352,10 @@ fn render_give_with(
     let given = String::from_utf8(given).map_err(request::unwritable)?;
     let mut copied = String::new();
     for (position, element) in &copies {
+        if matches!(element, convert::Type::Script { .. }) {
+            copied.push_str(&format!(", argument_{position}_proxy.0.into_dynamic()"));
+            continue;
+        }
         let converted = given_back(*position, element, !LENT_ARGUMENTS.get())?;
         if LENT_ARGUMENTS.get() && place::available(element) {
             copied.push_str(&format!(", match argument_{position}_copy {{ Some(argument_{position}_copy) => ({converted})?, None => argument_{position}_place }}"));
@@ -18078,6 +18112,21 @@ fn impl_type(ty: &convert::Type, generics: &[Box<str>]) -> Option<String> {
             {
                 "&str".to_owned()
             }
+            convert::Type::Borrowed { mutable: false, ty }
+                if matches!(
+                    &**ty,
+                    convert::Type::Sequence {
+                        owned: false,
+                        length: None,
+                        ..
+                    }
+                ) =>
+            {
+                let convert::Type::Sequence { element, .. } = &**ty else {
+                    return None;
+                };
+                format!("&[{}]", concrete_type(element)?)
+            }
             convert::Type::Borrowed { mutable, ty } => {
                 let inner = concrete_type(ty)?;
                 if *mutable {
@@ -18266,6 +18315,7 @@ fn render_impl_function(
     let mut restores = String::new();
     let mut lends = Vec::new();
     let mut places = Vec::new();
+    let mut slices = Vec::new();
     match function.receiver() {
         ImplReceiver::None => {}
         ImplReceiver::Shared => {
@@ -18333,6 +18383,24 @@ fn render_impl_function(
             }
             convert::Type::Borrowed { ty, .. } if matches!(**ty, convert::Type::Unit) => {
                 values.push("Dynamic::UNIT".to_owned());
+            }
+            // A `&[T]` native code lends: the slice itself, as a place the
+            // script function reads for the call.
+            convert::Type::Borrowed { mutable: false, ty }
+                if matches!(
+                    **ty,
+                    convert::Type::Sequence {
+                        owned: false,
+                        length: None,
+                        ..
+                    }
+                ) =>
+            {
+                let convert::Type::Sequence { element, .. } = &**ty else {
+                    return Err(drift("a script impl function's slice input"));
+                };
+                values.push(format!("place_{position}.clone()"));
+                slices.push((position, place::policy(element)?));
             }
             convert::Type::Borrowed { mutable, ty }
                 if matches!(
@@ -18487,6 +18555,11 @@ fn render_impl_function(
             &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
             call,
         );
+        let call = place::around_slices(
+            &slices,
+            &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
+            call,
+        );
         return Ok(format!(
             "    fn {}{}({}) -> {rust} {{
 {items}        {call}
@@ -18551,6 +18624,11 @@ fn render_impl_function(
     call = wrapped;
     call = place::around(
         &places,
+        &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
+        call,
+    );
+    call = place::around_slices(
+        &slices,
         &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
         call,
     );
