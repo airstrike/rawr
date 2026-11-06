@@ -18021,7 +18021,7 @@ fn render_proxies(output: &mut Vec<u8>) -> Result<(), request::Error> {
         for module in &modules[open.len()..] {
             writeln!(
                 output,
-                "pub mod {module} {{\n#[allow(unused_imports)]\nuse super::*;"
+                "#[allow(non_snake_case)]\npub mod {module} {{\n#[allow(unused_imports)]\nuse super::*;"
             )
             .map_err(request::unwritable)?;
             open.push(module.clone());

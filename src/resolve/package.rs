@@ -89,6 +89,9 @@ struct Unit {
     context: Context,
     parsed: parse::Unit,
     slots: Vec<Option<Slot>>,
+    /// The module whose names a derive's expansion sees, as its own
+    /// module's glob import of it (#593).
+    enclosing: Option<Box<[ImmutableString]>>,
 }
 
 #[derive(Clone)]
@@ -160,7 +163,13 @@ impl<'a> Resolver<'a> {
             .map(|unit| {
                 let source = &sources[unit.source.index()];
                 let package = package_by_name[source.package()];
+                let enclosing = source
+                    .diagnostic()
+                    .origin()
+                    .and_then(|_| source.modules().split_last())
+                    .map(|(_, enclosing)| enclosing.into());
                 Unit {
+                    enclosing,
                     context: Context {
                         source: unit.source,
                         package,
@@ -392,6 +401,25 @@ impl<'a> Resolver<'a> {
                         );
                     }
                 }
+                // A derive's expansion sees what its item's module binds,
+                // its private items and imports too, as `use super::*;`.
+                if let Some(enclosing) = &unit.enclosing {
+                    for name in self.module_names(context, enclosing) {
+                        let address = context.address(&name);
+                        if self.binds(&address) || found.contains_key(&address) {
+                            continue;
+                        }
+                        found.insert(
+                            address,
+                            Export {
+                                source: context.source,
+                                context: context.clone(),
+                                path: Box::new(["super".into(), name]),
+                                span: Span::NONE,
+                            },
+                        );
+                    }
+                }
             }
             if found.is_empty() {
                 return;
@@ -578,6 +606,7 @@ impl<'a> Resolver<'a> {
             context,
             parsed,
             slots,
+            ..
         } in units
         {
             #[cfg(feature = "rust-import")]
