@@ -1572,6 +1572,13 @@ fn install(
     )?;
     let macros = rawr_import::surface::facade::macros(contract.raw_graph())?;
     let derives = rawr_import::surface::facade::derives(contract.raw_graph())?;
+    if std::env::var_os("RAWR_DEBUG_DERIVES").is_some() {
+        eprintln!("DEBUG derives {:?}", derives);
+        for export in contract.raw_graph().exports() {
+            let text = format!("{export:?}");
+            if text.contains("Serialize") { eprintln!("DEBUG export {}", &text[..text.len().min(400)]); }
+        }
+    }
     let mut facades = Vec::<Facade<'_>>::new();
     facades
         .try_reserve_exact(facade_count)
