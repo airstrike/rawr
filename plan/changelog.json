@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.144",
+      "date": "2026-11-05",
+      "entries": [
+        {"text":"Programs can write the items a derive expands to: `const _: () = { .. };` blocks of items, `extern crate x as y;`, paths through a renamed module (`use std as s;`), a turbofish on a program method or a trait's path (`v.f::<T>()`, `Trait::f::<T>(&v)`), and a generic trait function called by its path.","issues":[976],"refs":[593]}
+      ]
+    },
+    {
       "version": "0.3.143",
       "date": "2026-11-05",
       "entries": [

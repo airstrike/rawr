@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-05",
-  "version": "0.3.143",
+  "version": "0.3.144",
   "examples": {
     "running": 15,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.144",
+        "date": "2026-11-05",
+        "entries": [
+          {"text":"Programs can write the items a derive expands to: `const _: () = { .. };` blocks of items, `extern crate x as y;`, paths through a renamed module (`use std as s;`), a turbofish on a program method or a trait's path (`v.f::<T>()`, `Trait::f::<T>(&v)`), and a generic trait function called by its path.","issues":[976],"refs":[593]}
+        ]
+      },
       {
         "version": "0.3.143",
         "date": "2026-11-05",
@@ -2354,7 +2361,10 @@
     {"issue":972,"title":"A relative CARGO_TARGET_DIR is taken relative to the project, while Cargo takes it relative to the working directory","state":"open","category":"Health"},
     {"issue":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"open","category":"Divergences from rustc"},
     {"issue":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"open","category":"Divergences from rustc"},
-    {"issue":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed","category":"Divergences from rustc","release":"0.3.143"}
+    {"issue":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed","category":"Divergences from rustc","release":"0.3.143"},
+    {"issue":976,"title":"A derive expansion's syntax in program code","state":"closed","category":"Divergences from rustc","release":"0.3.144"},
+    {"issue":977,"title":"std trait-path calls with a turbofish or a written Self","state":"open","category":"Divergences from rustc"},
+    {"issue":978,"title":"`fmt::Formatter::write_str(f, s)` by its path in a fmt body","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2835,7 +2845,8 @@
             {"number":973,"title":"A fn pointer value passed to a crate's impl Fn parameter","state":"open"},
             {"number":974,"title":"A crate's operator impl on a std type with a crate type on the right: f32 * Radians","state":"open"},
             {"number":593,"title":"serde's derives on program types","state":"open"},
-            {"number":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed"}
+            {"number":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed"},
+            {"number":976,"title":"A derive expansion's syntax in program code","state":"closed"}
           ],
           "milestone": "0.4"
         },
@@ -3038,7 +3049,9 @@
             {"number":962,"title":"Deep macro recursion overflows the debug build's stack before rustc's recursion limit","state":"open"},
             {"number":968,"title":"`async fn` in a program without a Cargo project is unsupported: no core future","state":"open"},
             {"number":969,"title":"A panic in a runtime's async main prints \"invocation of symbolic item ... failed: Runtime error:\" instead of Rust's","state":"open"},
-            {"number":970,"title":"A crate's async fn taking &str through a type parameter generated code that didn't compile","state":"closed"}
+            {"number":970,"title":"A crate's async fn taking &str through a type parameter generated code that didn't compile","state":"closed"},
+            {"number":977,"title":"std trait-path calls with a turbofish or a written Self","state":"open"},
+            {"number":978,"title":"`fmt::Formatter::write_str(f, s)` by its path in a fmt body","state":"open"}
           ]
         }
       ]

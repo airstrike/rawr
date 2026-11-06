@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.144 (2026-11-05)
+
+- Programs can write the items a derive expands to: `const _: () = { .. };` blocks of items, `extern crate x as y;`, paths through a renamed module (`use std as s;`), a turbofish on a program method or a trait's path (`v.f::<T>()`, `Trait::f::<T>(&v)`), and a generic trait function called by its path. (#976; part of #593)
+
 ## 0.3.143 (2026-11-05)
 
 - A crate's derive macro on a program type, such as serde's `#[derive(Serialize)]`, resolves through the program's `use`, at the top of the file or in a function body, and is reported at its span as not supported yet, where `rawr check` used to say it couldn't find the derive. (#975; part of #593, #205)
