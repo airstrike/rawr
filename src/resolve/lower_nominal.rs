@@ -37639,6 +37639,26 @@ impl<'a> Parser<'a> {
                     Err(back) => value = back,
                 }
             }
+            // `Trait::f(0usize, ..)` of a crate's trait, where no type the
+            // call can be on has `f`, as `de::Error::invalid_length(0usize,
+            // ..)` of a type parameter whose `invalid_length` Rawr can't
+            // take: the trait's member is unknown, at the call.
+            #[cfg(feature = "rust-import")]
+            if matches!(
+                without_references(&builtin),
+                Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool
+            ) && let Some(trait_path) = self.spliced_traits.get(&member_span.start()).cloned()
+                && self
+                    .models
+                    .host_items(&format!("{trait_path}::{member}"))
+                    .is_none()
+            {
+                return Err(Error::UnknownMember {
+                    owner: trait_path,
+                    member,
+                    reference: member_span,
+                });
+            }
             // `a.min(b)`, `a.max(b)`, `a.clamp(lo, hi)` through `Ord`, unless
             // the type has its own method of that name.
             if matches!(member.as_str(), "min" | "max" | "clamp")
@@ -39996,26 +40016,36 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         let (path, reference, next) = self.peek_path(name, name_span);
-        // A std type's method called by its path is the method on its first
-        // argument (`parse_qualified_path`).
-        if matches!(next, Some(Token::LeftParen))
-            && let Some((owner, _)) = path.rsplit_once("::")
-            && let Ok(Some(crate::std_table::Resolved::Path(resolved))) = super::std_path::check(
-                owner,
-                crate::std_table::Namespace::Type,
-                "type",
-                reference,
-            )
-            && resolved.is_type()
-        {
-            return Ok(());
-        }
         let kind = match next {
             Some(Token::LeftParen) => "function",
             _ => "value",
         };
-        super::std_path::check(&path, crate::std_table::Namespace::Value, kind, reference)
-            .map(|_| ())
+        let checked =
+            super::std_path::check(&path, crate::std_table::Namespace::Value, kind, reference);
+        // A std type's method Rawr doesn't run by its path is the method on
+        // its first argument, which it may (`std_type_method`).
+        if checked.is_err()
+            && matches!(next, Some(Token::LeftParen))
+            && self.std_type_method(&path, reference)
+        {
+            return Ok(());
+        }
+        checked.map(|_| ())
+    }
+
+    /// Whether `path` names a function of a std type, as
+    /// `std::fmt::Formatter::write_str` does, that Rawr doesn't run by its
+    /// path: the method on its first argument.
+    fn std_type_method(&self, path: &str, reference: Span) -> bool {
+        let Some((owner, _)) = path.rsplit_once("::") else {
+            return false;
+        };
+        super::std_path::check(path, crate::std_table::Namespace::Value, "function", reference)
+            .is_err()
+            && matches!(
+                super::std_path::check(owner, crate::std_table::Namespace::Type, "type", reference),
+                Ok(Some(crate::std_table::Resolved::Path(resolved))) if resolved.is_type()
+            )
     }
 
     /// The path ahead from its first segment `name`, which is read: its
@@ -48959,18 +48989,14 @@ impl<'a> Parser<'a> {
             && !self.bindings.contains_key(owner[0].0.as_str())
             && self.models.get(&owner[0].0).is_none()
             && self.models.import(&owner[0].0).is_none()
-            && let Ok(Some(crate::std_table::Resolved::Path(resolved))) =
-                crate::resolve::std_path::check(
-                    &owner
-                        .iter()
-                        .map(|(name, _)| name.as_str())
-                        .collect::<Vec<_>>()
-                        .join("::"),
-                    crate::std_table::Namespace::Type,
-                    "type",
-                    *member_span,
-                )
-            && resolved.is_type()
+            && self.std_type_method(
+                &segments
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+                *member_span,
+            )
             && let Some(tokens) = self.path_method_call(member, *member_span, None)
         {
             self.splice_tokens(tokens);
