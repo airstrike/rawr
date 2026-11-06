@@ -1,5 +1,5 @@
 // rawr
-use visits::{Expected, FromKeys, Keys, Problem, Read, Reader, Visit, Visitor};
+use visits::{Expected, FromKeys, Keys, Problem, Read, Reader, Tally, Visit, Visitor};
 
 struct Seven;
 
@@ -62,6 +62,17 @@ fn describe(formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
     write!(formatter, "I {}", "wanted")
 }
 
+/// Numbers counted, not added.
+struct Counter {
+    count: i64,
+}
+
+impl Tally for Counter {
+    fn add(&mut self, _number: i64) {
+        self.count += 1;
+    }
+}
+
 #[derive(Debug)]
 struct Counts {
     odd: i64,
@@ -110,7 +121,9 @@ fn main() {
     println!("{}", visits::expecting(&Wanted));
     let mut sum = visits::Sum::default();
     visits::tally(&[1, 2, 3], &mut sum);
-    println!("{}", sum.total());
+    let mut counter = Counter { count: 0 };
+    visits::tally(&[1, 2, 3], &mut counter);
+    println!("{} {}", sum.total(), counter.count);
     println!("{}", visits::from_keys::<Counts>(&[1, 2, 3]));
     println!("{}", visits::named(FIELDS));
 }

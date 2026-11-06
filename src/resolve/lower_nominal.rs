@@ -8157,6 +8157,9 @@ fn copied_input(inference: &Inference, ty: &Ty) -> bool {
 /// as its Rust value (`crossing::Std`), as a crate's `fn f(path: &mut
 /// PathBuf)` takes. The call changes the program's value itself, and none
 /// is copied, as rustc's borrow copies none.
+///
+/// So is a `&mut` of a program value where a generic call takes `&mut T`,
+/// which native code changes through the value's proxy (#1008).
 fn moved_input(inference: &Inference, ty: &Ty) -> bool {
     matches!(
         inference.resolve(ty),
@@ -8168,6 +8171,7 @@ fn moved_input(inference: &Inference, ty: &Ty) -> bool {
                     .strip_prefix(crate::std_facade::ROOT)
                     .and_then(|path| path.strip_prefix("::"))
                     .is_some_and(crate::std_facade::crosses))
+                || matches!(inference.resolve(&target), Ty::Script(..))
     )
 }
 

@@ -16320,7 +16320,20 @@ fn render_give_with(
     value: &str,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let copies = copied_inputs(signature);
+    let mut copies = copied_inputs(signature);
+    // A program value lent `&mut` where a generic call takes `&mut T` moves
+    // into the call through its proxy and goes back after the call's value,
+    // with what native code changed in it (#1008).
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if let convert::Type::Borrowed { mutable: true, ty } =
+            substituted(input, signature, substitutions)?
+            && matches!(*ty, convert::Type::Script { .. })
+            && !copies.iter().any(|(copied, _)| *copied == position)
+        {
+            copies.push((position, *ty));
+        }
+    }
+    copies.sort_by_key(|(position, _)| *position);
     if copies.is_empty() {
         return render_give(
             &substituted(signature.output(), signature, substitutions)?,
@@ -16338,6 +16351,10 @@ fn render_give_with(
     let given = String::from_utf8(given).map_err(request::unwritable)?;
     let mut copied = String::new();
     for (position, element) in &copies {
+        if matches!(element, convert::Type::Script { .. }) {
+            copied.push_str(&format!(", argument_{position}_proxy.0.into_dynamic()"));
+            continue;
+        }
         let converted = given_back(*position, element, !LENT_ARGUMENTS.get())?;
         if LENT_ARGUMENTS.get() && place::available(element) {
             copied.push_str(&format!(", match argument_{position}_copy {{ Some(argument_{position}_copy) => ({converted})?, None => argument_{position}_place }}"));
