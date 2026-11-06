@@ -8779,7 +8779,9 @@ fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'
         // A value in a scope frame's region the call takes (D558 tier 1),
         // as `push_html(&mut s, parser)` takes `Parser::new(&text)`'s: the
         // call runs inside the region, which keeps what it makes that
-        // carries the region's lifetime.
+        // carries the region's lifetime. So does a call a slot's region is
+        // open around that takes none, as iced's `hover(base, None)` in a
+        // view: what it makes joins what the view makes (#352).
         let indices = region
             .iter()
             .map(usize::to_string)
@@ -8787,8 +8789,8 @@ fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'
             .join(", ");
         writeln!(
             output,
-            "    if let Some(scoped) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))) {{
-        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{"
+            "    if let Some((nonce, name)) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))).map(|scoped| (scoped.nonce(), scoped.name())).or_else(|| __rawr_internal::scope::anchor().map(|anchor| (anchor, \"a slot's region\"))) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(nonce, |region| -> Result<Dynamic, Error> {{"
         )
         .map_err(encoding)?;
         {
@@ -8799,7 +8801,7 @@ fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'
         output
             .write_all(
                 b"        })
-        .map_err(|error| Error::Lent(scoped.name(), error))?;
+        .map_err(|error| Error::Lent(name, error))?;
     }
 ",
             )
@@ -9374,7 +9376,9 @@ fn opaque_holes(ty: &str) -> Vec<usize> {
 }
 
 /// The signature, substitutions and argument offset of a call: a
-/// function's, or a method's after its receiver.
+/// function's, or a method's after its receiver, whether or not it also
+/// takes a script closure, as iced's `table::column(header, |row| ..)`
+/// and `Cache::draw(renderer, size, |frame| ..)` do (#952, #954).
 fn call_signature(
     plan: &Plan,
 ) -> Option<(
@@ -9386,14 +9390,11 @@ fn call_signature(
         Operation::Function {
             signature,
             substitutions,
-            mappers,
-            call: None,
             ..
-        } if mappers.is_empty() => Some((signature, substitutions, 0)),
+        } => Some((signature, substitutions, 0)),
         Operation::Method {
             signature,
             substitutions,
-            call: None,
             ..
         } => Some((signature, substitutions, 1)),
         _ => None,
@@ -9514,7 +9515,13 @@ fn render_adapter_body(
             if copy_field(field.ty()) {
                 let mut converted = String::new();
                 render_to_dynamic(field.ty(), "output", 0, &mut converted)?;
-                writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
+                // A field that borrows for the struct's lifetime, as iced's
+                // `Stroke::line_dash: LineDash<'a>` (#951), keeps the borrow
+                // where the struct is: a lent struct lends it only for the
+                // accessor's call, so it can't be given out of it, and one
+                // in a scope frame's region gives it into the region.
+                if !carries_lifetime(field.ty()) {
+                    writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
         let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
             .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
         let mut output = None;
@@ -9523,6 +9530,7 @@ fn render_adapter_body(
         let output = output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?;
         return {converted};
     }}", field.name()).map_err(request::unwritable)?;
+                }
                 output
                     .write_all(b"    let handle = native_handle(arguments, 0, false)?;\n")
                     .map_err(request::unwritable)?;
@@ -10123,9 +10131,7 @@ fn render_adapter_body(
                                 }
                             }
                         }
-                        output
-                            .write_all(b"    let receiver: ")
-                            .map_err(request::unwritable)?;
+                        let mut container = Vec::new();
                         render_container_path(
                             &path,
                             signature,
@@ -10133,11 +10139,19 @@ fn render_adapter_body(
                             constants,
                             *container_parameters,
                             true,
-                            output,
+                            &mut container,
                         )?;
-                        output
-                            .write_all(b" = take_native(arguments, 0)?;\n")
-                            .map_err(request::unwritable)?;
+                        let container =
+                            String::from_utf8(container).map_err(request::unwritable)?;
+                        writeln!(
+                            output,
+                            "    let receiver: {container} = take_native(arguments, 0)?;"
+                        )
+                        .map_err(request::unwritable)?;
+                        // A receiver of a type that carries no lifetime, as
+                        // iced's `Table` or `Space`, borrows nothing a
+                        // region must keep (#352).
+                        let lifetime_free = container_family(&path, &container).is_none();
                         // An implementation's parameter the call infers, as
                         // `Renderer` of iced's `Widget` for `Button`, is
                         // named by the output's type.
@@ -10183,10 +10197,11 @@ fn render_adapter_body(
                             // slot's region is open from an opaque value its
                             // table takes, stays in that region, as a
                             // function's does: `Widget::boxed` of an opaque
-                            // widget gives the view's element. A receiver
-                            // of a type that names its own lifetime keeps
-                            // the one it was made at.
-                            if OPAQUE_WITNESSED.with_borrow(Option::is_some)
+                            // widget gives the view's element, and so does
+                            // `boxed` of a widget whose type carries no
+                            // lifetime. A receiver of a type that names its
+                            // own lifetime keeps the one it was made at.
+                            if (lifetime_free || OPAQUE_WITNESSED.with_borrow(Option::is_some))
                                 && future_output(&returned).is_none()
                                 && !lifetime_inputs(signature, substitutions)?
                             {
@@ -11893,6 +11908,49 @@ fn render_guard(
         container_parameters,
         output,
     )?;
+    // A receiver native code lent (D558.3), as iced lends `draw` its
+    // `&Theme`, whose `palette()` the program reads (#954): the method is
+    // called through its accessor, and the copy goes out of it.
+    if matches!(guard, Guard::Shared)
+        && matches!(receiver, Receiver::Shared)
+        && signature.inputs().is_empty()
+    {
+        let mut container = Vec::new();
+        render_container_path(
+            path,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            true,
+            &mut container,
+        )?;
+        let container = String::from_utf8(container).map_err(request::unwritable)?;
+        let mut turbofish = Vec::new();
+        render_item_turbofish(
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            &mut turbofish,
+        )?;
+        let turbofish = String::from_utf8(turbofish).map_err(request::unwritable)?;
+        writeln!(
+            output,
+            "    if let Some(lent) = lent_value(arguments, 0) {{
+        let access: fn(u64, &mut dyn FnMut(&{container})) -> Result<(), u8> = lent
+            .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
+        let mut copied = None;
+        access(lent.nonce().bits(), &mut |receiver| {{ let mut guard = receiver.{name}{turbofish}(); let _ = &mut guard; copied = Some({copy}!(&*guard)); }})
+            .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
+        let output = copied.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))??;
+        return {{",
+            name = plan.name()
+        )
+        .map_err(encoding)?;
+        render_give(&target, "output", output)?;
+        writeln!(output, "    }};\n    }}").map_err(encoding)?;
+    }
     writeln!(
         output,
         "    let receiver = native_handle(arguments, 0, false)?;"
@@ -13994,13 +14052,14 @@ fn render_take_input(
     }
     // A type parameter a borrow of one of std's values fills, as `&PathBuf`
     // fills `opened<P: AsRef<Path>>(path: P)`: the value itself, lent as a
-    // `&Path` input is.
+    // `&Path` input is. So is a borrow of a crate value, as `&Handle` fills
+    // iced's `canvas::Image::new(handle: impl Into<Handle>)` (#954).
     if let convert::Type::Parameter(_) = ty
         && let lent @ convert::Type::Borrowed {
             mutable: false,
             ty: target,
         } = substitute(ty, signature, substitutions)?
-        && std_value(target).is_some()
+        && (std_value(target).is_some() || matches!(**target, convert::Type::Nominal { .. }))
     {
         let lent = lent.clone();
         return render_take_input(
@@ -14175,22 +14234,8 @@ fn render_take_input(
         && let Some(family) = family_of(&element).filter(|family| family.named().is_some())
     {
         let taken = family.call(family::Reach::Take, "scoped");
-        // An element made outside any region is in the arena, at
-        // `'static`, which the region's lifetime shortens when the type is
-        // covariant in it, as rustc's variance says. An invariant one, as
-        // iced's `Text<'a>` is through `Theme::Class<'a>`, can't be: Rust
-        // makes each element of a view at the view's lifetime, as Rawr
-        // makes it in the region, and one made before can't join them.
-        let rust =
-            concrete_type(&element).ok_or_else(|| request::drift("a region array's element"))?;
-        let arena = if shortens(&element) {
-            format!("item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))")
-        } else {
-            format!(
-                "Err(Error::Value({:?}.to_owned()))",
-                format!("`{rust}` is invariant in its lifetime, so one made outside the view can't join those the view makes")
-            )
-        };
+        // An element made outside any region is in the arena.
+        let arena = region_arena(&element)?;
         return writeln!(
             output,
             "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.{taken}.map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).collect::<Result<Vec<_>, Error>>())?;"
@@ -14206,16 +14251,7 @@ fn render_take_input(
         && let Some(family) = family_of(&element).filter(|family| family.named().is_some())
     {
         let taken = family.call(family::Reach::Take, "scoped");
-        let rust =
-            concrete_type(&element).ok_or_else(|| request::drift("a region option's element"))?;
-        let arena = if shortens(&element) {
-            format!("item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))")
-        } else {
-            format!(
-                "Err(Error::Value({:?}.to_owned()))",
-                format!("`{rust}` is invariant in its lifetime, so one made outside the view can't join those the view makes")
-            )
-        };
+        let arena = region_arena(&element)?;
         return writeln!(
             output,
             "    let argument_{local} = {{ let mut value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)?.map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.{taken}.map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).transpose()? }};"
@@ -14223,14 +14259,17 @@ fn render_take_input(
         .map_err(request::unwritable);
     }
     // A value of a scope frame's region, moved out of it into the call
-    // (D558 tier 1), as `push_html` takes a `Parser`.
+    // (D558 tier 1), as `push_html` takes a `Parser`. One made outside any
+    // region is in the arena, as an array's element is (#952).
     if REGION_ARGUMENTS.get()
-        && let Some(family) = family_of(&substituted(ty, signature, substitutions)?)
+        && let region_ty = substituted(ty, signature, substitutions)?
+        && let Some(family) = family_of(&region_ty)
     {
         let taken = family.call(family::Reach::Take, "scoped");
+        let arena = region_arena(&region_ty)?;
         return writeln!(
             output,
-            "    let argument_{local} = {{ let scoped = scoped_value(arguments, {index}).ok_or(Error::TypeMismatch)?; region.{taken}.map_err(|error| Error::Lent(scoped.name(), error))? }};"
+            "    let argument_{local} = {{ let item = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.{taken}.map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }}? }};"
         )
         .map_err(request::unwritable);
     }
@@ -15105,6 +15144,23 @@ fn render_take(
                 length: None,
             };
             return render_take(local, index, &owned, output);
+        }
+        // A slice of scalars a type parameter takes, as `&[u8]` fills iced's
+        // `image::Handle::from_bytes(impl Into<Bytes>)` (#954): kept for the
+        // runner's life, as a struct's borrowed slice field is.
+        convert::Type::Borrowed {
+            mutable: false,
+            ty: lent,
+        } if matches!(lent.as_ref(), convert::Type::Sequence { element, length: None, .. }
+                if matches!(**element, convert::Type::Builtin(builtin) if builtin.rust_name().is_some())) =>
+        {
+            let mut converted = String::new();
+            render_from_dynamic(ty, "value", 0, &mut converted)?;
+            return writeln!(
+                output,
+                "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
+            )
+            .map_err(request::unwritable);
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
             return Err(request::drift(
@@ -17456,6 +17512,29 @@ fn may_borrow(ty: &convert::Type) -> bool {
 }
 
 /// Whether a value of `ty` borrows when it is made in a scope frame.
+/// The expression that takes `item`, a native value of `ty` a region's
+/// call takes, from the arena, where one made outside any region is, at
+/// `'static`. The region's lifetime shortens it when the type is covariant
+/// in it, as rustc's variance says. An invariant one, as iced's `Text<'a>`
+/// is through `Theme::Class<'a>`, can't be: Rust makes each widget of a
+/// view at the view's lifetime, as Rawr makes it in the region, and one
+/// made before can't join them.
+fn region_arena(ty: &convert::Type) -> Result<String, request::Error> {
+    let rust = concrete_type(ty).ok_or_else(|| request::drift("a region value's type"))?;
+    Ok(if shortens(ty) {
+        format!(
+            "item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))"
+        )
+    } else {
+        format!(
+            "Err(Error::Value({:?}.to_owned()))",
+            format!(
+                "`{rust}` is invariant in its lifetime, so one made outside the view can't join those the view makes"
+            )
+        )
+    })
+}
+
 /// Whether a native value of `ty` at `'static` is one at any shorter
 /// lifetime: its type is covariant in each lifetime it declares, as rustc's
 /// variance says, and its type arguments carry none.

@@ -875,6 +875,84 @@ fn a_borrowed_vec_fills_rows_a_crate_takes_by_into_iterator() {
     );
 }
 
+/// iced's table again, with the table alone in the view's `column!`: a
+/// widget with no lifetime, made from what the view borrows, is the view's
+/// value without anything else that borrows (#352). The output is `cargo
+/// run`'s.
+#[test]
+fn a_view_of_only_a_lifetime_free_widget_runs() {
+    let (rawr, cargo) = both_printed("table_alone.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("last view pad 0 |Name|Time|Talk|45 min|Workshop|120 min|"),
+        "{rawr}"
+    );
+}
+
+/// iced's table and arc: rows of script values whose fields hold std's
+/// `Duration` and `Instant` cross to the crate, which checks each as Rust's
+/// own type. The output is `cargo run`'s.
+#[test]
+fn script_rows_holding_std_time_values_cross() {
+    let (rawr, cargo) = both_printed("table_timed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("|Name|Time|Talk|45 min true|Workshop|120 min true|"),
+        "{rawr}"
+    );
+}
+
+/// iced's bezier_tool: the view is a container, invariant in its lifetime,
+/// of a hover whose base has no lifetime and whose top is `None` at first,
+/// so nothing the view passes the hover borrows. It is made at the view's
+/// lifetime all the same (#352). The output is `cargo run`'s.
+#[test]
+fn a_view_whose_widgets_borrow_nothing_is_made_at_the_views_lifetime() {
+    let (rawr, cargo) = both_printed("hovered.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view container 20 hover rule 0 none")
+            && rawr.contains("4 message Decrement"),
+        "{rawr}"
+    );
+}
+
+/// iced's sierpinski_triangle: the crate's `Point` shares its name with a
+/// type of another crate the root reaches only through a signature, as
+/// iced's does tiny_skia's. Its fields, its pattern and its literal are the
+/// crate's own type's (#954). The output is `cargo run`'s.
+#[test]
+fn a_crate_type_whose_name_another_crates_type_shares_crosses() {
+    let (rawr, cargo) = both_printed("pointed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "1.5 2 1.5 2 1.5 2", "{rawr}");
+}
+
+/// iced's gradient and custom_quad: a crate macro makes a crate struct
+/// through the crate's own path (`$crate::Color`), and the program reads
+/// its fields, destructures it and builds one from it at its public path:
+/// one type at two paths (#953). The output is `cargo run`'s.
+#[test]
+fn a_crate_value_a_macro_made_crosses_at_its_public_path() {
+    let (rawr, cargo) = both_printed("colored.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "red 1 of 1 2 3\nlighter rgb(9, 2, 3)", "{rawr}");
+}
+
+/// iced's solar_system: a borrow of a crate value the program keeps fills
+/// a crate function's `impl Into<Handle>` and `impl Into<Image>`, through
+/// the crate's `From<&Handle>` impls, as `canvas::Image::new(&self.earth)`
+/// does (#954). The output is `cargo run`'s.
+#[test]
+fn a_borrowed_crate_value_fills_an_impl_into_parameter() {
+    let (rawr, cargo) = both_printed("imaged.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr, "sun turned 0\nearth turned 2.5\nsun turned 0\ntrue",
+        "{rawr}"
+    );
+}
+
 /// iced's canvas aliases: `canvas::Cache` passes its parameter on to a
 /// type of another crate that no path of the root reaches, and defaults it
 /// to the root's `Renderer` alias. A derived `Default` builds a field of it,

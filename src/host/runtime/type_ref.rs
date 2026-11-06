@@ -339,6 +339,111 @@ impl Type {
         }
     }
 
+    /// Whether `self` and `other` are one type. An imported type is one type
+    /// at each of its paths, as rustc has it: a crate's macros name its types
+    /// through a hidden segment (`iced::__rawr_crate_iced_core_<id>::Color`)
+    /// beside their public paths, and a value made at one path is the type
+    /// a signature or a pattern names at the other (#893, #953).
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        let all = |own: &[Self], other: &[Self]| {
+            own.len() == other.len() && own.iter().zip(other).all(|(own, other)| own.same(other))
+        };
+        match (self, other) {
+            (
+                Self::Array { element, length },
+                Self::Array {
+                    element: other_element,
+                    length: other_length,
+                },
+            ) => length == other_length && element.same(other_element),
+            (Self::Option(own), Self::Option(other)) => own.same(other),
+            (Self::Result(ok, error), Self::Result(other_ok, other_error)) => {
+                ok.same(other_ok) && error.same(other_error)
+            }
+            (Self::Tuple(own), Self::Tuple(other)) => all(own, other),
+            (
+                Self::Callable {
+                    inputs,
+                    output,
+                    item,
+                },
+                Self::Callable {
+                    inputs: other_inputs,
+                    output: other_output,
+                    item: other_item,
+                },
+            ) => item == other_item && all(inputs, other_inputs) && output.same(other_output),
+            (
+                Self::Counted { name, element },
+                Self::Counted {
+                    name: other_name,
+                    element: other_element,
+                },
+            ) => name == other_name && all(element, other_element),
+            (
+                Self::Script {
+                    identity,
+                    schema,
+                    kind,
+                    runtime,
+                    arguments,
+                },
+                Self::Script {
+                    identity: other_identity,
+                    schema: other_schema,
+                    kind: other_kind,
+                    runtime: other_runtime,
+                    arguments: other_arguments,
+                },
+            ) => {
+                identity == other_identity
+                    && schema == other_schema
+                    && kind == other_kind
+                    && runtime == other_runtime
+                    && all(arguments, other_arguments)
+            }
+            (
+                Self::Host {
+                    path,
+                    identity,
+                    arguments,
+                    owner,
+                },
+                Self::Host {
+                    path: other_path,
+                    identity: other_identity,
+                    arguments: other_arguments,
+                    owner: other_owner,
+                },
+            ) => {
+                path == other_path
+                    && identity == other_identity
+                    && owner == other_owner
+                    && all(arguments, other_arguments)
+            }
+            #[cfg(feature = "rust-import")]
+            (
+                Self::Imported {
+                    identity,
+                    arguments,
+                    owner,
+                    ..
+                },
+                Self::Imported {
+                    identity: other_identity,
+                    arguments: other_arguments,
+                    owner: other_owner,
+                    ..
+                },
+            ) => {
+                identity == other_identity
+                    && owner == other_owner
+                    && all(arguments, other_arguments)
+            }
+            (own, other) => own == other,
+        }
+    }
+
     pub(crate) const fn arguments(&self) -> &[Self] {
         match self {
             Self::Host { arguments, .. } => arguments,
@@ -699,6 +804,13 @@ impl Type {
                     TypeId::of::<crate::ImmutableString>(),
                 )),
                 "f64" => Ok(Self::builtin("f64", TypeId::of::<crate::FLOAT>())),
+                // `std::time`'s types are Rust's at runtime, as a script
+                // struct's `Instant` or `Duration` field holds them.
+                "Duration" => Ok(Self::builtin(
+                    "Duration",
+                    TypeId::of::<std::time::Duration>(),
+                )),
+                "Instant" => Ok(Self::builtin("Instant", TypeId::of::<std::time::Instant>())),
                 // A function type: any callable (`validate`).
                 name if crate::item::type_ref::is_fn_type(name) => Ok(Self::Object(name.into())),
                 name => Err(Error::Unsupported { ty: name.into() }),

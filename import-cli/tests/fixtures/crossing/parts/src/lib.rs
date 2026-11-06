@@ -431,3 +431,14 @@ pub mod widget {
         }
     }
 }
+
+/// A point of the soft renderer's own, as tiny_skia's `Point`: a type of
+/// this crate that `events` reaches only through a signature, beside its
+/// own `Point` of the same name.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    /// Its x.
+    pub x: f32,
+    /// Its y.
+    pub y: f32,
+}

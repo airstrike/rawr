@@ -651,9 +651,36 @@ fn structural_path<'facade>(
             let identity = definition.identity().imported();
             match found {
                 // One type at two paths, as ratatui re-exports
-                // `ratatui_core::layout::Rect`: the first path stands.
-                Some((_, _, first)) if first.is_some() && first == identity => continue,
-                Some(_) => panic!("one structural adapter selector names one item"),
+                // `ratatui_core::layout::Rect`: the first path stands, but
+                // for one through a crate's hidden segment, which a public
+                // path replaces, as values of the type are attested at it
+                // (`iced::__rawr_crate_iced_widget_<id>::core::border::
+                // Radius` is `iced::border::Radius`, #953).
+                Some((path, _, first)) if first.is_some() && first == identity => {
+                    let hidden = |path: &host::path::Path| {
+                        path.segments()
+                            .iter()
+                            .any(|segment| host::path::is_hidden(segment))
+                    };
+                    if hidden(path) && !hidden(definition.path_ref()) {
+                        found = Some((definition.path_ref(), kind, identity));
+                    }
+                    continue;
+                }
+                // Two types whose paths end in the owner's, as `iced::Point`
+                // and tiny_skia's `Point` reached through its hidden
+                // segment: the one at the owner's own path below the root
+                // is the one the row names (#954).
+                Some((first_path, _, _)) => {
+                    let named = |path: &host::path::Path| {
+                        path.to_string() == format!("{}::{}", row.root, row.owner)
+                    };
+                    match (named(first_path), named(definition.path_ref())) {
+                        (true, false) => {}
+                        (false, true) => found = Some((definition.path_ref(), kind, identity)),
+                        _ => panic!("one structural adapter selector names one item"),
+                    }
+                }
                 None => found = Some((definition.path_ref(), kind, identity)),
             }
         }

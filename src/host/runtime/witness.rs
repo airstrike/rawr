@@ -70,7 +70,7 @@ impl Witness {
     }
 
     pub(super) fn matches(&self, authority: Authority, ty: &Type) -> bool {
-        self.authority == authority && *self.ty == *ty
+        self.authority == authority && self.ty.same(ty)
     }
 
     /// Match a native Rust value's witness from any generation of this runner.
@@ -78,11 +78,14 @@ impl Witness {
     /// A native value holds no script code, and its Rust code cannot change
     /// inside one runner, so only the runner and the exact type must agree.
     pub(super) fn matches_native(&self, authority: Authority, ty: &Type) -> bool {
-        self.authority.same_runner(authority) && *self.ty == *ty
+        self.authority.same_runner(authority) && self.ty.same(ty)
     }
 
     pub(super) fn arguments_match(&self, authority: Authority, ty: &Type) -> bool {
-        self.authority == authority && self.ty.arguments() == ty.arguments()
+        let (own, other) = (self.ty.arguments(), ty.arguments());
+        self.authority == authority
+            && own.len() == other.len()
+            && own.iter().zip(other).all(|(own, other)| own.same(other))
     }
 
     /// The witness of this type's argument at `index`, under the same
@@ -118,7 +121,7 @@ impl Witness {
     #[doc(hidden)]
     #[must_use]
     pub fn same_native_type(&self, other: &Self) -> bool {
-        self.authority.same_runner(other.authority) && self.ty == other.ty
+        self.authority.same_runner(other.authority) && self.ty.same(&other.ty)
     }
 
     /// The element witness of a variable-length sequence, when this is one.
