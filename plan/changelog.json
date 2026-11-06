@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.3.157",
+      "date": "2026-11-06",
+      "entries": [
+        {"text":"A `use` path can start at a name another `use` brings in, in a function body too, as in `use keyboard::key;` after `use iced::keyboard;`. A derive's expansion and a child module's `use super::*;` reach it as rustc does.","issues":[1044]},
+        {"text":"A cached check whose stored demand belongs to another build of a crate's contract is rebuilt instead of stopping with \"a stored demand or facade plan is not canonical\" (D744).","issues":[1053]}
+      ]
+    },
+    {
       "version": "0.3.156",
       "date": "2026-11-06",
       "entries": [

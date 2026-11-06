@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.157 (2026-11-06)
+
+- A `use` path can start at a name another `use` brings in, in a function body too, as in `use keyboard::key;` after `use iced::keyboard;`. A derive's expansion and a child module's `use super::*;` reach it as rustc does. (#1044)
+- A cached check whose stored demand belongs to another build of a crate's contract is rebuilt instead of stopping with "a stored demand or facade plan is not canonical" (D744). (#1053)
+
 ## 0.3.156 (2026-11-06)
 
 - A crate's call into your impl of its trait finds the impl once per generation, and the runner's arena does no release work when nothing was let go: serde's round trip of 1,000 tasks serializes about 20% faster and deserializes about 30% faster. (#1038)
