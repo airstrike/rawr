@@ -18111,6 +18111,23 @@ fn impl_type(ty: &convert::Type, generics: &[Box<str>]) -> Option<String> {
             {
                 "&str".to_owned()
             }
+            convert::Type::Borrowed {
+                mutable: false,
+                ty,
+            } if matches!(
+                &**ty,
+                convert::Type::Sequence {
+                    owned: false,
+                    length: None,
+                    ..
+                }
+            ) =>
+            {
+                let convert::Type::Sequence { element, .. } = &**ty else {
+                    return None;
+                };
+                format!("&[{}]", concrete_type(element)?)
+            }
             convert::Type::Borrowed { mutable, ty } => {
                 let inner = concrete_type(ty)?;
                 if *mutable {
@@ -18299,6 +18316,7 @@ fn render_impl_function(
     let mut restores = String::new();
     let mut lends = Vec::new();
     let mut places = Vec::new();
+    let mut slices = Vec::new();
     match function.receiver() {
         ImplReceiver::None => {}
         ImplReceiver::Shared => {
@@ -18366,6 +18384,24 @@ fn render_impl_function(
             }
             convert::Type::Borrowed { ty, .. } if matches!(**ty, convert::Type::Unit) => {
                 values.push("Dynamic::UNIT".to_owned());
+            }
+            // A `&[T]` native code lends: the slice itself, as a place the
+            // script function reads for the call.
+            convert::Type::Borrowed { mutable: false, ty }
+                if matches!(
+                    **ty,
+                    convert::Type::Sequence {
+                        owned: false,
+                        length: None,
+                        ..
+                    }
+                ) =>
+            {
+                let convert::Type::Sequence { element, .. } = &**ty else {
+                    return Err(drift("a script impl function's slice input"));
+                };
+                values.push(format!("place_{position}.clone()"));
+                slices.push((position, place::policy(element)?));
             }
             convert::Type::Borrowed { mutable, ty }
                 if matches!(
@@ -18520,6 +18556,11 @@ fn render_impl_function(
             &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
             call,
         );
+        let call = place::around_slices(
+            &slices,
+            &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
+            call,
+        );
         return Ok(format!(
             "    fn {}{}({}) -> {rust} {{
 {items}        {call}
@@ -18584,6 +18625,11 @@ fn render_impl_function(
     call = wrapped;
     call = place::around(
         &places,
+        &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
+        call,
+    );
+    call = place::around_slices(
+        &slices,
         &format!("__rawr_internal::crossing::member_witnesses({member:?})"),
         call,
     );

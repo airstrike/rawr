@@ -1943,6 +1943,15 @@ fn impl_surface_type(
             owned: true,
             length: None,
         },
+        // `[T]`, as `visit_bytes(self, v: &[u8])` takes it.
+        Ty::Array {
+            element,
+            kind: sequence::Kind::Slice,
+        } => Type::Sequence {
+            element: Box::new(impl_surface_type(models, element, generics)?),
+            owned: false,
+            length: None,
+        },
         Ty::Tuple(members) => Type::Tuple(all(members)?),
         Ty::Script(definition, arguments) => Type::Script {
             path: models.script_path(*definition),
@@ -39195,6 +39204,18 @@ impl<'a> Parser<'a> {
                 }
                 // A path through a crate, as `serde::de::Error`, names the
                 // crate's trait, never std's of the same name.
+                // `fmt::Display` after `use std::fmt;` is std's.
+                let root = self.models.import(&root).map_or_else(
+                    || root.to_string(),
+                    |binding| {
+                        binding
+                            .qualified
+                            .split("::")
+                            .next()
+                            .unwrap_or_default()
+                            .to_owned()
+                    },
+                );
                 let through_crate = segments > 1 && !crate::std_table::is_root(&root);
                 let explicit = if matches!(self.peek(), Token::LessThan) {
                     Some(self.parse_trait_path_arguments()?)
