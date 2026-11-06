@@ -19562,8 +19562,13 @@ fn render_generic_arguments(
                     // In a type, which a scope family's declaration can't
                     // leave to inference: the `Vec` a crate's `&[T]`
                     // constant crosses as, as `pick_list(.., Backend::ALL,
-                    // ..)`'s `L` is.
-                    convert::Type::Sequence { length: None, .. } if opening == b"<" => {
+                    // ..)`'s `L` is. So is a `Vec` of script values' proxies,
+                    // which nothing else infers, as `next_value::<Vec<T>>`'s.
+                    convert::Type::Sequence {
+                        length: None,
+                        element,
+                        ..
+                    } if opening == b"<" || matches!(**element, convert::Type::Script { .. }) => {
                         concrete_type(ty)
                     }
                     _ => None,

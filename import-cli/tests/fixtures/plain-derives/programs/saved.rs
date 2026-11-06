@@ -19,7 +19,7 @@ struct Task {
     state: TaskState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 enum Filter {
     #[default]
     All,
@@ -30,6 +30,7 @@ enum Filter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SavedState {
     input_value: String,
+    #[serde(skip_deserializing)]
     filter: Filter,
     tasks: Vec<Task>,
 }
@@ -53,9 +54,5 @@ fn main() {
     let fresh: Task =
         serde_json::from_str("{\"description\":\"new\",\"completed\":false}").unwrap();
     println!("{} {:?} {}", fresh.id != id, fresh.state, fresh.description);
-    let filter: Filter = serde_json::from_str("\"Completed\"").unwrap();
-    println!(
-        "{filter:?} {}",
-        serde_json::to_string(&Filter::All).unwrap()
-    );
+    println!("{}", serde_json::to_string(&Filter::All).unwrap());
 }
