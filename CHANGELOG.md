@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.156 (2026-11-06)
+
+- A crate's call into your impl of its trait finds the impl once per generation, and the runner's arena does no release work when nothing was let go: serde's round trip of 1,000 tasks serializes about 20% faster and deserializes about 30% faster. (#1038)
+- An edit that changes only a crate derive's expanded bodies, such as a new `#[serde(rename)]`, swaps into the running program in a fraction of a second and keeps its state. Derive expansions run in one rustc run against the run's own build, so adding a field reruns sooner, and a derive used under another name (`use serde::Serialize as Save`) expands. (#1039, #1040)
+
 ## 0.3.155 (2026-11-06)
 
 - A program that uses tracing-subscriber, as iced's clock, gradient, changelog, game_of_life and todos do, no longer stops with "symbolic surface identity belongs to a different contract". That error can no longer happen: an item enters a run's demand only through its own contract. A member whose signature names its trait's own parameter, as `Layer<S>::and_then` does, now says it isn't supported yet, and the rest of the crate works. (#1032)

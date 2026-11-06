@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.3.156",
+      "date": "2026-11-06",
+      "entries": [
+        {"text":"A crate's call into your impl of its trait finds the impl once per generation, and the runner's arena does no release work when nothing was let go: serde's round trip of 1,000 tasks serializes about 20% faster and deserializes about 30% faster.","issues":[1038]},
+        {"text":"An edit that changes only a crate derive's expanded bodies, such as a new `#[serde(rename)]`, swaps into the running program in a fraction of a second and keeps its state. Derive expansions run in one rustc run against the run's own build, so adding a field reruns sooner, and a derive used under another name (`use serde::Serialize as Save`) expands.","issues":[1039,1040]}
+      ]
+    },
+    {
       "version": "0.3.155",
       "date": "2026-11-06",
       "entries": [
