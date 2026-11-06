@@ -88,6 +88,10 @@ fn main() {
 
     // This undeclared ambient value changes only observed script outputs, not
     // source, declarations, configuration or the compiler environment domain.
+    // Builds share the nightly's build directory, where Cargo reruns a script
+    // only when what it declared changes: rewriting the declared file with its
+    // same contents reruns it, and the run observes the new value.
+    std::fs::write(b.join("declared.txt"), "unchanged declared input").unwrap();
     let outputs = capture(request("changed-output", &["a", "b", "c"], false, "second"));
     assert!(no_children()
         .run(|| catalog.bind_native(outputs))
