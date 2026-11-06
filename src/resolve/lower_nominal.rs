@@ -1841,11 +1841,7 @@ fn native_impl(
                 for bound in generic.bounds.iter() {
                     bounds.push(rawr_import::surface::instance::ImplBound::new(
                         bound.path.as_str().into(),
-                        bound
-                            .lifetimes
-                            .iter()
-                            .map(|lifetime| lifetime_text(lifetime))
-                            .collect(),
+                        bound.lifetimes.iter().map(lifetime_text).collect(),
                         bound
                             .arguments
                             .iter()
@@ -1866,7 +1862,14 @@ fn native_impl(
                     inputs,
                     output,
                 )
-                .with_generics(generics.into_boxed_slice()),
+                .with_generics(generics.into_boxed_slice())
+                .with_formatter(function.formatter.as_ref().and_then(|formatter| {
+                    let position = function
+                        .parameters
+                        .iter()
+                        .position(|parameter| parameter.name.text == *formatter)?;
+                    u32::try_from(position).ok()
+                })),
             );
         }
         let (lifetimes, lifetime_names) = match &implementation.trait_ {
@@ -1886,12 +1889,7 @@ fn native_impl(
             functions.into_boxed_slice(),
         )
         .with_lifetimes(u32::try_from(lifetimes).unwrap_or(u32::MAX))
-        .with_lifetime_names(
-            lifetime_names
-                .iter()
-                .map(|name| lifetime_text(name))
-                .collect(),
-        ))
+        .with_lifetime_names(lifetime_names.iter().map(lifetime_text).collect()))
     }
 }
 
@@ -3989,20 +3987,29 @@ pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> 
     tokens
 }
 
+/// A free function's first `&mut` parameter, which a call passes as its
+/// receiver's place. Not its `&mut fmt::Formatter`, whose text the body
+/// gives back (`wrap_formatter`).
 pub(crate) fn this_parameter(definition: &item::Function) -> Option<usize> {
     definition.parameters.iter().position(|parameter| {
         matches!(
             parameter.ty,
             type_ref::Type::Reference { mutable: true, .. }
         ) && !super::direct_mutable_invocation(&parameter.ty)
+            && definition.formatter.as_ref() != Some(&parameter.name.text)
     })
 }
 
 /// The `&mut` parameters a call copies in and back out: a free
 /// function's after its receiver (`this_parameter`), an inherent method's
 /// or associated function's all. Rust's borrow rules keep them apart, so
-/// the copies change the caller's places as the references would.
-fn copied_parameters(parameters: &[item::Parameter], receiver: Option<usize>) -> Vec<usize> {
+/// the copies change the caller's places as the references would. Not the
+/// `formatter`, whose text the body gives back (`wrap_formatter`).
+fn copied_parameters(
+    parameters: &[item::Parameter],
+    receiver: Option<usize>,
+    formatter: Option<&ImmutableString>,
+) -> Vec<usize> {
     parameters
         .iter()
         .enumerate()
@@ -4013,6 +4020,7 @@ fn copied_parameters(parameters: &[item::Parameter], receiver: Option<usize>) ->
                     type_ref::Type::Reference { mutable: true, .. }
                 )
                 && !super::direct_mutable_invocation(&parameter.ty)
+                && formatter != Some(&parameter.name.text)
         })
         .map(|(index, _)| index)
         .collect()
@@ -4020,7 +4028,8 @@ fn copied_parameters(parameters: &[item::Parameter], receiver: Option<usize>) ->
 
 /// `copied_parameters` of a method, a trait's too (every impl of a trait
 /// function copies the same parameters, so a dispatcher passes the copies
-/// through); not the formatter of a `Debug` or `Display` `fmt`.
+/// through); not the formatter of a `Debug` or `Display` `fmt`, nor any
+/// method's `&mut fmt::Formatter`, whose text the body gives back.
 fn method_copied(definition: &method::Definition, _models: &Models) -> Vec<usize> {
     if definition
         .trait_name()
@@ -4028,7 +4037,7 @@ fn method_copied(definition: &method::Definition, _models: &Models) -> Vec<usize
     {
         return Vec::new();
     }
-    copied_parameters(definition.parameters(), None)
+    copied_parameters(definition.parameters(), None, definition.formatter())
 }
 
 /// The body of a function copying `copied` back out: its value and the
@@ -4088,10 +4097,14 @@ fn write_function(
         output.declaration(source, declaration, &witness_variable(&generic.name.text));
     }
     output.declaration(source, declaration, ") {\n");
-    let copied = copied_parameters(&definition.parameters, receiver)
-        .into_iter()
-        .map(|index| definition.parameters[index].name.text.as_str())
-        .collect::<Vec<_>>();
+    let copied = copied_parameters(
+        &definition.parameters,
+        receiver,
+        definition.formatter.as_ref(),
+    )
+    .into_iter()
+    .map(|index| definition.parameters[index].name.text.as_str())
+    .collect::<Vec<_>>();
     let body_offset = write_copied_body(
         output,
         source,
@@ -12718,14 +12731,8 @@ impl<'a> Parser<'a> {
             );
         }
 
-        // The formatter is the text being written: a mutable `String`.
         if let Some(name) = formatter {
-            if let Some(binding) = parser.bindings.get_mut(name.as_str()) {
-                binding.ty = Ty::String;
-                binding.mutable = true;
-            }
-            parser.formatter = Some(name);
-            parser.return_blocked = Some("from a `fmt` body; use its tail");
+            parser.bind_formatter(name);
         }
 
         parser.self_ty = Some(impl_self_ty(definition, &BTreeMap::new()));
@@ -12823,10 +12830,14 @@ impl<'a> Parser<'a> {
         }
 
         let receiver = this_parameter(definition);
-        parser.copy_out = copied_parameters(&definition.parameters, receiver)
-            .into_iter()
-            .map(|index| definition.parameters[index].name.text.clone())
-            .collect();
+        parser.copy_out = copied_parameters(
+            &definition.parameters,
+            receiver,
+            definition.formatter.as_ref(),
+        )
+        .into_iter()
+        .map(|index| definition.parameters[index].name.text.clone())
+        .collect();
         for (index, parameter) in definition.parameters.iter().enumerate() {
             let ty = Ty::from_resolved(&parameter.ty);
             // The `&mut` parameter is `this`, the caller's place.
@@ -12867,8 +12878,22 @@ impl<'a> Parser<'a> {
                 },
             );
         }
+        if let Some(name) = definition.formatter.clone() {
+            parser.bind_formatter(name);
+        }
 
         parser
+    }
+
+    /// The formatter `name` is the text the body writes, a mutable
+    /// `String`, which the body gives back (`wrap_formatter`).
+    fn bind_formatter(&mut self, name: ImmutableString) {
+        if let Some(binding) = self.bindings.get_mut(name.as_str()) {
+            binding.ty = Ty::String;
+            binding.mutable = true;
+        }
+        self.formatter = Some(name);
+        self.return_blocked = Some("from a `fmt` body; use its tail");
     }
 
     /// The variables of an embedder's `Scope`, which the script reads as
@@ -13167,7 +13192,7 @@ impl<'a> Parser<'a> {
         let expected = self.tail_expected(Some(definition.output()));
         self.coerce_tail(&expected, definition.body())?;
         self.close_body_drops()?;
-        self.wrap_formatter(definition);
+        self.wrap_formatter(definition.body());
 
         self.finish_uninitialized()?;
 
@@ -13758,6 +13783,7 @@ impl<'a> Parser<'a> {
         self.coerce_tail(&expected, definition.body.span)?;
         if !definition.body.constant && !definition.body.asynchronous {
             self.close_body_drops()?;
+            self.wrap_formatter(definition.body.span);
         }
 
         self.finish_uninitialized()?;
@@ -17335,7 +17361,7 @@ impl<'a> Parser<'a> {
         let copied = if matches!(trait_name.as_str(), "Debug" | "Display") {
             Vec::new()
         } else {
-            copied_parameters(&function.parameters, None)
+            copied_parameters(&function.parameters, None, function.formatter.as_ref())
         };
         let places = self.mutable_arguments(&arguments, copied)?;
         let dispatcher = if trait_arguments.is_empty() {
@@ -40033,15 +40059,29 @@ impl<'a> Parser<'a> {
         checked.map(|_| ())
     }
 
-    /// Whether `path` names a function of a std type, as
-    /// `std::fmt::Formatter::write_str` does, that Rawr doesn't run by its
-    /// path: the method on its first argument.
+    /// Whether `path` names a method of a std type, as
+    /// `std::fmt::Formatter::write_str` does: one that takes `self`, or one
+    /// the table doesn't list, as a trait impl's. It is the method on its
+    /// first argument. An associated function, as `String::from`, has no
+    /// receiver to be called on.
     fn std_type_method(&self, path: &str, reference: Span) -> bool {
         let Some((owner, _)) = path.rsplit_once("::") else {
             return false;
         };
-        super::std_path::check(path, crate::std_table::Namespace::Value, "function", reference)
-            .is_err()
+        let method = match super::std_path::check(
+            path,
+            crate::std_table::Namespace::Value,
+            "function",
+            reference,
+        ) {
+            Err(_) => true,
+            Ok(Some(crate::std_table::Resolved::Member {
+                member: Some(member),
+                ..
+            })) => member.receiver().is_some(),
+            Ok(_) => false,
+        };
+        method
             && matches!(
                 super::std_path::check(owner, crate::std_table::Namespace::Type, "type", reference),
                 Ok(Some(crate::std_table::Resolved::Path(resolved))) if resolved.is_type()
@@ -41097,7 +41137,12 @@ impl<'a> Parser<'a> {
                 return Ok(self.constant_use(&function, name_span));
             }
             if this_parameter(&function.definition).is_some()
-                || !copied_parameters(&function.definition.parameters, None).is_empty()
+                || !copied_parameters(
+                    &function.definition.parameters,
+                    None,
+                    function.definition.formatter.as_ref(),
+                )
+                .is_empty()
             {
                 // A `&mut` parameter is copied in and back out of a call, so
                 // the value is the closure `|a, ..| f(a, ..)` over the
@@ -46416,7 +46461,11 @@ impl<'a> Parser<'a> {
             .as_ref()
             .and_then(|function| this_parameter(&function.definition));
         let copied = function.as_ref().map_or_else(Vec::new, |function| {
-            copied_parameters(&function.definition.parameters, receiver)
+            copied_parameters(
+                &function.definition.parameters,
+                receiver,
+                function.definition.formatter.as_ref(),
+            )
         });
         let borrow = std::mem::replace(
             &mut self.mutable_borrow,
@@ -46452,10 +46501,35 @@ impl<'a> Parser<'a> {
             // Rust infers them, and its bounds are checked once they are known.
             let call = span(name_span.start(), end);
             let substitution = self.instantiate_generics(&function.definition.generics, call)?;
-            for (argument, parameter) in arguments
+            // A function's `&mut fmt::Formatter` takes the formatter of the
+            // `fmt` body that calls it, whose text the call gives back.
+            let formatter = function
+                .definition
+                .formatter
+                .as_ref()
+                .and_then(|formatter| {
+                    function
+                        .definition
+                        .parameters
+                        .iter()
+                        .position(|parameter| parameter.name.text == *formatter)
+                });
+            for (index, (argument, parameter)) in arguments
                 .iter_mut()
                 .zip(function.definition.parameters.iter())
+                .enumerate()
             {
+                if Some(index) == formatter {
+                    if self.formatter.as_ref().map(ImmutableString::as_str)
+                        != Some(argument.source.as_str())
+                    {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "a `fmt::Formatter` other than a `fmt` body's own".into(),
+                            source: argument.span,
+                        });
+                    }
+                    continue;
+                }
                 let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
@@ -46558,6 +46632,22 @@ impl<'a> Parser<'a> {
                         .chain(witnesses),
                 );
                 let source = self.copied_call(source, &places)?;
+                return Ok(self.operator_expr(source, output, call));
+            }
+            if let Some(formatter) = formatter.and_then(|index| arguments.get(index)) {
+                let mut source = origin::Fragment::plain("{ ");
+                source.push(formatter.rendered_source());
+                source.push_text(" = ");
+                source.push(origin::Fragment::call(
+                    name.as_str(),
+                    arguments
+                        .iter()
+                        .map(ParsedExpr::rendered_source)
+                        .chain(witnesses),
+                ));
+                source.push_text("; ");
+                source.push(self.prelude_op(PreludeOp::Ok, ["()".into()]));
+                source.push_text(" }");
                 return Ok(self.operator_expr(source, output, call));
             }
             output
@@ -50939,6 +51029,21 @@ impl<'a> Parser<'a> {
                     if spelling == "Cow" {
                         return self.parse_cow_type();
                     }
+                    // A prelude type, as `core::option::Option<T>` names
+                    // `Option`, is the prelude's name, which nothing here
+                    // shadows.
+                    if !spelling.contains("::")
+                        && self.models.get(spelling).is_none()
+                        && self.models.import(spelling).is_none()
+                        && crate::std_table::prelude(super::std_path::EDITION)
+                            .any(|path| path.path.rsplit("::").next() == Some(spelling))
+                    {
+                        self.splice_tokens(vec![(
+                            Token::Identifier(Box::new(spelling.into())),
+                            name_span.start(),
+                        )]);
+                        return self.parse_local_type();
+                    }
                     name = spelling.into();
                 }
             }
@@ -52892,7 +52997,7 @@ impl<'a> Parser<'a> {
 
     /// A `fmt` body returns the text it wrote: its `fmt::Result` tail is
     /// evaluated, then the formatter is the function's value.
-    fn wrap_formatter(&mut self, definition: &method::Definition) {
+    fn wrap_formatter(&mut self, body: Span) {
         let Some(formatter) = self.formatter.clone() else {
             return;
         };
@@ -52902,7 +53007,7 @@ impl<'a> Parser<'a> {
                 value.trim_end();
                 (value, original)
             }
-            None => (origin::Fragment::plain("()"), definition.body()),
+            None => (origin::Fragment::plain("()"), body),
         };
         let mut rendered = origin::Fragment::plain("{ let __rawr_fmt_result = ");
         rendered.push(value);

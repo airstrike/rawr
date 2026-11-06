@@ -180,6 +180,12 @@ pub struct ScriptImplFunction {
     /// (`surface::opaque::parameter_path`).
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     generics: Box<[ImplGeneric]>,
+    /// The input, by position after `self`, that is the trait method's
+    /// `&mut fmt::Formatter`, as `Display::fmt` and serde's `expecting`
+    /// take: the script writes Rawr's string, which is written into the
+    /// formatter after the call, and the output is `fmt::Result`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    formatter: Option<u32>,
 }
 
 /// A type parameter of a [`ScriptImplFunction`]: its name and its bounds,
@@ -373,7 +379,22 @@ impl ScriptImplFunction {
             inputs,
             output,
             generics: Box::default(),
+            formatter: None,
         }
+    }
+
+    /// This function, whose input at `position` is the trait method's
+    /// `&mut fmt::Formatter`.
+    #[must_use]
+    pub const fn with_formatter(mut self, position: Option<u32>) -> Self {
+        self.formatter = position;
+        self
+    }
+
+    /// The input that is the trait method's `&mut fmt::Formatter`.
+    #[must_use]
+    pub const fn formatter(&self) -> Option<u32> {
+        self.formatter
     }
 
     /// This function with its own type parameters `generics`.
