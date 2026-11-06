@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-05",
-  "version": "0.3.146",
+  "version": "0.3.147",
   "examples": {
     "running": 23,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.147",
+        "date": "2026-11-05",
+        "entries": [
+          {"text":"A crate's derive macro on a program type is expanded by rustc and runs as part of the program. A derive whose expansion is a plain impl runs as `cargo run` does, and an error in an expansion is reported at the derive with rustc's note. serde's `Serialize` and `Deserialize` now reach their expansion's generic methods, which aren't supported yet.","issues":[985],"refs":[593]},
+          {"text":"`std::result::Result`, `core::option::Option` and `Box` written by their std paths resolve, and a crate's re-export of a std type, such as serde's `__private::Result`, is that std type.","issues":[995]}
+        ]
+      },
       {
         "version": "0.3.146",
         "date": "2026-11-05",
@@ -2391,13 +2399,17 @@
     {"issue":982,"title":"Crossing tests fail with 'runner did not connect before the protocol deadline' under load","state":"open","category":"Health"},
     {"issue":983,"title":"A lent struct's field that borrows for the struct can't be read by script code","state":"open","category":"Divergences from rustc"},
     {"issue":984,"title":"A crate derive's expansion from the driver","state":"closed","category":"Divergences from rustc","release":"0.3.145"},
-    {"issue":985,"title":"`rawr check` asks for a crate derive's expansion and checks the items","state":"open","category":"Divergences from rustc"},
+    {"issue":985,"title":"`rawr check` asks for a crate derive's expansion and checks the items","state":"closed","category":"Divergences from rustc","release":"0.3.147"},
     {"issue":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open","category":"Health"},
     {"issue":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open","category":"Divergences from rustc"},
     {"issue":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"open","category":"Divergences from rustc"},
     {"issue":989,"title":"rawr mcp: send input events to a started program","state":"open","category":"Health"},
     {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open","category":"Divergences from rustc"},
-    {"issue":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open","category":"Divergences from rustc"}
+    {"issue":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open","category":"Divergences from rustc"},
+    {"issue":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open","category":"Divergences from rustc"},
+    {"issue":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"open","category":"Divergences from rustc"},
+    {"issue":994,"title":"A derive macro's own error is reported at the derive","state":"open","category":"Divergences from rustc"},
+    {"issue":995,"title":"std types written by their std paths and crates' re-exports of std types resolve","state":"closed","category":"Divergences from rustc","release":"0.3.147"}
   ],
   "groups": [
     {
@@ -2885,12 +2897,16 @@
             {"number":981,"title":"clock: subscription closure panics with Stale on a tokio worker","state":"open"},
             {"number":983,"title":"A lent struct's field that borrows for the struct can't be read by script code","state":"open"},
             {"number":984,"title":"A crate derive's expansion from the driver","state":"closed"},
-            {"number":985,"title":"`rawr check` asks for a crate derive's expansion and checks the items","state":"open"},
+            {"number":985,"title":"`rawr check` asks for a crate derive's expansion and checks the items","state":"closed"},
             {"number":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open"},
             {"number":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open"},
             {"number":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"open"},
             {"number":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open"},
-            {"number":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open"}
+            {"number":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open"},
+            {"number":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open"},
+            {"number":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"open"},
+            {"number":994,"title":"A derive macro's own error is reported at the derive","state":"open"},
+            {"number":995,"title":"std types written by their std paths and crates' re-exports of std types resolve","state":"closed"}
           ],
           "milestone": "0.4"
         },

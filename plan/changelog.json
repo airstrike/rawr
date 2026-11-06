@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.3.147",
+      "date": "2026-11-05",
+      "entries": [
+        {"text":"A crate's derive macro on a program type is expanded by rustc and runs as part of the program. A derive whose expansion is a plain impl runs as `cargo run` does, and an error in an expansion is reported at the derive with rustc's note. serde's `Serialize` and `Deserialize` now reach their expansion's generic methods, which aren't supported yet.","issues":[985],"refs":[593]},
+        {"text":"`std::result::Result`, `core::option::Option` and `Box` written by their std paths resolve, and a crate's re-export of a std type, such as serde's `__private::Result`, is that std type.","issues":[995]}
+      ]
+    },
+    {
       "version": "0.3.146",
       "date": "2026-11-05",
       "entries": [
