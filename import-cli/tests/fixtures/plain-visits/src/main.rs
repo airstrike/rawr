@@ -33,7 +33,22 @@ impl<'a> Read<'a> for Pair {
     }
 }
 
+/// The first of `items`, through a crate's re-exports of std's items.
+fn first(items: &[i64]) -> visits::reexports::Option<i64> {
+    match items.first() {
+        visits::reexports::Some(number) => visits::reexports::Some(*number),
+        visits::reexports::None => visits::reexports::None,
+    }
+}
+
+impl std::fmt::Display for Pair {
+    fn fmt(&self, f: &mut visits::reexports::Formatter) -> visits::reexports::fmt::Result {
+        visits::reexports::Formatter::write_str(f, "a pair")
+    }
+}
+
 fn main() {
+    println!("{:?} {}", first(&[5]), Pair(1, 2));
     println!("{}", visits::show(Seven));
     println!("{}", visits::shown(&Seven));
     println!("{}", visits::read::<Pair>(&[3, 4]));

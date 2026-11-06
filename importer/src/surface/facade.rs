@@ -459,9 +459,6 @@ pub fn std_reexports(
         let crate::api::ledger::Path::Imported(export) = export else {
             continue;
         };
-        if export.variant().is_some() {
-            continue;
-        }
         let Ok(index) = sysroot.binary_search_by(|(id, _)| (*id).cmp(export.target())) else {
             continue;
         };
@@ -478,6 +475,12 @@ pub fn std_reexports(
         for segment in segments {
             std.push_str("::");
             std.push_str(segment);
+        }
+        // A re-exported variant, as serde's `__private::Ok` is, is its
+        // enum's: `std::result::Result::Ok`.
+        if let Some(variant) = export.variant() {
+            std.push_str("::");
+            std.push_str(variant);
         }
         let std = std.into_boxed_str();
         let key = export.key();

@@ -326,6 +326,9 @@ pub(crate) struct Function {
     /// Each type parameter of a dependency's trait method that native code
     /// fills, which the signature and body name as an opaque type (#593).
     pub opaque: Box<[OpaqueGeneric]>,
+    /// The parameter written `&mut fmt::Formatter`, through any path to
+    /// it, whose body writes into it as a `fmt` body does.
+    pub formatter: Option<crate::ImmutableString>,
 }
 
 /// A type parameter of a dependency's trait method that an impl's function

@@ -49,6 +49,14 @@ pub fn shown<T: Visit>(value: &T) -> String {
     value.visit(Speller)
 }
 
+/// std's items re-exported, as serde's hidden `__private` module
+/// re-exports them for its derives.
+#[doc(hidden)]
+pub mod reexports {
+    pub use core::fmt::{self, Formatter};
+    pub use core::option::Option::{self, None, Some};
+}
+
 /// A problem a reader reports.
 pub trait Problem {
     fn custom(message: &str) -> Self;

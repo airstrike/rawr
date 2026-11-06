@@ -1393,7 +1393,10 @@ fn a_crates_derive_runs_from_its_expansion() {
 /// So do an `Option<V>` input, a bound at the impl's lifetime (`R:
 /// Reader<'a>`) over a reader that isn't `'static`, an associated function
 /// of a parameter's associated type (`R::Error::custom(..)`), and a
-/// borrowed program value where the crate takes `&T` (#993).
+/// borrowed program value where the crate takes `&T` (#993). A crate's
+/// re-exports of std's items, as serde's `__private` module has, are those
+/// items: `Formatter` and its `write_str` by path, `fmt::Result`, and the
+/// variants `Some` and `None` in expressions and patterns.
 #[test]
 fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     const VISITS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-visits");
@@ -1410,7 +1413,7 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     );
     assert_eq!(
         text(&run.stdout),
-        "14 <7> Some(10) None\n<7>\nPair(3, 4)\nno second\n"
+        "Some(5) a pair\n14 <7> Some(10) None\n<7>\nPair(3, 4)\nno second\n"
     );
 }
 

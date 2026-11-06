@@ -2508,6 +2508,7 @@ fn resolve_function(
 
     let mut parameters = Vec::with_capacity(parsed.parameters.len());
     let mut parameter_names = BTreeMap::new();
+    let mut formatter = None;
 
     for parameter in parsed.parameters.into_vec() {
         if let Some(previous_declaration) =
@@ -2520,15 +2521,27 @@ fn resolve_function(
                 previous_declaration,
             });
         }
+        let written_formatter = writes_formatter(&parameter.ty);
+        let ty = type_ref::resolve(
+            parameter.ty,
+            types,
+            host,
+            #[cfg(feature = "rust-import")]
+            native,
+        )?;
+        // `f: &mut fmt::Formatter`, as serde's `expecting` takes, is the
+        // text it writes, as a `fmt` body's formatter is.
+        if formatter.is_none()
+            && written_formatter
+            && matches!(&ty, type_ref::Type::Reference { mutable: true, target, .. }
+                if matches!(&**target, type_ref::Type::Path(path)
+                    if path.name == "String" && path.target == type_ref::Target::Builtin))
+        {
+            formatter = Some(parameter.name.text.clone());
+        }
         parameters.push(item::Parameter {
             name: parameter.name,
-            ty: type_ref::resolve(
-                parameter.ty,
-                types,
-                host,
-                #[cfg(feature = "rust-import")]
-                native,
-            )?,
+            ty,
             span: parameter.span,
             pattern: parameter.pattern,
         });
@@ -2589,7 +2602,15 @@ fn resolve_function(
             elide: None,
         },
         opaque: Box::default(),
+        formatter,
     })
+}
+
+/// Whether `ty` is written `&mut Formatter`, by any path to it.
+fn writes_formatter(ty: &crate::item::type_ref::Type) -> bool {
+    matches!(ty, crate::item::type_ref::Type::Reference { mutable: true, target, .. }
+        if matches!(&**target, crate::item::type_ref::Type::Path(path)
+            if path.segments.last().is_some_and(|last| last.name.text == "Formatter")))
 }
 
 /// `function`, a function of an impl of the dependency's trait at

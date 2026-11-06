@@ -63,6 +63,8 @@ pub(crate) struct Definition {
     generics: Box<[resolve::item::Generic]>,
     /// The type parameters native code fills (`opaque`).
     opaque: std::collections::BTreeMap<ImmutableString, ImmutableString>,
+    /// The parameter written `&mut fmt::Formatter` (`formatter`).
+    formatter: Option<ImmutableString>,
     /// How many of `generics` are the impl's.
     impl_generics: usize,
     /// The owner's type arguments in the impl header: `T` of `impl<T> Pair<T>`.
@@ -144,6 +146,7 @@ impl Definition {
                 .iter()
                 .map(|generic| (generic.name.clone(), generic.path.clone()))
                 .collect(),
+            formatter: function.formatter.clone(),
             impl_generics: 0,
             owner_arguments: Box::default(),
             builtin_owner: None,
@@ -191,6 +194,12 @@ impl Definition {
     /// The impl's generic parameters, then the method's own.
     pub(crate) fn generics(&self) -> &[resolve::item::Generic] {
         &self.generics
+    }
+
+    /// The parameter written `&mut fmt::Formatter`, which the body writes
+    /// into as a `fmt` body does.
+    pub(crate) fn formatter(&self) -> Option<&ImmutableString> {
+        self.formatter.as_ref()
     }
 
     /// Each type parameter of a dependency's trait method native code fills,
