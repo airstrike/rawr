@@ -6,4 +6,3 @@
 arc
 counter
 pick_list
-tooltip
