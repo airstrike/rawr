@@ -249,6 +249,16 @@ impl<T> DeferNot<T> for &DeferProbe<T> {
     }
 }
 
+/// The script value `proxy` holds, given back to script code by an adapter,
+/// whose arena is borrowed. A value made where it is first used
+/// (`Proxy::deferred`) is made here, on the owner thread, with the arena
+/// lent to the script function that makes it, as `Task::map`'s value is
+/// read by `Task::value`.
+#[allow(dead_code)]
+fn give_proxy(arena: &mut Arena, proxy: __rawr_internal::crossing::Proxy) -> Dynamic {
+    lend(arena, || proxy.into_dynamic())
+}
+
 fn display_text<T: std::fmt::Display + 'static>(value: &dyn Any) -> Option<String> {
     value.downcast_ref::<T>().map(ToString::to_string)
 }
@@ -13351,7 +13361,10 @@ fn render_slot(
                 let rust = concrete_type(input).ok_or_else(|| drift("a slot's input"))?;
                 parameters.push(format!("{name}: {rust}"));
                 let mut converted = String::new();
-                render_to_dynamic(input, &name, 0, &mut converted)?;
+                {
+                    let _inputs = ScriptInputs::enter();
+                    render_to_dynamic(input, &name, 0, &mut converted)?;
+                }
                 // A crate value, alone or inside an `Option`, a `Result`,
                 // a `Vec` or a tuple, enters the arena.
                 let crate_value = holds_native(input);
@@ -14796,7 +14809,10 @@ fn render_callable_closure(
             continue;
         }
         let mut converted = String::new();
-        render_to_dynamic(input, &format!("input_{position}"), 0, &mut converted)?;
+        {
+            let _inputs = ScriptInputs::enter();
+            render_to_dynamic(input, &format!("input_{position}"), 0, &mut converted)?;
+        }
         // A native value takes the closure parameter's witness, so script
         // code reads it as its type, as a `match` on an imported enum does.
         // So does a value that holds one, as a slot's input does.
@@ -15198,7 +15214,9 @@ fn render_give(
             writeln!(output, "    Ok(Dynamic::from({value}))")
         }
         ty if is_value(ty) => writeln!(output, "    Ok({value}.into_inner())"),
-        convert::Type::Script { .. } => writeln!(output, "    Ok({value}.0.into_dynamic())"),
+        convert::Type::Script { .. } => {
+            writeln!(output, "    Ok(give_proxy(arguments.arena, {value}.0))")
+        }
         // A value that carries the lifetime of the scope frame's region the
         // call runs in stays there (D558 tier 1), when its type has a name:
         // one that leaves an argument to rustc is held as any native value.
@@ -15697,9 +15715,15 @@ fn render_to_dynamic(
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
         ty if is_value(ty) => write!(output, "Ok::<Dynamic, Error>({value}.into_inner())"),
-        convert::Type::Script { .. } => {
+        // A value native code gives a script function has no adapter's
+        // arena at hand: it is made where the function uses it.
+        convert::Type::Script { .. } if SCRIPT_INPUTS.get() => {
             write!(output, "Ok::<Dynamic, Error>({value}.0.into_dynamic())")
         }
+        convert::Type::Script { .. } => write!(
+            output,
+            "Ok::<Dynamic, Error>(give_proxy(arguments.arena, {value}.0))"
+        ),
         // A value that borrows, made in a scope frame: its region holds it
         // (D558 tier 1), when its type has a name: one that leaves an
         // argument to rustc is held as any native value.
@@ -16624,6 +16648,9 @@ thread_local! {
     /// Whether a Rust value being converted lives in a scope frame's
     /// region, the local `region`, when its type carries a lifetime.
     static IN_REGION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the values being converted are inputs native code gives a
+    /// script function or closure, outside any adapter's `arguments`.
+    static SCRIPT_INPUTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Whether an adapter's body takes its arguments that carry a lifetime
     /// from the scope frame's region `region` it runs in.
     static REGION_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -17372,6 +17399,22 @@ impl InRegion {
 impl Drop for InRegion {
     fn drop(&mut self) {
         IN_REGION.set(self.0);
+    }
+}
+
+/// Converts the inputs native code gives a script function or closure,
+/// while it lives.
+struct ScriptInputs(bool);
+
+impl ScriptInputs {
+    fn enter() -> Self {
+        Self(SCRIPT_INPUTS.replace(true))
+    }
+}
+
+impl Drop for ScriptInputs {
+    fn drop(&mut self) {
+        SCRIPT_INPUTS.set(self.0);
     }
 }
 
