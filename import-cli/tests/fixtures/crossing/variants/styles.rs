@@ -5,7 +5,7 @@
 // to that pointer, and each toggle takes its style from the array.
 
 use events::controls::{primary, secondary, toggle};
-use events::widgets::{Column, Widget};
+use events::widgets::{column, Column, Widget};
 use events::Theme;
 
 #[derive(Debug, Clone, Copy)]
@@ -32,12 +32,14 @@ impl Styling {
             ("Primary", primary as fn(&Theme, _) -> _),
             ("Secondary", secondary),
         ];
-        Column::with_children(styles.into_iter().map(|(name, style)| {
-            toggle(self.toggled)
-                .label(name)
-                .on_toggle(Message::Toggled)
-                .style(style)
-        }))
+        column![Column::with_children(styles.into_iter().map(
+            |(name, style)| {
+                toggle(self.toggled)
+                    .label(name)
+                    .on_toggle(Message::Toggled)
+                    .style(style)
+            }
+        ))]
     }
 }
 
