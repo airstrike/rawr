@@ -18,6 +18,9 @@ pub struct Acquired {
     fingerprint: [u8; 32],
     /// What the nightly's build scripts gave, which each entry keeps.
     scripts: super::store::Scripts,
+    /// For each crate, sorted, the definitions its own walk recorded of
+    /// crates no partition holds, such as the standard library's.
+    foreign: BTreeMap<identity::Unit, Box<[identity::Definition]>>,
 }
 
 /// Unvalidated canonical facts from one authenticated compiler document.
@@ -125,6 +128,7 @@ impl Acquired {
     pub(crate) fn authenticate(
         exports: Box<[(identity::Export, identity::Definition)]>,
         facts: Facts,
+        foreign: BTreeMap<identity::Unit, Box<[identity::Definition]>>,
     ) -> Self {
         if let Err(violation) = facts.validate() {
             panic!("captured crate facts break their invariant: {violation}");
@@ -138,6 +142,7 @@ impl Acquired {
             facts,
             fingerprint: fingerprint.finalize().into(),
             scripts: super::store::Scripts::default(),
+            foreign,
         }
     }
 
@@ -146,10 +151,13 @@ impl Acquired {
     #[cfg(test)]
     pub(super) fn mutate_for_test(self, change: impl FnOnce(&mut Facts)) -> Self {
         let Self {
-            exports, mut facts, ..
+            exports,
+            mut facts,
+            foreign,
+            ..
         } = self;
         change(&mut facts);
-        Self::authenticate(exports, facts)
+        Self::authenticate(exports, facts, foreign)
     }
 
     #[cfg(test)]
@@ -305,22 +313,49 @@ impl Entry {
 
 impl Acquired {
     /// Split this capture into one entry per crate. `key` gives each
-    /// crate's shared key from its compiler unit. Declarations of its
-    /// dependencies and of crates no partition owns, such as the standard
-    /// library's, go with each entry that may read them; identical copies
-    /// join as one.
+    /// crate's shared key from its compiler unit. An entry holds its own
+    /// crate's definitions and implementations, the trait members its
+    /// implementations declare, which may come from a crate a dependency
+    /// re-exports, and the definitions its own walk recorded of crates no
+    /// partition holds, such as the standard library's. A dependency's facts
+    /// are in the dependency's own entry, which every union of the closure
+    /// joins, so no entry holds a copy of another's.
     ///
     /// # Panics
     ///
     /// When `key` has no key for a crate this capture holds, as the
     /// caller keys every crate of the closure it captured.
     pub fn entries(&self, key: impl Fn(&str) -> Option<[u8; 32]>) -> Vec<Entry> {
-        let owned = self
-            .facts
-            .partitions
-            .iter()
-            .map(|partition| &partition.unit)
-            .collect::<BTreeSet<_>>();
+        let definitions = &self.facts.definitions;
+        let implementations = &self.facts.implementations;
+        // Both are sorted by identity, whose unit comes first: a crate's
+        // own facts are one run of each.
+        let own_definitions = |unit: &identity::Unit| {
+            let start = definitions.partition_point(|definition| definition.id().unit() < unit);
+            let end = definitions.partition_point(|definition| definition.id().unit() <= unit);
+            &definitions[start..end]
+        };
+        let own_implementations = |unit: &identity::Unit| {
+            let start =
+                implementations.partition_point(|implementation| implementation.id().unit() < unit);
+            let end = implementations
+                .partition_point(|implementation| implementation.id().unit() <= unit);
+            &implementations[start..end]
+        };
+        let definition = |id: &identity::Definition| {
+            definitions
+                .binary_search_by(|definition| definition.id().cmp(id))
+                .ok()
+                .map(|index| &definitions[index])
+        };
+        let mut by_root = BTreeMap::<&str, Vec<RelativeExport>>::new();
+        for (key, target) in &self.exports {
+            by_root.entry(key.root_alias()).or_default().push((
+                key.path().map(Into::into).collect(),
+                key.namespace(),
+                target.clone(),
+            ));
+        }
         let mut entries = Vec::new();
         for partition in self.facts.partitions.iter() {
             let unit = &partition.unit;
@@ -330,36 +365,17 @@ impl Acquired {
                     unit.crate_name()
                 )
             });
-            // A crate's facts read its dependencies' declarations, which
-            // its key covers too, and the trait members its implementations
-            // declare, which may come from a crate a dependency re-exports.
-            // Its own implementations are its alone.
             let declarations = partition
                 .associated
                 .iter()
-                .filter_map(|link| link.declaration.as_ref())
-                .collect::<BTreeSet<_>>();
-            let readable = |definition: &identity::Definition| {
-                let owner = definition.unit();
-                owner == unit
-                    || !owned.contains(owner)
-                    || partition.dependencies.binary_search(owner).is_ok()
-                    || declarations.contains(definition)
-            };
-            let ours = |owner: &identity::Unit| owner == unit || !owned.contains(owner);
+                .filter_map(|link| link.declaration.as_ref());
+            let foreign = self.foreign.get(unit).into_iter().flatten();
+            let mut read = own_definitions(unit).iter().collect::<Vec<_>>();
+            read.extend(declarations.chain(foreign).filter_map(definition));
+            read.sort_unstable_by(|left, right| left.id().cmp(right.id()));
+            read.dedup_by(|left, right| left.id() == right.id());
             let crate_name = unit.crate_name();
-            let mut exports = self
-                .exports
-                .iter()
-                .filter(|(key, _)| key.root_alias() == crate_name)
-                .map(|(key, target)| {
-                    (
-                        key.path().map(Into::into).collect(),
-                        key.namespace(),
-                        target.clone(),
-                    )
-                })
-                .collect::<Vec<_>>();
+            let mut exports = by_root.get(crate_name).cloned().unwrap_or_default();
             exports.sort_unstable();
             exports.dedup();
             let entry = Entry {
@@ -368,20 +384,8 @@ impl Acquired {
                 crate_name: crate_name.into(),
                 exports: exports.into_boxed_slice(),
                 facts: Facts {
-                    definitions: self
-                        .facts
-                        .definitions
-                        .iter()
-                        .filter(|definition| readable(definition.id()))
-                        .cloned()
-                        .collect(),
-                    implementations: self
-                        .facts
-                        .implementations
-                        .iter()
-                        .filter(|implementation| ours(implementation.id().unit()))
-                        .cloned()
-                        .collect(),
+                    definitions: read.into_iter().cloned().collect(),
+                    implementations: own_implementations(unit).into(),
                     partitions: Box::new([partition.clone()]),
                 },
                 scripts: self.scripts.clone(),
@@ -581,17 +585,24 @@ impl Facts {
                 &definitions,
                 &implementations,
             )?;
-            let nominal_owners = self
+            // Sorted by identity, whose unit comes first, the partition's
+            // own definitions are one run.
+            let unit = &partition.unit;
+            let start = self
                 .definitions
+                .partition_point(|definition| definition.id().unit() < unit);
+            let end = self
+                .definitions
+                .partition_point(|definition| definition.id().unit() <= unit);
+            let nominal_owners = self.definitions[start..end]
                 .iter()
                 .filter(|definition| {
-                    definition.id().unit() == &partition.unit
-                        && matches!(
-                            definition.kind(),
-                            model::Kind::Struct { .. }
-                                | model::Kind::Enum { .. }
-                                | model::Kind::Union { .. }
-                        )
+                    matches!(
+                        definition.kind(),
+                        model::Kind::Struct { .. }
+                            | model::Kind::Enum { .. }
+                            | model::Kind::Union { .. }
+                    )
                 })
                 .map(model::Definition::id)
                 .collect::<BTreeSet<_>>();

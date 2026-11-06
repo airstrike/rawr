@@ -570,6 +570,20 @@ impl Publication {
         let catalog = Catalog::from_fragments(&document.fragments, &authority, &mut allocation)?;
         let mut partitions = Vec::new();
         allocation.reserve(&mut partitions, document.fragments.len())?;
+        // The crates this capture holds whole. A definition of any other,
+        // as the standard library's, is in no crate's own facts: each
+        // crate's entry keeps the ones its own walk recorded (`foreign`).
+        let captured = document
+            .fragments
+            .iter()
+            .map(|fragment| {
+                (
+                    fragment.handshake.crate_name.as_str(),
+                    fragment.handshake.artifact.stable_crate_id.as_str(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        let mut foreign = BTreeMap::new();
         for fragment in &document.fragments {
             // An inventory capture asks the driver for each crate's whole
             // domain, which it gives for the crate it compiled.
@@ -592,6 +606,33 @@ impl Publication {
                 .get(&key)
                 .expect("the catalog holds each fragment's own crate");
             allocation.unit(unit)?;
+            let raw_foreign = fragment
+                .definitions
+                .iter()
+                .filter(|raw| {
+                    let protocol::Authority::Compiler {
+                        crate_name,
+                        stable_crate_id,
+                    } = &raw.id.authority;
+                    !captured.contains(&(crate_name.as_str(), stable_crate_id.as_str()))
+                })
+                .collect::<Vec<_>>();
+            let mut recorded = Vec::new();
+            allocation.reserve(&mut recorded, raw_foreign.len())?;
+            for raw in raw_foreign {
+                if catalog
+                    .unavailable_identity(&raw.id, &mut allocation)?
+                    .is_some()
+                {
+                    continue;
+                }
+                allocation.protocol_id(&raw.id)?;
+                recorded.push(catalog.id_bounded(raw.id.clone(), &mut allocation)?);
+            }
+            recorded.sort_unstable();
+            recorded.dedup();
+            allocation.unit(unit)?;
+            foreign.insert(unit.clone(), recorded.into_boxed_slice());
             let mut inherent = Vec::new();
             allocation.reserve(&mut inherent, manifest.inherent.len())?;
             for domain in &manifest.inherent {
@@ -777,6 +818,7 @@ impl Publication {
         Ok(inventory::Acquired::authenticate(
             exports.into_boxed_slice(),
             facts,
+            foreign,
         ))
     }
 
@@ -1006,6 +1048,16 @@ struct Catalog {
 struct CompilerKey {
     crate_name: Box<str>,
     stable_crate_id: Box<str>,
+}
+
+impl CompilerKey {
+    /// The key a protocol id's authority names, taking its strings.
+    fn from_raw(crate_name: String, stable_crate_id: String) -> Self {
+        Self {
+            crate_name: crate_name.into_boxed_str(),
+            stable_crate_id: stable_crate_id.into_boxed_str(),
+        }
+    }
 }
 
 struct Candidate {
@@ -2930,6 +2982,12 @@ fn validate_external_crates(label: &'static str, crates: &[protocol::ExternalCra
 }
 
 impl Catalog {
+    /// The captured and the sysroot unit `key` names, each looked up once
+    /// rather than compared against every unit.
+    fn lookup(&self, key: &CompilerKey) -> (Option<&identity::Unit>, Option<&identity::Unit>) {
+        (self.units.get(key), self.sysroots.get(key))
+    }
+
     fn from_fragments(
         fragments: &[protocol::Fragment],
         invocations: &InvocationAuthority,
@@ -3174,27 +3232,18 @@ impl Catalog {
             } => {
                 nonempty("compiler crate name", &crate_name)?;
                 exact_hex("StableCrateId", &stable_crate_id, 16)?;
-                let cargo = self.units.iter().find_map(|(key, unit)| {
-                    (key.crate_name.as_ref() == crate_name
-                        && key.stable_crate_id.as_ref() == stable_crate_id)
-                        .then_some(unit)
-                });
-                let sysroot = self.sysroots.iter().find_map(|(key, unit)| {
-                    (key.crate_name.as_ref() == crate_name
-                        && key.stable_crate_id.as_ref() == stable_crate_id)
-                        .then_some(unit)
-                });
-                match (cargo, sysroot) {
+                let key = CompilerKey::from_raw(crate_name, stable_crate_id);
+                match self.lookup(&key) {
                     (Some(unit), None) | (None, Some(unit)) => {
                         allocation.unit(unit)?;
                         allocation.cloned_ownership(1);
                         unit.clone()
                     }
                     (Some(_), Some(_)) => {
-                        return Err(extraction("ambiguous-compiler-authority", &crate_name));
+                        return Err(extraction("ambiguous-compiler-authority", &key.crate_name));
                     }
                     (None, None) => {
-                        return Err(extraction("unresolved-compiler-unit", &crate_name));
+                        return Err(extraction("unresolved-compiler-unit", &key.crate_name));
                     }
                 }
             }
@@ -3227,36 +3276,32 @@ impl Catalog {
         nonempty("re-export compiler crate name", &raw.crate_name)?;
         exact_hex("re-export StableCrateId", &raw.stable_crate_id, 16)?;
         exact_hex("re-export DefPathHash", &raw.def_path_hash, 32)?;
-        let cargo = self.units.iter().find_map(|(key, unit)| {
-            (key.crate_name.as_ref() == raw.crate_name
-                && key.stable_crate_id.as_ref() == raw.stable_crate_id)
-                .then_some(unit)
-        });
-        let sysroot = self.sysroots.iter().find_map(|(key, unit)| {
-            (key.crate_name.as_ref() == raw.crate_name
-                && key.stable_crate_id.as_ref() == raw.stable_crate_id)
-                .then_some(unit)
-        });
-        let unit = match (cargo, sysroot) {
+        let protocol::ReexportId {
+            crate_name,
+            stable_crate_id,
+            def_path_hash,
+        } = raw;
+        let key = CompilerKey::from_raw(crate_name, stable_crate_id);
+        let unit = match self.lookup(&key) {
             (Some(unit), None) | (None, Some(unit)) => {
                 allocation.unit(unit)?;
                 allocation.cloned_ownership(1);
                 unit.clone()
             }
             (Some(_), Some(_)) => {
-                return Err(extraction("ambiguous-re-export-authority", &raw.crate_name));
+                return Err(extraction("ambiguous-re-export-authority", &key.crate_name));
             }
             (None, None) => {
                 return Err(extraction(
                     "unresolved-re-export-authority",
-                    &raw.crate_name,
+                    &key.crate_name,
                 ));
             }
         };
         allocation.items(1)?;
         Ok(identity::Reexport::new(unit, {
-            allocation.string(&raw.def_path_hash)?;
-            raw.def_path_hash.into_boxed_str()
+            allocation.string(&def_path_hash)?;
+            def_path_hash.into_boxed_str()
         }))
     }
 
