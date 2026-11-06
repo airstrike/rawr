@@ -97,7 +97,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // method gives from its default body as the trait's opaque type.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 49;
+const PROTOCOL_SCHEMA: u32 = 50;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,

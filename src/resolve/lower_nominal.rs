@@ -33624,38 +33624,50 @@ impl<'a> Parser<'a> {
             Ty::Reference { target, .. } => self.inference.resolve(target),
             ty => ty.clone(),
         };
-        // `2.0 * angle` through `impl Mul<Radians> for f32`: the library
-        // type's own `mul` of the number, as multiplying commutes.
-        if symbol == "*"
-            && matches!(host, Ty::Float(_) | Ty::Int(_) | Ty::Unknown)
+        // `2.0 * angle` through a crate's `impl Mul<Radians> for f32`: the
+        // operand type's function of the number (`Radians::mul(f32,
+        // Radians)`), among which the number's kind selects one as rustc
+        // selects the impl.
+        if !symbol.ends_with('=')
+            && matches!(host, Ty::Float(_) | Ty::Int(_) | Ty::Bool | Ty::Char)
             && let Some(rhs) = rhs.as_deref()
             && let Ty::Host { proof, .. } = self.inference.resolve(&rhs.ty)
         {
-            let path = format!("{}::mul", proof.definition.path());
-            if self.models.host_items(&path).is_some_and(|items| {
-                items.iter().any(|item| {
-                    item.kind() == crate::host::item::Kind::Method
-                        && item
-                            .signature()
-                            .parameters()
-                            .first()
-                            .is_some_and(|parameter| {
-                                matches!(
-                                    parameter.shape(),
-                                    crate::host::type_ref::Shape::Builtin(
-                                        crate::host::type_ref::Builtin::F64
-                                            | crate::host::type_ref::Builtin::F32
-                                    )
-                                )
-                            })
+            let path = format!("{}::{member}", proof.definition.path());
+            let operands = self
+                .models
+                .host_items(&path)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|item| {
+                            item.kind() == crate::host::item::Kind::AssociatedFunction
+                                && item.signature().parameters().len() == 2
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
                 })
-            }) {
-                let ty = self.inference.resolve(&rhs.ty);
-                let receiver = self.operator_expr(rhs.rendered_source(), ty, rhs.span);
-                self.pending_arguments = Some((vec![lhs.clone()], expression.end()));
-                let mut value = self.parse_host_method(receiver, "mul".into(), expression)?;
-                value.span = expression;
-                return Ok(Some(value));
+                .unwrap_or_default();
+            if !operands.is_empty() {
+                let owner = self.models.item_owner(&path).cloned();
+                let arguments = vec![lhs.clone(), rhs.clone()];
+                return self
+                    .call_host_function(&operands, owner, arguments, expression)
+                    .map(Some);
+            }
+            // The importer answers a miss with each impl of the operator's
+            // trait that takes the type, its own and a number's.
+            #[cfg(feature = "rust-import")]
+            if proof.definition.identity().imported().is_some()
+                && self.models.host_items(&path).is_none()
+                && self.models.host.entry(&path).is_none()
+            {
+                let error = Error::UnknownMember {
+                    owner: host_type_name(&proof, &self.models),
+                    member: (*member).into(),
+                    reference: expression,
+                };
+                return Err(self.native_miss(true, error));
             }
         }
         if let Ty::Host { proof, .. } = &host

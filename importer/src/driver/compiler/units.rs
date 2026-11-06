@@ -850,7 +850,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // its own inputs and `Output`, and rustc picks one by the
             // argument where the bridge calls it (T412, T502).
             if trait_generic {
-                let own = candidates.iter().copied().filter(owned).collect::<Vec<_>>();
+                let mut own = candidates.iter().copied().filter(owned).collect::<Vec<_>>();
+                own.extend(self.operand_impls(trait_id, adt)?);
                 for implementation in &own {
                     let Some(reference) = tcx.impl_opt_trait_ref(*implementation) else {
                         continue;
@@ -923,6 +924,58 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
         }
         Ok(())
+    }
+
+    /// The implementations of the binary operator `trait_id` for a
+    /// primitive whose operand is `adt`, as iced's `impl Mul<Radians> for
+    /// f32`: rustc selects one for `2.0 * angle` as it selects the type's
+    /// own, so each is a member of `adt`'s, with the number as its first
+    /// input. Empty for any other trait.
+    fn operand_impls(&mut self, trait_id: DefId, adt: DefId) -> Result<Vec<DefId>, String> {
+        let tcx = self.tcx;
+        let lang = tcx.lang_items();
+        let operators = [
+            lang.add_trait(),
+            lang.sub_trait(),
+            lang.mul_trait(),
+            lang.div_trait(),
+            lang.rem_trait(),
+            lang.bitand_trait(),
+            lang.bitor_trait(),
+            lang.bitxor_trait(),
+            lang.shl_trait(),
+            lang.shr_trait(),
+        ];
+        if !operators.contains(&Some(trait_id)) {
+            return Ok(Vec::new());
+        }
+        let mut found = Vec::new();
+        for implementation in tcx.all_impls(trait_id) {
+            let Some(reference) = tcx.impl_opt_trait_ref(implementation) else {
+                continue;
+            };
+            let reference = reference.instantiate_identity().skip_norm_wip();
+            let primitive = matches!(
+                reference.self_ty().kind(),
+                ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Bool | ty::Char
+            );
+            let operand = reference.args.types().skip(1).any(|argument| {
+                matches!(argument.kind(), ty::Adt(definition, _) if definition.did() == adt)
+            });
+            if primitive
+                && operand
+                && tcx.impl_polarity(implementation) == ty::ImplPolarity::Positive
+            {
+                self.edge(1)?;
+                if self.reaches(implementation.krate)? {
+                    found.push(implementation);
+                }
+            }
+        }
+        found.sort_unstable_by_key(|implementation| {
+            tcx.def_path_hash(*implementation).0.to_le_bytes()
+        });
+        Ok(found)
     }
 
     /// The one blanket implementation among `candidates` (`impl<T, ..>

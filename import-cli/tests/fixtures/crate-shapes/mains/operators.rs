@@ -21,7 +21,4 @@ fn main() {
     println!("{:?} {:?}", 10.0 - a, 3 / Turn(2.0));
     let x: f32 = 1.5;
     println!("{:?}", x * a);
-    let mut y = 1.0f32;
-    y += a;
-    println!("{y}");
 }
