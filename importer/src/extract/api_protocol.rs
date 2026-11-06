@@ -114,6 +114,22 @@ fn extraction_context_carries_build_unit_and_stable_role_and_namespace_text() {
     assert_eq!(identity::Namespace::Macro.as_str(), "macro");
 }
 
+/// A cold build compiles what a warm one reuses; Cargo says so in each
+/// artifact's `fresh`. The graph is the build's, not the build directory's:
+/// both give one graph, byte for byte, with one fingerprint.
+#[test]
+fn a_reused_artifact_and_a_compiled_one_have_byte_identical_graphs() {
+    let with = |fresh: bool| {
+        let mut root = fragment("root 0.1.0 (path+file:///root)", "root", Some("root"));
+        root["handshake"]["artifact"]["fresh"] = json!(fresh);
+        graph(&[root], Policy::empty())
+    };
+    let compiled = with(false);
+    let reused = with(true);
+    assert_eq!(compiled.canonical_bytes(), reused.canonical_bytes());
+    assert_eq!(compiled.fingerprint(), reused.fingerprint());
+}
+
 #[test]
 fn shuffled_fragments_and_definitions_have_byte_identical_graphs() {
     let support = fragment("support 0.1.0 (path+file:///support)", "support", None);

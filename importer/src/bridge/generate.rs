@@ -111,10 +111,15 @@ thread_local! {
 /// time it has the arena.
 static RELEASES: std::sync::Mutex<Vec<([u8; 32], u32, u64)>> = std::sync::Mutex::new(Vec::new());
 
-/// Whether [`RESTORES`] or [`RELEASES`] may hold an entry: an arena that
-/// finds neither this nor this thread's own [`QUEUED_HERE`] marked releases
-/// nothing, and looks at no queue.
-static QUEUED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How many entries [`RESTORES`] and [`RELEASES`] hold together, changed
+/// only under the lock of the queue that changes ([`enqueue`],
+/// [`dequeue`]). An arena that finds none, and nothing in this thread's own
+/// [`QUEUED_HERE`], releases nothing and looks at no queue. It is a count,
+/// not a mark the first arena to look clears: the entries another arena
+/// waits for keep it above zero till that arena takes them, so a call
+/// arena on one thread never misses its own releases because an arena on
+/// another thread looked first.
+static PENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 thread_local! {
     /// Whether this thread's [`REHOMES`], [`RELENDS`] or [`UNLENDS`] may
@@ -122,9 +127,23 @@ thread_local! {
     static QUEUED_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Mark [`QUEUED`] after an entry joins a queue every thread shares.
-fn queued() {
-    QUEUED.store(true, std::sync::atomic::Ordering::Release);
+/// Add `entry` to a queue every thread shares, and count it in [`PENDING`].
+fn enqueue<T>(queue: &std::sync::Mutex<Vec<T>>, entry: T) {
+    let mut entries = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    entries.push(entry);
+    PENDING.fetch_add(1, std::sync::atomic::Ordering::Release);
+}
+
+/// Take the entries `take` picks out of a queue every thread shares, and
+/// uncount them in [`PENDING`].
+fn dequeue<T>(queue: &std::sync::Mutex<Vec<T>>, mut take: impl FnMut(&T) -> bool) -> Vec<T> {
+    let mut entries = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (taken, kept) = std::mem::take(&mut *entries)
+        .into_iter()
+        .partition::<Vec<_>, _>(|entry| take(entry));
+    *entries = kept;
+    PENDING.fetch_sub(taken.len(), std::sync::atomic::Ordering::AcqRel);
+    taken
 }
 
 /// Mark [`QUEUED_HERE`] after an entry joins one of this thread's queues.
@@ -134,11 +153,7 @@ fn queued_here() {
 
 impl Drop for Release {
     fn drop(&mut self) {
-        RELEASES
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((self.epoch, self.slot, self.generation));
-        queued();
+        enqueue(&RELEASES, (self.epoch, self.slot, self.generation));
         // A handle may be dropped on any thread; the arena is the owner's.
         __rawr_internal::future::on_owner(|| {
             let _ = with_arena(|_| Ok(()));
@@ -1174,10 +1189,7 @@ impl Drop for CallArena {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|live| *live != epoch);
-        RELEASES
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|(released, ..)| *released != epoch);
+        dequeue(&RELEASES, |(released, ..)| *released == epoch);
         if let Some(kept) = kept
             && !std::thread::panicking()
         {
@@ -1861,18 +1873,11 @@ impl Arena {
     fn release_dropped(&mut self) {
         // Nothing queued since the last look: nothing to release.
         let here = QUEUED_HERE.try_with(|queued| queued.replace(false)).unwrap_or(false);
-        if !QUEUED.swap(false, std::sync::atomic::Ordering::AcqRel) && !here {
+        if PENDING.load(std::sync::atomic::Ordering::Acquire) == 0 && !here {
             return;
         }
         // Another arena's values wait for their own arena.
-        let restores = {
-            let mut queued = RESTORES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let (mine, others) = std::mem::take(&mut *queued)
-                .into_iter()
-                .partition::<Vec<_>, _>(|(handle, _)| handle.epoch == self.epoch);
-            *queued = others;
-            mine
-        };
+        let restores = dequeue(&RESTORES, |(handle, _)| handle.epoch == self.epoch);
         for (handle, value) in restores {
             self.restore(handle, value);
         }
@@ -1899,27 +1904,11 @@ impl Arena {
         };
         let call = live(&self.epoch);
         loop {
-            let batch = {
-                let mut queued = RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                let (mine, others) = std::mem::take(&mut *queued)
-                    .into_iter()
-                    .partition::<Vec<_>, _>(|(epoch, ..)| *epoch == self.epoch);
-                *queued = others;
-                mine
-            };
+            let batch = dequeue(&RELEASES, |(epoch, ..)| *epoch == self.epoch);
             if !call {
-                RELEASES
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .retain(|(epoch, ..)| live(epoch));
+                dequeue(&RELEASES, |(epoch, ..)| !live(epoch));
             }
             if batch.is_empty() {
-                // What waits for another arena keeps the queues marked.
-                if !RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
-                    || !RESTORES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
-                {
-                    queued();
-                }
                 return;
             }
             let mut dropped = Vec::with_capacity(batch.len());
@@ -2258,11 +2247,7 @@ impl<T: Send + 'static> Drop for Held<T> {
             // The arena is the owner thread's, and may be borrowed by the
             // native call that drops this future, or absent on an executor's
             // thread: the value waits in the queue its next use drains.
-            RESTORES
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((handle.clone(), Box::new(value)));
-            queued();
+            enqueue(&RESTORES, (handle.clone(), Box::new(value) as Box<dyn Any + Send>));
             __rawr_internal::future::on_owner(|| {
                 let _ = with_arena(|_| Ok(()));
             });

@@ -12,7 +12,7 @@ use crate::{Error, Result};
 pub(crate) struct Context<'graph>(pub(crate) &'graph super::Context);
 
 /// The attempt correlation and the artifact's physical bytes (`digest`,
-/// `length`, `fresh`) are derivation evidence: a proc-macro dylib is not
+/// `length`) are derivation evidence: a proc-macro dylib is not
 /// bit-reproducible across build directories. The crate's `crate_hash`
 /// (SVH) is derivation evidence too: it folds in every function body, so an
 /// edit that leaves the extracted body unchanged would otherwise change the
@@ -362,7 +362,7 @@ mod tests {
                 "crate_types": ["proc-macro"], "crate_name": "m", "edition": "2021",
                 "compilation": "c", "host": "h", "selected_target": "s", "features": [],
                 "artifact": {"length": digest.len(), "digest": digest, "profile": "dev",
-                    "fresh": digest == "a", "crate_hash": crate_hash, "stable_crate_id": stable_crate_id},
+                    "crate_hash": crate_hash, "stable_crate_id": stable_crate_id},
                 "compiler_commit": "x", "unit_correlation": digest, "unit_key": "u",
                 "dependencies": [], "sysroot": [],
             }))

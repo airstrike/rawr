@@ -6234,7 +6234,6 @@ fn invocation(
             length: handshake.artifact.length,
             digest: handshake.artifact.digest.as_str().into(),
             profile: handshake.artifact.profile.as_str().into(),
-            fresh: handshake.artifact.fresh,
             crate_hash: handshake.artifact.crate_hash.as_str().into(),
             stable_crate_id: handshake.artifact.stable_crate_id.as_str().into(),
         },
@@ -6679,7 +6678,7 @@ mod allocation {
             "crate_types": ["lib"], "crate_name": "m", "edition": "2021",
             "compilation": "c", "host": "h", "selected_target": "s", "features": [],
             "artifact": {"length": 1, "digest": "d", "profile": "dev",
-                "fresh": true, "crate_hash": "h1", "stable_crate_id": "i"},
+                "crate_hash": "h1", "stable_crate_id": "i"},
             "compiler_commit": "x", "unit_correlation": "u1", "unit_key": "u",
             "dependencies": [], "sysroot": [],
         }))

@@ -31,10 +31,16 @@ fn admitted_runner_invokes_an_exact_compiled_adapter_and_rejects_wrong_arity() {
     let output = candidate
         .invoke(entry, Box::default())
         .expect("the exact compiled adapter executes");
-    assert!(matches!(
-        output,
-        Value::Unit | Value::I64(_) | Value::Handle(_)
-    ));
+    // Which zero-argument adapter comes first follows the manifest's
+    // identities, which move with the graph's encoding: any of the
+    // fixture's zero-argument functions' outputs is an exact invocation.
+    assert!(
+        matches!(
+            output,
+            Value::Unit | Value::I64(_) | Value::Handle(_) | Value::Option(_)
+        ),
+        "{output:?}"
+    );
     assert!(matches!(
         candidate.invoke(entry, Box::from([Value::Unit])),
         Err(rawr_import::process::RunnerError::Invocation(
