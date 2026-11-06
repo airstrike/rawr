@@ -255,6 +255,83 @@ fn type_errors_are_the_same_diagnostic_for_check_and_run() {
     assert!(text.contains(&format!("{}:2:", source.display())), "{text}");
 }
 
+/// A lone file's async fns, async blocks and `.await`s check and run as
+/// rustc's do: a future needs no runtime crate until it is polled, and an
+/// async body's value is a future, as rustc names it.
+#[test]
+fn a_lone_files_async_code_checks_and_runs_with_no_runtime() {
+    let sandbox = Sandbox::new("lone-async");
+    fs::write(
+        sandbox.work().join("futures.rs"),
+        "async fn one() -> usize {\n    1\n}\n\nasync fn three() -> usize {\n    let a = one().await;\n    let b = async { a + 1 }.await;\n    a + b\n}\n\nfn main() {\n    let pending = three();\n    drop(pending);\n    println!(\"made\");\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        sandbox.work().join("wrong.rs"),
+        "async fn one() -> usize {\n    1\n}\n\nfn main() {\n    let n: usize = one();\n}\n",
+    )
+    .unwrap();
+
+    let checked = sandbox.rawr(&["check", "futures.rs"]);
+    let run = sandbox.rawr(&["run", "futures.rs"]);
+    let wrong = sandbox.rawr(&["check", "wrong.rs"]);
+
+    assert_success(&checked);
+    assert_success(&run);
+    assert_eq!(stdout(&run), "made\n");
+    let text = stderr(&wrong);
+    assert!(
+        text.starts_with("error[E0308]: mismatched types") && text.contains("found future"),
+        "{text}"
+    );
+}
+
+/// rustlings' async1 run alone: with no tokio dependency, `#[tokio::main]`
+/// and `tokio::join!` name no crate (rustc's E0433), and an async `main`
+/// with no runtime's entry is rustc's E0752.
+#[test]
+fn a_lone_files_runtime_paths_and_async_main_are_rustcs_errors() {
+    let sandbox = Sandbox::new("lone-runtime");
+    for (name, source) in [
+        (
+            "attribute.rs",
+            "async fn one() -> usize {\n    1\n}\n\n#[tokio::main]\nasync fn main() {\n    println!(\"{}\", one().await);\n}\n",
+        ),
+        (
+            "joined.rs",
+            "async fn one() -> usize {\n    1\n}\n\nasync fn two() -> usize {\n    let (a, b) = tokio::join!(one(), one());\n    a + b\n}\n\nfn main() {\n    drop(two());\n}\n",
+        ),
+        (
+            "main.rs",
+            "async fn main() {\n    println!(\"never\");\n}\n",
+        ),
+    ] {
+        fs::write(sandbox.work().join(name), source).unwrap();
+    }
+
+    let attribute = stderr(&sandbox.rawr(&["check", "attribute.rs"]));
+    let joined = stderr(&sandbox.rawr(&["run", "joined.rs"]));
+    let main = sandbox.rawr(&["run", "main.rs"]);
+
+    for (text, line) in [
+        (&attribute, "attribute.rs:5:3"),
+        (&joined, "joined.rs:6:18"),
+    ] {
+        assert!(
+            text.starts_with("error[E0433]: cannot find module or crate `tokio` in this scope")
+                && text.contains(line)
+                && text.contains("use of unresolved module or unlinked crate `tokio`"),
+            "{text}"
+        );
+    }
+    assert!(!main.status.success());
+    let text = stderr(&main);
+    assert!(
+        text.starts_with("error[E0752]: `main` function is not allowed to be `async`"),
+        "{text}"
+    );
+}
+
 /// An iced program is a program with Rust dependencies like any other: it
 /// goes to rawr-import and its generated bindings (D662).
 #[test]

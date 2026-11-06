@@ -33202,11 +33202,16 @@ impl<'a> Parser<'a> {
                     reference: operator_at.unwrap_or(span(lhs.span.start(), rhs.span.end())),
                 });
             }
-            // Two numeric types, as `f64 / usize`: the left's impl of the
-            // operator's trait takes only its own type, rustc's E0277.
+            // A number with another type, as `f64 / usize` or `2.0 *
+            // angle` with no crate's `impl Mul<Angle> for f64`: std's impls
+            // of the operator's trait for the number take only its own
+            // type, rustc's E0277.
             let right = self.inference.resolve(&rhs.ty);
             if matches!(left, Ty::Int(_) | Ty::Float(_))
-                && matches!(right, Ty::Int(_) | Ty::Float(_))
+                && !matches!(
+                    right,
+                    Ty::Infer(_) | Ty::Param(_) | Ty::Projection(..) | Ty::Unknown
+                )
                 && !self.unifies(&left, &right)
             {
                 let (left, right) = (left.name(&self.models), right.name(&self.models));
@@ -33807,6 +33812,13 @@ impl<'a> Parser<'a> {
                 chosen = Some(candidate);
                 break;
             }
+        }
+        // A number whose kind no impl is for, as `x * angle` with `x: f64`
+        // and only `impl Mul<Angle> for f32`: std's impls of the trait for
+        // the number, which take only its own type (rustc's E0277).
+        if chosen.is_none() && matches!(lhs_ty, Ty::Int(_) | Ty::Float(_)) && !symbol.ends_with('=')
+        {
+            return Ok(None);
         }
         let Some(definition) = chosen else {
             let operation =
