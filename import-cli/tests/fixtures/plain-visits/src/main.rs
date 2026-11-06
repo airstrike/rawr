@@ -1,5 +1,5 @@
 // rawr
-use visits::{Problem, Read, Reader, Visit, Visitor};
+use visits::{Expected, Problem, Read, Reader, Visit, Visitor};
 
 struct Seven;
 
@@ -27,7 +27,7 @@ impl<'a> Read<'a> for Pair {
         };
         let second = match reader.number() {
             Some(number) => number,
-            None => return Err(R::Error::custom("no second")),
+            None => return Err(R::Error::short(1, &"two numbers")),
         };
         Ok(Pair(first, second))
     }
@@ -47,10 +47,31 @@ impl std::fmt::Display for Pair {
     }
 }
 
+/// What the program wanted, as a derive's visitor says.
+struct Wanted;
+
+impl Expected for Wanted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("what ")?;
+        describe(formatter)
+    }
+}
+
+/// What the program wants, written into the formatter it is passed.
+fn describe(formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+    write!(formatter, "I {}", "wanted")
+}
+
 fn main() {
     println!("{:?} {}", first(&[5]), Pair(1, 2));
     println!("{}", visits::show(Seven));
     println!("{}", visits::shown(&Seven));
     println!("{}", visits::read::<Pair>(&[3, 4]));
     println!("{}", visits::read::<Pair>(&[3]));
+    println!("{}", visits::expecting(&"a str"));
+    println!("{}", visits::expecting(&visits::Count::new(2)));
+    println!("{}", visits::expecting(&Wanted));
+    let mut sum = visits::Sum::default();
+    visits::tally(&[1, 2, 3], &mut sum);
+    println!("{}", sum.total());
 }

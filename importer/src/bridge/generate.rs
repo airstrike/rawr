@@ -8939,12 +8939,16 @@ thread_local! {
     /// (`render_frame`): the slot of each opaque type of its own
     /// parameters, by identity, and how the code being written names the
     /// frame.
-    static FRAME: std::cell::RefCell<Option<(std::collections::BTreeMap<[u8; 32], usize>, &'static str)>> =
+    static FRAME: std::cell::RefCell<Option<EnteredFrame>> =
         const { std::cell::RefCell::new(None) };
 }
 
+/// A frame's slots by identity and the name the code being written gives
+/// the frame (`FRAME`).
+type EnteredFrame = (std::collections::BTreeMap<[u8; 32], usize>, &'static str);
+
 /// Sets `FRAME` for as long as it lives.
-struct InFrame(Option<(std::collections::BTreeMap<[u8; 32], usize>, &'static str)>);
+struct InFrame(Option<EnteredFrame>);
 
 impl InFrame {
     fn enter(slots: &std::collections::BTreeMap<[u8; 32], usize>, name: &'static str) -> Self {
@@ -14112,7 +14116,10 @@ fn render_take_input(
     // A borrow of a script value where native generic code takes a Rust
     // type, as `&Square` fills `name_of(shape: &impl Shape)`: a borrow of
     // its proxy, which shares the value's handle (D594, #993).
-    if let convert::Type::Borrowed { mutable, ty: target } = &lent
+    if let convert::Type::Borrowed {
+        mutable,
+        ty: target,
+    } = &lent
         && matches!(**target, convert::Type::Script { .. })
     {
         let rust = concrete_type(target).ok_or_else(|| request::drift("a script type's proxy"))?;
@@ -14212,6 +14219,22 @@ fn render_take_input(
         return writeln!(
             output,
             "{witness}    let mut argument_{local}_copy = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    #[allow(unused_variables)]\n    let argument_{local} = &mut argument_{local}_copy;"
+        )
+        .map_err(request::unwritable);
+    }
+    // `&&str`, as a `&"text"` an argument's `impl Trait` borrows where the
+    // crate implements its trait for `&str` (`object_inputs`): a borrow of
+    // the `&str` lent from Rawr's string.
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: lent,
+    } = &lent
+        && matches!(&**lent, convert::Type::Borrowed { mutable: false, ty }
+            if **ty == convert::Type::Builtin(convert::Builtin::Str))
+    {
+        return writeln!(
+            output,
+            "    let argument_{local}_owned = take_primitive::<ImmutableString>(arguments, {index})?;\n    let argument_{local}_str = argument_{local}_owned.as_str();\n    let argument_{local} = &argument_{local}_str;"
         )
         .map_err(request::unwritable);
     }
@@ -18264,9 +18287,20 @@ fn render_impl_function(
     // depth of an input, and script code holds it by a handle into the
     // frame (`frame::Frame`).
     let _in_frame = frame.map(|frame| InFrame::enter(frame.slots(), "frame"));
+    let formatter = function
+        .formatter()
+        .and_then(|position| usize::try_from(position).ok());
     for (position, input) in function.inputs().iter().enumerate() {
         let name = format!("input_{position}");
         let at = values.len();
+        // The trait method's `&mut fmt::Formatter`: the script's body
+        // writes into Rawr's string and gives back its text, as a `fmt`
+        // body does, which goes into the formatter.
+        if formatter == Some(position) {
+            parameters.push(format!("{name}: &mut ::core::fmt::Formatter<'_>"));
+            values.push("Dynamic::from(String::new())".to_owned());
+            continue;
+        }
         let rust = match frame {
             Some(frame) => frame.spell(input, generics),
             None => impl_type(input, generics),
@@ -18372,6 +18406,23 @@ fn render_impl_function(
             "with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {body} }})"
         )
     };
+    // A method that writes into a formatter gives `fmt::Result`: its body
+    // gives back the text it wrote, which the formatter takes.
+    let written = formatter.map(|position| {
+        format!("Ok::<::core::fmt::Result, Error>(input_{position}.write_str(&value.to_string()))")
+    });
+    let rust = if written.is_some() {
+        "::core::fmt::Result".to_owned()
+    } else {
+        rust
+    };
+    let output = |converted: &mut String| match &written {
+        Some(written) => {
+            converted.push_str(written);
+            Ok(())
+        }
+        None => render_from_dynamic(returned, "value", 0, converted),
+    };
     let crossed = |value: &str| {
         if value.starts_with('(') {
             format!("{value}?")
@@ -18407,7 +18458,7 @@ fn render_impl_function(
         let mut converted = String::new();
         {
             let _frame = InFrame::enter(frame.slots(), "frame");
-            render_from_dynamic(returned, "value", 0, &mut converted)?;
+            output(&mut converted)?;
         }
         let converted = in_arena(&converted);
         let call = format!(
@@ -18468,7 +18519,7 @@ fn render_impl_function(
         }
         None => {
             let mut converted = String::new();
-            render_from_dynamic(returned, "value", 0, &mut converted)?;
+            output(&mut converted)?;
             let converted = in_arena(&converted);
             // A `&str` comes back pinned for the runner's life, so it
             // meets a trait that asks for `&'static str`, as a derive's

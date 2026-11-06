@@ -61,7 +61,8 @@ impl Frame {
             let convert::Type::Nominal { definition, .. } = &ty else {
                 continue;
             };
-            let Some(path) = super::TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())
+            let Some(path) =
+                super::TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())
             else {
                 continue;
             };
@@ -109,7 +110,9 @@ impl Frame {
             for bound in generic.bounds() {
                 // A lifetime the bound names is the impl's, by its name.
                 if !bound.lifetimes().is_empty() && named_lifetimes(script).is_none() {
-                    return Err(drift("a generic impl function's bound that takes a lifetime"));
+                    return Err(drift(
+                        "a generic impl function's bound that takes a lifetime",
+                    ));
                 }
                 let written = bound
                     .lifetimes()
@@ -144,7 +147,11 @@ impl Frame {
             function
                 .member()
                 .chars()
-                .map(|character| if character.is_ascii_alphanumeric() { character } else { '_' })
+                .map(|character| if character.is_ascii_alphanumeric() {
+                    character
+                } else {
+                    '_'
+                })
                 .collect::<String>()
         );
         Ok(Self {
@@ -396,7 +403,13 @@ impl<{header}> Frame for {name}<{arguments}> {{
             let _producing = super::OpaqueProducing::enter(None);
             let _consuming = super::OpaqueConsuming::enter(false);
             let _witnessed = super::OpaqueWitnessed::enter(Some(ty.clone()));
-            super::render_adapter_body(consumer, cohort.plans, cohort.profile, cohort.facade, &mut body)?;
+            super::render_adapter_body(
+                consumer,
+                cohort.plans,
+                cohort.profile,
+                cohort.facade,
+                &mut body,
+            )?;
         }
         let body = String::from_utf8(body).map_err(request::unwritable)?;
         Ok(body

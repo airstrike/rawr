@@ -1,6 +1,8 @@
 //! Traits with generic methods, as serde's `Serialize::serialize` and
 //! `Deserialize::deserialize` are.
 
+use std::fmt;
+
 /// What a value is shown to.
 pub trait Visitor {
     type Out;
@@ -58,9 +60,80 @@ pub mod reexports {
 }
 
 /// A problem a reader reports.
-pub trait Problem {
+pub trait Problem: Sized {
     fn custom(message: &str) -> Self;
     fn describe(&self) -> String;
+
+    /// Too few numbers, where `expected` says what was, as serde's
+    /// `de::Error::invalid_length` takes a `&dyn Expected`.
+    fn short(count: usize, expected: &dyn Expected) -> Self {
+        Self::custom(&format!("{count} read, expected {expected}"))
+    }
+}
+
+/// What a reader expected, as serde's `de::Expected` is.
+pub trait Expected {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result;
+}
+
+impl Expected for &str {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str(self)
+    }
+}
+
+impl fmt::Display for dyn Expected + '_ {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        Expected::fmt(self, formatter)
+    }
+}
+
+/// A count of numbers, expected.
+pub struct Count(usize);
+
+impl Count {
+    pub fn new(numbers: usize) -> Self {
+        Count(numbers)
+    }
+}
+
+impl Expected for Count {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "{} numbers", self.0)
+    }
+}
+
+/// What `expected` says.
+pub fn expecting(expected: &dyn Expected) -> String {
+    format!("expected {expected}")
+}
+
+/// What adds numbers up.
+pub trait Tally {
+    fn add(&mut self, number: i64);
+}
+
+/// A sum of numbers.
+#[derive(Default)]
+pub struct Sum(i64);
+
+impl Sum {
+    pub fn total(&self) -> i64 {
+        self.0
+    }
+}
+
+impl Tally for Sum {
+    fn add(&mut self, number: i64) {
+        self.0 += number;
+    }
+}
+
+/// Each of `items` added to `tally`.
+pub fn tally(items: &[i64], tally: &mut dyn Tally) {
+    for item in items {
+        tally.add(*item);
+    }
 }
 
 /// Numbers read one at a time from what it borrows.

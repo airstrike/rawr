@@ -2613,6 +2613,15 @@ fn writes_formatter(ty: &crate::item::type_ref::Type) -> bool {
             if path.segments.last().is_some_and(|last| last.name.text == "Formatter")))
 }
 
+/// A function with its opaque type parameters taken off, the scope that
+/// names them, and each one's name and bounds (`opaque_generics`).
+#[cfg(feature = "rust-import")]
+type OpaqueSplit = (
+    crate::item::Function,
+    Option<BTreeMap<ImmutableString, type_ref::Target>>,
+    Box<[item::OpaqueGeneric]>,
+);
+
 /// `function`, a function of an impl of the dependency's trait at
 /// `trait_path`, with each of its type parameters that the trait's method
 /// has as an opaque type (`rawr_import::surface::opaque::parameter_path`)
@@ -2628,14 +2637,7 @@ fn opaque_generics(
     types: &BTreeMap<ImmutableString, type_ref::Target>,
     host: &host::Registry,
     native: Option<native::Site<'_>>,
-) -> Result<
-    (
-        crate::item::Function,
-        Option<BTreeMap<ImmutableString, type_ref::Target>>,
-        Box<[item::OpaqueGeneric]>,
-    ),
-    Error,
-> {
+) -> Result<OpaqueSplit, Error> {
     let mut scope = None::<BTreeMap<ImmutableString, type_ref::Target>>;
     let mut opaque = Vec::new();
     let mut kept = Vec::new();

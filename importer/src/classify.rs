@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 111;
+const CLASSIFIER_VERSION: u32 = 112;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7608,6 +7608,12 @@ impl<P: api::Phase> Context<'_, P> {
             .map_or((signature, generics), |(signature, generics)| {
                 (signature, generics)
             });
+        let objects = object_inputs(signature, generics);
+        let (signature, generics) = objects
+            .as_ref()
+            .map_or((signature, generics), |(signature, generics)| {
+                (signature, generics)
+            });
         let opens_copies = self.late_binders_open_copies(signature);
         let borrows_receiver = borrows_receiver(signature, |id| {
             self.graph
@@ -10027,6 +10033,118 @@ fn reaches_only_exported(
     }
 }
 
+/// `signature` and `generics` with each input that borrows a trait object
+/// of traits alone, as serde's `invalid_length(len: usize, exp: &dyn
+/// Expected)` takes, read as a borrow of an argument's `impl Trait` of its
+/// own, bounded by the object's traits. The call's argument fills it at
+/// its own type, a crate's, a std type the crate implements the trait for,
+/// or a program type through its proxy, and the bridge's borrow of it
+/// coerces to the object where it is passed, as rustc coerces it. An
+/// object that binds an associated type, as `dyn Fn(A) -> B` does, stays
+/// what it is. `None` when there is none.
+fn object_inputs(
+    signature: &model::Signature,
+    generics: &model::Generics,
+) -> Option<(model::Signature, model::Generics)> {
+    fn object(
+        ty: &model::Type,
+    ) -> Option<(&model::Lifetime, model::Mutability, Vec<&model::Bound>)> {
+        let model::Type::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } = ty
+        else {
+            return None;
+        };
+        let model::Type::TraitObject { bounds, .. } = ty.as_ref() else {
+            return None;
+        };
+        let traits = bounds
+            .iter()
+            .map(|bound| match bound {
+                model::ObjectBound::Trait(
+                    bound @ model::Bound::Trait {
+                        polarity: model::Polarity::Positive,
+                        ..
+                    },
+                ) => Some(bound),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (!traits.is_empty()).then_some((lifetime, *mutability, traits))
+    }
+    if !signature.inputs().any(|input| object(input).is_some()) {
+        return None;
+    }
+    let mut next = generics
+        .parameters()
+        .map(model::Parameter::index)
+        .filter(|index| *index & representability::signature::FUTURE_OUTPUT == 0)
+        .max()
+        .map_or(0, |index| index + 1);
+    let mut parameters = generics.parameters().cloned().collect::<Vec<_>>();
+    let mut predicates = generics.predicates().cloned().collect::<Vec<_>>();
+    let mut inputs = Vec::new();
+    for input in signature.inputs() {
+        let Some((lifetime, mutability, traits)) = object(input) else {
+            inputs.push(input.clone());
+            continue;
+        };
+        // A parameter is read by its index alone, so one an item with no
+        // parameters of its own declares is owned by the object's trait.
+        let owner = match generics.parameters().next() {
+            Some(parameter) => parameter.owner().clone(),
+            None => match traits[0] {
+                model::Bound::Trait { trait_id, .. } => trait_id.clone(),
+                model::Bound::MaybeSized => return None,
+            },
+        };
+        let index = next;
+        next += 1;
+        let parameter = model::Type::Parameter {
+            owner: owner.clone(),
+            index,
+        };
+        parameters.push(model::Parameter::new(
+            owner,
+            index,
+            format!("impl dyn#{index}").into(),
+            model::ParameterKind::Type {
+                bounds: Box::default(),
+                default: model::Default::Absent,
+            },
+        ));
+        for bound in traits {
+            predicates.push(model::Predicate::Bound {
+                ty: parameter.clone(),
+                bound: bound.clone(),
+            });
+        }
+        inputs.push(model::Type::Reference {
+            lifetime: lifetime.clone(),
+            mutability,
+            ty: Box::new(parameter),
+        });
+    }
+    let rewritten = model::Signature::new(
+        signature.safety(),
+        signature.const_function(),
+        signature.async_function(),
+        signature.abi().into(),
+        signature.variadic(),
+        signature.binders().cloned().collect(),
+        signature.receiver().clone(),
+        inputs.into_boxed_slice(),
+        signature.output().clone(),
+    )
+    .with_guard(signature.guard().cloned());
+    Some((
+        rewritten,
+        model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice()),
+    ))
+}
+
 fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
     let mut binders = signature.binders();
     match signature.receiver() {
@@ -10974,7 +11092,10 @@ fn parameter_opaque(
         })
         .cloned()
         .collect::<Vec<_>>();
-    if let model::ParameterKind::Type { bounds: declared, .. } = parameter.kind() {
+    if let model::ParameterKind::Type {
+        bounds: declared, ..
+    } = parameter.kind()
+    {
         for bound in declared.iter() {
             let predicate = model::Predicate::Bound {
                 ty: this.clone(),
