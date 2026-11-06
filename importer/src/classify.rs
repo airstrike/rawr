@@ -290,6 +290,11 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
     opaque_self: std::cell::RefCell<Option<model::Type>>,
+    /// The opaque types `opaque_projection` gives that are being converted,
+    /// so a projection their own bounds reach again, as `A: From<Self::B>`
+    /// and `B: From<Self::A>` of one trait do, is refused, not converted
+    /// without end.
+    opaque_projecting: std::cell::RefCell<Vec<api::identity::Definition>>,
     /// While a function's output is converted: the associated types each
     /// opaque `impl Trait` type it gives binds, as arguments of that type.
     opaque_associated: std::cell::RefCell<Vec<representability::signature::Opaque>>,
@@ -594,6 +599,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             sole_aliases: std::cell::OnceCell::new(),
             opaque_output: std::cell::RefCell::new(None),
             opaque_self: std::cell::RefCell::new(None),
+            opaque_projecting: std::cell::RefCell::new(Vec::new()),
             opaque_associated: std::cell::RefCell::new(Vec::new()),
             core_traits: std::cell::OnceCell::new(),
             callable_traits: std::cell::OnceCell::new(),
@@ -5574,29 +5580,69 @@ impl<P: api::Phase> Context<'_, P> {
             ),
             _ => (None, Box::default()),
         };
+        let id = api::identity::Definition::new(
+            id.unit().clone(),
+            format!("{}::{}", id.def_path_hash(), associated.def_path_hash()).into(),
+            api::identity::Namespace::Type,
+        );
         // The declaration's `Self` is the opaque type, and so is the
-        // projection a bound of its own names it by.
+        // projection a bound of its own names it by. The projection itself
+        // is the new type's `Self`, as `PartialEq<Self>` of `type Font:
+        // PartialEq` is the font's own (rustc's item bounds of the type).
+        let this = owner.as_ref().map(|owner| model::Type::Projection {
+            trait_id: owner.clone(),
+            associated: associated.clone(),
+            arguments: Box::new([model::Argument::Type(opaque.clone())]),
+        });
+        let own = model::Type::SelfType(id.clone());
         let bounds = declared
             .iter()
             .map(|predicate| {
-                map_predicate_types(predicate, |ty| match &owner {
-                    Some(owner) => substitute_parameters(
-                        &self_replaced(ty, owner, opaque),
-                        &[((owner.clone(), 0), opaque.clone())],
+                map_predicate_types(predicate, |ty| match (&owner, &this) {
+                    (Some(owner), Some(this)) => type_replaced(
+                        &substitute_parameters(
+                            &self_replaced(ty, owner, opaque),
+                            &[((owner.clone(), 0), opaque.clone())],
+                        ),
+                        this,
+                        &own,
                     ),
-                    None => ty.clone(),
+                    _ => ty.clone(),
                 })
             })
             .collect();
         model::Type::ImplTrait {
-            id: api::identity::Definition::new(
-                id.unit().clone(),
-                format!("{}::{}", id.def_path_hash(), associated.def_path_hash()).into(),
-                api::identity::Namespace::Type,
-            ),
+            id,
             bounds,
             captures: Box::default(),
         }
+    }
+
+    /// `projected`, the type `opaque_projection` gives, converted as a
+    /// function's output is. An opaque type of its own that its own bounds
+    /// reach again while it is converted is refused (`opaque_projecting`).
+    fn convert_projected(
+        &self,
+        projected: &model::Type,
+    ) -> Result<representability::convert::Type, Failure> {
+        let opened = match projected {
+            model::Type::ImplTrait { id, .. } => {
+                let mut projecting = self.opaque_projecting.borrow_mut();
+                if projecting.contains(id) {
+                    return Err(representability::reject::Kind::Projection.into());
+                }
+                projecting.push(id.clone());
+                true
+            }
+            _ => false,
+        };
+        let outer = self.opaque_output.replace(Some(Box::default()));
+        let converted = self.convert(projected);
+        *self.opaque_output.borrow_mut() = outer;
+        if opened {
+            self.opaque_projecting.borrow_mut().pop();
+        }
+        converted
     }
 
     /// `method` of the trait `definition`, whose generics are `container`,
@@ -7088,9 +7134,11 @@ impl<P: api::Phase> Context<'_, P> {
             {
                 continue;
             }
+            // `Self`, as `PartialEq<Self>` names it, is no type Rawr writes.
             let arguments = arguments
                 .iter()
                 .filter_map(|argument| match argument {
+                    model::Argument::Type(model::Type::SelfType(_)) => Some(None),
                     model::Argument::Type(ty) => Some(self.convert(ty).ok()),
                     _ => None,
                 })
@@ -8840,10 +8888,7 @@ impl<P: api::Phase> Context<'_, P> {
                     (None, Some(opaque)) => self.opaque_projection(opaque, associated),
                     (None, None) => return Err(representability::reject::Kind::Projection.into()),
                 };
-                let outer = self.opaque_output.replace(Some(Box::default()));
-                let converted = self.convert(&ty);
-                *self.opaque_output.borrow_mut() = outer;
-                return converted;
+                return self.convert_projected(&ty);
             }
             // `<S as Serializer>::Ok` of an opaque type `S`, as a type
             // parameter's bound names it (`parameter_members`).
@@ -8859,11 +8904,7 @@ impl<P: api::Phase> Context<'_, P> {
                 let Some(model::Argument::Type(opaque)) = arguments.first() else {
                     return Err(representability::reject::Kind::Projection.into());
                 };
-                let ty = self.opaque_projection(opaque, associated);
-                let outer = self.opaque_output.replace(Some(Box::default()));
-                let converted = self.convert(&ty);
-                *self.opaque_output.borrow_mut() = outer;
-                return converted;
+                return self.convert_projected(&self.opaque_projection(opaque, associated));
             }
             model::Type::Projection { .. } => match self.projected(ty) {
                 Some(item) => return self.convert(item),
@@ -12033,6 +12074,63 @@ pub(crate) fn substitute_bindings(
             length: length.clone(),
         },
         ty => ty.clone(),
+    }
+}
+
+/// `ty` with each `from` inside it written as `to`.
+fn type_replaced(ty: &model::Type, from: &model::Type, to: &model::Type) -> model::Type {
+    if ty == from {
+        return to.clone();
+    }
+    let inner = |ty: &model::Type| Box::new(type_replaced(ty, from, to));
+    let arguments = |arguments: &[model::Argument]| {
+        arguments
+            .iter()
+            .map(|argument| match argument {
+                model::Argument::Type(ty) => model::Argument::Type(type_replaced(ty, from, to)),
+                other => other.clone(),
+            })
+            .collect()
+    };
+    match ty {
+        model::Type::Definition { id, arguments: of } => model::Type::Definition {
+            id: id.clone(),
+            arguments: arguments(of),
+        },
+        model::Type::Projection {
+            trait_id,
+            associated,
+            arguments: of,
+        } => model::Type::Projection {
+            trait_id: trait_id.clone(),
+            associated: associated.clone(),
+            arguments: arguments(of),
+        },
+        model::Type::Tuple(members) => model::Type::Tuple(
+            members
+                .iter()
+                .map(|member| type_replaced(member, from, to))
+                .collect(),
+        ),
+        model::Type::Slice(element) => model::Type::Slice(inner(element)),
+        model::Type::Array { element, length } => model::Type::Array {
+            element: inner(element),
+            length: length.clone(),
+        },
+        model::Type::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => model::Type::Reference {
+            lifetime: lifetime.clone(),
+            mutability: *mutability,
+            ty: inner(ty),
+        },
+        model::Type::RawPointer { mutability, ty } => model::Type::RawPointer {
+            mutability: *mutability,
+            ty: inner(ty),
+        },
+        other => other.clone(),
     }
 }
 
