@@ -2083,7 +2083,7 @@ fn imported_surface_type(
                 ));
             }
         }),
-        Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
+        Ty::InclusiveRange(_) => Type::Builtin(Builtin::InclusiveRange),
         Ty::InclusiveOf(element) => {
             imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
             Type::Nominal {
@@ -2536,7 +2536,7 @@ fn instance_surface_type(
             Int::Usize => Builtin::Usize,
             Int::I128 | Int::U128 => return None,
         }),
-        Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
+        Ty::InclusiveRange(_) => Type::Builtin(Builtin::InclusiveRange),
         Ty::InclusiveOf(element) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::range_inclusive(),
             arguments: Box::new([instance_surface_type(inference, models, element)?]),
@@ -8871,7 +8871,9 @@ enum Ty {
     /// `String`, as in Rust: a `&String` becomes a `&str` only by deref
     /// coercion.
     Str,
-    InclusiveRange,
+    /// `a..=b` of integers of a kind: Rust's `RangeInclusive<T>`, a value
+    /// that is also an iterator of `T`. A `RangeInclusive<i64>` at runtime.
+    InclusiveRange(Int),
     /// `a..=b` of floats: Rust's `RangeInclusive<f64>`, bounds only.
     FloatRange,
     /// `a..b` of floats: Rust's `Range<T>` as a value, which an imported
@@ -9051,7 +9053,7 @@ impl Ty {
             | Self::String
             | Self::UnsizedStr
             | Self::Str
-            | Self::InclusiveRange
+            | Self::InclusiveRange(_)
             | Self::FloatRange
             | Self::Ordering
             | Self::Time(_)
@@ -9172,10 +9174,11 @@ impl Ty {
                             match Self::from_resolved(element) {
                                 Self::Float(_) => Self::FloatRange,
                                 element @ Self::Host { .. } => Self::InclusiveOf(Box::new(element)),
-                                _ => Self::InclusiveRange,
+                                Self::Int(kind) => Self::InclusiveRange(kind),
+                                _ => Self::InclusiveRange(Int::I64),
                             }
                         }
-                        _ => Self::InclusiveRange,
+                        _ => Self::InclusiveRange(Int::I64),
                     },
                     name => ParseError::named(name)
                         .map(Self::ParseError)
@@ -9251,7 +9254,7 @@ impl Ty {
             Self::String => "String".into(),
             Self::UnsizedStr => "str".into(),
             Self::Str => "&str".into(),
-            Self::InclusiveRange => "RangeInclusive<i64>".into(),
+            Self::InclusiveRange(kind) => format!("RangeInclusive<{}>", kind.name()).into(),
             Self::FloatRange => "RangeInclusive<f64>".into(),
             Self::Range(element) => format!("Range<{}>", element.name(models)).into(),
             Self::InclusiveOf(element) => {
@@ -9424,7 +9427,7 @@ impl Ty {
             Self::Int(_) => Some(TypeId::of::<INT>()),
             Self::Float(_) => Some(TypeId::of::<crate::FLOAT>()),
             Self::String | Self::UnsizedStr | Self::Str => Some(TypeId::of::<ImmutableString>()),
-            Self::InclusiveRange => Some(TypeId::of::<std::ops::RangeInclusive<INT>>()),
+            Self::InclusiveRange(_) => Some(TypeId::of::<std::ops::RangeInclusive<INT>>()),
             Self::FloatRange => Some(TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>()),
             Self::Range(element) => Some(range_type_id(element)),
             Self::InclusiveOf(_) => Some(TypeId::of::<std::ops::RangeInclusive<Dynamic>>()),
@@ -9556,7 +9559,7 @@ impl Ty {
             | Self::String
             | Self::UnsizedStr
             | Self::Str
-            | Self::InclusiveRange
+            | Self::InclusiveRange(_)
             | Self::FloatRange
             | Self::Range(_)
             | Self::InclusiveOf(_)
@@ -9836,6 +9839,9 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
             | (Ty::InclusiveOf(left), Ty::InclusiveOf(right)) => {
                 compare(left, right, forward, reverse)
             }
+            (Ty::InclusiveRange(left), Ty::InclusiveRange(right)) => {
+                compare(&Ty::Int(*left), &Ty::Int(*right), forward, reverse)
+            }
             (Ty::Cell(left_kind, left), Ty::Cell(right_kind, right)) => {
                 left_kind == right_kind && compare(left, right, forward, reverse)
             }
@@ -10097,6 +10103,10 @@ impl Inference {
             Ty::Cow(inner) => Ty::Cow(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
             Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(self.resolve(element))),
+            Ty::InclusiveRange(kind) => match self.resolve(&Ty::Int(*kind)) {
+                Ty::Int(kind) => Ty::InclusiveRange(kind),
+                _ => ty.clone(),
+            },
             Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(self.resolve(inner))),
             Ty::Thread(kind, inner) => Ty::Thread(*kind, Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
@@ -18901,7 +18911,7 @@ impl<'a> Parser<'a> {
                 capability == capability::Kind::Copy
                     || crate::capability::builtin_supports("String", capability)
             }
-            Ty::InclusiveRange | Ty::FloatRange => false,
+            Ty::InclusiveRange(_) | Ty::FloatRange => false,
             // `Range<T>` and `RangeInclusive<T>` derive from `T`, but are
             // never `Copy`.
             Ty::Range(element) | Ty::InclusiveOf(element) => {
@@ -19175,7 +19185,7 @@ impl<'a> Parser<'a> {
             Ty::String | Ty::UnsizedStr | Ty::Str => {
                 intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>())
             }
-            Ty::InclusiveRange => intrinsic::Type::i64_range_inclusive(),
+            Ty::InclusiveRange(_) => intrinsic::Type::i64_range_inclusive(),
             Ty::FloatRange => intrinsic::Type::f64_range_inclusive(),
             Ty::Range(element) => intrinsic::Type::builtin(
                 if matches!(*element, Ty::Float(_)) {
@@ -19446,7 +19456,7 @@ impl<'a> Parser<'a> {
         let ty = self.inference.resolve(&argument.ty);
         let steps = match &ty {
             Ty::Iter(..) => true,
-            Ty::InclusiveRange | Ty::Script(..) => iterator && self.program_iterator(&ty),
+            Ty::InclusiveRange(_) | Ty::Script(..) => iterator && self.program_iterator(&ty),
             Ty::Array { .. } | Ty::Keyed(..) | Ty::Reference { .. } if iterator => {
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
@@ -20099,7 +20109,7 @@ impl<'a> Parser<'a> {
                             .map(|argument| self.inference.resolve(&argument.ty))
                         && matches!(
                             argument,
-                            Ty::FloatRange | Ty::InclusiveRange | Ty::InclusiveOf(_)
+                            Ty::FloatRange | Ty::InclusiveRange(_) | Ty::InclusiveOf(_)
                         )
                     {
                         let element = self.instantiate_host_type(
@@ -20337,7 +20347,7 @@ impl<'a> Parser<'a> {
             (None, Ty::Float(_)) => true,
             (None, Ty::Int(_)) => false,
             (None, Ty::Host { .. }) => return Ty::InclusiveOf(Box::new(element.clone())),
-            (None, _) => return Ty::InclusiveRange,
+            (None, _) => return Ty::InclusiveRange(Int::Var(self.inference.fresh_id())),
         };
         let id = self.inference.fresh_id();
         let number = if float {
@@ -20349,7 +20359,7 @@ impl<'a> Parser<'a> {
         if float {
             Ty::FloatRange
         } else {
-            Ty::InclusiveRange
+            Ty::InclusiveRange(Int::Var(id))
         }
     }
 
@@ -20876,7 +20886,9 @@ impl<'a> Parser<'a> {
             Shape::Builtin(Builtin::Instant) => Ty::Time(Time::Instant),
             Shape::Builtin(Builtin::Never) => Ty::Never,
             Shape::Builtin(Builtin::String) => Ty::String,
-            Shape::Builtin(Builtin::InclusiveRange) => Ty::InclusiveRange,
+            Shape::Builtin(Builtin::InclusiveRange) => {
+                Ty::InclusiveRange(Int::Var(self.inference.fresh_id()))
+            }
             Shape::Builtin(Builtin::FloatInclusiveRange) => Ty::FloatRange,
             Shape::Parameter(name) => parameters
                 .entry(name.to_string().into())
@@ -23680,7 +23692,7 @@ impl<'a> Parser<'a> {
     #[cfg(feature = "rust-import")]
     fn program_iterator(&self, ty: &Ty) -> bool {
         match self.inference.resolve(ty) {
-            Ty::Iter(..) | Ty::InclusiveRange => true,
+            Ty::Iter(..) | Ty::InclusiveRange(_) => true,
             ty @ Ty::Script(..) => self.type_implements(&ty, "Iterator"),
             _ => false,
         }
@@ -30539,7 +30551,7 @@ impl<'a> Parser<'a> {
             _ => {
                 // An iterator chain of one loop runs the body in it.
                 let iterated = self.inference.resolve(&lhs.ty);
-                if (matches!(iterated, Ty::Iter(..) | Ty::InclusiveRange)
+                if (matches!(iterated, Ty::Iter(..) | Ty::InclusiveRange(_))
                     || (iterated.script().is_some() || matches!(iterated, Ty::Host { .. }))
                         && self.type_implements(&iterated, "Iterator"))
                     && let Some((pipeline, item)) = self.for_pipeline(&lhs)
@@ -36297,12 +36309,12 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        // A range's element kind is not kept: `start()` of a
-        // `RangeInclusive<f32>` is an `f32` where one is expected.
-        let element = if range == Ty::FloatRange {
-            Ty::Float(Float::Var(self.inference.fresh_id()))
-        } else {
-            Ty::Int(Int::Var(self.inference.fresh_id()))
+        // An integer range keeps its kind. A float range's kind is not kept:
+        // `start()` of a `RangeInclusive<f32>` is an `f32` where one is
+        // expected.
+        let element = match range {
+            Ty::InclusiveRange(kind) => Ty::Int(kind),
+            _ => Ty::Float(Float::Var(self.inference.fresh_id())),
         };
         let code = match member.as_str() {
             "start" => 0,
@@ -38446,7 +38458,7 @@ impl<'a> Parser<'a> {
                 value = self.parse_char_method(value, code, member_span)?;
                 continue;
             }
-            if matches!(number, Ty::InclusiveRange | Ty::FloatRange) {
+            if matches!(number, Ty::InclusiveRange(_) | Ty::FloatRange) {
                 value = self.parse_range_method(value, number, member, member_span)?;
                 continue;
             }
@@ -51076,7 +51088,8 @@ impl<'a> Parser<'a> {
         }
         Ok(match element {
             Ty::Float(_) => Ty::FloatRange,
-            _ => Ty::InclusiveRange,
+            Ty::Int(kind) => Ty::InclusiveRange(kind),
+            _ => Ty::InclusiveRange(Int::Var(self.inference.fresh_id())),
         })
     }
 
@@ -53574,6 +53587,9 @@ impl<'a> Parser<'a> {
             | (Ty::Range(expected_element), Ty::Range(actual_element))
             | (Ty::InclusiveOf(expected_element), Ty::InclusiveOf(actual_element)) => {
                 self.unify_type(expected_element, actual_element)
+            }
+            (Ty::InclusiveRange(expected_kind), Ty::InclusiveRange(actual_kind)) => {
+                self.unify_type(&Ty::Int(*expected_kind), &Ty::Int(*actual_kind))
             }
             (Ty::Cell(expected_kind, expected_element), Ty::Cell(actual_kind, actual_element)) => {
                 expected_kind == actual_kind && self.unify_type(expected_element, actual_element)

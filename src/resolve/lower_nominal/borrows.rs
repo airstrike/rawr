@@ -1651,7 +1651,7 @@ impl Parser<'_> {
             | Ty::Int(_)
             | Ty::Float(_)
             | Ty::String
-            | Ty::InclusiveRange
+            | Ty::InclusiveRange(_)
             | Ty::FloatRange
             | Ty::Ordering
             | Ty::Time(_)

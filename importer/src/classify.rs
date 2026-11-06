@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 116;
+const CLASSIFIER_VERSION: u32 = 117;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1720,8 +1720,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// other than a future's `Output`, as `render_stateful_widget`'s `&mut
     /// W::State`, or a callable parameter's bound names in its inputs or
     /// output, as iced's `Application<P>::subscription(f: impl Fn(&P::State)
-    /// -> Subscription<P::Message>)`: each with the synthetic type parameter
-    /// that stands for it, numbered per parameter.
+    /// -> Subscription<P::Message>)`, or what a parameter's bound binds, as
+    /// `presets(impl IntoIterator<Item = Preset<P::State, P::Message>>)`:
+    /// each with the synthetic type parameter that stands for it, numbered
+    /// per parameter.
     fn projections(
         &self,
         generics: &model::Generics,
@@ -1846,10 +1848,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         }
                     }
                 }
+                // What a parameter's bound binds, as iced's
+                // `Application<P>::presets(impl IntoIterator<Item =
+                // Preset<P::State, P::Message>>)` binds `Item` (#1050).
                 model::Predicate::ProjectionEquality {
-                    projection: model::Type::Projection { trait_id, .. },
+                    projection:
+                        model::Type::Projection {
+                            trait_id,
+                            arguments,
+                            ..
+                        },
                     ty,
-                } if self.definition_name(trait_id) == Some("FnOnce") => {
+                } if self.definition_name(trait_id) == Some("FnOnce")
+                    || matches!(
+                        arguments.first(),
+                        Some(model::Argument::Type(model::Type::Parameter { .. }))
+                    ) =>
+                {
                     find(ty, true, &mut found);
                 }
                 _ => {}

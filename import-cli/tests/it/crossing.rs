@@ -729,6 +729,23 @@ fn an_opaque_program_takes_a_subscription_of_its_state() {
     );
 }
 
+/// iced's todos (#1050): `Application::presets` takes `impl
+/// IntoIterator<Item = Preset<P::State, P::Message>>`, whose item names the
+/// opaque program's own state and message, read through the opaque
+/// program's bounds as rustc reads them. A program function gives the
+/// presets, and the crate boots each one and shows its view. The output is
+/// `cargo run`'s.
+#[test]
+fn an_opaque_program_takes_presets_of_its_own_state() {
+    let (rawr, cargo) = both_printed("presets.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("preset Empty view pad 0 'Nothing to do'@16")
+            && rawr.contains("preset Carl Sagan view pad 0 'Create the universe'@16"),
+        "{rawr}"
+    );
+}
+
 /// iced's game_of_life, arc and delineate: `Application::theme` takes `impl
 /// ThemeFn<State, Theme>`, which the crate implements for its `Theme` and
 /// for every `Fn(&State)` whose output turns into an `Option<Theme>`. The

@@ -131,7 +131,7 @@ impl Parser<'_> {
     pub(super) fn iterator_receiver(&self, ty: &Ty, member: &str) -> bool {
         match self.inference.resolve(ty) {
             Ty::Iter(..) => true,
-            ty @ Ty::InclusiveRange => {
+            ty @ Ty::InclusiveRange(_) => {
                 let Some((definition, _)) = std_impl::std_definition(&ty) else {
                     return false;
                 };
@@ -409,9 +409,14 @@ impl Parser<'_> {
         };
         let pipeline = self.source_pipeline(source);
         let end = high.map_or(low.span.end(), |high| high.span.end());
-        let host_range = matches!(item, Ty::Int(Int::I64 | Int::Var(_)));
+        // An integer range is Rawr's range value of its kind, but for an `i128`
+        // or a `u128`, whose bounds may be wider than its `i64`s.
+        let kind = match self.inference.resolve(&item) {
+            Ty::Int(kind) if !kind.wide() => Some(kind),
+            _ => None,
+        };
         let mut expr = self.iterator_expr(pipeline.clone(), item, span(low.span.start(), end));
-        if inclusive && host_range {
+        if inclusive && let Some(kind) = kind {
             // `a..=b` stays the range value hosts take; its chain is kept.
             let mut value = low.rendered_source();
             value.push_text(" ..= ");
@@ -420,7 +425,7 @@ impl Parser<'_> {
                     .rendered_source(),
             );
             expr.source = value;
-            expr.ty = Ty::InclusiveRange;
+            expr.ty = Ty::InclusiveRange(kind);
             expr = expr.retain_origin();
             self.pipelines
                 .insert(expr.source.as_str().to_string(), pipeline);
@@ -611,7 +616,7 @@ impl Parser<'_> {
         }
         let item = match &ty {
             Ty::Iter(item, _) => (**item).clone(),
-            Ty::InclusiveRange => Ty::Int(Int::Var(self.inference.fresh_id())),
+            Ty::InclusiveRange(kind) => Ty::Int(*kind),
             Ty::Array { element, .. } => (**element).clone(),
             // A map's or set's sorted entries.
             Ty::Keyed(kind, arguments) => keyed::keyed_item(*kind, arguments, None),
@@ -632,7 +637,7 @@ impl Parser<'_> {
         }
         let source = Source::Values {
             values: value.rendered_source(),
-            array: !matches!(ty, Ty::InclusiveRange),
+            array: !matches!(ty, Ty::InclusiveRange(_)),
         };
         Some((self.source_pipeline(source), item))
     }
@@ -1382,7 +1387,7 @@ impl Parser<'_> {
                         let inner_item = match inner_ty {
                             Ty::Iter(item, _) => *item,
                             Ty::Array { element, .. } => *element,
-                            Ty::InclusiveRange => Ty::Int(Int::Var(self.inference.fresh_id())),
+                            Ty::InclusiveRange(kind) => Ty::Int(kind),
                             Ty::Reference { mutable, target } => match *target {
                                 Ty::Array { element, .. } => Ty::Reference {
                                     mutable,
