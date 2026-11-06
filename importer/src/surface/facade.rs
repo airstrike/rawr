@@ -459,9 +459,6 @@ pub fn std_reexports(
         let crate::api::ledger::Path::Imported(export) = export else {
             continue;
         };
-        if export.variant().is_some() {
-            continue;
-        }
         let Ok(index) = sysroot.binary_search_by(|(id, _)| (*id).cmp(export.target())) else {
             continue;
         };
@@ -478,6 +475,12 @@ pub fn std_reexports(
         for segment in segments {
             std.push_str("::");
             std.push_str(segment);
+        }
+        // A re-exported variant, as serde's `__private::Ok` is, is its
+        // enum's: `std::result::Result::Ok`.
+        if let Some(variant) = export.variant() {
+            std.push_str("::");
+            std.push_str(variant);
         }
         let std = std.into_boxed_str();
         let key = export.key();
@@ -1350,7 +1353,19 @@ impl Plan {
         }
         // An opaque `impl Trait` type a function gives is a type of its
         // own, declared beside the function (`surface::opaque`).
-        let opaque = super::opaque::identities(graph);
+        let mut opaque = super::opaque::identities(graph);
+        // So is the opaque type a trait method's type parameter is, which
+        // the function beside the trait's methods over its `Self` gives
+        // (`opaque::parameter_name`).
+        for facade in &facades {
+            for item in facade.items.iter().filter(|item| {
+                super::member::declared(&item.path) && super::opaque::is_parameter(&item.path)
+            }) {
+                if let Type::Nominal { identity, .. } = &item.signature.output {
+                    opaque.insert(*identity);
+                }
+            }
+        }
         if !opaque.is_empty() {
             for facade in &mut facades {
                 let mut types = std::mem::take(&mut facade.types).into_vec();

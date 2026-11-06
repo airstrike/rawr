@@ -12595,6 +12595,21 @@ fn language_a_callable_that_takes_a_borrow_is_not_given_its_value() {
     );
 }
 
+/// A `fn` pointer value where `Fn(&Theme)` is expected passes as the
+/// closure that calls it, wherever the pointer comes from: an array's
+/// element, a parameter, a field (#973).
+#[test]
+fn language_a_fn_pointer_value_passes_where_a_callable_is_taken() {
+    for accepted in [
+        "use ui::{Button, Theme, button};\nfn shade(theme: &Theme) -> i64 { 1 }\nfn dark(theme: &Theme) -> i64 { 2 }\npub fn view(index: usize) -> Button { let styles = [shade as fn(&Theme) -> i64, dark]; button().style(styles[index]) }",
+        "use ui::{Button, Theme, button};\nfn shade(theme: &Theme) -> i64 { 1 }\nfn styled(style: fn(&Theme) -> i64) -> Button { button().style(style) }\npub fn view() -> Button { styled(shade) }",
+        "use ui::{Button, Theme, button};\nfn shade(theme: &Theme) -> i64 { 1 }\nstruct Styled { style: fn(&Theme) -> i64 }\npub fn view() -> Button { let styled = Styled { style: shade }; button().style(styled.style) }",
+    ] {
+        compile_with(borrowed_style_facade(), accepted)
+            .unwrap_or_else(|error| panic!("{error}\n{accepted}"));
+    }
+}
+
 /// A generic bound `F: Fn(&State)` takes a closure of `&State`, and refuses
 /// one of `State` with rustc's E0631.
 #[test]

@@ -161,6 +161,10 @@ pub struct ScriptImpl {
     /// The trait's lifetime arguments, which the header writes `'_`.
     #[serde(default)]
     lifetimes: u32,
+    /// Those lifetime arguments by name, as the impl writes them (`'de`),
+    /// which a generic function's bounds may name (#593).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    lifetime_names: Box<[Box<str>]>,
 }
 
 /// One function of a [`ScriptImpl`].
@@ -171,6 +175,88 @@ pub struct ScriptImplFunction {
     receiver: ImplReceiver,
     inputs: Box<[convert::Type]>,
     output: convert::Type,
+    /// The method's own type parameters native code fills (#593), each an
+    /// opaque type in `inputs` and `output`
+    /// (`surface::opaque::parameter_path`).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    generics: Box<[ImplGeneric]>,
+    /// The input, by position after `self`, that is the trait method's
+    /// `&mut fmt::Formatter`, as `Display::fmt` and serde's `expecting`
+    /// take: the script writes Rawr's string, which is written into the
+    /// formatter after the call, and the output is `fmt::Result`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    formatter: Option<u32>,
+}
+
+/// A type parameter of a [`ScriptImplFunction`]: its name and its bounds,
+/// as the runner's impl writes them.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct ImplGeneric {
+    name: Box<str>,
+    bounds: Box<[ImplBound]>,
+}
+
+/// One bound of an [`ImplGeneric`]: the trait's Rust path, its lifetime
+/// arguments by name, and its type arguments.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct ImplBound {
+    path: Box<str>,
+    lifetimes: Box<[Box<str>]>,
+    arguments: Box<[convert::Type]>,
+}
+
+impl ImplGeneric {
+    /// The parameter `name` with `bounds`.
+    #[must_use]
+    pub const fn new(name: Box<str>, bounds: Box<[ImplBound]>) -> Self {
+        Self { name, bounds }
+    }
+
+    /// The parameter's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Its bounds.
+    #[must_use]
+    pub fn bounds(&self) -> &[ImplBound] {
+        &self.bounds
+    }
+}
+
+impl ImplBound {
+    /// The bound of the trait at `path`, at `lifetimes` and `arguments`.
+    #[must_use]
+    pub const fn new(
+        path: Box<str>,
+        lifetimes: Box<[Box<str>]>,
+        arguments: Box<[convert::Type]>,
+    ) -> Self {
+        Self {
+            path,
+            lifetimes,
+            arguments,
+        }
+    }
+
+    /// The trait's Rust path.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// The trait's lifetime arguments, by name.
+    #[must_use]
+    pub fn lifetimes(&self) -> &[Box<str>] {
+        &self.lifetimes
+    }
+
+    /// The trait's type arguments.
+    #[must_use]
+    pub fn arguments(&self) -> &[convert::Type] {
+        &self.arguments
+    }
 }
 
 /// How a [`ScriptImplFunction`] takes `self`.
@@ -191,7 +277,7 @@ impl ScriptImpl {
     /// writes, `iced::widget::canvas::Program` or `From`), with the type
     /// arguments the header writes, for `owner`.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         owner: convert::Type,
         trait_path: Box<str>,
         arguments: Box<[convert::Type]>,
@@ -207,7 +293,21 @@ impl ScriptImpl {
             associated,
             functions,
             lifetimes: 0,
+            lifetime_names: Box::default(),
         }
+    }
+
+    /// This impl with its trait's lifetime arguments named `names`.
+    #[must_use]
+    pub fn with_lifetime_names(mut self, names: Box<[Box<str>]>) -> Self {
+        self.lifetime_names = names;
+        self
+    }
+
+    /// The trait's lifetime arguments by name, as the impl writes them.
+    #[must_use]
+    pub fn lifetime_names(&self) -> &[Box<str>] {
+        &self.lifetime_names
     }
 
     /// This impl of a trait with `lifetimes` lifetime arguments before its
@@ -265,7 +365,7 @@ impl ScriptImplFunction {
     /// The function `name`, which the script's program holds as its
     /// owner's `member` (`Program<Message>::draw`).
     #[must_use]
-    pub const fn new(
+    pub fn new(
         name: Box<str>,
         member: Box<str>,
         receiver: ImplReceiver,
@@ -278,7 +378,36 @@ impl ScriptImplFunction {
             receiver,
             inputs,
             output,
+            generics: Box::default(),
+            formatter: None,
         }
+    }
+
+    /// This function, whose input at `position` is the trait method's
+    /// `&mut fmt::Formatter`.
+    #[must_use]
+    pub const fn with_formatter(mut self, position: Option<u32>) -> Self {
+        self.formatter = position;
+        self
+    }
+
+    /// The input that is the trait method's `&mut fmt::Formatter`.
+    #[must_use]
+    pub const fn formatter(&self) -> Option<u32> {
+        self.formatter
+    }
+
+    /// This function with its own type parameters `generics`.
+    #[must_use]
+    pub fn with_generics(mut self, generics: Box<[ImplGeneric]>) -> Self {
+        self.generics = generics;
+        self
+    }
+
+    /// Its own type parameters native code fills.
+    #[must_use]
+    pub fn generics(&self) -> &[ImplGeneric] {
+        &self.generics
     }
 
     /// The function's Rust name.

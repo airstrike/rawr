@@ -12,7 +12,7 @@ use crate::std_table::{self, Missing, Namespace, Resolved, Stability};
 use crate::{ImmutableString, Span};
 
 /// The edition whose prelude a program sees.
-const EDITION: &str = "2024";
+pub(crate) const EDITION: &str = "2024";
 
 /// The std types rawr represents with its own, by definition, and rawr's
 /// name for each: D711's binding table for types. A std type that isn't

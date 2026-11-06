@@ -1833,17 +1833,52 @@ fn native_impl(
                     },
                 ),
             };
-            functions.push(ScriptImplFunction::new(
-                function.name.text.as_str().into(),
-                format!("{owner_path}::{}", definition.key().name()).into(),
-                receiver,
-                inputs,
-                output,
-            ));
+            // Each type parameter native code fills, with its bounds as
+            // the impl writes them (#593).
+            let mut generics = Vec::with_capacity(function.opaque.len());
+            for generic in function.opaque.iter() {
+                let mut bounds = Vec::with_capacity(generic.bounds.len());
+                for bound in generic.bounds.iter() {
+                    bounds.push(rawr_import::surface::instance::ImplBound::new(
+                        bound.path.as_str().into(),
+                        bound.lifetimes.iter().map(lifetime_text).collect(),
+                        bound
+                            .arguments
+                            .iter()
+                            .map(&convert)
+                            .collect::<Result<Box<[_]>, _>>()?,
+                    ));
+                }
+                generics.push(rawr_import::surface::instance::ImplGeneric::new(
+                    generic.name.as_str().into(),
+                    bounds.into_boxed_slice(),
+                ));
+            }
+            functions.push(
+                ScriptImplFunction::new(
+                    function.name.text.as_str().into(),
+                    format!("{owner_path}::{}", definition.key().name()).into(),
+                    receiver,
+                    inputs,
+                    output,
+                )
+                .with_generics(generics.into_boxed_slice())
+                .with_formatter(function.formatter.as_ref().and_then(|formatter| {
+                    let position = function
+                        .parameters
+                        .iter()
+                        .position(|parameter| parameter.name.text == *formatter)?;
+                    u32::try_from(position).ok()
+                })),
+            );
         }
-        let lifetimes = match &implementation.trait_ {
-            Some(item::TraitImpl::Native { lifetimes, .. }) => *lifetimes,
-            _ => 0,
+        let (lifetimes, lifetime_names) = match &implementation.trait_ {
+            Some(item::TraitImpl::Native {
+                lifetimes,
+                lifetime_names,
+                ..
+            }) => (*lifetimes, lifetime_names.clone()),
+            _ => (0, Box::default()),
         };
         Ok(ScriptImpl::new(
             owner,
@@ -1853,7 +1888,18 @@ fn native_impl(
             associated,
             functions.into_boxed_slice(),
         )
-        .with_lifetimes(u32::try_from(lifetimes).unwrap_or(u32::MAX)))
+        .with_lifetimes(u32::try_from(lifetimes).unwrap_or(u32::MAX))
+        .with_lifetime_names(lifetime_names.iter().map(lifetime_text).collect()))
+    }
+}
+
+/// A lifetime's name as Rust writes it, with its `'`.
+#[cfg(feature = "rust-import")]
+fn lifetime_text(name: &ImmutableString) -> Box<str> {
+    if name.starts_with('\'') {
+        name.as_str().into()
+    } else {
+        format!("'{name}").into()
     }
 }
 
@@ -3941,20 +3987,29 @@ pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> 
     tokens
 }
 
+/// A free function's first `&mut` parameter, which a call passes as its
+/// receiver's place. Not its `&mut fmt::Formatter`, whose text the body
+/// gives back (`wrap_formatter`).
 pub(crate) fn this_parameter(definition: &item::Function) -> Option<usize> {
     definition.parameters.iter().position(|parameter| {
         matches!(
             parameter.ty,
             type_ref::Type::Reference { mutable: true, .. }
         ) && !super::direct_mutable_invocation(&parameter.ty)
+            && definition.formatter.as_ref() != Some(&parameter.name.text)
     })
 }
 
 /// The `&mut` parameters a call copies in and back out: a free
 /// function's after its receiver (`this_parameter`), an inherent method's
 /// or associated function's all. Rust's borrow rules keep them apart, so
-/// the copies change the caller's places as the references would.
-fn copied_parameters(parameters: &[item::Parameter], receiver: Option<usize>) -> Vec<usize> {
+/// the copies change the caller's places as the references would. Not the
+/// `formatter`, whose text the body gives back (`wrap_formatter`).
+fn copied_parameters(
+    parameters: &[item::Parameter],
+    receiver: Option<usize>,
+    formatter: Option<&ImmutableString>,
+) -> Vec<usize> {
     parameters
         .iter()
         .enumerate()
@@ -3965,6 +4020,7 @@ fn copied_parameters(parameters: &[item::Parameter], receiver: Option<usize>) ->
                     type_ref::Type::Reference { mutable: true, .. }
                 )
                 && !super::direct_mutable_invocation(&parameter.ty)
+                && formatter != Some(&parameter.name.text)
         })
         .map(|(index, _)| index)
         .collect()
@@ -3972,7 +4028,8 @@ fn copied_parameters(parameters: &[item::Parameter], receiver: Option<usize>) ->
 
 /// `copied_parameters` of a method, a trait's too (every impl of a trait
 /// function copies the same parameters, so a dispatcher passes the copies
-/// through); not the formatter of a `Debug` or `Display` `fmt`.
+/// through); not the formatter of a `Debug` or `Display` `fmt`, nor any
+/// method's `&mut fmt::Formatter`, whose text the body gives back.
 fn method_copied(definition: &method::Definition, _models: &Models) -> Vec<usize> {
     if definition
         .trait_name()
@@ -3980,7 +4037,7 @@ fn method_copied(definition: &method::Definition, _models: &Models) -> Vec<usize
     {
         return Vec::new();
     }
-    copied_parameters(definition.parameters(), None)
+    copied_parameters(definition.parameters(), None, definition.formatter())
 }
 
 /// The body of a function copying `copied` back out: its value and the
@@ -4040,10 +4097,14 @@ fn write_function(
         output.declaration(source, declaration, &witness_variable(&generic.name.text));
     }
     output.declaration(source, declaration, ") {\n");
-    let copied = copied_parameters(&definition.parameters, receiver)
-        .into_iter()
-        .map(|index| definition.parameters[index].name.text.as_str())
-        .collect::<Vec<_>>();
+    let copied = copied_parameters(
+        &definition.parameters,
+        receiver,
+        definition.formatter.as_ref(),
+    )
+    .into_iter()
+    .map(|index| definition.parameters[index].name.text.as_str())
+    .collect::<Vec<_>>();
     let body_offset = write_copied_body(
         output,
         source,
@@ -12184,6 +12245,9 @@ struct Parser<'a> {
     text_into: Vec<TextInto>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
+    /// Each type parameter of a dependency's trait method that native code
+    /// fills, with the host path of its opaque type (#593).
+    opaque: BTreeMap<ImmutableString, ImmutableString>,
     /// `::<A, B>` read after a generic function's name, for its call.
     pending_turbofish: Option<Vec<Ty>>,
     /// `::<T>` read after a trait function's name in `Trait::f::<T>(..)`,
@@ -12510,6 +12574,7 @@ impl<'a> Parser<'a> {
             parse_count: 0,
             text_into: Vec::new(),
             generics: BTreeMap::new(),
+            opaque: BTreeMap::new(),
             pending_turbofish: None,
             trait_turbofish: None,
             path_values: HashSet::new(),
@@ -12601,7 +12666,8 @@ impl<'a> Parser<'a> {
                     && parser.models.std_traits.contains(*trait_name)
             })
             .and_then(|_| definition.parameters().first())
-            .map(|parameter| parameter.name.text.clone());
+            .map(|parameter| parameter.name.text.clone())
+            .or_else(|| definition.formatter().cloned());
         parser.return_ty = Some(Ty::from_resolved(definition.output()));
         parser.place_output = definition.name() != "index_mut"
             && matches!(definition.receiver(), Some(receiver::Mode::Mutable))
@@ -12613,6 +12679,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
+        parser.opaque = definition.opaque().clone();
         parser.generic_traits = generic_traits(definition.generics());
         parser.host_witnesses = host_witnesses(definition.generics());
         parser.generic_trait_arguments = generic_trait_arguments(definition.generics());
@@ -12664,14 +12731,8 @@ impl<'a> Parser<'a> {
             );
         }
 
-        // The formatter is the text being written: a mutable `String`.
         if let Some(name) = formatter {
-            if let Some(binding) = parser.bindings.get_mut(name.as_str()) {
-                binding.ty = Ty::String;
-                binding.mutable = true;
-            }
-            parser.formatter = Some(name);
-            parser.return_blocked = Some("from a `fmt` body; use its tail");
+            parser.bind_formatter(name);
         }
 
         parser.self_ty = Some(impl_self_ty(definition, &BTreeMap::new()));
@@ -12769,10 +12830,14 @@ impl<'a> Parser<'a> {
         }
 
         let receiver = this_parameter(definition);
-        parser.copy_out = copied_parameters(&definition.parameters, receiver)
-            .into_iter()
-            .map(|index| definition.parameters[index].name.text.clone())
-            .collect();
+        parser.copy_out = copied_parameters(
+            &definition.parameters,
+            receiver,
+            definition.formatter.as_ref(),
+        )
+        .into_iter()
+        .map(|index| definition.parameters[index].name.text.clone())
+        .collect();
         for (index, parameter) in definition.parameters.iter().enumerate() {
             let ty = Ty::from_resolved(&parameter.ty);
             // The `&mut` parameter is `this`, the caller's place.
@@ -12813,8 +12878,22 @@ impl<'a> Parser<'a> {
                 },
             );
         }
+        if let Some(name) = definition.formatter.clone() {
+            parser.bind_formatter(name);
+        }
 
         parser
+    }
+
+    /// The formatter `name` is the text the body writes, a mutable
+    /// `String`, which the body gives back (`wrap_formatter`).
+    fn bind_formatter(&mut self, name: ImmutableString) {
+        if let Some(binding) = self.bindings.get_mut(name.as_str()) {
+            binding.ty = Ty::String;
+            binding.mutable = true;
+        }
+        self.formatter = Some(name);
+        self.return_blocked = Some("from a `fmt` body; use its tail");
     }
 
     /// The variables of an embedder's `Scope`, which the script reads as
@@ -13113,7 +13192,7 @@ impl<'a> Parser<'a> {
         let expected = self.tail_expected(Some(definition.output()));
         self.coerce_tail(&expected, definition.body())?;
         self.close_body_drops()?;
-        self.wrap_formatter(definition);
+        self.wrap_formatter(definition.body());
 
         self.finish_uninitialized()?;
 
@@ -13704,6 +13783,7 @@ impl<'a> Parser<'a> {
         self.coerce_tail(&expected, definition.body.span)?;
         if !definition.body.constant && !definition.body.asynchronous {
             self.close_body_drops()?;
+            self.wrap_formatter(definition.body.span);
         }
 
         self.finish_uninitialized()?;
@@ -16815,6 +16895,16 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        // `<S::Error as Error>::custom(..)` of a type parameter native code
+        // fills: the function of its opaque type (#593).
+        #[cfg(feature = "rust-import")]
+        if let Some(Ty::Host { proof, .. }) = self_ty.as_ref().map(|ty| self.inference.resolve(ty))
+            && turbofish.is_none()
+            && rawr_import::surface::opaque::declared(&proof.definition.path())
+        {
+            let owner = proof.definition.path().to_string();
+            return self.opaque_function_call(&owner, &member, member_span);
+        }
         // `<Look as Tone>::tone` of a crate's trait a `use` names: the
         // method on its first input or argument, as `Tone::tone` is.
         if !self.ufcs_trait(&trait_name)
@@ -17271,7 +17361,7 @@ impl<'a> Parser<'a> {
         let copied = if matches!(trait_name.as_str(), "Debug" | "Display") {
             Vec::new()
         } else {
-            copied_parameters(&function.parameters, None)
+            copied_parameters(&function.parameters, None, function.formatter.as_ref())
         };
         let places = self.mutable_arguments(&arguments, copied)?;
         let dispatcher = if trait_arguments.is_empty() {
@@ -19186,45 +19276,6 @@ impl<'a> Parser<'a> {
             .then_some(path)
     }
 
-    /// The closure `move |a, ..| name(a, ..)` over the local function
-    /// pointer `name` of `arity` inputs.
-    fn eta_expand(&mut self, name: &str, arity: usize, at: Span) -> Result<ParsedExpr, Error> {
-        let position = at.start();
-        let identifier = |text: &str| (Token::Identifier(Box::new(text.into())), position);
-        let parameters = (0..arity)
-            .map(|_| self.temporary("eta"))
-            .collect::<Vec<_>>();
-        let mut tokens = Vec::new();
-        for (index, parameter) in parameters.iter().enumerate() {
-            if index > 0 {
-                tokens.push((Token::Comma, position));
-            }
-            tokens.push(identifier(parameter));
-        }
-        tokens.extend([
-            (Token::Pipe, position),
-            (Token::LeftBrace, position),
-            identifier(name),
-            (Token::LeftParen, position),
-        ]);
-        for (index, parameter) in parameters.iter().enumerate() {
-            if index > 0 {
-                tokens.push((Token::Comma, position));
-            }
-            tokens.push(identifier(parameter));
-        }
-        tokens.extend([(Token::RightParen, position), (Token::RightBrace, position)]);
-        self.splice_tokens(tokens);
-        let hint = self.closure_hint.take();
-        let output = self.closure_output.take();
-        let closure = self.parse_closure(Token::Pipe, at, true);
-        self.closure_hint = hint;
-        self.closure_output = output;
-        let mut closure = closure?;
-        closure.span = at;
-        Ok(closure)
-    }
-
     /// Whether `argument`, as written, fits the callable parameter at
     /// `index` of the one item, with the receiver's types. Nothing is bound.
     fn callable_fits(
@@ -19327,15 +19378,6 @@ impl<'a> Parser<'a> {
                 argument.source = value;
                 argument.prelude = origin::Fragment::default();
                 argument.ty = ty;
-            }
-            // A local `fn` pointer, as `message: fn(f32) -> _`, is passed
-            // as the closure that calls it.
-            if facade
-                && let Ty::Fn { inputs, .. } = self.inference.resolve(&argument.ty)
-                && let Some(name) = variable_name(argument.source.as_str())
-                && self.bindings.contains_key(name.as_str())
-            {
-                *argument = self.eta_expand(&name, inputs.len(), argument.span)?;
             }
             self.host_callable_of(argument, !facade)?;
             self.option_host_callable(argument)?;
@@ -21501,9 +21543,12 @@ impl<'a> Parser<'a> {
                 .map(|(name, ty, _)| (name.clone(), ty.clone()))
                 .collect();
         }
+        // A function item takes no space, as in Rust: the proof is its
+        // type's, and its value is `()`, which a tuple or array holding it
+        // reads before a member coerces to a `fn` pointer.
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
-            source: origin::Fragment::plain(item.path()),
+            source: origin::Fragment::plain("()"),
             ty: Ty::ImportedFunctionItem {
                 input: Box::new(input),
                 output: Box::new(signature.output),
@@ -26921,6 +26966,7 @@ impl<'a> Parser<'a> {
             let span = Span::new(start, text_end(start, "_"));
             return Ok(PatternSyntax::Discard { span });
         }
+        self.splice_std_alias();
         // `&p`, `&mut p`; `&&p` is two references.
         if matches!(self.peek(), Token::Ampersand | Token::And) {
             let double = matches!(self.next().0, Token::And);
@@ -28816,6 +28862,7 @@ impl<'a> Parser<'a> {
             // subject is left `()` there first.
             self.open_drops();
             let mut clears = String::new();
+            self.splice_std_alias();
             // `_`, or a binding `name` that matches anything and binds it,
             // as in Rust.
             let catch_all = match self.peek() {
@@ -37573,6 +37620,26 @@ impl<'a> Parser<'a> {
                     Err(back) => value = back,
                 }
             }
+            // `Trait::f(0usize, ..)` of a crate's trait, where no type the
+            // call can be on has `f`, as `de::Error::invalid_length(0usize,
+            // ..)` of a type parameter whose `invalid_length` Rawr can't
+            // take: the trait's member is unknown, at the call.
+            #[cfg(feature = "rust-import")]
+            if matches!(
+                without_references(&builtin),
+                Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool
+            ) && let Some(trait_path) = self.spliced_traits.get(&member_span.start()).cloned()
+                && self
+                    .models
+                    .host_items(&format!("{trait_path}::{member}"))
+                    .is_none()
+            {
+                return Err(Error::UnknownMember {
+                    owner: trait_path,
+                    member,
+                    reference: member_span,
+                });
+            }
             // `a.min(b)`, `a.max(b)`, `a.clamp(lo, hi)` through `Ord`, unless
             // the type has its own method of that name.
             if matches!(member.as_str(), "min" | "max" | "clamp")
@@ -39261,6 +39328,27 @@ impl<'a> Parser<'a> {
         if crate::std_table::is_root(&name) && matches!(self.peek(), Token::DoubleColon) {
             self.check_std_path(&name, name_span)?;
         }
+        // `S::Error::custom(..)` or `S::f(..)` of a type parameter native
+        // code fills: the function of its opaque type (#593).
+        #[cfg(feature = "rust-import")]
+        if matches!(self.peek(), Token::DoubleColon)
+            && !self.bindings.contains_key(name.as_str())
+            && let Some(path) = self.opaque.get(&name).cloned()
+        {
+            self.next();
+            let (first, first_span) = self.expect_qualified_name()?;
+            let projected = rawr_import::surface::opaque::parameter_projection(&path, &first)
+                .filter(|projected| self.models.host.source_type(projected).is_some());
+            let (owner, member, member_span) = match projected {
+                Some(projected) if matches!(self.peek(), Token::DoubleColon) => {
+                    self.next();
+                    let (member, member_span) = self.expect_qualified_name()?;
+                    (projected, member, member_span)
+                }
+                _ => (path.to_string(), first, first_span),
+            };
+            return self.opaque_function_call(&owner, &member, member_span);
+        }
         if matches!(self.peek(), Token::DoubleColon) && !self.bindings.contains_key(name.as_str()) {
             self.unbound_std_type(&name, true, name_span)?;
         }
@@ -39913,8 +40001,46 @@ impl<'a> Parser<'a> {
             Some(Token::LeftParen) => "function",
             _ => "value",
         };
-        super::std_path::check(&path, crate::std_table::Namespace::Value, kind, reference)
-            .map(|_| ())
+        let checked =
+            super::std_path::check(&path, crate::std_table::Namespace::Value, kind, reference);
+        // A std type's method Rawr doesn't run by its path is the method on
+        // its first argument, which it may (`std_type_method`).
+        if checked.is_err()
+            && matches!(next, Some(Token::LeftParen))
+            && self.std_type_method(&path, reference)
+        {
+            return Ok(());
+        }
+        checked.map(|_| ())
+    }
+
+    /// Whether `path` names a method of a std type, as
+    /// `std::fmt::Formatter::write_str` does: one that takes `self`, or one
+    /// the table doesn't list, as a trait impl's. It is the method on its
+    /// first argument. An associated function, as `String::from`, has no
+    /// receiver to be called on.
+    fn std_type_method(&self, path: &str, reference: Span) -> bool {
+        let Some((owner, _)) = path.rsplit_once("::") else {
+            return false;
+        };
+        let method = match super::std_path::check(
+            path,
+            crate::std_table::Namespace::Value,
+            "function",
+            reference,
+        ) {
+            Err(_) => true,
+            Ok(Some(crate::std_table::Resolved::Member {
+                member: Some(member),
+                ..
+            })) => member.receiver().is_some(),
+            Ok(_) => false,
+        };
+        method
+            && matches!(
+                super::std_path::check(owner, crate::std_table::Namespace::Type, "type", reference),
+                Ok(Some(crate::std_table::Resolved::Path(resolved))) if resolved.is_type()
+            )
     }
 
     /// The path ahead from its first segment `name`, which is read: its
@@ -40966,7 +41092,12 @@ impl<'a> Parser<'a> {
                 return Ok(self.constant_use(&function, name_span));
             }
             if this_parameter(&function.definition).is_some()
-                || !copied_parameters(&function.definition.parameters, None).is_empty()
+                || !copied_parameters(
+                    &function.definition.parameters,
+                    None,
+                    function.definition.formatter.as_ref(),
+                )
+                .is_empty()
             {
                 // A `&mut` parameter is copied in and back out of a call, so
                 // the value is the closure `|a, ..| f(a, ..)` over the
@@ -41363,6 +41494,7 @@ impl<'a> Parser<'a> {
     /// inputs is a callable too when `nullary`: an imported item takes
     /// Freya's `fn app()` as the closure that calls it (D551.6).
     fn host_callable_of(&mut self, value: &mut ParsedExpr, nullary: bool) -> Result<(), Error> {
+        self.lift_fn_pointer(value);
         let Ty::FnItem {
             key,
             inputs,
@@ -41487,6 +41619,60 @@ impl<'a> Parser<'a> {
         value.prelude = prelude;
         value.ty = symbolic.ty;
         Ok(())
+    }
+
+    /// A `fn` pointer value passed to the host, as a style read from an
+    /// array of them or a closure's `message: fn(f32) -> _`: the closure
+    /// `move |a, ..| pointer(a, ..)`, lifted as a written closure is, which
+    /// captures the pointer where it is passed. The host takes its
+    /// generated function as it takes any closure's.
+    fn lift_fn_pointer(&mut self, value: &mut ParsedExpr) {
+        let Ty::Fn { inputs, output } = self.inference.resolve(&value.ty) else {
+            return;
+        };
+        // A `&mut` input a closure copies back after its call (`copied`)
+        // has no place to go through a pointer's call.
+        if inputs.iter().any(|input| {
+            matches!(
+                self.inference.resolve(input),
+                Ty::Reference { mutable: true, .. }
+            )
+        }) {
+            return;
+        }
+        let Some(callable) = &self.callable else {
+            return;
+        };
+        self.closure_count += 1;
+        let key = crate::item::Key::closure(callable, self.closure_count);
+        let pointer = ImmutableString::from(self.temporary("pointer"));
+        let arguments = (0..inputs.len())
+            .map(|_| ImmutableString::from(self.temporary("eta")))
+            .collect::<Vec<_>>();
+        let mut body =
+            origin::Fragment::plain(format!("{{ {pointer}.call({}) }}", arguments.join(", ")));
+        body.cover(value.span);
+        let mut parameters = vec![pointer];
+        parameters.extend(arguments);
+        self.lifted.push(LiftedClosure {
+            key: key.clone(),
+            value: None,
+            parameters,
+            captures: vec![value.rendered_source()],
+            body,
+            span: value.span,
+            header: value.span,
+            held: false,
+        });
+        value.prelude = origin::Fragment::default();
+        value.source = origin::Fragment::plain("()");
+        value.source.cover(value.span);
+        value.ty = Ty::FnItem {
+            key: Box::new(key),
+            inputs,
+            output,
+        };
+        value.lvalue = None;
     }
 
     /// Before parsing a single-signature host call's arguments, the input
@@ -46285,7 +46471,11 @@ impl<'a> Parser<'a> {
             .as_ref()
             .and_then(|function| this_parameter(&function.definition));
         let copied = function.as_ref().map_or_else(Vec::new, |function| {
-            copied_parameters(&function.definition.parameters, receiver)
+            copied_parameters(
+                &function.definition.parameters,
+                receiver,
+                function.definition.formatter.as_ref(),
+            )
         });
         let borrow = std::mem::replace(
             &mut self.mutable_borrow,
@@ -46321,10 +46511,35 @@ impl<'a> Parser<'a> {
             // Rust infers them, and its bounds are checked once they are known.
             let call = span(name_span.start(), end);
             let substitution = self.instantiate_generics(&function.definition.generics, call)?;
-            for (argument, parameter) in arguments
+            // A function's `&mut fmt::Formatter` takes the formatter of the
+            // `fmt` body that calls it, whose text the call gives back.
+            let formatter = function
+                .definition
+                .formatter
+                .as_ref()
+                .and_then(|formatter| {
+                    function
+                        .definition
+                        .parameters
+                        .iter()
+                        .position(|parameter| parameter.name.text == *formatter)
+                });
+            for (index, (argument, parameter)) in arguments
                 .iter_mut()
                 .zip(function.definition.parameters.iter())
+                .enumerate()
             {
+                if Some(index) == formatter {
+                    if self.formatter.as_ref().map(ImmutableString::as_str)
+                        != Some(argument.source.as_str())
+                    {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "a `fmt::Formatter` other than a `fmt` body's own".into(),
+                            source: argument.span,
+                        });
+                    }
+                    continue;
+                }
                 let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
@@ -46427,6 +46642,22 @@ impl<'a> Parser<'a> {
                         .chain(witnesses),
                 );
                 let source = self.copied_call(source, &places)?;
+                return Ok(self.operator_expr(source, output, call));
+            }
+            if let Some(formatter) = formatter.and_then(|index| arguments.get(index)) {
+                let mut source = origin::Fragment::plain("{ ");
+                source.push(formatter.rendered_source());
+                source.push_text(" = ");
+                source.push(origin::Fragment::call(
+                    name.as_str(),
+                    arguments
+                        .iter()
+                        .map(ParsedExpr::rendered_source)
+                        .chain(witnesses),
+                ));
+                source.push_text("; ");
+                source.push(self.prelude_op(PreludeOp::Ok, ["()".into()]));
+                source.push_text(" }");
                 return Ok(self.operator_expr(source, output, call));
             }
             output
@@ -48801,6 +49032,76 @@ impl<'a> Parser<'a> {
         let path_end = segments.last().map_or(first_span.end(), |(name, span)| {
             text_end(span.start(), name)
         });
+        // `serde::__private::Ok(..)`: a crate's re-export of a std item is
+        // that item (#593).
+        if segments.len() > 1
+            && let Some(std) = self.std_alias(
+                &segments[0].0,
+                &segments
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+            )
+        {
+            let at = segments[0].1.start();
+            let mut tokens = Vec::new();
+            for segment in std.split("::") {
+                if !tokens.is_empty() {
+                    tokens.push((Token::DoubleColon, at));
+                }
+                tokens.push((Token::Identifier(Box::new(segment.into())), at));
+            }
+            self.splice_tokens(tokens);
+            return self.parse_primary();
+        }
+        // `serde::__private::Formatter::write_str(..)`: a crate's re-export
+        // of a std type is that type, and so is its function (#593).
+        if let [owner @ .., (member, member_span)] = &segments[..]
+            && owner.len() > 1
+            && self.pending_turbofish.is_none()
+            && let Some(std) = self.std_alias(
+                &owner[0].0,
+                &owner
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+            )
+        {
+            let at = member_span.start();
+            let mut tokens = Vec::new();
+            for segment in std.split("::").chain([member.as_str()]) {
+                if !tokens.is_empty() {
+                    tokens.push((Token::DoubleColon, at));
+                }
+                tokens.push((Token::Identifier(Box::new(segment.into())), at));
+            }
+            self.splice_tokens(tokens);
+            return self.parse_primary();
+        }
+        // `std::fmt::Formatter::write_str(f, ..)`: a std type's method by its
+        // path is the method on its first argument, as rustc calls it.
+        if let [owner @ .., (member, member_span)] = &segments[..]
+            && owner.len() > 1
+            && self.pending_turbofish.is_none()
+            && matches!(self.peek(), Token::LeftParen)
+            && !self.bindings.contains_key(owner[0].0.as_str())
+            && self.models.get(&owner[0].0).is_none()
+            && self.models.import(&owner[0].0).is_none()
+            && self.std_type_method(
+                &segments
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+                *member_span,
+            )
+            && let Some(tokens) = self.path_method_call(member, *member_span, None)
+        {
+            self.splice_tokens(tokens);
+            return self.parse_primary();
+        }
         // `std::f64::consts::PI`, `f32::consts::TAU`, `consts::E`.
         {
             let written = segments
@@ -49244,6 +49545,16 @@ impl<'a> Parser<'a> {
                     .next()
                     .and_then(|name| name.chars().next())
                     .is_some_and(char::is_uppercase);
+            // A trait's function with no receiver, of the one type parameter
+            // native code fills that has it (`opaque_function_owner`).
+            #[cfg(feature = "rust-import")]
+            if crate_trait
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(opaque) = self.opaque_function_owner(&binding.qualified, &member)
+            {
+                self.pending_turbofish = None;
+                return self.opaque_function_call(&opaque, &member, member_span);
+            }
             if crate_trait
                 && matches!(self.peek(), Token::LeftParen)
                 && let Some(tokens) =
@@ -49567,6 +49878,17 @@ impl<'a> Parser<'a> {
                     && self.models.function(root).is_none()
                     && !self.bindings.contains_key(root)
             });
+            // `de::Error::invalid_length(..)`, a trait's function that takes
+            // no receiver, where one type parameter native code fills, or
+            // one of its associated types, has it: that type's, as rustc
+            // infers `Self` from the one type in scope it can be (#593).
+            #[cfg(feature = "rust-import")]
+            if matches!(self.peek(), Token::LeftParen)
+                && let Some(opaque) = self.opaque_function_owner(&owner, &member)
+            {
+                self.pending_turbofish = None;
+                return self.opaque_function_call(&opaque, &member, member_span);
+            }
             // `Trait::method(receiver, ..)` through a crate's trait, which
             // Rawr names as a module (`iced::advanced::Widget::_boxed(w)`,
             // as a macro writes it): the method called on its receiver.
@@ -50569,6 +50891,12 @@ impl<'a> Parser<'a> {
             }
             _ => self.expect_name("binding type")?,
         };
+        // A type parameter native code fills, and its associated types, as
+        // `S` and `S::Ok`: the opaque types the signature names (#593).
+        #[cfg(feature = "rust-import")]
+        if let Some(path) = self.opaque.get(&name).cloned() {
+            return self.opaque_parameter_type(&name, &path, name_span);
+        }
         // A bare `str`, as `Cow<'_, str>` writes it: rustc's unsized `str`.
         if name.as_str() == "str"
             && !matches!(self.peek(), Token::DoubleColon)
@@ -50671,6 +50999,20 @@ impl<'a> Parser<'a> {
                 name = format!("{name}::{segment}").into();
                 name_span = Span::new(name_span.start(), text_end(segment_span.start(), &segment));
             }
+            // A crate's re-export of a std type is that type, as serde's
+            // `__private::Formatter` is `core::fmt::Formatter` (#593).
+            if let Some(std) = self.std_alias(&first, &name) {
+                let at = name_span.start();
+                let mut tokens = Vec::new();
+                for (index, segment) in std.split("::").enumerate() {
+                    if index > 0 {
+                        tokens.push((Token::DoubleColon, at));
+                    }
+                    tokens.push((Token::Identifier(Box::new(segment.into())), at));
+                }
+                self.splice_tokens(tokens);
+                return self.parse_local_type();
+            }
             if let Some(model) = self.models.qualified_owner(name_span) {
                 return Ok(model.ty());
             }
@@ -50696,6 +51038,21 @@ impl<'a> Parser<'a> {
                 if let Some(spelling) = std.and_then(crate::resolve::std_path::spelling) {
                     if spelling == "Cow" {
                         return self.parse_cow_type();
+                    }
+                    // A prelude type, as `core::option::Option<T>` names
+                    // `Option`, is the prelude's name, which nothing here
+                    // shadows.
+                    if !spelling.contains("::")
+                        && self.models.get(spelling).is_none()
+                        && self.models.import(spelling).is_none()
+                        && crate::std_table::prelude(super::std_path::EDITION)
+                            .any(|path| path.path.rsplit("::").next() == Some(spelling))
+                    {
+                        self.splice_tokens(vec![(
+                            Token::Identifier(Box::new(spelling.into())),
+                            name_span.start(),
+                        )]);
+                        return self.parse_local_type();
                     }
                     name = spelling.into();
                 }
@@ -51063,6 +51420,185 @@ impl<'a> Parser<'a> {
     /// The type `name` names before `::Output` in a local type, when it is a
     /// generic parameter, `Self` in a method, or a script type with
     /// associated types.
+    /// The one opaque type of a type parameter native code fills, or of one
+    /// of its associated types, that has a function `member` with no
+    /// receiver, for a call through the crate trait at `trait_path`
+    /// (`opaque_parameter_type`).
+    #[cfg(feature = "rust-import")]
+    fn opaque_function_owner(&self, trait_path: &str, member: &str) -> Option<String> {
+        if !matches!(
+            self.models.host.entry(trait_path),
+            Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+        ) {
+            return None;
+        }
+        let mut found = None;
+        for path in self.opaque.values() {
+            let (module, own) = path.rsplit_once("::")?;
+            for child in self.models.host.children(module) {
+                if !child.starts_with(own) {
+                    continue;
+                }
+                let candidate = format!("{module}::{child}");
+                let Some(items) = self.models.host_items(&format!("{candidate}::{member}")) else {
+                    continue;
+                };
+                if !items.iter().any(|item| item.receiver().is_none()) {
+                    continue;
+                }
+                if found.replace(candidate).is_some() {
+                    return None;
+                }
+            }
+        }
+        found
+    }
+
+    /// The call of the function `member` of the opaque type at the host path
+    /// `owner`, as its path names it.
+    #[cfg(feature = "rust-import")]
+    fn opaque_function_call(
+        &mut self,
+        owner: &str,
+        member: &ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let full = format!("{owner}::{member}");
+        let Some(items) = self.models.host_items(&full).map(<[_]>::to_vec) else {
+            return Err(Error::UnknownMember {
+                owner: owner.into(),
+                member: member.clone(),
+                reference: member_span,
+            });
+        };
+        let item_owner = self.models.item_owner(&full).cloned();
+        let named = span(member_span.start(), text_end(member_span.start(), member));
+        self.parse_host_function_or_item(items.into_boxed_slice(), item_owner, named)
+    }
+
+    /// The opaque type of the type parameter `name` native code fills, at
+    /// the host path `path`, or of the associated type a `::` after it
+    /// names (`resolve::opaque_generics`).
+    #[cfg(feature = "rust-import")]
+    fn opaque_parameter_type(
+        &mut self,
+        name: &ImmutableString,
+        path: &str,
+        name_span: Span,
+    ) -> Result<Ty, Error> {
+        let (path, span) = if matches!(self.peek(), Token::DoubleColon)
+            && matches!(self.peek_second(), Token::Identifier(_))
+        {
+            self.next();
+            let (member, member_span) = self.expect_qualified_name()?;
+            let span = Span::new(name_span.start(), text_end(member_span.start(), &member));
+            let projected = rawr_import::surface::opaque::parameter_projection(path, &member)
+                .filter(|projected| self.models.host.source_type(projected).is_some())
+                .ok_or_else(|| Error::UnknownMember {
+                    owner: name.clone(),
+                    member: member.clone(),
+                    reference: span,
+                })?;
+            (projected, span)
+        } else {
+            (path.to_owned(), name_span)
+        };
+        let definition = self
+            .models
+            .host
+            .source_type(&path)
+            .cloned()
+            .ok_or_else(|| Error::UnknownType {
+                name: name.clone(),
+                reference: span,
+                path: false,
+            })?;
+        Ok(Ty::from_resolved(&type_ref::Type::Path(type_ref::Path {
+            name: path.as_str().into(),
+            target: type_ref::Target::Host {
+                definition,
+                owner: self.models.host.type_owner(&path).cloned(),
+            },
+            arguments: Box::default(),
+            span,
+        })))
+    }
+
+    /// The path ahead, when it names a std item through a crate's re-export
+    /// of it, as `serde::__private::Some` does, read as that item's own path
+    /// (`std_alias`), so a pattern or an expression names the item (#593).
+    fn splice_std_alias(&mut self) {
+        let start = self.position();
+        let Token::Identifier(first) = self.peek() else {
+            return;
+        };
+        if !matches!(self.peek_second(), Token::DoubleColon) {
+            return;
+        }
+        let first = ImmutableString::from(first.as_str());
+        let mut ahead = self.input.clone();
+        ahead.next();
+        let mut path = first.to_string();
+        while let Some((Token::DoubleColon, _)) = ahead.next() {
+            let Some((Token::Identifier(segment), _)) = ahead.next() else {
+                break;
+            };
+            path.push_str("::");
+            path.push_str(segment.as_str());
+        }
+        let Some(std) = self.std_alias(&first, &path) else {
+            return;
+        };
+        self.next();
+        for _ in 1..path.split("::").count() {
+            self.next();
+            self.next();
+        }
+        let mut tokens = Vec::new();
+        for segment in std.split("::") {
+            if !tokens.is_empty() {
+                tokens.push((Token::DoubleColon, start));
+            }
+            tokens.push((Token::Identifier(Box::new(segment.into())), start));
+        }
+        self.splice_tokens(tokens);
+    }
+
+    /// The std path `name`, whose first segment is `first`, names through a
+    /// crate's re-export of it, when it is one.
+    fn std_alias(&self, first: &ImmutableString, name: &str) -> Option<ImmutableString> {
+        if self.models.get(first).is_some() || self.bindings.contains_key(first.as_str()) {
+            return None;
+        }
+        let qualified = match self.models.import(first) {
+            Some(binding) => format!("{}{}", binding.qualified, &name[first.len()..]),
+            None => name.to_owned(),
+        };
+        let std = self.models.host.std_alias(&qualified)?;
+        if !crate::std_table::is_root(std.split("::").next()?) || *std == *qualified {
+            return None;
+        }
+        // A variant of a std enum Rawr represents, as `std::result::Result::
+        // Ok`, goes by the enum's own name: `Result::Ok`.
+        let spelled = |path: &str| {
+            crate::resolve::std_path::check(
+                path,
+                crate::std_table::Namespace::Type,
+                "type",
+                Span::NONE,
+            )
+            .ok()
+            .flatten()
+            .and_then(crate::resolve::std_path::spelling)
+        };
+        if let Some((owner, variant)) = std.rsplit_once("::")
+            && let Some(name) = spelled(owner)
+        {
+            return Some(format!("{name}::{variant}").into());
+        }
+        Some(std)
+    }
+
     fn projection_base(&self, name: &str) -> Option<Ty> {
         if self.generics.contains_key(name) {
             return Some(Ty::Param(name.into()));
@@ -52471,7 +53007,7 @@ impl<'a> Parser<'a> {
 
     /// A `fmt` body returns the text it wrote: its `fmt::Result` tail is
     /// evaluated, then the formatter is the function's value.
-    fn wrap_formatter(&mut self, definition: &method::Definition) {
+    fn wrap_formatter(&mut self, body: Span) {
         let Some(formatter) = self.formatter.clone() else {
             return;
         };
@@ -52481,7 +53017,7 @@ impl<'a> Parser<'a> {
                 value.trim_end();
                 (value, original)
             }
-            None => (origin::Fragment::plain("()"), definition.body()),
+            None => (origin::Fragment::plain("()"), body),
         };
         let mut rendered = origin::Fragment::plain("{ let __rawr_fmt_result = ");
         rendered.push(value);

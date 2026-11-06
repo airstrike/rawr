@@ -506,7 +506,6 @@ fn crate_functions_cast_to_an_inferred_fn_pointer_share_an_array() {
 /// iced's styling, run: each toggle takes its style from the array. The
 /// output is `cargo run`'s.
 #[test]
-#[ignore = "blocked: a `fn` pointer value passed to a crate's `impl Fn` parameter is not supported yet (`Toggle::style(style)`)"]
 fn crate_functions_in_a_fn_pointer_array_style_their_toggles() {
     let (rawr, cargo) = both_printed("styles.rs", "Primary");
     assert_eq!(rawr, cargo);
@@ -529,7 +528,6 @@ fn a_closures_range_parameter_takes_its_element_from_the_other_arguments() {
 /// iced's vectorial_text, run: the closure passes its `fn(f32) -> _`
 /// parameter on to the slider. The output is `cargo run`'s.
 #[test]
-#[ignore = "blocked: a `fn` pointer value passed to a crate's `impl Fn` parameter is not supported yet (`slider(range, value, message)`)"]
 fn a_closure_passes_its_range_and_fn_pointer_to_a_slider() {
     let (rawr, cargo) = both_printed("labeled.rs", "slide");
     assert_eq!(rawr, cargo);

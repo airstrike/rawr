@@ -307,6 +307,8 @@ pub(super) fn resolve(
                     _ => None,
                 })
                 .flatten();
+            #[cfg(feature = "rust-import")]
+            let host_alias = host_alias.or_else(|| parameter_projection(&written, types, host));
             if let Some(Target::Alias(alias)) = host_alias.as_ref().or(types.get(written.as_str()))
             {
                 let span = path.span;
@@ -391,6 +393,53 @@ pub(super) fn resolve(
     }
 }
 
+/// `S::Ok` where `S` is a dependency's trait method's type parameter, which
+/// names the opaque type native code fills it with (`resolve::
+/// opaque_generics`): the opaque type of its associated type (#593).
+#[cfg(feature = "rust-import")]
+fn parameter_projection(
+    written: &str,
+    types: &BTreeMap<ImmutableString, Target>,
+    host: &host::Registry,
+) -> Option<Target> {
+    let (base, associated) = written.rsplit_once("::")?;
+    let Some(Target::Alias(Alias {
+        params,
+        target: Some(target),
+        ..
+    })) = types.get(base)
+    else {
+        return None;
+    };
+    let Type::Path(Path {
+        name,
+        target: Target::Host { .. },
+        span,
+        ..
+    }) = &**target
+    else {
+        return None;
+    };
+    if !params.is_empty() {
+        return None;
+    }
+    let path = rawr_import::surface::opaque::parameter_projection(name, associated)?;
+    let definition = host.source_type(&path)?;
+    Some(Target::Alias(Alias {
+        params: Box::default(),
+        target: Some(Box::new(Type::Path(Path {
+            name: path.as_str().into(),
+            target: Target::Host {
+                definition: definition.clone(),
+                owner: host.type_owner(&path).cloned(),
+            },
+            arguments: Box::default(),
+            span: *span,
+        }))),
+        defaults: Box::default(),
+    }))
+}
+
 fn resolve_path(
     parsed: item::type_ref::Path,
     types: &BTreeMap<ImmutableString, Target>,
@@ -413,6 +462,17 @@ fn resolve_path(
     {
         let first = &first.name.text;
         return Err(super::not_a_crate(first, span));
+    }
+    // A crate's re-export of a std type is that type, as serde's
+    // `__private::Formatter` is `core::fmt::Formatter` (#593).
+    if let Some(std) = std_alias_path(&parsed, types, host) {
+        return resolve_path(
+            std,
+            types,
+            host,
+            #[cfg(feature = "rust-import")]
+            native,
+        );
     }
     if let Some(path) = std_fmt_type(&parsed) {
         return Ok(path);
@@ -1384,6 +1444,64 @@ fn future_output(parsed: &item::type_ref::Path) -> Option<Option<&item::type_ref
 /// `fmt::Formatter` and `fmt::Result` (also under `std::` or
 /// `core::`): a hand-written `Debug` or `Display` impl writes its text into
 /// the formatter, which is Rawr's `String`, and returns `Result<(), ()>`.
+/// `parsed`, a path through a crate's re-export of a std item, as the std
+/// path it names, with its last segment's arguments.
+fn std_alias_path(
+    parsed: &item::type_ref::Path,
+    types: &BTreeMap<ImmutableString, Target>,
+    host: &host::Registry,
+) -> Option<item::type_ref::Path> {
+    let [prefix @ .., last] = &parsed.segments[..] else {
+        return None;
+    };
+    if prefix.is_empty()
+        || prefix.iter().any(|segment| !segment.arguments.is_empty())
+        || types.contains_key(prefix[0].name.text.as_str())
+    {
+        return None;
+    }
+    let written = parsed
+        .segments
+        .iter()
+        .map(|segment| segment.name.text.as_str())
+        .collect::<Vec<_>>()
+        .join("::");
+    let std = host.std_alias(&written)?;
+    if *std == *written || !crate::std_table::is_root(std.split("::").next()?) {
+        return None;
+    }
+    let count = std.split("::").count();
+    let segments = std
+        .split("::")
+        .enumerate()
+        .map(|(index, text)| item::type_ref::Segment {
+            name: crate::item::Name {
+                text: text.into(),
+                span: if index + 1 == count {
+                    last.name.span
+                } else {
+                    prefix[0].name.span
+                },
+            },
+            arguments: if index + 1 == count {
+                last.arguments.clone()
+            } else {
+                Box::default()
+            },
+            span: if index + 1 == count {
+                last.span
+            } else {
+                prefix[0].span
+            },
+        })
+        .collect();
+    Some(item::type_ref::Path {
+        segments,
+        span: parsed.span,
+        global: false,
+    })
+}
+
 fn std_fmt_type(parsed: &item::type_ref::Path) -> Option<Path> {
     let [prefix @ .., module, last] = &parsed.segments[..] else {
         return None;
