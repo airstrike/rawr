@@ -754,18 +754,6 @@ fn an_unannotated_closure_takes_its_input_from_the_opaque_programs_state() {
 #[test]
 fn std_types_a_crate_re_exports_cross_by_value() {
     let (rawr, cargo) = both_printed("time.rs", "Stop");
-    // `Instant { tv_sec: 7, tv_nsec: 8 }` with its values left out.
-    let instants = |text: &str| {
-        text.lines()
-            .map(|line| match (line.find("Instant { "), line.rfind(" })")) {
-                (Some(start), Some(end)) if start < end => {
-                    format!("{}Instant {{ .. }}{}", &line[..start], &line[end + 2..])
-                }
-                _ => line.to_owned(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
     assert_eq!(instants(&rawr), instants(&cargo));
     let tick = "heard Tick(Instant { .. })";
     assert_eq!(
@@ -775,6 +763,36 @@ fn std_types_a_crate_re_exports_cross_by_value() {
              1 view pad 0 <x Stop:0> '20 ms in 3 ticks'@16\n1 message Toggle(false)\n\
              last view pad 0 <Stop:0> '20 ms in 3 ticks'@16"
         )
+    );
+}
+
+/// `text` with each `Instant { tv_sec: 7, tv_nsec: 8 }` shown without its
+/// values, which differ between runs.
+fn instants(text: &str) -> String {
+    text.lines()
+        .map(|line| match (line.find("Instant { "), line.rfind(" })")) {
+            (Some(start), Some(end)) if start < end => {
+                format!("{}Instant {{ .. }}{}", &line[..start], &line[end + 2..])
+            }
+            _ => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// iced's solar_system (#979): `timed(..)` gives an opaque program whose
+/// message is the tuple `(Message, Instant)`, and `.theme(..)` gives
+/// another that reads it from the first as `P::Message`. The output is
+/// `cargo run`'s, apart from the instants' values.
+#[test]
+fn an_opaque_program_whose_message_is_a_tuple_takes_a_theme() {
+    let (rawr, cargo) = both_printed("timed.rs", "Dark,Dark");
+    assert_eq!(instants(&rawr), instants(&cargo));
+    assert!(
+        instants(&rawr).contains(
+            "1 theme Light\n1 message (Toggled(true), Instant { .. })\n2 view pad 0 <x Dark:0>\n2 theme Dark"
+        ),
+        "{rawr}"
     );
 }
 

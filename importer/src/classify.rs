@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 107;
+const CLASSIFIER_VERSION: u32 = 108;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8351,7 +8351,10 @@ impl<P: api::Phase> Context<'_, P> {
                     ) {
                         continue;
                     }
-                    let Ok(value) = self.convert(&ty) else {
+                    // A value that is a tuple, as `timed(..)`'s `impl
+                    // Program<Message = (Message, Instant)>` binds, is one
+                    // as a call's value is.
+                    let Ok(value) = self.convert_value(&ty) else {
                         continue;
                     };
                     let Ok(position) = u32::try_from(arguments.len()) else {
