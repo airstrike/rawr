@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::accounting::{self, Allocation, Class, Reference, Registered};
-use super::{bundle, entry, index, lease, pins, recovery};
+use super::{bundle, entry, index, lease, pins, recovery, session};
 use crate::node::codec::{Envelope, MAX_ENVELOPE_BYTES};
 use crate::node::{ActionKey, Digest, Error, Kind};
 
@@ -431,6 +431,77 @@ pub(super) const KEPT: [(Kind, usize); 3] = [
     (Kind::Runner, 4),
     (Kind::NativeProduct, 4),
 ];
+
+/// Every kind with none kept: what a collected project published goes whole.
+const NONE_KEPT: [(Kind, usize); 11] = [
+    (Kind::Toolchain, 0),
+    (Kind::Resolution, 0),
+    (Kind::Api, 0),
+    (Kind::Generic, 0),
+    (Kind::Profile, 0),
+    (Kind::Facade, 0),
+    (Kind::Checked, 0),
+    (Kind::ProfileProof, 0),
+    (Kind::NativeProduct, 0),
+    (Kind::Overlay, 0),
+    (Kind::Runner, 0),
+];
+
+/// Collect the projects no process has open in a store the requesting one
+/// shares, as checks of many projects with one `CARGO_TARGET_DIR` leave
+/// (#960): each one's roots are released, then each unit it published that
+/// no remaining root reaches and no other action names (action, bundle,
+/// content), oldest first. While another project's session is held nothing
+/// is collected, so no run that might reuse a unit loses it. Returns how
+/// many projects were collected.
+pub(super) fn recover_idle(store: &Path, requesting: Digest) -> Result<usize, Error> {
+    if !pins::others(store, requesting) && !session::others(store, requesting) {
+        return Ok(0);
+    }
+    let projects = lease::with_publication(store, |publication| {
+        let mut budget = recovery::Budget::new();
+        let registrations = accounting::registrations_recovery(store, &mut budget)?;
+        let snapshot = pins::snapshot(publication, store, &registrations, &mut budget)?;
+        let mut projects = registrations
+            .iter()
+            .map(|registered| registered.publisher())
+            .collect::<BTreeSet<_>>();
+        projects.extend(snapshot.stale().iter().map(pins::lock::Stale::project));
+        projects.extend(snapshot.active().iter().map(pins::lock::Active::project));
+        projects.remove(&requesting);
+        Ok(projects)
+    })?;
+    let mut idle = Vec::new();
+    for project in projects {
+        match session::Idle::take(store, project)? {
+            Some(lease) => idle.push((project, lease)),
+            None => return Ok(0),
+        }
+    }
+    let mut collected = 0;
+    for (project, lease) in idle {
+        let released = lease::with_publication(store, |publication| {
+            let mut budget = recovery::Budget::new();
+            let registrations = accounting::registrations_recovery(store, &mut budget)?;
+            let snapshot = pins::snapshot(publication, store, &registrations, &mut budget)?;
+            pins::release_project(
+                publication,
+                store,
+                snapshot,
+                project,
+                &registrations,
+                &mut budget,
+            )
+        })?;
+        if !released {
+            continue;
+        }
+        while recover_excess(store, project, &NONE_KEPT, &mut recovery::Budget::new())? {}
+        lease.retire();
+        collected += 1;
+    }
+    Ok(collected)
+}
 
 /// Retire the requesting project's oldest unrooted unit (action, its bundle,
 /// its content when nothing else names it) of the first kind it has more of

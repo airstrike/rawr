@@ -654,6 +654,101 @@ fn a_project_keeps_only_its_newest_unrooted_units_of_a_kind() {
     fs::remove_dir_all(root).expect("the excess fixture retires");
 }
 
+// Projects that share a `CARGO_TARGET_DIR` share its store (#960). A project
+// no process has open is collected whole, roots and all, unless another
+// project is in use; what the project in use reaches stays and still hits.
+#[test]
+fn a_shared_store_collects_the_projects_no_process_has_open() {
+    use crate::store::PinRole;
+
+    let root = temporary("idle-projects");
+    fs::create_dir_all(root.join("cargo-home")).unwrap();
+    let cargo_home = fs::canonicalize(root.join("cargo-home")).unwrap();
+    let target = root.join("target");
+    let context = |name: &str| {
+        fs::create_dir_all(root.join(name)).unwrap();
+        let environment = cargo::config::Environment::from_pairs([
+            ("CARGO_HOME", cargo_home.to_str().unwrap()),
+            ("CARGO_TARGET_DIR", target.to_str().unwrap()),
+        ])
+        .unwrap();
+        Context::capture(
+            &root.join(name),
+            environment,
+            "test-target",
+            &cargo::Limits::standard(),
+        )
+        .unwrap()
+    };
+    let (first, second) = (context("first"), context("second"));
+    let counts = Counts::default();
+    let executions = AtomicUsize::new(0);
+    let evaluate = |store: &crate::store::Store, context: &Context, request: &str, output: &str| {
+        let recipe = context
+            .direct::<Artifact>(request.as_bytes(), 4_096)
+            .unwrap();
+        Evaluator::new(store, &counts)
+            .direct(&recipe, || {
+                executions.fetch_add(1, Ordering::Relaxed);
+                Ok(Artifact(output.as_bytes().into()))
+            })
+            .unwrap()
+    };
+    let ran = || executions.load(Ordering::Relaxed);
+
+    let first_store = first.open_store().unwrap();
+    let pinned = evaluate(&first_store, &first, "first-pinned", "first-pinned");
+    evaluate(&first_store, &first, "first-unrooted", "shared-output");
+    let proof = Evaluator::new(&first_store, &counts)
+        .seal_read_set([pinned.receipt().read_set().clone()])
+        .unwrap();
+    first_store
+        .with_pin(PinRole::Live, &proof, || Ok(()))
+        .unwrap();
+    drop(pinned);
+    let second_store = second.open_store().unwrap();
+    assert_eq!(second_store.root(), first_store.root(), "one store");
+    evaluate(&second_store, &second, "second-own", "second-own");
+    // The same bytes under another action: one content allocation.
+    evaluate(&second_store, &second, "second-shared", "shared-output");
+    assert_eq!(ran(), 4);
+
+    // While the first project is open, nothing is collected.
+    assert_eq!(second_store.fixture_collect_idle().unwrap(), 0);
+    evaluate(&first_store, &first, "first-pinned", "first-pinned");
+    evaluate(&first_store, &first, "first-unrooted", "shared-output");
+    assert_eq!(ran(), 4, "the open project's units still hit");
+
+    drop(first_store);
+    assert_eq!(second_store.fixture_collect_idle().unwrap(), 1);
+    assert_eq!(
+        second_store.fixture_collect_idle().unwrap(),
+        0,
+        "a collected project leaves nothing to collect"
+    );
+    let (bytes, allocations, ..) = second_store.fixture_usage().unwrap();
+    second_store.fixture_physical_inventory().unwrap();
+    evaluate(&second_store, &second, "second-own", "second-own");
+    evaluate(&second_store, &second, "second-shared", "shared-output");
+    assert_eq!(
+        ran(),
+        4,
+        "the project in use still hits, shared content too"
+    );
+
+    // The collected project runs again from nothing, then hits again.
+    let first_store = first.open_store().unwrap();
+    evaluate(&first_store, &first, "first-pinned", "first-pinned");
+    evaluate(&first_store, &first, "first-unrooted", "shared-output");
+    assert_eq!(ran(), 6, "the collected project's units execute again");
+    evaluate(&first_store, &first, "first-pinned", "first-pinned");
+    assert_eq!(ran(), 6);
+    let (grown, more, ..) = first_store.fixture_usage().unwrap();
+    assert!(grown > bytes && more > allocations, "the store had shrunk");
+    drop((first_store, second_store));
+    fs::remove_dir_all(root).unwrap();
+}
+
 // The store inventory checks a registered allocation's placement only, as
 // for bundles; its record and payload are checked by the consumer
 // that reads them, not re-read on every store write.

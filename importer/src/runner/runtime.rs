@@ -37,6 +37,8 @@ use toml_edit::{DocumentMut, Item, Table};
 use crate::cargo::config::INTERNAL_ALIAS;
 use crate::node;
 
+mod users;
+
 const DOMAIN: &[u8] = b"rawr.runtime/v1";
 /// The runtime's own package, which only depends on `rawr`.
 const PACKAGE: &str = "rawr-runtime";
@@ -50,10 +52,9 @@ const DEFAULT_OPT_LEVEL: &str = "3";
 /// In `<target>/rawr`: the runner this project could not link to the
 /// shared runtime, and why.
 const LOCAL: &str = "runtime-local";
-/// How long an entry must sit unused before it may be removed.
-const IDLE: Duration = Duration::from_secs(24 * 60 * 60);
-/// How many recently used entries are kept besides the one in use.
-const KEPT: usize = 3;
+/// How long an entry no installed rawr links stays after its last use: a
+/// rebuild of rawr from unchanged sources asks for it again within it.
+const RECENT: Duration = Duration::from_secs(60 * 60);
 /// In the runner's directory: the pruned lockfile's digest, then the lock
 /// cargo settled it to.
 const SETTLED: &str = "rawr-settled-lock";
@@ -187,7 +188,7 @@ pub(crate) fn prepare(
     let key = hex(&key.finalize());
     let runtimes = runtimes()?;
     let entry = runtimes.join(&key[..16]);
-    let runtime = ensure(
+    let (runtime, compiled) = ensure(
         &entry,
         &key,
         &wrapper,
@@ -196,10 +197,14 @@ pub(crate) fn prepare(
         environment,
         development,
     )?;
-    let keep = entry.clone();
-    let _ = std::thread::Builder::new()
-        .name("rawr-runtime-cleanup".into())
-        .spawn(move || prune(&runtimes, &[keep.as_path()], IDLE, KEPT));
+    // A new entry is what replaces older ones, so cleanup runs when one is
+    // compiled, never on a build that reuses one.
+    if compiled {
+        let keep = entry.clone();
+        let _ = std::thread::Builder::new()
+            .name("rawr-runtime-cleanup".into())
+            .spawn(move || prune(&runtimes, &[keep.as_path()], RECENT));
+    }
     Ok(Some(runtime))
 }
 
@@ -760,7 +765,8 @@ fn runtimes() -> Result<PathBuf, node::Error> {
     Ok(crate::store::runtime_home(&cargo_home).join("runtime"))
 }
 
-/// The entry for `key`, compiled first when it has none, and leased.
+/// The entry for `key`, compiled first when it has none, and leased, with
+/// whether this call compiled it new.
 fn ensure(
     entry: &Path,
     key: &str,
@@ -769,7 +775,7 @@ fn ensure(
     toolchain: &Toolchain,
     environment: &crate::cargo::config::Environment,
     development: bool,
-) -> Result<Runtime, node::Error> {
+) -> Result<(Runtime, bool), node::Error> {
     let io = |operation: &'static str, path: &Path| {
         let path = path.to_path_buf();
         move |source| node::Error::Io {
@@ -804,6 +810,9 @@ fn ensure(
     if development || !built {
         compile(entry, key, wrapper, source_lock, toolchain, environment)?;
     }
+    if let Ok(executable) = std::env::current_exe() {
+        users::Users::of(entry).enroll(&executable);
+    }
     let native = fs::read_to_string(entry.join("native"))
         .map_err(io("read the native libraries of rawr's runtime", entry))?
         .lines()
@@ -815,14 +824,17 @@ fn ensure(
         .map_err(io("lease rawr's runtime", &lease))?;
     // The last use, which cleanup orders entries by.
     let _ = File::open(entry).and_then(|directory| directory.set_modified(SystemTime::now()));
-    Ok(Runtime {
-        lib,
-        stamp,
-        key: key.to_owned(),
-        native,
-        cargo: toolchain.cargo.clone(),
-        _lease: lock,
-    })
+    Ok((
+        Runtime {
+            lib,
+            stamp,
+            key: key.to_owned(),
+            native,
+            cargo: toolchain.cargo.clone(),
+            _lease: lock,
+        },
+        !built,
+    ))
 }
 
 /// Compile the runtime in `entry` with the project's toolchain and publish
@@ -1092,26 +1104,32 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// `rawr cache clean`: remove idle runtimes beyond the most recently used.
+/// `rawr cache clean`: remove the runtimes no installed rawr links.
 pub fn clean(cargo_home: &Path) {
     prune(
         &crate::store::runtime_home(cargo_home).join("runtime"),
         &[],
-        IDLE,
-        KEPT,
+        Duration::ZERO,
     );
 }
 
-/// Best effort: remove entries other than `keep` that are both unused for
-/// `idle` and older than the `kept` most recently used. An entry a runner
-/// build leases is skipped, and nothing here waits for a lock or reads free
-/// disk. Each goes by being renamed aside first, so a partial removal is
-/// never taken for an entry and is finished by a later cleanup.
-pub(crate) fn prune(runtimes: &Path, keep: &[&Path], idle: Duration, kept: usize) {
+/// Best effort: remove entries other than `keep` that nothing used within
+/// `recent` and that no installed rawr links (the entry's [`users`], which
+/// only runtimes record). An entry a build leases is skipped, and nothing
+/// here waits for a lock or reads free disk. Each goes by being renamed
+/// aside first, so a partial removal is never taken for an entry and is
+/// finished by a later cleanup.
+pub(crate) fn prune(runtimes: &Path, keep: &[&Path], recent: Duration) {
     let Ok(entries) = fs::read_dir(runtimes) else {
         return;
     };
-    let mut candidates = Vec::new();
+    // Every use stamps the entry's time, then its users, under its lock.
+    let unreached = |path: &Path| {
+        let idle = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|used| used.elapsed().is_ok_and(|age| age >= recent));
+        idle && !users::Users::of(path).any_installed()
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
@@ -1125,22 +1143,14 @@ pub(crate) fn prune(runtimes: &Path, keep: &[&Path], idle: Duration, kept: usize
         {
             continue;
         }
-        let used = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or_else(|_| SystemTime::now());
-        let idle = used.elapsed().is_ok_and(|age| age > idle);
-        candidates.push((used, idle, name, path));
-    }
-    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
-    for (_, idle, name, path) in candidates.into_iter().skip(kept) {
-        if !idle {
+        if !unreached(&path) {
             continue;
         }
         let Ok(lock) = File::open(path.join(".lock")) else {
             continue;
         };
-        if lock.try_lock().is_err() {
+        // A use that finished between the first look and the lock shows now.
+        if lock.try_lock().is_err() || !unreached(&path) {
             continue;
         }
         let retired = runtimes.join(format!(".retired-{name}-{}", std::process::id()));
@@ -1385,35 +1395,59 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     }
 
     #[test]
-    fn cleanup_removes_idle_entries_beyond_the_newest_and_skips_leased_ones() {
-        let runtimes = scratch("prune");
-        let _ = fs::remove_dir_all(&runtimes);
+    fn cleanup_keeps_entries_an_installed_rawr_links_and_removes_the_rest() {
+        let root = scratch("prune");
+        let _ = fs::remove_dir_all(&root);
+        let runtimes = root.join("runtime");
+        let installed = root.join("bin/rawr");
+        let replaced = root.join("old/rawr");
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs::create_dir_all(replaced.parent().unwrap()).unwrap();
+        fs::write(&installed, b"installed").unwrap();
+        fs::write(&replaced, b"old").unwrap();
         let now = SystemTime::now();
-        let ages = [
-            ("current", 9),
-            ("newest", 0),
-            ("old1", 2),
-            ("old2", 3),
-            ("leased", 4),
+        // Each entry's users, and whether it was used within the hour.
+        let entries = [
+            ("current", None, false),
+            ("installed", Some(&installed), false),
+            ("replaced", Some(&replaced), false),
+            ("unrecorded", None, false),
+            ("recent", None, true),
+            ("leased", None, false),
         ];
-        for (name, days) in ages {
-            fs::create_dir_all(runtimes.join(name).join("lib")).unwrap();
-            fs::write(runtimes.join(name).join(".lock"), b"").unwrap();
-            fs::File::open(runtimes.join(name))
-                .and_then(|dir| dir.set_modified(now - super::IDLE * days))
+        for (name, user, recent) in entries {
+            let entry = runtimes.join(name);
+            fs::create_dir_all(entry.join("lib")).unwrap();
+            fs::write(entry.join(".lock"), b"").unwrap();
+            if let Some(user) = user {
+                super::users::Users::of(&entry).enroll(user);
+            }
+            let used = if recent { now } else { now - 2 * super::RECENT };
+            fs::File::open(&entry)
+                .and_then(|dir| dir.set_modified(used))
                 .unwrap();
         }
+        // A reinstall replaces the old executable.
+        fs::remove_file(&replaced).unwrap();
+        fs::write(&replaced, b"reinstalled from other sources").unwrap();
         let leased = fs::File::open(runtimes.join("leased/.lock")).unwrap();
         leased.lock_shared().unwrap();
         let current = runtimes.join("current");
-        super::prune(&runtimes, &[current.as_path()], super::IDLE, 1);
+        super::prune(&runtimes, &[current.as_path()], super::RECENT);
         let mut left = fs::read_dir(&runtimes)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
         left.sort();
-        assert_eq!(left, ["current", "leased", "newest"]);
+        assert_eq!(left, ["current", "installed", "leased", "recent"]);
         drop(leased);
-        fs::remove_dir_all(runtimes).unwrap();
+        // `rawr cache clean` has no recent window and keeps no entry by name.
+        super::prune(&runtimes, &[], std::time::Duration::ZERO);
+        let left = fs::read_dir(&runtimes)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(left, ["installed"]);
+        fs::remove_dir_all(root).unwrap();
     }
 }

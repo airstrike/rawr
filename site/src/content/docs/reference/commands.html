@@ -51,7 +51,8 @@
 <h2 id="files">Files rawr writes</h2>
 <ul>
   <li><code>target/&lt;host&gt;/debug/</code> holds the compiled crates. <code>rawr run</code> and <code>cargo build</code> share them.</li>
-  <li><code>target/rawr/</code> holds rawr&rsquo;s cached data and the generated runner. <code>cargo clean</code> removes it.</li>
+  <li><code>target/rawr/</code> holds rawr&rsquo;s cached data and the generated runner. <code>cargo clean</code> removes it. Projects that share one target directory, through <code>CARGO_TARGET_DIR</code>, share its cache. When rawr starts a check or run there, it removes what the other projects left, unless one of them is being checked or run at that moment.</li>
   <li>rawr&rsquo;s home, <code>~/.cargo/rawr</code> unless <code>RAWR_HOME</code> says otherwise, holds what every project on the machine shares: rawr&rsquo;s runtime, the bindings and the nightly&rsquo;s check build. <code>rawr cache clean</code> removes what no build has used lately. It never removes what a running build is using.</li>
+  <li>rawr compiles one runtime for each rawr version and toolchain, in <code>runtime/</code> in rawr&rsquo;s home. When it compiles a new one, it removes each runtime that no installed <code>rawr</code> uses and no build used in the last hour. A <code>rawr</code> that was reinstalled or deleted no longer counts as installed.</li>
 </ul>
 </article>
