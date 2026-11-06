@@ -183,7 +183,7 @@ fn main() {
   <div class="run"><button type="button" class="runbtn" data-source="src-geometry" data-out="out-geometry" aria-label="Run geometry.rs" hidden></button><b>rawr run geometry.rs</b><span id="out-geometry" aria-live="polite">6</span></div>
 </div>
 <h2 id="use"><code>use</code></h2>
-<p>Paths, groups, and globs of a standard library module work. A path that starts with <code>::</code> names an outside crate, and its first name must be a crate. A path may start with <code>self::</code>.</p>
+<p>Paths, groups, and globs of a standard library module work. A path that starts with <code>::</code> names an outside crate, and its first name must be a crate. A path may start with <code>self::</code>. A path may also start at a name another <code>use</code> brings in. This holds in a function body too, so after <code>use iced::keyboard;</code>, a function&rsquo;s <code>use keyboard::key;</code> names <code>iced::keyboard::key</code>.</p>
 <div class="block"><pre><code data-lang="rust">use std::collections::{HashMap, HashSet};
 use std::fmt::*;
 use ::image::ColorType;</code></pre></div>

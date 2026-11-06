@@ -438,3 +438,46 @@ fn main() {
     );
     assert_eq!(output, "Move { x: 1, y: 2 }\nQuit\nat (3, 4)\n");
 }
+
+struct NamedKey;
+
+/// A `use` that starts at another `use`'s crate module (`use
+/// keyboard::key;` after `use iced::keyboard;`) is reached through the
+/// path it starts at from a child module's `use super::*;`, as a crate
+/// derive's expansion reaches the item's module in iced's todos (#1044).
+#[test]
+fn a_child_glob_reaches_a_use_that_starts_at_another_use() {
+    let mut builder =
+        crate::host::facade::Builder::new("iced", crate::host::facade::Abi::new(1).unwrap())
+            .unwrap();
+    builder.module("keyboard").unwrap();
+    builder.module("keyboard::key").unwrap();
+    builder
+        .type_::<NamedKey>("keyboard::key::Named", &[], &[])
+        .unwrap();
+    let mut engine = Engine::new();
+    engine
+        .register_host_facade(builder.finish().unwrap())
+        .unwrap();
+    let source = r#"
+use iced::keyboard;
+use keyboard::key;
+
+mod shortcuts {
+    use super::*;
+
+    pub fn none() -> Option<key::Named> {
+        None
+    }
+}
+
+fn main() {
+    println!("{}", shortcuts::none().is_none());
+}
+"#;
+    let unit = engine.parse_unit(source).unwrap();
+    let evidence = crate::diagnostic::Source::new("main.rs", source).unwrap();
+    engine
+        .compile_unit(unit, evidence)
+        .unwrap_or_else(|error| panic!("{error}"));
+}

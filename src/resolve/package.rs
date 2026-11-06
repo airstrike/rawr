@@ -962,32 +962,39 @@ impl<'a> Resolver<'a> {
         let mut path: Box<[ImmutableString]> = path.into();
         // Each step follows a distinct import, so a cycle ends the walk.
         for _ in 0..=self.aliases.len() + self.exports.len() + self.globs.len() {
-            let Some((name, prefix)) = path.split_last() else {
-                break;
-            };
-            let Some(modules) = self.local_glob_module(&context, prefix) else {
-                break;
-            };
-            let address = Address {
-                package: context.namespace.package.clone(),
-                modules: modules.into_boxed_slice(),
-                name: name.clone(),
-            };
-            if self.declarations.contains_key(&address) {
-                break;
+            if let Some(import) = self.path_import(&context, &path) {
+                context = import.context.clone();
+                path = import.path.clone();
+                continue;
             }
-            let Some(import) = self
-                .exports
-                .get(&address)
-                .or_else(|| self.aliases.get(&address))
-                .or_else(|| self.globs.get(&address))
-            else {
+            // `keyboard::key` after `use iced::keyboard;`: the crate path
+            // the first name's `use` starts it at (`crate_alias`).
+            let Some((_, alias)) = self.crate_alias(&context, &path) else {
                 break;
             };
-            context = import.context.clone();
-            path = import.path.clone();
+            path = alias.path.iter().chain(&path[1..]).cloned().collect();
+            context = alias.context.clone();
         }
         (context, path)
+    }
+
+    /// The `use` or glob import that binds the item `path` names in a
+    /// module of this crate, when no declaration there does.
+    fn path_import(&self, context: &Context, path: &[ImmutableString]) -> Option<&Export> {
+        let (name, prefix) = path.split_last()?;
+        let modules = self.local_glob_module(context, prefix)?;
+        let address = Address {
+            package: context.namespace.package.clone(),
+            modules: modules.into_boxed_slice(),
+            name: name.clone(),
+        };
+        if self.declarations.contains_key(&address) {
+            return None;
+        }
+        self.exports
+            .get(&address)
+            .or_else(|| self.aliases.get(&address))
+            .or_else(|| self.globs.get(&address))
     }
 
     /// The crate enum a `use` prefix names, as `Shape`, `shapes::Shape` or
@@ -1416,6 +1423,33 @@ impl<'a> Resolver<'a> {
         module.then_some(alias)
     }
 
+    /// The `use` in `context` that binds the first name of the longer path
+    /// `path` (`use iced::keyboard;` for `keyboard::key`), with its address.
+    /// A crate path `path` names itself is its own, as `::iced::..` is: a
+    /// name that is both is rustc's E0659, which no checked program has.
+    fn crate_alias(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+    ) -> Option<(Address, &Export)> {
+        let [first, _, ..] = path else {
+            return None;
+        };
+        let address = context.address(first);
+        let alias = self
+            .aliases
+            .get(&address)
+            .or_else(|| self.exports.get(&address))?;
+        let direct = host_target(
+            self.host,
+            path,
+            Span::NONE,
+            #[cfg(feature = "rust-import")]
+            None,
+        );
+        (alias.path.first() != Some(first) && direct.is_err()).then_some((address, alias))
+    }
+
     fn is_child_module(&self, context: &Context, name: &str) -> bool {
         self.declarations
             .get(&context.address(name))
@@ -1431,6 +1465,21 @@ impl<'a> Resolver<'a> {
     ) -> Result<Target, Failure> {
         if self.is_script_path(context, path) {
             self.resolve_path(context, path, reference, active)
+        } else if let Some((address, alias)) = self.crate_alias(context, path)
+            && active.insert(address.clone())
+        {
+            // `use keyboard::key;` after `use iced::keyboard;`, wherever it
+            // is resolved from, as a child module's `use super::*;` reaches
+            // it: the path starts at the name in scope, as rustc's do.
+            let expanded = alias
+                .path
+                .iter()
+                .chain(&path[1..])
+                .cloned()
+                .collect::<Vec<_>>();
+            let target = self.resolve_any_path(&alias.context, &expanded, reference, active);
+            active.remove(&address);
+            target
         } else {
             host_target(
                 self.host,
