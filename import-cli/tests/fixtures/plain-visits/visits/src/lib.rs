@@ -243,6 +243,7 @@ pub trait Painter {
     type Font: Copy + PartialEq;
     fn font(&self) -> Self::Font;
     fn fits(&self, font: Self::Font) -> bool;
+    fn size(&self) -> u32;
 }
 
 /// A value that paints itself with any painter.
@@ -260,6 +261,9 @@ impl Painter for Pen {
     }
     fn fits(&self, font: u8) -> bool {
         font == 12
+    }
+    fn size(&self) -> u32 {
+        12
     }
 }
 

@@ -20,7 +20,8 @@ impl Visit for Seven {
 
 impl Paint for Seven {
     fn paint<P: Painter>(&self, painter: P) -> bool {
-        painter.fits(painter.font())
+        let _font = painter.font();
+        painter.size() == 12
     }
 }
 
