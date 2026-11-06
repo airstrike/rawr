@@ -1904,6 +1904,45 @@ fn an_enum_with_defaulted_parameters_is_matched_and_made() {
     );
 }
 
+/// iced's layout: a crate closure takes a key press whose fields hold an
+/// `Option` of the key's defaulted text type, destructured by value with a
+/// literal field and `..`. Each crate value below a variant's fields, an
+/// `Option`'s too, has its own type (#971). The output is `cargo run`'s.
+#[test]
+fn a_variants_optional_crate_field_has_its_own_type() {
+    let (rawr, cargo) = both_printed("typed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "[\"character A\", \"escape\"]\n[Some(\"A\"), None, None]"
+    );
+}
+
+/// iced's layout: each example is a `fn() -> Element<'static, Message>` in
+/// a constant table, called through its pointer by the view. One makes a
+/// `column![..]`, sets its padding and boxes it, as layout's `column_`
+/// does (#971). The output is `cargo run`'s.
+#[test]
+fn a_column_an_example_pointer_boxes_is_shown() {
+    let (rawr, cargo) = both_printed("examples.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.contains("pad 40 A column can be used to@"), "{rawr}");
+}
+
+/// iced's bezier_tool: a `Copy` cursor's by-value method gives an `Option`
+/// of a point whose coordinate type has a default, read directly, through
+/// `?` and in a closure native code calls with the cursor. The point has
+/// the output's type. The output is `cargo run`'s.
+#[test]
+fn a_by_value_methods_optional_crate_output_has_its_type() {
+    let (rawr, cargo) = both_printed("cursor.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "5 10\nSome(Point { x: 10.0, y: 10.0 })\nNone\nSome(15.0)"
+    );
+}
+
 /// String-like generics follow their bound, not their spelling (#713): `S:
 /// Into<String>` takes what `impl Into<String>` takes, and `AsRef<str>`,
 /// `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` and `ToString` take a
