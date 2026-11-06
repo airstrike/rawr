@@ -307,6 +307,6 @@ mod tests {
         assert!(known
             .install
             .iter()
-            .any(|line| line.ends_with(" rawr-import-cli")));
+            .any(|line| line.contains("rawr.airstrike.fyi/install.sh")));
     }
 }
