@@ -1333,9 +1333,8 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
 /// are program code (D740, #593). A local proc-macro crate's derive,
 /// re-exported beside its trait as serde's is, runs on a top-level struct
 /// and enum, a struct in a function's body and one in an inline module
-/// named by its path, and prints what `cargo run` prints. serde's
-/// expansion is checked as program code too, and what rawr doesn't run in
-/// it yet is reported at the derive, never inside the expansion.
+/// named by its path, and prints what `cargo run` prints. So do serde's
+/// `Serialize` and `Deserialize` through serde_json.
 #[test]
 fn a_crates_derive_runs_from_its_expansion() {
     const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
@@ -1343,25 +1342,19 @@ fn a_crates_derive_runs_from_its_expansion() {
     let _ = fs::remove_dir_all(&root);
     copy(Path::new(DERIVES), &root);
 
-    // The program serializes alone, so the first error is the
-    // `Deserialize` expansion's, at its derive.
-    let program = fs::read_to_string(root.join("src/main.rs")).unwrap();
-    let serializing = program
-        .lines()
-        .filter(|line| !line.contains("back"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(root.join("src/main.rs"), serializing).unwrap();
-    let checked = rawr_import(&root, &["check"]);
-    let stderr = text(&checked.stderr);
-    assert!(!checked.status.success(), "stderr:\n{stderr}");
-    assert!(stderr.contains("main.rs:4:35"), "stderr:\n{stderr}");
+    // serde's `Serialize` and `Deserialize`, from their expansions, run
+    // as `cargo run` runs them.
+    let run = rawr_import(&root, &["run"]);
     assert!(
-        stderr.contains("this error originates in the derive macro `Deserialize`"),
-        "stderr:\n{stderr}"
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
     );
-    assert!(!stderr.contains("target/rawr/expand"), "stderr:\n{stderr}");
-    assert!(!stderr.contains("panicked"), "stderr:\n{stderr}");
+    assert_eq!(
+        text(&run.stdout),
+        "{\"description\":\"write\",\"done\":false}\nTask { description: \"write\", done: false }\n"
+    );
 
     fs::write(
         root.join("src/main.rs"),

@@ -18112,17 +18112,15 @@ fn impl_type(ty: &convert::Type, generics: &[Box<str>]) -> Option<String> {
             {
                 "&str".to_owned()
             }
-            convert::Type::Borrowed {
-                mutable: false,
-                ty,
-            } if matches!(
-                &**ty,
-                convert::Type::Sequence {
-                    owned: false,
-                    length: None,
-                    ..
-                }
-            ) =>
+            convert::Type::Borrowed { mutable: false, ty }
+                if matches!(
+                    &**ty,
+                    convert::Type::Sequence {
+                        owned: false,
+                        length: None,
+                        ..
+                    }
+                ) =>
             {
                 let convert::Type::Sequence { element, .. } = &**ty else {
                     return None;
