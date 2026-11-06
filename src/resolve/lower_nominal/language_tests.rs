@@ -6626,6 +6626,61 @@ fn language_bit_reference_and_index_operator_traits() {
     }
 }
 
+/// A number on an operator's left selects the impl of the operator's trait
+/// for that number, as rustc does: `impl Mul<Angle> for f32` beside the
+/// type's own `Mul<f32>` and `Mul`, a literal taking the kind the one impl
+/// for it is for, and the impl's own `Output`. A number of a kind no impl
+/// is for, or with no impl at all, is rustc's E0277 and its message.
+#[test]
+fn language_a_number_on_the_left_selects_its_impl_of_the_operator() {
+    let value = run_string(
+        r#"
+        use std::ops::{Div, Mul, Rem, Sub};
+        #[derive(Debug, Clone, Copy)]
+        struct Angle(f32);
+        impl Mul<Angle> for f32 { type Output = Angle; fn mul(self, a: Angle) -> Angle { Angle(self * a.0) } }
+        impl Mul<f32> for Angle { type Output = Angle; fn mul(self, k: f32) -> Angle { Angle(self.0 * k * 10.0) } }
+        impl Mul for Angle { type Output = Angle; fn mul(self, a: Angle) -> Angle { Angle(self.0 * a.0 * 100.0) } }
+        impl Rem for Angle { type Output = Angle; fn rem(self, a: Angle) -> Angle { Angle(self.0 % a.0) } }
+        impl Sub<Angle> for f64 { type Output = f64; fn sub(self, a: Angle) -> f64 { self - a.0 as f64 } }
+        impl Div<Angle> for i32 { type Output = Angle; fn div(self, a: Angle) -> Angle { Angle(self as f32 / a.0) } }
+        const HALF: Angle = Angle(3.0);
+        pub fn run() -> String {
+            let a = Angle(7.0);
+            let x: f32 = 1.5;
+            format!(
+                "{:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+                2.0 * a, a * 2.0, a * a, (a * 2.0) % (2.0 * HALF), 10.0 - a, 3 / Angle(2.0), x * a
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "Angle(14.0) Angle(140.0) Angle(4900.0) Angle(2.0) 3.0 Angle(1.5) Angle(10.5)"
+    );
+    let angle = "use std::ops::Mul; #[derive(Clone, Copy)] struct Angle(f32);";
+    for (source, expected) in [
+        (
+            "impl Mul<Angle> for f32 { type Output = Angle; fn mul(self, a: Angle) -> Angle { a } } \
+             fn f() -> i64 { let x: f64 = 2.0; let _ = x * Angle(1.0); 0 }",
+            "cannot multiply `f64` by `Angle`",
+        ),
+        (
+            "fn f() -> i64 { let _ = 2.0 * Angle(1.0); 0 }",
+            "cannot multiply `{float}` by `Angle`",
+        ),
+        (
+            "fn f() -> i64 { let _ = 2 + Angle(1.0); 0 }",
+            "cannot add `Angle` to `{integer}`",
+        ),
+    ] {
+        let error = rejected(&format!("{angle} {source} pub fn run() -> i64 {{ 0 }} run()"));
+        assert!(error.contains(expected), "{source}: {error}");
+    }
+}
+
 #[test]
 fn language_ref_bindings_in_slice_patterns() {
     let value = run_string(

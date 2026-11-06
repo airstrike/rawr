@@ -184,6 +184,7 @@ sum 5050</span></div>
   <li>A generic item whose bound picks behaviour by type alone, such as <code>Default</code> or <code>Deserialize</code>, can&rsquo;t take one of your types. rawr says which bound when it builds the runner.</li>
   <li>A <code>main</code> that is <code>async</code> needs a runtime&rsquo;s attribute, as Rust does. Without one it is rustc&rsquo;s E0752.</li>
 </ul>
+<p>A program with no dependencies, such as a lone <code>.rs</code> file, can use <code>async fn</code>, <code>async</code> blocks and <code>.await</code> too. They check as rustc checks them, and calling an <code>async fn</code> makes its future, as in Rust. Running a future needs a runtime crate, so <code>#[tokio::main]</code> or <code>tokio::join!</code> there is rustc&rsquo;s E0433, since no <code>tokio</code> crate is linked.</p>
 
 <h2 id="check">Checking</h2>
 <p><code>rawr check</code> checks a program without running it. Then it runs <code>cargo check</code>, because rawr&rsquo;s check accepts some code that rustc rejects. The <a href="/docs/reference/overview#lenient">Overview</a> lists those cases.</p>

@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 107;
+const CLASSIFIER_VERSION: u32 = 108;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -5701,6 +5701,14 @@ impl<P: api::Phase> Context<'_, P> {
                 self.trait_self.set(outer);
                 evidence
             }
+            // A crate's impl of an operator for a number that takes this
+            // type, as iced's `impl Mul<Radians> for f32`: the member is
+            // this type's function of the number and the operand.
+            None if is_number(implementation.self_type())
+                && matches!(implementation.trait_ref(), model::Trait::Trait { .. }) =>
+            {
+                self.classify_operand_member(implementation, definition)
+            }
             None if default_method => {
                 let index = self
                     .graph
@@ -5719,6 +5727,79 @@ impl<P: api::Phase> Context<'_, P> {
                 plan_evidence(definitions, definition)
             }
             None => self.classify_inherent_invocation(implementation, definition),
+        }
+    }
+
+    /// The method of a trait's impl for a number that takes another type,
+    /// as `mul` of `impl Mul<Radians> for f32`: a function of the number
+    /// and the operand whose instance is the number, so the bridge calls
+    /// `<f32>::mul(number, operand)` and rustc selects the impl.
+    fn classify_operand_member(
+        &self,
+        implementation: &model::Implementation,
+        definition: &model::Definition,
+    ) -> Result<OutcomeEvidence, Error> {
+        use representability::{function, reject, Representability};
+        let retained_before = (self.retained_items.get(), self.retained_bytes.get());
+        let result = (|| -> Result<Representability, Failure> {
+            let model::Kind::Function {
+                signature,
+                generics,
+            } = definition.kind()
+            else {
+                return Err(reject::Kind::GenericImplementation.into());
+            };
+            // A number's `self` is its type written out: the function's
+            // first input.
+            let by_value = matches!(signature.receiver(),
+                model::Receiver::Explicit { ty } if ty == implementation.self_type());
+            if !by_value
+                || implementation.generics().parameters().next().is_some()
+                || generics.parameters().next().is_some()
+            {
+                return Err(reject::Kind::GenericImplementation.into());
+            }
+            let instance = self
+                .convert(implementation.self_type())
+                .map_err(|_| reject::Kind::GenericImplementation)?;
+            let free = model::Signature::new(
+                signature.safety(),
+                signature.const_function(),
+                signature.async_function(),
+                signature.abi().into(),
+                signature.variadic(),
+                signature.binders().cloned().collect(),
+                model::Receiver::None,
+                std::iter::once(implementation.self_type().clone())
+                    .chain(signature.inputs().cloned())
+                    .collect(),
+                signature.output().clone(),
+            );
+            match self.function(&free, generics)? {
+                Representability::Function(plan) => Ok(Representability::Function(
+                    function::Plan::new(plan.signature().clone().with_instance(Some(instance))),
+                )),
+                _ => Err(reject::Kind::GenericImplementation.into()),
+            }
+        })();
+        match result {
+            Ok(plan) => {
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(plan)))
+            }
+            Err(Failure::Reject(kind)) => {
+                self.retained_items.set(retained_before.0);
+                self.retained_bytes.set(retained_before.1);
+                self.retain_span(implementation.span())?;
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(
+                    Representability::Rejected(reject::Reason::classification(
+                        kind,
+                        implementation.span().clone(),
+                    )),
+                )))
+            }
+            Err(Failure::Operational(error)) => Err(error),
         }
     }
 
@@ -9666,6 +9747,12 @@ fn leased(ty: representability::convert::Type) -> Result<representability::conve
     } else {
         Err(representability::reject::Kind::ReferenceType.into())
     }
+}
+
+/// Whether `ty` is a number, `bool` or `char`: the self type of a crate's
+/// operator impl for a std type, as `impl Mul<Radians> for f32`.
+fn is_number(ty: &model::Type) -> bool {
+    matches!(ty, model::Type::Primitive(name) if !matches!(&**name, "str" | "!"))
 }
 
 fn is_str_reference(ty: &model::Type) -> bool {

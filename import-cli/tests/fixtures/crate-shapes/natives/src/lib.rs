@@ -559,3 +559,74 @@ pub mod looks {
         looks.iter().map(label).collect()
     }
 }
+
+/// A type with operators on both sides of a number, as iced's `Radians`:
+/// `impl Mul<Radians> for f32` is the crate's impl of a std trait for a
+/// std type, beside the type's own `Mul<f32>`, `Mul` and `Rem`.
+pub mod angle {
+    use std::ops::{Add, Div, Mul, Rem, Sub};
+
+    #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+    pub struct Turn(pub f32);
+
+    impl Turn {
+        pub const HALF: Self = Self(0.5);
+    }
+
+    impl Mul<Turn> for f32 {
+        type Output = Turn;
+
+        fn mul(self, rhs: Turn) -> Self::Output {
+            Turn(self * rhs.0)
+        }
+    }
+
+    impl Mul<f32> for Turn {
+        type Output = Turn;
+
+        fn mul(self, rhs: f32) -> Turn {
+            Turn(self.0 * rhs * 10.0)
+        }
+    }
+
+    impl Mul for Turn {
+        type Output = Turn;
+
+        fn mul(self, rhs: Turn) -> Turn {
+            Turn(self.0 * rhs.0 * 100.0)
+        }
+    }
+
+    impl Rem for Turn {
+        type Output = Turn;
+
+        fn rem(self, rhs: Turn) -> Turn {
+            Turn(self.0 % rhs.0)
+        }
+    }
+
+    impl Add for Turn {
+        type Output = Turn;
+
+        fn add(self, rhs: Turn) -> Turn {
+            Turn(self.0 + rhs.0)
+        }
+    }
+
+    /// A difference that is a number, not a turn.
+    impl Sub<Turn> for f64 {
+        type Output = f64;
+
+        fn sub(self, rhs: Turn) -> Self::Output {
+            self - f64::from(rhs.0)
+        }
+    }
+
+    impl Div<Turn> for i32 {
+        type Output = Turn;
+
+        fn div(self, rhs: Turn) -> Turn {
+            Turn(self as f32 / rhs.0)
+        }
+    }
+}
