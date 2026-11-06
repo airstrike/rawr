@@ -46,9 +46,11 @@ pub enum Build {
 }
 
 impl Build {
-    /// An engine that parses a program for this build.
+    /// An engine that parses a program for this build. Its async code
+    /// gives the core's future, as rustc's needs no runtime crate until a
+    /// future is polled.
     fn parser(self) -> Engine {
-        let mut engine = Engine::new();
+        let mut engine = rawr::future::facade::engine();
         engine.set_test(self == Self::Test);
         engine
     }

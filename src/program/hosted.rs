@@ -7,6 +7,7 @@
 //! missing facade, a changed fingerprint or a missing binding fails before
 //! any callback runs. Later evaluations reuse the binding.
 
+use crate::future::facade;
 use crate::host;
 use crate::{EvalAltResult, Position, Shared};
 
@@ -40,32 +41,41 @@ impl Hosted {
 
     /// This program's runtime generation of `engine`'s registry, bound on
     /// first use. An engine that exports nothing binds a program that names
-    /// only std's types to a registry of its own (`std_facade`). `None` when
-    /// the program names anything else, which leaves each host call to
-    /// report its missing binding.
+    /// only std's types and the core's future to a registry of its own
+    /// (`std_facade`, `future::facade`). `None` when the program names
+    /// anything else, which leaves each host call to report its missing
+    /// binding.
     pub(crate) fn bind(
         &self,
         engine: &crate::Engine,
     ) -> Result<Option<Shared<host::runtime::Registry>>, Box<EvalAltResult>> {
+        let failed = |error: &dyn std::fmt::Display| -> Box<EvalAltResult> {
+            EvalAltResult::ErrorRuntime(error.to_string().into(), Position::NONE).into()
+        };
         let validate = |registry: &host::runtime::Registry| {
             registry
                 .validate(&self.dependencies, &self.requirements, &self.projections)
-                .map_err(|error| -> Box<EvalAltResult> {
-                    EvalAltResult::ErrorRuntime(error.to_string().into(), Position::NONE).into()
-                })
+                .map_err(|error| failed(&error))
         };
         let Some(registry) = engine.host_runtime.as_ref() else {
-            if !self
-                .dependencies
-                .iter()
-                .all(|dependency| dependency.root() == crate::std_facade::ROOT)
-            {
+            let names = |root: &str| {
+                self.dependencies
+                    .iter()
+                    .any(|dependency| dependency.root() == root)
+            };
+            if self.dependencies.iter().any(|dependency| {
+                ![crate::std_facade::ROOT, facade::ROOT].contains(&dependency.root())
+            }) {
                 return Ok(None);
             }
-            // Every build's std facade is the same, so any engine's program
-            // binds to it.
+            // Every build's std facade and core future are the same, so any
+            // engine's program binds to them.
             let bound = self.bound.get_or_try_init(|| {
-                let registry = host::runtime::Registry::new();
+                let mut registry = host::runtime::Registry::new();
+                if names(facade::ROOT) {
+                    let runtime = facade::runtime().map_err(|error| failed(&error))?;
+                    registry.install(runtime).map_err(|error| failed(&error))?;
+                }
                 validate(&registry)?;
                 Ok::<_, Box<EvalAltResult>>(Shared::new(registry))
             })?;

@@ -561,6 +561,11 @@ impl<'a> Resolver<'a> {
         );
 
         self.resolve_aliases()?;
+        let prelude = self
+            .packages
+            .iter()
+            .find(|package| package.name() == self.package.as_str())
+            .map(super::extern_prelude::Prelude::of);
         let mut aliases = BTreeMap::new();
         #[cfg(feature = "rust-import")]
         let mut lexical = BTreeMap::new();
@@ -577,6 +582,13 @@ impl<'a> Resolver<'a> {
                 parsed.imports().to_vec().into_boxed_slice(),
             );
             let (source_map, parsed_items, statements, statement_source) = parsed.into_parts();
+            if context.source == self.entry_source {
+                super::async_main(&parsed_items, prelude.as_ref()).map_err(|error| Failure {
+                    primary: context.source,
+                    secondary: None,
+                    error,
+                })?;
+            }
 
             if context.source != self.entry_source
                 && let Some(position) = statements
@@ -698,6 +710,7 @@ impl<'a> Resolver<'a> {
             qualified_pattern_owners,
             qualified_rust: qualified_calls.rust,
             entry_crate,
+            crates: prelude,
             aliases,
             scripts,
             instances: super::Instances::default(),

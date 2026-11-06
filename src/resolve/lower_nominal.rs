@@ -4472,6 +4472,8 @@ struct Tables {
     qualified_rust: BTreeMap<(crate::program::source::Id, Span), Box<[ImmutableString]>>,
     /// The app crate whose shadow holds an async `main`'s entry (D513.4).
     entry_crate: Option<ImmutableString>,
+    /// The crates the program's paths may start with (`Program::crates`).
+    crates: Option<crate::resolve::extern_prelude::Prelude>,
     /// The type aliases each source names, resolved once with the headers.
     aliases: BTreeMap<(crate::program::source::Id, ImmutableString), type_ref::Alias>,
     /// The module each source is, which decides what it sees of another
@@ -5100,6 +5102,7 @@ impl Models {
             qualified_pattern_owners: program.qualified_pattern_owners.clone(),
             qualified_rust: program.qualified_rust.clone(),
             entry_crate: program.entry_crate.clone(),
+            crates: program.crates.clone(),
             aliases: program.aliases.clone(),
             namespaces: program
                 .scripts
@@ -48624,6 +48627,11 @@ impl<'a> Parser<'a> {
             if matches!(self.peek(), Token::Bang)
                 && let Some(name) = crate::resolve::tokio_macro(&full, &self.models.host)
             {
+                if let Some(crates) = &self.models.crates {
+                    let (written, _) = &segments[0];
+                    let at = span(first_span.start(), text_end(first_span.start(), written));
+                    crates.reach(full.split("::").next().unwrap_or_default(), at)?;
+                }
                 return self.parse_tokio_macro(name, first_span);
             }
             // `tokio::spawn` has no place to run without tokio.

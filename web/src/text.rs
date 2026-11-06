@@ -322,7 +322,7 @@ fn limit(text: &str) -> Option<String> {
 /// A base Engine with the server's limits but its operation count, and a
 /// wall-clock deadline instead, whose output goes to `sink`.
 fn engine(sink: &Arc<Mutex<Output>>) -> Engine {
-    let mut engine = Engine::new();
+    let mut engine = rawr::future::facade::engine();
     sandbox(&mut engine, sink);
     engine
 }
