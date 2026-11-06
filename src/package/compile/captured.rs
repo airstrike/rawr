@@ -60,10 +60,13 @@ impl Output {
         let program =
             resolve::package::resolve_captured(graph, &engine.host_registry, native.clone())
                 .map_err(|failure| {
-                    let missed = native.matches(
-                        crate::program::source::Id::from_index(failure.primary.index()),
-                        &failure.error,
-                    );
+                    // A crate derive whose item changed is expanded again
+                    // by preparation, as a native miss is answered (#593).
+                    let missed = matches!(failure.error, resolve::Error::ExpansionRequired { .. })
+                        || native.matches(
+                            crate::program::source::Id::from_index(failure.primary.index()),
+                            &failure.error,
+                        );
                     let error = package::Error::resolution(sources.clone(), failure);
                     if missed {
                         Error::NativeMiss(error)

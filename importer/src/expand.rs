@@ -24,9 +24,6 @@ pub struct Item {
 
 /// What an expansion needs of the probe's build: the target, where the
 /// selected crates' own dependencies are, and each selected crate's
-/// An alias, the artifact it names and that artifact's digest.
-pub(crate) type Extern = (Box<str>, Box<str>, Box<str>);
-
 /// artifact by the aliases the program names it by.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(
@@ -36,13 +33,80 @@ pub(crate) type Extern = (Box<str>, Box<str>, Box<str>);
 pub struct Basis {
     pub(crate) selected_target: Box<str>,
     pub(crate) dependency_directories: Box<[PathBuf]>,
+    /// Each alias, the artifact it names and that artifact's digest.
     pub(crate) externs: Box<[Extern]>,
 }
+
+/// One crate a derive may come from: the alias the program names it by,
+/// its artifact, and that artifact's digest.
+pub(crate) type Extern = (Box<str>, Box<str>, Box<str>);
 
 /// Where the expansions of the project at `project` are kept.
 #[must_use]
 pub fn directory(project: &Path) -> PathBuf {
     project.join("target/rawr/expand")
+}
+
+/// Where the program at `project` keeps the expansion its item `text` has
+/// from the derive it writes as `written` (`Serialize`): a Rawr source of
+/// its own, which loading the item's module reads beside it (#593).
+#[must_use]
+pub fn source_path(project: &Path, text: &str, written: &str) -> PathBuf {
+    let mut digest = Sha256::new();
+    digest.update(b"rawr.import.expand.source/v1");
+    digest.update(text.as_bytes());
+    digest.update([0]);
+    digest.update(written.as_bytes());
+    let key: [u8; 32] = digest.finalize().into();
+    directory(project).join(format!("{}.rs", hex(&key)))
+}
+
+/// The first line of an expansion source, before the macro's path.
+const SOURCE_HEADER: &str = "// derive ";
+
+/// An expansion source's text: a line naming the macro `resolved`
+/// (`serde::Serialize`) the items come from, then the items.
+#[must_use]
+pub fn source_text(resolved: &str, items: &[String]) -> String {
+    let mut text = format!("{SOURCE_HEADER}{resolved}\n");
+    for item in items {
+        text.push_str(item);
+        text.push('\n');
+    }
+    text
+}
+
+/// The macro an expansion source's `text` comes from, as
+/// [`source_text`] names it.
+#[must_use]
+pub fn source_macro(text: &str) -> Option<&str> {
+    let (line, _) = text.split_once('\n')?;
+    line.strip_prefix(SOURCE_HEADER)
+}
+
+/// Keep each of `item`'s derives' expansions in `expanded` as its source
+/// under `project`, where loading the item's module reads it. A derive the
+/// expansion has no items for gets an empty source: it expanded to nothing.
+pub fn keep_sources(
+    project: &Path,
+    item: &Item,
+    expanded: &request::Expanded,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory(project))?;
+    let mut expansions = expanded.expansions.iter().collect::<Vec<_>>();
+    for (written, resolved) in &item.derives {
+        let name = macro_name(resolved);
+        let items = expansions
+            .iter()
+            .position(|expansion| macro_name(&expansion.derive) == name)
+            .map(|index| expansions.remove(index).items.as_slice())
+            .unwrap_or_default();
+        let path = source_path(project, &item.text, written);
+        let staged = path.with_extension(format!("rs.{}", std::process::id()));
+        std::fs::write(&staged, source_text(resolved, items))?;
+        std::fs::rename(&staged, &path)?;
+    }
+    Ok(())
 }
 
 /// The small crate's source: one `use` for each derive, then the item.
@@ -69,7 +133,7 @@ pub fn source(item: &Item) -> String {
 #[must_use]
 pub fn key(item: &Item, basis: &Basis, protocol: u32, edition: &str) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(b"rawr.import.expand/v1");
+    digest.update(b"rawr.import.expand/v2");
     digest.update(protocol.to_le_bytes());
     digest.update(edition.as_bytes());
     digest.update([0]);
@@ -84,6 +148,12 @@ pub fn key(item: &Item, basis: &Basis, protocol: u32, edition: &str) -> [u8; 32]
         }
     }
     digest.finalize().into()
+}
+
+/// A derive macro's own name, however a path names it: `Serialize` of
+/// `serde::Serialize`, as rustc names an expansion by the path written.
+fn macro_name(path: &str) -> &str {
+    path.rsplit("::").next().unwrap_or(path)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -207,7 +277,7 @@ pub fn expand(
     let named = item
         .derives
         .iter()
-        .filter_map(|(_, path)| path.rsplit("::").next())
+        .map(|(_, path)| macro_name(path))
         .collect::<std::collections::BTreeSet<_>>();
     let expanded = ran
         .and_then(|output| output.checked(Program::Driver))
@@ -221,7 +291,7 @@ pub fn expand(
                 })?;
             expanded
                 .expansions
-                .retain(|expansion| named.contains(expansion.derive.as_str()));
+                .retain(|expansion| named.contains(macro_name(&expansion.derive)));
             Ok(expanded)
         });
     let kept = directory.join(format!("{name}.json"));
@@ -239,7 +309,21 @@ pub fn expand(
 
 #[cfg(test)]
 mod tests {
-    use super::{key, source, Basis, Item};
+    use super::{key, source, source_macro, source_path, source_text, Basis, Item};
+
+    #[test]
+    fn an_expansion_source_names_its_macro_and_follows_its_item() {
+        let text = source_text("serde::Serialize", &["impl A for B {}".to_owned()]);
+        assert_eq!(text, "// derive serde::Serialize\nimpl A for B {}\n");
+        assert_eq!(source_macro(&text), Some("serde::Serialize"));
+        assert_eq!(source_macro("impl A for B {}\n"), None);
+        let project = std::path::Path::new("/p");
+        let path = source_path(project, "struct A;", "Serialize");
+        assert!(path.starts_with("/p/target/rawr/expand"));
+        assert_eq!(path, source_path(project, "struct A;", "Serialize"));
+        assert_ne!(path, source_path(project, "struct A;", "Deserialize"));
+        assert_ne!(path, source_path(project, "struct B;", "Serialize"));
+    }
 
     fn task() -> Item {
         Item {

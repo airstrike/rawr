@@ -155,6 +155,45 @@ mod tests {
     use crate::diagnostic::{code, Report, Source};
     use crate::{Position, Span};
 
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn a_position_in_a_derives_expansion_is_reported_at_the_derive() {
+        use crate::diagnostic::source;
+
+        let item = Source::new("src/main.rs", "#[derive(Serialize)]\nstruct Task;\n").unwrap();
+        let derive = Span::new(Position::new(1, 10), Position::new(1, 19));
+        let expansion = Source::expansion(
+            "target/rawr/expand/k.rs",
+            "// derive serde::Serialize\nimpl Serialize for Task {}\n",
+            source::Origin {
+                source: item,
+                span: derive,
+                name: "Serialize".into(),
+            },
+        )
+        .unwrap();
+        let report = Report::error(code::RESOLVE_DUPLICATE_ITEM, "duplicate `Task`")
+            .source(expansion.clone())
+            .primary(
+                expansion,
+                Span::new(Position::new(2, 6), Position::new(2, 15)),
+                None,
+            )
+            .unwrap()
+            .finish();
+
+        assert_eq!(
+            render(&report),
+            concat!(
+                "error[RAWR-RESOLVE-DUPLICATE-ITEM]: duplicate `Task`\n",
+                " --> src/main.rs:1:10-1:19\n",
+                " 1 | #[derive(Serialize)]\n",
+                "   |          ^^^^^^^^^\n",
+                "  = note: this error originates in the derive macro `Serialize`\n",
+            )
+        );
+    }
+
     #[test]
     fn renderer_handles_unicode_multiline_and_cross_source_labels() {
         let primary = Source::new("src/main.rs", "αβγ\nline two\n").unwrap();

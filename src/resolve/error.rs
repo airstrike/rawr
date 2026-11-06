@@ -337,6 +337,18 @@ pub struct MoveCause {
     pub ty: ImmutableString,
 }
 
+/// One program item whose crate derives need expanding (#593).
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Expansion {
+    /// The source the item is written in.
+    pub(crate) source: crate::program::source::Id,
+    /// The item, its attributes first.
+    pub(crate) item: Span,
+    /// Each crate derive: as written (`Serialize`), and the macro it
+    /// names (`serde::Serialize`).
+    pub(crate) derives: Box<[(ImmutableString, ImmutableString)]>,
+}
+
 /// Failure to promote a parsed unit into an opaque resolved program.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Error {
@@ -407,6 +419,17 @@ pub enum Error {
         attribute: Span,
         /// Secondary span on the nominal declaration.
         declaration: Span,
+    },
+    /// A crate's derive on a program type whose expansion the program has
+    /// not loaded (#593): rustc expands it, and checking the program again
+    /// loads the expansion beside its item.
+    ExpansionRequired {
+        /// The first item's type, as written.
+        owner: ImmutableString,
+        /// The first item's crate derive, as written.
+        attribute: Span,
+        /// Every item a crate derive needs expanding for.
+        items: Box<[Expansion]>,
     },
     /// A struct field or enum variant name is declared twice, or a generic
     /// parameter name in one item's generics.
@@ -933,7 +956,7 @@ impl Error {
             Self::InvalidImport { .. } => Category::InvalidImport,
             Self::InvalidTypeArguments { .. } => Category::InvalidTypeArguments,
             Self::LoweringUnavailable { .. } => Category::LoweringUnavailable,
-            Self::InvalidDerive { .. } => Category::InvalidDerive,
+            Self::InvalidDerive { .. } | Self::ExpansionRequired { .. } => Category::InvalidDerive,
             Self::DuplicateMember { .. } => Category::DuplicateMember,
             Self::UnknownMember { .. } | Self::MemberKind { .. } => Category::UnknownMember,
             Self::NotInModule { .. } => Category::NotInModule,
@@ -993,9 +1016,9 @@ impl Error {
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
             Self::LoweringUnavailable { item, .. } => item.as_str(),
-            Self::InvalidDerive { owner, .. } | Self::DuplicateMember { owner, .. } => {
-                owner.as_str()
-            }
+            Self::InvalidDerive { owner, .. }
+            | Self::ExpansionRequired { owner, .. }
+            | Self::DuplicateMember { owner, .. } => owner.as_str(),
             Self::NotInModule { module, .. } => module.as_str(),
             Self::PrivateItem { name, .. } => name.as_str(),
             Self::OverflowingLiteral { ty, .. } => ty.as_str(),
@@ -1042,7 +1065,9 @@ impl Error {
             | Self::InvalidImport { reference, .. }
             | Self::InvalidTypeArguments { reference, .. } => *reference,
             Self::LoweringUnavailable { body, .. } => *body,
-            Self::InvalidDerive { attribute, .. } => *attribute,
+            Self::InvalidDerive { attribute, .. } | Self::ExpansionRequired { attribute, .. } => {
+                *attribute
+            }
             Self::DuplicateMember { declaration, .. } => *declaration,
             Self::UnknownMember { reference, .. }
             | Self::MemberKind { reference, .. }
@@ -1096,6 +1121,7 @@ impl Error {
                 ..
             } => Some(*previous_declaration),
             Self::InvalidDerive { declaration, .. } => Some(*declaration),
+            Self::ExpansionRequired { .. } => None,
             Self::DuplicateMember {
                 previous_declaration,
                 ..
@@ -1365,6 +1391,12 @@ impl fmt::Display for Written<'_> {
             } => write!(
                 formatter,
                 "cannot derive `{capability}` for `{owner}` at {attribute}: {reason}"
+            ),
+            Error::ExpansionRequired {
+                owner, attribute, ..
+            } => write!(
+                formatter,
+                "the derives on `{owner}` at {attribute} have not been expanded"
             ),
             Error::DuplicateMember {
                 owner,

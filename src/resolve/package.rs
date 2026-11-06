@@ -118,6 +118,8 @@ struct Resolver<'a> {
     /// Each crate enum's variant names, for `use Shape::Circle;` and
     /// `use Shape::*;`.
     enum_variants: BTreeMap<type_def::Id, Box<[ImmutableString]>>,
+    /// Each crate derive whose expansion the graph loaded (#593).
+    expanded: crate::capability::Expanded,
 }
 
 /// The variants of `std::cmp::Ordering`, which `use` may import by name.
@@ -140,6 +142,7 @@ pub(crate) fn resolve_captured(
 
 impl<'a> Resolver<'a> {
     fn new(graph: Graph, host: &'a host::Registry) -> Result<Self, Failure> {
+        let expanded = graph.expanded();
         let (packages, sources, parsed, entry_package, entry_source) = graph.into_parts();
         let package = packages[entry_package.index()].name().into();
         let evidence = sources
@@ -187,6 +190,7 @@ impl<'a> Resolver<'a> {
             globs: BTreeMap::new(),
             type_declarations: Vec::new(),
             enum_variants: BTreeMap::new(),
+            expanded,
         };
         resolver.predeclare()?;
         resolver.predeclare_globs();
@@ -666,8 +670,9 @@ impl<'a> Resolver<'a> {
             ));
         }
 
-        let definitions = finish_definitions(self.type_declarations, &shells, self.host)
-            .map_err(Failure::from_located)?;
+        let definitions =
+            finish_definitions(self.type_declarations, &shells, self.host, &self.expanded)
+                .map_err(Failure::from_located)?;
         let (methods, builtin_methods, std_traits) =
             super::resolve_methods(&mut shells, &definitions, self.host)
                 .map_err(Failure::from_located)?;
@@ -2458,9 +2463,10 @@ fn finish_definitions(
     declarations: Vec<type_def::Declaration>,
     items: &[item::Shell],
     host: &crate::host::Registry,
+    expanded: &crate::capability::Expanded,
 ) -> Result<Vec<type_def::Definition>, LocatedError> {
     let mut schemas = BTreeMap::new();
-    let capabilities = crate::capability::resolve(items, host)?;
+    let capabilities = crate::capability::resolve(items, host, expanded)?;
     for shell in items {
         match &shell.kind {
             item::Kind::Struct(item) => {

@@ -76,6 +76,9 @@ pub struct Graph {
     units: Box<[Unit]>,
     entry_package: Id,
     entry_source: source::Id,
+    /// Each crate derive whose expansion was loaded beside its item, by the
+    /// derive's source and span: the macro the expansion came from (#593).
+    expanded: BTreeMap<(source::Id, Span), ImmutableString>,
 }
 
 impl Id {
@@ -343,6 +346,20 @@ impl Graph {
             .map(|unit| (&self.sources[unit.source.index()], unit.parsed.items()))
     }
 
+    /// Each crate derive whose expansion was loaded beside its item, by the
+    /// derive's source and span as written: the macro it came from.
+    pub(crate) fn expanded(&self) -> crate::capability::Expanded {
+        self.expanded
+            .iter()
+            .map(|(&(source, span), resolved)| {
+                (
+                    (crate::program::source::Id::from_index(source.index()), span),
+                    resolved.clone(),
+                )
+            })
+            .collect()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn into_parts(self) -> Parts {
         (
@@ -394,6 +411,7 @@ struct Builder<'a> {
     packages: Vec<Package>,
     module_targets: BTreeMap<PathBuf, error::Label>,
     active_modules: Vec<PathBuf>,
+    expanded: BTreeMap<(source::Id, Span), ImmutableString>,
 }
 
 struct Request {
@@ -413,6 +431,7 @@ impl<'a> Builder<'a> {
             packages: Vec::new(),
             module_targets: BTreeMap::new(),
             active_modules: Vec::new(),
+            expanded: BTreeMap::new(),
         }
     }
 
@@ -441,6 +460,7 @@ impl<'a> Builder<'a> {
             units: self.units.into_boxed_slice(),
             entry_package,
             entry_source,
+            expanded: self.expanded,
         })
     }
 
@@ -465,6 +485,7 @@ impl<'a> Builder<'a> {
             units: self.units.into_boxed_slice(),
             entry_package,
             entry_source,
+            expanded: self.expanded,
         })
     }
 
@@ -731,8 +752,16 @@ impl<'a> Builder<'a> {
             })
             .collect::<Vec<_>>();
         let file_text = source.text().to_string();
+        #[cfg(feature = "rust-import")]
+        let derived = derived_items(&file_text, parsed.items());
+        #[cfg(feature = "rust-import")]
+        let item_source = source.diagnostic().clone();
         self.sources.push(source);
         self.units.push(Unit { source: id, parsed });
+        #[cfg(feature = "rust-import")]
+        for derived in derived {
+            self.load_expansion(package_name, &modules, id, &item_source, derived)?;
+        }
         self.active_modules.push(key.clone());
         self.module_targets.insert(
             key.clone(),
@@ -804,6 +833,65 @@ impl<'a> Builder<'a> {
 
         self.active_modules.pop();
         Ok(id)
+    }
+
+    /// The expansion kept for one crate derive of an item in the module
+    /// `modules`, when the program has one: a source of its own in the
+    /// item's module, whose positions are reported at the derive (#593).
+    #[cfg(feature = "rust-import")]
+    fn load_expansion(
+        &mut self,
+        package_name: &str,
+        modules: &[ImmutableString],
+        item_source: source::Id,
+        item_evidence: &diagnostic::Source,
+        derived: Derived,
+    ) -> Result<(), Error> {
+        // Expansions are kept with the project: the entry package.
+        let Some(project) = self.packages.first().map(|package| package.root.clone()) else {
+            return Ok(());
+        };
+        let path = rawr_import::expand::source_path(&project, &derived.text, &derived.written);
+        if !self.is_file(&path) {
+            return Ok(());
+        }
+        let Ok(text) = self.read_to_string(&path) else {
+            return Ok(());
+        };
+        let Some(resolved) = rawr_import::expand::source_macro(&text).map(ImmutableString::from)
+        else {
+            return Ok(());
+        };
+        let name = derived
+            .written
+            .rsplit("::")
+            .next()
+            .unwrap_or_default()
+            .into();
+        let id = source::Id::from_index(self.sources.len());
+        let source = source::Source::expansion(
+            id,
+            path,
+            package_name.into(),
+            modules.into(),
+            text,
+            diagnostic::source::Origin {
+                source: item_evidence.clone(),
+                span: derived.attribute,
+                name,
+            },
+        )
+        .map_err(Error::diagnostic)?;
+        let evidence = self.push_evidence(source.diagnostic().clone());
+        let parsed = self
+            .engine
+            .parse_unit(source.text())
+            .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?;
+        self.sources.push(source);
+        self.units.push(Unit { source: id, parsed });
+        self.expanded
+            .insert((item_source, derived.attribute), resolved);
+        Ok(())
     }
 
     /// In a crate whose root is marked, native code must not depend on
@@ -1300,6 +1388,50 @@ impl<'a> Builder<'a> {
             span: Span::new(Position::START, Position::START),
         }
     }
+}
+
+/// One derive of a program item that a crate's macro may expand.
+#[cfg(feature = "rust-import")]
+struct Derived {
+    /// The item as written, its attributes first.
+    text: String,
+    /// The derive as written, as `Serialize`.
+    written: String,
+    /// Where the derive is written.
+    attribute: Span,
+}
+
+/// Each derive of `items` (written in `text`) that isn't one of std's by
+/// name: what a crate's macro may have expanded.
+#[cfg(feature = "rust-import")]
+fn derived_items(text: &str, items: &[item::Parsed]) -> Vec<Derived> {
+    let mut derived = Vec::new();
+    for parsed in items {
+        let (header, span) = match parsed {
+            item::Parsed::Struct(item) => (&item.header, item.span),
+            item::Parsed::Enum(item) => (&item.header, item.span),
+            _ => continue,
+        };
+        let mut arguments = header
+            .derives()
+            .filter(|path| {
+                !matches!(path.segments.as_ref(), [only]
+                    if !path.global && crate::capability::Kind::from_derive(&only.name.text).is_some())
+            })
+            .peekable();
+        if arguments.peek().is_none() {
+            continue;
+        }
+        let written = header.written_span(span).text(text);
+        for argument in arguments {
+            derived.push(Derived {
+                text: written.to_owned(),
+                written: item::written_path(argument),
+                attribute: argument.span,
+            });
+        }
+    }
+    derived
 }
 
 /// `text` with everything outside `span` blanked, line breaks kept, so the

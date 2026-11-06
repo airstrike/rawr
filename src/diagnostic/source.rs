@@ -10,6 +10,18 @@ pub struct Source(Shared<Data>);
 struct Data {
     identity: ImmutableString,
     text: ImmutableString,
+    origin: Option<Origin>,
+}
+
+/// Where a macro's expansion was asked for: every position in an expansion
+/// is reported there, as rustc reports an error in a derive's output at
+/// the derive.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Origin {
+    pub(crate) source: Source,
+    pub(crate) span: crate::Span,
+    /// The macro, as the program writes it (`Serialize`).
+    pub(crate) name: ImmutableString,
 }
 
 impl Source {
@@ -29,7 +41,32 @@ impl Source {
         Ok(Self(Shared::new(Data {
             identity,
             text: text.into(),
+            origin: None,
         })))
+    }
+
+    /// The expansion `text` of the macro `origin` names, kept at
+    /// `identity`, whose positions are all reported at `origin`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn expansion(
+        identity: impl Into<ImmutableString>,
+        text: impl Into<ImmutableString>,
+        origin: Origin,
+    ) -> Result<Self, super::Error> {
+        let identity = identity.into();
+        if identity.is_empty() {
+            return Err(super::Error::EmptySourceIdentity);
+        }
+        Ok(Self(Shared::new(Data {
+            identity,
+            text: text.into(),
+            origin: Some(origin),
+        })))
+    }
+
+    /// Where this expansion was asked for, when it is a macro's expansion.
+    pub(crate) fn origin(&self) -> Option<&Origin> {
+        self.0.origin.as_ref()
     }
 
     /// Return the stable human-facing source identity.

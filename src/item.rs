@@ -317,6 +317,47 @@ pub struct Header {
     pub span: Span,
 }
 
+impl Header {
+    /// The item spanning `span` as written, its attributes first: the text
+    /// a derive's macro is given.
+    pub(crate) fn written_span(&self, span: Span) -> Span {
+        let start = self
+            .attributes
+            .iter()
+            .map(|attribute| attribute.span.start())
+            .chain([span.start()])
+            .min()
+            .unwrap_or(span.start());
+        Span::new(start, span.end())
+    }
+
+    /// Each argument of the item's `#[derive(..)]` attributes, as written.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn derives(&self) -> impl Iterator<Item = &type_ref::Path> {
+        self.attributes
+            .iter()
+            .filter(|attribute| {
+                matches!(attribute.path.segments.as_ref(), [only] if only.name.text == "derive")
+            })
+            .flat_map(|attribute| attribute.arguments.iter())
+    }
+}
+
+/// The name a derive argument writes, as `Serialize` or `serde::Serialize`.
+pub(crate) fn written_path(path: &type_ref::Path) -> String {
+    let joined = path
+        .segments
+        .iter()
+        .map(|segment| segment.name.text.as_str())
+        .collect::<Vec<_>>()
+        .join("::");
+    if path.global {
+        format!("::{joined}")
+    } else {
+        joined
+    }
+}
+
 /// Whether `path` names a Rawr attribute: `preview`, or `rawr::preview`.
 pub(crate) fn is_attribute_path(path: &type_ref::Path, name: &str) -> bool {
     match path.segments.as_ref() {

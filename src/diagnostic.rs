@@ -5,7 +5,7 @@ pub mod code;
 mod panic;
 mod render;
 mod report;
-mod source;
+pub(crate) mod source;
 mod view;
 
 pub use crate::types::Rendered;

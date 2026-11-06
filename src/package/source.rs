@@ -46,6 +46,29 @@ impl Source {
         })
     }
 
+    /// A derive's expansion `text`, kept at `path`, read as part of the
+    /// module `modules` its item is in, whose positions are reported at
+    /// `origin` (#593).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn expansion(
+        id: Id,
+        path: PathBuf,
+        package: ImmutableString,
+        modules: Box<[ImmutableString]>,
+        text: String,
+        origin: diagnostic::source::Origin,
+    ) -> Result<Self, diagnostic::Error> {
+        let diagnostic =
+            diagnostic::Source::expansion(path.to_string_lossy().into_owned(), text, origin)?;
+        Ok(Self {
+            id,
+            path,
+            package,
+            modules,
+            diagnostic,
+        })
+    }
+
     /// Return this source's graph-local opaque identity.
     #[must_use]
     pub const fn id(&self) -> Id {
