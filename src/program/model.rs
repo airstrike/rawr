@@ -33,13 +33,26 @@ pub(crate) struct Model {
     /// RefCell<Vec<Cache>>`, is a proxy whose `Default` is made here.
     #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
     associated: BTreeMap<String, type_ref::Type>,
-    /// Each script type's path below its crate (`State`, `app::State`), in
-    /// the order the program defines them, in a universe runner
-    /// (`rawr_import::universe`): it names the type at index `i` by
-    /// [`crossing_name`], so it depends on the shape of the program's
-    /// native calls and never on its type names. Empty elsewhere.
+    /// Each script type, in the order the program defines them, in a
+    /// universe runner (`rawr_import::universe`), with the name the runner
+    /// gives it: [`crossing_name`] of its index, so it depends on the shape
+    /// of the program's native calls and never on its type names. Empty
+    /// elsewhere.
     #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
-    crossing: Box<[String]>,
+    crossing: Box<[Crossed]>,
+}
+
+/// A script type as a universe runner names it.
+#[derive(Clone)]
+#[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+struct Crossed {
+    /// Its path below its crate (`State`, `app::State`).
+    path: String,
+    /// [`crossing_name`] of its index among the types of its program: the
+    /// crate, or the module with its own `main` it is in.
+    name: String,
+    /// Whether its program is the crate.
+    root: bool,
 }
 
 /// The name a runner gives the script type at `index` in its program's
@@ -206,6 +219,19 @@ impl Model {
         let universe = rawr_import::universe::enabled();
         #[cfg(not(feature = "rust-import"))]
         let universe = false;
+        // A module with its own `main` is a program of its own, as ?play's
+        // universe holds iced's examples (#1000): its types are counted
+        // from zero, as they are when it is the crate.
+        let programs = program
+            .items()
+            .iter()
+            .filter(|_| universe)
+            .filter(|shell| matches!(shell.kind, item::Kind::Function(_)))
+            .filter_map(|shell| shell.key.as_ref())
+            .filter(|key| key.owner().is_none() && key.name() == "main")
+            .map(|key| key.modules().to_vec())
+            .collect::<BTreeSet<_>>();
+        let mut counted = BTreeMap::<&[ImmutableString], usize>::new();
         let crossing = program
             .types()
             .iter()
@@ -215,16 +241,29 @@ impl Model {
             })
             .map(|definition| {
                 let key = definition.key();
-                key.modules()
-                    .iter()
-                    .map(ImmutableString::as_str)
-                    .chain([key.name()])
-                    .collect::<Vec<_>>()
-                    .join("::")
+                let modules = key.modules();
+                let space = (0..=modules.len())
+                    .rev()
+                    .map(|length| &modules[..length])
+                    .find(|space| space.is_empty() || programs.contains(*space))
+                    .unwrap_or_default();
+                let index = counted.entry(space).or_default();
+                let crossed = Crossed {
+                    path: modules
+                        .iter()
+                        .map(ImmutableString::as_str)
+                        .chain([key.name()])
+                        .collect::<Vec<_>>()
+                        .join("::"),
+                    name: crossing_name(*index),
+                    root: space.is_empty(),
+                };
+                *index += 1;
+                crossed
             })
             .collect::<Box<[_]>>();
-        let crossed = |path: &str| match crossing.iter().position(|known| known == path) {
-            Some(index) => crossing_name(index),
+        let crossed = |path: &str| match crossing.iter().find(|known| known.path == path) {
+            Some(known) => known.name.clone(),
             None => path.to_owned(),
         };
 
@@ -304,8 +343,8 @@ impl Model {
     #[must_use]
     #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
     pub(crate) fn crossing_path(&self, path: &str) -> String {
-        match self.crossing.iter().position(|known| known == path) {
-            Some(index) => crossing_name(index),
+        match self.crossing.iter().find(|known| known.path == path) {
+            Some(known) => known.name.clone(),
             None => path.to_owned(),
         }
     }
@@ -524,12 +563,13 @@ impl Model {
         if let Some(ty) = self.associated.get(path) {
             return Some(self.default_for_type(ty, &mut BTreeSet::new()));
         }
-        // The script type the runner names by its index.
-        let path = path
-            .strip_prefix(CROSSING)
-            .and_then(|index| index.parse::<usize>().ok())
-            .and_then(|index| self.crossing.get(index))
-            .map_or(path, String::as_str);
+        // The script type the runner names by its index: the crate's own
+        // where a module with its own `main` counts one there too.
+        let named = || self.crossing.iter().filter(|known| known.name == path);
+        let path = named()
+            .find(|known| known.root)
+            .or_else(|| named().next())
+            .map_or(path, |known| known.path.as_str());
         let (identity, definition) = self.definitions.iter().find(|(identity, _)| {
             let type_def::Identity::Script(key) = identity else {
                 return false;

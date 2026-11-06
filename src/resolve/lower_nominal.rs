@@ -1790,15 +1790,18 @@ fn native_impl(
                     None => definition,
                 };
             // The member as the running program holds it: its owner's path,
-            // then its name (`crate::island::shared`).
+            // as the runner names the owner (`crossing_path`), then its name
+            // (`crate::island::shared`).
             let owner_path = match definition.key().owner() {
-                Some(type_def::Identity::Script(owner)) => owner
-                    .modules()
-                    .iter()
-                    .map(ImmutableString::as_str)
-                    .chain([owner.name()])
-                    .collect::<Vec<_>>()
-                    .join("::"),
+                Some(type_def::Identity::Script(owner)) => models.tables.runtime.crossing_path(
+                    &owner
+                        .modules()
+                        .iter()
+                        .map(ImmutableString::as_str)
+                        .chain([owner.name()])
+                        .collect::<Vec<_>>()
+                        .join("::"),
+                ),
                 _ => continue,
             };
             let receiver = match &function.receiver {

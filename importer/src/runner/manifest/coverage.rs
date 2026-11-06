@@ -358,13 +358,14 @@ impl Projection<'_> {
             .iter()
             .map(crate::surface::Entry::identity)
             .find(|identity| identity.as_bytes() == plan.identity().as_bytes())?;
-        // The executable collector currently exposes type substitutions and
-        // direct static operands. Other instance dimensions cannot be guessed.
-        if !identity.constants().is_empty()
-            || !identity.binders().is_empty()
-            || identity.callable().is_some()
-            || !identity.types().iter().all(|ty| concrete(ty, 0))
-        {
+        // The executable collector exposes type substitutions and direct
+        // static operands. A closure's class and the lifetimes it is
+        // generic over are the item's own, as canvas's `Cache::draw` and
+        // `Path::new` take theirs, so they follow from the rest: the
+        // adapter calls whichever closure the use passes (#1000). Two
+        // instances that differ only in them both match, which covers
+        // neither. Other instance dimensions cannot be guessed.
+        if !identity.constants().is_empty() || !identity.types().iter().all(|ty| concrete(ty, 0)) {
             return None;
         }
         let (types, functions, mappers) = match plan.operation() {
@@ -585,12 +586,13 @@ where
     for _ in 0..native_count {
         let index = super::take_length(&mut bytes).ok()?;
         let encoded = fact_bytes(&mut bytes).ok()?;
-        // Two adapters a use fits, as two calls that pass different script
-        // functions have, are two Rust types: the use names neither.
-        if equal(&facts, encoded) {
-            if found.is_some() {
-                return None;
-            }
+        // Two adapters with the same facts are one item at the same types,
+        // slots, functions and mappers: they differ only in the path the
+        // program named the item by (`canvas::Stroke` and
+        // `canvas::stroke::Stroke`) or in the closure class the item's
+        // signature gives, and either serves the use (#1000). Two calls
+        // that pass different script functions differ in their slots.
+        if found.is_none() && equal(&facts, encoded) {
             found = Some((Binding::Adapter(carrier.entries.get(index)?), encoded));
         }
     }
@@ -732,7 +734,11 @@ fn concrete(ty: &convert::Type, depth: usize) -> bool {
         return false;
     }
     match ty {
-        convert::Type::Parameter(_) | convert::Type::FunctionItem { .. } => false,
+        convert::Type::Parameter(_) => false,
+        // A crate's function item, which the use's functions name.
+        convert::Type::FunctionItem { input, output } => {
+            concrete(input, depth + 1) && concrete(output, depth + 1)
+        }
         convert::Type::Nominal { arguments, .. } => {
             arguments.iter().all(|ty| concrete(ty, depth + 1))
         }
