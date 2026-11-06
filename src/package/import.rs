@@ -3344,6 +3344,16 @@ impl Types {
                         crate::future::facade::definition()?.export_type("future::Future")?;
                     return Ok(host::type_ref::Type::external(future, converted)?);
                 }
+                // A program's iterator where a crate takes one, as
+                // itertools' `cartesian_product(self, other: J)`: an iterator
+                // of its item, which a program's iterator fills, as it is in
+                // the `Product<Self, J::IntoIter>` the call gives.
+                if *definition == rawr_import::surface::identity::Definition::iterator()
+                    && converted.len() == 1
+                    && let Some(item) = converted.pop()
+                {
+                    return Ok(host::type_ref::Type::iterator(item));
+                }
                 // A script closure where a signature names its type, as
                 // iced's `Widget::map` gives `Map<Self, F, Message>`: the
                 // closure's type, as the input that takes it is (T417).
@@ -3483,12 +3493,16 @@ impl Types {
 
 /// What the type that fills an imported type parameter must implement: the
 /// derivable std traits its bounds name, which a script type filling it as
-/// `Value` is checked for (review 3). `Copy` and `Eq` bring the traits they
-/// extend.
+/// `Value` is checked for (review 3), and `Iterator`, which an array
+/// doesn't fill (E0277). `Copy` and `Eq` bring the traits they extend.
 pub(crate) fn requirements(bounds: &[Box<str>]) -> Vec<capability::Kind> {
     let mut kinds = Vec::new();
     for name in bounds {
-        let Some(kind) = capability::Kind::from_derive(name) else {
+        let kind = match &**name {
+            "Iterator" => Some(capability::Kind::Iterator),
+            name => capability::Kind::from_derive(name),
+        };
+        let Some(kind) = kind else {
             continue;
         };
         let implied = match kind {

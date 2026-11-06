@@ -26,6 +26,7 @@ const KEYED: [&str; 4] = ["HashMap", "HashSet", "BTreeMap", "BTreeSet"];
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
 const SELF_MEMBER_DOMAIN: &[u8] = b"rawr.identity.self-member/v1";
 const CALLABLE_DOMAIN: &[u8] = b"rawr.identity.callable/v1";
+const ITERATOR_DOMAIN: &[u8] = b"rawr.identity.iterator/v1";
 const STD_DOMAIN: &[u8] = b"rawr.identity.std/v1";
 
 /// Canonical generic extension slot; Phase 2 has no constructor.
@@ -262,6 +263,16 @@ impl Definition {
         Self(Framed::new(CALLABLE_DOMAIN).finish())
     }
 
+    /// The type a program's iterator has where a crate's signature takes
+    /// an iterator, as itertools' `cartesian_product(self, other: J)` over
+    /// `Self: Iterator` and `J: IntoIterator`: `rawr::future::Items<T>`,
+    /// whose one argument is the item, which pulls from the program's
+    /// iterator on each `next()`.
+    #[must_use]
+    pub fn iterator() -> Self {
+        Self(Framed::new(ITERATOR_DOMAIN).finish())
+    }
+
     /// Rust's `std::time::Duration`, which crosses by value as Rawr's own
     /// `Duration`. It lives in `core`, which no crate's facade declares.
     #[must_use]
@@ -389,13 +400,14 @@ impl Definition {
     }
 
     /// Whether these bytes name a type rawr declares for a Rust value no
-    /// imported crate declares: a future, a duration, an instant, an
-    /// inclusive range, a box, an `Rc` or an `Arc`, a keyed collection,
-    /// `Infallible`, one of std's held types or a script value.
+    /// imported crate declares: a future, a program's iterator, a duration,
+    /// an instant, an inclusive range, a box, an `Rc` or an `Arc`, a keyed
+    /// collection, `Infallible`, one of std's held types or a script value.
     #[must_use]
     pub fn is_projected(bytes: &[u8; 32]) -> bool {
         Self::std_path(bytes).is_some()
             || *bytes == Self::future().0
+            || *bytes == Self::iterator().0
             || *bytes == Self::duration().0
             || *bytes == Self::instant().0
             || *bytes == Self::infallible().0

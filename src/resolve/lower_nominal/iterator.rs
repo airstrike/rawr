@@ -18,6 +18,9 @@ pub(super) struct Pipeline {
     setup: origin::Fragment,
     /// The names `setup` binds.
     names: Vec<String>,
+    /// The names its bindings so far bound (`bound_pipeline`), which its
+    /// loops read: what a step function of it captures (`step_iterator`).
+    outer: Vec<String>,
     /// Run before each run of the loops: the counters and flags the stages
     /// change, from their initial values.
     state: origin::Fragment,
@@ -177,8 +180,17 @@ impl Parser<'_> {
         value: &ParsedExpr,
         id: Option<type_def::Id>,
     ) -> Result<(Pipeline, Ty), Error> {
-        let iterator = self.temporary("iterator");
         let ty = self.inference.resolve(&value.ty);
+        // The `next` of a crate type several paths name, as itertools'
+        // `Product`, which no alias has yet: the miss the importer answers
+        // by bringing it.
+        #[cfg(feature = "rust-import")]
+        if id.is_none()
+            && let Some(error) = self.ambiguous_imported_member(&ty, "next", value.span, true)
+        {
+            return Err(error);
+        }
+        let iterator = self.temporary("iterator");
         self.bindings.insert(
             iterator.as_str().into(),
             Binding {
@@ -245,6 +257,7 @@ impl Parser<'_> {
         let pipeline = Pipeline {
             setup,
             names: vec![initial.clone()],
+            outer: Vec::new(),
             state: origin::Fragment::plain(format!("let {iterator} = {initial}; ")),
             segments: vec![Segment {
                 guards: Vec::new(),
@@ -259,6 +272,86 @@ impl Parser<'_> {
             exact: false,
         };
         Ok((pipeline, *item))
+    }
+
+    /// A program's iterator where a crate takes an iterator, as itertools'
+    /// `rows.cartesian_product(columns)` takes both (`future::Items`): its
+    /// chain as a step function that runs the chain and suspends at each
+    /// item (`eval::machine`), so native code pulls one item on each
+    /// `next()`, and the chain's closures run as it pulls. The chain's
+    /// sources and closures are evaluated here, where Rust evaluates them;
+    /// its counters start with each run, as a clone of an iterator that
+    /// hasn't started starts again. `false`, and `value` unchanged, when it
+    /// is no iterator of the program's: a crate's own iterator crosses as
+    /// itself.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn step_iterator(&mut self, value: &mut ParsedExpr) -> Result<bool, Error> {
+        if matches!(self.inference.resolve(&value.ty), Ty::Host { .. }) || self.callable.is_none() {
+            return Ok(false);
+        }
+        let Some((pipeline, item)) = self.pipeline_of(value) else {
+            return Ok(false);
+        };
+        let (code, pipeline, _) = self.bound_pipeline(pipeline);
+        let Some(callable) = &self.callable else {
+            return Ok(false);
+        };
+        self.closure_count += 1;
+        let key = crate::item::Key::closure(callable, self.closure_count);
+        let sink = origin::Fragment::plain(format!(
+            "{}({}); ",
+            crate::eval::machine::AWAIT,
+            pipeline.item
+        ));
+        let mut body = origin::Fragment::plain("{ ");
+        body.push(Self::render(&pipeline, &sink));
+        body.push_text("}");
+        body.cover(value.span);
+        let mut captured = BTreeSet::new();
+        let mut parameters = pipeline
+            .outer
+            .iter()
+            .filter(|name| captured.insert(name.as_str()))
+            .map(|name| ImmutableString::from(name.as_str()))
+            .collect::<Vec<_>>();
+        let captures = parameters
+            .iter()
+            .map(|name| origin::Fragment::plain(name.as_str()))
+            .collect();
+        parameters.push(self.temporary("resume").into());
+        self.lifted.push(LiftedClosure {
+            key: key.clone(),
+            value: None,
+            parameters,
+            captures,
+            body,
+            span: value.span,
+            header: value.span,
+            held: false,
+        });
+        let mut prelude = std::mem::take(&mut value.prelude);
+        prelude.push(code);
+        let mut source = origin::Fragment::plain("()");
+        source.cover(value.span);
+        let mut step = ParsedExpr {
+            prelude,
+            source,
+            ty: Ty::FnItem {
+                key: Box::new(key),
+                inputs: Box::new([Ty::Unit]),
+                output: Box::new(Ty::Unit),
+            },
+            span: value.span,
+            lvalue: None,
+            outcome: crate::host::usage::Outcome::Conservative,
+            evaluation: crate::host::usage::Evaluation::Required,
+        };
+        self.host_callable(&mut step)?;
+        let callable = std::mem::replace(&mut step.ty, Ty::iter(item));
+        self.steps
+            .insert(step.source.as_str().to_string(), callable);
+        *value = step;
+        Ok(true)
     }
 
     /// `v.iter()`, `v.into_iter()`: a chain over an array's items.
@@ -348,6 +441,7 @@ impl Parser<'_> {
         let mut pipeline = Pipeline {
             setup: origin::Fragment::default(),
             names: Vec::new(),
+            outer: Vec::new(),
             state: origin::Fragment::default(),
             segments: Vec::new(),
             item: item.clone(),
@@ -665,6 +759,7 @@ impl Parser<'_> {
                 rebind(&mut reversible.source, segment);
             }
         }
+        pipeline.outer.extend(names.iter().cloned());
         (code, pipeline, names)
     }
 
@@ -1229,6 +1324,7 @@ impl Parser<'_> {
                 }
                 pipeline.setup.push(other.setup);
                 pipeline.names.extend(other.names);
+                pipeline.outer.extend(other.outer);
                 pipeline.state.push(other.state);
                 for (index, segment) in other.segments.iter_mut().enumerate() {
                     segment
@@ -1966,6 +2062,7 @@ impl Parser<'_> {
             let item = self.temporary("item");
             let mut reversed = self.walked_backwards(None, &pipeline, item);
             reversed.exact = pipeline.exact;
+            reversed.outer = pipeline.outer;
             return reversed;
         };
         let mut reversed =
@@ -1984,6 +2081,7 @@ impl Parser<'_> {
         segment.exit = reversible.exit;
         reversed.item = pipeline.item;
         reversed.exact = pipeline.exact;
+        reversed.outer = pipeline.outer;
         reversed
     }
 
@@ -1998,6 +2096,7 @@ impl Parser<'_> {
         let mut reversed = Pipeline {
             setup: origin::Fragment::default(),
             names: Vec::new(),
+            outer: Vec::new(),
             state: origin::Fragment::default(),
             segments: Vec::new(),
             item: item.clone(),

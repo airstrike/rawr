@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 115;
+const CLASSIFIER_VERSION: u32 = 116;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1465,6 +1465,74 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         Some(implementation)
     }
 
+    /// `core::iter::Iterator`, when the crate trait `trait_id` is one only
+    /// iterators have, as itertools' `trait Itertools: Iterator`, or has an
+    /// implementation for every type parameter bounded by it, as its
+    /// `impl<T: Iterator + ?Sized> Itertools for T`. rustc holds the
+    /// program's iterator to the trait where the runner calls its method.
+    fn iterator_blanket(
+        &self,
+        trait_id: &api::identity::Definition,
+    ) -> Option<api::identity::Definition> {
+        let supertrait = self
+            .graph
+            .definition_index(trait_id)
+            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|definition| match definition.kind() {
+                model::Kind::Trait { supertraits, .. } => {
+                    supertraits.iter().find_map(|predicate| match predicate {
+                        model::Predicate::Bound {
+                            bound:
+                                model::Bound::Trait {
+                                    trait_id: bound,
+                                    polarity: model::Polarity::Positive,
+                                    ..
+                                },
+                            ..
+                        } if self.is_core_trait(bound, "Iterator") => Some(bound.clone()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            });
+        if supertrait.is_some() {
+            return supertrait;
+        }
+        self.graph
+            .implementations_of(trait_id)
+            .find_map(|implementation| {
+                let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+                    return None;
+                };
+                let model::Type::Parameter { owner, index } = implementation.self_type() else {
+                    return None;
+                };
+                if id != trait_id
+                    || owner != implementation.id()
+                    || implementation.polarity() != model::Polarity::Positive
+                {
+                    return None;
+                }
+                implementation
+                    .generics()
+                    .predicates()
+                    .find_map(|predicate| match predicate {
+                        model::Predicate::Bound {
+                            ty: model::Type::Parameter { index: bounded, .. },
+                            bound:
+                                model::Bound::Trait {
+                                    trait_id: bound,
+                                    polarity: model::Polarity::Positive,
+                                    ..
+                                },
+                        } if bounded == index && self.is_core_trait(bound, "Iterator") => {
+                            Some(bound.clone())
+                        }
+                        _ => None,
+                    })
+            })
+    }
+
     /// `<T as Trait<..>>::Name` as the trait's one implementation for every
     /// callable sets it (`callable_blanket`), at the projection's self type
     /// and arguments: the opaque `impl Fn(B) -> O` iced's `Function::with`
@@ -1724,10 +1792,20 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         for input in signature.inputs() {
             find(input, true, &mut deep);
         }
+        // So is an iterator's `I::Item` and `J::IntoIter`, as
+        // `Product<I, J>::next` gives `Option<(I::Item, J::Item)>` and
+        // itertools' `cartesian_product` gives `Product<Self, J::IntoIter>`:
+        // the type that fills the parameter gives it.
+        let item = |chain: &Chain| {
+            matches!(&chain[..], [(trait_id, _)]
+                if self.is_core_trait(trait_id, "Iterator")
+                    || self.is_core_trait(trait_id, "IntoIterator"))
+        };
         for (index, chain) in deep {
-            if chain
+            if (chain
                 .iter()
                 .all(|(trait_id, _)| trait_id.unit().authority().sysroot().is_none())
+                || item(&chain))
                 && chain.iter().all(|(_, associated)| {
                     self.definition_name(associated)
                         .is_some_and(|name| name.chars().all(|c| c.is_alphanumeric() || c == '_'))
@@ -5759,6 +5837,33 @@ impl<P: api::Phase> Context<'_, P> {
             if !bounded {
                 predicates.insert(0, own_bound);
             }
+            // A trait every iterator has through a blanket impl, as
+            // itertools' `impl<T: Iterator + ?Sized> Itertools for T`: a
+            // program's iterator is its `Self`, as a type of the call's.
+            if let Some(iterator) = self.iterator_blanket(trait_id)
+                && !predicates.iter().any(|predicate| {
+                    matches!(
+                        predicate,
+                        model::Predicate::Bound {
+                            ty: model::Type::Parameter { owner, index: 0 },
+                            bound: model::Bound::Trait { trait_id: bound, .. },
+                        } if owner == trait_id && *bound == iterator
+                    )
+                })
+            {
+                predicates.push(model::Predicate::Bound {
+                    ty: model::Type::Parameter {
+                        owner: trait_id.clone(),
+                        index: 0,
+                    },
+                    bound: model::Bound::Trait {
+                        trait_id: iterator,
+                        arguments: Box::default(),
+                        polarity: model::Polarity::Positive,
+                        binders: Box::default(),
+                    },
+                });
+            }
             let mut inputs = vec![this(receiver)];
             inputs.extend(signature.inputs().map(this));
             // What the trait's implementation for every callable returns,
@@ -7675,6 +7780,8 @@ impl<P: api::Phase> Context<'_, P> {
             .map_or((signature, generics), |(signature, generics)| {
                 (signature, generics)
             });
+        let normalized = self.self_projections(signature);
+        let signature = normalized.as_ref().unwrap_or(signature);
         let opens_copies = self.late_binders_open_copies(signature);
         let borrows_receiver = borrows_receiver(signature, |id| {
             self.graph
@@ -7694,6 +7801,83 @@ impl<P: api::Phase> Context<'_, P> {
                 Err(representability::reject::Kind::UndeclaredParameter.into())
             }
             classified => classified,
+        }
+    }
+
+    /// `signature` with each `<T as Trait>::Name` of a type `T` the crate
+    /// implements the trait for, set to a type that projects from a type
+    /// parameter, read as that type, as `Product<I, J>`'s `impl Iterator`
+    /// sets `Item` to `(I::Item, J::Item)`: `next`'s `Option<Self::Item>`
+    /// names `I::Item` and `J::Item`, which the call infers from the
+    /// receiver (`projections`). `None` when none does.
+    fn self_projections(&self, signature: &model::Signature) -> Option<model::Signature> {
+        if self.opaque_self.borrow().is_some() {
+            return None;
+        }
+        let mut changed = false;
+        let inputs = signature
+            .inputs()
+            .map(|input| self.self_projected(input, &mut changed))
+            .collect::<Box<[_]>>();
+        let output = self.self_projected(signature.output(), &mut changed);
+        changed.then(|| {
+            model::Signature::new(
+                signature.safety(),
+                signature.const_function(),
+                signature.async_function(),
+                signature.abi().into(),
+                signature.variadic(),
+                signature.binders().cloned().collect(),
+                signature.receiver().clone(),
+                inputs,
+                output,
+            )
+            .with_guard(signature.guard().cloned())
+        })
+    }
+
+    /// `ty` with each `<T as Trait>::Name` read as `self_projections`
+    /// reads it, `changed` set when one is.
+    fn self_projected(&self, ty: &model::Type, changed: &mut bool) -> model::Type {
+        let mut argument = |argument: &model::Argument| match argument {
+            model::Argument::Type(ty) => model::Argument::Type(self.self_projected(ty, changed)),
+            other => other.clone(),
+        };
+        match ty {
+            model::Type::Projection { arguments, .. }
+                if !matches!(
+                    arguments.first(),
+                    Some(model::Argument::Type(model::Type::Parameter { .. }))
+                ) =>
+            {
+                match self.projected(ty) {
+                    Some(value) if projects_parameter(value) => {
+                        *changed = true;
+                        value.clone()
+                    }
+                    _ => ty.clone(),
+                }
+            }
+            model::Type::Definition { id, arguments } => model::Type::Definition {
+                id: id.clone(),
+                arguments: arguments.iter().map(&mut argument).collect(),
+            },
+            model::Type::Tuple(members) => model::Type::Tuple(
+                members
+                    .iter()
+                    .map(|member| self.self_projected(member, changed))
+                    .collect(),
+            ),
+            model::Type::Reference {
+                lifetime,
+                mutability,
+                ty,
+            } => model::Type::Reference {
+                lifetime: lifetime.clone(),
+                mutability: *mutability,
+                ty: Box::new(self.self_projected(ty, changed)),
+            },
+            other => other.clone(),
         }
     }
 
@@ -7980,7 +8164,8 @@ impl<P: api::Phase> Context<'_, P> {
         let generics = converted.as_ref().unwrap_or(generics);
         // `W::State` of a type parameter `W: StatefulWidget` is a synthetic
         // type parameter the call infers from `W`'s implementation (D558.5),
-        // and so is `P::State` where a callable's bound names it.
+        // and so is `P::State` where a callable's bound names it, and
+        // `I::Item` of a type parameter a program's iterator doesn't fill.
         let projected = self.projections(generics, signature);
         let rewritten = Self::projected_generics(generics, &projected);
         let generics = rewritten.as_ref().unwrap_or(generics);
@@ -9235,6 +9420,9 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
+    /// The derivable std traits the bounds of the parameter at `index` name,
+    /// and `Iterator`, which a crate's iterator value or a program's
+    /// iterator fills and an array doesn't (E0277).
     fn derivable_bounds(&self, generics: &model::Generics, index: u32) -> Box<[Box<str>]> {
         let declared = generics
             .parameters()
@@ -9264,6 +9452,7 @@ impl<P: api::Phase> Context<'_, P> {
             };
             let Some(name) = representability::signature::DERIVABLE
                 .into_iter()
+                .chain(["Iterator"])
                 .find(|name| self.is_core_trait(trait_id, name))
             else {
                 continue;
@@ -10705,6 +10894,23 @@ fn names_late_lifetime(ty: &model::Type) -> bool {
 
 /// `ty` with each `<F as Future>::Output` of a future parameter `F` named
 /// as its synthetic output parameter (D527).
+/// Whether `ty` names an associated type of a type parameter, as
+/// `(I::Item, J::Item)` does.
+fn projects_parameter(ty: &model::Type) -> bool {
+    let argument = |argument: &model::Argument| matches!(argument, model::Argument::Type(ty) if projects_parameter(ty));
+    match ty {
+        model::Type::Projection { arguments, .. } => match arguments.first() {
+            Some(model::Argument::Type(model::Type::Parameter { .. })) => true,
+            _ => arguments.iter().any(argument),
+        },
+        model::Type::Definition { arguments, .. } => arguments.iter().any(argument),
+        model::Type::Tuple(members) => members.iter().any(projects_parameter),
+        model::Type::Reference { ty, .. } | model::Type::Slice(ty) => projects_parameter(ty),
+        model::Type::Array { element, .. } => projects_parameter(element),
+        _ => false,
+    }
+}
+
 fn future_projections(
     ty: &model::Type,
     futures: &[(u32, api::identity::Definition)],

@@ -15325,6 +15325,34 @@ fn render_take(
             )
             .map_err(request::unwritable);
         }
+        // A program's iterator where native code takes one, as itertools'
+        // `cartesian_product(self, other: J)` takes `Self: Iterator` and `J:
+        // IntoIterator`: its step function, pulled on each `next()`, and
+        // each item made the call's `T` where it is pulled.
+        ty if let Some(item) = items_element(ty) => {
+            let mut converted = String::new();
+            render_from_dynamic(item, "value", 0, &mut converted)?;
+            // A native item comes out of the arena, as a closure's native
+            // output does (`render_callable_closure`).
+            let native = matches!(item, convert::Type::Nominal { .. })
+                && !is_value(item)
+                && !is_duration(item)
+                && boxed_element(item).is_none()
+                && counted_element(item).is_none()
+                && keyed_element(item).is_none();
+            let converted = if native || holds_native(item) {
+                format!(
+                    "{{ let _arena = CallArena::enter(); with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {converted} }}) }}"
+                )
+            } else {
+                format!("(|| {converted})()")
+            };
+            return writeln!(
+                output,
+                "    let argument_{local} = __rawr_internal::future::Items::new((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(), |value: Dynamic| {converted}.unwrap_or_else(|error| panic!(\"rawr: an iterator gave an item native code can't take: {{error:?}}\"))).map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;"
+            )
+            .map_err(request::unwritable);
+        }
         // A script future where native code takes a future of a type of its
         // own, as iced's `Task::future(impl Future<Output = T>)` of the
         // call's `T`: its output becomes that type on the owner thread,
@@ -16310,6 +16338,23 @@ fn range_inclusive_element(ty: &convert::Type) -> Option<&convert::Type> {
         } if *definition == crate::surface::identity::Definition::range_inclusive() => {
             match arguments.as_ref() {
                 [element] => Some(element),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The item `T` of a program's iterator, `rawr::future::Items<T>`, where a
+/// crate takes an iterator.
+fn items_element(ty: &convert::Type) -> Option<&convert::Type> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if *definition == crate::surface::identity::Definition::iterator() => {
+            match arguments.as_ref() {
+                [item] => Some(item),
                 _ => None,
             }
         }
@@ -19311,6 +19356,10 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 inputs.join(", "),
                 concrete_type(output)?
             )
+        }
+        // A program's iterator where a crate takes one.
+        ty if let Some(item) = items_element(ty) => {
+            format!("__rawr_internal::future::Items<{}>", concrete_type(item)?)
         }
         ty if let Some(rust) = std_value(ty) => rust,
         ty if let Some(time) = std_time(ty) => time.to_owned(),

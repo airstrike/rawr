@@ -1268,6 +1268,13 @@ fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
             {
                 return Ok(host::type_ref::Type::range_inclusive_of(element.clone()));
             }
+            // A program's iterator a crate takes or holds, as itertools'
+            // `Product<Self, J::IntoIter>` does: an iterator of its item.
+            if identity == rawr_import::surface::identity::Definition::iterator().as_bytes()
+                && let [item] = &*arguments
+            {
+                return Ok(host::type_ref::Type::iterator(item.clone()));
+            }
             // A script closure a crate value holds, as iced's `Map<W, F, A>`
             // from `Widget::map` does: the closure's type (T417).
             if identity == rawr_import::surface::identity::Definition::callable().as_bytes() {

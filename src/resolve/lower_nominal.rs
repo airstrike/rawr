@@ -2155,6 +2155,15 @@ fn imported_surface_type(
                 arguments: converted.into_boxed_slice(),
             }
         }
+        // A program's iterator a crate value holds, as itertools' `Product`
+        // holds the two `cartesian_product` took: the native iterator that
+        // pulls from it (`future::Items`).
+        Ty::Iter(item, _) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::iterator(),
+            arguments: Box::new([imported_surface_type(
+                inference, models, item, operation, imported,
+            )?]),
+        },
         // A `Box<T>`: alloc's, which a crate's signature names (D711
         // step 5).
         Ty::Boxed(inner) => Type::Nominal {
@@ -2554,6 +2563,11 @@ fn instance_surface_type(
         Ty::Boxed(inner) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::boxed(),
             arguments: Box::new([instance_surface_type(inference, models, inner)?]),
+        },
+        // A program's iterator a crate value holds (`future::Items`).
+        Ty::Iter(item, _) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::iterator(),
+            arguments: Box::new([instance_surface_type(inference, models, item)?]),
         },
         Ty::Counted(counter, inner) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::counted(
@@ -12150,6 +12164,11 @@ struct Parser<'a> {
     /// Iterator chains by the source of their iterator expression, fused by
     /// the consumer that runs them.
     pipelines: BTreeMap<String, iterator::Pipeline>,
+    /// The step function a program's iterator crosses into a crate as, by
+    /// the source of the iterator it stands for there (`step_iterator`):
+    /// the callable the runtime binding takes.
+    #[cfg(feature = "rust-import")]
+    steps: BTreeMap<String, Ty>,
     /// `a..b` of integers or chars by the source of its iterator, with the
     /// value it is as Rust's `Range<T>`: what an imported generic item such
     /// as rand's `random_range` takes in its place.
@@ -12584,6 +12603,8 @@ impl<'a> Parser<'a> {
             array_hint: None,
             collect_hint: None,
             pipelines: BTreeMap::new(),
+            #[cfg(feature = "rust-import")]
+            steps: BTreeMap::new(),
             range_values: BTreeMap::new(),
             last_range: None,
             field_entries: Vec::new(),
@@ -19378,6 +19399,72 @@ impl<'a> Parser<'a> {
         fits
     }
 
+    /// `argument` where an imported item takes a type parameter at its input
+    /// `index`. An adaptor chain is the native iterator that pulls from it
+    /// (`step_iterator`). So is a range or a script iterator where the
+    /// parameter is bounded by `Iterator`, and an array or a collection where
+    /// the item names the parameter's `IntoIter`, as `Product<Self,
+    /// J::IntoIter>` does. An array where the bound is `Iterator` is rustc's
+    /// E0277. Any other value, as a crate's own iterator, fills it as itself.
+    #[cfg(feature = "rust-import")]
+    fn iterator_argument(
+        &mut self,
+        items: &[crate::host::item::Definition],
+        index: usize,
+        argument: &mut ParsedExpr,
+    ) -> Result<(), Error> {
+        let mut iterator = false;
+        let mut into_iter = false;
+        let mut taken = false;
+        for item in items
+            .iter()
+            .filter(|item| item.imported_identity().is_some())
+        {
+            let signature = item.signature();
+            let Some(crate::host::type_ref::Shape::Parameter(name)) = signature
+                .parameters()
+                .get(index)
+                .map(crate::host::type_ref::Type::shape)
+            else {
+                continue;
+            };
+            let name = name.to_string();
+            taken = true;
+            iterator |= signature
+                .requirements(&name)
+                .is_some_and(|set| set.contains(capability::Kind::Iterator));
+            into_iter |= signature.relations().iter().any(|relation| {
+                relation.parameter() == name
+                    && relation
+                        .associated()
+                        .is_some_and(|(_, associated)| associated.as_str() == "IntoIter")
+            });
+        }
+        if !taken {
+            return Ok(());
+        }
+        let ty = self.inference.resolve(&argument.ty);
+        let steps = match &ty {
+            Ty::Iter(..) => true,
+            Ty::InclusiveRange | Ty::Script(..) => iterator && self.program_iterator(&ty),
+            Ty::Array { .. } | Ty::Keyed(..) | Ty::Reference { .. } if iterator => {
+                return Err(Error::MissingCapability {
+                    owner: ty.name(&self.models),
+                    capability: "Iterator".into(),
+                    operation: argument.span,
+                    derive: false,
+                    required_by: None,
+                });
+            }
+            Ty::Array { .. } | Ty::Keyed(..) | Ty::Reference { .. } => into_iter,
+            _ => false,
+        };
+        if steps {
+            self.step_iterator(argument)?;
+        }
+        Ok(())
+    }
+
     /// Whether an item's parameter at `index` is a type parameter that a
     /// bound fills with a `Range<T>`, as rand's `random_range` has
     /// `R: SampleRange<T>` implemented for `Range<T>`.
@@ -19456,6 +19543,13 @@ impl<'a> Parser<'a> {
                 argument.prelude = origin::Fragment::default();
                 argument.ty = ty;
             }
+            // A program's iterator where the crate takes a type parameter,
+            // as itertools' `cartesian_product(self, other: J)` takes `Self:
+            // Iterator` and `J: IntoIterator`: a native iterator that pulls
+            // from it (`step_iterator`). A crate's own iterator fills it as
+            // itself.
+            #[cfg(feature = "rust-import")]
+            self.iterator_argument(items, index, argument)?;
             self.host_callable_of(argument, !facade)?;
             self.option_host_callable(argument)?;
             // A `T: Into<Length>` passed where the library takes a `Length`:
@@ -20341,6 +20435,34 @@ impl<'a> Parser<'a> {
                     // A mismatch is rustc's to report where it compiles the call.
                     let _ = self.unify_type(&declared, &value);
                 }
+                // A program's iterator that fills the parameter gives its
+                // items as `I::Item`, and an iterator is its own `IntoIter`,
+                // as the `Product<Self, J::IntoIter>` of itertools'
+                // `cartesian_product` holds two.
+                #[cfg(feature = "rust-import")]
+                if let Some((_, name)) = relation.associated()
+                    && let [declared] = relation.arguments()
+                    && let Some(item) = match (name.as_str(), &actual) {
+                        ("Item", Ty::Iter(item, _)) => Some((**item).clone()),
+                        ("Item", Ty::Host { .. }) => self.host_iterator_item(&actual, span),
+                        ("IntoIter", Ty::Iter(..)) => Some(actual.clone()),
+                        ("IntoIter", Ty::Host { .. })
+                            if self.type_implements(&actual, "Iterator") =>
+                        {
+                            Some(actual.clone())
+                        }
+                        _ => None,
+                    }
+                {
+                    let declared = self.pattern_type(
+                        declared,
+                        &mut BTreeMap::new(),
+                        parameters,
+                        (&item_path, span),
+                        owner,
+                    )?;
+                    let _ = self.unify_type(&declared, &item);
+                }
                 continue;
             };
             // The one case the argument fits is its type, so its literals
@@ -21088,7 +21210,16 @@ impl<'a> Parser<'a> {
                 }
                 false
             } else {
-                operands.push((argument.ty.clone(), argument.span, false));
+                // A program's iterator is its step function at run time.
+                #[cfg(feature = "rust-import")]
+                let ty = self
+                    .steps
+                    .get(argument.source.as_str())
+                    .unwrap_or(&argument.ty)
+                    .clone();
+                #[cfg(not(feature = "rust-import"))]
+                let ty = argument.ty.clone();
+                operands.push((ty, argument.span, false));
                 true
             }
         });
@@ -23273,6 +23404,18 @@ impl<'a> Parser<'a> {
         if !method && self.imported_field_owner(ty, member).is_some() {
             return None;
         }
+        // An adaptor of std's `Iterator` on a crate's iterator, as `map` of
+        // itertools' `Product`, is the program's own chain over its `next`
+        // (`iterator_receiver`), and a method of a trait in scope that every
+        // iterator has, as `cartesian_product`, is the trait's.
+        if method
+            && (self.iterator_receiver(ty, member)
+                || self.type_implements(ty, "Iterator")
+                    && std_method::iterator(member, |_| true).is_none()
+                    && self.scoped_trait_member(member).is_some())
+        {
+            return None;
+        }
         let paths = self
             .models
             .host
@@ -23491,6 +23634,56 @@ impl<'a> Parser<'a> {
             })
             .map(|(_, binding)| rawr_import::surface::member::path(&binding.qualified, member))
             .find(|path| self.models.host_items(path).is_some())
+    }
+
+    /// The item of the crate iterator `ty`: its `next`'s `Option<T>`'s `T`,
+    /// as `Product<I, J>`'s `next` gives `(I::Item, J::Item)`. `None` when
+    /// `ty` has no `next` Rawr has.
+    #[cfg(feature = "rust-import")]
+    fn host_iterator_item(&mut self, ty: &Ty, span: Span) -> Option<Ty> {
+        if !self.type_implements(ty, "Iterator") {
+            return None;
+        }
+        let definition = ty
+            .host_alias()
+            .cloned()
+            .or_else(|| self.imported_member_owner(ty, "next"))?;
+        let next = self
+            .models
+            .host_items(&format!("{}::next", definition.path()))?
+            .first()?
+            .clone();
+        let checkpoint = self.inference.checkpoint();
+        let Ok(signature) = self.instantiate_host_signature(&next, Some(ty), None, span) else {
+            self.inference.rollback(checkpoint);
+            return None;
+        };
+        self.inference.commit(checkpoint);
+        match self.inference.resolve(&signature.output) {
+            Ty::Option(item) => Some(*item),
+            _ => None,
+        }
+    }
+
+    /// Whether `ty` is an iterator: the program's own (`program_iterator`)
+    /// or a crate type that implements `Iterator`.
+    #[cfg(feature = "rust-import")]
+    fn iterator_value(&self, ty: &Ty) -> bool {
+        let ty = self.inference.resolve(ty);
+        self.program_iterator(&ty)
+            || matches!(ty, Ty::Host { .. }) && self.type_implements(&ty, "Iterator")
+    }
+
+    /// Whether `ty` is an iterator of the program's own, which crosses into
+    /// a crate as a step function (`step_iterator`): an adaptor chain, an
+    /// integer range, or a script type that implements `Iterator`.
+    #[cfg(feature = "rust-import")]
+    fn program_iterator(&self, ty: &Ty) -> bool {
+        match self.inference.resolve(ty) {
+            Ty::Iter(..) | Ty::InclusiveRange => true,
+            ty @ Ty::Script(..) => self.type_implements(&ty, "Iterator"),
+            _ => false,
+        }
     }
 
     /// Whether the crate gives the host type `ty` (or the type it refers
@@ -37565,6 +37758,37 @@ impl<'a> Parser<'a> {
                 if let Ty::Fn { inputs, .. } = self.inference.resolve(&value.ty) {
                     value = self.fn_pointer_closure(value, &inputs)?;
                 }
+                let mut inputs = Vec::with_capacity(arguments.len() + 1);
+                self.move_local(&mut value)?;
+                inputs.push(value);
+                for mut argument in arguments {
+                    self.move_local(&mut argument)?;
+                    inputs.push(argument);
+                }
+                value = self.call_host_function(&items, owner, inputs, span(start, end))?;
+                continue;
+            }
+            // `rows.cartesian_product(columns)`: a method of a crate's trait
+            // in scope that every iterator has, as itertools' `Itertools`,
+            // on a program's iterator or a crate's own, called as the
+            // trait's method over its `Self` (`surface::member`). std's own
+            // methods come first, as rustc finds an inherent method or
+            // `Iterator`'s before a trait's.
+            #[cfg(feature = "rust-import")]
+            if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && self.iterator_value(&value.ty)
+                && std_method::iterator(&member, |_| true).is_none()
+                && std_method::inherent(&self.inference.resolve(&value.ty), &member).is_none()
+                && let Some(path) = self.scoped_trait_member(&member)
+            {
+                let items = self
+                    .models
+                    .host_items(&path)
+                    .expect("a scoped trait member has items")
+                    .to_vec();
+                let owner = self.models.item_owner(&path).cloned();
+                let start = value.span.start();
+                let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
                 let mut inputs = Vec::with_capacity(arguments.len() + 1);
                 self.move_local(&mut value)?;
                 inputs.push(value);
