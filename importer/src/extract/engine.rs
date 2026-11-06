@@ -1429,6 +1429,9 @@ impl<'o, O: Oracle> Engine<'o, O> {
                         continue;
                     }
                     ChildTarget::Definition { key, .. } if self.definitions.contains_key(key) => {}
+                    // A derive has no definition to extract, so naming it
+                    // extracts nothing: serde's `Serialize` beside its trait.
+                    ChildTarget::Derive if self.only_names.is_none() => {}
                     _ => continue,
                 }
             }
@@ -2262,10 +2265,31 @@ mod tests {
         );
     }
 
+    /// A derive is a reachable macro path on a whole walk and on a demanded
+    /// one, as a program demands serde's `Serialize` trait and names its
+    /// derive of the same name.
     #[test]
     fn a_derive_macro_is_an_unsupported_macro_export_of_its_kind() {
+        let demanded = vec![vec!["fixture".to_owned(), "One".to_owned()]];
+        for demand in [Vec::new(), demanded] {
+            derive_reachable(&demand);
+        }
+    }
+
+    fn derive_reachable(demand: &[Vec<String>]) {
         let mut fixture = Fixture::default();
         exporting(&mut fixture);
+        fixture.modules.get_mut(&hash(0)).unwrap()[0].landing = Some(Ok(super::Landing {
+            requests: vec![(
+                Request {
+                    key: key(1),
+                    owner: raw(r#"{"kind":"free"}"#),
+                    level: Level::Selected,
+                },
+                None,
+            )],
+            next: super::Next::Nominal(hash(1)),
+        }));
         fixture.modules.get_mut(&hash(0)).unwrap().push(Child {
             name: "Serialize".to_owned(),
             landing: None,
@@ -2287,13 +2311,13 @@ mod tests {
             vec!["fixture".to_owned()],
             String::new(),
         )
-        .run(&[])
+        .run(demand)
         .unwrap();
         let derive = extracted
             .reachable
             .iter()
             .find(|export| export.path == ["Serialize"])
-            .expect("the derive is a reachable path");
+            .unwrap_or_else(|| panic!("the derive is a reachable path for {demand:?}"));
         assert_eq!(derive.namespace, Namespace::Macro);
         assert!(matches!(
             &derive.target,

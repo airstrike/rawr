@@ -1329,6 +1329,49 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
     );
 }
 
+/// A crate's derive re-exported from its proc-macro crate, as serde's
+/// `Serialize` from serde_derive beside the trait of the same name,
+/// resolves through the program's `use`, at the top of the file or in a
+/// function's body, and is refused at its span (D681.5, #593). The fixture's
+/// `shapes` re-exports `shapes_derive::Shape` as serde does.
+#[test]
+fn a_crates_reexported_derive_resolves_and_is_refused_at_its_span() {
+    const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
+    let root = crate::support::scratch().join("plain-derives");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(DERIVES), &root);
+    let check = |source: Option<&str>, derive: &str, at: &str| {
+        if let Some(source) = source {
+            fs::write(root.join("src/main.rs"), source).unwrap();
+        }
+        let checked = rawr_import(&root, &["check"]);
+        let stderr = text(&checked.stderr);
+        assert!(!checked.status.success(), "stderr:\n{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "deriving the crate's macro `{derive}` on a type of this program isn't \
+                 supported yet"
+            )),
+            "stderr:\n{stderr}"
+        );
+        assert!(stderr.contains(at), "stderr:\n{stderr}");
+        assert!(
+            !stderr.contains("cannot find derive macro"),
+            "stderr:\n{stderr}"
+        );
+    };
+    check(None, "serde::Serialize", "main.rs:4:24");
+    check(
+        Some(
+            "// rawr\nfn main() {\n    use shapes::Shape;\n\n    \
+             #[derive(Shape)]\n    struct Square;\n\n    \
+             println!(\"{}\", shapes::name_of(&Square));\n}\n",
+        ),
+        "shapes::Shape",
+        "main.rs:5:14",
+    );
+}
+
 /// A crate's whole table, made by a program that called none of its
 /// macros, still answers a later program's macro whose `$crate` names
 /// another crate (#281): the whole walk keeps every crate's `$crate` root.
