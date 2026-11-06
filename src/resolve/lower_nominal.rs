@@ -1844,7 +1844,7 @@ fn native_impl(
                         bound
                             .lifetimes
                             .iter()
-                            .map(|lifetime| lifetime.as_str().into())
+                            .map(|lifetime| lifetime_text(lifetime))
                             .collect(),
                         bound
                             .arguments
@@ -1869,9 +1869,13 @@ fn native_impl(
                 .with_generics(generics.into_boxed_slice()),
             );
         }
-        let lifetimes = match &implementation.trait_ {
-            Some(item::TraitImpl::Native { lifetimes, .. }) => *lifetimes,
-            _ => 0,
+        let (lifetimes, lifetime_names) = match &implementation.trait_ {
+            Some(item::TraitImpl::Native {
+                lifetimes,
+                lifetime_names,
+                ..
+            }) => (*lifetimes, lifetime_names.clone()),
+            _ => (0, Box::default()),
         };
         Ok(ScriptImpl::new(
             owner,
@@ -1881,7 +1885,23 @@ fn native_impl(
             associated,
             functions.into_boxed_slice(),
         )
-        .with_lifetimes(u32::try_from(lifetimes).unwrap_or(u32::MAX)))
+        .with_lifetimes(u32::try_from(lifetimes).unwrap_or(u32::MAX))
+        .with_lifetime_names(
+            lifetime_names
+                .iter()
+                .map(|name| lifetime_text(name))
+                .collect(),
+        ))
+    }
+}
+
+/// A lifetime's name as Rust writes it, with its `'`.
+#[cfg(feature = "rust-import")]
+fn lifetime_text(name: &ImmutableString) -> Box<str> {
+    if name.starts_with('\'') {
+        name.as_str().into()
+    } else {
+        format!("'{name}").into()
     }
 }
 

@@ -161,6 +161,10 @@ pub struct ScriptImpl {
     /// The trait's lifetime arguments, which the header writes `'_`.
     #[serde(default)]
     lifetimes: u32,
+    /// Those lifetime arguments by name, as the impl writes them (`'de`),
+    /// which a generic function's bounds may name (#593).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    lifetime_names: Box<[Box<str>]>,
 }
 
 /// One function of a [`ScriptImpl`].
@@ -267,7 +271,7 @@ impl ScriptImpl {
     /// writes, `iced::widget::canvas::Program` or `From`), with the type
     /// arguments the header writes, for `owner`.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         owner: convert::Type,
         trait_path: Box<str>,
         arguments: Box<[convert::Type]>,
@@ -283,7 +287,21 @@ impl ScriptImpl {
             associated,
             functions,
             lifetimes: 0,
+            lifetime_names: Box::default(),
         }
+    }
+
+    /// This impl with its trait's lifetime arguments named `names`.
+    #[must_use]
+    pub fn with_lifetime_names(mut self, names: Box<[Box<str>]>) -> Self {
+        self.lifetime_names = names;
+        self
+    }
+
+    /// The trait's lifetime arguments by name, as the impl writes them.
+    #[must_use]
+    pub fn lifetime_names(&self) -> &[Box<str>] {
+        &self.lifetime_names
     }
 
     /// This impl of a trait with `lifetimes` lifetime arguments before its

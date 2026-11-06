@@ -35,6 +35,7 @@ impl<'a> Read<'a> for Pair {
 
 fn main() {
     println!("{}", visits::show(Seven));
+    println!("{}", visits::shown(&Seven));
     println!("{}", visits::read::<Pair>(&[3, 4]));
     println!("{}", visits::read::<Pair>(&[3]));
 }

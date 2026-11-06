@@ -44,6 +44,11 @@ pub fn show<T: Visit>(value: T) -> String {
     format!("{doubled} {spelled} {some:?} {none:?}")
 }
 
+/// `value`, borrowed, shown to a visitor.
+pub fn shown<T: Visit>(value: &T) -> String {
+    value.visit(Speller)
+}
+
 /// A problem a reader reports.
 pub trait Problem {
     fn custom(message: &str) -> Self;

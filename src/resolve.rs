@@ -4940,16 +4940,22 @@ fn resolve_trait(
                     crate::item::type_ref::Argument::Lifetime(_) => None,
                 })
                 .collect::<Result<_, _>>()?;
-            let lifetimes = last
+            let lifetime_names = last
                 .arguments
                 .iter()
-                .filter(|argument| matches!(argument, crate::item::type_ref::Argument::Lifetime(_)))
-                .count();
+                .filter_map(|argument| match argument {
+                    crate::item::type_ref::Argument::Lifetime(lifetime) => {
+                        Some(lifetime.name.text.clone())
+                    }
+                    crate::item::type_ref::Argument::Type(_) => None,
+                })
+                .collect::<Box<[_]>>();
             return Ok(item::TraitImpl::Native {
                 path: trait_path.into(),
                 name: last.name.clone(),
                 arguments,
-                lifetimes,
+                lifetimes: lifetime_names.len(),
+                lifetime_names,
             });
         }
         let error = Error::UnknownType {

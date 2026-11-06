@@ -96,9 +96,10 @@ impl Frame {
             slots.insert(*definition.as_bytes(), types.len());
             types.push((ty, rust));
         }
-        let mut header = script
-            .generics()
+        let mut header = named_lifetimes(script)
+            .unwrap_or_default()
             .iter()
+            .chain(script.generics())
             .map(ToString::to_string)
             .collect::<Vec<_>>();
         let mut arguments = header.clone();
@@ -106,13 +107,21 @@ impl Frame {
         for generic in generics {
             let mut bounds = Vec::new();
             for bound in generic.bounds() {
-                if !bound.lifetimes().is_empty() {
+                // A lifetime the bound names is the impl's, by its name.
+                if !bound.lifetimes().is_empty() && named_lifetimes(script).is_none() {
                     return Err(drift("a generic impl function's bound that takes a lifetime"));
                 }
                 let written = bound
-                    .arguments()
+                    .lifetimes()
                     .iter()
-                    .map(|argument| super::impl_type(argument, script.generics()))
+                    .map(ToString::to_string)
+                    .map(Some)
+                    .chain(
+                        bound
+                            .arguments()
+                            .iter()
+                            .map(|argument| super::impl_type(argument, script.generics())),
+                    )
                     .collect::<Option<Vec<_>>>()
                     .ok_or_else(|| drift("a generic impl function's bound's argument"))?;
                 bounds.push(if written.is_empty() {
@@ -167,9 +176,10 @@ impl Frame {
         &self.slots
     }
 
-    /// The frame type's name.
-    pub(super) fn name(&self) -> &str {
-        &self.name
+    /// The static of each opaque type's slot, by identity, as
+    /// `FrameCurrent` takes it.
+    pub(super) fn keys(&self) -> String {
+        format!("{}_KEYS", self.name)
     }
 
     /// An empty frame of the call, at its type parameters.
@@ -232,7 +242,13 @@ impl Frame {
             arguments,
             ..
         } = self;
-        let impl_parameters = script.generics().join(", ");
+        let impl_parameters = named_lifetimes(script)
+            .unwrap_or_default()
+            .iter()
+            .map(|lifetime| format!("&{lifetime} ()"))
+            .chain(script.generics().iter().map(ToString::to_string))
+            .collect::<Vec<_>>()
+            .join(", ");
         let mut fields = String::new();
         let mut made = String::new();
         let mut accessors = String::new();
@@ -271,11 +287,27 @@ impl Frame {
 
     fn give_{slot}(&mut self, arena: &mut Arena, value: {rust}) -> Result<Dynamic, Error> {{
         let at = self.keep_{slot}(value);
-        frame_handle(arena, self.nonce, {slot}, at, {name}_table_{slot}())
+        let handle = frame_handle(arena, self.nonce, {slot}, at, {name}_table_{slot}())?;
+        // Before the frame is lent, its nonce is the lend's to come.
+        if self.nonce == 0 {{
+            self.fresh.push(handle.clone_cast::<NativeHandle>());
+        }}
+        Ok(handle)
     }}
 "
             );
             let consumers = super::opaque_consumers(cohort.plans, ty)?;
+            // A call that takes no value of a frame's but names its type,
+            // as `<S::Error as Error>::custom(..)`, runs here too, after
+            // those that take one (`static_entry`).
+            for (offset, plan) in statics(cohort.plans, ty)?.into_iter().enumerate() {
+                let entry = consumers.len() + offset;
+                let body = self.entry(plan, ty, slot, usize::MAX, cohort)?;
+                let _ = write!(
+                    entries,
+                    "            ({slot}, {entry}) => {{\n{body}\n            }}\n"
+                );
+            }
             let mut reach = String::new();
             for (entry, consumer) in consumers.iter().enumerate() {
                 let Some((position, _, _)) = super::opaque_operand(consumer)? else {
@@ -307,19 +339,29 @@ fn {name}_table_{slot}() -> OpaqueTable {{
 "
             );
         }
+        let keys = self
+            .slots
+            .iter()
+            .map(|(identity, slot)| format!("({identity:?}, {slot})"))
+            .collect::<Vec<_>>()
+            .join(", ");
         Ok(format!(
             "
+#[allow(non_upper_case_globals)]
+static {name}_KEYS: &[([u8; 32], u32)] = &[{keys}];
+
 /// The frame of a generic function of the script's impl (#593).
 #[allow(non_camel_case_types, dead_code)]
 struct {name}<{header}> {{
     nonce: u64,
+    fresh: Vec<NativeHandle>,
 {fields}    parameters: std::marker::PhantomData<fn() -> ({impl_parameters})>,
 }}
 
 #[allow(dead_code, unused_mut, clippy::all)]
 impl<{header}> {name}<{arguments}> {{
     fn new() -> Self {{
-        Self {{ nonce: 0,{made} parameters: std::marker::PhantomData }}
+        Self {{ nonce: 0, fresh: Vec::new(),{made} parameters: std::marker::PhantomData }}
     }}
 {accessors}}}
 
@@ -371,6 +413,81 @@ impl<{header}> Frame for {name}<{arguments}> {{
                 &format!("self.mutable_{slot}(arguments.arena, receiver, "),
             ))
     }
+}
+
+/// Whether `ty` is the opaque type of a trait method's type parameter, or
+/// of one of its associated types, which a frame keeps.
+fn kept(ty: &convert::Type) -> bool {
+    let convert::Type::Nominal { definition, .. } = ty else {
+        return false;
+    };
+    super::TYPE_PATHS
+        .with_borrow(|paths| paths.get(definition.as_bytes()).cloned())
+        .is_some_and(|path| crate::surface::opaque::parameter_of(&path).is_some())
+}
+
+/// The opaque type a frame keeps that `plan` names without taking a value
+/// of it, as `<S::Error as Error>::custom(..)` gives one: the first its
+/// types name.
+fn static_key(plan: &Plan) -> Result<Option<convert::Type>, request::Error> {
+    if super::opaque_operand(plan)?.is_some() {
+        return Ok(None);
+    }
+    let mut nominals = Vec::new();
+    for ty in plan_types(plan)? {
+        nominal_types(&ty, &mut nominals);
+    }
+    Ok(nominals.into_iter().find(kept))
+}
+
+/// The calls in `plans` that name the opaque type `key` a frame keeps but
+/// take no value of it, in a fixed order.
+fn statics<'p>(plans: &'p [Plan], key: &convert::Type) -> Result<Vec<&'p Plan>, request::Error> {
+    let mut found = Vec::new();
+    for plan in plans {
+        if static_key(plan)?.is_some_and(|static_key| super::same_opaque(&static_key, key)) {
+            found.push(plan);
+        }
+    }
+    Ok(found)
+}
+
+/// The opaque type a frame keeps that `plan` names without taking a value
+/// of it, and the entry of the frame's slot for it that runs the call.
+pub(super) fn static_entry(
+    plan: &Plan,
+    cohort: &[Plan],
+) -> Result<Option<(convert::Type, usize)>, request::Error> {
+    let Some(key) = static_key(plan)? else {
+        return Ok(None);
+    };
+    let consumers = super::opaque_consumers(cohort, &key)?.len();
+    let index = statics(cohort, &key)?
+        .iter()
+        .position(|found| std::ptr::eq(*found, plan))
+        .ok_or_else(|| request::drift("a frame's call"))?;
+    Ok(Some((key, consumers + index)))
+}
+
+/// The names of `script`'s trait's lifetime arguments, as its header writes
+/// them, where a bound of one of its generic functions names one: the
+/// header names them then, so the function's own bounds can (#593).
+pub(super) fn named_lifetimes(
+    script: &crate::surface::instance::ScriptImpl,
+) -> Option<&[Box<str>]> {
+    let names = script.lifetime_names();
+    let named = script.functions().iter().any(|function| {
+        function.generics().iter().any(|generic| {
+            generic
+                .bounds()
+                .iter()
+                .any(|bound| !bound.lifetimes().is_empty())
+        })
+    });
+    (named
+        && names.len() == script.lifetimes() as usize
+        && names.iter().all(|name| &**name != "'_"))
+    .then_some(names)
 }
 
 /// The types a plan's call takes and gives, at its substitutions.

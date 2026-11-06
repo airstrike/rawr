@@ -1390,6 +1390,10 @@ fn a_crates_derive_runs_from_its_expansion() {
 /// visitors (#593): the body reads `V` as an opaque type bounded by its
 /// trait and `V::Out` as its associated type, and the runner's impl keeps
 /// their values in a frame of its generic function, at each call's types.
+/// So do an `Option<V>` input, a bound at the impl's lifetime (`R:
+/// Reader<'a>`) over a reader that isn't `'static`, an associated function
+/// of a parameter's associated type (`R::Error::custom(..)`), and a
+/// borrowed program value where the crate takes `&T` (#993).
 #[test]
 fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     const VISITS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-visits");
@@ -1404,7 +1408,10 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
         text(&run.stdout),
         text(&run.stderr)
     );
-    assert_eq!(text(&run.stdout), "14 <7>\n");
+    assert_eq!(
+        text(&run.stdout),
+        "14 <7> Some(10) None\n<7>\nPair(3, 4)\nno second\n"
+    );
 }
 
 /// A crate's whole table, made by a program that called none of its
