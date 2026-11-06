@@ -28,7 +28,7 @@ pub use retained::keep_graphs;
 #[cfg(feature = "rustc-driver")]
 pub use retained::Continuation;
 
-const CANONICALIZER_VERSION: u32 = 15;
+const CANONICALIZER_VERSION: u32 = 16;
 
 /// The stored API product's schema: its codec with the versions the action
 /// key carries, so an entry an older canonicalizer or extraction protocol
@@ -465,12 +465,15 @@ pub(crate) struct Invocation {
     sysroot: Box<[identity::Sysroot]>,
 }
 
+/// One invocation's artifact as the graph records it. Whether Cargo reused
+/// it (its `fresh`) is not here: that is the build directory's state, not
+/// the build's, and the graph a cold build gives is the graph a warm one
+/// gives, byte for byte.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Artifact {
     pub(crate) length: u64,
     pub(crate) digest: Box<str>,
     pub(crate) profile: Box<str>,
-    pub(crate) fresh: bool,
     pub(crate) crate_hash: Box<str>,
     pub(crate) stable_crate_id: Box<str>,
 }
@@ -1911,7 +1914,6 @@ mod tests {
                 length: 1,
                 digest: "11".repeat(32).into_boxed_str(),
                 profile: "dev".into(),
-                fresh: false,
                 crate_hash: "crate-hash".into(),
                 stable_crate_id: "1111111111111111".into(),
             },
