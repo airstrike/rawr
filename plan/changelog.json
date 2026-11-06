@@ -8,6 +8,15 @@
   },
   "releases": [
     {
+      "version": "0.3.146",
+      "date": "2026-11-05",
+      "entries": [
+        {"text":"A number on an operator's left with a crate's type on its right, as ferris's `(rotation + step) % (2.0 * Radians::PI)`, calls the crate's impl of the operator for that number (`impl Mul<Radians> for f32`), as rustc selects it. A number whose impls don't take the other type is rustc's E0277.","issues":[974]},
+        {"text":"A program with no dependencies can use `async fn`, `async` blocks and `.await`, which check and run as rustc's do. `#[tokio::main]` or `tokio::join!` there is rustc's E0433, and an `async fn main` is E0752.","issues":[968]},
+        {"text":"A crate value inside an `Option` or `Result` below a variant's fields, a tuple or an array now has its type at any depth, so layout's key press with `text: Option<SmolStr>` no longer fails. A by-value method's `Option` output, such as `Cursor::position_in`, now has its type too. A crate's closure that returns an `Option` now compiles.","issues":[971]}
+      ]
+    },
+    {
       "version": "0.3.145",
       "date": "2026-11-05",
       "entries": [
