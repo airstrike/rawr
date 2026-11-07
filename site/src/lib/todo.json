@@ -2604,7 +2604,12 @@
     {"issue":1072,"title":"url_handler: the runner fails with E0283 at iced::application(..) with an undetermined renderer argument","state":"open","category":"Divergences from rustc"},
     {"issue":1073,"title":"toast: Task::perform with a tokio future and a move closure isn't supported","state":"open","category":"Divergences from rustc"},
     {"issue":1074,"title":"tour: a generic fn's type parameter is inferred only from its arguments, not from a later use (padded_button)","state":"open","category":"Divergences from rustc"},
-    {"issue":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open","category":"Divergences from rustc"}
+    {"issue":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open","category":"Divergences from rustc"},
+    {"issue":1076,"title":"assert!() with no condition is a rustc-like error, not RAWR-RESOLVE-UNSUPPORTED-SYNTAX (rustlings tests1, tests2)","state":"open","category":"Divergences from rustc"},
+    {"issue":1077,"title":"A Vec<_> whose element type nothing fixes is E0282, as rustc reports (rustlings threads1)","state":"open","category":"Divergences from rustc"},
+    {"issue":1078,"title":"Assigning through an Arc is E0594, as rustc reports (rustlings threads2)","state":"open","category":"Divergences from rustc"},
+    {"issue":1079,"title":"for over an Option iterates it, as Option is IntoIterator (rustlings clippy2)","state":"open","category":"Divergences from rustc"},
+    {"issue":1080,"title":"std::thread::spawn in a lone-file program (rustlings smart_pointers3)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3297,11 +3302,11 @@
         },
         {
           "id": "rustlings",
-          "name": "rustlings: 94 of 95",
+          "name": "rustlings: 94/95 solutions, 86/95 exercises",
           "start": 74,
           "size": 4,
           "state": "now",
-          "note": "Solutions that run and match rustc (scripts/rustlings.sh, v6.5.0), measured at 0.3.140; async1 alone now gets rustc's E0433 (#968), to be remeasured",
+          "note": "Measured at 0.3.160 (scripts/rustlings.sh, rustlings at f7b9b3c): 94 of 95 solutions run and match rustc (92 with every test), 126 of 132 tests, 86 of 95 exercises fail as rustc fails (was 74 at 0.3.134). Left: #935, #908 and the gaps filed with this measurement.",
           "issues": [
             {"number":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"closed"},
             {"number":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"closed"},
@@ -3348,7 +3353,12 @@
             {"number":977,"title":"std trait-path calls with a turbofish or a written Self","state":"open"},
             {"number":978,"title":"`fmt::Formatter::write_str(f, s)` by its path in a fmt body","state":"open"},
             {"number":1001,"title":"`Option::get_or_insert_with` and `Option::insert` don't run yet","state":"open"},
-            {"number":1002,"title":"A std associated function's path as a value: `get_or_insert_with(Instant::now)`","state":"open"}
+            {"number":1002,"title":"A std associated function's path as a value: `get_or_insert_with(Instant::now)`","state":"open"},
+            {"number":1076,"title":"assert!() with no condition is a rustc-like error, not RAWR-RESOLVE-UNSUPPORTED-SYNTAX (rustlings tests1, tests2)","state":"open"},
+            {"number":1077,"title":"A Vec<_> whose element type nothing fixes is E0282, as rustc reports (rustlings threads1)","state":"open"},
+            {"number":1078,"title":"Assigning through an Arc is E0594, as rustc reports (rustlings threads2)","state":"open"},
+            {"number":1079,"title":"for over an Option iterates it, as Option is IntoIterator (rustlings clippy2)","state":"open"},
+            {"number":1080,"title":"std::thread::spawn in a lone-file program (rustlings smart_pointers3)","state":"open"}
           ]
         }
       ]
