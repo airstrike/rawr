@@ -9,5 +9,16 @@ for (const t of document.querySelectorAll("code[data-run] + template[data-hl]"))
 </script>
 <script>
   import { setup } from "../scripts/run.ts";
-  setup({ document, window, fetch: fetch.bind(window) });
+  import { WEB_MODULE } from "../play/session.ts";
+  setup({
+    document,
+    window,
+    fetch: fetch.bind(window),
+    // rawr-web, as the playground loads it.
+    web: async () => {
+      const m = await import(/* @vite-ignore */ WEB_MODULE);
+      await m.default();
+      return m;
+    },
+  });
 </script>

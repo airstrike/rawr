@@ -385,9 +385,15 @@ test("the allow-list build fails on empty, marked-up or disagreeing blocks", asy
 /**
  * Run the site's run.ts over a stand-in DOM that holds one run block, click
  * its Run button, and return the request it sends. With `edit`, the code is
- * edited first, so the request goes to /play/render.
+ * edited first, so the request goes to /play/render. With `web`, the page
+ * has rawr-web, and a run in it comes back as the url "browser"; `web` is
+ * "fails" for a rawr-web that doesn't load. `where` is the block's data-where.
  */
-async function runJs(block: { name: string; code: string }, edit = ""): Promise<{ url: string; body: any }> {
+async function runJs(
+  block: { name: string; code: string },
+  edit = "",
+  { web, where }: { web?: "loads" | "fails"; where?: string } = {},
+): Promise<{ url: string; body: any }> {
   const { setup } = await import("../../../../site/src/scripts/run.ts");
   const element = (props: Record<string, unknown> = {}): any => {
     const listeners: Record<string, ((event: unknown) => void)[]> = {};
@@ -417,7 +423,7 @@ async function runJs(block: { name: string; code: string }, edit = ""): Promise<
   const strip = element();
   const out = element({ closest: () => strip });
   const source = element({ textContent: block.code, innerHTML: block.code, innerText: block.code });
-  source.dataset = { run: block.name };
+  source.dataset = where ? { run: block.name, where } : { run: block.name };
   const button = element();
   button.dataset = { source: "src", out: "out" };
   const document = {
@@ -436,7 +442,16 @@ async function runJs(block: { name: string; code: string }, edit = ""): Promise<
     sent({ url, body: JSON.parse(init?.body ?? "null") });
     return Response.json({ kind: "text", status: 0, output: [] });
   };
-  setup({ document, window: {}, fetch } as any);
+  const loader = web && (async () => {
+    if (web === "fails") throw new Error("no module");
+    return {
+      run_text: (code: string) => {
+        sent({ url: "browser", body: { code } });
+        return JSON.stringify({ kind: "text", status: 0, output: [] });
+      },
+    };
+  });
+  setup({ document, window: {}, fetch, web: loader } as any);
   if (edit) {
     source.innerText = block.code + edit;
     source.fire("input");
@@ -461,6 +476,15 @@ test("run.ts sends a docs block's code to /play/run, and an edit to /play/render
   // An edit is the visitor's own code: it goes to /play/render.
   const edited = await runJs(sum, "\n// edited");
   assert.equal(edited.url, "/play/render");
+});
+
+test("run.ts runs a block in the browser when rawr-web loads, and on the server when it doesn't or the block says so", async () => {
+  const block = { name: "x.rs", code: "println!(\"x\");" };
+  assert.deepEqual(await runJs(block, "", { web: "loads" }), { url: "browser", body: { code: block.code } });
+  // An edit runs in the browser too, with no browser check.
+  assert.equal((await runJs(block, "\n// edited", { web: "loads" })).url, "browser");
+  assert.equal((await runJs(block, "", { web: "fails" })).url, "/play/run");
+  assert.equal((await runJs(block, "", { web: "loads", where: "server" })).url, "/play/run");
 });
 
 test("text results are read back, and give a preview line", async () => {
