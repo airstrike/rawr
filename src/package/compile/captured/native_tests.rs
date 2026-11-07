@@ -179,14 +179,15 @@ fn absent_structural_adapter_is_a_miss_but_wrong_adapter_kind_panics() {
 fn capture_and_lowering_allocation_refusals_precede_native_miss_classification() {
     let engine = compiler();
     let snapshot = native_snapshot("pub fn sample() -> i64 { native::new_function() }");
-    let graph = package::Graph::load_snapshot(&engine, &snapshot).unwrap();
+    // What the whole path charges before it classifies the miss.
     let mut probe = host::TestImportAllocation::default();
-    let capture = resolve::native::Capture::from_graph(&graph, &mut probe).unwrap();
-    drop(capture);
+    let missed = Output::transform_plain(&engine, &snapshot, &mut probe);
+    assert!(matches!(missed, Err(Error::NativeMiss(_))));
     let (items, bytes) = probe.usage();
     for mut allocation in [
         host::TestImportAllocation::new(0, 0),
-        host::TestImportAllocation::new(items, bytes),
+        host::TestImportAllocation::new(items - 1, bytes),
+        host::TestImportAllocation::new(items, bytes - 1),
     ] {
         let error = match Output::transform_plain(&engine, &snapshot, &mut allocation) {
             Ok(_) => panic!("bounded metadata account must refuse this compilation"),
@@ -194,4 +195,7 @@ fn capture_and_lowering_allocation_refusals_precede_native_miss_classification()
         };
         assert!(matches!(error, Error::Resource(_)), "{error}");
     }
+    let mut enough = host::TestImportAllocation::new(items, bytes);
+    let missed = Output::transform_plain(&engine, &snapshot, &mut enough);
+    assert!(matches!(missed, Err(Error::NativeMiss(_))));
 }
