@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.169 (2026-11-07)
+
 - Two projects that share a dependency now both check, whichever runs first. A dependency's shared bindings used to include implementations from other crates the first project had loaded, so the second project failed with `external crate was not loaded`. A crate's bindings now hold only what its own dependencies reach, and bindings saved before this are extracted again once. (#1097)
 - A widget that keeps your closure to make its content, as iced's `transition(..)` and `lazy(..)` do, now builds in a view beside widgets that borrow your state. progress_bar's runner now builds. (#1083)
 - A bound on an iterator's items can fix another type parameter, as rustc infers it: rand's `WeightedIndex::new([10, 4, 2, 1])` makes a `WeightedIndex<i32>`, so iced's the_matrix runs. (#1084)

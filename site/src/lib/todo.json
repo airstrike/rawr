@@ -1,21 +1,23 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-07",
-  "version": "0.3.168",
+  "version": "0.3.169",
   "examples": {"running":30,"total":56,"note":"0.3.160 sweep plus the_matrix (0.3.169): 30 run; progress_bar now builds its runner"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"Two projects that share a dependency now both check, whichever runs first. A dependency's shared bindings used to include implementations from other crates the first project had loaded, so the second project failed with `external crate was not loaded`. A crate's bindings now hold only what its own dependencies reach, and bindings saved before this are extracted again once.","issues":[1097]},
-        {"text":"A widget that keeps your closure to make its content, as iced's `transition(..)` and `lazy(..)` do, now builds in a view beside widgets that borrow your state. progress_bar's runner now builds.","issues":[1083]},
-        {"text":"A bound on an iterator's items can fix another type parameter, as rustc infers it: rand's `WeightedIndex::new([10, 4, 2, 1])` makes a `WeightedIndex<i32>`, so iced's the_matrix runs.","issues":[1084]},
-        {"text":"In a marked module, a `use` that binds a native module (`use crate::units;`, `use crate::units as u;`) binds it as a module, and its constants, functions, types and nested modules are reached through the name as rustc reaches them.","issues":[1117]},
-        {"text":"A project that depends directly on a proc-macro crate, such as `rust_decimal_macros`, now checks and runs instead of failing as if `Cargo.toml` changed during the build. Its macros expand in native modules through Cargo's build. A `cdylib` or `staticlib` dependency builds as Cargo builds it, and a dependency whose only library is a Rust `dylib` stops with an error that names it.","issues":[1124]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.169",
+        "date": "2026-11-07",
+        "entries": [
+          {"text":"Two projects that share a dependency now both check, whichever runs first. A dependency's shared bindings used to include implementations from other crates the first project had loaded, so the second project failed with `external crate was not loaded`. A crate's bindings now hold only what its own dependencies reach, and bindings saved before this are extracted again once.","issues":[1097]},
+          {"text":"A widget that keeps your closure to make its content, as iced's `transition(..)` and `lazy(..)` do, now builds in a view beside widgets that borrow your state. progress_bar's runner now builds.","issues":[1083]},
+          {"text":"A bound on an iterator's items can fix another type parameter, as rustc infers it: rand's `WeightedIndex::new([10, 4, 2, 1])` makes a `WeightedIndex<i32>`, so iced's the_matrix runs.","issues":[1084]},
+          {"text":"In a marked module, a `use` that binds a native module (`use crate::units;`, `use crate::units as u;`) binds it as a module, and its constants, functions, types and nested modules are reached through the name as rustc reaches them.","issues":[1117]},
+          {"text":"A project that depends directly on a proc-macro crate, such as `rust_decimal_macros`, now checks and runs instead of failing as if `Cargo.toml` changed during the build. Its macros expand in native modules through Cargo's build. A `cdylib` or `staticlib` dependency builds as Cargo builds it, and a dependency whose only library is a Rust `dylib` stops with an error that names it.","issues":[1124]}
+        ]
+      },
       {
         "version": "0.3.168",
         "date": "2026-11-07",
@@ -2671,8 +2673,8 @@
     {"issue":1080,"title":"std::thread::spawn in a lone-file program (rustlings smart_pointers3)","state":"open","category":"Divergences from rustc"},
     {"issue":1081,"title":"A region family writes a closure-filled type argument at the region's lifetime, not 'static (lazy, pane_grid)","state":"open","category":"Divergences from rustc"},
     {"issue":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"open","category":"Divergences from rustc"},
-    {"issue":1083,"title":"progress_bar's runner: transition(..) in a region closure gives 'lifetime may not live long enough'","state":"closed","category":"Divergences from rustc"},
-    {"issue":1084,"title":"the_matrix's runner: WeightedIndex<_> where X is fixed only through I::Item: SampleBorrow<X>","state":"closed","category":"Divergences from rustc"},
+    {"issue":1083,"title":"progress_bar's runner: transition(..) in a region closure gives 'lifetime may not live long enough'","state":"closed","category":"Divergences from rustc","release":"0.3.169"},
+    {"issue":1084,"title":"the_matrix's runner: WeightedIndex<_> where X is fixed only through I::Item: SampleBorrow<X>","state":"closed","category":"Divergences from rustc","release":"0.3.169"},
     {"issue":1085,"title":"A generic program impl of a crate trait isn't generated for a crate function's bound at a concrete argument","state":"open","category":"Divergences from rustc"},
     {"issue":1086,"title":"Relation cases for a std type are written as the value rawr holds, not the Rust type (f32 is f64)","state":"open","category":"Divergences from rustc"},
     {"issue":1087,"title":"A crate_shapes strftime test panicked once in a parallel run: a value reached an adapter as a type it doesn't take","state":"open","category":"Health"},
@@ -2685,7 +2687,7 @@
     {"issue":1094,"title":"Agents page leaves out some MCP tool arguments and defaults","state":"open","category":"Health"},
     {"issue":1095,"title":"rawr-macros comments claim previews render and #[widget] runs","state":"open","category":"Health"},
     {"issue":1096,"title":"Docs index cards leave out Agents and ratatui","state":"open","category":"Health"},
-    {"issue":1097,"title":"A shared extraction table holds definitions from crates outside its key; another project replays crates it never loaded","state":"closed","category":"Health"},
+    {"issue":1097,"title":"A shared extraction table holds definitions from crates outside its key; another project replays crates it never loaded","state":"closed","category":"Health","release":"0.3.169"},
     {"issue":1098,"title":"markdown: code_block's opaque type gets 4 arguments where 5 are declared (panic in host/type_ref.rs:790)","state":"open","category":"Divergences from rustc"},
     {"issue":1099,"title":"gallery: image(handle) fixes Handle from its argument, not from the renderer (54 x E0271)","state":"open","category":"Divergences from rustc"},
     {"issue":1100,"title":"screenshot: &screenshot.rgba (a &Bytes) isn't deref-coerced to &[u8]","state":"open","category":"Divergences from rustc"},
@@ -2705,14 +2707,14 @@
     {"issue":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open","category":"Divergences from rustc"},
     {"issue":1115,"title":"A marked src/lib.rs beside a native src/main.rs","state":"open","category":"Divergences from rustc"},
     {"issue":1116,"title":"Binaries under src/bin/ and [[bin]] targets are not found","state":"open","category":"Divergences from rustc"},
-    {"issue":1117,"title":"`use crate::native_mod;` then `native_mod::ITEM` fails in marked code","state":"closed","category":"Divergences from rustc"},
+    {"issue":1117,"title":"`use crate::native_mod;` then `native_mod::ITEM` fails in marked code","state":"closed","category":"Divergences from rustc","release":"0.3.169"},
     {"issue":1118,"title":"Native code can't get a Result, such as iced::Result, back from a marked function","state":"open","category":"Divergences from rustc"},
     {"issue":1119,"title":"A marked function that native main calls runs off the main thread, so winit panics on macOS","state":"open","category":"Divergences from rustc"},
     {"issue":1120,"title":"A lock with a path package and a git package of one name and version is refused as ambiguous","state":"closed","category":"Health","release":"0.3.167"},
     {"issue":1121,"title":"An iced canvas::Program's State written through &mut in update isn't kept between events","state":"open","category":"Divergences from rustc"},
     {"issue":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open","category":"Health"},
     {"issue":1123,"title":"A lock's qualified spelling of a git dependency was read with its commit, so it was not found","state":"closed","category":"Health","release":"0.3.168"},
-    {"issue":1124,"title":"A direct proc-macro dependency fails rawr check as if Cargo.toml changed during the build","state":"closed","category":"Health"},
+    {"issue":1124,"title":"A direct proc-macro dependency fails rawr check as if Cargo.toml changed during the build","state":"closed","category":"Health","release":"0.3.169"},
     {"issue":1125,"title":"A marked module can't name a direct proc-macro dependency's macros","state":"open","category":"Divergences from rustc"},
     {"issue":1126,"title":"A direct dependency whose only library is a Rust dylib stops the build","state":"open","category":"Health"},
     {"issue":1127,"title":"A native main announces a restart on a changed field but keeps running the old program","state":"open","category":"Health"},
