@@ -41,12 +41,8 @@ impl Notes {
         let size = if self.clicked.is_some() { 12.0 } else { 16.0 };
         column![
             button("Reset").on_press(Message::Reset),
-            markdown::view(
-                &self.items,
-                markdown::Settings::with_text_size(size),
-                Theme,
-            )
-            .map(Message::LinkClicked),
+            markdown::view(&self.items, markdown::Settings::with_text_size(size), Theme,)
+                .map(Message::LinkClicked),
         ]
     }
 }

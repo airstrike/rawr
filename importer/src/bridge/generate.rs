@@ -2119,12 +2119,29 @@ fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T,
 /// authority, including non-Send values. Its synchronous lease is always
 /// restored before the source operation returns or unwinds.
 struct PlaceOwner<T>(std::marker::PhantomData<fn() -> T>);
+
+/// A value lent from its slot for a synchronous use on the owner thread,
+/// as a native place's access or a call's `&mut T` input is: it never
+/// leaves the thread, so it needs no `Send`, as rand's `ThreadRng` isn't.
 struct PlaceHeld<T: 'static> { value: Option<T>, handle: NativeHandle }
+
+#[allow(dead_code)]
+impl<T: 'static> PlaceHeld<T> {
+    fn get_mut(&mut self) -> &mut T {
+        self.value.as_mut().expect("a lent value is held till it drops")
+    }
+}
 
 impl<T: 'static> Drop for PlaceHeld<T> {
     fn drop(&mut self) {
         if let Some(value) = self.value.take() {
-            let _ = with_arena(|arena| { arena.restore(self.handle.clone(), Box::new(value)); Ok(()) });
+            // The call that borrowed it may still hold the arena: the value
+            // waits in this thread's queue for its next use.
+            RELENDS.with_borrow_mut(|relends| {
+                relends.push((self.handle.clone(), Box::new(value) as Box<dyn Any>));
+            });
+            queued_here();
+            let _ = with_arena(|_| Ok(()));
         }
     }
 }
@@ -9324,8 +9341,14 @@ fn opaque_table_source(
         };
         // An operand that holds the table's opaque type, where the table's
         // type is that opaque type itself, is taken at the type that holds
-        // it (`shape_witnesses`).
-        let holding = same_opaque(&returned, &key) && !same_opaque(&operand, &key);
+        // it (`shape_witnesses`). So is a receiver whose type's arguments
+        // hold it, as `MouseArea<'_, Message, Container<'_, _>>` of
+        // `.on_press(..)`: `opaque_operand` gives the opaque type there.
+        let receiver_holds = position == 0
+            && matches!(consumer.operation(), Operation::Method { signature, .. }
+                if signature.instance().is_none());
+        let holding =
+            same_opaque(&returned, &key) && (receiver_holds || !same_opaque(&operand, &key));
         // A call that gives a value of another opaque type, as iced's
         // `Application::subscription` gives another `impl Program`, makes
         // that value's own table here, where rustc knows its type. One that
@@ -9484,11 +9507,11 @@ fn shape_witnesses(body: &str, position: usize) -> String {
             shaped.push_str(line);
             continue;
         };
-        let holding = format!("{}T{}", &ty[..hole], &ty[hole + 1..]);
+        let (holding, lifetimes) = named_lifetimes(&format!("{}T{}", &ty[..hole], &ty[hole + 1..]));
         shaped.push_str(&line.replacen(
             &take,
             &format!(
-                " = take_like(arguments, {position}, {{ fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<{holding}> {{ std::marker::PhantomData }} shape(_w) }})?;"
+                " = take_like(arguments, {position}, {{ fn shape<{lifetimes}T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<{holding}> {{ std::marker::PhantomData }} shape(_w) }})?;"
             ),
             1,
         ));
@@ -9496,11 +9519,50 @@ fn shape_witnesses(body: &str, position: usize) -> String {
     shaped
 }
 
+/// The Rust type `ty`, which `concrete_type` wrote for a body, as an item
+/// names it: each lifetime it leaves to inference, `'_`, a lifetime of the
+/// item's own, `'l0`, `'l1` and on, and those lifetimes as the item
+/// declares them, each followed by `, `. An item's lifetimes are its
+/// caller's to pick, as a body's inferred ones are.
+fn named_lifetimes(ty: &str) -> (String, String) {
+    let mut declared = String::new();
+    let named = inferred_lifetimes(ty, |index| {
+        declared.push_str(&format!("'l{index}, "));
+        format!("'l{index}")
+    });
+    (named, declared)
+}
+
+/// `ty` with each lifetime it leaves to inference, `'_`, as `name` names
+/// the one at its index among them.
+fn inferred_lifetimes(ty: &str, mut name: impl FnMut(usize) -> String) -> String {
+    let mut named = String::with_capacity(ty.len());
+    let mut rest = ty;
+    let mut count = 0;
+    while let Some(at) = rest.find("'_") {
+        named.push_str(&rest[..at]);
+        if rest[at + 2..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_alphanumeric() || next == '_')
+        {
+            named.push_str("'_");
+        } else {
+            named.push_str(&name(count));
+            count += 1;
+        }
+        rest = &rest[at + 2..];
+    }
+    named.push_str(rest);
+    named
+}
+
 /// The offsets of each `_` in the Rust type `ty` that stands for a whole
 /// type, as in `Map<_, F, M>`, and not inside a name.
 fn opaque_holes(ty: &str) -> Vec<usize> {
     let bytes = ty.as_bytes();
-    let name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    // Neither inside a name nor a lifetime's, `'_`.
+    let name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'\'';
     (0..bytes.len())
         .filter(|&at| {
             bytes[at] == b'_'
@@ -13573,7 +13635,7 @@ fn render_slot(
                 if *borrowed_mutably {
                     mutable.push(position.to_string());
                 }
-                lends.push((position, *borrowed_mutably, rust));
+                lends.push(LentInput::new(position, *borrowed_mutably, rust));
             }
             convert::Type::Borrowed {
                 mutable: borrowed_mutably,
@@ -14445,10 +14507,12 @@ fn render_take_input(
         );
     }
     if let convert::Type::Borrowed { .. } = ty {
+        let future = is_future(&substituted(signature.output(), signature, substitutions)?);
         return render_lease(
             local,
             index,
             &substituted(ty, signature, substitutions)?,
+            future,
             output,
         );
     }
@@ -14657,10 +14721,17 @@ impl Lease {
                     && !is_made_for_call(lent) =>
             {
                 let rust = concrete_type(lent)?;
+                // A call holds it on the owner thread: only a future asks
+                // `Send` (`render_lease`).
+                let (held, lease) = if future {
+                    ("Held", "lease")
+                } else {
+                    ("PlaceHeld", "lease_place")
+                };
                 Some(Self {
-                    held: format!("Held<{rust}>"),
+                    held: format!("{held}<{rust}>"),
                     take: format!(
-                        "{{ let handle = value_{depth}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?; arguments.arena.lease::<{rust}>(handle)? }}"
+                        "{{ let handle = value_{depth}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?; arguments.arena.{lease}::<{rust}>(handle)? }}"
                     ),
                     kind: LeaseKind::Native { mutable: *mutable },
                 })
@@ -14886,10 +14957,14 @@ fn future_borrows(
 /// `render_stateful_widget` takes `&mut ListState`: the value leaves its
 /// slot for the call, which refuses every other use meanwhile (E0499), and
 /// goes back when the lease drops, before the arena is next used (D558.5).
+/// Only a `future` that may run on another thread holds it as a `Held`,
+/// which asks `Send`; a call holds it on the owner thread, so a value that
+/// isn't `Send`, as rand's `ThreadRng`, is lent as rustc lends it.
 fn render_lease(
     local: usize,
     index: usize,
     ty: &convert::Type,
+    future: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let convert::Type::Borrowed { mutable, ty } = ty else {
@@ -14897,6 +14972,11 @@ fn render_lease(
     };
     let rust = concrete_type(ty).ok_or_else(|| request::drift("borrowed input type"))?;
     let borrow = if *mutable { "" } else { "&*" };
+    let (held, lease) = if future {
+        ("Held", "lease")
+    } else {
+        ("PlaceHeld", "lease_place")
+    };
     if LENT_ARGUMENTS.get() && !carries_lifetime(ty) {
         // Or a value native code lent a marked function (D558.3), reached
         // through its accessor, which the call runs inside.
@@ -14908,11 +14988,11 @@ fn render_lease(
         return writeln!(
             output,
             "    #[allow(unused_mut)]
-    let mut argument_{local}_held: Held<{rust}>;
+    let mut argument_{local}_held: {held}<{rust}>;
     let argument_{local}: {reference}{rust} = match lent_argument(lent, {index}) {{
         Some(value) => value.{reach}::<{rust}>().ok_or(Error::Lent({rust:?}, __rawr_internal::scope::Error::Mismatch))?,
         None => {{
-            argument_{local}_held = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease(handle)? }};
+            argument_{local}_held = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.{lease}(handle)? }};
             {borrow}argument_{local}_held.get_mut()
         }}
     }};"
@@ -14921,7 +15001,7 @@ fn render_lease(
     }
     writeln!(
         output,
-        "    let mut argument_{local}_held: Held<{rust}> = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease(handle)? }};\n    let argument_{local} = {borrow}argument_{local}_held.get_mut();"
+        "    let mut argument_{local}_held: {held}<{rust}> = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.{lease}(handle)? }};\n    let argument_{local} = {borrow}argument_{local}_held.get_mut();"
     )
     .map_err(request::unwritable)
 }
@@ -15100,7 +15180,7 @@ fn render_callable_closure(
             parameters.push(format!("input_{position}: &mut {rust}"));
             values.push(lent_value(position, true, &rust));
             lent.push(position.to_string());
-            lends.push((position, true, rust));
+            lends.push(LentInput::new(position, true, rust));
             continue;
         }
         let rust = concrete_type(input).ok_or_else(|| request::drift("closure input type"))?;
@@ -16897,16 +16977,33 @@ fn render_container_path(
             .write_all(instance.as_bytes())
             .map_err(request::unwritable);
     }
-    output
-        .write_all(path.as_bytes())
-        .map_err(request::unwritable)?;
+    let mut arguments = Vec::new();
     render_generic_arguments(
         partition.container_parameters,
         partition.container_types,
         partition.container_constants,
         if type_position { b"<" } else { b"::<" },
-        output,
-    )
+        &mut arguments,
+    )?;
+    output
+        .write_all(path.as_bytes())
+        .map_err(request::unwritable)?;
+    // A type names each lifetime it declares as rustc infers it in a body,
+    // `'_` (`concrete_type`); a turbofish leaves them out, as rustc allows.
+    let lifetimes =
+        SCOPED_PATHS.with_borrow(|paths| paths.get(path).map_or(0, |found| found.count));
+    if type_position && lifetimes != 0 {
+        let marks = vec!["'_"; lifetimes as usize].join(", ");
+        let arguments = String::from_utf8(arguments).map_err(request::unwritable)?;
+        let written = match arguments.strip_prefix('<') {
+            Some(rest) => format!("<{marks}, {rest}"),
+            None => format!("<{marks}>"),
+        };
+        return output
+            .write_all(written.as_bytes())
+            .map_err(request::unwritable);
+    }
+    output.write_all(&arguments).map_err(request::unwritable)
 }
 
 /// `instance` with each parameter given its substitution from `types`, the
@@ -18033,16 +18130,24 @@ fn names_inferred(text: &str) -> bool {
     let identifier = |character: Option<char>| {
         character.is_some_and(|character| character.is_alphanumeric() || character == '_')
     };
+    // Not a lifetime rustc infers, `'_`.
     text.match_indices('_').any(|(at, _)| {
-        !identifier(text[..at].chars().next_back()) && !identifier(text[at + 1..].chars().next())
+        let before = text[..at].chars().next_back();
+        !identifier(before) && before != Some('\'') && !identifier(text[at + 1..].chars().next())
     })
 }
 
 /// The family of `ty`, an imported type that carries lifetimes. An opaque
 /// type's is what the wrapper of the call that makes it gives, when it has
-/// one (`family`).
+/// one (`family`). A type that holds an opaque type, as iced's
+/// `Container<'a, impl Widget>`, has none: Rust code can't name it, so its
+/// value is held where rustc infers its type and lifetimes, in the arena.
 fn family_of(ty: &convert::Type) -> Option<family::Family> {
-    let convert::Type::Nominal { definition, .. } = ty else {
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = ty
+    else {
         return None;
     };
     if !carries_lifetime(ty) {
@@ -18054,6 +18159,9 @@ fn family_of(ty: &convert::Type) -> Option<family::Family> {
             Some(held) => family(held, BOXED_LIFETIMES),
             None => family::of(&key),
         };
+    }
+    if arguments.iter().any(holds_opaque) {
+        return None;
     }
     let lifetimes = TYPE_TRAITS.with_borrow(|types| types.get(definition.as_bytes()).copied())?;
     family(scoped_type(ty)?, lifetimes)
@@ -18082,8 +18190,12 @@ fn container_family(path: &str, container: &str) -> Option<family::Family> {
     // A borrowed type argument, as `Reader<&[u8]>`'s, borrows at `'x`.
     let borrowed = rest.contains('&');
     // So does a type argument that is a scoped type, as `Column<Element<'x,
-    // ..>>`'s.
-    let (rest, inner) = mark_scoped_arguments(rest);
+    // ..>>`'s, and each lifetime the container's spelling leaves to
+    // inference, `'_` (`concrete_type`).
+    let rest = inferred_lifetimes(rest, |_| "'x".to_owned());
+    let written = rest.contains("'x");
+    let (rest, inner) = mark_scoped_arguments(&rest);
+    let inner = inner || written;
     if lifetimes.count == 0 && !borrowed && !inner {
         return None;
     }
@@ -18100,7 +18212,9 @@ fn container_family(path: &str, container: &str) -> Option<family::Family> {
     let rest = marked;
     let marks = vec!["'x"; lifetimes.count as usize].join(", ");
     let text = match rest.strip_prefix('<') {
-        Some(arguments) if lifetimes.count != 0 => format!("{path}<{marks}, {arguments}"),
+        Some(arguments) if lifetimes.count != 0 && !arguments.starts_with('\'') => {
+            format!("{path}<{marks}, {arguments}")
+        }
         Some(_) => format!("{path}{rest}"),
         None if rest.is_empty() => format!("{path}<{marks}>"),
         None => return None,
@@ -18585,7 +18699,22 @@ fn render_impl_function(
                 let target =
                     concrete_type(ty).ok_or_else(|| drift("a script impl function's input"))?;
                 values.push(lent_value(position, *borrowed_mutably, &target));
-                lends.push((position, *borrowed_mutably, target));
+                lends.push(LentInput::new(position, *borrowed_mutably, target));
+            }
+            // One whose type carries lifetimes, as iced's `update(..,
+            // shell: &mut Shell<'_, Message>)` takes: lent for the call too,
+            // at every lifetime its family takes, and never copied (#957).
+            convert::Type::Borrowed {
+                mutable: borrowed_mutably,
+                ty,
+            } if matches!(**ty, convert::Type::Nominal { .. })
+                && !is_value(ty)
+                && let Some(family) = scoped_type(ty) =>
+            {
+                let target =
+                    concrete_type(ty).ok_or_else(|| drift("a script impl function's input"))?;
+                values.push(lent_value(position, *borrowed_mutably, &target));
+                lends.push(LentInput::scoped(position, *borrowed_mutably, target, family));
             }
             convert::Type::Borrowed { ty, .. } => {
                 // A copy of a value Rawr holds by value, as a `&str` or a
@@ -18789,14 +18918,55 @@ fn render_impl_function(
     ))
 }
 
-/// The call `call` with each borrowed native value of `lends` (its input's
-/// position, whether it is `&mut`, and its Rust type) lent around it,
-/// innermost last, and the items that reach each one (D558.3): what a script
-/// impl function and a slot write where native code lends them a value.
-fn lent_around(lends: &[(usize, bool, String)], call: String) -> (String, String) {
+/// A borrowed native value native code gives a script function, lent around
+/// its call (`lent_around`): the input's position, whether it is `&mut`,
+/// its Rust type, and that type at the scope family's `'x`.
+struct LentInput {
+    position: usize,
+    mutable: bool,
+    rust: String,
+    family: String,
+}
+
+impl LentInput {
+    /// A value of a type without lifetimes, which its family is at every
+    /// `'x`.
+    fn new(position: usize, mutable: bool, rust: String) -> Self {
+        Self {
+            position,
+            mutable,
+            family: rust.clone(),
+            rust,
+        }
+    }
+
+    /// A value of a type with lifetimes, as iced's `Shell<'_, Message>`:
+    /// `rust` elides them, so the accessor reaches it at every lifetime,
+    /// and `family` names each `'x`.
+    fn scoped(position: usize, mutable: bool, rust: String, family: String) -> Self {
+        Self {
+            position,
+            mutable,
+            rust,
+            family,
+        }
+    }
+}
+
+/// The call `call` with each borrowed native value of `lends` lent around
+/// it, innermost last, and the items that reach each one (D558.3): what a
+/// script impl function and a slot write where native code lends them a
+/// value.
+fn lent_around(lends: &[LentInput], call: String) -> (String, String) {
     let mut call = call;
     let mut items = String::new();
-    for (position, borrowed_mutably, target) in lends.iter().rev() {
+    for LentInput {
+        position,
+        mutable: borrowed_mutably,
+        rust: target,
+        family,
+    } in lends.iter().rev()
+    {
         let lend = if *borrowed_mutably {
             "lend"
         } else {
@@ -18810,7 +18980,7 @@ fn lent_around(lends: &[(usize, bool, String)], call: String) -> (String, String
         items.push_str(&format!(
             "        struct Lend{position};
         impl __rawr_internal::scope::Family for Lend{position} {{
-            type Of<'x> = {target};
+            type Of<'x> = {family};
         }}
         fn reach_{position}(nonce: u64, visit: &mut dyn FnMut(&{target})) -> Result<(), u8> {{
             __rawr_internal::scope::with_ref::<Lend{position}, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value))
@@ -19433,13 +19603,15 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         } => {
             let mut text =
                 TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())?;
-            if !arguments.is_empty() {
-                let arguments = arguments
-                    .iter()
-                    .map(concrete_type)
-                    .collect::<Option<Vec<_>>>()?;
+            // Each lifetime the type declares, as rustc names one it
+            // infers in a body: `'_`. An item names them (`named_lifetimes`).
+            let lifetimes = scoped_definition(definition).map_or(0, |lifetimes| lifetimes.count);
+            let parts = std::iter::repeat_n(Some("'_".to_owned()), lifetimes as usize)
+                .chain(arguments.iter().map(concrete_type))
+                .collect::<Option<Vec<_>>>()?;
+            if !parts.is_empty() {
                 text.push('<');
-                text.push_str(&arguments.join(", "));
+                text.push_str(&parts.join(", "));
                 text.push('>');
             }
             text

@@ -690,3 +690,153 @@ pub mod lifetimes {
         }
     }
 }
+
+/// A generic type whose parameter's bound only one float type meets, as
+/// iced's `Animation<T: Float>` is, whose `Float` is lilt's
+/// `FloatRepresentable`, implemented for `bool` and `f32` alone.
+pub mod animation {
+    pub trait Float {
+        fn float_value(&self) -> f32;
+    }
+
+    impl Float for bool {
+        fn float_value(&self) -> f32 {
+            if *self { 1.0 } else { 0.0 }
+        }
+    }
+
+    impl Float for f32 {
+        fn float_value(&self) -> f32 {
+            *self
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    pub struct Animation<T: Float + Copy> {
+        state: T,
+    }
+
+    impl<T: Float + Copy> Animation<T> {
+        pub fn new(state: T) -> Self {
+            Self { state }
+        }
+
+        pub fn slow(self) -> Self {
+            self
+        }
+
+        /// The Rust name of the state's type, which tells `f32` from `f64`.
+        pub fn kind(&self) -> &'static str {
+            std::any::type_name::<T>()
+        }
+
+        pub fn value(&self) -> f32 {
+            self.state.float_value()
+        }
+    }
+}
+
+/// A random source that isn't `Send`, as rand's `ThreadRng` holds an `Rc`,
+/// and a distribution that samples it through `&mut R`, as rand's
+/// `Distribution::sample` does.
+pub mod random {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    pub trait Source {
+        fn draw(&mut self) -> u32;
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Thread {
+        state: Rc<Cell<u32>>,
+    }
+
+    pub fn rng() -> Thread {
+        Thread {
+            state: Rc::new(Cell::new(7)),
+        }
+    }
+
+    impl Source for Thread {
+        fn draw(&mut self) -> u32 {
+            let next = self.state.get().wrapping_mul(31).wrapping_add(11) % 1000;
+            self.state.set(next);
+            next
+        }
+    }
+
+    impl Thread {
+        pub fn below(&mut self, bound: u32) -> u32 {
+            self.draw() % bound
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    pub struct Weighted {
+        weights: [u32; 3],
+    }
+
+    impl Weighted {
+        pub fn new(first: u32, second: u32, third: u32) -> Self {
+            Self {
+                weights: [first, second, third],
+            }
+        }
+
+        pub fn sample<R: Source + ?Sized>(&self, rng: &mut R) -> usize {
+            let total: u32 = self.weights.iter().sum();
+            let mut pick = rng.draw() % total;
+            for (index, weight) in self.weights.iter().enumerate() {
+                if pick < *weight {
+                    return index;
+                }
+                pick -= weight;
+            }
+            self.weights.len() - 1
+        }
+
+        /// The same through a `&mut` of the concrete source.
+        pub fn sample_thread(&self, rng: &mut Thread) -> usize {
+            self.sample(rng)
+        }
+    }
+}
+
+/// A trait whose method takes a `&mut` of a type with a lifetime, as
+/// iced's `Widget::update` takes `shell: &mut Shell<'_, Message>`: native
+/// code lends the shell for the call, and it isn't `Clone`.
+pub mod shell {
+    pub struct Shell<'a, M> {
+        messages: &'a mut Vec<M>,
+        redraws: u32,
+    }
+
+    impl<M> Shell<'_, M> {
+        pub fn request_redraw(&mut self) {
+            self.redraws += 1;
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.messages.is_empty()
+        }
+    }
+
+    pub trait Widget<M> {
+        fn update(&mut self, cursor: u32, shell: &mut Shell<'_, M>);
+    }
+
+    /// Each cursor's update, with one shell lent to them all: how many
+    /// redraws they asked for.
+    pub fn drive<W: Widget<u32>>(widget: &mut W, cursors: &[u32]) -> u32 {
+        let mut messages = Vec::new();
+        let mut shell = Shell {
+            messages: &mut messages,
+            redraws: 0,
+        };
+        for cursor in cursors {
+            widget.update(*cursor, &mut shell);
+        }
+        shell.redraws
+    }
+}

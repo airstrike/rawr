@@ -2558,7 +2558,41 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .iter()
                 .filter(|argument| !matches!(argument, model::Argument::Lifetime(_)))
                 .collect::<Vec<_>>();
-            if !binders.is_empty() || arguments.is_empty() {
+            if !binders.is_empty() {
+                continue;
+            }
+            // `T: Float` with no arguments, as iced's `Animation<T: Float>`:
+            // its implementations for number types are the cases, so a
+            // literal whose kind only one of them fits is that type, as
+            // rustc selects lilt's `impl Float for f32` for `new(0.)` (#1028).
+            // The driver brings a crate trait's impls for numbers; a std
+            // trait's, as `Copy`'s, are only those something else used.
+            if arguments.is_empty() {
+                if trait_id.unit().authority().sysroot().is_some() {
+                    continue;
+                }
+                let cases = self
+                    .graph
+                    .implementations_of(trait_id)
+                    .filter(|implementation| {
+                        implementation.polarity() == model::Polarity::Positive
+                    })
+                    .filter_map(|implementation| match implementation.self_type() {
+                        // The Rust number itself: `convert` gives the
+                        // value Rawr holds, an `f64` for an `f32`.
+                        model::Type::Primitive(name) => {
+                            representability::convert::Builtin::primitive(name)
+                                .filter(|builtin| builtin.is_number())
+                                .map(|builtin| Case::new(Type::Builtin(builtin), Box::default()))
+                        }
+                        _ => None,
+                    })
+                    .take(CASES)
+                    .collect::<Vec<_>>();
+                if !cases.is_empty() {
+                    self.retain_array::<Case>(cases.len())?;
+                    relations.push(Relation::new(*index, Box::default(), cases.into()));
+                }
                 continue;
             }
             let Some(converted) = arguments
@@ -7175,20 +7209,31 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
-    /// Whether `output` is an iced view type ([`Self::renders`]).
-    fn view_output(&self, output: &model::Type) -> bool {
-        let model::Type::Definition { id, .. } = output else {
+    /// Whether a function's output is a struct or enum that declares a
+    /// lifetime and names an early-bound one, and every input that borrows
+    /// at an early lifetime borrows shared, as a widget's builder
+    /// `Field<'a, ..>::value(self, value: &'a str) -> Self` does: the output
+    /// keeps those inputs borrowed for as long as it lives, as rustc reads
+    /// the signature. A shared borrow stays valid for as long as the region
+    /// that holds the output, which pins the strings and holds the values
+    /// it lends; an exclusive one would keep its place locked for that long.
+    fn lends_shared(&self, signature: &model::Signature) -> bool {
+        let model::Type::Definition { id, .. } = signature.output() else {
             return false;
         };
-        self.graph
+        let declares = self
+            .graph
             .definition_index(id)
             .and_then(|index| self.graph.definitions().nth(index))
             .is_some_and(|definition| match definition.kind() {
-                model::Kind::Struct { generics, .. } => {
-                    lifetime_parameters(generics) != 0 && self.renders(generics)
+                model::Kind::Struct { generics, .. } | model::Kind::Enum { generics, .. } => {
+                    lifetime_parameters(generics) != 0
                 }
                 _ => false,
-            })
+            });
+        declares
+            && names_early_lifetime(signature.output())
+            && !signature.inputs().any(borrows_mutably_at_early_lifetime)
     }
 
     /// Whether a function with no receiver gives a struct or enum that
@@ -7493,22 +7538,6 @@ impl<P: api::Phase> Context<'_, P> {
                         }
                     )
                 })
-    }
-
-    /// Whether `generics` bound a type parameter by iced's `Renderer`, as
-    /// an iced widget's do: its lifetime is iced's view lifetime.
-    fn renders(&self, generics: &model::Generics) -> bool {
-        generics.predicates().any(|predicate| {
-            matches!(predicate, model::Predicate::Bound {
-                ty: model::Type::Parameter { .. },
-                bound: model::Bound::Trait { trait_id, .. },
-            } if self.iced_trait(trait_id, "Renderer"))
-        })
-    }
-
-    /// Whether `id` is iced's own trait `name`, in `iced_core`.
-    fn iced_trait(&self, id: &api::identity::Definition, name: &str) -> bool {
-        id.unit().crate_name() == "iced_core" && self.definition_name(id) == Some(name)
     }
 
     fn enumeration(
@@ -8190,10 +8219,13 @@ impl<P: api::Phase> Context<'_, P> {
                     .filter_map(|(index, _)| u32::try_from(index).ok())
                     .collect();
                 None
-            } else if self.view_output(signature.output()) {
-                // An iced view type's constructor, as `PaneGrid::new(&state,
-                // view)`: its value is a recipe, which borrows its inputs
-                // again at each lowering (D558 tier 2).
+            } else if self.lends_shared(signature) {
+                lends = signature
+                    .inputs()
+                    .enumerate()
+                    .filter(|(_, input)| borrows_at_early_lifetime(input))
+                    .filter_map(|(index, _)| u32::try_from(index).ok())
+                    .collect();
                 None
             } else if !names_early_lifetime(signature.output()) {
                 // A lifetime the output doesn't name, as serde_json's
@@ -12156,6 +12188,40 @@ fn names_early_lifetime(ty: &model::Type) -> bool {
         | model::Type::Never
         | model::Type::TraitObject { .. }
         | model::Type::ImplTrait { .. } => false,
+    }
+}
+
+/// Whether `ty` holds a `&mut` at an early-bound lifetime.
+fn borrows_mutably_at_early_lifetime(ty: &model::Type) -> bool {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => borrows_mutably_at_early_lifetime(ty),
+        model::Argument::Lifetime(_) | model::Argument::Const(_) => false,
+    };
+    match ty {
+        model::Type::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => {
+            matches!(
+                (lifetime, mutability),
+                (model::Lifetime::Early { .. }, model::Mutability::Mutable)
+            ) || borrows_mutably_at_early_lifetime(ty)
+        }
+        model::Type::Definition { arguments, .. } => arguments.iter().any(argument),
+        model::Type::Tuple(types) => types.iter().any(borrows_mutably_at_early_lifetime),
+        model::Type::Slice(ty) => borrows_mutably_at_early_lifetime(ty),
+        model::Type::Array { element, .. } | model::Type::RawPointer { ty: element, .. } => {
+            borrows_mutably_at_early_lifetime(element)
+        }
+        model::Type::FunctionPointer(_)
+        | model::Type::Primitive(_)
+        | model::Type::Parameter { .. }
+        | model::Type::SelfType(_)
+        | model::Type::Never
+        | model::Type::TraitObject { .. }
+        | model::Type::ImplTrait { .. }
+        | model::Type::Projection { .. } => false,
     }
 }
 
