@@ -1198,14 +1198,18 @@ impl BuildGraph {
                     .and_then(|target| target.get("kind"))
                     .and_then(Value::as_array)
                     .ok_or_else(|| schema("Cargo unit graph", "selected target kind is absent"))?;
-                let library = kinds.iter().any(|kind| {
-                    kind.as_str()
-                        .is_some_and(|kind| matches!(kind, "lib" | "rlib"))
-                });
-                if !library {
-                    return Err(Error::ResolutionDrift {
-                        command: "build",
-                        field: "selected library target kind",
+                // A proc macro is a host unit Cargo builds as a dylib: its
+                // macros expand in rustc, and it has no API to extract. A
+                // `cdylib` or `staticlib` gets no `--extern` from Cargo, so
+                // no Rust code names it.
+                let kind = Library::of(kinds);
+                if kind == Library::Dylib {
+                    return Err(Error::Request {
+                        reason: format!(
+                            "the dependency `{alias}` is a `dylib` library, which rawr \
+                             doesn't build against yet; give it an `rlib` crate type"
+                        )
+                        .into_boxed_str(),
                     });
                 }
                 validate_profile(target, profile, "build")?;
@@ -1237,7 +1241,7 @@ impl BuildGraph {
                         });
                     }
                     #[cfg(feature = "rustc-driver")]
-                    if metadata.extracts_alias(selected_alias) {
+                    if kind == Library::Rust && metadata.extracts_alias(selected_alias) {
                         match extraction_indices.get(selected_alias.as_ref()) {
                             Some(previous) if *previous != index => {
                                 return Err(Error::ResolutionDrift {
@@ -2830,6 +2834,35 @@ fn is_std(unit: &Value, no_build_std: config::NoBuildStd) -> Result<bool> {
         Some(
             Value::Null | Value::Number(_) | Value::String(_) | Value::Array(_) | Value::Object(_),
         ) => Err(schema("Cargo unit graph", "unit is_std is not a boolean")),
+    }
+}
+
+/// What a dependency's library target is to the crate that names it, read
+/// from the unit's target kinds as Cargo reads them to pass `--extern`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Library {
+    /// An `rlib`: Rust items a marked module calls.
+    Rust,
+    /// A proc macro, built for the host: macros rustc expands.
+    Macros,
+    /// A Rust `dylib` with no `rlib`.
+    Dylib,
+    /// A `cdylib` or `staticlib`, which Cargo passes no `--extern` for.
+    Native,
+}
+
+impl Library {
+    fn of(kinds: &[Value]) -> Self {
+        let has = |wanted: &str| kinds.iter().any(|kind| kind.as_str() == Some(wanted));
+        if has("lib") || has("rlib") {
+            Self::Rust
+        } else if has("proc-macro") {
+            Self::Macros
+        } else if has("dylib") {
+            Self::Dylib
+        } else {
+            Self::Native
+        }
     }
 }
 

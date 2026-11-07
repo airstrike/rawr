@@ -1685,6 +1685,85 @@ fn a_crates_derive_runs_from_its_expansion() {
     assert_eq!(text(&run.stdout), "Square Square\nTile\nCircle\nRing\n");
 }
 
+/// A direct dependency that is a proc-macro crate, as `rust_decimal_macros`
+/// is, is a host unit Cargo builds as a dylib, with no API to extract: a
+/// native module expands its macro through Cargo's build, and a marked
+/// module beside it runs. It used to fail as if the manifest changed
+/// during the build, and so did a direct `cdylib` or `dylib` dependency
+/// (the proc-macro issue).
+#[test]
+fn a_direct_proc_macro_dependency_expands_in_native_code() {
+    const PROC_MACRO: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-proc-macro"
+    );
+    let root = crate::support::scratch().join("plain-proc-macro");
+    let _ = fs::remove_dir_all(&root);
+    copy(Path::new(PROC_MACRO), &root);
+
+    let checked = rawr_import(&root, &["check"]);
+    assert!(
+        checked.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&checked.stdout),
+        text(&checked.stderr)
+    );
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "42 value 43\n");
+
+    // A `cdylib` dependency gets no `--extern` from Cargo, so nothing
+    // names it and the check passes. A `dylib` one is an ordinary error
+    // that says rawr doesn't build against it, never drift.
+    fs::create_dir_all(root.join("foreign/src")).unwrap();
+    fs::write(
+        root.join("foreign/src/lib.rs"),
+        "pub fn one() -> i64 {\n    1\n}\n",
+    )
+    .unwrap();
+    let foreign = |kind: &str| {
+        fs::write(
+            root.join("foreign/Cargo.toml"),
+            format!(
+                "[package]\nname = \"foreign\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+                 publish = false\n\n[lib]\ncrate-type = [\"{kind}\"]\n"
+            ),
+        )
+        .unwrap();
+    };
+    foreign("cdylib");
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        manifest.replace(
+            "[dependencies]\n",
+            "[dependencies]\nforeign = { path = \"foreign\" }\n",
+        ),
+    )
+    .unwrap();
+    let checked = rawr_import(&root, &["check"]);
+    assert!(
+        checked.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&checked.stdout),
+        text(&checked.stderr)
+    );
+    foreign("dylib");
+    let checked = rawr_import(&root, &["check"]);
+    let stderr = text(&checked.stderr);
+    assert!(!checked.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("the dependency `foreign` is a `dylib` library"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("changed during the build"), "{stderr}");
+}
+
 /// An edit that changes only a derive's expansion's bodies, as a new
 /// `#[serde(rename)]` does, swaps into the running program (#1040): rustc
 /// expands the item again, its expansion's source changes in place, and the
