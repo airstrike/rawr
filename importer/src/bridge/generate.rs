@@ -2120,7 +2120,10 @@ fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
 /// The script value that holds a native value native code gave a marked
 /// function by value (#1139), kept in this thread's arena with what its
 /// trampoline found of its type, as a value the runner made is.
-fn lodge(given: __rawr_internal::island::Given) -> Result<Dynamic, String> {
+fn lodge(
+    given: __rawr_internal::island::Given,
+    witness: Option<&__rawr_internal::host::runtime::Witness>,
+) -> Result<Dynamic, String> {
     let (value, name, (debug, display, clone, equal, hash, order)) = given;
     let kept = arena_access(|arena| {
         let handle = arena.occupy(Some(value), None, name)?;
@@ -2129,6 +2132,9 @@ fn lodge(given: __rawr_internal::island::Given) -> Result<Dynamic, String> {
             entry.display = display;
             entry.clone = clone;
             entry.relations = Relations { equal, hash, order };
+        }
+        if let Some(witness) = witness {
+            arena.attest(handle.clone(), witness.clone())?;
         }
         Ok::<_, Error>(handle)
     });

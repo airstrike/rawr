@@ -134,12 +134,14 @@ impl Model {
 
     /// One value from `reader`, built in this model. `lent` holds the
     /// script values of what the call's trampoline lends, and `given` the
-    /// native values it gives, each taken once.
+    /// native values it gives, each taken once; `witness` proves the type a
+    /// given value is, which an argument is.
     pub(crate) fn island_read(
         &self,
         types: &Types,
         lent: &[crate::scope::Lent],
         given: &mut [Option<crate::island::Given>],
+        witness: Option<&crate::host::runtime::Witness>,
         reader: &mut Reader<'_>,
         depth: usize,
     ) -> Result<Dynamic, String> {
@@ -161,7 +163,7 @@ impl Model {
                 let length = reader.members()?;
                 let mut items = crate::Array::with_capacity(length);
                 for _ in 0..length {
-                    items.push(self.island_read(types, lent, given, reader, depth)?);
+                    items.push(self.island_read(types, lent, given, None, reader, depth)?);
                 }
                 Dynamic::from_array(items)
             }
@@ -179,12 +181,12 @@ impl Model {
                     .get_mut(index)
                     .and_then(Option::take)
                     .ok_or("a native value the call has no place for")?;
-                crate::island::lodged(value)?
+                crate::island::lodged(value, witness)?
             }
             NONE => crate::option::none(),
-            SOME => crate::option::some(self.island_read(types, lent, given, reader, depth)?),
-            OK => crate::result::ok(self.island_read(types, lent, given, reader, depth)?),
-            ERR => crate::result::err(self.island_read(types, lent, given, reader, depth)?),
+            SOME => crate::option::some(self.island_read(types, lent, given, None, reader, depth)?),
+            OK => crate::result::ok(self.island_read(types, lent, given, None, reader, depth)?),
+            ERR => crate::result::err(self.island_read(types, lent, given, None, reader, depth)?),
             STRUCT => {
                 let name = reader.text()?;
                 let identity = types
@@ -195,7 +197,7 @@ impl Model {
                 let length = reader.members()?;
                 let mut fields = Vec::with_capacity(length);
                 for _ in 0..length {
-                    fields.push(self.island_read(types, lent, given, reader, depth)?);
+                    fields.push(self.island_read(types, lent, given, None, reader, depth)?);
                 }
                 let proof = self
                     .prove_struct(identity, &definition.schema, fields.into_boxed_slice())
@@ -223,7 +225,7 @@ impl Model {
                 let length = reader.members()?;
                 let mut payload = Vec::with_capacity(length);
                 for _ in 0..length {
-                    payload.push(self.island_read(types, lent, given, reader, depth)?);
+                    payload.push(self.island_read(types, lent, given, None, reader, depth)?);
                 }
                 let proof = self
                     .prove_enum(

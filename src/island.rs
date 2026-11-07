@@ -89,8 +89,9 @@ pub type Traits = (
 pub type Given = (Box<dyn Any>, &'static str, Traits);
 
 /// The script value that holds a [`Given`] value, kept in the runner's
-/// arena on this thread; `Err` says why it can't be.
-pub type Lodge = fn(Given) -> Result<Dynamic, String>;
+/// arena on this thread as a value of the type the witness proves; `Err`
+/// says why it can't be.
+pub type Lodge = fn(Given, Option<&crate::host::runtime::Witness>) -> Result<Dynamic, String>;
 
 /// Name how the runner keeps a native value native code gives a marked
 /// function. Set once.
@@ -98,12 +99,16 @@ pub fn lodges(lodge: Lodge) {
     let _ = LODGE.set(lodge);
 }
 
-/// The script value that holds `given`, kept by the runner.
-pub(crate) fn lodged(given: Given) -> Result<Dynamic, String> {
+/// The script value that holds `given`, kept by the runner as a value of
+/// the type `witness` proves.
+pub(crate) fn lodged(
+    given: Given,
+    witness: Option<&crate::host::runtime::Witness>,
+) -> Result<Dynamic, String> {
     let lodge = LODGE
         .get()
         .ok_or("no runner keeps native values on this thread")?;
-    lodge(given)
+    lodge(given, witness)
 }
 
 /// Register the native `main` to start: the shadow crate's island module
@@ -350,6 +355,8 @@ struct Current {
 struct Calls {
     items: HashMap<(bool, String), item::Value>,
     types: program::model::island::Types,
+    /// What each native value a function takes by value is attested as.
+    inputs: HashMap<(bool, String), Box<[Option<crate::host::runtime::Witness>]>>,
 }
 
 /// One call from native code: the function's path and the arguments its
@@ -801,7 +808,7 @@ impl crate::future::Remote for Shared {
 impl Current {
     fn new(bootstrap: Bootstrap) -> Self {
         let authority = bootstrap.catalog().authority();
-        let calls = Arc::new(Calls::new(authority));
+        let calls = Arc::new(Calls::new(authority, bootstrap.catalog().runtime()));
         #[cfg(feature = "sync")]
         let shared = {
             let (authority, runtime) = bootstrap.catalog().shared();
@@ -847,7 +854,10 @@ fn elsewhere() -> Option<(Arc<Calls>, Arc<Shared>)> {
 }
 
 impl Calls {
-    fn new(authority: &program::Authority) -> Self {
+    fn new(
+        authority: &program::Authority,
+        runtime: &crate::Shared<crate::host::runtime::Registry>,
+    ) -> Self {
         let join = |modules: &[ImmutableString], names: &[&str]| {
             modules
                 .iter()
@@ -874,9 +884,22 @@ impl Calls {
             };
             items.insert(entry, item.clone());
         }
+        let inputs = authority
+            .model()
+            .island_inputs()
+            .iter()
+            .map(|(key, types)| {
+                let witnesses = types
+                    .iter()
+                    .map(|ty| ty.as_ref().map(|ty| runtime.witness_for(ty)))
+                    .collect();
+                (key.clone(), witnesses)
+            })
+            .collect();
         Self {
             items,
             types: authority.model().island_types(),
+            inputs,
         }
     }
 
@@ -912,11 +935,13 @@ impl Calls {
             format!("rawr: the running program has no function `{path}`; restart `rawr run`")
         })?;
         let model = call.model;
+        let inputs = self.inputs.get(&(owned, path.to_owned()));
         let mut values = Vec::with_capacity(count);
-        for _ in 0..count {
+        for index in 0..count {
+            let witness = inputs.and_then(|inputs| inputs.get(index)?.as_ref());
             values.push(
                 model
-                    .island_read(&self.types, lent, given, &mut reader, 0)
+                    .island_read(&self.types, lent, given, witness, &mut reader, 0)
                     .map_err(malformed)?,
             );
         }
