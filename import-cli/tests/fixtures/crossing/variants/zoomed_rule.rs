@@ -39,7 +39,7 @@ where
     }
 }
 
-fn zoomed<'a, Message: 'a>(
+fn zoomed<'a>(
     zoom: u16,
     content: impl Widget<Message, Theme, Renderer> + 'a,
 ) -> Zoomed<impl Widget<Message> + 'a> {
