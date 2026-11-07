@@ -3502,7 +3502,7 @@ fn native_borrow(declared: &item::Trait, function: &item::Function) -> Option<&'
         return None;
     };
     match (&function.receiver, mutable) {
-        (Some(crate::item::Receiver::Shared(_)), false) => Some("return this;"),
+        (Some(crate::item::Receiver::Shared(_)), false) => Some("return self;"),
         (Some(crate::item::Receiver::Mutable(_)), true) => Some("return [];"),
         _ => None,
     }
