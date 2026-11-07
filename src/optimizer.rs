@@ -4,10 +4,7 @@ use crate::ast::{
     ASTFlags, Expr, FlowControl, OpAssignment, Stmt, StmtBlock, StmtBlockContainer,
     SwitchCasesCollection,
 };
-use crate::engine::{
-    KEYWORD_DEBUG, KEYWORD_EVAL, KEYWORD_FN_PTR, KEYWORD_FN_PTR_CURRY, KEYWORD_PRINT,
-    KEYWORD_TYPE_OF, OP_NOT,
-};
+use crate::engine::{KEYWORD_FN_PTR_CURRY, OP_NOT};
 use crate::eval::{Caches, GlobalRuntimeState};
 use crate::func::builtin::get_builtin_binary_op_fn;
 use crate::func::hashing::get_hasher;
@@ -241,8 +238,6 @@ fn optimize_stmt_block(
 
                 Stmt::Var(x, ..) if x.1.is_constant() => true,
                 Stmt::Expr(e) if !e.is_constant() => true,
-
-                Stmt::Import(x, ..) if !x.0.is_constant() => true,
 
                 _ => false,
             })
@@ -824,12 +819,6 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
             *body.statements_mut() =
                 optimize_stmt_block(body.take_statements(), state, false, true, false);
         }
-        // do { block } while|until expr
-        Stmt::Do(x, ..) => {
-            optimize_expr(&mut x.expr, state, false);
-            *x.body.statements_mut() =
-                optimize_stmt_block(x.body.take_statements(), state, false, true, false);
-        }
         // for id in expr { block }
         Stmt::For(x, ..) => {
             optimize_expr(&mut x.2.expr, state, false);
@@ -849,8 +838,6 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
         Stmt::Var(x, options, ..) if !options.intersects(ASTFlags::CONSTANT) => {
             optimize_expr(&mut x.1, state, false);
         }
-        // import expr as var;
-        Stmt::Import(x, ..) => optimize_expr(&mut x.0, state, false),
         // { block }
         Stmt::Block(block) => {
             let mut stmts =
@@ -869,25 +856,6 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
                 _ => *block.statements_mut() = stmts,
             }
         }
-        // try { pure try_block } catch ( var ) { catch_block } -> try_block
-        Stmt::TryCatch(x, ..) if x.body.iter().all(Stmt::is_pure) => {
-            // If try block is pure, there will never be any exceptions
-            state.set_dirty();
-            let statements = x.body.take_statements();
-            let block = StmtBlock::new_with_span(
-                optimize_stmt_block(statements, state, false, true, false),
-                x.body.span(),
-            );
-            *stmt = Stmt::Block(block.into());
-        }
-        // try { try_block } catch ( var ) { catch_block }
-        Stmt::TryCatch(x, ..) => {
-            *x.body.statements_mut() =
-                optimize_stmt_block(x.body.take_statements(), state, false, true, false);
-            *x.branch.statements_mut() =
-                optimize_stmt_block(x.branch.take_statements(), state, false, true, false);
-        }
-
         // expr(stmt)
         Stmt::Expr(expr) if matches!(**expr, Expr::Stmt(..)) => {
             state.set_dirty();
@@ -976,13 +944,6 @@ fn move_constant_arg(arg_expr: &mut Expr) -> bool {
 
 /// Optimize an [expression][Expr].
 fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
-    // These keywords are handled specially
-    const DONT_EVAL_KEYWORDS: &[&str] = &[
-        KEYWORD_PRINT, // side effects
-        KEYWORD_DEBUG, // side effects
-        KEYWORD_EVAL,  // arbitrary scripts
-    ];
-
     let start_pos = expr.position();
 
     match expr {
@@ -1005,11 +966,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             // { Stmt(Expr) } - promote
             if let [ Stmt::Expr(e) ] = x.statements_mut().as_mut() { state.set_dirty(); *expr = e.take(); }
         }
-        // ()?.rhs
-        Expr::Dot(x, options, ..) if options.intersects(ASTFlags::NEGATED) && matches!(x.lhs, Expr::Unit(..)) => {
-            state.set_dirty();
-            *expr = x.lhs.take();
-        }
         // lhs.rhs
         Expr::Dot(x, ..) if !_chaining => match (&mut x.lhs, &mut x.rhs) {
             // map.string
@@ -1028,32 +984,12 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             },
             // var.rhs or this.rhs
             (Expr::Variable(..) | Expr::ThisPtr(..), rhs) => optimize_expr(rhs, state, true),
-            // const.type_of()
-            (lhs, Expr::MethodCall(x, pos)) if lhs.is_constant() && x.name == KEYWORD_TYPE_OF && x.args.is_empty() => {
-                if let Some(value) = lhs.get_literal_value(None) {
-                    state.set_dirty();
-                    let typ = state.engine.map_type_name(value.type_name()).into();
-                    *expr = Expr::from_dynamic(typ, *pos);
-                }
-            }
-            // const.is_shared()
-            (lhs, Expr::MethodCall(x, pos)) if lhs.is_constant() && x.name == crate::engine::KEYWORD_IS_SHARED && x.args.is_empty() => {
-                if lhs.get_literal_value(None).is_some() {
-                    state.set_dirty();
-                    *expr = Expr::from_dynamic(Dynamic::FALSE, *pos);
-                }
-            }
             // lhs.rhs
             (lhs, rhs) => { optimize_expr(lhs, state, false); optimize_expr(rhs, state, true); }
         }
         // ....lhs.rhs
         Expr::Dot(x,..) => { optimize_expr(&mut x.lhs, state, false); optimize_expr(&mut x.rhs, state, _chaining); }
 
-        // ()?[rhs]
-        Expr::Index(x, options, ..) if options.intersects(ASTFlags::NEGATED) && matches!(x.lhs, Expr::Unit(..)) => {
-            state.set_dirty();
-            *expr = x.lhs.take();
-        }
         // lhs[rhs]
         Expr::Index(x, ..) if !_chaining => match (&mut x.lhs, &mut x.rhs) {
             // array[int]
@@ -1131,36 +1067,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
         },
         // ...[lhs][rhs]
         Expr::Index(x, ..) => { optimize_expr(&mut x.lhs, state, false); optimize_expr(&mut x.rhs, state, _chaining); }
-        // ``
-        Expr::InterpolatedString(x, pos) if x.is_empty() => {
-            state.set_dirty();
-            *expr = Expr::StringConstant(state.engine.const_empty_string(), *pos);
-        }
-        // `... ${const} ...`
-        Expr::InterpolatedString(..) if expr.is_constant() => {
-            state.set_dirty();
-            *expr = Expr::StringConstant(expr.get_literal_value(None).unwrap().cast::<ImmutableString>(), expr.position());
-        }
-        // `... ${ ... } ...`
-        Expr::InterpolatedString(x, ..) => {
-            x.iter_mut().for_each(|expr| optimize_expr(expr, state, false));
-
-            let mut n = 0;
-
-            // Merge consecutive strings
-            while n < x.len() - 1 {
-                match (x[n].take(),x[n+1].take()) {
-                    (Expr::StringConstant(mut s1, pos), Expr::StringConstant(s2, ..)) => { s1 += s2; x[n] = Expr::StringConstant(s1, pos); x.remove(n+1); state.set_dirty(); }
-                    (expr1, Expr::Unit(..)) => { x[n] = expr1; x.remove(n+1); state.set_dirty(); }
-                    (Expr::Unit(..), expr2) => { x[n+1] = expr2; x.remove(n); state.set_dirty(); }
-                    (expr1, Expr::StringConstant(s, ..)) if s.is_empty() => { x[n] = expr1; x.remove(n+1); state.set_dirty(); }
-                    (Expr::StringConstant(s, ..), expr2) if s.is_empty()=> { x[n+1] = expr2; x.remove(n); state.set_dirty(); }
-                    (expr1, expr2) => { x[n] = expr1; x[n+1] = expr2; n += 1; }
-                }
-            }
-
-            x.shrink_to_fit();
-        }
         // [ constant .. ]
         Expr::Array(..) if expr.is_constant() => {
             state.set_dirty();
@@ -1247,33 +1153,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
                 *expr = x[0].take();
             }
         },
-        // () ?? rhs -> rhs
-        Expr::Coalesce(x, ..) => {
-            let mut n = 0 ;
-
-            while n < x.len() {
-                match &x[n] {
-                    // () ?? rhs -> rhs
-                    Expr::Unit(..) => { state.set_dirty(); x.remove(n); }
-                    e if e.is_constant() => {
-                        if x.len() > n + 1 {
-                            x.truncate(n + 1);
-                            state.set_dirty();
-                        }
-                        break;
-                    }
-                    _ => { optimize_expr(&mut x[n], state, false); n += 1; }
-                }
-            }
-
-            if x.is_empty() {
-                state.set_dirty();
-                *expr = Expr::BoolConstant(false, start_pos);
-            } else if x.len() == 1 {
-                state.set_dirty();
-                *expr = x[0].take();
-            }
-        },
 
         // !true or !false
         Expr::FnCall(x,..)
@@ -1296,24 +1175,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
                 state.set_dirty();
             }
         }),
-        // eval!
-        Expr::FnCall(x, ..) if x.name == KEYWORD_EVAL => {
-            state.propagate_constants = false;
-        }
-        // Fn
-        Expr::FnCall(x, pos) if x.args.len() == 1 && x.name == KEYWORD_FN_PTR && x.constant_args() => {
-            let fn_name = match x.args[0] {
-                Expr::StringConstant(ref s, ..) => s.clone().into(),
-                _ => Dynamic::UNIT
-            };
-
-            if let Ok(fn_ptr) = fn_name.into_immutable_string().map_err(Into::into).and_then(FnPtr::try_from) {
-                state.set_dirty();
-                *expr = Expr::DynamicConstant(Box::new(fn_ptr.into()), *pos);
-            } else {
-                optimize_expr(&mut x.args[0], state, false);
-            }
-        }
         // curry(FnPtr, constants...)
         Expr::FnCall(x, pos) if x.args.len() >= 2
                                 && x.name == KEYWORD_FN_PTR_CURRY
@@ -1326,11 +1187,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             *expr = Expr::DynamicConstant(Box::new(fn_ptr.into()), *pos);
         }
 
-        // Do not call some special keywords that may have side effects
-        Expr::FnCall(x, ..) if DONT_EVAL_KEYWORDS.contains(&x.name.as_str()) => {
-            x.args.iter_mut().for_each(|arg_expr| optimize_expr(arg_expr, state, false));
-        }
-
         // Call built-in operators
         Expr::FnCall(x, pos) if state.optimization_level == OptimizationLevel::Simple // simple optimizations
                                 && x.constant_args() // all arguments are constants
@@ -1339,17 +1195,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             let arg_types = arg_values.iter().map(Dynamic::type_id).collect::<FnArgsVec<_>>();
 
             match x.name.as_str() {
-                KEYWORD_TYPE_OF if arg_values.len() == 1 => {
-                    state.set_dirty();
-                    let typ = state.engine.map_type_name(arg_values[0].type_name()).into();
-                    *expr = Expr::from_dynamic(typ, *pos);
-                    return;
-                }
-                crate::engine::KEYWORD_IS_SHARED if arg_values.len() == 1 => {
-                    state.set_dirty();
-                    *expr = Expr::from_dynamic(Dynamic::FALSE, *pos);
-                    return;
-                }
                 // Overloaded operators can override built-in.
                 _ if x.args.len() == 2 && x.is_operator_call() && (state.engine.fast_operators() || !state.engine.has_native_fn_override(x.hashes.native(), &arg_types)) => {
                     if let Some((f, ctx)) = get_builtin_binary_op_fn(x.op_token.as_ref().unwrap(), &arg_values[0], &arg_values[1]) {
@@ -1385,11 +1230,7 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             if !_has_script_fn {
                 let arg_values = &mut x.args.iter().map(|a| a.get_literal_value(None)).collect::<Option<FnArgsVec<_>>>().unwrap();
 
-                let result = match x.name.as_str() {
-                    KEYWORD_TYPE_OF if arg_values.len() == 1 => Some(state.engine.map_type_name(arg_values[0].type_name()).into()),
-                    crate::engine::KEYWORD_IS_SHARED if arg_values.len() == 1 => Some(Dynamic::FALSE),
-                    _ => state.call_fn_with_const_args(&x.name, x.op_token.as_ref(), arg_values)
-                };
+                let result = state.call_fn_with_const_args(&x.name, x.op_token.as_ref(), arg_values);
 
                 if let Some(r) = result {
                     state.set_dirty();
@@ -1416,13 +1257,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             *expr = Expr::from_dynamic(state.find_literal_constant(&x.1).unwrap().clone(), *pos);
             state.set_dirty();
         }
-
-        // Custom syntax
-        Expr::Custom(x, ..)
-            if x.scope_may_be_changed => {
-                state.propagate_constants = false;
-            }
-            // Do not optimize custom syntax expressions as you won't know how they would be called
 
         // All other expressions - skip
         _ => (),

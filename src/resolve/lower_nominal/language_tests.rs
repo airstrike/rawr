@@ -10083,9 +10083,25 @@ main();
     assert_eq!(printed(source), "3 2\n");
 }
 
-/// Words the old dialect reserved that Rust doesn't are ordinary names,
-/// even when a host disables them, as `?play` disables `eval`. rustc
-/// prints `42 49` for this program.
+/// `?` before `.`, `[` or another `?` is Rust's `?` and then the next
+/// token, never one of the old engine's operators. rustc prints
+/// `Some(7) Some(3) Some(4)`.
+#[test]
+fn language_a_try_before_a_member_index_or_try_is_rusts() {
+    let source = r#"
+fn first(v: Option<Vec<i64>>) -> Option<i64> { Some(v?[0]) }
+fn len(s: Option<String>) -> Option<usize> { Some(s?.len()) }
+fn flat(o: Option<Option<i64>>) -> Option<i64> { Some(o??) }
+fn main() {
+    println!("{:?} {:?} {:?}", first(Some(vec![7])), len(Some("abc".to_string())), flat(Some(Some(4))));
+}
+main();
+"#;
+    assert_eq!(printed(source), "Some(7) Some(3) Some(4)\n");
+}
+
+/// Words the old dialect reserved that Rust doesn't are ordinary names.
+/// rustc prints `42 49` for this program.
 #[test]
 fn language_dialect_words_are_ordinary_names() {
     let source = r#"
@@ -10113,15 +10129,6 @@ fn main() {
 main();
 "#;
     assert_eq!(printed(source), "42 49\n");
-    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let mut engine = Engine::new();
-    for symbol in ["import", "eval", "print", "debug"] {
-        engine.disable_symbol(symbol);
-    }
-    let sink = lines.clone();
-    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
-    engine.run(source).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(*lines.lock().unwrap(), "42 49\n");
     // `throw` is a name, so a value after it is rustc's parse error.
     let error =
         rejected(r#"fn f(flag: bool) -> i64 { if flag { throw "branch" } else { 0 } } f(true)"#);

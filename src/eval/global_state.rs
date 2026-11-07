@@ -36,8 +36,6 @@ pub struct GlobalRuntimeState {
     pub source: Option<ImmutableString>,
     /// Number of operations performed.
     pub num_operations: u64,
-    /// Number of modules loaded.
-    pub num_modules_loaded: usize,
     /// The current nesting level of function calls.
     pub level: usize,
     /// Level of the current scope.
@@ -54,9 +52,6 @@ pub struct GlobalRuntimeState {
     ///
     /// When that happens, this flag is turned on.
     pub always_search_scope: bool,
-    /// Embedded [module][crate::Module] resolver.
-    pub embedded_module_resolver:
-        Option<crate::Shared<crate::module::resolvers::StaticModuleResolver>>,
     /// Cache of globally-defined constants.
     ///
     /// Interior mutability is needed because it is shared in order to aid in cloning.
@@ -86,11 +81,9 @@ impl Engine {
             lib: crate::StaticVec::new(),
             source: None,
             num_operations: 0,
-            num_modules_loaded: 0,
             scope_level: 0,
             level: 0,
             always_search_scope: false,
-            embedded_module_resolver: None,
             constants: None,
 
             tag: self.default_tag().clone(),
@@ -275,9 +268,7 @@ impl fmt::Debug for GlobalRuntimeState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("GlobalRuntimeState");
 
-        f.field("imports", &self.scan_imports_raw().collect::<Vec<_>>())
-            .field("num_modules_loaded", &self.num_modules_loaded)
-            .field("embedded_module_resolver", &self.embedded_module_resolver);
+        f.field("imports", &self.scan_imports_raw().collect::<Vec<_>>());
 
         f.field("lib", &self.lib);
 

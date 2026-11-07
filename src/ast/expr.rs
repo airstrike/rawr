@@ -1,20 +1,16 @@
 //! Module defining script expressions.
 
 use super::{ASTFlags, ASTNode, Ident, Stmt, StmtBlock};
-use crate::engine::KEYWORD_FN_PTR;
 use crate::eval::GlobalRuntimeState;
 use crate::tokenizer::Token;
 use crate::types::dynamic::Union;
 use crate::{
-    calc_fn_hash, Dynamic, FnArgsVec, FnPtr, Identifier, ImmutableString, Position, SmartString,
-    StaticVec, ThinVec, INT,
+    Dynamic, FnArgsVec, FnPtr, Identifier, ImmutableString, Position, StaticVec, ThinVec, INT,
 };
 use std::{
     collections::BTreeMap,
     fmt,
-    fmt::Write,
     hash::Hash,
-    iter::once,
     mem,
     num::{NonZeroU8, NonZeroUsize},
 };
@@ -27,34 +23,6 @@ pub struct BinaryExpr {
     pub lhs: Expr,
     /// RHS expression.
     pub rhs: Expr,
-}
-
-/// _(internals)_ A custom syntax expression.
-/// Exported under the `internals` feature only.
-#[derive(Debug, Clone, Hash)]
-pub struct CustomExpr {
-    /// List of keywords.
-    pub inputs: FnArgsVec<Expr>,
-    /// List of tokens actually parsed.
-    pub tokens: FnArgsVec<ImmutableString>,
-    /// State value.
-    pub state: Dynamic,
-    /// Is the current [`Scope`][crate::Scope] possibly modified by this custom statement
-    /// (e.g. introducing a new variable)?
-    pub scope_may_be_changed: bool,
-    /// Is this custom syntax self-terminated?
-    pub self_terminated: bool,
-}
-
-impl CustomExpr {
-    /// Is this custom syntax self-terminated (i.e. no need for a semicolon terminator)?
-    ///
-    /// A self-terminated custom syntax always ends in `$block$`, `}` or `;`
-    #[inline(always)]
-    #[must_use]
-    pub const fn is_self_terminated(&self) -> bool {
-        self.self_terminated
-    }
 }
 
 /// _(internals)_ A set of function call hashes. Exported under the `internals` feature only.
@@ -249,8 +217,6 @@ pub enum Expr {
     CharConstant(char, Position),
     /// [String][ImmutableString] constant.
     StringConstant(ImmutableString, Position),
-    /// An interpolated [string][ImmutableString].
-    InterpolatedString(ThinVec<Self>, Position),
     /// [ expr, ... ]
     Array(ThinVec<Self>, Position),
     /// #{ name:expr, ... }
@@ -287,28 +253,22 @@ pub enum Expr {
     Stmt(Box<StmtBlock>),
     /// func `(` expr `,` ... `)`
     FnCall(Box<FnCallExpr>, Position),
-    /// lhs `.` rhs | lhs `?.` rhs
+    /// lhs `.` rhs
     ///
     /// ### Flags
     ///
-    /// * [`NEGATED`][ASTFlags::NEGATED] = `?.` (`.` if unset)
     /// * [`BREAK`][ASTFlags::BREAK] = terminate the chain (recurse into the chain if unset)
     Dot(Box<BinaryExpr>, ASTFlags, Position),
     /// lhs `[` rhs `]`
     ///
     /// ### Flags
     ///
-    /// * [`NEGATED`][ASTFlags::NEGATED] = `?[` ... `]` (`[` ... `]` if unset)
     /// * [`BREAK`][ASTFlags::BREAK] = terminate the chain (recurse into the chain if unset)
     Index(Box<BinaryExpr>, ASTFlags, Position),
     /// lhs `&&` rhs
     And(Box<StaticVec<Self>>, Position),
     /// lhs `||` rhs
     Or(Box<StaticVec<Self>>, Position),
-    /// lhs `??` rhs
-    Coalesce(Box<StaticVec<Self>>, Position),
-    /// Custom syntax
-    Custom(Box<CustomExpr>, Position),
 }
 
 impl Default for Expr {
@@ -333,10 +293,6 @@ impl fmt::Debug for Expr {
             Self::StringConstant(value, ..) => write!(f, "{value:?}"),
             Self::Unit(..) => f.write_str("()"),
 
-            Self::InterpolatedString(x, ..) => {
-                f.write_str("InterpolatedString")?;
-                return f.debug_list().entries(x.iter()).finish();
-            }
             Self::Array(x, ..) => {
                 f.write_str("Array")?;
                 f.debug_list().entries(x.iter()).finish()
@@ -404,12 +360,11 @@ impl fmt::Debug for Expr {
                 }
                 f.finish()
             }
-            Self::And(x, pos) | Self::Or(x, pos) | Self::Coalesce(x, pos) => {
+            Self::And(x, pos) | Self::Or(x, pos) => {
                 let op_name = match self {
                     Self::And(..) => "And",
                     Self::Or(..) => "Or",
-                    Self::Coalesce(..) => "Coalesce",
-                    expr => unreachable!("`And`, `Or` or `Coalesce` expected but gets {:?}", expr),
+                    expr => unreachable!("`And` or `Or` expected but gets {:?}", expr),
                 };
 
                 if !pos.is_none() {
@@ -422,7 +377,6 @@ impl fmt::Debug for Expr {
                 });
                 f.finish()
             }
-            Self::Custom(x, ..) => f.debug_tuple("Custom").field(x).finish(),
         }?;
 
         write!(f, " @ {display_pos:?}")
@@ -473,26 +427,8 @@ impl Expr {
                 Dynamic::from_map(map)
             }
 
-            // Interpolated string
-            Self::InterpolatedString(x, ..) if self.is_constant() => {
-                let mut s = SmartString::new_const();
-                for segment in x {
-                    let v = segment.get_literal_value(global).unwrap();
-                    write!(&mut s, "{v}").unwrap();
-                }
-                s.into()
-            }
-
             // Qualified function call
             Self::FnCall(x, ..) if x.is_qualified() => return None,
-
-            // Function call
-            Self::FnCall(x, ..) if x.args.len() == 1 && x.name == KEYWORD_FN_PTR => {
-                match &x.args[0] {
-                    Self::StringConstant(s, ..) => FnPtr::new(s.clone()).ok()?.into(),
-                    _ => return None,
-                }
-            }
 
             // Binary operator call
             Self::FnCall(x, ..) if x.args.len() == 2 => {
@@ -549,25 +485,6 @@ impl Expr {
 
             Union::Map(m, ..) => Self::DynamicConstant(Box::new((*m).into()), pos),
 
-            // A closure's pointer carries its definition, which `Fn(name)`
-            // would lose: it stays the value itself.
-            Union::FnPtr(f, ..)
-                if !f.is_curried() && matches!(f.typ, crate::types::fn_ptr::FnPtrType::Normal) =>
-            {
-                Self::FnCall(
-                    FnCallExpr {
-                        namespace: super::Namespace::default(),
-                        name: KEYWORD_FN_PTR.into(),
-                        hashes: FnCallHashes::from_hash(calc_fn_hash(None, f.fn_name(), 1)),
-                        args: once(Self::StringConstant(f.fn_name().into(), pos)).collect(),
-                        capture_parent_scope: false,
-                        op_token: None,
-                    }
-                    .into(),
-                    pos,
-                )
-            }
-
             _ => Self::DynamicConstant(value.into(), pos),
         }
     }
@@ -602,14 +519,10 @@ impl Expr {
             | Self::ThisPtr(..)
             | Self::And(..)
             | Self::Or(..)
-            | Self::Coalesce(..)
             | Self::FnCall(..)
             | Self::MethodCall(..)
-            | Self::InterpolatedString(..)
             | Self::Property(..)
             | Self::Stmt(..) => ASTFlags::empty(),
-
-            Self::Custom(..) => ASTFlags::empty(),
         }
     }
     /// Get the [position][Position] of the expression.
@@ -631,15 +544,11 @@ impl Expr {
             | Self::ThisPtr(pos)
             | Self::And(.., pos)
             | Self::Or(.., pos)
-            | Self::Coalesce(.., pos)
             | Self::FnCall(.., pos)
             | Self::MethodCall(.., pos)
             | Self::Index(.., pos)
             | Self::Dot(.., pos)
-            | Self::InterpolatedString(.., pos)
             | Self::Property(.., pos) => *pos,
-
-            Self::Custom(.., pos) => *pos,
 
             Self::Stmt(x) => x.position(),
         }
@@ -658,7 +567,7 @@ impl Expr {
                 }
             }
 
-            Self::And(x, ..) | Self::Or(x, ..) | Self::Coalesce(x, ..) => x[0].start_position(),
+            Self::And(x, ..) | Self::Or(x, ..) => x[0].start_position(),
 
             Self::Index(x, ..) | Self::Dot(x, ..) => x.lhs.start_position(),
 
@@ -683,17 +592,13 @@ impl Expr {
             | Self::Map(.., pos)
             | Self::And(.., pos)
             | Self::Or(.., pos)
-            | Self::Coalesce(.., pos)
             | Self::Dot(.., pos)
             | Self::Index(.., pos)
             | Self::Variable(.., pos)
             | Self::ThisPtr(pos)
             | Self::FnCall(.., pos)
             | Self::MethodCall(.., pos)
-            | Self::InterpolatedString(.., pos)
             | Self::Property(.., pos) => *pos = new_pos,
-
-            Self::Custom(.., pos) => *pos = new_pos,
 
             Self::Stmt(x) => x.set_position(new_pos, Position::NONE),
         }
@@ -707,13 +612,11 @@ impl Expr {
     #[must_use]
     pub fn is_pure(&self) -> bool {
         match self {
-            Self::InterpolatedString(x, ..) | Self::Array(x, ..) => x.iter().all(Self::is_pure),
+            Self::Array(x, ..) => x.iter().all(Self::is_pure),
 
             Self::Map(x, ..) => x.0.iter().map(|(.., v)| v).all(Self::is_pure),
 
-            Self::And(x, ..) | Self::Or(x, ..) | Self::Coalesce(x, ..) => {
-                x.iter().all(Self::is_pure)
-            }
+            Self::And(x, ..) | Self::Or(x, ..) => x.iter().all(Self::is_pure),
 
             Self::Stmt(x) => x.iter().all(Stmt::is_pure),
 
@@ -742,7 +645,7 @@ impl Expr {
             | Self::StringConstant(..)
             | Self::Unit(..) => true,
 
-            Self::InterpolatedString(x, ..) | Self::Array(x, ..) => x.iter().all(Self::is_constant),
+            Self::Array(x, ..) => x.iter().all(Self::is_constant),
 
             Self::Map(x, ..) => x.0.iter().map(|(.., expr)| expr).all(Self::is_constant),
 
@@ -754,8 +657,7 @@ impl Expr {
     #[must_use]
     pub const fn is_valid_postfix(&self, token: &Token) -> bool {
         match token {
-            Token::Period | Token::Elvis => return true,
-            Token::LeftBracket | Token::QuestionBracket => return true,
+            Token::Period | Token::LeftBracket => return true,
             _ => (),
         }
 
@@ -767,12 +669,10 @@ impl Expr {
             | Self::CharConstant(..)
             | Self::And(..)
             | Self::Or(..)
-            | Self::Coalesce(..)
             | Self::Unit(..) => false,
 
             Self::IntegerConstant(..)
             | Self::StringConstant(..)
-            | Self::InterpolatedString(..)
             | Self::FnCall(..)
             | Self::ThisPtr(..)
             | Self::MethodCall(..)
@@ -781,8 +681,6 @@ impl Expr {
             | Self::Index(..)
             | Self::Array(..)
             | Self::Map(..) => false,
-
-            Self::Custom(..) => false,
 
             Self::Variable(..) => matches!(
                 token,
@@ -820,7 +718,7 @@ impl Expr {
                     }
                 }
             }
-            Self::InterpolatedString(x, ..) | Self::Array(x, ..) => {
+            Self::Array(x, ..) => {
                 for e in &**x {
                     if !e.walk(path, on_node) {
                         return false;
@@ -842,7 +740,7 @@ impl Expr {
                     return false;
                 }
             }
-            Self::And(x, ..) | Self::Or(x, ..) | Self::Coalesce(x, ..) => {
+            Self::And(x, ..) | Self::Or(x, ..) => {
                 for expr in &***x {
                     if !expr.walk(path, on_node) {
                         return false;
@@ -851,13 +749,6 @@ impl Expr {
             }
             Self::FnCall(x, ..) | Self::MethodCall(x, ..) => {
                 for e in &*x.args {
-                    if !e.walk(path, on_node) {
-                        return false;
-                    }
-                }
-            }
-            Self::Custom(x, ..) => {
-                for e in &*x.inputs {
                     if !e.walk(path, on_node) {
                         return false;
                     }

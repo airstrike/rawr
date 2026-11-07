@@ -169,14 +169,14 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
                 return Err(error.clone().into_err(*position));
             }
             (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
-                scan.next(input, &tokenizer_control);
+                scan.next(input);
             }
             (Token::RightBrace | Token::RightParen | Token::RightBracket, _) => {
-                scan.next(input, &tokenizer_control);
+                scan.next(input);
             }
             (token, _) if scan.delimiter_depth == 0 && is_attribute_marker(token) => {
                 let (_, position) = scan
-                    .next(input, &tokenizer_control)
+                    .next(input)
                     .expect("peeked attribute marker must exist");
 
                 if matches!(input.peek(), Some((Token::LeftBracket, _)))
@@ -241,11 +241,7 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
                             span: Span::NONE,
                         };
                         items.push(crate::item::Parsed::Function(parse_const_rest(
-                            input,
-                            &tokenizer_control,
-                            header,
-                            start,
-                            name,
+                            input, header, start, name,
                         )?));
                     }
                 }
@@ -269,17 +265,11 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
                 if scan.delimiter_depth == 0 && text.as_str() == "static" =>
             {
                 let start = input.peek().expect("peeked static").1;
-                items.push(parse_static(
-                    input,
-                    &tokenizer_control,
-                    Box::default(),
-                    None,
-                    start,
-                )?);
+                items.push(parse_static(input, Box::default(), None, start)?);
             }
             (token, position) if scan.delimiter_depth == 0 && is_word(token, "extern") => {
                 let start = *position;
-                scan.next(input, &tokenizer_control);
+                scan.next(input);
                 // `extern "C" ..` is passed over as before.
                 if input
                     .peek()
@@ -304,7 +294,7 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
             }
             _ => {
                 let depth = scan.delimiter_depth;
-                let token = scan.next(input, &tokenizer_control);
+                let token = scan.next(input);
                 after_name = depth == 0
                     && token.is_some_and(|(token, _)| {
                         matches!(token, Token::Identifier(_) | Token::Reserved(_))
@@ -583,45 +573,21 @@ fn inner_attribute_error(message: &str) -> PERR {
 #[derive(Default)]
 struct ScanState {
     delimiter_depth: usize,
-    interpolation_depths: Vec<usize>,
-    expects_interpolation_brace: bool,
 }
 
 impl ScanState {
     fn inside_body() -> Self {
-        Self {
-            delimiter_depth: 1,
-            ..Self::default()
-        }
+        Self { delimiter_depth: 1 }
     }
 
-    fn next(
-        &mut self,
-        input: &mut TokenStream,
-        tokenizer_control: &TokenizerControl,
-    ) -> Option<(Token, Position)> {
+    fn next(&mut self, input: &mut TokenStream) -> Option<(Token, Position)> {
         let (token, position) = input.next()?;
 
         match &token {
-            Token::InterpolatedString(_) => self.expects_interpolation_brace = true,
-            Token::LeftBrace => {
-                self.delimiter_depth += 1;
-                if self.expects_interpolation_brace {
-                    self.interpolation_depths.push(self.delimiter_depth);
-                    self.expects_interpolation_brace = false;
-                }
-            }
-            Token::LeftParen | Token::LeftBracket | Token::MapStart => {
+            Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart => {
                 self.delimiter_depth += 1;
             }
-            Token::RightBrace => {
-                if self.interpolation_depths.last() == Some(&self.delimiter_depth) {
-                    self.interpolation_depths.pop();
-                    tokenizer_control.borrow_mut().is_within_text = true;
-                }
-                self.delimiter_depth = self.delimiter_depth.saturating_sub(1);
-            }
-            Token::RightParen | Token::RightBracket => {
+            Token::RightBrace | Token::RightParen | Token::RightBracket => {
                 self.delimiter_depth = self.delimiter_depth.saturating_sub(1);
             }
             _ => {}
@@ -664,11 +630,7 @@ fn begins_statement_item(token: &Token) -> bool {
 }
 
 fn is_attribute_marker(token: &Token) -> bool {
-    match token {
-        Token::Hash => true,
-        Token::Custom(symbol) => symbol.as_str() == "#",
-        _ => false,
-    }
+    matches!(token, Token::Hash)
 }
 
 fn parse_item(
@@ -892,7 +854,7 @@ fn parse_enabled_item(
             parse_const_item(input, tokenizer_control, attributes, visibility, start)
         }
         (Token::Reserved(text), _) if text.as_str() == "static" => {
-            parse_static(input, tokenizer_control, attributes, visibility, start)
+            parse_static(input, attributes, visibility, start)
         }
         (_, position) => Err(PERR::MissingToken(
             "item".into(),
@@ -1018,7 +980,6 @@ fn parse_type_alias(
 /// whose value it always has. A `static mut` is not supported yet.
 fn parse_static(
     input: &mut TokenStream,
-    tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
     visibility: Option<Span>,
     start: Position,
@@ -1039,7 +1000,6 @@ fn parse_static(
         crate::resolve::borrowck::note_unlowered("a `static` item, read as a `const`", name.span);
         parse_const_rest(
             input,
-            tokenizer_control,
             crate::item::Header {
                 attributes,
                 visibility,
@@ -1075,7 +1035,6 @@ fn parse_const_item(
     let name = parse_name(input, "after 'const'")?;
     parse_const_rest(
         input,
-        tokenizer_control,
         crate::item::Header {
             attributes,
             visibility,
@@ -3300,22 +3259,13 @@ fn parse_associated_const(
         });
     }
     let equals = expect(input, Token::Equals, "after a constant type")?;
-    finish_associated_const(
-        input,
-        tokenizer_control,
-        header,
-        start,
-        name,
-        output,
-        equals,
-    )
+    finish_associated_const(input, header, start, name, output, equals)
 }
 
 /// The value of an associated const after its `=`, its body as a
 /// top-level const's is.
 fn finish_associated_const(
     input: &mut TokenStream,
-    tokenizer_control: &TokenizerControl,
     header: crate::item::Header,
     start: Position,
     name: crate::item::Name,
@@ -3326,10 +3276,7 @@ fn finish_associated_const(
     let mut scan = ScanState::default();
     let mut tokens = Vec::new();
     let semicolon = loop {
-        match scan
-            .next(input, tokenizer_control)
-            .expect("token streams always end with EOF")
-        {
+        match scan.next(input).expect("token streams always end with EOF") {
             (Token::SemiColon, position) if scan.delimiter_depth == 0 => break position,
             (Token::EOF, position) => {
                 return Err(PERR::MissingToken(
@@ -3366,7 +3313,6 @@ fn finish_associated_const(
 /// Parse `: T = value;` after `const NAME`.
 fn parse_const_rest(
     input: &mut TokenStream,
-    tokenizer_control: &TokenizerControl,
     header: crate::item::Header,
     start: Position,
     name: crate::item::Name,
@@ -3378,10 +3324,7 @@ fn parse_const_rest(
     let mut scan = ScanState::default();
     let mut tokens = Vec::new();
     let semicolon = loop {
-        match scan
-            .next(input, tokenizer_control)
-            .expect("token streams always end with EOF")
-        {
+        match scan.next(input).expect("token streams always end with EOF") {
             (Token::SemiColon, position) if scan.delimiter_depth == 0 => break position,
             (Token::EOF, position) => {
                 return Err(PERR::MissingToken(
@@ -3882,9 +3825,7 @@ fn parse_type_split(
 /// trait is then expected: "expected identifier, found `,`".
 fn expect_type_path(input: &mut TokenStream) -> ParseResult<()> {
     let mut bound = false;
-    while matches!(input.peek(), Some((Token::DoubleQuestion, _)))
-        || matches!(input.peek(), Some((Token::Reserved(symbol), _)) if symbol.as_str() == "?")
-    {
+    while matches!(input.peek(), Some((Token::Reserved(symbol), _)) if symbol.as_str() == "?") {
         input.next();
         bound = true;
     }
@@ -4692,9 +4633,7 @@ fn parse_body_syntax(
             && text.as_str() == "unsafe"
         {
             let start = *position;
-            let (token, position) = scan
-                .next(input, tokenizer_control)
-                .expect("peeked unsafe must exist");
+            let (token, position) = scan.next(input).expect("peeked unsafe must exist");
             if matches!(input.peek(), Some((Token::Impl, _))) {
                 let item = parse_impl(input, tokenizer_control, Box::default(), None, start)?;
                 if let Some(item) = marker_impl(item, Some(start))? {
@@ -4723,9 +4662,7 @@ fn parse_body_syntax(
             && is_word(token, "extern")
         {
             let start = *position;
-            let (token, position) = scan
-                .next(input, tokenizer_control)
-                .expect("peeked extern must exist");
+            let (token, position) = scan.next(input).expect("peeked extern must exist");
             if input
                 .peek()
                 .is_some_and(|(token, _)| is_word(token, "crate"))
@@ -4839,9 +4776,7 @@ fn parse_body_syntax(
                 "unsafe" | "move" | "async" | "try" | "extern" | "union"
             ));
         }
-        let (token, position) = scan
-            .next(input, tokenizer_control)
-            .expect("token streams always end with EOF");
+        let (token, position) = scan.next(input).expect("token streams always end with EOF");
         if matches!(token, Token::LeftBrace) {
             scopes.push((
                 scan.delimiter_depth,
@@ -5199,8 +5134,8 @@ fn expect_parameter_type(input: &mut TokenStream) -> ParseResult<Position> {
     }
 }
 
-/// rustc's name for a token it did not expect: `` `)` ``, `` keyword `fn` ``
-/// or `` `<eof>` ``.
+/// rustc's name for a token it did not expect: `` `)` ``, `` keyword `fn` ``,
+/// `` reserved keyword `do` `` or `` `<eof>` ``.
 pub(crate) fn found(token: &Token) -> String {
     /// Rust's keywords, which rustc names as keywords.
     const KEYWORDS: [&str; 38] = [
@@ -5208,6 +5143,12 @@ pub(crate) fn found(token: &Token) -> String {
         "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
         "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
         "true", "type", "unsafe", "use", "where", "while",
+    ];
+    /// The words Rust reserves for later, which rustc names as reserved
+    /// keywords.
+    const RESERVED: [&str; 14] = [
+        "abstract", "become", "box", "do", "final", "gen", "macro", "override", "priv", "try",
+        "typeof", "unsized", "virtual", "yield",
     ];
     match token {
         Token::EOF => "`<eof>`".into(),
@@ -5217,6 +5158,8 @@ pub(crate) fn found(token: &Token) -> String {
             let text = crate::tokenizer::raw_names(&text);
             if KEYWORDS.contains(&text.as_ref()) {
                 format!("keyword `{text}`")
+            } else if RESERVED.contains(&text.as_ref()) {
+                format!("reserved keyword `{text}`")
             } else {
                 format!("`{text}`")
             }

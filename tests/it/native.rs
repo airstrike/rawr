@@ -5,8 +5,8 @@ use std::any::TypeId;
 fn test_native_context() {
     let mut engine = Engine::new();
 
-    engine.set_max_modules(40);
-    engine.register_fn("test", |context: NativeCallContext, x: INT| context.engine().max_modules() as INT + x);
+    engine.set_max_variables(40);
+    engine.register_fn("test", |context: NativeCallContext, x: INT| context.engine().max_variables() as INT + x);
 
     assert_eq!(engine.eval::<INT>("test(2)").unwrap(), 42);
 }
@@ -28,27 +28,4 @@ fn test_native_context_fn_name() {
     assert_eq!(engine.eval::<String>("add_double(40, 1)").unwrap(), "add_double_42");
 
     assert_eq!(engine.eval::<String>("append_x2(40, 1)").unwrap(), "append_x2_42");
-}
-
-/// A native asking rawr for a function it answers by name rather than by
-/// dispatch.
-///
-/// The runtime's `type_of` (`__rawr_type_of`, a name no Rust name spells) and
-/// `is_shared` have no registered implementation anywhere, and a call by name
-/// for one used to route past the code that implements them. So a host could
-/// ask for `type_of` and be told there is no such function.
-#[test]
-fn test_native_call_fn_raw_reaches_syntactic_functions() {
-    let mut engine = Engine::new();
-
-    engine.register_raw_fn("ask_type", [TypeId::of::<Dynamic>()], |context, args| {
-        let mut value = args[0].clone();
-        context.call_fn_raw("__rawr_type_of", false, false, &mut [&mut value])
-    });
-
-    // A string answers with its type name.
-    assert_eq!(engine.eval::<String>(r#"let s = "a"; ask_type(s)"#).unwrap(), "string");
-
-    // An integer answers with the integer type's name.
-    assert_eq!(engine.eval::<String>("let x = 1; ask_type(x)").unwrap(), "i64");
 }

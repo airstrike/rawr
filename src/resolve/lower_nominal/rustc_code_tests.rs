@@ -480,3 +480,115 @@ fn the_first_error_is_the_first_body_the_program_writes() {
         Some("expected `Result<C, ()>`, found `()`")
     );
 }
+
+#[test]
+fn the_old_engines_statements_are_rustc_syntax_errors() {
+    assert_eq!(
+        refused("fn main() {\n    try { 1 } catch (e) { 2 };\n}\n"),
+        (
+            "".into(),
+            "keyword `catch` cannot follow a `try` block".into(),
+            None
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let mut x = 0;\n    do { x += 1; } while x < 3;\n}\n"),
+        (
+            "".into(),
+            "expected expression, found reserved keyword `do`".into(),
+            label("expected expression")
+        )
+    );
+    let eight = "expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator";
+    assert_eq!(
+        refused("fn main() {\n    import \"m\" as m;\n}\n"),
+        (
+            "".into(),
+            format!("{eight}, found `\"m\"`"),
+            label("expected one of 8 possible tokens")
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let x = 1;\n    export x;\n}\n"),
+        (
+            "".into(),
+            format!("{eight}, found `x`"),
+            label("expected one of 8 possible tokens")
+        )
+    );
+}
+
+#[test]
+fn the_old_engines_intrinsics_are_unknown_functions() {
+    for name in [
+        "__rawr_type_of",
+        "__rawr_print",
+        "__rawr_debug",
+        "__rawr_eval",
+        "__rawr_fn_ptr",
+        "__rawr_is_shared",
+        "__rawr_is_def_var",
+        "__rawr_is_def_fn",
+    ] {
+        assert_eq!(
+            refused(&format!("fn main() {{\n    let x = {name}(1);\n}}\n")),
+            (
+                "E0425".into(),
+                format!("cannot find function `{name}` in this scope"),
+                label("not found in this scope")
+            )
+        );
+    }
+}
+
+#[test]
+fn the_old_engines_symbols_are_rustc_syntax_errors() {
+    assert_eq!(
+        refused("fn main() {\n    let a = 1;\n    let b = a === 1;\n}\n"),
+        ("".into(), "invalid comparison operator `===`".into(), None)
+    );
+    assert_eq!(
+        refused("fn main() {\n    let a = 1;\n    let b = a !== 1;\n}\n"),
+        ("".into(), "invalid comparison operator `!==`".into(), None)
+    );
+    assert_eq!(
+        refused("fn main() {\n    let a := 1;\n}\n"),
+        (
+            "".into(),
+            "expected type, found `=`".into(),
+            label("expected type")
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let a:;\n}\n"),
+        (
+            "".into(),
+            "expected type, found `;`".into(),
+            label("expected type")
+        )
+    );
+    let after_let = "expected one of `.`, `;`, `?`, `else`, or an operator";
+    assert_eq!(
+        refused(
+            "fn f(a: Option<Option<i32>>) -> Option<i32> {\n    let b = a ?? 2;\n    b\n}\n\
+             fn main() {}\n"
+        ),
+        (
+            "".into(),
+            format!("{after_let}, found `2`"),
+            label(after_let)
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let v = vec![1];\n    let b = 1 !in v;\n}\n"),
+        (
+            "".into(),
+            format!("{after_let}, found `!`"),
+            label(after_let)
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let s = `hello`;\n}\n"),
+        ("".into(), "unknown start of token: `".into(), None)
+    );
+}

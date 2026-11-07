@@ -207,35 +207,6 @@ impl Engine {
     ) -> &mut Self {
         self.register_indexer_set(set_fn)
     }
-    /// Register a custom syntax with the [`Engine`].
-    ///
-    /// # Deprecated
-    ///
-    /// This method is deprecated.
-    /// Use [`register_custom_syntax_with_state_raw`][Engine::register_custom_syntax_with_state_raw] instead.
-    ///
-    /// This method will be removed in the next major version.
-    #[deprecated(
-        since = "1.11.0",
-        note = "use `register_custom_syntax_with_state_raw` instead"
-    )]
-    #[inline(always)]
-    pub fn register_custom_syntax_raw(
-        &mut self,
-        key: impl Into<Identifier>,
-        parse: impl Fn(&[ImmutableString], &str) -> crate::parser::ParseResult<Option<ImmutableString>>
-            + SendSync
-            + 'static,
-        scope_may_be_changed: bool,
-        func: impl Fn(&mut crate::EvalContext, &[crate::Expression]) -> RawrResult + SendSync + 'static,
-    ) -> &mut Self {
-        self.register_custom_syntax_with_state_raw(
-            key,
-            move |keywords, look_ahead, _| parse(keywords, look_ahead),
-            scope_may_be_changed,
-            move |context, expressions, _| func(context, expressions),
-        )
-    }
     /// _(internals)_ Evaluate a list of statements with no `this` pointer.
     /// Exported under the `internals` feature only.
     ///
@@ -445,23 +416,6 @@ impl FnPtr {
         arg_values: impl AsMut<[Dynamic]>,
     ) -> RawrResult {
         self.call_raw(context, this_ptr, arg_values)
-    }
-}
-
-impl crate::Expression<'_> {
-    /// If this expression is a variable name, return it.  Otherwise [`None`].
-    ///
-    /// # Deprecated
-    ///
-    /// This method is deprecated.
-    /// Use [`get_string_value`][crate::Expression::get_string_value] instead.
-    ///
-    /// This method will be removed in the next major version.
-    #[deprecated(since = "1.4.0", note = "use `get_string_value` instead")]
-    #[inline(always)]
-    #[must_use]
-    pub fn get_variable_name(&self) -> Option<&str> {
-        self.get_string_value()
     }
 }
 

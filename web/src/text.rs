@@ -333,7 +333,7 @@ fn engine(sink: &Arc<Mutex<Output>>) -> Engine {
 fn sandbox(engine: &mut Engine, sink: &Arc<Mutex<Output>>) {
     let deadline = crate::now() + TIME_MS;
     let depth = engine.max_call_levels().min(CALL_DEPTH);
-    let (output, print, debug, progress) = (sink.clone(), sink.clone(), sink.clone(), sink.clone());
+    let (output, progress) = (sink.clone(), sink.clone());
     engine
         .set_max_call_levels(depth)
         .set_max_string_size(DATA_SIZE)
@@ -354,15 +354,7 @@ fn sandbox(engine: &mut Engine, sink: &Arc<Mutex<Output>>) {
                 .lock()
                 .unwrap()
                 .push(stream == rawr::Output::Stderr, text);
-        })
-        // Untyped `fn f(x) { .. }` bodies reach the base language's
-        // `print` and `debug`: their text goes with the rest.
-        .on_print(move |text| print.lock().unwrap().push(false, &format!("{text}\n")))
-        .on_debug(move |text, _, _| debug.lock().unwrap().push(true, &format!("{text}\n")))
-        .set_module_resolver(rawr::module_resolvers::DummyModuleResolver::new());
-    for symbol in ["import", "eval"] {
-        engine.disable_symbol(symbol);
-    }
+        });
     let refuse = || Err::<(), Box<rawr::EvalAltResult>>("sleep is not available in ?play".into());
     engine
         .register_fn("sleep", move |_: rawr::INT| refuse())

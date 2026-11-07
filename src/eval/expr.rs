@@ -3,10 +3,9 @@
 use super::{Caches, EvalContext, GlobalRuntimeState, Target};
 use crate::ast::Expr;
 use crate::engine::{HELD_STEPS, KEYWORD_HELD, KEYWORD_SLOT_OF, KEYWORD_THIS, KEYWORD_THROUGH};
-use crate::packages::string_basic::{print_with_func, FUNC_TO_STRING};
 use crate::types::dynamic::AccessMode;
 use crate::{Dynamic, Engine, RawrResult, RawrResultOf, Scope, SmartString, ERR};
-use std::{convert::TryInto, fmt::Write, num::NonZeroUsize};
+use std::{convert::TryInto, num::NonZeroUsize};
 
 impl Engine {
     /// Search for a module within an imports stack.
@@ -435,31 +434,6 @@ impl Engine {
                 .search_namespace(global, caches, scope, this_ptr, expr)
                 .map(Target::take_or_clone),
 
-            Expr::InterpolatedString(x, _) => {
-                let mut concat = SmartString::new_const();
-
-                for expr in &**x {
-                    let item = &mut self
-                        .eval_expr(global, caches, scope, this_ptr.as_deref_mut(), expr)?
-                        .flatten();
-                    let pos = expr.position();
-
-                    if item.is_string() {
-                        write!(concat, "{item}").unwrap();
-                    } else {
-                        let source = global.source();
-                        let context = &(self, FUNC_TO_STRING, source, &*global, pos).into();
-                        let display = print_with_func(FUNC_TO_STRING, context, item);
-                        write!(concat, "{display}").unwrap();
-                    }
-
-                    self.throw_on_size((0, 0, concat.len()))
-                        .map_err(|err| err.fill_position(pos))?;
-                }
-
-                Ok(self.get_interned_string(concat).into())
-            }
-
             Expr::Array(x, ..) => {
                 let mut array = crate::Array::with_capacity(x.len());
 
@@ -547,38 +521,6 @@ impl Engine {
                 }
 
                 Ok(value)
-            }
-
-            Expr::Coalesce(x, ..) => {
-                let mut value = Dynamic::UNIT;
-
-                for expr in &***x {
-                    value = self.eval_expr(global, caches, scope, this_ptr.as_deref_mut(), expr)?;
-
-                    if !value.is_unit() {
-                        break;
-                    }
-                }
-                Ok(value)
-            }
-
-            Expr::Custom(custom, pos) => {
-                let expressions: crate::StaticVec<_> =
-                    custom.inputs.iter().map(Into::into).collect();
-                // The first token acts as the custom syntax's key
-                let key_token = custom.tokens.first().unwrap();
-                // The key should exist, unless the AST is compiled in a different Engine
-                let custom_def = self.custom_syntax.get(key_token.as_str()).ok_or_else(|| {
-                    Box::new(ERR::ErrorCustomSyntax(
-                        format!("Invalid custom syntax prefix: {key_token}"),
-                        custom.tokens.iter().map(<_>::to_string).collect(),
-                        *pos,
-                    ))
-                })?;
-                let mut context = EvalContext::new(self, global, caches, scope, this_ptr);
-
-                (custom_def.func)(&mut context, &expressions, &custom.state)
-                    .and_then(|r| self.check_data_size(r, expr.start_position()))
             }
 
             Expr::Stmt(x) => {

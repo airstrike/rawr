@@ -335,34 +335,11 @@ pub enum Op {
         op: Option<u32>,
     },
 
-    /// Pop a value and push whether it is a shared cell.
-    ///
-    /// Rawr answers `is_shared` before dispatch and registers no function for
-    /// it (`func/call.rs:1240`), so there is nothing to call — and the value
-    /// has to arrive unflattened, or the answer is always false.
-    IsShared,
-
     /// Push a function pointer to the compiled function named `.0`.
     ///
-    /// A closure's, whose name the parser makes up (`anon$…`) and which
-    /// [`Op::MakeFnPtr`] would refuse — rawr only builds pointers to names a
-    /// script could have written. The name is known here, so unlike
-    /// `MakeFnPtr` it needs no operand on the stack.
+    /// A closure's, whose name the parser makes up (`anon$…`). The name is
+    /// known here, so it needs no operand on the stack.
     MakeClosure(u32),
-
-    /// Pop a name and push a function pointer to it.
-    ///
-    /// Deliberately the *late-bound* kind, carrying a name and nothing else.
-    /// Rawr's other kind embeds a `ScriptFuncDef` — an AST body — which is
-    /// both unreachable from outside the crate and exactly the allocation this
-    /// project exists to remove. Building our own means a pointer resolves
-    /// through the compiled function table like any other call, and a program
-    /// holding one can still be written to an artifact.
-    ///
-    /// The cost is that a `Normal` pointer is late-bound where rawr's is
-    /// early-bound: redefining the function after taking a pointer to it is
-    /// visible here and not in the walker.
-    MakeFnPtr,
 
     /// Pop `.0` arguments and a function pointer, and push the pointer with
     /// those arguments bound to the front of it.
@@ -397,32 +374,6 @@ pub enum Op {
         /// Only meaningful when `method` is set.
         receiver: Option<Receiver>,
     },
-
-    /// Push an empty buffer for an interpolated string to be built in.
-    ///
-    /// Interpolation is three instructions rather than one because rawr checks
-    /// the size limit after **every** segment and blames the segment that went
-    /// over. One instruction has one position-table entry, so it could not say
-    /// which; a pool of per-segment positions would say it but would not be
-    /// strippable, and diagnostics staying separable is the point of the
-    /// table. An instruction per segment puts each position exactly where the
-    /// rest of them live.
-    ///
-    /// The buffer is an ordinary operand, so a nested interpolation needs
-    /// nothing special.
-    InterpolateStart,
-
-    /// Pop a segment and append it to the buffer beneath it.
-    ///
-    /// Not `+`, which is what it looks like: `+` is overridable and
-    /// interpolation is not, and the string-plus-anything operator skips this
-    /// size check. A string segment is written straight out and never reaches
-    /// dispatch; anything else goes through rawr's `to_string` rendering,
-    /// which consults native functions only.
-    InterpolateAppend,
-
-    /// Replace the buffer with the interned string it built.
-    InterpolateEnd,
 
     /// Pop `.0` values and push them as an array.
     ///
@@ -522,34 +473,6 @@ pub enum Op {
         /// Whether locals the fragment declares are discarded afterwards.
         rewind_scope: bool,
     },
-
-    /// Arm a handler covering the instructions up to the matching
-    /// [`Op::PopHandler`], catching to `target`.
-    ///
-    /// Records where the operand stack, the scope and the iterator stack were
-    /// when it was armed, because an error can be raised at any depth of all
-    /// three and the catch block has to start where the `try` did.
-    ///
-    /// Only errors rawr considers catchable are caught: `return`, `break`,
-    /// `continue` and `exit` unwind as errors too and must pass straight
-    /// through (`eval/stmt.rs:806`).
-    ///
-    /// `catch_var` names the variable the error is bound to. Its table entry
-    /// is that variable's position, which is what rawr reports
-    /// `ErrorTooManyVariables` against.
-    PushHandler {
-        /// Where to jump to when an error is caught.
-        target: u32,
-        /// The name the error is bound to; absent for a bare `catch`.
-        catch_var: Option<u32>,
-    },
-
-    /// Disarm the innermost handler.
-    ///
-    /// Emitted twice per `try`: once where the body ends normally, and once
-    /// where the catch block does — the second ends the region in which a
-    /// bare `throw;` means "re-raise the original".
-    PopHandler,
 
     /// Pop an iterable and start iterating it.
     ///

@@ -300,13 +300,6 @@ fn main() {
     // Setup Engine
     engine.set_optimization_level(rawr::OptimizationLevel::None);
 
-    // Set a file module resolver without caching
-    {
-        let mut resolver = rawr::module_resolvers::FileModuleResolver::new();
-        resolver.enable_cache(false);
-        engine.set_module_resolver(resolver);
-    }
-
     // Register sample functions
     engine.register_static_module("test", exported_module!(sample_functions).into());
 

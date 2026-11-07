@@ -917,11 +917,6 @@ impl Engine {
 
         match ChainType::from(parent) {
             ChainType::Indexing => {
-                // Check for existence with the null conditional operator
-                if parent.options().intersects(ASTFlags::NEGATED) && target.as_ref().is_unit() {
-                    return Ok((Dynamic::UNIT, false));
-                }
-
                 let pos = rhs.start_position();
 
                 match (rhs, new_val) {
@@ -1157,11 +1152,6 @@ impl Engine {
             }
 
             ChainType::Dotting => {
-                // Check for existence with the Elvis operator
-                if parent.options().intersects(ASTFlags::NEGATED) && target.as_ref().is_unit() {
-                    return Ok((Dynamic::UNIT, false));
-                }
-
                 match (rhs, new_val, target.as_ref().is_map()) {
                     // xxx.fn_name(...) = ???
                     (Expr::MethodCall(..), Some(..), ..) => {

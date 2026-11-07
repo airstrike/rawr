@@ -240,7 +240,6 @@ pub(super) fn read(bytes: &[u8]) -> Result<Program<'_>, ReadError> {
             // that has any and a loaded one never does.
             lib: None,
             has_compiler_support: false,
-            resolver: None,
             source,
         },
     );

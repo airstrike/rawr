@@ -105,13 +105,6 @@ pub enum VerifyError {
         /// Byte offset of the instruction
         at: usize,
     },
-    /// A handler is disarmed where none was armed. A stale handler is worse
-    /// than a missing one: the next unrelated error would be caught into an
-    /// already-exited `catch` block.
-    HandlerUnderflow {
-        /// Byte offset of the instruction
-        at: usize,
-    },
     /// An index into a pool with nothing behind it.
     BadIndex {
         /// Byte offset of the instruction
@@ -185,7 +178,6 @@ pub fn verify(code: &[u8], chunks: &[Chunk], pools: Pools) -> Result<Vec<u16>, V
 struct State {
     operands: usize,
     iters: usize,
-    handlers: usize,
 }
 
 /// Walk one chunk's reachable instructions, checking that every path into an
@@ -251,14 +243,6 @@ fn verify_chunk(
                     .ok_or(VerifyError::IteratorUnderflow { at })?,
                 _ => state.iters,
             },
-            handlers: match op {
-                Op::PushHandler { .. } => state.handlers + 1,
-                Op::PopHandler => state
-                    .handlers
-                    .checked_sub(1)
-                    .ok_or(VerifyError::HandlerUnderflow { at })?,
-                _ => state.handlers,
-            },
         };
         let next_depth = next_state.operands;
         high_water = high_water.max(next_depth);
@@ -296,21 +280,6 @@ fn verify_chunk(
 
             Op::Jump(target) => go(target, next_state)?,
 
-            // The catch block is entered on the exception path, so it starts
-            // where the `try` did: same operand depth, same iterators, and
-            // inside the handler it will disarm itself.
-            Op::PushHandler { target, .. } => {
-                go(
-                    target,
-                    State {
-                        operands: depth,
-                        iters: state.iters,
-                        handlers: next_state.handlers,
-                    },
-                )?;
-                worklist.push((next, next_state));
-            }
-
             Op::JumpIfFalse { target } | Op::JumpIfTrue { target } => {
                 go(target, next_state)?;
                 worklist.push((next, next_state));
@@ -328,7 +297,6 @@ fn verify_chunk(
                             .iters
                             .checked_sub(1)
                             .ok_or(VerifyError::IteratorUnderflow { at })?,
-                        handlers: state.handlers,
                     },
                 )?;
                 worklist.push((
@@ -337,7 +305,6 @@ fn verify_chunk(
                         // The item, and the count under it when there is one.
                         operands: depth + 1 + usize::from(indexed),
                         iters: state.iters,
-                        handlers: state.handlers,
                     },
                 ));
             }
@@ -422,12 +389,7 @@ fn effect(op: &Op, pools: Pools) -> (usize, usize) {
 
         Op::JumpIfFalse { .. } | Op::JumpIfTrue { .. } | Op::Switch(..) => (1, 0),
 
-        Op::Jump(..)
-        | Op::UnwindTo(..)
-        | Op::Tick
-        | Op::Checkpoint
-        | Op::PushHandler { .. }
-        | Op::PopHandler => (0, 0),
+        Op::Jump(..) | Op::UnwindTo(..) | Op::Tick | Op::Checkpoint => (0, 0),
 
         // Arguments in, result out.
         Op::Call { argc, .. } => (*argc as usize, 1),
@@ -459,14 +421,9 @@ fn effect(op: &Op, pools: Pools) -> (usize, usize) {
         // The buffer is an ordinary operand: started, appended to, then
         // replaced by the string it built.
         // A name in, a pointer out.
-        Op::MakeFnPtr | Op::IsShared => (1, 1),
         // The arguments and the pointer itself, leaving one of each.
         Op::Curry(argc) => (*argc as usize + 1, 1),
         Op::CallFnPtr { argc, .. } => (*argc as usize + 1, 1),
-
-        Op::InterpolateStart => (0, 1),
-        Op::InterpolateAppend => (1, 0),
-        Op::InterpolateEnd => (1, 1),
 
         // Pops the thrown value; nothing follows, so what it leaves is moot.
         Op::Throw | Op::StoreShared(..) => (1, 0),

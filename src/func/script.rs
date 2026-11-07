@@ -227,41 +227,4 @@ impl Engine {
 
         _result
     }
-
-    // Does a script-defined function exist?
-    ///
-    /// # Note
-    ///
-    /// If the scripted function is not found, this information is cached for future look-ups.
-    #[must_use]
-    pub(crate) fn has_script_fn(
-        &self,
-        global: &GlobalRuntimeState,
-        caches: &mut Caches,
-        hash_script: u64,
-    ) -> bool {
-        let cache = caches.fn_resolution_cache_mut();
-
-        if let Some(result) = cache.dict.get(&hash_script).map(Option::is_some) {
-            return result;
-        }
-
-        // First check script-defined functions
-        let result = global.lib.iter().any(|m| m.contains_fn(hash_script))
-            // Then check the global namespace and packages
-            || self.global_modules.iter().any(|m| m.contains_fn(hash_script));
-
-        let result = result ||
-            // Then check imported modules
-            global.contains_qualified_fn(hash_script)
-            // Then check sub-modules
-            || self.global_sub_modules.values().any(|m| m.contains_qualified_fn(hash_script));
-
-        if !result && !cache.bloom_filter.is_absent_and_set(hash_script) {
-            // Do not cache "one-hit wonders"
-            cache.dict.insert(hash_script, None);
-        }
-
-        result
-    }
 }

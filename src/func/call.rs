@@ -3,10 +3,7 @@
 use super::{get_builtin_binary_op_fn, get_builtin_op_assignment_fn, RawrFunc};
 use crate::api::default_limits::MAX_DYNAMIC_PARAMETERS;
 use crate::ast::{Expr, FnCallExpr, FnCallHashes};
-use crate::engine::{
-    KEYWORD_DEBUG, KEYWORD_EVAL, KEYWORD_FN_PTR, KEYWORD_FN_PTR_CALL, KEYWORD_FN_PTR_CURRY,
-    KEYWORD_IS_DEF_VAR, KEYWORD_PRINT, KEYWORD_TYPE_OF,
-};
+use crate::engine::{KEYWORD_FN_PTR_CALL, KEYWORD_FN_PTR_CURRY};
 #[cfg(feature = "internals")]
 use crate::eval::EvalContext;
 use crate::eval::{Caches, FnResolutionCacheEntry, GlobalRuntimeState};
@@ -17,11 +14,7 @@ use crate::{
     RawrResult, RawrResultOf, Scope, Shared, ERR,
 };
 use std::collections::hash_map::Entry;
-use std::{
-    any::{type_name, TypeId},
-    convert::TryFrom,
-    mem,
-};
+use std::{any::TypeId, convert::TryFrom, mem};
 
 /// Arguments to a function call, which is a list of [`&mut Dynamic`][Dynamic].
 pub type FnCallArgs<'a> = [&'a mut Dynamic];
@@ -447,30 +440,7 @@ impl Engine {
                 self.check_data_size(&*args[0], pos)?;
             }
 
-            // See if the function match print/debug (which requires special processing)
-            return Ok(match name {
-                KEYWORD_PRINT => {
-                    if let Some(ref print) = self.print {
-                        let text = result.into_immutable_string().map_err(|typ| {
-                            let t = self.map_type_name(type_name::<ImmutableString>()).into();
-                            ERR::ErrorMismatchOutputType(t, typ.into(), pos)
-                        })?;
-                        print(&text);
-                    }
-                    (Dynamic::UNIT, false)
-                }
-                KEYWORD_DEBUG => {
-                    if let Some(ref debug) = self.debug {
-                        let text = result.into_immutable_string().map_err(|typ| {
-                            let t = self.map_type_name(type_name::<ImmutableString>()).into();
-                            ERR::ErrorMismatchOutputType(t, typ.into(), pos)
-                        })?;
-                        debug(&text, global.source(), pos);
-                    }
-                    (Dynamic::UNIT, false)
-                }
-                _ => (result, is_method),
-            });
+            return Ok((result, is_method));
         }
 
         // Error handling
@@ -537,50 +507,21 @@ impl Engine {
         }
     }
 
-    /// The functions answered by name rather than by dispatch.
-    ///
-    /// `type_of` and `is_shared` have no registered implementation anywhere —
-    /// this *is* their implementation, and the rest of the names here exist only
-    /// as syntax, so reaching one of them by dispatch is always an error.
+    /// The names that exist only as syntax, which no dispatch reaches.
     ///
     /// `None` means the name is not one of these and should be dispatched
-    /// normally. `Some` is the whole answer: the value, or the error for a
-    /// spelling that has none — `type_of` with the wrong number of arguments, or
-    /// a name that is only ever syntax.
+    /// normally. `Some` is the error for reaching one by dispatch.
     ///
     /// Shared with [`NativeCallContext::call_fn_raw`], which reaches names it
     /// decided were native-only without going through [`Self::exec_fn_call`] at
-    /// all. Keeping one copy is the point: these used to be answerable only
-    /// through the script path, so a host calling `call_fn_raw("type_of", ..)`
-    /// — and the bytecode VM, which dispatches every call that way — got
-    /// `ErrorFunctionNotFound` for a function rawr does implement.
+    /// all, as the bytecode VM's calls do.
     pub(crate) fn exec_syntactic_fn_call(
         &self,
         fn_name: &str,
         args: &FnCallArgs,
         pos: Position,
     ) -> Option<RawrResult> {
-        let only_syntax = match fn_name {
-            // Handle type_of()
-            KEYWORD_TYPE_OF if args.len() == 1 => {
-                let typ = self.get_interned_string(self.map_type_name(args[0].type_name()));
-                return Some(Ok(typ.into()));
-            }
-
-            crate::engine::KEYWORD_IS_SHARED if args.len() == 1 => {
-                return Some(Ok(args[0].is_shared().into()))
-            }
-            crate::engine::KEYWORD_IS_SHARED => true,
-
-            crate::engine::KEYWORD_IS_DEF_FN => true,
-
-            KEYWORD_TYPE_OF | KEYWORD_FN_PTR | KEYWORD_EVAL | KEYWORD_IS_DEF_VAR
-            | KEYWORD_FN_PTR_CALL | KEYWORD_FN_PTR_CURRY => true,
-
-            _ => false,
-        };
-
-        only_syntax.then(|| {
+        matches!(fn_name, KEYWORD_FN_PTR_CALL | KEYWORD_FN_PTR_CURRY).then(|| {
             Err(ERR::ErrorFunctionNotFound(self.gen_fn_call_signature(fn_name, args), pos).into())
         })
     }
@@ -930,28 +871,6 @@ impl Engine {
                 }
             }
 
-            // Handle fn_ptr.curry(...)
-            KEYWORD_FN_PTR_CURRY => {
-                let typ = target.as_ref().type_name();
-                let mut fn_ptr = target
-                    .as_ref()
-                    .read_lock::<FnPtr>()
-                    .ok_or_else(|| {
-                        self.make_type_mismatch_err::<FnPtr>(self.map_type_name(typ), pos)
-                    })?
-                    .clone();
-
-                // Append the new curried arguments to the existing list.
-                fn_ptr.extend(call_args.iter_mut().map(mem::take));
-
-                Ok((fn_ptr.into(), false))
-            }
-
-            // Handle var.is_shared()
-            crate::engine::KEYWORD_IS_SHARED if call_args.is_empty() => {
-                return Ok((target.is_shared().into(), false));
-            }
-
             _ => {
                 let mut fn_name = fn_name;
                 let _redirected;
@@ -1199,21 +1118,6 @@ impl Engine {
                 };
             }
 
-            // Handle Fn(fn_name)
-            KEYWORD_FN_PTR if num_args == 1 => {
-                let arg = first_arg.unwrap();
-                let (arg_value, arg_pos) =
-                    self.get_arg_value(global, caches, scope, this_ptr, arg)?;
-
-                // Fn - only in function call style
-                return arg_value
-                    .into_immutable_string()
-                    .map_err(|typ| self.make_type_mismatch_err::<ImmutableString>(typ, arg_pos))
-                    .and_then(FnPtr::try_from)
-                    .map(Into::into)
-                    .map_err(|err| err.fill_position(arg_pos));
-            }
-
             // Handle curry(x, ...)
             KEYWORD_FN_PTR_CURRY if num_args > 1 => {
                 let first = first_arg.unwrap();
@@ -1235,79 +1139,6 @@ impl Engine {
                 }
 
                 return Ok(fn_ptr.into());
-            }
-
-            // Handle is_shared(var)
-            crate::engine::KEYWORD_IS_SHARED if num_args == 1 => {
-                let arg = first_arg.unwrap();
-                let (arg_value, ..) =
-                    self.get_arg_value(global, caches, scope, this_ptr.as_deref_mut(), arg)?;
-                return Ok(arg_value.is_shared().into());
-            }
-
-            // Handle is_def_fn(fn_name, arity)
-            crate::engine::KEYWORD_IS_DEF_FN if num_args == 2 => {
-                let first = first_arg.unwrap();
-                let (arg_value, arg_pos) =
-                    self.get_arg_value(global, caches, scope, this_ptr.as_deref_mut(), first)?;
-
-                let fn_name = arg_value
-                    .into_immutable_string()
-                    .map_err(|typ| self.make_type_mismatch_err::<ImmutableString>(typ, arg_pos))?;
-
-                let (arg_value, arg_pos) =
-                    self.get_arg_value(global, caches, scope, this_ptr, &args_expr[0])?;
-
-                let num_params = arg_value
-                    .as_int()
-                    .map_err(|typ| self.make_type_mismatch_err::<crate::INT>(typ, arg_pos))?;
-
-                return Ok(usize::try_from(num_params)
-                    .map(|num_params| {
-                        let hash_script = calc_fn_hash(None, &fn_name, num_params);
-                        self.has_script_fn(global, caches, hash_script).into()
-                    })
-                    .unwrap_or(Dynamic::FALSE));
-            }
-
-            // Handle is_def_fn(this_type, fn_name, arity)
-            crate::engine::KEYWORD_IS_DEF_FN if num_args == 3 => {
-                let first = first_arg.unwrap();
-                let (arg_value, arg_pos) =
-                    self.get_arg_value(global, caches, scope, this_ptr.as_deref_mut(), first)?;
-
-                let this_type = arg_value
-                    .into_immutable_string()
-                    .map_err(|typ| self.make_type_mismatch_err::<ImmutableString>(typ, arg_pos))?;
-
-                let (arg_value, arg_pos) = self.get_arg_value(
-                    global,
-                    caches,
-                    scope,
-                    this_ptr.as_deref_mut(),
-                    &args_expr[0],
-                )?;
-
-                let fn_name = arg_value
-                    .into_immutable_string()
-                    .map_err(|typ| self.make_type_mismatch_err::<ImmutableString>(typ, arg_pos))?;
-
-                let (arg_value, arg_pos) =
-                    self.get_arg_value(global, caches, scope, this_ptr, &args_expr[1])?;
-
-                let num_params = arg_value
-                    .as_int()
-                    .map_err(|typ| self.make_type_mismatch_err::<crate::INT>(typ, arg_pos))?;
-
-                return Ok(usize::try_from(num_params)
-                    .map(|num_params| {
-                        let hash_script = crate::calc_typed_method_hash(
-                            calc_fn_hash(None, &fn_name, num_params),
-                            &this_type,
-                        );
-                        self.has_script_fn(global, caches, hash_script).into()
-                    })
-                    .unwrap_or(Dynamic::FALSE));
             }
 
             // Handle __rawr_lend(x): the local's shared handle.
@@ -1495,60 +1326,10 @@ impl Engine {
                 return Ok(place.clone());
             }
 
-            // Handle is_def_var(fn_name)
-            KEYWORD_IS_DEF_VAR if num_args == 1 => {
-                let arg = first_arg.unwrap();
-                let (arg_value, arg_pos) =
-                    self.get_arg_value(global, caches, scope, this_ptr, arg)?;
-                let var_name = arg_value
-                    .into_immutable_string()
-                    .map_err(|typ| self.make_type_mismatch_err::<ImmutableString>(typ, arg_pos))?;
-                return Ok(scope.contains(&var_name).into());
-            }
-
-            // Handle eval(script)
-            KEYWORD_EVAL if num_args == 1 => {
-                // eval - only in function call style
-                let orig_scope_len = scope.len();
-                let orig_imports_len = global.num_imports();
-                let arg = first_arg.unwrap();
-                let (arg_value, pos) = self.get_arg_value(global, caches, scope, this_ptr, arg)?;
-                let s = &arg_value
-                    .into_immutable_string()
-                    .map_err(|typ| self.make_type_mismatch_err::<ImmutableString>(typ, pos))?;
-
-                let orig_level = global.level;
-                global.level += 1;
-
-                let result = self.eval_script_expr_in_place(global, caches, scope, s, pos);
-
-                // IMPORTANT! If the eval defines new variables in the current scope,
-                //            all variable offsets from this point on will be mis-aligned.
-                //            The same is true for imports.
-                let scope_changed = scope.len() != orig_scope_len;
-                let scope_changed = scope_changed || global.num_imports() != orig_imports_len;
-
-                if scope_changed {
-                    global.always_search_scope = true;
-                }
-                global.level = orig_level;
-
-                return result.map_err(|err| match *err {
-                    ERR::Exit(..) => err,
-                    _ => ERR::ErrorInFunctionCall(
-                        KEYWORD_EVAL.to_string(),
-                        global.source().unwrap_or("").to_string(),
-                        err,
-                        pos,
-                    )
-                    .into(),
-                });
-            }
-
             _ => (),
         }
 
-        // Normal function call - except for Fn, curry, call and eval (handled above)
+        // Normal function call - except for curry and call (handled above)
         // A place a closure reaches (`KEYWORD_HELD`), lent to the call.
         let mut loaned: Option<crate::eval::Target> = None;
         let mut arg_values = FnArgsVec::with_capacity(num_args);
@@ -2090,48 +1871,6 @@ impl Engine {
             self.unlend_bindings(global);
         }
         result
-    }
-
-    /// Evaluate a text script in place - used primarily for 'eval'.
-    pub(crate) fn eval_script_expr_in_place(
-        &self,
-        global: &mut GlobalRuntimeState,
-        caches: &mut Caches,
-        scope: &mut Scope,
-        script: &str,
-        _pos: Position,
-    ) -> RawrResult {
-        self.track_operation(global, _pos)?;
-
-        let script = script.trim();
-
-        if script.is_empty() {
-            return Ok(Dynamic::UNIT);
-        }
-
-        // Compile the script text
-        // No optimizations because we only run it once
-        let ast =
-            self.compile_scripts_with_scope_raw(None, [script], crate::OptimizationLevel::None)?;
-
-        // If new functions are defined within the eval string, it is an error
-        if ast.has_functions() {
-            return Err(crate::PERR::WrongFnDefinition.into());
-        }
-
-        let statements = ast.statements();
-        if statements.is_empty() {
-            return Ok(Dynamic::UNIT);
-        }
-
-        let orig_lib_len = global.lib.len();
-        global.lib.push(ast.shared_support().clone());
-        defer! { global => move |_state| {
-            _state.lib.truncate(orig_lib_len);
-        }}
-
-        // Evaluate the AST
-        self.eval_global_statements(global, caches, scope, statements, false)
     }
 
     /// # Main Entry-Point (`FnCallExpr`)

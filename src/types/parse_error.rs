@@ -213,8 +213,6 @@ pub enum ParseErrorType {
     FnDuplicatedParam(String, String),
     /// A function definition is missing the body. Wrapped value is the function name.
     FnMissingBody(String),
-    /// Export statement not at global level.
-    WrongExport,
     /// Assignment to an a constant variable. Wrapped value is the constant variable name.
     AssignmentToConstant(String),
     /// Assignment to an inappropriate LHS (left-hand-side) expression.
@@ -539,7 +537,6 @@ impl fmt::Display for ParseErrorType {
             Self::WrongFnDefinition => f.write_str("Function definitions must be at global level and cannot be inside a block or another function"),
             Self::FnMissingName => f.write_str("Expecting function name in function declaration"),
             Self::WrongDocComment => f.write_str("Doc-comment must be followed immediately by a function definition"),
-            Self::WrongExport => f.write_str("Export statement can only appear at global level"),
             Self::ExprTooDeep => f.write_str("Expression exceeds maximum complexity"),
             Self::TooManyFunctions => f.write_str("Number of functions defined exceeds maximum limit"),
             Self::LoopBreak => f.write_str("Break statement should only be used inside a loop"),

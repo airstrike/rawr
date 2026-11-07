@@ -1,7 +1,7 @@
 //! Module defining script statements.
 
 use super::{ASTFlags, ASTNode, BinaryExpr, Expr, FnCallExpr, Ident};
-use crate::engine::{KEYWORD_EVAL, OP_EQUALS};
+use crate::engine::OP_EQUALS;
 use crate::func::StraightHashMap;
 use crate::tokenizer::Token;
 use crate::types::dynamic::Union;
@@ -715,20 +715,12 @@ pub enum Stmt {
     ///
     /// If the guard expression is [`UNIT`][Expr::Unit], then it is a `loop` statement.
     While(Box<FlowControl>, Position),
-    /// `do` `{` stmt `}` `while`|`until` expr
-    ///
-    /// ### Flags
-    ///
-    /// * [`NONE`][ASTFlags::NONE] = `while`  
-    /// * [`NEGATED`][ASTFlags::NEGATED] = `until`
-    Do(Box<FlowControl>, ASTFlags, Position),
     /// `for` `(` id `,` counter `)` `in` expr `{` stmt `}`
     For(Box<(Ident, Option<Ident>, FlowControl)>, Position),
-    /// \[`export`\] `let`|`const` id `=` expr
+    /// `let`|`const` id `=` expr
     ///
     /// ### Flags
     ///
-    /// * [`EXPORTED`][ASTFlags::EXPORTED] = `export`  
     /// * [`CONSTANT`][ASTFlags::CONSTANT] = `const`
     Var(Box<(Ident, Expr, Option<NonZeroUsize>)>, ASTFlags, Position),
     /// expr op`=` expr
@@ -740,8 +732,6 @@ pub enum Stmt {
     FnCall(Box<FnCallExpr>, Position),
     /// `{` stmt`;` ... `}`
     Block(Box<StmtBlock>),
-    /// `try` `{` stmt; ... `}` `catch` `(` var `)` `{` stmt; ... `}`
-    TryCatch(Box<FlowControl>, Position),
     /// [expression][Expr]
     Expr(Box<Expr>),
     /// `continue`/`break` expr
@@ -758,10 +748,6 @@ pub enum Stmt {
     /// * [`NONE`][ASTFlags::NONE] = `return`
     /// * [`BREAK`][ASTFlags::BREAK] = `throw`
     Return(Option<Box<Expr>>, ASTFlags, Position),
-    /// `import` expr `as` alias
-    Import(Box<(Expr, Ident)>, Position),
-    /// `export` var `as` alias
-    Export(Box<(Ident, Ident)>, Position),
     /// Convert a list of variables to shared.
     ///
     /// # Notes
@@ -790,8 +776,7 @@ impl Stmt {
     #[must_use]
     pub const fn options(&self) -> ASTFlags {
         match self {
-            Self::Do(_, options, _)
-            | Self::Var(_, options, _)
+            Self::Var(_, options, _)
             | Self::BreakLoop(_, options, _)
             | Self::Return(_, options, _) => *options,
 
@@ -803,10 +788,7 @@ impl Stmt {
             | Self::FnCall(..)
             | Self::While(..)
             | Self::For(..)
-            | Self::TryCatch(..)
             | Self::Assignment(..) => ASTFlags::empty(),
-
-            Self::Import(..) | Self::Export(..) => ASTFlags::empty(),
 
             Self::Share(..) => ASTFlags::empty(),
         }
@@ -821,20 +803,15 @@ impl Stmt {
             | Self::If(.., pos)
             | Self::Switch(.., pos)
             | Self::While(.., pos)
-            | Self::Do(.., pos)
             | Self::For(.., pos)
             | Self::Return(.., pos)
-            | Self::Var(.., pos)
-            | Self::TryCatch(.., pos) => *pos,
+            | Self::Var(.., pos) => *pos,
 
             Self::Assignment(x) => x.0.pos,
 
             Self::Block(x) => x.position(),
 
             Self::Expr(x) => x.start_position(),
-
-            Self::Import(.., pos) => *pos,
-            Self::Export(.., pos) => *pos,
 
             Self::Share(x) => x[0].0.pos,
         }
@@ -848,11 +825,9 @@ impl Stmt {
             | Self::If(.., pos)
             | Self::Switch(.., pos)
             | Self::While(.., pos)
-            | Self::Do(.., pos)
             | Self::For(.., pos)
             | Self::Return(.., pos)
-            | Self::Var(.., pos)
-            | Self::TryCatch(.., pos) => *pos = new_pos,
+            | Self::Var(.., pos) => *pos = new_pos,
 
             Self::Assignment(x) => x.0.pos = new_pos,
 
@@ -861,9 +836,6 @@ impl Stmt {
             Self::Expr(x) => {
                 x.set_position(new_pos);
             }
-
-            Self::Import(.., pos) => *pos = new_pos,
-            Self::Export(.., pos) => *pos = new_pos,
 
             Self::Share(x) => x.iter_mut().for_each(|(x, _)| x.pos = new_pos),
         }
@@ -880,15 +852,9 @@ impl Stmt {
             | Self::Expr(..)
             | Self::FnCall(..) => true,
 
-            Self::Noop(..)
-            | Self::While(..)
-            | Self::Do(..)
-            | Self::For(..)
-            | Self::TryCatch(..) => false,
+            Self::Noop(..) | Self::While(..) | Self::For(..) => false,
 
             Self::Var(..) | Self::Assignment(..) | Self::BreakLoop(..) | Self::Return(..) => false,
-
-            Self::Import(..) | Self::Export(..) => false,
 
             Self::Share(..) => false,
         }
@@ -897,26 +863,20 @@ impl Stmt {
     #[must_use]
     pub const fn is_self_terminated(&self) -> bool {
         match self {
-            Self::If(..)
-            | Self::Switch(..)
-            | Self::While(..)
-            | Self::For(..)
-            | Self::Block(..)
-            | Self::TryCatch(..) => true,
+            Self::If(..) | Self::Switch(..) | Self::While(..) | Self::For(..) | Self::Block(..) => {
+                true
+            }
 
             // A No-op requires a semicolon in order to know it is an empty statement!
             Self::Noop(..) => false,
 
-            Self::Expr(e) => matches!(&**e, Expr::Custom(x, ..) if x.is_self_terminated()),
+            Self::Expr(..) => false,
 
             Self::Var(..)
             | Self::Assignment(..)
             | Self::FnCall(..)
-            | Self::Do(..)
             | Self::BreakLoop(..)
             | Self::Return(..) => false,
-
-            Self::Import(..) | Self::Export(..) => false,
 
             Self::Share(..) => false,
         }
@@ -955,15 +915,9 @@ impl Stmt {
 
             // Loops that exit can be pure because it can never be infinite.
             Self::While(x, ..) if matches!(x.expr, Expr::BoolConstant(false, ..)) => true,
-            Self::Do(x, options, ..) if matches!(x.expr, Expr::BoolConstant(..)) => match x.expr {
-                Expr::BoolConstant(cond, ..) if cond == options.intersects(ASTFlags::NEGATED) => {
-                    x.body.iter().all(Self::is_pure)
-                }
-                _ => false,
-            },
 
             // Loops are never pure since they can be infinite - and that's a side effect.
-            Self::While(..) | Self::Do(..) => false,
+            Self::While(..) => false,
 
             // For loops can be pure because if the iterable is pure, it is finite,
             // so infinite loops can never occur.
@@ -972,14 +926,6 @@ impl Stmt {
             Self::Var(..) | Self::Assignment(..) | Self::FnCall(..) => false,
             Self::Block(block, ..) => block.iter().all(Self::is_pure),
             Self::BreakLoop(..) | Self::Return(..) => false,
-            Self::TryCatch(x, ..) => {
-                x.expr.is_pure()
-                    && x.body.iter().all(Self::is_pure)
-                    && x.branch.iter().all(Self::is_pure)
-            }
-
-            Self::Import(..) => false,
-            Self::Export(..) => false,
 
             Self::Share(..) => false,
         }
@@ -989,8 +935,7 @@ impl Stmt {
     /// A statement that depends on its containing block behaves differently when promoted to an
     /// upper block.
     ///
-    /// Currently only variable definitions (i.e. `let` and `const`), `import`/`export` statements,
-    /// and `eval` calls (which may in turn define variables) fall under this category.
+    /// Currently only variable definitions (i.e. `let` and `const`) fall under this category.
     #[inline]
     #[must_use]
     pub fn is_block_dependent(&self) -> bool {
@@ -999,16 +944,8 @@ impl Stmt {
 
             Self::Expr(e) => match &**e {
                 Expr::Stmt(s) => s.iter().all(Self::is_block_dependent),
-                Expr::FnCall(x, ..) if x.is_qualified() => false,
-                Expr::FnCall(x, ..) => x.name == KEYWORD_EVAL,
                 _ => false,
             },
-
-            Self::FnCall(x, ..) if x.is_qualified() => false,
-
-            Self::FnCall(x, ..) => x.name == KEYWORD_EVAL,
-
-            Self::Import(..) | Self::Export(..) => true,
 
             _ => false,
         }
@@ -1017,8 +954,8 @@ impl Stmt {
     ///
     /// An internally pure statement only has side effects that disappear outside the block.
     ///
-    /// Currently only variable definitions (i.e. `let` and `const`) and `import`/`export`
-    /// statements are internally pure, other than pure expressions.
+    /// Currently only variable definitions (i.e. `let` and `const`) are internally pure, other
+    /// than pure expressions.
     #[inline]
     #[must_use]
     pub fn is_internally_pure(&self) -> bool {
@@ -1029,9 +966,6 @@ impl Stmt {
                 Expr::Stmt(s) => s.iter().all(Self::is_internally_pure),
                 _ => self.is_pure(),
             },
-
-            Self::Import(x, ..) => x.0.is_pure(),
-            Self::Export(..) => true,
 
             _ => self.is_pure(),
         }
@@ -1135,7 +1069,7 @@ impl Stmt {
                     }
                 }
             }
-            Self::While(x, ..) | Self::Do(x, ..) => {
+            Self::While(x, ..) => {
                 if !x.expr.walk(path, on_node) {
                     return false;
                 }
@@ -1177,29 +1111,12 @@ impl Stmt {
                     }
                 }
             }
-            Self::TryCatch(x, ..) => {
-                for s in &x.body {
-                    if !s.walk(path, on_node) {
-                        return false;
-                    }
-                }
-                for s in &x.branch {
-                    if !s.walk(path, on_node) {
-                        return false;
-                    }
-                }
-            }
             Self::Expr(e) => {
                 if !e.walk(path, on_node) {
                     return false;
                 }
             }
-            Self::Return(Some(e), ..) => {
-                if !e.walk(path, on_node) {
-                    return false;
-                }
-            }
-            Self::Import(x, ..) if !x.0.walk(path, on_node) => {
+            Self::Return(Some(e), ..) if !e.walk(path, on_node) => {
                 return false;
             }
             _ => (),

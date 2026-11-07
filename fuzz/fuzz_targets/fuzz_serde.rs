@@ -75,17 +75,13 @@ fuzz_target!(|ctx: Ctx| {
     engine.set_max_array_size(500);
     engine.set_max_map_size(500);
     engine.set_max_variables(1000);
-    engine.set_max_modules(1000);
     engine.set_max_call_levels(10);
     engine.set_max_expr_depths(50, 5);
     engine.set_optimization_level(ctx.optimization_level);
 
     // Don't actually print to stdout, but also don't optimise
     // printing code away.
-    engine.on_debug(|x, src, pos| _ = black_box((x, src, pos)));
-    engine.on_print(move |s| {
-        _ = black_box(s);
-    });
+    engine.on_output(|_, s| _ = black_box(s));
 
     // Limit the length of scripts.
     let script = ctx.script.chars().take(32 * 1024).collect::<String>();

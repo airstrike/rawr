@@ -13187,7 +13187,7 @@ impl<'a> Parser<'a> {
         // `switch x { .. }` and `import "m" as m;`: a name followed by a
         // token no expression continues with is rustc's syntax error there,
         // which it reports before it resolves the name.
-        if let Some(error) = self.expected_operator(true) {
+        if let Some(error) = self.expected_operator(Continuation::Path) {
             return error;
         }
         let written = crate::tokenizer::raw_names(name);
@@ -25442,7 +25442,9 @@ impl<'a> Parser<'a> {
             self.write_output(rendered, span(start, value.span.end()));
             self.last_type = Ty::Unit;
             self.last_expression = None;
-            return self.consume_terminator(start).map(|_| ());
+            return self
+                .consume_binding_terminator(start, let_keyword)
+                .map(|_| ());
         }
         // `let r = c.slot(0);`, `let x = v.get_mut(0).unwrap();`: the call
         // is made here, once, and each use of `r` is the place it gave.
@@ -25462,7 +25464,9 @@ impl<'a> Parser<'a> {
             self.borrow_lvalue(name, name_span, value.ty, Lvalue::Nested(Box::new(held)));
             self.last_type = Ty::Unit;
             self.last_expression = None;
-            return self.consume_terminator(start).map(|_| ());
+            return self
+                .consume_binding_terminator(start, let_keyword)
+                .map(|_| ());
         }
         // `let r = if c { &mut self.a } else { &mut self.b };` in a function
         // returning `&mut`: each branch gave its path below `self`
@@ -25496,7 +25500,9 @@ impl<'a> Parser<'a> {
             self.borrow_lvalue(name, name_span, value.ty, held);
             self.last_type = Ty::Unit;
             self.last_expression = None;
-            return self.consume_terminator(start).map(|_| ());
+            return self
+                .consume_binding_terminator(start, let_keyword)
+                .map(|_| ());
         }
         // A closure that changes `self` writes it back after its statement,
         // so it cannot outlive that statement in a local.
@@ -25538,7 +25544,9 @@ impl<'a> Parser<'a> {
             self.borrow_lvalue(name, name_span, value.ty, lvalue);
             self.last_type = Ty::Unit;
             self.last_expression = None;
-            return self.consume_terminator(start).map(|_| ());
+            return self
+                .consume_binding_terminator(start, let_keyword)
+                .map(|_| ());
         }
         if let Ty::Reference {
             mutable: true,
@@ -25563,7 +25571,9 @@ impl<'a> Parser<'a> {
                 self.select_local(name, name_span, value.ty.clone(), mutable);
                 self.last_type = Ty::Unit;
                 self.last_expression = None;
-                return self.consume_terminator(start).map(|_| ());
+                return self
+                    .consume_binding_terminator(start, let_keyword)
+                    .map(|_| ());
             }
             // `let r = &mut s.cells[i];`: `r` is the place, reached again
             // from `s` at each use, its indexes read once, where the borrow
@@ -25588,7 +25598,9 @@ impl<'a> Parser<'a> {
                     self.borrow_located(name, name_span, value.ty, &holder);
                     self.last_type = Ty::Unit;
                     self.last_expression = None;
-                    return self.consume_terminator(start).map(|_| ());
+                    return self
+                        .consume_binding_terminator(start, let_keyword)
+                        .map(|_| ());
                 }
                 let mut indexes = origin::Fragment::default();
                 let lvalue = self.hoist_indexes(lvalue, &mut indexes);
@@ -25601,7 +25613,9 @@ impl<'a> Parser<'a> {
                 self.borrow_lvalue(name, name_span, value.ty, lvalue);
                 self.last_type = Ty::Unit;
                 self.last_expression = None;
-                return self.consume_terminator(start).map(|_| ());
+                return self
+                    .consume_binding_terminator(start, let_keyword)
+                    .map(|_| ());
             }
             // `let s = r;` moves the borrow `r` into `s`.
             let Some(Lvalue::Binding { binding: root, .. } | Lvalue::Place { binding: root, .. }) =
@@ -25640,7 +25654,9 @@ impl<'a> Parser<'a> {
             self.borrow_place(name, name_span, *target, place, root.clone());
             self.last_type = Ty::Unit;
             self.last_expression = None;
-            return self.consume_terminator(start).map(|_| ());
+            return self
+                .consume_binding_terminator(start, let_keyword)
+                .map(|_| ());
         }
 
         self.reject_invocation(&value.ty, value.span, "kept in a `let` binding")?;
@@ -25718,7 +25734,9 @@ impl<'a> Parser<'a> {
             self.write_output(rendered, span(start, value.span.end()));
             self.last_type = Ty::Unit;
             self.last_expression = None;
-            return self.consume_terminator(start).map(|_| ());
+            return self
+                .consume_binding_terminator(start, let_keyword)
+                .map(|_| ());
         }
         let mut rendered = origin::Fragment::plain(format!("{keyword} {name} = "));
         if let Some((pipeline, item)) = bound {
@@ -25742,7 +25760,8 @@ impl<'a> Parser<'a> {
         self.write_output(rendered, span(start, value.span.end()));
         self.last_type = Ty::Unit;
         self.last_expression = None;
-        self.consume_terminator(start).map(|_| ())
+        self.consume_binding_terminator(start, let_keyword)
+            .map(|_| ())
     }
 
     /// `let x;`, `let x: i32;`: a local an assignment gives its value
@@ -25864,11 +25883,7 @@ impl<'a> Parser<'a> {
     }
 
     fn attribute_ahead(&mut self) -> bool {
-        match self.peek() {
-            Token::Hash => true,
-            Token::Custom(symbol) => symbol.as_str() == "#",
-            _ => false,
-        }
+        matches!(self.peek(), Token::Hash)
     }
 
     /// A `struct`, `enum`, `impl`, `trait` or `type` item inside a body,
@@ -26480,7 +26495,7 @@ impl<'a> Parser<'a> {
             }
         {
             let end = value.span.end();
-            self.consume_terminator(start)?;
+            self.terminate(start, Continuation::Let)?;
             return self.bind_let_pattern(start, &syntax, value, Some(matched), None, end, pending);
         }
         self.reject_invocation(&value.ty, value.span, "kept in a `let` binding")?;
@@ -26491,7 +26506,7 @@ impl<'a> Parser<'a> {
         // else` is, after the coverage check finds it irrefutable.
         if !syntax.has_ref_mut() && syntax.has_script_variant() {
             let end = value.span.end();
-            self.consume_terminator(start)?;
+            self.terminate(start, Continuation::Let)?;
             return self.bind_let_pattern(start, &syntax, value, Some(matched), None, end, pending);
         }
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
@@ -26570,7 +26585,7 @@ impl<'a> Parser<'a> {
         self.write_output(rendered, span(start, value.span.end()));
         self.last_type = Ty::Unit;
         self.last_expression = None;
-        self.consume_terminator(start).map(|_| ())
+        self.terminate(start, Continuation::Let).map(|_| ())
     }
 
     /// Bind an irrefutable pattern to the value at `path`, of type `ty`; the
@@ -33216,6 +33231,24 @@ impl<'a> Parser<'a> {
     }
 
     fn consume_terminator(&mut self, start: Position) -> Result<bool, Error> {
+        self.terminate(start, Continuation::Statement)
+    }
+
+    /// The end of a binding: a `let`'s value may also go on with `else`.
+    fn consume_binding_terminator(
+        &mut self,
+        start: Position,
+        let_keyword: bool,
+    ) -> Result<bool, Error> {
+        let continuation = if let_keyword {
+            Continuation::Let
+        } else {
+            Continuation::Statement
+        };
+        self.terminate(start, continuation)
+    }
+
+    fn terminate(&mut self, start: Position, continuation: Continuation) -> Result<bool, Error> {
         if matches!(self.peek(), Token::SemiColon) {
             self.next();
             return Ok(true);
@@ -33223,7 +33256,7 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Token::EOF | Token::RightBrace) {
             return Ok(false);
         }
-        if let Some(error) = self.expected_operator(false) {
+        if let Some(error) = self.expected_operator(continuation) {
             return Err(error);
         }
         Err(Error::UnsupportedNominalSyntax {
@@ -33233,9 +33266,10 @@ impl<'a> Parser<'a> {
     }
 
     /// rustc's syntax error at the next token when no expression continues
-    /// with it: a name, a literal or a keyword after an expression (`2 in
-    /// y`). After a path, rustc also expects `!`, `::` or `{`.
-    fn expected_operator(&mut self, after_path: bool) -> Option<Error> {
+    /// with it: a name, a literal, a keyword or a `!` after an expression
+    /// (`2 in y`, `1 !in v`). What rustc lists as expected depends on what
+    /// the expression ends ([`Continuation`]).
+    fn expected_operator(&mut self, continuation: Continuation) -> Option<Error> {
         let (token, position) = self.input.peek().map(|(token, at)| (token.clone(), *at))?;
         let stops = matches!(
             token,
@@ -33244,7 +33278,7 @@ impl<'a> Parser<'a> {
                 | Token::StringConstant(_)
                 | Token::CharConstant(_)
                 | Token::ByteConstant(_)
-                | Token::InterpolatedString(_)
+                | Token::Bang
                 | Token::True
                 | Token::False
                 | Token::Fn
@@ -33264,19 +33298,25 @@ impl<'a> Parser<'a> {
         if !stops || self.split_angle.is_some() {
             return None;
         }
-        let (expected, label) = if after_path {
-            (
+        let (expected, label) = match continuation {
+            Continuation::Path => (
                 "expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator",
                 "expected one of 8 possible tokens",
-            )
-        } else {
-            (
+            ),
+            Continuation::Statement => (
                 "expected one of `.`, `;`, `?`, `}`, or an operator",
                 "expected one of `.`, `;`, `?`, `}`, or an operator",
-            )
+            ),
+            Continuation::Let => (
+                "expected one of `.`, `;`, `?`, `else`, or an operator",
+                "expected one of `.`, `;`, `?`, `else`, or an operator",
+            ),
         };
         let found = crate::parser::item::found(&token);
-        let written = found.trim_start_matches("keyword ").trim_matches('`');
+        let written = found
+            .trim_start_matches("reserved ")
+            .trim_start_matches("keyword ")
+            .trim_matches('`');
         Some(Error::Syntax {
             message: format!("{expected}, found {found}").into(),
             label: label.into(),
@@ -33355,10 +33395,7 @@ impl<'a> Parser<'a> {
             // after the block. A `(` or `[` there starts a new statement.
             self.parse_primary().and_then(|value| {
                 let continues = match self.peek() {
-                    Token::Period
-                    | Token::DoubleQuestion
-                    | Token::QuestionBracket
-                    | Token::Elvis => true,
+                    Token::Period => true,
                     Token::Reserved(keyword) => keyword.as_str() == "?",
                     _ => false,
                 };
@@ -33557,6 +33594,26 @@ impl<'a> Parser<'a> {
                 operator_at,
                 text_end(operator_at, operator.literal_syntax()),
             );
+            // `===` and `!==` lex as `==` or `!=` and then `=`, as rustc lexes
+            // them, and rustc names the three characters together.
+            if matches!(operator, Token::EqualsTo | Token::NotEqualsTo)
+                && matches!(self.peek(), Token::Equals)
+                && self.position() == operator_at.end()
+            {
+                let (written, meant) = match operator {
+                    Token::EqualsTo => ("===", "=="),
+                    _ => ("!==", "!="),
+                };
+                return Err(Error::Syntax {
+                    message: format!("invalid comparison operator `{written}`").into(),
+                    label: "".into(),
+                    help: Some(
+                        format!("`{written}` is not a valid comparison operator, use `{meant}`")
+                            .into(),
+                    ),
+                    at: span(operator_at.start(), text_end(operator_at.start(), written)),
+                });
+            }
             // `String + &str` takes the `String` by value.
             if matches!(operator, Token::Plus)
                 && matches!(self.inference.resolve(&lhs.ty), Ty::String)
@@ -37787,24 +37844,6 @@ impl<'a> Parser<'a> {
                     value = self.parse_try(value, end)?;
                     continue;
                 }
-                // `value??` is two `?`s in Rust.
-                Token::DoubleQuestion => {
-                    let end = self.next().1;
-                    value = self.parse_try(value, end)?;
-                    value = self.parse_try(value, end)?;
-                    continue;
-                }
-                Token::QuestionBracket => {
-                    let end = self.position();
-                    value = self.parse_try(value, end)?;
-                    value = self.parse_index(value)?;
-                    self.flow().index_end(value.span.start());
-                    continue;
-                }
-                Token::Elvis => {
-                    let end = self.position();
-                    value = self.parse_try(value, end)?;
-                }
                 Token::Period => {}
                 _ => break,
             }
@@ -39886,18 +39925,21 @@ impl<'a> Parser<'a> {
                 }
                 .retain_origin())
             }
-            // `Fn("name")`: `Fn` is a trait in Rust, not a value.
-            Token::Reserved(word) if word.as_str() == "Fn" => Err(Error::Syntax {
-                message: "expected function, tuple struct or tuple variant, found trait `Fn`"
-                    .into(),
-                label: "not a function, tuple struct or tuple variant".into(),
-                help: None,
-                at: Span::new(token_span.start(), text_end(token_span.start(), "Fn")),
+            // `try { .. } catch ..`: rustc reads a `try` block, which no
+            // `catch` may follow.
+            Token::Try if let Some(at) = self.catch_after_block() => Err(Error::Syntax {
+                message: "keyword `catch` cannot follow a `try` block".into(),
+                label: "".into(),
+                help: Some("try using `match` on the result of the `try` block instead".into()),
+                at: Span::new(at, text_end(at, "catch")),
             }),
             // `throw`, `do`, `#{ .. }` and the like: rustc's syntax error.
             token => {
                 let found = crate::parser::item::found(&token);
-                let written = found.trim_start_matches("keyword ").trim_matches('`');
+                let written = found
+                    .trim_start_matches("reserved ")
+                    .trim_start_matches("keyword ")
+                    .trim_matches('`');
                 Err(Error::Syntax {
                     message: format!("expected expression, found {found}").into(),
                     label: "expected expression".into(),
@@ -43152,6 +43194,27 @@ impl<'a> Parser<'a> {
         Ok(Some(types))
     }
 
+    /// Where a `catch` follows the block that starts at the next token.
+    fn catch_after_block(&self) -> Option<Position> {
+        let mut ahead = self.input.clone();
+        if !matches!(ahead.next(), Some((Token::LeftBrace, _))) {
+            return None;
+        }
+        let mut depth = 1_usize;
+        while depth > 0 {
+            match ahead.next()? {
+                (Token::LeftBrace | Token::MapStart, _) => depth += 1,
+                (Token::RightBrace, _) => depth -= 1,
+                (Token::EOF, _) => return None,
+                _ => {}
+            }
+        }
+        match ahead.next()? {
+            (Token::Identifier(word), at) if word.as_str() == "catch" => Some(at),
+            _ => None,
+        }
+    }
+
     /// Whether, from inside a literal's opening bracket, a method call,
     /// field, index or `?` follows its closing one.
     fn postfix_after_literal(&mut self) -> bool {
@@ -43166,13 +43229,7 @@ impl<'a> Parser<'a> {
                     depth -= 1;
                 }
                 Token::RightBracket | Token::RightParen => {
-                    return matches!(
-                        ahead.next(),
-                        Some((
-                            Token::Period | Token::LeftBracket | Token::QuestionBracket,
-                            _
-                        ))
-                    );
+                    return matches!(ahead.next(), Some((Token::Period | Token::LeftBracket, _)));
                 }
                 Token::EOF => return false,
                 _ => {}
@@ -51645,6 +51702,17 @@ impl<'a> Parser<'a> {
                 let position = self.next().1;
                 ("super".into(), point_span(position))
             }
+            // `let a := 1;`, `let a:;`: no type starts there.
+            token @ (Token::Equals | Token::SemiColon) => {
+                let at = self.position();
+                let written = token.literal_syntax();
+                return Err(Error::Syntax {
+                    message: format!("expected type, found `{written}`").into(),
+                    label: "expected type".into(),
+                    help: None,
+                    at: Span::new(at, text_end(at, written)),
+                });
+            }
             _ => self.expect_name("binding type")?,
         };
         // A type parameter native code fills, and its associated types, as
@@ -56660,10 +56728,7 @@ fn relocate_statement(statement: &mut Stmt, locate: &mut dyn FnMut(Position) -> 
         Stmt::FnCall(call, ..) => relocate_call(call, locate),
         Stmt::Expr(expr) => relocate_expr(expr, locate),
         Stmt::Block(block) => relocate_block(block, locate),
-        Stmt::If(flow, ..)
-        | Stmt::While(flow, ..)
-        | Stmt::Do(flow, ..)
-        | Stmt::TryCatch(flow, ..) => {
+        Stmt::If(flow, ..) | Stmt::While(flow, ..) => {
             relocate_expr(&mut flow.expr, locate);
             relocate_block(&mut flow.body, locate);
             relocate_block(&mut flow.branch, locate);
@@ -56684,7 +56749,6 @@ fn relocate_statement(statement: &mut Stmt, locate: &mut dyn FnMut(Position) -> 
                 relocate_expr(expr, locate);
             }
         }
-        Stmt::Import(value, ..) => relocate_expr(&mut value.0, locate),
         _ => {}
     }
 }
@@ -56704,14 +56768,12 @@ fn relocate_expr(expr: &mut ast::Expr, locate: &mut dyn FnMut(Position) -> Posit
         ast::Expr::FnCall(call, ..) | ast::Expr::MethodCall(call, ..) => {
             relocate_call(call, locate)
         }
-        ast::Expr::Array(values, ..) | ast::Expr::InterpolatedString(values, ..) => {
+        ast::Expr::Array(values, ..) => {
             for value in values {
                 relocate_expr(value, locate);
             }
         }
-        ast::Expr::And(values, ..)
-        | ast::Expr::Or(values, ..)
-        | ast::Expr::Coalesce(values, ..) => {
+        ast::Expr::And(values, ..) | ast::Expr::Or(values, ..) => {
             for value in values.iter_mut() {
                 relocate_expr(value, locate);
             }
@@ -56725,11 +56787,6 @@ fn relocate_expr(expr: &mut ast::Expr, locate: &mut dyn FnMut(Position) -> Posit
         ast::Expr::Dot(binary, ..) | ast::Expr::Index(binary, ..) => {
             relocate_expr(&mut binary.lhs, locate);
             relocate_expr(&mut binary.rhs, locate);
-        }
-        ast::Expr::Custom(custom, ..) => {
-            for input in &mut custom.inputs {
-                relocate_expr(input, locate);
-            }
         }
         ast::Expr::DynamicConstant(value, ..) => relocate_constant(value, locate),
         _ => {}
@@ -56782,10 +56839,7 @@ fn rewrite_statement(
         Stmt::FnCall(call, ..) => rewrite_call(call, rewrites, patterns, false),
         Stmt::Expr(expr) => rewrite_expr(expr, rewrites, patterns),
         Stmt::Block(block) => rewrite_statements(block.statements_mut(), rewrites, patterns),
-        Stmt::If(flow, ..)
-        | Stmt::While(flow, ..)
-        | Stmt::Do(flow, ..)
-        | Stmt::TryCatch(flow, ..) => rewrite_flow(flow, rewrites, patterns),
+        Stmt::If(flow, ..) | Stmt::While(flow, ..) => rewrite_flow(flow, rewrites, patterns),
         Stmt::For(value, ..) => {
             rewrite_expr(&mut value.2.expr, rewrites, patterns);
             rewrite_statements(value.2.body.statements_mut(), rewrites, patterns);
@@ -56838,8 +56892,6 @@ fn rewrite_statement(
             }
         }
         Stmt::Noop(..) => {}
-        Stmt::Import(value, ..) => rewrite_expr(&mut value.0, rewrites, patterns),
-        Stmt::Export(..) => {}
         Stmt::Share(..) => {}
     }
 }
@@ -56862,14 +56914,12 @@ fn rewrite_expr(
     match expr {
         ast::Expr::FnCall(call, ..) => rewrite_call(call, rewrites, patterns, false),
         ast::Expr::MethodCall(call, ..) => rewrite_call(call, rewrites, patterns, true),
-        ast::Expr::Array(values, ..) | ast::Expr::InterpolatedString(values, ..) => {
+        ast::Expr::Array(values, ..) => {
             for value in values {
                 rewrite_expr(value, rewrites, patterns);
             }
         }
-        ast::Expr::And(values, ..)
-        | ast::Expr::Or(values, ..)
-        | ast::Expr::Coalesce(values, ..) => {
+        ast::Expr::And(values, ..) | ast::Expr::Or(values, ..) => {
             for value in values.iter_mut() {
                 rewrite_expr(value, rewrites, patterns);
             }
@@ -56882,11 +56932,6 @@ fn rewrite_expr(
         ast::Expr::Stmt(block) => rewrite_statements(block.statements_mut(), rewrites, patterns),
         ast::Expr::Dot(binary, ..) | ast::Expr::Index(binary, ..) => {
             rewrite_binary(binary, rewrites, patterns);
-        }
-        ast::Expr::Custom(custom, ..) => {
-            for input in &mut custom.inputs {
-                rewrite_expr(input, rewrites, patterns);
-            }
         }
         ast::Expr::Variable(variable, ..) => {
             rewrite_variable(&mut variable.1, rewrites);
@@ -59455,6 +59500,18 @@ fn standard_function(name: &str) -> bool {
                 .collect()
         })
         .contains(name)
+}
+
+/// What an expression ends, which decides the tokens rustc lists as
+/// expected after it.
+#[derive(Clone, Copy)]
+enum Continuation {
+    /// A path, which `!`, `::` or `{` may continue.
+    Path,
+    /// A statement, which the block's `}` may end.
+    Statement,
+    /// A `let`'s value, which `else` may continue.
+    Let,
 }
 
 fn text_end(mut position: Position, text: &str) -> Position {

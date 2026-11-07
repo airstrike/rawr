@@ -304,16 +304,10 @@ impl Engine {
             None => (options.this_ptr, &mut *all_values),
         };
 
-        let orig_embedded_module_resolver =
-            std::mem::replace(&mut global.embedded_module_resolver, ast.resolver.clone());
-
         let rewind_scope = options.rewind_scope;
         let in_all_namespaces = options.in_all_namespaces;
 
         defer! { global => move |g| {
-            {
-                g.embedded_module_resolver = orig_embedded_module_resolver;
-            }
             if let Some(orig_tag) = orig_tag { g.tag = orig_tag; }
             g.lib.truncate(orig_lib_len);
             g.source = orig_source;

@@ -231,7 +231,6 @@ use once_cell::sync::OnceCell;
 
 pub use access::Access;
 pub use api::build_type::{CustomType, TypeBuilder};
-pub use api::custom_syntax::Expression;
 pub use api::events::Output;
 #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 pub use api::files::{eval_file, run_file};
@@ -301,11 +300,6 @@ pub type Map = std::collections::BTreeMap<Identifier, Dynamic>;
 
 pub use api::json::format_map_as_json;
 
-pub use module::ModuleResolver;
-
-/// Module containing all built-in _module resolvers_ available to Rawr.
-pub use module::resolvers as module_resolvers;
-
 pub use optimizer::OptimizationLevel;
 
 // Expose internal data structures.
@@ -343,8 +337,6 @@ pub use ast::{
 };
 
 #[cfg(feature = "internals")]
-pub use ast::CustomExpr;
-
 #[cfg(feature = "internals")]
 pub use ast::Namespace;
 

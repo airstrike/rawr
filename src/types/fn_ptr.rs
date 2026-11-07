@@ -575,7 +575,7 @@ impl TryFrom<ImmutableString> for FnPtr {
                 env: None,
                 typ: FnPtrType::Normal,
             })
-        } else if is_reserved_keyword_or_symbol(&value).0
+        } else if is_reserved_keyword_or_symbol(&value)
             || Token::lookup_symbol_from_syntax(&value).is_some()
         {
             Err(ERR::ErrorParsing(
