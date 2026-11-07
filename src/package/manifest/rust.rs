@@ -246,6 +246,24 @@ pub(super) fn cargo_dependencies(
     Ok(dependencies.into_boxed_slice())
 }
 
+impl Dependency {
+    /// The library of the package `cargo` at `root`, as its binary depends
+    /// on it: by the library's crate name, with the features the package
+    /// builds with by default (#1164).
+    pub(crate) fn library(cargo: &super::cargo::Cargo, root: &Path) -> Self {
+        Self {
+            key: cargo.crate_name.clone(),
+            alias: cargo.crate_name.as_str().into(),
+            package: Some(cargo.package.clone()),
+            source: Source::Path(root.to_path_buf()),
+            features: Box::default(),
+            default_features: true,
+            optional: false,
+            span: Span::new(Position::START, Position::START),
+        }
+    }
+}
+
 impl Config {
     /// The imports a Cargo package manifest implies: its dependencies,
     /// itself as the Cargo authority and the `dev` profile.
