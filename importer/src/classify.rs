@@ -9866,24 +9866,73 @@ impl<P: api::Phase> Context<'_, P> {
     /// Whether `ty` is a type parameter `generics` bounds by `Future`, or by
     /// a trait whose supertraits include it as rustc elaborates them, as a
     /// closure's `Fut` is in `F: FnOnce(Sender<P>) -> Fut, Fut:
-    /// Future<Output = O>`.
+    /// Future<Output = O>`, and sipper's `Sipper` is through `Core`.
     fn future_bounded(&self, generics: &model::Generics, ty: &model::Type) -> bool {
+        /// Supertraits are read this deep, as [`Self::elaborate`] reads them.
+        const DEPTH: usize = 8;
+        // The positive trait bound `predicate` puts on what `bounded`
+        // matches.
+        fn bound(
+            predicate: &model::Predicate,
+            bounded: impl Fn(&model::Type) -> bool,
+        ) -> Option<&api::identity::Definition> {
+            match predicate {
+                model::Predicate::Bound {
+                    ty,
+                    bound:
+                        model::Bound::Trait {
+                            trait_id,
+                            polarity: model::Polarity::Positive,
+                            ..
+                        },
+                } if bounded(ty) => Some(trait_id),
+                _ => None,
+            }
+        }
         let model::Type::Parameter { index, .. } = ty else {
             return false;
         };
-        let bounds = generics
+        let mut pending = generics
             .predicates()
-            .filter(|predicate| {
-                matches!(predicate, model::Predicate::Bound {
-                    ty: model::Type::Parameter { index: bounded, .. },
-                    ..
-                } if bounded == index)
+            .filter_map(|predicate| {
+                bound(predicate, |ty| {
+                    matches!(ty, model::Type::Parameter { index: bounded, .. } if bounded == index)
+                })
             })
-            .cloned()
+            .map(|trait_id| (trait_id, 0))
             .collect::<Vec<_>>();
-        self.bound_traits(&bounds)
-            .iter()
-            .any(|(trait_id, _)| self.is_core_trait(trait_id, "Future"))
+        let mut seen = Vec::new();
+        while let Some((trait_id, depth)) = pending.pop() {
+            if self.is_core_trait(trait_id, "Future") {
+                return true;
+            }
+            if depth >= DEPTH || seen.contains(&trait_id) {
+                continue;
+            }
+            seen.push(trait_id);
+            let Some(model::Kind::Trait { supertraits, .. }) = self
+                .graph
+                .definition_index(trait_id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .map(model::Definition::kind)
+            else {
+                continue;
+            };
+            pending.extend(
+                supertraits
+                    .iter()
+                    .filter_map(|predicate| {
+                        bound(predicate, |ty| {
+                            matches!(
+                                ty,
+                                model::Type::SelfType(_) | model::Type::Parameter { index: 0, .. }
+                            )
+                        })
+                    })
+                    .map(|trait_id| (trait_id, depth + 1)),
+            );
+        }
+        false
     }
 
     fn is_core_trait(&self, id: &api::identity::Definition, name: &str) -> bool {
@@ -13469,8 +13518,9 @@ mod tests {
     /// A closure that returns a future, as `sipper(|sender| async move {
     /// .. })` takes, has no Rust type the runner can write for the script's
     /// `async` block. The item is refused with that reason, which a script's
-    /// call of it reports, and never reaches the generator (#545). A closure
-    /// that returns a value is made.
+    /// call of it reports, and never reaches the generator (#545), as is one
+    /// whose output's bound has `Future` among its supertraits (#1149). A
+    /// closure that returns a value is made.
     #[test]
     fn a_closure_that_returns_a_future_is_refused_in_rust_terms() {
         use super::representability::reject;
@@ -13485,10 +13535,15 @@ mod tests {
                 .representability()
                 .clone()
         };
+        for name in ["sip", "sip_core"] {
+            let Representability::Rejected(reason) = outcome(name) else {
+                panic!("`{name}` is refused: {:?}", outcome(name));
+            };
+            assert_eq!(reason.kind(), reject::Kind::FutureClosure, "{name}");
+        }
         let Representability::Rejected(reason) = outcome("sip") else {
             panic!("`sip` is refused: {:?}", outcome("sip"));
         };
-        assert_eq!(reason.kind(), reject::Kind::FutureClosure);
         assert_eq!(
             reason.kind().describe(),
             "it takes a closure that returns a future"
