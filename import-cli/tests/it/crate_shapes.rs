@@ -157,7 +157,7 @@ fn an_uncallable_named_callable_parameter_leaves_the_crate_importable() {
 /// or a type, which isn't a module, and failed the import too.
 #[test]
 fn an_opaque_types_members_import() {
-    runs_as_cargo_does("opaque", "7\nvalue 8\n");
+    runs_as_cargo_does("opaque", "7\nvalue 8\n2\n");
 }
 
 /// A crate's trait impl on a type with a const parameter, as palette's
