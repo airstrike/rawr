@@ -10,7 +10,8 @@
 //! the crate root (`physics::Ball`) and an enum also its variant's name.
 //! A native value, such as the `iced::Error` in an `iced::Result`, moves
 //! itself to native code: its tag names its place among the reply's
-//! [`Natives`].
+//! [`Natives`]. One native code gives by value moves to the interpreter
+//! the same way, its tag naming its place among the call's given values.
 
 use super::{Model, Shape};
 use crate::types::dynamic::Union;
@@ -36,7 +37,8 @@ pub(crate) const ENUM: u8 = 16;
 /// call's lent values.
 pub(crate) const LENT: u8 = 20;
 /// A native value the reply moves to native code: its index among the
-/// reply's [`Natives`].
+/// reply's [`Natives`]; or one the call gives the interpreter, its index
+/// among the call's given values.
 pub(crate) const NATIVE: u8 = 21;
 
 /// Nesting deeper than this does not cross.
@@ -131,11 +133,15 @@ impl Model {
     }
 
     /// One value from `reader`, built in this model. `lent` holds the
-    /// script values of what the call's trampoline lends.
+    /// script values of what the call's trampoline lends, and `given` the
+    /// native values it gives, each taken once; `witness` proves the type a
+    /// given value is, which an argument is.
     pub(crate) fn island_read(
         &self,
         types: &Types,
         lent: &[crate::scope::Lent],
+        given: &mut [Option<crate::island::Given>],
+        witness: Option<&crate::host::runtime::Witness>,
         reader: &mut Reader<'_>,
         depth: usize,
     ) -> Result<Dynamic, String> {
@@ -157,7 +163,7 @@ impl Model {
                 let length = reader.members()?;
                 let mut items = crate::Array::with_capacity(length);
                 for _ in 0..length {
-                    items.push(self.island_read(types, lent, reader, depth)?);
+                    items.push(self.island_read(types, lent, given, None, reader, depth)?);
                 }
                 Dynamic::from_array(items)
             }
@@ -169,10 +175,18 @@ impl Model {
                         .ok_or("a lent value the call has no place for")?,
                 )
             }
+            NATIVE => {
+                let index = reader.count()?;
+                let value = given
+                    .get_mut(index)
+                    .and_then(Option::take)
+                    .ok_or("a native value the call has no place for")?;
+                crate::island::lodged(value, witness)?
+            }
             NONE => crate::option::none(),
-            SOME => crate::option::some(self.island_read(types, lent, reader, depth)?),
-            OK => crate::result::ok(self.island_read(types, lent, reader, depth)?),
-            ERR => crate::result::err(self.island_read(types, lent, reader, depth)?),
+            SOME => crate::option::some(self.island_read(types, lent, given, None, reader, depth)?),
+            OK => crate::result::ok(self.island_read(types, lent, given, None, reader, depth)?),
+            ERR => crate::result::err(self.island_read(types, lent, given, None, reader, depth)?),
             STRUCT => {
                 let name = reader.text()?;
                 let identity = types
@@ -183,7 +197,7 @@ impl Model {
                 let length = reader.members()?;
                 let mut fields = Vec::with_capacity(length);
                 for _ in 0..length {
-                    fields.push(self.island_read(types, lent, reader, depth)?);
+                    fields.push(self.island_read(types, lent, given, None, reader, depth)?);
                 }
                 let proof = self
                     .prove_struct(identity, &definition.schema, fields.into_boxed_slice())
@@ -211,7 +225,7 @@ impl Model {
                 let length = reader.members()?;
                 let mut payload = Vec::with_capacity(length);
                 for _ in 0..length {
-                    payload.push(self.island_read(types, lent, reader, depth)?);
+                    payload.push(self.island_read(types, lent, given, None, reader, depth)?);
                 }
                 let proof = self
                     .prove_enum(

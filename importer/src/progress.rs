@@ -397,7 +397,8 @@ struct Style {
     truecolor: bool,
 }
 
-/// The CLI's palette: hot pink, soft pink and grays.
+/// The CLI's palette: the site's two reds (site/src/styles/tokens.css's
+/// `--red` in its light and dark themes) and grays.
 pub mod palette {
     /// One terminal color: 24-bit RGB with a 256-color fallback.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -406,15 +407,15 @@ pub mod palette {
         pub ansi256: u8,
     }
 
-    /// #FF1493: the one colored swatch (spinner, bar fill).
-    pub const HOT_PINK: Color = Color {
-        rgb: (255, 20, 147),
-        ansi256: 198,
+    /// #E4002B: the one colored swatch (spinner, bar fill).
+    pub const RED: Color = Color {
+        rgb: (228, 0, 43),
+        ansi256: 160,
     };
-    /// #FF8FC8: the `rawr` mark and percentages.
-    pub const SOFT_PINK: Color = Color {
-        rgb: (255, 143, 200),
-        ansi256: 211,
+    /// #F87171: the `rawr` mark and percentages.
+    pub const LIGHT_RED: Color = Color {
+        rgb: (248, 113, 113),
+        ansi256: 203,
     };
     /// #C8C8C8: labels.
     pub const LIGHT_GRAY: Color = Color {
@@ -455,7 +456,7 @@ pub mod palette {
 }
 
 fn render(stage: usize, percent: f64, elapsed: Duration, tick: usize, style: &Style) -> String {
-    use palette::{DARK_GRAY, HOT_PINK, LIGHT_GRAY, MID_GRAY, SOFT_PINK};
+    use palette::{DARK_GRAY, LIGHT_GRAY, LIGHT_RED, MID_GRAY, RED};
     const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     let name = STAGES[stage.clamp(1, STAGES.len()) - 1];
     let percent = percent.clamp(0.0, 1.0);
@@ -502,12 +503,12 @@ fn render(stage: usize, percent: f64, elapsed: Duration, tick: usize, style: &St
     let tc = style.truecolor;
     format!(
         "{} {} {}  {}{}  {}  {}",
-        SOFT_PINK.paint("rawr", true, tc),
-        HOT_PINK.paint(&spin, false, tc),
+        LIGHT_RED.paint("rawr", true, tc),
+        RED.paint(&spin, false, tc),
         LIGHT_GRAY.paint(name, false, tc),
-        HOT_PINK.paint(&bar, false, tc),
+        RED.paint(&bar, false, tc),
         DARK_GRAY.paint(&rest, false, tc),
-        SOFT_PINK.paint(&share, false, tc),
+        LIGHT_RED.paint(&share, false, tc),
         MID_GRAY.paint(&time, false, tc),
     )
 }
@@ -546,16 +547,16 @@ mod tests {
         };
         assert_eq!(
             render(3, 0.5, Duration::from_secs(9), 3, &colored),
-            "\x1b[1;38;2;255;143;200mrawr\x1b[0m \x1b[38;2;255;20;147m⠸\x1b[0m \
+            "\x1b[1;38;2;248;113;113mrawr\x1b[0m \x1b[38;2;228;0;43m⠸\x1b[0m \
              \x1b[38;2;200;200;200mbuilding runner\x1b[0m  \
-             \x1b[38;2;255;20;147m━━━━━━━━━━━━\x1b[0m\x1b[38;2;74;74;74m────────────\x1b[0m  \
-             \x1b[38;2;255;143;200m50%\x1b[0m  \x1b[38;2;138;138;138m9s\x1b[0m"
+             \x1b[38;2;228;0;43m━━━━━━━━━━━━\x1b[0m\x1b[38;2;74;74;74m────────────\x1b[0m  \
+             \x1b[38;2;248;113;113m50%\x1b[0m  \x1b[38;2;138;138;138m9s\x1b[0m"
         );
         let colored = Style {
             truecolor: false,
             ..colored
         };
-        assert!(render(3, 0.5, Duration::ZERO, 0, &colored).contains("\x1b[38;5;198m━"));
+        assert!(render(3, 0.5, Duration::ZERO, 0, &colored).contains("\x1b[38;5;160m━"));
         let narrow = Style {
             width: Some(42),
             unicode: false,

@@ -377,6 +377,15 @@ impl<B> Slot<B> {
         Ok(exited)
     }
 
+    /// Whether the current runner exited on its own, its program ended:
+    /// [`Self::reap_if_exited`] says how.
+    #[must_use]
+    pub fn exited(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(crate::process::Candidate::exited)
+    }
+
     /// Validate a queued message against the current exact profile route.
     pub fn validate_message<M>(
         &self,

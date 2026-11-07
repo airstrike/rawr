@@ -67,6 +67,12 @@ impl BoundCatalog {
         (self.authority.clone(), self.runtime.clone())
     }
 
+    /// The runtime the program's witnesses are issued by.
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn runtime(&self) -> &Shared<host::runtime::Registry> {
+        &self.runtime
+    }
+
     /// Validate one value against the exact type a runtime witness proves.
     #[cfg(feature = "rust-import")]
     pub(crate) fn validate_witness(

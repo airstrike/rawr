@@ -2117,8 +2117,37 @@ fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     )
 }
 
+/// The script value that holds a native value native code gave a marked
+/// function by value (#1139), kept in this thread's arena with what its
+/// trampoline found of its type, as a value the runner made is.
+fn lodge(
+    given: __rawr_internal::island::Given,
+    witness: Option<&__rawr_internal::host::runtime::Witness>,
+) -> Result<Dynamic, String> {
+    let (value, name, (debug, display, clone, equal, hash, order)) = given;
+    let kept = arena_access(|arena| {
+        let handle = arena.occupy(Some(value), None, name)?;
+        if let Some(entry) = arena.slots.get_mut(handle.slot as usize) {
+            entry.debug = debug;
+            entry.display = display;
+            entry.clone = clone;
+            entry.relations = Relations { equal, hash, order };
+        }
+        if let Some(witness) = witness {
+            arena.attest(handle.clone(), witness.clone())?;
+        }
+        Ok::<_, Error>(handle)
+    });
+    match kept {
+        Some(Ok(handle)) => Ok(Dynamic::from(handle)),
+        Some(Err(error)) => Err(format!("{:?}", error.reported())),
+        None => Err("a native value can't move to another thread's arena".to_owned()),
+    }
+}
+
 fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::island::moves(moved);
+    __rawr_internal::island::lodges(lodge);
     __rawr_internal::host::debug::register::<NativeHandle>();
     __rawr_internal::host::display::register::<NativeHandle>();
     __rawr_internal::host::debug::register::<__rawr_internal::scope::Scoped>();

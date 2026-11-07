@@ -75,12 +75,18 @@
   footer.site a { color: inherit; text-decoration-color: var(--grid); }
   footer.site a:hover { color: var(--ink); text-decoration-color: currentColor; }
 
-  /* Syntax: red keywords, blue literals, plain names, quiet comments. The
-     build and the playground's editor both write these classes (highlight.ts). */
-  :where(code, .cm-content) .k { color: var(--red); }
-  :where(code, .cm-content) :is(.s, .n) { color: var(--lit); }
-  :where(code, .cm-content) :is(.t, .m) { color: var(--ink); }
-  :where(code, .cm-content) :is(.c, .p, .a) { color: var(--quiet); }
+  /* Syntax, in tokens.css's --syn-* colours. The build and the playground's
+     editor both write these classes (highlight.ts); names and punctuation stay
+     ink. A diagnostic's gutter (.diag .c) is a comment's grey. */
+  :where(code, .cm-content) .k { color: var(--syn-key); }
+  /* In the editor a refined mark (highlight.ts) may wrap the tag's span. */
+  :where(code, .cm-content) :is(.t, .t .f) { color: var(--syn-type); }
+  :where(code, .cm-content) .f { color: var(--syn-fn); }
+  :where(code, .cm-content) .s { color: var(--syn-str); }
+  :where(code, .cm-content) :is(.n, .x) { color: var(--syn-num); }
+  :where(code, .cm-content) .a { color: var(--syn-attr); }
+  :where(code, .cm-content) .c { color: var(--syn-com); }
+  :where(code, .cm-content) :is(.d, .d .c) { color: var(--syn-doc); }
   .diag .e { color: var(--red); }
   .diag .h { color: var(--ink); font-weight: var(--w-strong); }
 

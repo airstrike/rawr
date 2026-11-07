@@ -80,6 +80,19 @@ impl Run {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+
+    /// Wait for the run to end, and keep the output it printed since the
+    /// last [`Run::until`], to the end of its pipes.
+    pub fn wait(&mut self) -> std::process::ExitStatus {
+        let status = self.child.wait().unwrap();
+        while let Ok(line) = self.lines.recv() {
+            self.seen.push(match line {
+                Line::Out(line) => line,
+                Line::Err(line) => format!("stderr: {line}"),
+            });
+        }
+        status
+    }
 }
 
 impl Drop for Run {

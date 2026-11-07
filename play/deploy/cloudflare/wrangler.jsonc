@@ -53,8 +53,9 @@
   "rules": [{ "type": "Text", "globs": ["**/*.rs"], "fallthrough": false }],
   // dist/ is site/dist (the Astro build: the landing page, the docs, /play's page) and public/
   // (/bot/invite, the redirect with its link preview; /og/invite.png, drawn
-  // from og/card.rs when ?play rendered iced), merged by build.mjs. It also writes
-  // src/runnable.gen.ts, the hashes of the sources /play/run accepts.
+  // from og/card.rs by ?play's headless shell), merged by build.mjs. It also writes
+  // src/runnable.gen.ts, the hashes of the sources /play/run accepts, and
+  // src/cards.gen.ts, each link card's URL with its content hash.
   "build": { "command": "node build.mjs" },
   // The Worker runs first so it can redirect the old host; for the new host
   // it hands every path but /play and /bot to the assets.

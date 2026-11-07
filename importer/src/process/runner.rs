@@ -161,6 +161,9 @@ struct Inner<B> {
     stdout: Option<thread::JoinHandle<std::io::Result<Box<[u8]>>>>,
     stderr: Option<thread::JoinHandle<std::io::Result<Box<[u8]>>>>,
     reaped: bool,
+    /// The status the runner exited with on its own, once this process saw
+    /// it: its program ended, whether between exchanges or during one.
+    exited: Option<std::process::ExitStatus>,
     lifecycle: Lifecycle,
     started: bool,
     observed: bool,
@@ -433,6 +436,7 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             stdout,
             stderr,
             reaped: false,
+            exited: None,
             lifecycle: process.lifecycle,
             started: false,
             observed: false,
@@ -704,28 +708,25 @@ impl<B> Candidate<Admitted, B> {
     pub fn reap_if_exited(&mut self) -> Result<bool, Error> {
         let inner = self.inner.as_mut().ok_or(Error::Consumed)?;
         if inner.reaped {
-            return Ok(true);
+            // A runner an exchange saw exit ended its program then.
+            return inner.exited.map_or(Ok(true), ended);
         }
         let Some(status) = inner.child.try_wait().map_err(resource_error)? else {
             return Ok(false);
         };
         inner.reaped = true;
+        inner.exited = Some(status);
         join_logs(inner)?;
-        if status.success() {
-            Ok(true)
-        } else {
-            // A program a signal ended gives the status a shell gives it.
-            #[cfg(unix)]
-            let code = {
-                use std::os::unix::process::ExitStatusExt as _;
-                status
-                    .code()
-                    .or_else(|| status.signal().map(|signal| 128 + signal))
-            };
-            #[cfg(not(unix))]
-            let code = status.code();
-            Err(Error::Exit(code))
-        }
+        ended(status)
+    }
+
+    /// Whether the runner exited on its own: its program ended, and
+    /// [`Self::reap_if_exited`] says how.
+    #[must_use]
+    pub fn exited(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|inner| inner.exited.is_some())
     }
 
     /// Invoke one exact compiled adapter with a closed move-only value payload.
@@ -1508,6 +1509,7 @@ fn exited_peer<B>(inner: &mut Inner<B>, failure: &crate::protocol::Error) -> Opt
         Err(error) => return Some(resource_error(error)),
     };
     inner.reaped = true;
+    inner.exited = Some(status);
     let stderr = match take_logs(inner) {
         Ok((_, stderr)) => String::from_utf8_lossy(&stderr).into_owned(),
         Err(error) => format!("cannot retain bounded child logs: {error}"),
@@ -1517,6 +1519,24 @@ fn exited_peer<B>(inner: &mut Inner<B>, failure: &crate::protocol::Error) -> Opt
         protocol: failure.to_string().into_boxed_str(),
         stderr: stderr.into_boxed_str(),
     })
+}
+
+/// How a program that exited with `status` ended: `true` for success,
+/// and otherwise its code, or the code a shell gives a signal.
+fn ended(status: std::process::ExitStatus) -> Result<bool, Error> {
+    if status.success() {
+        return Ok(true);
+    }
+    #[cfg(unix)]
+    let code = {
+        use std::os::unix::process::ExitStatusExt as _;
+        status
+            .code()
+            .or_else(|| status.signal().map(|signal| 128 + signal))
+    };
+    #[cfg(not(unix))]
+    let code = status.code();
+    Err(Error::Exit(code))
 }
 
 fn abort_hot<B>(inner: &mut Inner<B>, prepared: &super::hot::Prepared<B>) -> Result<(), Error> {
@@ -1932,6 +1952,13 @@ mod tests {
         assert!(closed.is_closed());
         let status = child.wait().expect("the exit is observable");
         assert_eq!(status.code(), Some(3));
+        // The status stands as the program's end, as a shell gives it.
+        assert!(matches!(ended(status), Err(Error::Exit(Some(3)))));
+        let killed = Command::new("/bin/sh")
+            .args(["-c", "kill -9 $$"])
+            .status()
+            .expect("the killed stand-in runs");
+        assert!(matches!(ended(killed), Err(Error::Exit(Some(137)))));
     }
 
     #[test]

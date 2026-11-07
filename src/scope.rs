@@ -370,7 +370,7 @@ pub fn lend_ref<F: Family, R>(value: &F::Of<'_>, body: impl FnOnce(Nonce) -> R) 
 
 /// A lend under a `key` only the code that reaches it knows, as a native
 /// island's trampoline lends its `&mut Frame<'_>` to the thread that runs
-/// script code (`island::__rawr_island_call_v3`). The value is reached by
+/// script code (`island::__rawr_island_call_v4`). The value is reached by
 /// [`claim`]ing the key.
 ///
 /// # Safety
