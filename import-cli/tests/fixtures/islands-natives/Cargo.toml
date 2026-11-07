@@ -1,0 +1,11 @@
+[package]
+name = "islands-natives"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ui = { path = "ui" }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]
