@@ -9403,8 +9403,12 @@ fn opaque_table_source(
             let _witnessed = OpaqueWitnessed::enter(Some(returned.clone()));
             let _cell = OpaqueCell::enter(reach);
             let mut body = Vec::new();
+            // What a region holds boxed is made of a receiver in the region
+            // (`region_operand`), never of this value, which is in the
+            // arena.
+            let boxed = scoped_type(&produced).is_some_and(|key| family::Ops::held(&key).is_some());
             let region = region_inputs(consumer)?;
-            if !region.is_empty() {
+            if !region.is_empty() && !boxed {
                 let indices = region
                     .iter()
                     .map(usize::to_string)
@@ -11786,13 +11790,17 @@ fn declare_ops(plans: &[Plan], ty: &convert::Type) -> Result<(), request::Error>
             } => (signature, substitutions, 1, scoped_function_call(plan)?),
             _ => continue,
         };
+        // A call with an input of an opaque type, or of no Rust spelling,
+        // has no method.
         let mut inputs = Vec::new();
         for (position, input) in signature.inputs().iter().enumerate().skip(skip) {
             let input = substituted(input, signature, substitutions)?;
-            let Some(rust) = scoped_type(&input).filter(|_| !holds_opaque(&input)) else {
-                return Ok(());
-            };
-            inputs.push((format!("argument_{}", position - skip), rust));
+            if let Some(rust) = scoped_type(&input).filter(|_| !holds_opaque(&input)) {
+                inputs.push((format!("argument_{}", position - skip), rust));
+            }
+        }
+        if inputs.len() + skip != signature.inputs().len() {
+            continue;
         }
         let returned = substituted(signature.output(), signature, substitutions)?;
         let (output, call) = match scoped_type(&returned) {

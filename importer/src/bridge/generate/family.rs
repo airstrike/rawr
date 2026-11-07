@@ -20,6 +20,9 @@
 //! Theme>`, and an opaque type a free function makes of a region's value,
 //! as `opaque(content)`: its trait is implemented for the type's shape, each
 //! opaque position a parameter of the opaque type's bounds ([`Shape`]).
+//!
+//! A script type's proxy that takes such a type as an argument, as loupe's
+//! `Zoomed<impl Widget>`, names it by a name of the runner's ([`named`]).
 
 use std::collections::BTreeMap;
 
