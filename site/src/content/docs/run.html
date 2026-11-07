@@ -34,6 +34,7 @@ fn main() {
 <p>The marker must be the line right after the frontmatter. A blank line between them leaves the file unmarked. A file whose frontmatter cargo rejects isn&rsquo;t marked, and <code>rawr run</code> reports cargo&rsquo;s error.</p>
 <ul>
   <li>The crate root may be marked or native. A crate with a native root runs when a module it declares is marked. If no file is marked, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-MISSING-SOURCE</code>.</li>
+  <li>In a package with both <code>src/main.rs</code> and <code>src/lib.rs</code>, the marker may go in either crate&rsquo;s tree. <a href="#library">A library and a thin main</a> says how rawr runs a marked module of the library.</li>
   <li>Marked code may call native modules.</li>
   <li>Native code may call marked modules when the crate root is native.</li>
   <li>With a marked root, native code can&rsquo;t use code from marked files yet. rawr reports an error if it does.</li>
@@ -92,6 +93,19 @@ fn main() {
   <li>A native module other than the root can&rsquo;t declare a marked module.</li>
   <li>Marked code can&rsquo;t call items written in the native root itself.</li>
 </ul>
+
+<h3 id="library">A library and a thin main</h3>
+<p>Many apps keep their code in the library and have a short <code>main.rs</code> that calls it:</p>
+<div class="block"><pre><code>fn main() {
+    let mut game = arcade::score::Game::new();
+    game.play(3);
+    println!("{}", arcade::report::line(&amp;game));
+}</code></pre></div>
+<p>Mark a module of the library, such as <code>src/score.rs</code>, and <code>rawr run</code> runs the package from its library. The binary stays native and its <code>main</code> is the program&rsquo;s. It reaches the marked module through the library, as <code>cargo build</code> builds it, so <code>arcade::score::Game::new()</code> calls the stub of the marked function. Native modules of the library call it through the same stubs. The binary&rsquo;s own modules stay native too.</p>
+<p>The library root stays native, and the modules it declares are marked. A marked <code>src/lib.rs</code> beside a native <code>src/main.rs</code> stops <code>rawr run</code> with an error that says so.</p>
+<p>rawr keeps a copy of the binary under <code>target/rawr/bin</code>, beside the library&rsquo;s copy in <code>target/rawr/crate</code>. It runs <code>src/main.rs</code> from there. <code>cargo build --release</code> builds the package as it is, and the marker is only a comment.</p>
+<p>When both the binary&rsquo;s tree and the library&rsquo;s have marked modules, <code>rawr run</code> stops with an error that names both trees. Remove the marker from one of them.</p>
+<p>rawr looks for the binary at <code>src/main.rs</code> only. Binaries under <code>src/bin/</code> or named by <code>[[bin]]</code> aren&rsquo;t found yet.</p>
 <p>A marked <code>main</code> runs on the process&rsquo;s main thread too, with the interpreter. So a marked crate root can start a winit event loop itself, as Freya&rsquo;s <code>launch</code> does. A save reaches such a program while it runs, as <a href="#swap">a running marked main</a> says.</p>
 
 <h2 id="swap">A running marked main</h2>

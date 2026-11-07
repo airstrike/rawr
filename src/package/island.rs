@@ -30,10 +30,23 @@ use crate::{ImmutableString, Span};
 /// support. The Rawr root calls its `main` to start the program.
 pub(crate) const MODULE: &str = "__rawr_island";
 
+/// The name the runner links a package's native binary by, when the
+/// program runs from the package's library (#1107). The binary's own
+/// shadow crate is a library of this name, beside the library's.
+pub(crate) const BIN: &str = "__rawr_bin";
+
+/// The Rawr `main` that starts the native program: the crate root's own
+/// `main`, or with `bin`, the native binary's.
+fn start(bin: bool) -> String {
+    let owner = if bin { BIN } else { "crate" };
+    format!("\nfn main() {{\n    {owner}::{MODULE}::main();\n}}\n")
+}
+
 /// The Rawr text of a native crate root: its `mod name;` declarations at
 /// their places, everything else blanked (line breaks kept, so positions
-/// stay the file's), and a `main` that starts the native program.
-pub(crate) fn root_text(text: &str) -> String {
+/// stay the file's), and a `main` that starts the native program, the
+/// binary's with `bin`.
+pub(crate) fn root_text(text: &str, bin: bool) -> String {
     let mut kept: Vec<std::ops::Range<usize>> = Vec::new();
     for declaration in super::polyglot::declarations(text) {
         if declaration.explicit_path || declaration.disabled || declaration.path.len() != 1 {
@@ -58,10 +71,7 @@ pub(crate) fn root_text(text: &str) -> String {
             blanked.push(' ');
         }
     }
-    let _ = write!(
-        blanked,
-        "\nfn main() {{\n    crate::{MODULE}::main();\n}}\n"
-    );
+    blanked.push_str(&start(bin));
     blanked
 }
 
@@ -1532,7 +1542,7 @@ mod tests {
     fn a_root_keeps_only_its_module_declarations() {
         let text = "//! Native.\nmod physics;\npub mod util;\n#[cfg(test)]\nmod tests;\n\
                     fn main() { physics::run(); }\n";
-        let rawr = root_text(text);
+        let rawr = root_text(text, false);
         let lines = rawr.lines().collect::<Vec<_>>();
         assert_eq!(lines[0].trim(), "");
         assert_eq!(lines[1], "mod physics;");

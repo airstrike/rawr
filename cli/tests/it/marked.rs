@@ -297,6 +297,169 @@ fn native_code_cannot_use_marked_code() {
     );
 }
 
+/// A package with a library and a binary whose marked modules are all in
+/// the library's tree runs from its library (#1107). Rawr reads the
+/// library root's `mod` declarations and the marked files; the binary is
+/// native, its own crate with its own modules, and it is the program's
+/// `main`. It reaches the marked module through the library, as Cargo
+/// builds it, and so does a native module of the library.
+#[test]
+fn a_marked_module_of_the_library_runs_from_the_native_binary() {
+    let sandbox = Sandbox::new("marked-lib");
+    let root = copy("rs-marker-lib", &sandbox.work());
+
+    let graph = graph(&root, None).unwrap();
+
+    let sources: Vec<_> = graph
+        .sources()
+        .iter()
+        .map(|source| source.path().strip_prefix(&root).unwrap().to_path_buf())
+        .collect();
+    assert_eq!(
+        sources,
+        [PathBuf::from("src/lib.rs"), PathBuf::from("src/score.rs")]
+    );
+    let package = graph.entry_package();
+    assert_eq!(package.name(), "rs_marker_lib");
+    assert_eq!(
+        package.native_root().map(rawr::package::RustModule::path),
+        Some(root.join("src/lib.rs").as_path())
+    );
+    let native = package
+        .rust_modules()
+        .iter()
+        .map(|module| module.modules().join("::"))
+        .collect::<Vec<_>>();
+    assert_eq!(native, ["report", "units"]);
+    let bin = package.bin().expect("the binary runs the program");
+    assert_eq!(bin.root().path(), root.join("src/main.rs"));
+    let modules = bin
+        .modules()
+        .iter()
+        .map(|module| (module.modules().join("::"), module.path().to_path_buf()))
+        .collect::<Vec<_>>();
+    assert_eq!(modules, [("rounds".to_owned(), root.join("src/rounds.rs"))]);
+    // The library's Rawr text starts the binary's `main`.
+    let rawr = graph.entry_source().text();
+    assert!(
+        rawr.ends_with("fn main() {\n    __rawr_bin::__rawr_island::main();\n}\n"),
+        "{rawr}"
+    );
+    assert!(graph.declares_rust_import());
+    let shape = graph.island_shape().unwrap();
+    assert_eq!(
+        rawr::package::Shape::default().change(&shape),
+        Some("native code can now see `score::Game`".to_owned())
+    );
+
+    // A marked library root is not run from a native binary yet.
+    let library = root.join("src/lib.rs");
+    let text = fs::read_to_string(&library).unwrap();
+    fs::write(&library, format!("// rawr\n{text}")).unwrap();
+    let error = self::graph(&root, None).unwrap_err();
+    assert!(
+        error.contains(&format!(
+            "`{}` starts with `// rawr`, and the package's binary `{}` is native. \
+             A native binary runs the marked modules of a native library root, \
+             not yet a marked library root. \
+             Remove `// rawr` from `{}` and mark the modules it declares.",
+            library.display(),
+            root.join("src/main.rs").display(),
+            library.display(),
+        )),
+        "{error}"
+    );
+}
+
+/// The library fixture builds and runs unchanged under Cargo,
+/// with the marker only a comment.
+#[test]
+fn a_package_whose_library_is_marked_builds_under_cargo() {
+    let Some(cargo) = std::env::var_os("CARGO") else {
+        panic!("run under cargo: $CARGO names the cargo to test with");
+    };
+    let sandbox = Sandbox::new("marked-lib-cargo");
+    let root = copy("rs-marker-lib", &sandbox.work());
+
+    let output = Command::new(&cargo)
+        .args(["run", "--quiet", "--offline", "--release"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", sandbox.path.join("target"))
+        .env("RUSTFLAGS", "--deny warnings")
+        .output()
+        .unwrap();
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "score: 53 points in 3 rounds\n");
+}
+
+/// When both the binary's tree and the library's have marked modules,
+/// Rawr runs neither half silently: it names both trees.
+#[test]
+fn marked_modules_in_both_trees_of_a_package_are_an_error() {
+    let sandbox = Sandbox::new("marked-lib-both");
+    let root = copy("rs-marker-lib", &sandbox.work());
+    let rounds = root.join("src/rounds.rs");
+    let text = fs::read_to_string(&rounds).unwrap();
+    fs::write(&rounds, format!("// rawr\n{text}")).unwrap();
+
+    let error = graph(&root, None).unwrap_err();
+
+    assert!(
+        error.contains(&format!(
+            "the binary `{}` has marked modules, and so does the library `{}`: `{}` starts with `// rawr`. \
+             Rawr runs the marked modules of one crate of a package, \
+             the binary's when its tree has one, else the library's. \
+             Remove `// rawr` from the marked files of one of the two trees.",
+            root.join("src/main.rs").display(),
+            root.join("src/lib.rs").display(),
+            root.join("src/score.rs").display(),
+        )),
+        "{error}"
+    );
+
+    // With the library's marker gone, the binary's tree runs.
+    let score = root.join("src/score.rs");
+    let text = fs::read_to_string(&score).unwrap();
+    fs::write(&score, text.replacen("// rawr\n", "", 1)).unwrap();
+    let graph = self::graph(&root, None).unwrap();
+    assert!(graph.entry_source().path().ends_with("src/main.rs"));
+    assert!(graph.entry_package().bin().is_none());
+}
+
+/// A workspace member with a library and a binary runs from its library
+/// when only the library's tree is marked, with what it inherits.
+#[test]
+fn a_workspace_member_runs_from_its_marked_library() {
+    let sandbox = Sandbox::new("marked-workspace-lib");
+    let root = copy("rs-marker-workspace", &sandbox.work());
+    let dice = root.join("dice");
+    let library = dice.join("src/lib.rs");
+    let text = fs::read_to_string(&library).unwrap();
+    fs::write(&library, format!("pub mod roll;\n{text}")).unwrap();
+    fs::write(
+        dice.join("src/roll.rs"),
+        "// rawr\npub fn twice(seed: i64) -> i64 {\n    (seed.rem_euclid(6) + 1) * 2\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dice.join("src/main.rs"),
+        "fn main() {\n    println!(\"{}\", dice::roll::twice(4));\n}\n",
+    )
+    .unwrap();
+
+    let graph = graph(&dice, None).unwrap();
+
+    assert_eq!(graph.entry_source().path(), library);
+    let package = graph.entry_package();
+    assert_eq!(package.name(), "dice");
+    assert_eq!(
+        package.bin().map(|bin| bin.root().path()),
+        Some(dice.join("src/main.rs").as_path())
+    );
+    assert!(graph.declares_rust_import());
+}
+
 #[test]
 fn an_unmarked_crate_root_is_not_a_rawr_program() {
     let sandbox = Sandbox::new("marked-root");

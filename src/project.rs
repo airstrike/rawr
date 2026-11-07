@@ -49,8 +49,8 @@ impl Project {
         &self.root
     }
 
-    /// Return the validated entry source: the marked `src/main.rs` (else
-    /// `src/lib.rs`) of the crate.
+    /// Return the validated entry source: `src/main.rs` when its tree is
+    /// marked, else `src/lib.rs`.
     #[must_use]
     pub const fn source(&self) -> &source::File {
         &self.source
@@ -186,17 +186,20 @@ enum Entry {
 }
 
 /// The entry of the crate at `root`: the first of `src/main.rs` and
-/// `src/lib.rs` that exists, when its first line of Rust is the `// rawr`
-/// marker or its `mod` tree reaches a file that starts with it. A root
-/// that starts with the marker is read only to its first line, and one
-/// that may start with a shebang or frontmatter is read whole. An unmarked
-/// one is read whole, with the native modules it declares, until a marked
-/// module turns up.
+/// `src/lib.rs` whose first line of Rust is the `// rawr` marker or whose
+/// `mod` tree reaches a file that starts with it. So a package whose
+/// marked modules are all in its library's tree runs from `src/lib.rs`,
+/// and its binary is native. A root that starts with the marker is read
+/// only to its first line, and one that may start with a shebang or
+/// frontmatter is read whole. An unmarked one is read whole, with the
+/// native modules it declares, until a marked module turns up. With
+/// neither marked, the first that exists is the unmarked entry.
 fn entry(root: &Path) -> Result<Entry, Error> {
     if !path_exists(&root.join(CARGO_NAME), Resource::Manifest)? {
         return Ok(Entry::None);
     }
     let source = root.join(SOURCE_DIRECTORY);
+    let mut unmarked = None;
     for name in RUST_ROOTS {
         let path = source.join(name);
         if !path_exists(&path, Resource::Source)? {
@@ -208,7 +211,8 @@ fn entry(root: &Path) -> Result<Entry, Error> {
             source,
         })?;
         if !marking.marked && !reaches_marked(&path)? {
-            return Ok(Entry::Unmarked(path));
+            unmarked.get_or_insert(path);
+            continue;
         }
         return Ok(if marking.script {
             Entry::Script(path)
@@ -216,7 +220,7 @@ fn entry(root: &Path) -> Result<Entry, Error> {
             Entry::Found(path)
         });
     }
-    Ok(Entry::None)
+    Ok(unmarked.map_or(Entry::None, Entry::Unmarked))
 }
 
 /// Whether the unmarked crate root `root` reaches a marked module through
