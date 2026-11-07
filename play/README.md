@@ -338,7 +338,8 @@ The landing page has Run buttons for its own files. They call `POST
 accepts only the text of a `<code data-run>` element in the site's built
 pages, checked by SHA-256. `build.mjs` collects them when it builds, so the
 list is always the deployed pages'. A result is
-cached for each image version. Uncached runs are limited per IP (20 a
+cached for each image version, unless a limit stopped the run: that says
+how busy the bot was, not what the file does. Uncached runs are limited per IP (20 a
 minute, 120 an hour). A request whose `x-play-admin` is the admin HMAC
 or the Worker's secret `PLAY_SMOKE_TOKEN` skips that limit. `deploy.sh`
 sends `PLAY_SMOKE_TOKEN` from its environment, or else the admin HMAC of
@@ -382,7 +383,13 @@ npm run release:worker     # Worker and site only, no new image
 It refuses to run while the Worker or site sources have uncommitted changes.
 `deploy.sh` does the part after the image: the tests, the deploy, the wait
 for the bot and the smoke test. It retries the deploy when Cloudflare
-answers 100146 or a 500.
+answers 100146 or a 500. A deploy resets the Durable Object a while after
+it lands, and the reset fails the request it was serving with a 503. So
+the wait for the bot also waits for `/bot/health` to report, as
+`version`, the Worker version Cloudflare serves (`wrangler deployments
+status`). That answer comes from the Durable Object itself, through the
+`CF_VERSION_METADATA` binding. The smoke test then runs each snippet once,
+prints its time, and fails on a run that a limit stopped.
 
 ### Release from GitHub Actions
 
