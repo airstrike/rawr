@@ -79,7 +79,6 @@ pub const HELD_STEPS: &str = "_at";
 pub const KEYWORD_IS_DEF_FN: &str = "__rawr_is_def_fn";
 /// The receiver of a method in the lowered script: Rust's `self`.
 pub const KEYWORD_THIS: &str = "self";
-pub const KEYWORD_GLOBAL: &str = "global";
 pub const FN_GET: &str = "get$";
 pub const FN_SET: &str = "set$";
 pub const FN_IDX_GET: &str = "index$get$";

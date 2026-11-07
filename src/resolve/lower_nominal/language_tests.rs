@@ -10017,6 +10017,23 @@ fn language_a_closure_takes_its_parameter_types_from_impl_fn() {
     assert_eq!(value, 2);
 }
 
+/// A module named `global` is a module like any other: the old engine's
+/// `global::` root is gone. rustc prints `3 2`.
+#[test]
+fn language_a_module_named_global_is_a_module() {
+    let source = r#"
+mod global {
+    pub const N: i64 = 2;
+    pub fn f() -> i64 { N + 1 }
+}
+fn main() {
+    println!("{} {}", global::f(), global::N);
+}
+main();
+"#;
+    assert_eq!(printed(source), "3 2\n");
+}
+
 /// Words the old dialect reserved that Rust doesn't are ordinary names,
 /// even when a host disables them, as `?play` disables `eval`. rustc
 /// prints `42 49` for this program.

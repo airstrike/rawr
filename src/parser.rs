@@ -677,13 +677,9 @@ impl Engine {
                 } else {
                     let root = namespace.root();
                     let index = state.find_module(root);
-                    let is_global = false;
-
-                    let is_global = is_global || root == crate::engine::KEYWORD_GLOBAL;
 
                     if settings.has_option(LangOptions::STRICT_VAR)
                         && index.is_none()
-                        && !is_global
                         && !state.global_imports.iter().any(|m| m == root)
                         && !self.global_sub_modules.contains_key(root)
                     {
@@ -739,11 +735,8 @@ impl Engine {
                         let root = namespace.root();
                         let index = state.find_module(root);
 
-                        let is_global = root == crate::engine::KEYWORD_GLOBAL;
-
                         if settings.has_option(LangOptions::STRICT_VAR)
                             && index.is_none()
-                            && !is_global
                             && !state.global_imports.iter().any(|m| m == root)
                             && !self.global_sub_modules.contains_key(root)
                         {
@@ -1952,13 +1945,9 @@ impl Engine {
             {
                 let root = namespace.root();
                 let index = state.find_module(root);
-                let is_global = false;
-
-                let is_global = is_global || root == crate::engine::KEYWORD_GLOBAL;
 
                 if settings.has_option(LangOptions::STRICT_VAR)
                     && index.is_none()
-                    && !is_global
                     && !state.global_imports.iter().any(|m| m == root)
                     && !self.global_sub_modules.contains_key(root)
                 {
