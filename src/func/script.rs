@@ -129,23 +129,25 @@ impl Engine {
         // Evaluate the function. `this_ptr` is reborrowed because the
         // debugger reads it after the call.
         #[cfg_attr(not(feature = "debugging"), allow(clippy::needless_option_as_deref))]
-        let evaluated = entered.and_then(|()| match &fn_def.machine {
-            Some(machine) => self.run_machine(
-                global,
-                caches,
-                scope,
-                this_ptr.as_deref_mut(),
-                machine,
-                orig_scope_len,
-            ),
-            None => self.eval_stmt_block(
-                global,
-                caches,
-                scope,
-                this_ptr.as_deref_mut(),
-                fn_def.body.statements(),
-                rewind_scope,
-            ),
+        let evaluated = entered.and_then(|()| {
+            crate::eval::stack::with_room(|| match &fn_def.machine {
+                Some(machine) => self.run_machine(
+                    global,
+                    caches,
+                    scope,
+                    this_ptr.as_deref_mut(),
+                    machine,
+                    orig_scope_len,
+                ),
+                None => self.eval_stmt_block(
+                    global,
+                    caches,
+                    scope,
+                    this_ptr.as_deref_mut(),
+                    fn_def.body.statements(),
+                    rewind_scope,
+                ),
+            })
         });
         let mut _result: RawrResult = evaluated.or_else(|err| match *err {
             // Convert return statement to return value

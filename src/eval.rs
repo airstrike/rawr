@@ -6,6 +6,7 @@ mod eval_context;
 mod expr;
 mod global_state;
 pub(crate) mod machine;
+pub(crate) mod stack;
 mod stmt;
 mod target;
 #[cfg(feature = "sync")]

@@ -67,8 +67,8 @@ impl Signature {
     }
 
     /// Whether a handle with `parameters` and `output` may call this
-    /// function. A parameter the script borrows (`&str`, `&T`) takes the
-    /// handle's owned value, which the call lends it.
+    /// function. A parameter the script borrows (`&str`, `&T`, `&mut T`)
+    /// takes the handle's owned value, which the call lends it.
     pub(crate) fn accepts(
         &self,
         parameters: &[Ty],
@@ -210,14 +210,11 @@ impl Ty {
         }
     }
 
-    /// A parameter as written takes `expected`: the same type, or a shared
-    /// borrow of it.
+    /// A parameter as written takes `expected`: the same type, or a borrow
+    /// of it.
     fn lends(&self, expected: &Self, registry: &host::Registry) -> bool {
         match self {
-            Self::Reference {
-                mutable: false,
-                target,
-            } => match (&**target, expected) {
+            Self::Reference { target, .. } => match (&**target, expected) {
                 (Self::Named(found), Self::Named(expected)) if found == "str" => {
                     expected == "String"
                 }

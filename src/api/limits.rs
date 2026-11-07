@@ -7,13 +7,6 @@ use std::num::{NonZeroU64, NonZeroUsize};
 /// is a debug build; a script must not behave differently there).
 pub mod default_limits {
     /// Maximum levels of function calls.
-    ///
-    /// Debug-build call frames are large; deeper recursion there needs a bigger
-    /// evaluation stack first.
-    #[cfg(debug_assertions)]
-    pub const MAX_CALL_STACK_DEPTH: usize = 8;
-    /// Maximum levels of function calls (release builds).
-    #[cfg(not(debug_assertions))]
     pub const MAX_CALL_STACK_DEPTH: usize = 64;
     /// Maximum levels of expressions.
     pub const MAX_EXPR_DEPTH: usize = 256;

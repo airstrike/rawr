@@ -110,8 +110,10 @@ impl Engine {
         unit: crate::parse::Unit,
         source: crate::diagnostic::Source,
     ) -> ParseResult<AST> {
-        if let Some(compiled) = crate::package::compile::inline_modules(self, &unit, &source) {
-            return compiled.map(|(ast, _)| ast);
+        if let Some(compiled) =
+            crate::package::compile::inline_modules(self, &unit, source.identity(), source.text())
+        {
+            return compiled.map(program::Executable::into_hosted_ast);
         }
         let program = crate::resolve::resolve_with_evidence(unit, &self.host_registry, source)?;
         crate::resolve::lower_with_engine(
@@ -131,8 +133,10 @@ impl Engine {
         unit: crate::parse::Unit,
         source: crate::diagnostic::Source,
     ) -> ParseResult<(AST, program::Positions)> {
-        if let Some(compiled) = crate::package::compile::inline_modules(self, &unit, &source) {
-            return compiled;
+        if let Some(compiled) =
+            crate::package::compile::inline_modules(self, &unit, source.identity(), source.text())
+        {
+            return compiled.map(program::Executable::into_ast_with_positions);
         }
         let program = crate::resolve::resolve_with_evidence(unit, &self.host_registry, source)?;
         crate::resolve::lower_with_engine(
@@ -483,6 +487,14 @@ impl Engine {
             crate::timing::observe_optional(session, crate::timing::Phase::ParseItems, || {
                 self.parse_unit(&source)
             })?;
+        let identity = evidence
+            .as_ref()
+            .map_or("<script>", crate::diagnostic::Source::identity);
+        if let Some(compiled) =
+            crate::package::compile::inline_modules(self, &unit, identity, &source)
+        {
+            return compiled;
+        }
 
         let program =
             crate::timing::observe_optional(session, crate::timing::Phase::Resolve, || {
