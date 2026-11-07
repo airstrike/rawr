@@ -135,6 +135,13 @@ pub(crate) struct Instances {
     /// templates whose instances are these.
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) impls: BTreeMap<usize, Vec<ImplInstance>>,
+    /// Each call of a template, by the body that makes it and the call's
+    /// span: the name of the type each generic parameter takes, as the end
+    /// of that body resolves them. A parameter a later use fixes, as the
+    /// message of `padded_button("Back").on_press(Message::Back)`, is open
+    /// where the call is read, and its instance is the one rustc infers.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) calls: BTreeMap<(crate::item::Key, Span), Box<[ImmutableString]>>,
 }
 
 /// An instance of a script impl of a crate's trait (`Instances::impls`).

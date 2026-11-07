@@ -851,22 +851,23 @@ fn substitute_parameters(
 }
 
 /// The calls of generic functions compiled per instantiation that a body
-/// makes, with the types each gives, resolved once the body is read.
+/// makes, with the types each gives, resolved once the body is read, and
+/// each call's span.
 #[cfg(feature = "rust-import")]
-fn take_instance_calls(parser: &mut Parser<'_>) -> Vec<(crate::item::Key, Vec<Ty>)> {
+fn take_instance_calls(parser: &mut Parser<'_>) -> Vec<(crate::item::Key, Vec<Ty>, Span)> {
     std::mem::take(&mut parser.instance_calls)
         .into_iter()
-        .map(|(key, types)| {
+        .map(|(key, types, call)| {
             let types = types
                 .iter()
                 .map(|ty| parser.inference.resolve(ty))
                 .collect::<Vec<_>>();
-            (key, types)
+            (key, types, call)
         })
         // A literal still open is one of a body that stopped before its
         // end, which settles it: `50` may be the `u32` a bound's impl
         // picks, so its call waits for a reading that settles it.
-        .filter(|(_, types)| !types.iter().any(contains_open_literal))
+        .filter(|(_, types, _)| !types.iter().any(contains_open_literal))
         .collect()
 }
 
@@ -1137,7 +1138,8 @@ fn instance_round<A: crate::host::ImportAllocation>(
         let runtime =
             crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
         let models = Models::new(program, runtime, Shared::clone(host), engine);
-        let mut found = Vec::<(crate::item::Key, Vec<Ty>)>::new();
+        // Each call, by the body that makes it: the template and its types.
+        let mut found = Vec::<(crate::item::Key, crate::item::Key, Vec<Ty>, Span)>::new();
         let mut impl_uses = Vec::new();
         for shell in program.items.iter() {
             let item::Kind::Function(definition) = &shell.kind else {
@@ -1165,7 +1167,7 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 &body_source,
                 models.for_source(shell.source),
                 definition,
-                key,
+                key.clone(),
                 0,
                 0,
                 Some(ImportedContext {
@@ -1181,7 +1183,11 @@ fn instance_round<A: crate::host::ImportAllocation>(
             parser.collecting_instances = true;
             // A body that fails here fails again where it is lowered.
             let _ = parser.parse_function_body(definition);
-            found.extend(take_instance_calls(&mut parser));
+            found.extend(
+                take_instance_calls(&mut parser)
+                    .into_iter()
+                    .map(|(template, types, call)| (key.clone(), template, types, call)),
+            );
             impl_uses.extend(take_impl_uses(&mut parser));
             drop(parser);
             if let Some(error) = allocation_failure {
@@ -1221,7 +1227,13 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 parser.symbolic_only = true;
                 parser.collecting_instances = true;
                 let _ = parser.parse_method_body(definition);
-                found.extend(take_instance_calls(&mut parser));
+                found.extend(
+                    take_instance_calls(&mut parser)
+                        .into_iter()
+                        .map(|(template, types, call)| {
+                            (definition.key().clone(), template, types, call)
+                        }),
+                );
                 impl_uses.extend(take_impl_uses(&mut parser));
             }
             if let Some(error) = allocation_failure {
@@ -1229,10 +1241,21 @@ fn instance_round<A: crate::host::ImportAllocation>(
             }
         }
         let mut added = Vec::<(crate::item::Key, Vec<ImmutableString>, Vec<Ty>)>::new();
-        for (template, types) in found {
+        // Two calls a macro gives one span may take two instances: neither
+        // is known by its span.
+        let mut calls = BTreeMap::<(crate::item::Key, Span), Option<Box<[ImmutableString]>>>::new();
+        for (caller, template, types, call) in found {
             let Some(names) = instance_names(&types, &models) else {
                 continue;
             };
+            calls
+                .entry((caller, call))
+                .and_modify(|known| {
+                    if known.as_deref() != Some(names.as_slice()) {
+                        *known = None;
+                    }
+                })
+                .or_insert_with(|| Some(names.clone().into_boxed_slice()));
             let Some(instances) = program.instances.templates.get(&template) else {
                 continue;
             };
@@ -1246,6 +1269,10 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 added.push((template, names, types));
             }
         }
+        program.instances.calls = calls
+            .into_iter()
+            .filter_map(|(call, names)| Some((call, names?)))
+            .collect();
         // Each new use of a script impl of a crate's trait whose parameters
         // touch a crate's types is an instance of the impl, and of each of
         // its functions.
@@ -12421,7 +12448,7 @@ struct Parser<'a> {
     /// Each call of a generic function compiled per instantiation (D629):
     /// its key and the type each generic parameter takes.
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
-    instance_calls: Vec<(crate::item::Key, Vec<Ty>)>,
+    instance_calls: Vec<(crate::item::Key, Vec<Ty>, Span)>,
     /// Whether this body is read only for those calls (`monomorphize`).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     collecting_instances: bool,
@@ -47139,7 +47166,7 @@ impl<'a> Parser<'a> {
             .map(|generic| substitution[&generic.name.text].clone())
             .collect::<Vec<_>>();
         self.instance_calls
-            .push((function.key.clone(), types.clone()));
+            .push((function.key.clone(), types.clone(), call));
         let Some(instances) = self.models.instances.templates.get(&function.key) else {
             return Ok(function);
         };
@@ -47150,13 +47177,15 @@ impl<'a> Parser<'a> {
         // A generic of this body's own reaching one compiled per
         // instantiation makes this body one too.
         self.reaches_host |= resolved.iter().any(reaches_param);
-        let instance = instance_names(&resolved, &self.models)
+        let instance = self
+            .called_instance(&resolved, call)
             .and_then(|names| {
                 instances
                     .iter()
-                    .find(|(written, _)| written.as_ref() == names.as_slice())
+                    .find(|(written, _)| *written == names)
                     .map(|(_, key)| key.clone())
             })
+            .inspect(|key| self.take_instance_types(key, &types))
             .and_then(|key| self.models.functions_by_key.get(&key).cloned());
         // While calls are collected, a call with no instance yet reads
         // on with its template's signature.
@@ -47178,6 +47207,30 @@ impl<'a> Parser<'a> {
                 call,
             }
         })
+    }
+
+    /// The names of the types a call of a template gives its parameters:
+    /// those its arguments fix, else those the end of this body resolves,
+    /// as rustc infers a parameter from a later use of the call's value.
+    #[cfg(feature = "rust-import")]
+    fn called_instance(&self, resolved: &[Ty], call: Span) -> Option<Box<[ImmutableString]>> {
+        if let Some(names) = instance_names(resolved, &self.models) {
+            return Some(names.into_boxed_slice());
+        }
+        let caller = self.callable.clone()?;
+        self.models.instances.calls.get(&(caller, call)).cloned()
+    }
+
+    /// The call's types, `types` in its template's parameter order, are
+    /// those of the instance `key` it binds to.
+    #[cfg(feature = "rust-import")]
+    fn take_instance_types(&mut self, key: &crate::item::Key, types: &[Ty]) {
+        let Some(named) = self.models.instances.types.get(key).cloned() else {
+            return;
+        };
+        for (ty, (_, named)) in types.iter().zip(named.iter()) {
+            let _ = self.unify_type(ty, &Ty::from_resolved(named));
+        }
     }
 
     /// `definition`'s instance for the types `substitution` gives its impl's
@@ -47209,7 +47262,7 @@ impl<'a> Parser<'a> {
             .map(|generic| substitution[&generic.name.text].clone())
             .collect::<Vec<_>>();
         self.instance_calls
-            .push((definition.key().clone(), types.clone()));
+            .push((definition.key().clone(), types.clone(), call));
         let Some(instances) = self.models.instances.templates.get(definition.key()) else {
             return Ok(definition);
         };
@@ -47218,13 +47271,15 @@ impl<'a> Parser<'a> {
             .map(|ty| self.inference.resolve(ty))
             .collect::<Vec<_>>();
         self.reaches_host |= resolved.iter().any(reaches_param);
-        let instance = instance_names(&resolved, &self.models)
+        let instance = self
+            .called_instance(&resolved, call)
             .and_then(|names| {
                 instances
                     .iter()
-                    .find(|(written, _)| written.as_ref() == names.as_slice())
+                    .find(|(written, _)| *written == names)
                     .map(|(_, key)| key.clone())
             })
+            .inspect(|key| self.take_instance_types(key, &types))
             .and_then(|key| self.models.method(definition.owner(), key.name()).cloned());
         // While calls are collected, a call with no instance yet reads on
         // with its template's signature.
