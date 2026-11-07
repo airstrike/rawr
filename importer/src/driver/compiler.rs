@@ -2087,6 +2087,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         self.obligations.insert(key.clone(), obligation);
         self.budget.items(1)?;
         let class = match obligation.self_ty.kind() {
+            // A bound that fixes a parameter's associated type, as iced's
+            // `impl Widget for Image<Handle>` has `Renderer: image::Renderer<
+            // Handle = Handle>`, reads the trait's implementations at each
+            // type only an alias names wherever it is, so the classifier can
+            // read what the bound fixes there.
+            ty::Param(_) if obligation.associated.is_some() => engine::Class::Concrete,
             ty::Param(_) => engine::Class::Parameter,
             _ if parameter_projection(obligation.self_ty) => engine::Class::Parameter,
             ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Alias(..) => {
@@ -2112,6 +2118,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         // loaded implementation. Concrete constructors containing
         // parameters (for example `Wrapper<T>` or `&T`) remain eligible.
         match obligation.self_ty.kind() {
+            // A bound that fixes an associated type only asks what the
+            // trait's implementations give it.
+            ty::Param(_) if obligation.associated.is_some() => {
+                return self.request_relation_implementations(obligation);
+            }
             ty::Param(parameter) if selected => {
                 self.request_relation_implementations(obligation)?;
                 return self.process_scalar_predicate_obligation(obligation, *parameter);
@@ -2120,14 +2131,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // parameter, as rand's `I::Item: SampleBorrow<X>`: the trait's
             // implementations, as for a parameter's own bound (#1084).
             _ if selected && parameter_projection(obligation.self_ty) => {
-                return self.request_relation_implementations(obligation);
-            }
-            // An implementation's bound that fixes a parameter's associated
-            // type, as iced's `impl Widget for Image<Handle>` has `Renderer:
-            // image::Renderer<Handle = Handle>`: the trait's implementations
-            // at each type only an alias names, so the classifier can read
-            // what the bound fixes there.
-            ty::Param(_) if obligation.associated.is_some() => {
                 return self.request_relation_implementations(obligation);
             }
             ty::Param(_) | ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Alias(..) => {
