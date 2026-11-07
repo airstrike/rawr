@@ -334,6 +334,20 @@ pub mod form {
             self.0.iter_mut()
         }
     }
+
+    /// A generic type's `&self` method that gives an opaque iterator of
+    /// values borrowing it, as `slice.iter().copied()` gives.
+    impl<T: Copy> Holder<T> {
+        pub fn items(&self) -> impl Iterator<Item = T> + '_ {
+            self.0.iter().copied()
+        }
+    }
+
+    /// A function's opaque iterator, as `(0..n).rev()` behind `impl
+    /// Iterator<Item = u32>` gives.
+    pub fn countdown(from: u32) -> impl Iterator<Item = u32> {
+        (1..=from).rev()
+    }
 }
 
 /// Trait impls on a type with a const parameter, as palette's `impl<T>

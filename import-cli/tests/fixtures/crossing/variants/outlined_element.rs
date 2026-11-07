@@ -1,10 +1,11 @@
 // rawr
-// `outlined`, a default method of a trait the crate re-exports at its root,
+// `outlined`, a default method of the trait the crate re-exports at its root
+// beside `explain`, which gives an opaque type of its own,
 // called on an `Element<'_, ..>` a function of the program gives: the type
 // its body gives has no public path, so Rust code can't write the opaque
 // type a value borrowing the element is held as.
 use events::widgets::{button, column, rule, text, Element, Widget};
-use events::Outline;
+use events::Framed;
 
 #[derive(Default)]
 struct Counter {

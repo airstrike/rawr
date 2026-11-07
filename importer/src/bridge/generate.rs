@@ -17203,9 +17203,10 @@ fn opaque_traits<'s>(
     }
     // Each associated type the bounds bind, as `Item = T`, on the trait
     // that declares it, or else on the first, which reaches a supertrait's.
-    // The marks of a future or a callable are no trait's.
+    // The marks of a future, an iterator or a callable are no trait's.
     let marks = [
         *crate::surface::identity::Definition::future().as_bytes(),
+        *crate::surface::identity::Definition::iterator().as_bytes(),
         *crate::surface::identity::Definition::callable().as_bytes(),
     ];
     for (associated, position) in opaque.associated() {

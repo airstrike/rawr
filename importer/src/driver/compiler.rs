@@ -105,7 +105,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // marks a type parameter a struct's or an enum's boxed callable field gives.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 55;
+const PROTOCOL_SCHEMA: u32 = 56;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3194,9 +3194,15 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         // signature, which the impl's trait reference instantiates. So is
         // `Into::into`, which a crate's `impl From<Degrees> for f32` gives
         // `Degrees` through core's blanket `impl<T, U: From<T>> Into<U> for
-        // T`, as ferris's `f32::from(degrees)` calls. Any other standard
-        // definition stays opaque.
-        let shape = if self.comparison_provided(def_id) || self.conversion_member(def_id) {
+        // T`, as ferris's `f32::from(degrees)` calls. So are `Iterator` and
+        // its `next`, which a crate's `impl Iterator<Item = T>` gives its
+        // value, as polars' `downcast_iter_mut` does: a `for` loop and the
+        // iterator's adaptors pull from it. Any other standard definition
+        // stays opaque.
+        let shape = if self.comparison_provided(def_id)
+            || self.conversion_member(def_id)
+            || self.iteration(def_id)
+        {
             self.local_shape(def_id)?
         } else {
             Shape::Sysroot {
@@ -3232,6 +3238,20 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 self.tcx.item_name(def_id).as_str(),
                 "lt" | "le" | "gt" | "ge"
             )
+    }
+
+    /// `def_id` is core's `Iterator` or its `next`, whose signature names
+    /// nothing but the trait's `Self` and `Item`.
+    fn iteration(&self, def_id: DefId) -> bool {
+        let iterator = self.tcx.lang_items().iterator_trait();
+        match self.tcx.def_kind(def_id) {
+            DefKind::Trait => iterator == Some(def_id),
+            DefKind::AssocFn => {
+                iterator == Some(self.tcx.parent(def_id))
+                    && self.tcx.item_name(def_id).as_str() == "next"
+            }
+            _ => false,
+        }
     }
 
     /// `def_id` is `Into::into`, whose signature names nothing but the

@@ -1325,6 +1325,23 @@ fn imported_paths<'contract>(
                 });
                 continue;
             }
+            // The members of the opaque type an inherent method gives,
+            // declared in its owner's module (`opaque_types`).
+            let opaque = rawr_import::surface::opaque::path(
+                &format!("{owner}__{}", associated.name()),
+                0,
+            );
+            for member in associated
+                .implementations()
+                .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+            {
+                let member_path = format!("{opaque}::{}", member.name());
+                allocation.retain(1, member_path.len())?;
+                entries.push(ImportedPath {
+                    path: member_path.into_boxed_str(),
+                    outcome: member,
+                });
+            }
             let path = &owner;
             let associated_bytes = path
                 .len()
@@ -2133,10 +2150,17 @@ fn build(
     // declared beside the function, at the type arguments its caller fixes.
     for (path, definition, parameters, associated) in opaque_types(contract, &facade) {
         let shape = crate::Shared::new(host::type_def::Shape::Opaque);
+        // An iterator, as `impl Iterator<Item = T>` is, whatever bound
+        // makes it one (`Definition::iterator`'s mark).
+        let iterator = rawr_import::surface::identity::Definition::iterator();
+        let implemented = associated
+            .iter()
+            .any(|(identity, ..)| identity == iterator.as_bytes())
+            .then_some(crate::capability::Kind::Iterator);
         match builder.imported_opaque_type(
             &path,
             imported_identity(definition),
-            &[],
+            implemented.as_slice(),
             parameters,
             Box::default(),
             associated,
@@ -2380,6 +2404,26 @@ fn build(
                     .filter(|item| !alias || item.receiver().is_none())
                 {
                     builder.imported_item(values)?;
+                }
+            }
+            // The members of the opaque type the method gives, declared in
+            // its owner's module (`opaque_types`).
+            let opaque = rawr_import::surface::opaque::path(
+                &format!("{}__{}", entry.relative, associated.name()),
+                0,
+            );
+            for member in associated
+                .implementations()
+                .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+            {
+                let path = format!("{opaque}::{}", member.name());
+                if let Some(item) = imported_item(&types, &path, member, allocation)?
+                    .filter(|_| names_declared(member, resolved))
+                {
+                    builder.imported_item(item)?;
+                    if let Some(values) = imported_values(&types, &path, member, allocation)? {
+                        builder.imported_item(values)?;
+                    }
                 }
             }
         }
