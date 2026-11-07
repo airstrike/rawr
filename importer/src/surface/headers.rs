@@ -556,21 +556,14 @@ impl<'g, P: api::Phase> Headers<'g, P> {
             .get(&identity(associated))?
             .display_path()
             .last()?;
-        let candidates = self
-            .graph
-            .implementations_of(trait_id)
-            .map(model::Implementation::self_type)
-            .chain(
-                self.instances
-                    .get_or_init(|| crate::classify::instance_aliases(self.graph))
-                    .iter()
-                    .filter_map(|index| match self.graph.definitions().nth(*index)?.kind() {
-                        model::Kind::TypeAlias { ty, .. } => Some(ty),
-                        _ => None,
-                    }),
-            );
+        let candidates = crate::classify::projection_candidates(
+            self.graph,
+            trait_id,
+            self.instances
+                .get_or_init(|| crate::classify::instance_aliases(self.graph)),
+        );
         let mut cases = Vec::new();
-        for candidate in candidates {
+        for candidate in &candidates {
             let Some(at) = crate::classify::associated_at(self.graph, trait_id, name, candidate, 0)
             else {
                 continue;

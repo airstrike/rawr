@@ -4,7 +4,7 @@ use serde::ser::{SerializeSeq as _, SerializeStruct as _};
 use serde::{Deserialize, Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 
 use crate::api::{self, ledger, model};
@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 124;
+const CLASSIFIER_VERSION: u32 = 125;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2707,18 +2707,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     return None;
                 };
                 let name = self.definition_name(associated)?;
-                let candidates = self
-                    .graph
-                    .implementations_of(trait_id)
-                    .map(model::Implementation::self_type)
-                    .chain(self.instance_aliases().iter().filter_map(|index| {
-                        match self.graph.definitions().nth(*index)?.kind() {
-                            model::Kind::TypeAlias { ty, .. } => Some(ty),
-                            _ => None,
-                        }
-                    }));
+                let candidates =
+                    projection_candidates(self.graph, trait_id, self.instance_aliases());
                 let mut cases = Vec::new();
-                for candidate in candidates {
+                for candidate in &candidates {
                     let Some(at) = self.associated_at(trait_id, name, candidate, 0) else {
                         continue;
                     };
@@ -10450,6 +10442,84 @@ fn definition_name<'g>(
         .definition_index(definition)
         .and_then(|index| graph.definitions().nth(index))
         .and_then(|definition| definition.display_path().last())
+}
+
+/// The concrete types whose associated types of `trait_id` a projection
+/// bound reads: each concrete self type of the trait's impls, each type
+/// only a crate's alias names (`instance_aliases`, given), and each generic
+/// impl's self type at those concrete types, as iced's `impl<A, B>
+/// image::Renderer for fallback::Renderer<A, B>` is at its backends.
+pub(crate) fn projection_candidates(
+    graph: &api::Graph<impl api::Phase>,
+    trait_id: &api::identity::Definition,
+    instances: &[usize],
+) -> Vec<model::Type> {
+    /// More instantiations of one generic impl than this are not read.
+    const COMBINATIONS: usize = 64;
+    let selves = graph
+        .implementations_of(trait_id)
+        .map(model::Implementation::self_type)
+        .collect::<Vec<_>>();
+    let mut concrete = selves
+        .iter()
+        .filter(|ty| !names_type_parameter(ty))
+        .map(|ty| (*ty).clone())
+        .collect::<Vec<_>>();
+    let base = concrete.clone();
+    concrete.extend(instances.iter().filter_map(|index| {
+        match graph.definitions().nth(*index)?.kind() {
+            model::Kind::TypeAlias { ty, .. } => Some(ty.clone()),
+            _ => None,
+        }
+    }));
+    for generic in selves.iter().filter(|ty| names_type_parameter(ty)) {
+        let mut indices = BTreeSet::new();
+        type_parameter_indices(generic, &mut indices);
+        let indices = indices.into_iter().collect::<Vec<_>>();
+        let Some(count) = u32::try_from(indices.len())
+            .ok()
+            .and_then(|length| base.len().checked_pow(length))
+            .filter(|count| *count <= COMBINATIONS)
+        else {
+            continue;
+        };
+        for combination in 0..count {
+            let mut rest = combination;
+            let mut bindings = BTreeMap::new();
+            for index in &indices {
+                bindings.insert(*index, base[rest % base.len()].clone());
+                rest /= base.len();
+            }
+            concrete.push(substitute_bindings(generic, &bindings));
+        }
+    }
+    concrete
+}
+
+/// The indices of the type parameters `ty` names.
+fn type_parameter_indices(ty: &model::Type, found: &mut BTreeSet<u32>) {
+    match ty {
+        model::Type::Parameter { index, .. } => {
+            found.insert(*index);
+        }
+        model::Type::Definition { arguments, .. } => {
+            for argument in arguments.iter() {
+                if let model::Argument::Type(ty) = argument {
+                    type_parameter_indices(ty, found);
+                }
+            }
+        }
+        model::Type::Tuple(members) => {
+            for member in members.iter() {
+                type_parameter_indices(member, found);
+            }
+        }
+        model::Type::Reference { ty, .. }
+        | model::Type::RawPointer { ty, .. }
+        | model::Type::Slice(ty)
+        | model::Type::Array { element: ty, .. } => type_parameter_indices(ty, found),
+        _ => {}
+    }
 }
 
 /// The crate type aliases that are the only name of the type they name, by
