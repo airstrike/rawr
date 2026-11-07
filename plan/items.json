@@ -1157,6 +1157,10 @@
     {"t":"T1154","issue":1154,"title":"T1154: The lowered script is still the old engine's dialect","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1155","issue":1155,"title":"T1155: The site in the work plan's look, with dark mode","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1156","issue":1156,"title":"T1156: Bot status and invite pages in the site's look and dark mode","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1157","issue":1157,"title":"T1157: Link preview cards and favicons in the site's palette","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1157","issue":1157,"title":"T1157: Link preview cards and favicons in the site's palette","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1158","issue":1158,"title":"T1158: Embedding: a host's enums, Vec, usize and derives cross as they are, and an export root takes a glob import","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1159","issue":1159,"title":"T1159: Embedding: a typed handle over the script's own type, checked at lookup and lent by &mut, and Script::replace","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1160","issue":1160,"title":"T1160: std::thread::spawn fails in the browser playground","state":"open","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1161","issue":1161,"title":"T1161: A Rustlings group in the playground","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
