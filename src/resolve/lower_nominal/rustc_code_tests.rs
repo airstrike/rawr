@@ -144,6 +144,21 @@ fn a_paths_unknown_first_segment_is_e0433() {
             label("use of unresolved module or unlinked crate `nothing`")
         )
     );
+    // A crate the program doesn't depend on is unresolved, whatever its
+    // name (#1149).
+    for call in [
+        "tokio::spawn(async {})",
+        "tokio::task::spawn_local(async {})",
+    ] {
+        assert_eq!(
+            refused(&format!("fn main() {{\n    {call};\n}}\nmain();\n")),
+            (
+                "E0433".into(),
+                "cannot find module or crate `tokio` in this scope".into(),
+                label("use of unresolved module or unlinked crate `tokio`")
+            )
+        );
+    }
 }
 
 #[test]

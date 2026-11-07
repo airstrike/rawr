@@ -50311,6 +50311,17 @@ impl<'a> Parser<'a> {
                     member: member.clone(),
                     reference: member_span,
                 }
+            } else if let [(root, root_span), _, ..] = &segments[..]
+                && self.unresolved_root(root)
+            {
+                // rustc stops at the first segment it can't resolve: a
+                // crate the program doesn't depend on, as `tokio` in
+                // `tokio::task::spawn_local(..)` without tokio (#1149).
+                Error::UnknownType {
+                    name: root.clone(),
+                    reference: span(root_span.start(), text_end(root_span.start(), root)),
+                    path: true,
+                }
             } else {
                 Error::UnknownType {
                     name: owner,
@@ -51869,6 +51880,22 @@ impl<'a> Parser<'a> {
             tokens.push((Token::Identifier(Box::new(segment.into())), start));
         }
         self.splice_tokens(tokens);
+    }
+
+    /// Whether a path's first segment `root` names nothing in scope: no
+    /// crate the program reaches, no `use`, item or local of that name.
+    fn unresolved_root(&self, root: &str) -> bool {
+        !matches!(root, "std" | "core" | "crate" | "self" | "super")
+            && self.models.host.entry(root).is_none()
+            && self.models.import(root).is_none()
+            && self.models.get(root).is_none()
+            && self.models.function(root).is_none()
+            && !self.bindings.contains_key(root)
+            && self
+                .models
+                .crates
+                .as_ref()
+                .is_none_or(|crates| crates.reach(root, Span::default()).is_err())
     }
 
     /// The std path `name`, whose first segment is `first`, names through a
