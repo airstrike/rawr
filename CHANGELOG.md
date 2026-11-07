@@ -14,6 +14,18 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The playground's examples have a Rustlings group: 13 programs from the rustlings solutions (ownership, enums, Option, strings, HashMap, errors with ? and Box<dyn Error>, traits, lifetimes, iterators, Box, Rc and TryFrom), each crediting its source under rustlings' MIT licence. (#1161)
 - A module, its file, a function, a field or a binding can be named `switch`, `import`, `print`, `this` or any other word the old engine reserved, in marked code and in a crate's items, as in Rust: `mod switch;` opens `switch.rs`. rawr's grammar is Rust's, so the old engine's `switch`, `do`/`until`, `try`/`catch` and `import`/`export` syntax is gone. (#1153)
 - The landing page's reload section now covers any library: tabs show the same idea in iced, ratatui and a plain std loop, and a new docs page, Apps and libraries, explains how libraries are compiled by Cargo, called from marked code and reloaded on save. Section rules, headings, links and inline code read more evenly. (#1162)
+- An `Option` or a `Result` is an iterator of the value it holds: `for x in opt`, `for x in &opt`, `opt.iter()` and `opt.into_iter()` walk it, as std's `IntoIterator` impls do. (#1079)
+- Assigning through an `Rc` or an `Arc` is rustc's E0594, "cannot assign to data in an `Arc`". (#1078)
+- A formatted value whose type nothing settles is rustc's E0282 at its `let`, such as "type annotations needed for `Vec<_>`". (#1077)
+- `assert!()`, `assert_eq!()` and `assert_ne!()` with missing arguments give rustc's own macro errors. (#1076)
+- An unknown name inside `thread::spawn`'s closure, or in any std path's arguments, is rustc's E0425 rather than a not-yet error. (#1080)
+- A bound such as `T: AsRef<str>` or `T: AsMut<u32>` holds for std's types by std's impls, and `as_ref`, `as_mut`, `borrow`, `borrow_mut` and `deref_mut` run through it, a mutable one changing the value where it is. An array of different functions of one signature holds `fn` pointers. (#908)
+- A type can implement one generic trait more than once: `impl From<&str> for Bar` beside `impl From<String> for Bar`, two `impl Convert<T>` of your own trait, or one trait for both `f32` and `f64`. `Bar::from(x)`, `x.into()`, methods, operators and functions without `self` pick the impl by type, as rustc does, and a call nothing picks an impl for is rustc's E0283. (#988)
+- A build input reached through a symlink, such as a header under the SDK path `xcrun --show-sdk-path` prints, is the file the link resolves to, as for Cargo. Pointing the link elsewhere or editing its target runs the build script again and rebuilds the crate. (#1171)
+- The play bot's status page and its invite page now look like the rest of the site, in light and dark themes that follow the system or the site's theme switch. (#1156)
+- A program may name its types and modules anything, `Program`, `Error` and `Message` included: the generated runner keeps its own items in a module no program names. (#1163)
+- A marked `src/main.rs` names its package's library by the crate name, as a Cargo binary does: the library is built, read and bound like any dependency. (#1164)
+- A crate function whose `impl Trait` output captures a parameter a closure fills, such as iced's `markdown::code_block`, no longer panics rawr-import when a member of that output is called. (#1098)
 
 ## 0.3.171 (2026-11-07)
 
