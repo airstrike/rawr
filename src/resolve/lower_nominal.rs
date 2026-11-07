@@ -3416,7 +3416,7 @@ fn write_trait_dispatchers(
                 continue;
             }
             let mut text = format!(
-                "private fn {}({parameters}) {{\nlet __rawr_type = {type_index}(this);\n",
+                "__rawr_private fn {}({parameters}) {{\nlet __rawr_type = {type_index}(self);\n",
                 trait_dispatcher_name(trait_name, &function.name.text)
             );
             for ((owner, _), definitions) in models
@@ -3430,7 +3430,7 @@ fn write_trait_dispatchers(
                 {
                     let _ = writeln!(
                         text,
-                        "if __rawr_type == {} {{ return this.{}({parameters}); }}",
+                        "if __rawr_type == {} {{ return self.{}({parameters}); }}",
                         owner_key(*owner),
                         method_name(definition.id())
                     );
@@ -3439,32 +3439,32 @@ fn write_trait_dispatchers(
             // A std trait's dispatcher falls back to what Rawr does for a
             // type without a hand-written impl: a derive, or a builtin.
             let fallback = match (models.std_traits.contains(trait_name), trait_name.as_str()) {
-                (true, "Clone") => "return this;".to_string(),
+                (true, "Clone") => "return self;".to_string(),
                 // An `Rc` or `Arc` writes what it points to, as std's
                 // `impl<T: Display> Display for Rc<T>` does.
                 (true, "Display") => {
                     let get = format!("{SENTINEL}{}", ops.len());
                     ops.push(ExecutableOp::Prelude(PreludeOp::CountedGet));
                     format!(
-                        "if __rawr_type == {COUNTED_KEY} {{ return {get}(this).{}({parameters}); }}\n\
-                         return \"\" + this;",
+                        "if __rawr_type == {COUNTED_KEY} {{ return {get}(self).{}({parameters}); }}\n\
+                         return \"\" + self;",
                         trait_dispatcher_name(trait_name, &function.name.text)
                     )
                 }
                 (true, "Debug") => {
                     let generic = format!("{SENTINEL}{}", ops.len());
                     ops.push(ExecutableOp::Prelude(PreludeOp::GenericDebug));
-                    format!("return {generic}(this);")
+                    format!("return {generic}(self);")
                 }
                 (true, "PartialEq") => {
                     let generic = format!("{SENTINEL}{}", ops.len());
                     ops.push(ExecutableOp::Prelude(PreludeOp::GenericEqual));
-                    format!("return {generic}(this, __rawr_parameter_0);")
+                    format!("return {generic}(self, __rawr_parameter_0);")
                 }
                 (true, "PartialOrd" | "Ord") => {
                     let compare = format!("{SENTINEL}{}", ops.len());
                     ops.push(ExecutableOp::Prelude(PreludeOp::Compare));
-                    let compared = format!("{compare}(this, __rawr_parameter_0)");
+                    let compared = format!("{compare}(self, __rawr_parameter_0)");
                     if trait_name == "Ord" {
                         let unwrap = format!("{SENTINEL}{}", ops.len());
                         ops.push(ExecutableOp::Prelude(PreludeOp::Unwrap));
@@ -3474,7 +3474,7 @@ fn write_trait_dispatchers(
                     }
                 }
                 _ => format!(
-                    "throw \"`{trait_name}::{}` has no implementation for this value\";",
+                    "__rawr_throw \"`{trait_name}::{}` has no implementation for this value\";",
                     function.name.text
                 ),
             };
@@ -3526,7 +3526,7 @@ fn write_instance_dispatchers(
             FALLBACK_INSTANCE
         };
         let mut text = format!(
-            "private fn {}({parameters}) {{\nlet __rawr_type = {type_index}(this);\n",
+            "__rawr_private fn {}({parameters}) {{\nlet __rawr_type = {type_index}(self);\n",
             instance_dispatcher_name(trait_name, &function.name.text, index)
         );
         for (owner, definition) in &definitions {
@@ -3541,7 +3541,7 @@ fn write_instance_dispatchers(
             if matches {
                 let _ = writeln!(
                     text,
-                    "if __rawr_type == {} {{ return this.{}({parameters}); }}",
+                    "if __rawr_type == {} {{ return self.{}({parameters}); }}",
                     owner_key(*owner),
                     method_name(definition.id())
                 );
@@ -3559,17 +3559,17 @@ fn write_instance_dispatchers(
             .flatten()
         {
             let _ = match *symbol {
-                "neg" => writeln!(text, "return -this;"),
-                "!" => writeln!(text, "return !this;"),
+                "neg" => writeln!(text, "return -self;"),
+                "!" => writeln!(text, "return !self;"),
                 assign if assign.ends_with('=') => {
-                    writeln!(text, "this {assign} __rawr_parameter_0; return;")
+                    writeln!(text, "self {assign} __rawr_parameter_0; return;")
                 }
-                binary => writeln!(text, "return this {binary} __rawr_parameter_0;"),
+                binary => writeln!(text, "return self {binary} __rawr_parameter_0;"),
             };
         }
         let _ = write!(
             text,
-            "throw \"`{trait_name}::{}` has no implementation for this value\";\n}}\n",
+            "__rawr_throw \"`{trait_name}::{}` has no implementation for this value\";\n}}\n",
             function.name.text
         );
         output.declaration(source, declared.name.span, &text);
@@ -3620,7 +3620,7 @@ fn write_into_dispatchers(
         };
         let target = Ty::from_resolved(target);
         let mut text = format!(
-            "private fn {}() {{\nlet __rawr_type = {type_index}(this);\n",
+            "__rawr_private fn {}() {{\nlet __rawr_type = {type_index}(self);\n",
             instance_dispatcher_name("Into", "into", index)
         );
         for conversion in owner_id(&target)
@@ -3633,7 +3633,7 @@ fn write_into_dispatchers(
             if let Some(id) = owner_id(&from) {
                 let _ = writeln!(
                     text,
-                    "if __rawr_type == {} {{ return {}(this); }}",
+                    "if __rawr_type == {} {{ return {}(self); }}",
                     owner_key(id),
                     method_name(conversion.id())
                 );
@@ -3644,14 +3644,14 @@ fn write_into_dispatchers(
             ops.push(ExecutableOp::Prelude(op));
             let _ = writeln!(
                 text,
-                "if __rawr_type == {from} {{ return {helper}(this); }}"
+                "if __rawr_type == {from} {{ return {helper}(self); }}"
             );
         }
-        text.push_str("return this;\n}\n");
+        text.push_str("return self;\n}\n");
         output.declaration(source, declared.name.span, &text);
     }
     let text = format!(
-        "private fn {}() {{\nreturn this;\n}}\n",
+        "__rawr_private fn {}() {{\nreturn self;\n}}\n",
         instance_dispatcher_name("Into", "into", FALLBACK_INSTANCE)
     );
     output.declaration(source, declared.name.span, &text);
@@ -3746,7 +3746,8 @@ fn write_static_dispatcher(
         } else {
             static_instance_dispatcher_name(trait_name, &function.name.text, FALLBACK_INSTANCE)
         };
-        let mut text = format!("private fn {name}(__rawr_witness{separator}{parameters}) {{\n");
+        let mut text =
+            format!("__rawr_private fn {name}(__rawr_witness{separator}{parameters}) {{\n");
         let instance_types = *instance;
         let fallback = !declared.generics.is_empty() && instance_types.is_none();
         let instance = instance_types.map(instance_text);
@@ -3851,7 +3852,7 @@ fn write_static_dispatcher(
         }
         let _ = write!(
             text,
-            "throw \"`{trait_name}::{}` has no implementation for this type\";\n}}\n",
+            "__rawr_throw \"`{trait_name}::{}` has no implementation for this type\";\n}}\n",
             function.name.text
         );
         output.declaration(source, declared.name.span, &text);
@@ -3876,7 +3877,7 @@ fn write_default_dispatcher(
     let none = format!("{SENTINEL}{}", ops.len());
     ops.push(ExecutableOp::Prelude(PreludeOp::None));
     let mut text = format!(
-        "private fn {DEFAULT_DISPATCHER}(__rawr_witness) {{\n\
+        "__rawr_private fn {DEFAULT_DISPATCHER}(__rawr_witness) {{\n\
          if __rawr_witness == -2 {{ return 0; }}\n\
          if __rawr_witness == -3 {{ return 0.0; }}\n\
          if __rawr_witness == -4 {{ return \"\"; }}\n\
@@ -3911,7 +3912,7 @@ fn write_default_dispatcher(
             id.index()
         );
     }
-    text.push_str("throw \"no `Default` for this type witness\";\n}\n");
+    text.push_str("__rawr_throw \"no `Default` for this type witness\";\n}\n");
     output.declaration(shell.source, shell.span, &text);
 }
 
@@ -3932,7 +3933,7 @@ fn write_method(
 ) -> usize {
     let source = definition.source();
     let declaration = definition.name_span();
-    output.declaration(source, declaration, "private fn ");
+    output.declaration(source, declaration, "__rawr_private fn ");
     // A builtin owner's methods take any receiver: their callers are
     // checked, and dispatchers select them by runtime type key.
     if definition.receiver().is_some() && definition.builtin_owner().is_none() {
@@ -3994,25 +3995,7 @@ pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> 
             .next()
             .expect("token streams always produce their EOF marker");
         let is_eof = token.0 == Token::EOF;
-        // `switch`, `debug`, `call` and kin are legacy keywords; in
-        // checked Rawr they are names, as in Rust (`RUST_NAMES`).
         let token = match token {
-            (ref word, position) if let Some(name) = crate::tokenizer::rust_name(word) => {
-                (Token::Identifier(Box::new(name.into())), position)
-            }
-            // After such a keyword the lexer reads `+`/`-` as unary; after
-            // the name they are binary.
-            (Token::UnaryPlus | Token::UnaryMinus, position)
-                if matches!(tokens.last(), Some((Token::Identifier(name), _))
-                    if crate::tokenizer::demangle_names(name).len() < name.len()) =>
-            {
-                let binary = if token.0 == Token::UnaryPlus {
-                    Token::Plus
-                } else {
-                    Token::Minus
-                };
-                (binary, position)
-            }
             // Rust has no power operator: binary `**` is `*` then a
             // deref (`a * *b`), and `**=` is `*` then `*=`. The untyped
             // script lexer keeps `**`.
@@ -12864,7 +12847,7 @@ impl<'a> Parser<'a> {
                 receiver::Mode::Owned => (owner, definition.receiver_mutable()),
             };
             parser.bindings.insert(
-                "this".into(),
+                "self".into(),
                 Binding {
                     ty,
                     mutable,
@@ -12951,7 +12934,7 @@ impl<'a> Parser<'a> {
             // The `&mut` parameter is `this`, the caller's place.
             if Some(index) == receiver {
                 parser.bindings.insert(
-                    "this".into(),
+                    "self".into(),
                     Binding {
                         ty: ty.clone(),
                         mutable: true,
@@ -12964,8 +12947,8 @@ impl<'a> Parser<'a> {
                     parameter.name.text.clone(),
                     parameter.name.span,
                     ty,
-                    origin::Fragment::plain("this"),
-                    "this".into(),
+                    origin::Fragment::plain("self"),
+                    "self".into(),
                 );
                 continue;
             }
@@ -13101,7 +13084,7 @@ impl<'a> Parser<'a> {
         if native {
             return None;
         }
-        let written = crate::tokenizer::demangle_names(name);
+        let written = crate::tokenizer::raw_names(name);
         let reference = Span::new(at.start(), text_end(at.start(), &written));
         if let Some(error) = self.std_not_yet(&written, reference) {
             return Some(error);
@@ -13146,7 +13129,7 @@ impl<'a> Parser<'a> {
         if let Some(error) = self.expected_operator(true) {
             return error;
         }
-        let written = crate::tokenizer::demangle_names(name);
+        let written = crate::tokenizer::raw_names(name);
         let reference = Span::new(at.start(), text_end(at.start(), &written));
         if let Some(error) = self.module_value(name, reference) {
             return error;
@@ -13214,11 +13197,11 @@ impl<'a> Parser<'a> {
                 let helper = self.push_op(Op::Validate {
                     definition: model.definition().clone(),
                 });
-                self.write_output(format!("{helper}(this);"), definition.body());
+                self.write_output(format!("{helper}(self);"), definition.body());
             }
             let receiver = self
                 .bindings
-                .get("this")
+                .get("self")
                 .filter(|binding| !matches!(binding.ty, Ty::Reference { .. }))
                 .map(|binding| (binding.ty.clone(), binding.declaration));
             self.refuse_async_drops(
@@ -13258,12 +13241,12 @@ impl<'a> Parser<'a> {
             let helper = self.push_op(Op::Validate {
                 definition: model.definition().clone(),
             });
-            self.write_output(format!("{helper}(this);"), definition.body());
+            self.write_output(format!("{helper}(self);"), definition.body());
         }
         let receiver = definition
             .receiver_span()
             .filter(|_| definition.receiver().is_some())
-            .map(|span| (ImmutableString::from("this"), span));
+            .map(|span| (ImmutableString::from("self"), span));
         self.open_body_drops(
             receiver.into_iter().chain(
                 definition
@@ -13941,7 +13924,7 @@ impl<'a> Parser<'a> {
                 definition: model.clone(),
             });
             let name = if Some(index) == receiver {
-                "this"
+                "self"
             } else {
                 parameter.name.text.as_str()
             };
@@ -22288,11 +22271,10 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        // A facade member is named as in Rust, `go` among them, which the
-        // script spells `__rawr_go` (`tokenizer::RUST_NAMES`).
-        let member: ImmutableString = match crate::tokenizer::demangle_names(&member) {
-            std::borrow::Cow::Borrowed(_) => member,
-            std::borrow::Cow::Owned(name) => name.into(),
+        // A facade member is named as in Rust: `r#type` is `type`.
+        let member: ImmutableString = match crate::tokenizer::unraw(&member) {
+            name if name.len() == member.len() => member,
+            name => name.into(),
         };
 
         let turbofish = self.pending_turbofish.take();
@@ -23772,11 +23754,11 @@ impl<'a> Parser<'a> {
             Ty::Reference { target, .. } => self.inference.resolve(&target),
             ty => ty,
         };
-        let member = crate::tokenizer::demangle_names(member);
+        let member = crate::tokenizer::unraw(member);
         resolved
             .host_alias()
             .cloned()
-            .or_else(|| self.imported_member_owner(&resolved, &member))
+            .or_else(|| self.imported_member_owner(&resolved, member))
             .is_some_and(|definition| {
                 self.models
                     .host_items(&format!("{}::{member}", definition.path()))
@@ -24118,10 +24100,10 @@ impl<'a> Parser<'a> {
         // glue in the crate: its drop is its new owner's.
         if value.lvalue.is_none()
             && value.prelude.is_empty()
-            && value.source.as_str() == "this"
+            && value.source.as_str() == "self"
             && self.drops()
             && self.closures.is_empty()
-            && self.bindings.get("this").is_some_and(|binding| {
+            && self.bindings.get("self").is_some_and(|binding| {
                 matches!(binding.kind, BindingKind::Receiver { .. })
                     && !matches!(self.inference.resolve(&binding.ty), Ty::Reference { .. })
             })
@@ -25299,7 +25281,7 @@ impl<'a> Parser<'a> {
             let rendered = self.with_field_entries(pending, rendered);
             self.write_output(rendered, span(start, value.span.end()));
             let receiver = Lvalue::Binding {
-                binding: "this".into(),
+                binding: "self".into(),
                 ty: Ty::Unknown,
             };
             let step = PlaceStep::Path {
@@ -26153,7 +26135,7 @@ impl<'a> Parser<'a> {
         // `else`; a local's moved parts are left `()` in it.
         let made = self.drops()
             && subject.lvalue.is_none()
-            && subject.source.as_str() != "this"
+            && subject.source.as_str() != "self"
             && !self.subject_deref
             && self.needs_drop(&subject.ty, subject.span)?;
         let holder = if made {
@@ -26185,7 +26167,9 @@ impl<'a> Parser<'a> {
         let copies = self.shadow_copies(&drops::pattern_names(syntax))?;
         let mut rendered = origin::Fragment::plain(format!("let {scrutinee} = "));
         rendered.push(subject);
-        rendered.push_text(format!(";\nlet {values} = switch {operand} {{\n{label}"));
+        rendered.push_text(format!(
+            ";\nlet {values} = __rawr_switch {operand} {{\n{label}"
+        ));
         if let Some(condition) = host.condition() {
             rendered.push_text(" if ");
             rendered.push(condition);
@@ -26890,18 +26874,18 @@ impl<'a> Parser<'a> {
             Some((tail, endpoint)) if tail >= start => {
                 let value = self.temporary("tail");
                 let mut source = origin::Fragment::plain(format!(
-                    "{{ let {SELF_CAPTURE} = this; let {value} = "
+                    "{{ let {SELF_CAPTURE} = self; let {value} = "
                 ));
                 source.push(statement);
-                source.push_text(format!("; this = {SELF_CAPTURE}; {value} }}"));
+                source.push_text(format!("; self = {SELF_CAPTURE}; {value} }}"));
                 let tail = self.write_output(source, endpoint);
                 self.last_expression = Some((tail, endpoint));
             }
             _ => {
                 self.output
-                    .push_text(format!("let {SELF_CAPTURE} = this;\n"));
+                    .push_text(format!("let {SELF_CAPTURE} = self;\n"));
                 self.output.push(statement);
-                self.output.push_text(format!("\nthis = {SELF_CAPTURE};\n"));
+                self.output.push_text(format!("\nself = {SELF_CAPTURE};\n"));
             }
         }
     }
@@ -29548,7 +29532,9 @@ impl<'a> Parser<'a> {
         };
         let mut source = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
         source.push(subject);
-        source.push_text(format!(";\n{match_copies}{matched}switch {operand} {{\n"));
+        source.push_text(format!(
+            ";\n{match_copies}{matched}__rawr_switch {operand} {{\n"
+        ));
         let mut closers = Vec::new();
         for (label, guard, action, bound) in arms {
             let bind = bound.map(|name| format!("{{ let {name} = {operand}; "));
@@ -29561,7 +29547,7 @@ impl<'a> Parser<'a> {
                 source.push(guard);
                 source.push_text(" { ");
                 source.push(action.value.rendered_source());
-                source.push_text(format!(" }} else {{ switch {operand} {{\n"));
+                source.push_text(format!(" }} else {{ __rawr_switch {operand} {{\n"));
                 closers.push(if bind.is_some() { "} } }\n" } else { "} }\n" });
                 continue;
             }
@@ -29814,7 +29800,10 @@ impl<'a> Parser<'a> {
                 }
                 head.push_text(format!("let {scrutinee} = "));
                 head.push(subject);
-                head.push_text(format!(";\n{}switch {operand} {{\n", condition.copies));
+                head.push_text(format!(
+                    ";\n{}__rawr_switch {operand} {{\n",
+                    condition.copies
+                ));
                 head.push(arm);
                 head.push_text(" => { ");
                 head.push(binds);
@@ -30386,14 +30375,14 @@ impl<'a> Parser<'a> {
             // parameter, is the receiver's place.
             let receiver = place.lvalue.is_none()
                 && self.closures.is_empty()
-                && place.source.as_str() == "this"
-                && self.bindings.get("this").is_some_and(|binding| {
+                && place.source.as_str() == "self"
+                && self.bindings.get("self").is_some_and(|binding| {
                     binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
                 });
             let mut place = place.clone();
             if receiver {
                 place.lvalue = Some(Lvalue::Binding {
-                    binding: "this".into(),
+                    binding: "self".into(),
                     ty: place.ty.clone(),
                 });
             }
@@ -32433,7 +32422,7 @@ impl<'a> Parser<'a> {
                 }
                 open.push_text(format!("{{ let {scrutinee} = "));
                 open.push(subject);
-                open.push_text(format!("; switch {operand} {{ "));
+                open.push_text(format!("; __rawr_switch {operand} {{ "));
                 open.push(arm);
                 open.push_text(" => { ");
                 open.push(binds);
@@ -32669,7 +32658,7 @@ impl<'a> Parser<'a> {
             };
             let mut source = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
             source.push(subject);
-            source.push_text(format!(";\n{copies}{matched}switch {operand} {{\n"));
+            source.push_text(format!(";\n{copies}{matched}__rawr_switch {operand} {{\n"));
             source.push(arm);
             source.push_text(" => { ");
             source.push(binds);
@@ -34431,8 +34420,8 @@ impl<'a> Parser<'a> {
             return Ok(None);
         };
         let receiver = match &value.lvalue {
-            Some(Lvalue::Binding { binding, .. }) if binding.as_str() == "this" => Token::SelfValue,
-            None if value.source.as_str() == "this" => Token::SelfValue,
+            Some(Lvalue::Binding { binding, .. }) if binding.as_str() == "self" => Token::SelfValue,
+            None if value.source.as_str() == "self" => Token::SelfValue,
             Some(Lvalue::Binding { binding, .. }) => {
                 Token::Identifier(Box::new(binding.as_str().into()))
             }
@@ -34447,8 +34436,6 @@ impl<'a> Parser<'a> {
             if token == Token::EOF {
                 break;
             }
-            let token = crate::tokenizer::rust_name(&token)
-                .map_or(token, |name| Token::Identifier(Box::new(name.into())));
             body_tokens.push((token, position));
         }
         // `{ &mut place }`.
@@ -35753,7 +35740,7 @@ impl<'a> Parser<'a> {
                 let above = compare(self, &x, &z).expect("the type is ordered");
                 source.push_text("if !(");
                 source.push(bounds);
-                source.push_text(" <= 0) { throw \"assertion failed: min <= max\"; } if ");
+                source.push_text(" <= 0) { __rawr_throw \"assertion failed: min <= max\"; } if ");
                 source.push(ordered);
                 source.push_text(format!(" < 0 {{ {second} }} else if "));
                 source.push(above);
@@ -37195,13 +37182,13 @@ impl<'a> Parser<'a> {
             // `*self = x` in a `&mut self` method replaces the receiver.
             let receiver = operand.lvalue.is_none()
                 && self.closures.is_empty()
-                && operand.source.as_str() == "this"
-                && self.bindings.get("this").is_some_and(|binding| {
+                && operand.source.as_str() == "self"
+                && self.bindings.get("self").is_some_and(|binding| {
                     binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
                 });
             if receiver {
                 operand.lvalue = Some(Lvalue::Binding {
-                    binding: "this".into(),
+                    binding: "self".into(),
                     ty: Ty::Unknown,
                 });
             }
@@ -38577,7 +38564,7 @@ impl<'a> Parser<'a> {
             }
             let Some(definition_id) = self.inference.resolve(&value.ty).script() else {
                 // `f.curry(1)` on a closure: rustc's E0599, or E0609 for a field.
-                let written = crate::tokenizer::demangle_names(&member).into_owned();
+                let written = crate::tokenizer::raw_names(&member).into_owned();
                 return Err(Error::UnknownMember {
                     owner: self.inference.resolve(&value.ty).name(&self.models),
                     reference: Span::new(
@@ -39253,7 +39240,7 @@ impl<'a> Parser<'a> {
         // Rawr types a slice as a `Vec`.
         let mut checked = origin::Fragment::plain("{ let i = ");
         checked.push(index.rendered_source());
-        checked.push_text("; if i < 0 { throw \"index out of bounds\" } i }");
+        checked.push_text("; if i < 0 { __rawr_throw \"index out of bounds\" } i }");
         checked.cover(match length {
             Some(_) => point_span(value.span.start()),
             None => span(value.span.start(), end),
@@ -39582,7 +39569,7 @@ impl<'a> Parser<'a> {
                 // A free function's `&mut` parameter is `this` too.
                 let Some(binding) = self
                     .bindings
-                    .get("this")
+                    .get("self")
                     .filter(|binding| matches!(binding.kind, BindingKind::Receiver { .. }))
                 else {
                     return Err(Error::SelfOutsideImpl {
@@ -39593,9 +39580,9 @@ impl<'a> Parser<'a> {
                 // A closure reads `self` through the local its outermost
                 // closure binds (`parse_closure`): the runtime binds `this`
                 // only in the method's own body.
-                self.record_capture(&"this".into());
+                self.record_capture(&"self".into());
                 let source = if self.closures.is_empty() {
-                    "this"
+                    "self"
                 } else {
                     SELF_CAPTURE
                 };
@@ -39804,8 +39791,7 @@ impl<'a> Parser<'a> {
         // `print!`, `println!`, `eprint!`, `eprintln!`.
         if matches!(self.peek(), Token::Bang)
             && let Some(stream) = match name.as_str() {
-                // `print` is a legacy keyword; the lexer renames it.
-                "print" | "__rawr_print" => Some((false, false)),
+                "print" => Some((false, false)),
                 "println" => Some((false, true)),
                 "eprint" => Some((true, false)),
                 "eprintln" => Some((true, true)),
@@ -40237,7 +40223,7 @@ impl<'a> Parser<'a> {
             };
             let mut source = origin::Fragment::plain("if !(");
             source.push(condition.rendered_source());
-            source.push_text(") { throw ");
+            source.push_text(") { __rawr_throw ");
             source.push(message);
             source.push_text("; }");
             return Ok(self.operator_expr(source, Ty::Unit, call));
@@ -40263,7 +40249,7 @@ impl<'a> Parser<'a> {
                 origin::Fragment::plain(format!("{:?}", prefix.unwrap_or("explicit panic")))
             }
         };
-        let mut source = origin::Fragment::plain("{ throw ");
+        let mut source = origin::Fragment::plain("{ __rawr_throw ");
         source.push(message);
         source.push_text("; }");
         Ok(self.operator_expr(source, Ty::Never, call))
@@ -41824,7 +41810,7 @@ impl<'a> Parser<'a> {
         let places = self.mutable_arguments(&arguments, copied)?;
         let pointer = if choice { "[1]" } else { "" };
         let mut source = callee;
-        source.push_text(format!("{pointer}.call("));
+        source.push_text(format!("{pointer}.__rawr_call("));
         source.push(origin::Fragment::join(
             arguments.iter().map(ParsedExpr::rendered_source),
             ", ",
@@ -41981,7 +41967,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|name| {
                 let local = if name.as_str() == SELF_CAPTURE {
-                    "this"
+                    "self"
                 } else {
                     name.as_str()
                 };
@@ -42056,8 +42042,10 @@ impl<'a> Parser<'a> {
         let arguments = (0..inputs.len())
             .map(|_| ImmutableString::from(self.temporary("eta")))
             .collect::<Vec<_>>();
-        let mut body =
-            origin::Fragment::plain(format!("{{ {pointer}.call({}) }}", arguments.join(", ")));
+        let mut body = origin::Fragment::plain(format!(
+            "{{ {pointer}.__rawr_call({}) }}",
+            arguments.join(", ")
+        ));
         body.cover(value.span);
         let mut parameters = vec![pointer];
         parameters.extend(arguments);
@@ -43112,8 +43100,8 @@ impl<'a> Parser<'a> {
                 ) =>
             {
                 value.lvalue.clone().or_else(|| {
-                    (value.source.as_str() == "this").then(|| Lvalue::Binding {
-                        binding: "this".into(),
+                    (value.source.as_str() == "self").then(|| Lvalue::Binding {
+                        binding: "self".into(),
                         ty: value.ty.clone(),
                     })
                 })
@@ -44234,7 +44222,7 @@ impl<'a> Parser<'a> {
         };
         self.coerce_expr(&expected, callable)?;
         let mut call = callable.rendered_source().surrounded("(", ")");
-        call.push_text(".call(");
+        call.push_text(".__rawr_call(");
         call.push(origin::Fragment::join(operands, ", "));
         call.push_text(")");
         Ok(call)
@@ -44706,7 +44694,7 @@ impl<'a> Parser<'a> {
                 let message = self.temporary("debug");
                 let mut source = origin::Fragment::plain(format!("{{ let {message} = "));
                 source.push(value);
-                source.push_text(format!("; switch {message} {{ "));
+                source.push_text(format!("; __rawr_switch {message} {{ "));
                 for (text, debug) in error.texts() {
                     source.push_text(format!("{text:?} => {debug:?}, "));
                 }
@@ -45585,7 +45573,7 @@ impl<'a> Parser<'a> {
                     self.temporary("made"),
                 );
                 let item = if with {
-                    format!("{made}.call()")
+                    format!("{made}.__rawr_call()")
                 } else {
                     made.clone()
                 };
@@ -45845,7 +45833,7 @@ impl<'a> Parser<'a> {
                     .ok_or_else(|| missing(self, &key))?;
                 let mut native = origin::Fragment::plain(format!("{{ let {function} = "));
                 native.push(f.rendered_source());
-                native.push_text(format!("; |{a}, {b}| {{ let {left_key} = {function}.call({a}); let {right_key} = {function}.call({b}); "));
+                native.push_text(format!("; |{a}, {b}| {{ let {left_key} = {function}.__rawr_call({a}); let {right_key} = {function}.__rawr_call({b}); "));
                 native.push(native_compare);
                 native.push_text(" } }");
                 comparator = native;
@@ -45860,7 +45848,7 @@ impl<'a> Parser<'a> {
                 source.push(f.rendered_source());
                 source.push_text(format!(
                     "; let {keyed} = []; for {item} in {binding} {{ \
-                     {keyed}.push([{function}.call({item}), {item}]); }} {keyed}.sort(|{a}, {b}| "
+                     {keyed}.push([{function}.__rawr_call({item}), {item}]); }} {keyed}.sort(|{a}, {b}| "
                 ));
                 source.push(compare);
                 source.push_text(format!("); {binding} = {keyed}.map(|{item}| {item}[1]);"));
@@ -45978,7 +45966,7 @@ impl<'a> Parser<'a> {
                     required_by: None,
                 })?
             } else {
-                origin::Fragment::plain(format!("{function}.call({best}, {current})"))
+                origin::Fragment::plain(format!("{function}.__rawr_call({best}, {current})"))
             }
         } else {
             self.ord_compare(
@@ -45995,7 +45983,7 @@ impl<'a> Parser<'a> {
             })?
         };
         let key_value = if keyed {
-            format!("{function}.call({current})")
+            format!("{function}.__rawr_call({current})")
         } else {
             current.clone()
         };
@@ -46544,7 +46532,7 @@ impl<'a> Parser<'a> {
                 .iter()
                 .find(|name| !scope.consumed.contains(*name))
         {
-            let name = if name == "this" {
+            let name = if name == "self" {
                 "self".into()
             } else {
                 name.clone()
@@ -46557,7 +46545,7 @@ impl<'a> Parser<'a> {
         // in only the captures its body moves out.
         let mut moving = BTreeSet::new();
         for name in &scope.captures {
-            if name == "this" || !(moved || scope.consumed.contains(name)) {
+            if name == "self" || !(moved || scope.consumed.contains(name)) {
                 continue;
             }
             // A `&mut` borrow of a place moves into a `move` closure: the
@@ -46625,10 +46613,10 @@ impl<'a> Parser<'a> {
                 let mut lifted_parameters = Vec::new();
                 let mut captures = Vec::new();
                 for name in &scope.captures {
-                    if name == "this" {
+                    if name == "self" {
                         lifted_parameters.push(SELF_CAPTURE.into());
                         captures.push(origin::Fragment::plain(if self.closures.is_empty() {
-                            "this"
+                            "self"
                         } else {
                             SELF_CAPTURE
                         }));
@@ -46690,7 +46678,7 @@ impl<'a> Parser<'a> {
                     .captures
                     .iter()
                     .filter(|name| {
-                        name.as_str() != "this"
+                        name.as_str() != "self"
                             && !self.aliases.contains_key(name.as_str())
                             && self.bindings.get(name.as_str()).is_some_and(|binding| {
                                 !matches!(self.inference.resolve(&binding.ty), Ty::Reference { .. })
@@ -46730,7 +46718,7 @@ impl<'a> Parser<'a> {
                 {
                     continue;
                 }
-                if name == "this" {
+                if name == "self" {
                     if moved {
                         copied.push_text(format!("let {SELF_CAPTURE} = {SELF_CAPTURE}; "));
                     }
@@ -46753,8 +46741,8 @@ impl<'a> Parser<'a> {
         } else if changed {
             self.self_changed.set(true);
         }
-        if scope.captures.contains("this") && self.closures.is_empty() && !changed {
-            let mut bound = origin::Fragment::plain(format!("{{ let {SELF_CAPTURE} = this; "));
+        if scope.captures.contains("self") && self.closures.is_empty() && !changed {
+            let mut bound = origin::Fragment::plain(format!("{{ let {SELF_CAPTURE} = self; "));
             bound.push(source);
             bound.push_text(" }");
             source = bound;
@@ -46856,7 +46844,7 @@ impl<'a> Parser<'a> {
             // A `use` of a crate module with a function of its name beside
             // it, as iced's `combo_box`, names the function rawr can't
             // call, and the import says why.
-            let written = crate::tokenizer::demangle_names(&name);
+            let written = crate::tokenizer::raw_names(&name);
             let reference = Span::new(name_span.start(), text_end(name_span.start(), &written));
             return Err(self.module_value(&name, reference).unwrap_or(error));
         }
@@ -48507,7 +48495,7 @@ impl<'a> Parser<'a> {
             self.self_changed.set(true);
             return self
                 .bindings
-                .get("this")
+                .get("self")
                 .filter(|binding| matches!(binding.kind, BindingKind::Receiver { .. }));
         }
         self.bindings.get(name)
@@ -55635,8 +55623,8 @@ fn pretty_debug(text: &str) -> String {
     out
 }
 
-/// `value`'s `Debug` text, names Rawr keeps under another spelling written
-/// as Rust's (`demangle_names`).
+/// `value`'s `Debug` text, a raw identifier's keyword bare as Rust's
+/// derive writes it (`bare_names`).
 fn debug_value(value: &Dynamic, models: &Models) -> String {
     debug_value_spec(value, models, None)
 }
@@ -55646,10 +55634,9 @@ fn debug_value(value: &Dynamic, models: &Models) -> String {
 /// `Some(       1)`, and `{:x?}` writes each integer in hexadecimal.
 fn debug_value_spec(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> String {
     let text = debug_text(value, models, spec);
-    if text.contains("__rawr_") {
-        crate::tokenizer::demangle_names(&text).into_owned()
-    } else {
-        text
+    match crate::tokenizer::bare_names(&text) {
+        std::borrow::Cow::Borrowed(_) => text,
+        std::borrow::Cow::Owned(bare) => bare,
     }
 }
 

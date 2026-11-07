@@ -2,6 +2,10 @@ mod cases;
 mod poolable;
 mod slots;
 
+use crate::engine::{
+    KEYWORD_EVAL, KEYWORD_FN_PTR, KEYWORD_FN_PTR_CALL, KEYWORD_FN_PTR_CURRY, KEYWORD_IS_DEF_FN,
+    KEYWORD_IS_DEF_VAR, KEYWORD_IS_SHARED,
+};
 use core::mem;
 
 use crate::ast::{
@@ -1460,7 +1464,7 @@ impl Lowering {
             // further step would make it a `Dot` or an `Index` instead.
             Expr::Dot(binary, ..)
                 if matches!(&binary.rhs, Expr::MethodCall(m, ..)
-                    if matches!(m.name.as_str(), "call" | "curry")
+                    if matches!(m.name.as_str(), KEYWORD_FN_PTR_CALL | KEYWORD_FN_PTR_CURRY)
                         && m.args.len() <= u8::MAX as usize) =>
             {
                 let Expr::MethodCall(method, ..) = &binary.rhs else {
@@ -1497,7 +1501,7 @@ impl Lowering {
                 // different path in rawr and takes the *argument's* position —
                 // see `fn_ptr_call`. The two disagreeing is deliberate.
                 let pos = binary.rhs.position();
-                if method.name == "call" {
+                if method.name == KEYWORD_FN_PTR_CALL {
                     self.emit_at(
                         Op::CallFnPtr {
                             argc,
@@ -1743,7 +1747,7 @@ impl Lowering {
         match (call.name.as_str(), argc) {
             // The argument has to arrive as the cell, not its contents, or the
             // answer is always false.
-            ("is_shared", 1) => {
+            (KEYWORD_IS_SHARED, 1) => {
                 self.unflattened(&call.args[0]);
                 self.emit_at(Op::IsShared, pos);
             }
@@ -1753,11 +1757,11 @@ impl Lowering {
             // not an identifier, a first argument that is not a pointer — is
             // filled in with the argument's position (`func/call.rs:1217`,
             // `:1220`, `:1232`).
-            ("Fn", 1) => {
+            (KEYWORD_FN_PTR, 1) => {
                 self.expression(&call.args[0]);
                 self.emit_at(Op::MakeFnPtr, call.args[0].position());
             }
-            ("curry", _) if argc > 1 => {
+            (KEYWORD_FN_PTR_CURRY, _) if argc > 1 => {
                 let mut args = call.args.iter();
                 self.expression(args.next().expect("checked by the arity"));
                 for arg in args {
@@ -1768,7 +1772,7 @@ impl Lowering {
                 }
                 self.emit_at(Op::Curry((argc - 1) as u8), call.args[0].position());
             }
-            ("call", _) if argc >= 1 && argc <= u8::MAX as usize + 1 => {
+            (KEYWORD_FN_PTR_CALL, _) if argc >= 1 && argc <= u8::MAX as usize + 1 => {
                 for arg in call.args.iter() {
                     self.expression(arg);
                 }
@@ -1799,12 +1803,15 @@ impl Lowering {
         // answers it syntactically in both call positions (`func/call.rs:1240`
         // and `:929`) and registers no function for it anywhere, so a lowered
         // call raises `ErrorFunctionNotFound` where the walker returns a bool.
-        const SYNTACTIC: &[&str] = &["eval", "is_def_var", "is_def_fn"];
+        const SYNTACTIC: &[&str] = &[KEYWORD_EVAL, KEYWORD_IS_DEF_VAR, KEYWORD_IS_DEF_FN];
 
         // These are handled by `fn_ptr_call` above, but only at the arities
         // rawr treats syntactically — at any other arity it falls through to
         // ordinary dispatch, and so must this.
-        if matches!(call.name.as_str(), "Fn" | "call" | "curry" | "is_shared") {
+        if matches!(
+            call.name.as_str(),
+            KEYWORD_FN_PTR | KEYWORD_FN_PTR_CALL | KEYWORD_FN_PTR_CURRY | KEYWORD_IS_SHARED
+        ) {
             return false;
         }
 

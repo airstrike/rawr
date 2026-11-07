@@ -263,7 +263,7 @@ mod tests {
             span(1, 1, 1, 5),
             "fn prior() {}\n",
         );
-        generated.declaration(source, declaration, "private fn lowered() {\n");
+        generated.declaration(source, declaration, "__rawr_private fn lowered() {\n");
         generated.body(
             source,
             body,

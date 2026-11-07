@@ -318,8 +318,8 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
     let resolve::Error::UnknownMember { owner, member, .. } = error else {
         return resolution_builder(error);
     };
-    // `print` as the source writes it, not Rawr's spelling of it.
-    let member = crate::tokenizer::demangle_names(member);
+    // `r#type` as the source writes it, not Rawr's spelling of it.
+    let member = crate::tokenizer::raw_names(member);
     let member = member.as_ref();
     let Some(kind) = member_kind(source, primary, member) else {
         return resolution_builder(error);
@@ -413,7 +413,7 @@ fn member_span(error: &resolve::Error) -> Span {
     match (
         start.line(),
         start.position(),
-        u16::try_from(crate::tokenizer::demangle_names(member).chars().count()),
+        u16::try_from(crate::tokenizer::raw_names(member).chars().count()),
     ) {
         (Some(line), Some(column), Ok(length)) if primary.end() == start && length > 0 => {
             let line = u16::try_from(line).unwrap_or(u16::MAX);
@@ -718,7 +718,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
     let message = resolution_message(error);
     let builder = Report::error(
         stable_code,
-        crate::tokenizer::demangle_names(&message).into_owned(),
+        crate::tokenizer::raw_names(&message).into_owned(),
     );
     match error {
         resolve::Error::Syntax {

@@ -271,7 +271,7 @@ pub(crate) fn trees(tokens: &[(Token, Position)]) -> Result<Vec<Tree>, Immutable
 /// The text a token is written as.
 fn text(token: &Token) -> String {
     match token {
-        Token::Identifier(name) => crate::tokenizer::demangle_names(name).into_owned(),
+        Token::Identifier(name) => crate::tokenizer::raw_names(name).into_owned(),
         token => token.to_string(),
     }
 }

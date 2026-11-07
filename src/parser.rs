@@ -1579,9 +1579,6 @@ impl Engine {
                     self.parse_while_loop(state, settings.level_up()?)?.into(),
                 ))
             }
-            Token::Do if self.allow_looping() && settings.has_option(LangOptions::LOOP_EXPR) => {
-                Expr::Stmt(Box::new(self.parse_do(state, settings.level_up()?)?.into()))
-            }
             Token::For if self.allow_looping() && settings.has_option(LangOptions::LOOP_EXPR) => {
                 Expr::Stmt(Box::new(
                     self.parse_for(state, settings.level_up()?)?.into(),
@@ -1746,6 +1743,17 @@ impl Engine {
                 }
             }
 
+            // `self`: the receiver, within a function.
+            Token::SelfValue => {
+                eat_token(state.input, &Token::SelfValue);
+                if !settings.has_flag(ParseSettingFlags::FN_SCOPE) {
+                    return Err(
+                        PERR::Reserved(crate::engine::KEYWORD_THIS.into()).into_err(settings.pos)
+                    );
+                }
+                Expr::ThisPtr(settings.pos)
+            }
+
             // Reserved keyword or symbol
             Token::Reserved(..) => {
                 let ns = crate::ast::Namespace::default();
@@ -1765,19 +1773,6 @@ impl Engine {
                             None,
                             settings.pos,
                         )
-                    }
-                    // Access to `this` as a variable
-                    _ if *s == crate::engine::KEYWORD_THIS => {
-                        // OK within a function scope
-                        if settings.has_flag(ParseSettingFlags::FN_SCOPE) {
-                            Expr::ThisPtr(settings.pos)
-                        } else {
-                            // Cannot access to `this` as a variable not in a function scope
-                            let msg = format!("'{s}' can only be used in functions");
-                            return Err(
-                                LexError::ImproperSymbol(s.to_string(), msg).into_err(settings.pos)
-                            );
-                        }
                     }
                     _ => return Err(PERR::Reserved(s.to_string()).into_err(settings.pos)),
                 }
@@ -2868,45 +2863,6 @@ impl Engine {
         ))
     }
 
-    /// Parse a do loop.
-    fn parse_do(&self, state: &mut ParseState, settings: ParseSettings) -> ParseResult<Stmt> {
-        // do ...
-        let mut settings = settings.level_up_with_position(eat_token(state.input, &Token::Do))?;
-        let orig_breakable = settings.has_flag(ParseSettingFlags::BREAKABLE);
-        settings.flags |= ParseSettingFlags::BREAKABLE;
-
-        // do { body } [while|until] guard
-
-        let body = self.parse_block(state, settings, false)?.into();
-
-        let negated = match state.input.next().unwrap() {
-            (Token::While, ..) => ASTFlags::empty(),
-            (Token::Until, ..) => ASTFlags::NEGATED,
-            (.., pos) => {
-                return Err(
-                    PERR::MissingToken(Token::While.into(), "for the do statement".into())
-                        .into_err(pos),
-                )
-            }
-        };
-
-        if !orig_breakable {
-            settings.flags.remove(ParseSettingFlags::BREAKABLE);
-        }
-
-        ensure_not_statement_expr(state.input, "a boolean")?;
-        let expr = self.parse_expr(state, settings)?.ensure_bool_expr()?;
-        ensure_not_assignment(state.input)?;
-
-        let branch = StmtBlock::empty(crate::Position::NONE);
-
-        Ok(Stmt::Do(
-            FlowControl { expr, body, branch }.into(),
-            negated,
-            settings.pos,
-        ))
-    }
-
     /// Parse a for loop.
     fn parse_for(&self, state: &mut ParseState, settings: ParseSettings) -> ParseResult<Stmt> {
         // for ...
@@ -3098,90 +3054,6 @@ impl Engine {
             // const name = { expr:constant }
             AccessMode::ReadOnly => Stmt::Var(var_def, ASTFlags::CONSTANT | export, settings.pos),
         })
-    }
-
-    /// Parse an import statement.
-    fn parse_import(&self, state: &mut ParseState, settings: ParseSettings) -> ParseResult<Stmt> {
-        // import ...
-        let settings = settings.level_up_with_position(eat_token(state.input, &Token::Import))?;
-
-        // import expr ...
-        let expr = self.parse_expr(state, settings)?;
-
-        let export = if match_token(state.input, &Token::As).0 {
-            // import expr as name ...
-            let (name, pos) = parse_var_name(state.input)?;
-            Ident {
-                name: self.get_interned_string(name),
-                pos,
-            }
-        } else {
-            // import expr;
-            Ident {
-                name: self.get_interned_string(""),
-                pos: Position::NONE,
-            }
-        };
-
-        state.imports.push(export.name.clone());
-
-        Ok(Stmt::Import((expr, export).into(), settings.pos))
-    }
-
-    /// Parse an export statement.
-    fn parse_export(
-        &self,
-        state: &mut ParseState,
-        mut settings: ParseSettings,
-    ) -> ParseResult<Stmt> {
-        settings.pos = eat_token(state.input, &Token::Export);
-
-        match state.input.peek().unwrap() {
-            (Token::Let, pos) => {
-                let pos = *pos;
-                let settings = settings.level_up()?;
-                let mut stmt = self.parse_let(state, settings, AccessMode::ReadWrite, true)?;
-                stmt.set_position(pos);
-                return Ok(stmt);
-            }
-            (Token::Const, pos) => {
-                let pos = *pos;
-                let settings = settings.level_up()?;
-                let mut stmt = self.parse_let(state, settings, AccessMode::ReadOnly, true)?;
-                stmt.set_position(pos);
-                return Ok(stmt);
-            }
-            _ => (),
-        }
-
-        let (id, id_pos) = parse_var_name(state.input)?;
-
-        let (alias, alias_pos) = if match_token(state.input, &Token::As).0 {
-            parse_var_name(state.input).map(|(name, pos)| (self.get_interned_string(name), pos))?
-        } else {
-            (self.get_interned_string(""), Position::NONE)
-        };
-
-        let (existing, hit_barrier) = state.find_var(&id);
-
-        if !hit_barrier && existing > 0 {
-            state
-                .stack
-                .add_alias_by_index(state.stack.len() - existing, alias.clone());
-        }
-
-        let export = (
-            Ident {
-                name: self.get_interned_string(id),
-                pos: id_pos,
-            },
-            Ident {
-                name: alias,
-                pos: alias_pos,
-            },
-        );
-
-        Ok(Stmt::Export(export.into(), settings.pos))
     }
 
     /// Parse a statement block.
@@ -3497,7 +3369,6 @@ impl Engine {
             Token::While | Token::Loop if self.allow_looping() => {
                 self.parse_while_loop(state, settings.level_up()?)
             }
-            Token::Do if self.allow_looping() => self.parse_do(state, settings.level_up()?),
             Token::For if self.allow_looping() => self.parse_for(state, settings.level_up()?),
 
             Token::Continue
@@ -3559,88 +3430,11 @@ impl Engine {
                 }
             }
 
-            Token::Try => self.parse_try_catch(state, settings.level_up()?),
-
             Token::Let => self.parse_let(state, settings.level_up()?, ReadWrite, false),
             Token::Const => self.parse_let(state, settings.level_up()?, ReadOnly, false),
 
-            Token::Import => self.parse_import(state, settings.level_up()?),
-
-            Token::Export if !settings.has_flag(ParseSettingFlags::GLOBAL_LEVEL) => {
-                Err(PERR::WrongExport.into_err(token_pos))
-            }
-
-            Token::Export => self.parse_export(state, settings.level_up()?),
-
             _ => self.parse_expr_stmt(state, settings.level_up()?),
         }
-    }
-
-    /// Parse a try/catch statement.
-    fn parse_try_catch(
-        &self,
-        state: &mut ParseState,
-        settings: ParseSettings,
-    ) -> ParseResult<Stmt> {
-        // try ...
-        let settings = settings.level_up_with_position(eat_token(state.input, &Token::Try))?;
-
-        // try { try_block }
-        let body = self.parse_block(state, settings, false)?.into();
-
-        // try { try_block } catch
-        let (matched, catch_pos) = match_token(state.input, &Token::Catch);
-
-        if !matched {
-            return Err(
-                PERR::MissingToken(Token::Catch.into(), "for the 'try' statement".into())
-                    .into_err(catch_pos),
-            );
-        }
-
-        // try { try_block } catch (
-        let catch_var = if match_token(state.input, &Token::LeftParen).0 {
-            let (name, pos) = parse_var_name(state.input)?;
-            let (matched, err_pos) = match_token(state.input, &Token::RightParen);
-
-            if !matched {
-                return Err(PERR::MissingToken(
-                    Token::RightParen.into(),
-                    "to enclose the catch variable".into(),
-                )
-                .into_err(err_pos));
-            }
-
-            let name = self.get_interned_string(name);
-            state.stack.push(name.clone(), ());
-            Ident { name, pos }
-        } else {
-            Ident {
-                name: self.get_interned_string(""),
-                pos: Position::NONE,
-            }
-        };
-
-        // try { try_block } catch ( var ) { catch_block }
-        let branch = self.parse_block(state, settings, false)?.into();
-
-        let expr = if catch_var.is_empty() {
-            Expr::Unit(catch_var.pos)
-        } else {
-            // Remove the error variable from the stack
-            state.stack.pop();
-
-            Expr::Variable(
-                (None, catch_var.name, <_>::default(), 0).into(),
-                None,
-                catch_var.pos,
-            )
-        };
-
-        Ok(Stmt::TryCatch(
-            FlowControl { expr, body, branch }.into(),
-            settings.pos,
-        ))
     }
 
     /// Parse a function definition.

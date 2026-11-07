@@ -333,14 +333,14 @@ impl Parser<'_> {
             }
             // `self` in a method, owned (`mut self`) or `&mut self`, is the
             // receiver `this`.
-            None if value.source.as_str() == "this"
+            None if value.source.as_str() == "self"
                 && self.closures.is_empty()
-                && self.bindings.get("this").is_some_and(|binding| {
+                && self.bindings.get("self").is_some_and(|binding| {
                     matches!(binding.kind, BindingKind::Receiver { .. })
                 }) =>
             {
-                self.require_mutable_binding(&"this".into(), value.span)?;
-                Ok(origin::Fragment::plain("this"))
+                self.require_mutable_binding(&"self".into(), value.span)?;
+                Ok(origin::Fragment::plain("self"))
             }
             // An owned temporary (`vec![1, 2].resize(0, 5)`) is changed where
             // it is and dropped, as in Rust.
@@ -1019,7 +1019,10 @@ impl Parser<'_> {
         };
         self.coerce_expr(&expected, maker)?;
         Ok((
-            (maker.rendered_source().surrounded("(", ").call()"), true),
+            (
+                maker.rendered_source().surrounded("(", ").__rawr_call()"),
+                true,
+            ),
             end,
         ))
     }
