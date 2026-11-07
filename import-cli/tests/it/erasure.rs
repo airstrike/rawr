@@ -509,3 +509,83 @@ fn main() {
         "stderr:\n{stderr}"
     );
 }
+
+/// A program's types and modules may take any name, those of the runner's
+/// own items among them (#1163): each type crosses as its own Rust type
+/// (D594), which the runner declares where the program names it, and the
+/// runner's own items are where no program can name them.
+#[test]
+fn a_program_type_may_take_the_name_of_a_runner_item() {
+    runs(
+        "
+#[derive(Debug, Clone)]
+pub struct Program {
+    engine: i64,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Tick(i64),
+}
+
+#[derive(Debug, Clone)]
+struct Error(String);
+
+#[derive(Debug, Clone)]
+struct Engine;
+
+#[derive(Debug, Clone)]
+struct Runner;
+
+#[derive(Debug, Clone)]
+struct State;
+
+#[derive(Debug, Clone)]
+struct Application;
+
+#[derive(Debug, Clone)]
+struct Arena;
+
+#[derive(Debug, Clone)]
+struct NativeHandle;
+
+#[derive(Debug, Clone)]
+struct Started;
+
+#[derive(Debug, Clone)]
+struct Clone;
+
+mod rawr_surface {
+    #[derive(Debug, Clone)]
+    pub struct Adapter {
+        pub arguments: i64,
+    }
+}
+
+fn main() {
+    let program = natives::identity(Program { engine: 7 });
+    println!(\"{}\", program.engine);
+    println!(\"{}\", natives::show(Message::Tick(3)));
+    let (a, b) = natives::duplicate(Error(\"no\".to_string()));
+    println!(\"{a:?} {b:?}\");
+    println!(
+        \"{} {} {} {}\",
+        natives::show(Engine),
+        natives::show(Runner),
+        natives::show(State),
+        natives::show(Application),
+    );
+    println!(
+        \"{} {} {} {}\",
+        natives::show(Arena),
+        natives::show(NativeHandle),
+        natives::show(Started),
+        natives::show(Clone),
+    );
+    println!(\"{}\", natives::show(rawr_surface::Adapter { arguments: 2 }));
+}
+",
+        "7\nTick(3)\nError(\"no\") Error(\"no\")\nEngine Runner State Application\n\
+         Arena NativeHandle Started Clone\nAdapter { arguments: 2 }\n",
+    );
+}
