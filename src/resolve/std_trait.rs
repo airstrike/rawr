@@ -482,7 +482,7 @@ mod tests {
     fn std_trait_declarations_are_stds() {
         assert_eq!(
             declared("FromStr"),
-            "<> : Set(0)  | Err | from_str(String) -> Result<Self, Self::Err>"
+            "<> : Set(0)  | Err | from_str(&str) -> Result<Self, Self::Err>"
         );
         assert_eq!(
             declared("Iterator"),

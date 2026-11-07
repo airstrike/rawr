@@ -17,6 +17,7 @@ export const GROUPS: [string, Item[]][] = [
     ["/docs/agents", "Agents"],
     ["/docs/imports", "Imports"],
     ["/docs/embedding", "Embedding"],
+    ["/docs/apps", "Apps and libraries"],
     ["/docs/iced", "iced", [
       ["/docs/iced/reload", "Reload"],
       ["/docs/iced/previews", "Previews"],

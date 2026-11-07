@@ -232,9 +232,6 @@ fn input_condition(code: &str, reason: &str) -> Option<String> {
         | "protected-build-package-path-encoding"
         | "runner-harness-fixture-path"
         | "runner-harness-fixture-root" => format!("a path is not valid UTF-8: {reason}"),
-        "symlink-input" => {
-            format!("cannot build from `{reason}`: paths reached through a symlink are not supported yet")
-        }
         "cargo-commit-skew" => format!(
             "this Cargo (commit `{reason}`) is not the one rawr builds with; \
              install the toolchain rawr names"

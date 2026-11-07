@@ -153,22 +153,102 @@ fn content_membership_and_missing_type_drift_change_observation_data() {
     ));
 }
 
+/// An input reached through symlinks is the file they resolve to, as rustc
+/// and Cargo read it, and a tree is walked through its links as Cargo walks
+/// it; the stored observation matches the cold one. A link back to a
+/// directory the walk is inside and a dangling link have nothing to read.
 #[test]
-fn symlink_and_special_file_policy_remains_explicit() {
+fn inputs_through_symlinks_are_their_targets_and_match_legacy() {
+    use std::os::unix::fs::symlink;
+
     let fixture = Fixture::new();
-    let source = fixture.0.join("source");
-    fs::write(&source, b"one").expect("source");
-    std::os::unix::fs::symlink(&source, fixture.0.join("link")).expect("symlink");
-    for kind in [0, 1] {
-        assert!(matches!(
-            observe(&recipe(kind, &fixture.0.join("link")), &fixture.0),
-            Err(stored::Error::Observation(Error::Policy(_)))
-        ));
+    let real = fixture.0.join("real");
+    fs::create_dir_all(real.join("nested")).expect("real directory");
+    fs::write(real.join("source"), b"one").expect("source");
+    fs::write(real.join("nested/deep"), b"deep").expect("deep source");
+    let outside = fixture.0.join("outside");
+    fs::create_dir(&outside).expect("outside directory");
+    fs::write(outside.join("note"), b"note").expect("outside note");
+    let tree = fixture.0.join("tree");
+    fs::create_dir(&tree).expect("tree");
+    symlink(real.join("source"), tree.join("file-link")).expect("file link");
+    symlink(&real, tree.join("directory-link")).expect("directory link");
+    symlink(&outside, real.join("outside-link")).expect("nested link");
+    symlink(&tree, real.join("loop")).expect("loop back to the tree");
+    symlink(fixture.0.join("absent"), tree.join("dangling")).expect("dangling link");
+    symlink(&real, fixture.0.join("linked")).expect("linked directory");
+    let through = fixture.0.join("linked/nested/deep");
+    for (kind, path) in [
+        (0, fixture.0.join("tree/file-link")),
+        (0, through.clone()),
+        (1, through.clone()),
+        (1, fixture.0.join("linked")),
+        (1, fixture.0.join("tree")),
+        (1, fixture.0.join("tree/dangling")),
+        (2, fixture.0.join("linked")),
+        (2, tree.clone()),
+    ] {
+        let actual = observe(&recipe(kind, &path), &fixture.0).expect("followed observation");
+        let expected = reference(recipe(kind, &path));
+        assert_eq!(
+            serde_json::to_value(actual).expect("actual entry"),
+            serde_json::to_value(expected).expect("legacy entry"),
+            "{}",
+            path.display()
+        );
     }
-    assert!(matches!(
-        observe(&recipe(2, &fixture.0), &fixture.0),
-        Err(stored::Error::Observation(Error::Policy("symlink-input")))
-    ));
+    let Ok(proof::Entry::File { path, .. }) = observe(&recipe(1, &through), &fixture.0) else {
+        panic!("a file through a linked directory");
+    };
+    assert_eq!(path.as_ref(), real.join("nested/deep").to_str().unwrap());
+    let Ok(proof::Entry::Directory {
+        path,
+        directories,
+        files,
+        ..
+    }) = observe(&recipe(2, &tree), &fixture.0)
+    else {
+        panic!("a tree with links");
+    };
+    assert_eq!(path.as_ref(), tree.to_str().unwrap());
+    let directories = directories
+        .iter()
+        .map(|directory| directory.path.as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        directories,
+        [
+            "directory-link",
+            "directory-link/nested",
+            "directory-link/outside-link"
+        ]
+    );
+    let files = files
+        .iter()
+        .map(|file| file.path.as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        files,
+        [
+            "directory-link/nested/deep",
+            "directory-link/outside-link/note",
+            "directory-link/source",
+            "file-link"
+        ]
+    );
+    // Retargeting a link to a file of the same bytes is a changed input.
+    fs::write(outside.join("copy"), b"one").expect("same bytes elsewhere");
+    let before = observe(&recipe(1, &tree.join("file-link")), &fixture.0).expect("before");
+    fs::remove_file(tree.join("file-link")).expect("unlink");
+    symlink(outside.join("copy"), tree.join("file-link")).expect("relink");
+    let after = observe(&recipe(1, &tree.join("file-link")), &fixture.0).expect("after");
+    assert!(before != after);
+    assert!(after == reference(recipe(1, &tree.join("file-link"))));
+}
+
+#[test]
+fn special_file_policy_remains_explicit() {
+    let fixture = Fixture::new();
     assert!(matches!(
         observe(&recipe(1, Path::new("/dev/null")), &fixture.0),
         Err(stored::Error::Observation(Error::Policy(
@@ -442,11 +522,11 @@ fn an_unchanged_freshness_file_is_hashed_once_and_a_rewrite_is_hashed_again() {
 }
 
 /// #520: a config candidate under a symlinked `.cargo` keeps the path Cargo
-/// reads and is read through the link as it is now. Other inputs still refuse
-/// symlinks.
+/// reads and is read through the link as it is now. Another input is the
+/// file the links resolve to.
 #[cfg(unix)]
 #[test]
-fn config_candidates_follow_symlinks_and_other_inputs_refuse_them() {
+fn config_candidates_keep_their_spelling_and_other_inputs_resolve_symlinks() {
     use sha2::{Digest as _, Sha256};
     use std::os::unix::fs::symlink;
 
@@ -504,8 +584,14 @@ fn config_candidates_follow_symlinks_and_other_inputs_refuse_them() {
     assert!(path.ok() == Some(expected(b"second!")));
 
     let (_, path) = observe(proof::Role::DeclaredInput);
-    assert!(matches!(
-        path,
-        Err(stored::Error::Observation(Error::Policy("symlink-input")))
-    ));
+    assert!(
+        path.ok()
+            == Some(proof::Entry::File {
+                role: proof::Role::DeclaredInput,
+                package_id: None,
+                path: shared.join("second.toml").to_str().unwrap().into(),
+                bytes: 7,
+                digest: Sha256::digest(b"second!").into(),
+            })
+    );
 }

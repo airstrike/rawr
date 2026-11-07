@@ -1,14 +1,15 @@
 /* rawr docs: a sidebar and a reading column, in the work plan's look on the
    tokens in tokens.css. */
 body { font-size: var(--fs-read); line-height: 1.55; }
-:is(p, li, td, th, h2, h3, dt, figcaption) code { font-size: 0.88em; color: var(--ink); background: var(--wash); padding: 0 3px; overflow-wrap: anywhere; }
+/* Inline code sits in the line: a light chip, a little smaller than the text. */
+:is(p, li, td, th, h2, h3, dt, figcaption) code { font-size: 0.84em; color: var(--ink); background: var(--chip); padding: 0 2px; overflow-wrap: anywhere; }
 :is(h2, h3) code { font-size: 0.85em; }
 
 .docs { max-width: 1280px; margin: 0 auto; padding: 0 var(--pad); display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 56px; }
 .side { position: sticky; top: 50px; align-self: start; max-height: calc(100vh - 50px); overflow-y: auto; padding: 32px 0 40px; }
 .side ol { list-style: none; }
 .side > ol > li + li { margin-top: 2px; }
-.side a { display: block; color: var(--quiet); font-size: var(--fs-small); padding: 3px 0 3px 12px; border-bottom: 0; border-left: 3px solid transparent; }
+.side a { display: block; color: var(--quiet); font-size: var(--fs-small); padding: 3px 0 3px 12px; text-decoration: none; border-left: 3px solid transparent; }
 .side a:hover { color: var(--ink); }
 .side a[aria-current="page"] { color: var(--ink); font-weight: 600; border-left-color: var(--red); }
 .side ol ol { margin: 2px 0 6px; }
@@ -26,7 +27,7 @@ body { font-size: var(--fs-read); line-height: 1.55; }
 .toc summary { cursor: pointer; padding: 10px 0; font-size: var(--fs-label); font-weight: var(--w-strong); letter-spacing: var(--track-label); text-transform: uppercase; }
 .toc ol { list-style: none; margin: 0; padding: 0 0 10px; }
 .toc li { margin: 0; }
-.toc a { display: block; padding: 4px 0; color: var(--quiet); font-size: var(--fs-read); border-bottom: 0; }
+.toc a { display: block; padding: 4px 0; color: var(--quiet); font-size: var(--fs-read); text-decoration: none; }
 .toc a:hover { color: var(--ink); }
 
 /* The grid item is <main>: without min-width it grows to its widest code block. */
@@ -41,7 +42,7 @@ h2 { font-weight: var(--w-heavy); font-size: var(--fs-h2); line-height: 1.2; let
 h3 { font-weight: var(--w-heavy); font-size: var(--fs-label); letter-spacing: var(--track-label); text-transform: uppercase; line-height: 1.4; margin: 24px 0 6px; }
 h3 code { text-transform: none; letter-spacing: 0; }
 h2, h3 { position: relative; }
-.anchor { position: absolute; left: -1.1em; width: 1.1em; color: var(--quiet); opacity: 0; font-weight: 400; border-bottom: 0; }
+.anchor { position: absolute; left: -1.1em; width: 1.1em; color: var(--quiet); opacity: 0; font-weight: 400; text-decoration: none; }
 h2 .anchor { top: 10px; }
 h2:hover .anchor, h3:hover .anchor, .anchor:focus { opacity: 1; }
 article p { margin: 12px 0; }
@@ -78,14 +79,14 @@ td:first-child code { font-size: 13px; background: none; padding: 0; }
 .note p { margin: 0; }
 .note p + p { margin-top: 8px; }
 .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin: 20px 0; }
-.cards a { display: block; border: 0; border-top: var(--rule-mid) solid var(--rule); padding: 10px 0 4px; font-weight: var(--w-heavy); }
+.cards a { display: block; text-decoration: none; border: 0; border-top: var(--rule-mid) solid var(--rule); padding: 10px 0 4px; font-weight: var(--w-heavy); }
 .cards a:hover { border-top-color: var(--red); }
 .cards a span { display: block; color: var(--quiet); font-weight: var(--w-base); font-size: 14px; margin-top: 4px; }
 .shot { border: 1px solid var(--grid); background: var(--wash); margin: 18px 0; display: inline-block; max-width: 100%; }
 .shot img { display: block; max-width: 100%; height: auto; }
 .shot figcaption { padding: 8px 14px; border-top: 1px solid var(--grid); font-size: var(--fs-small); color: var(--quiet); }
 .pager { display: flex; justify-content: space-between; gap: 16px; margin-top: 64px; padding-top: 12px; border-top: var(--rule-thick) solid var(--rule); }
-.pager a { color: var(--quiet); font-size: var(--fs-label); font-weight: 600; letter-spacing: var(--track-label); text-transform: uppercase; border-bottom: 0; }
+.pager a { color: var(--quiet); font-size: var(--fs-label); font-weight: 600; letter-spacing: var(--track-label); text-transform: uppercase; text-decoration: none; }
 .pager a:hover { color: var(--red); }
 .pager b { display: block; color: var(--ink); font-size: 18px; font-weight: var(--w-heavy); letter-spacing: -0.01em; text-transform: none; margin-top: 2px; }
 .pager .next { text-align: right; margin-left: auto; }
