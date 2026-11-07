@@ -582,6 +582,66 @@ pub mod widgets {
     /// The only name of the renderer the crate draws with.
     pub type Renderer = fallback::Renderer<backend::Gpu, backend::Soft>;
 
+    /// Renderers that draw images, as iced_core's `image::Renderer`, which
+    /// iced doesn't re-export.
+    use parts::imaging;
+
+    impl imaging::Renderer for backend::Gpu {
+        type Handle = crate::image::Handle;
+    }
+
+    impl imaging::Renderer for backend::Soft {
+        type Handle = crate::image::Handle;
+    }
+
+    /// A renderer over two backends draws the first's handles, as iced's
+    /// fallback renderer does.
+    impl<A, B> imaging::Renderer for fallback::Renderer<A, B>
+    where
+        A: imaging::Renderer,
+        B: imaging::Renderer<Handle = A::Handle>,
+    {
+        type Handle = A::Handle;
+    }
+
+    /// An image, as iced's `widget::Image<Handle>`: a widget of the renderers
+    /// whose handle is its own, so the renderer that draws it fixes `Handle`.
+    pub struct Picture<Handle> {
+        handle: Handle,
+        width: u16,
+    }
+
+    /// An image of `handle`, as iced's `image(impl Into<Handle>)`: the
+    /// argument converts into the handle the later use's renderer draws.
+    pub fn picture<Handle>(handle: impl Into<Handle>) -> Picture<Handle> {
+        Picture {
+            handle: handle.into(),
+            width: 0,
+        }
+    }
+
+    impl<Handle> Picture<Handle> {
+        /// The image `width` wide.
+        pub fn width(mut self, width: u16) -> Self {
+            self.width = width;
+            self
+        }
+    }
+
+    impl<Message, Theme, Renderer, Handle> Widget<Message, Theme, Renderer> for Picture<Handle>
+    where
+        Renderer: imaging::Renderer<Handle = Handle>,
+        Handle: Debug,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("picture {:?}@{}", self.handle, self.width));
+        }
+
+        fn press(&self, _label: &str) -> Option<Message> {
+            None
+        }
+    }
+
     /// What a view gives, at a theme and renderer that default to the
     /// crate's.
     pub trait Widget<Message, Theme = crate::Theme, Renderer = crate::widgets::Renderer> {

@@ -2593,6 +2593,21 @@ fn build(
                 })
             })
             .collect();
+        let projections = header
+            .projections
+            .iter()
+            .filter_map(|projection| {
+                Some(host::facade::ImplProjection {
+                    ty: convert(&projection.ty)?,
+                    value: convert(&projection.value)?,
+                    cases: projection
+                        .cases
+                        .iter()
+                        .map(|(this, value)| Some((convert(this)?, convert(value)?)))
+                        .collect::<Option<_>>()?,
+                })
+            })
+            .collect();
         builder.impl_header(host::facade::ImplHeader {
             parameters: header
                 .parameters
@@ -2603,6 +2618,7 @@ fn build(
             arguments,
             self_type,
             bounds,
+            projections,
         })?;
     }
     // A re-exported variant names its enum's variant, through a path the
@@ -3633,10 +3649,26 @@ fn relations(
         if let Some(relation) = relation(
             parameter.name(),
             source.arguments(),
-            source
-                .cases()
-                .iter()
-                .map(|case| (case.this(), case.arguments())),
+            source.cases().iter().map(|case| {
+                (
+                    case.this(),
+                    case.arguments(),
+                    case.projections()
+                        .iter()
+                        .map(|projection| {
+                            (
+                                projection.ty(),
+                                projection.value(),
+                                projection
+                                    .cases()
+                                    .iter()
+                                    .map(|(this, at)| (this, at))
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                )
+            }),
             source.trait_identity(),
             source
                 .associated()
@@ -3649,14 +3681,18 @@ fn relations(
     Ok(())
 }
 
+/// A case's bounds that fix an associated type, each `(ty, value, cases)`
+/// (`host::signature::Projection`).
+pub(crate) type CaseProjections<'a, T> = Vec<(&'a T, &'a T, Vec<(&'a T, &'a T)>)>;
+
 /// A relation on `parameter`, its types made patterns by `pattern`: `None`
 /// when one of its trait arguments can't be one. A case that can't be is
 /// dropped, and a relation without cases, a trait or an associated type is
-/// none.
+/// none. A case's projection that can't be is dropped from it.
 pub(crate) fn relation<'a, T: 'a>(
     parameter: &str,
     arguments: &'a [T],
-    cases: impl Iterator<Item = (&'a T, &'a [T])>,
+    cases: impl Iterator<Item = (&'a T, &'a [T], CaseProjections<'a, T>)>,
     trait_identity: Option<[u8; 32]>,
     associated: Option<([u8; 32], &str)>,
     pattern: impl Fn(&T) -> Option<host::signature::Pattern>,
@@ -3666,14 +3702,30 @@ pub(crate) fn relation<'a, T: 'a>(
         .map(&pattern)
         .collect::<Option<Box<[_]>>>()?;
     let cases = cases
-        .filter_map(|(this, implemented)| {
-            Some(host::signature::Case::new(
-                pattern(this)?,
-                implemented
-                    .iter()
-                    .map(&pattern)
-                    .collect::<Option<Box<[_]>>>()?,
-            ))
+        .filter_map(|(this, implemented, projections)| {
+            let projections = projections
+                .into_iter()
+                .filter_map(|(ty, value, cases)| {
+                    Some(host::signature::Projection {
+                        ty: pattern(ty)?,
+                        value: pattern(value)?,
+                        cases: cases
+                            .into_iter()
+                            .map(|(this, at)| Some((pattern(this)?, pattern(at)?)))
+                            .collect::<Option<_>>()?,
+                    })
+                })
+                .collect();
+            Some(
+                host::signature::Case::new(
+                    pattern(this)?,
+                    implemented
+                        .iter()
+                        .map(&pattern)
+                        .collect::<Option<Box<[_]>>>()?,
+                )
+                .with_projections(projections),
+            )
         })
         .collect::<Box<[_]>>();
     (!cases.is_empty() || trait_identity.is_some() || associated.is_some()).then(|| {

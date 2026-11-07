@@ -103,6 +103,9 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // the context it applies through. Schema 48 gives the `impl Trait` a trait's
 // method gives from its default body as the trait's opaque type. Schema 55
 // marks a type parameter a struct's or an enum's boxed callable field gives.
+// Schema 57 keeps an alias's own type's implementation of a trait whose
+// associated type it passes on from the type's arguments, and reads them
+// for an implementation's bound that fixes a parameter's associated type.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
 const PROTOCOL_SCHEMA: u32 = 57;
@@ -2084,6 +2087,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         self.obligations.insert(key.clone(), obligation);
         self.budget.items(1)?;
         let class = match obligation.self_ty.kind() {
+            // A bound that fixes a parameter's associated type, as iced's
+            // `impl Widget for Image<Handle>` has `Renderer: image::Renderer<
+            // Handle = Handle>`, reads the trait's implementations at each
+            // type only an alias names wherever it is, so the classifier can
+            // read what the bound fixes there.
+            ty::Param(_) if obligation.associated.is_some() => engine::Class::Concrete,
             ty::Param(_) => engine::Class::Parameter,
             _ if parameter_projection(obligation.self_ty) => engine::Class::Parameter,
             ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Alias(..) => {
@@ -2109,6 +2118,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         // loaded implementation. Concrete constructors containing
         // parameters (for example `Wrapper<T>` or `&T`) remain eligible.
         match obligation.self_ty.kind() {
+            // A bound that fixes an associated type only asks what the
+            // trait's implementations give it.
+            ty::Param(_) if obligation.associated.is_some() => {
+                return self.request_relation_implementations(obligation);
+            }
             ty::Param(parameter) if selected => {
                 self.request_relation_implementations(obligation)?;
                 return self.process_scalar_predicate_obligation(obligation, *parameter);
@@ -2274,24 +2288,36 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 return Ok(());
             }
             self.find_aliases();
-            let mut selves = self
+            let aliased = self
                 .instance_aliases
                 .iter()
                 .flatten()
                 .map(|(_, aliased)| *aliased)
                 .collect::<Vec<_>>();
             let mut arguments = Vec::new();
-            for self_ty in &selves {
+            for self_ty in &aliased {
                 if let ty::Adt(_, adt_arguments) = self_ty.kind() {
                     arguments.extend(adt_arguments.types());
                 }
             }
-            selves.extend(arguments);
+            // An alias's own type's implementation, as iced's `impl<A, B>
+            // image::Renderer for fallback::Renderer<A, B> { type Handle =
+            // A::Handle; }` at `iced::Renderer`, is kept whatever its value:
+            // the classifier reads its projection at the type's arguments,
+            // whose implementations follow.
             let mut implementations = Vec::new();
-            for self_ty in selves {
+            let mut forwarding = Vec::new();
+            for (self_ty, own) in aliased
+                .iter()
+                .map(|self_ty| (*self_ty, true))
+                .chain(arguments.into_iter().map(|self_ty| (self_ty, false)))
+            {
                 self.budget.edge(1)?;
-                implementations
-                    .extend(self.relevant_implementations(obligation.trait_id, self_ty)?);
+                let found = self.relevant_implementations(obligation.trait_id, self_ty)?;
+                if own {
+                    forwarding.extend(found.iter().map(|implementation| implementation.id()));
+                }
+                implementations.extend(found);
                 if implementations.len() > RELATION_IMPLEMENTATIONS {
                     return Ok(());
                 }
@@ -2321,7 +2347,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     .instantiate_identity()
                     .skip_norm_wip();
                 if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
-                    && !matches!(value.kind(), ty::Alias(..))
+                    && (!matches!(value.kind(), ty::Alias(..)) || forwarding.contains(&impl_id))
                 {
                     self.request_implementation(implementation, obligation.relevance, associated)?;
                 }

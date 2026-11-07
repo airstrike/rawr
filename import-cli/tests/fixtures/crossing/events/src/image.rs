@@ -17,6 +17,14 @@ impl Handle {
     }
 }
 
+/// An image at a path, as iced's `impl<T: Into<PathBuf>> From<T> for
+/// Handle` makes one of a `&str`.
+impl From<&str> for Handle {
+    fn from(path: &str) -> Self {
+        Self::from_name(path)
+    }
+}
+
 /// Bytes an image is made of, as iced's `Bytes`, which a `&'static [u8]`
 /// converts into.
 pub struct Bytes(&'static [u8]);
