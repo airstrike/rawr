@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 122;
+const CLASSIFIER_VERSION: u32 = 123;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1821,6 +1821,22 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         for input in signature.inputs() {
             find(input, true, &mut deep);
         }
+        // So is one a bound ties to another parameter, as rand's
+        // `WeightedIndex::new(weights: I)` has `I::Item: SampleBorrow<X>`:
+        // the type that fills `I` gives it, and the trait's impls for it
+        // give `X`, as rustc infers `X` (#1084).
+        for predicate in generics.predicates() {
+            if let model::Predicate::Bound {
+                ty: projection @ model::Type::Projection { .. },
+                bound: model::Bound::Trait { arguments, .. },
+            } = predicate
+                && arguments.iter().any(|argument| {
+                    matches!(argument, model::Argument::Type(ty) if names_type_parameter(ty))
+                })
+            {
+                find(projection, false, &mut deep);
+            }
+        }
         // So is an iterator's `I::Item` and `J::IntoIter`, as
         // `Product<I, J>::next` gives `Option<(I::Item, J::Item)>` and
         // itertools' `cartesian_product` gives `Product<Self, J::IntoIter>`:
@@ -1973,6 +1989,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let predicates = generics
             .predicates()
             .map(|predicate| match predicate {
+                // A projection a bound names as its self type is its
+                // synthetic parameter too, as `I::Item: SampleBorrow<X>` is
+                // `IItem: SampleBorrow<X>` (#1084).
                 model::Predicate::Bound {
                     ty,
                     bound:
@@ -1983,7 +2002,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                             binders,
                         },
                 } => model::Predicate::Bound {
-                    ty: ty.clone(),
+                    ty: projected_parameters(ty, projected),
                     bound: model::Bound::Trait {
                         trait_id: trait_id.clone(),
                         arguments: arguments.iter().map(argument).collect(),
@@ -7097,6 +7116,7 @@ impl<P: api::Phase> Context<'_, P> {
             covariant_lifetimes(generics),
             self.implements_for_any(definition, "Iterator"),
         )
+        .with_given(given_parameters(generics))
         .with_unsupported(unsupported))
     }
 
@@ -7640,7 +7660,8 @@ impl<P: api::Phase> Context<'_, P> {
             lifetime_parameters(generics),
             covariant_lifetimes(generics),
             self.implements_for_any(definition, "Iterator"),
-        ))
+        )
+        .with_given(given_parameters(generics)))
     }
 
     fn constant(
@@ -12097,6 +12118,19 @@ fn covariant_lifetimes(generics: &model::Generics) -> bool {
         .parameters()
         .filter(|parameter| is_lifetime_parameter(parameter))
         .all(model::Parameter::covariant)
+}
+
+/// The positions, among a type's type parameters, of those a field's
+/// boxed callable gives, as `view: Box<dyn Fn(&D) -> W>` gives `W` of
+/// iced's `Lazy<'a, W, D>`.
+fn given_parameters(generics: &model::Generics) -> Vec<u32> {
+    generics
+        .parameters()
+        .filter(|parameter| !is_lifetime_parameter(parameter))
+        .zip(0..)
+        .filter(|(parameter, _)| parameter.given())
+        .map(|(_, position)| position)
+        .collect()
 }
 
 fn lifetime_parameters(generics: &model::Generics) -> u32 {

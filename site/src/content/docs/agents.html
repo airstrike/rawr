@@ -29,6 +29,7 @@
   <li><code>start</code> runs a window or a long-running program and keeps it running.</li>
   <li>After each save, <code>wait</code> says whether the program swapped, restarted or failed.</li>
   <li><code>screenshot</code> shows its window, and <code>inspect</code> reads its values.</li>
+  <li><code>click</code>, <code>type</code> and the other input tools use the window as a person would.</li>
   <li><code>break</code> pauses it at a line or a function. <code>step</code> and <code>continue</code> go on from there.</li>
   <li><code>stop</code> ends it.</li>
 </ol>
@@ -44,7 +45,13 @@
   <tr><td><code>wait</code></td><td>Waits for the next events of the started program and returns them with the output since the last call.</td></tr>
   <tr><td><code>status</code></td><td>Says what each started program is doing, without waiting. A paused program says where it is paused.</td></tr>
   <tr><td><code>stop</code></td><td>Stops the started program.</td></tr>
-  <tr><td><code>screenshot</code></td><td>Returns a PNG of the started program&rsquo;s window alone.</td></tr>
+  <tr><td><code>screenshot</code></td><td>Returns a PNG of the started program&rsquo;s window alone, and the window&rsquo;s size in points.</td></tr>
+  <tr><td><code>move</code></td><td>Moves the pointer in the window to <code>x</code>, <code>y</code>, as for a hover.</td></tr>
+  <tr><td><code>click</code></td><td>Clicks at <code>x</code>, <code>y</code>. <code>button</code> is <code>left</code>, <code>right</code> or <code>middle</code>. <code>count</code> is 2 for a double click.</td></tr>
+  <tr><td><code>drag</code></td><td>Presses <code>button</code> at <code>x</code>, <code>y</code>, moves to <code>to_x</code>, <code>to_y</code> with it held, and lets go there.</td></tr>
+  <tr><td><code>scroll</code></td><td>Scrolls what is under <code>x</code>, <code>y</code>. A positive <code>dy</code> scrolls down, toward the end, and a positive <code>dx</code> scrolls right. <code>unit</code> is <code>line</code>, as a mouse wheel, or <code>pixel</code>, as a trackpad.</td></tr>
+  <tr><td><code>key</code></td><td>Presses a <code>key</code> with <code>modifiers</code> held: <code>shift</code>, <code>control</code>, <code>alt</code> or <code>command</code>. A key is one character or a name such as <code>Enter</code>, <code>Tab</code>, <code>Backspace</code>, <code>ArrowLeft</code> or <code>F5</code>.</td></tr>
+  <tr><td><code>type</code></td><td>Types <code>text</code>, one key press per character. A newline is <code>Enter</code>.</td></tr>
   <tr><td><code>inspect</code></td><td>Reads the started program&rsquo;s values while it runs. It returns the file, line and function the program is in, and each binding in scope there as Rust&rsquo;s <code>{:?}</code> prints it. <code>name</code> asks for one binding and <code>file</code> for one source file. <code>frame</code> reads a caller&rsquo;s bindings.</td></tr>
   <tr><td><code>break</code></td><td>Sets a breakpoint on a <code>line</code> of a <code>file</code>, or on a <code>function</code>. It returns where the program paused, if it pauses within <code>timeout_ms</code>.</td></tr>
   <tr><td><code>step</code></td><td>Runs the paused program to its next statement. <code>kind</code> is <code>over</code>, <code>into</code> or <code>out</code>.</td></tr>
@@ -93,6 +100,21 @@ clear    {"path": "counter"}</code></pre></div>
   <li>A breakpoint stays across saves while its line&rsquo;s text is still in the file. When lines move, it moves to the nearest line with that text. When no line has that text, it is removed.</li>
 </ul>
 
+<h2 id="input">Using the window</h2>
+<p><code>move</code>, <code>click</code>, <code>drag</code>, <code>scroll</code>, <code>key</code> and <code>type</code> send input to the started program&rsquo;s window. A position is in logical points from the window&rsquo;s top-left corner, title bar included. That is the space <code>screenshot</code> shows. Its answer gives the window&rsquo;s size in points, and the PNG is that size times the display&rsquo;s scale.</p>
+<div class="block"><pre><code>screenshot  {"path": "todos"}
+click       {"path": "todos", "x": 400, "y": 140}
+type        {"path": "todos", "text": "Buy milk\n"}
+screenshot  {"path": "todos"}</code></pre></div>
+<ul>
+  <li>The input goes to the program alone, in its own process. Your pointer, your keyboard and the app you are using are left alone, and the program&rsquo;s window isn&rsquo;t brought forward. You can keep working while an agent uses the window.</li>
+  <li>The window shows an orange agent cursor where the pointer last went, so you can see where the agent is pointing. Screenshots show it too. It is drawn above the program&rsquo;s own drawing, and the program&rsquo;s layout and events don&rsquo;t change for it.</li>
+  <li>Each tool answers once the program has taken the input and drawn again. A <code>screenshot</code> right after it shows what the input did.</li>
+  <li><code>key</code> and <code>type</code> go to whatever the program has focused. Click a text input first.</li>
+  <li><code>title</code> picks a window by its title when the program has several. Otherwise the input goes to its front window.</li>
+  <li>A paused program takes no input until <code>continue</code> or <code>step</code>, since the pause holds its event loop.</li>
+</ul>
+
 <h2 id="example">An example session</h2>
 <p>An agent making a command-line tool calls these, in order:</p>
 <div class="block"><pre><code>new    {"path": "hello"}
@@ -102,6 +124,8 @@ run    {"path": "hello", "args": ["-n", "pie"], "stdin": "apple\ncherry\n"}</cod
 <div class="block"><pre><code>new         {"path": "counter"}
 start       {"path": "counter"}
 wait        {"path": "counter"}
+screenshot  {"path": "counter"}
+click       {"path": "counter", "x": 60, "y": 90}
 screenshot  {"path": "counter"}
 stop        {"path": "counter"}</code></pre></div>
 <p>The first <code>start</code> of an app with dependencies builds them, which can take minutes. It answers <code>building</code> within the call&rsquo;s time limit, and <code>wait</code> follows the build until the app runs.</p>
@@ -120,5 +144,6 @@ stop        {"path": "counter"}</code></pre></div>
   <li>No call takes longer than about 45 s. A longer build answers <code>building</code>, or <code>check</code> says it is still checking. Call it again to keep waiting.</li>
   <li><code>start</code> refuses a program that draws a terminal UI, such as a <a href="/docs/ratatui">ratatui</a> app. Run it with <code>rawr run</code> in a terminal of your own.</li>
   <li>A screenshot uses macOS&rsquo;s window capture. macOS asks for Screen Recording permission for the app the agent runs in. Other systems have no such capture yet.</li>
+  <li>The input tools need macOS too. They need no permission, since nothing goes through the system&rsquo;s input.</li>
   <li>One project has one started program at a time.</li></ul>
 </article>

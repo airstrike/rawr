@@ -1197,6 +1197,42 @@ pub mod widgets {
         }
     }
 
+    /// A widget that makes its content again from `value` each time it
+    /// shows it, as iced's `Transition<'a, Message, W, P>`, whose `view:
+    /// Box<dyn Fn(&P, Instant) -> W + 'a>` gives it. Its widget impl asks
+    /// nothing of `W`'s lifetime.
+    pub struct Transition<'a, Message, W> {
+        value: u32,
+        view: Box<dyn Fn(u32) -> W + 'a>,
+        message: std::marker::PhantomData<Message>,
+    }
+
+    /// A widget of what `view` makes of `value`, as iced's `transition`.
+    pub fn transition<'a, Message, W>(
+        value: u32,
+        view: impl Fn(u32) -> W + 'a,
+    ) -> Transition<'a, Message, W> {
+        Transition {
+            value,
+            view: Box::new(view),
+            message: std::marker::PhantomData,
+        }
+    }
+
+    impl<W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Transition<'_, Message, W>
+    where
+        W: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push("transition".to_owned());
+            (self.view)(self.value).labels(labels);
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            (self.view)(self.value).press(label)
+        }
+    }
+
     /// A column of one widget, as iced's `center` is a container of one.
     pub fn center<W>(content: W) -> Column<W> {
         Column {

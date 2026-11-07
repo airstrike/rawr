@@ -16,6 +16,40 @@ pub struct Window {
     pub pid: u32,
 }
 
+/// The logical size of a window's capture: its width and height in points,
+/// title bar included, the space the input tools take positions in. A
+/// capture is at the display's backing scale, which the PNG's density
+/// gives: 144 dots per inch at 2×, 72 at 1×.
+#[must_use]
+pub fn points(png: &[u8]) -> Option<(f64, f64)> {
+    let number = |at: usize| {
+        png.get(at..at + 4)
+            .map(|bytes| f64::from(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])))
+    };
+    if png.get(12..16) != Some(b"IHDR") {
+        return None;
+    }
+    let (width, height) = (number(16)?, number(20)?);
+    // The chunks after IHDR, to the first image data: `pHYs` holds the
+    // pixels per metre, 72 dpi's being 2835.
+    let mut at = 33;
+    let mut scale = 1.0;
+    while let (Some(length), Some(kind)) = (number(at), png.get(at + 4..at + 8)) {
+        match kind {
+            b"pHYs" => {
+                let density = number(at + 8)?;
+                if png.get(at + 16) == Some(&1) && density > 0.0 {
+                    scale = (density / 2835.0).round().max(1.0);
+                }
+                break;
+            }
+            b"IDAT" | b"IEND" => break,
+            _ => at += 12 + length as usize,
+        }
+    }
+    Some((width / scale, height / scale))
+}
+
 /// The on-screen windows owned by `pids`.
 #[cfg(target_os = "macos")]
 #[must_use]
@@ -100,4 +134,40 @@ pub fn capture(window: &Window, path: &Path) -> Result<Vec<u8>, String> {
 #[cfg(not(target_os = "macos"))]
 pub fn capture(_window: &Window, _path: &Path) -> Result<Vec<u8>, String> {
     Err("a window capture needs macOS here".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::points;
+
+    /// A PNG's signature, its IHDR for `width` × `height`, an sRGB chunk
+    /// and, at `ppm` pixels per metre, a pHYs chunk; the CRCs are zero.
+    fn png(width: u32, height: u32, ppm: Option<u32>) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend(13_u32.to_be_bytes());
+        bytes.extend(b"IHDR");
+        bytes.extend(width.to_be_bytes());
+        bytes.extend(height.to_be_bytes());
+        bytes.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        bytes.extend(1_u32.to_be_bytes());
+        bytes.extend(b"sRGB\0\0\0\0\0");
+        if let Some(ppm) = ppm {
+            bytes.extend(9_u32.to_be_bytes());
+            bytes.extend(b"pHYs");
+            bytes.extend(ppm.to_be_bytes());
+            bytes.extend(ppm.to_be_bytes());
+            bytes.extend([1, 0, 0, 0, 0]);
+        }
+        bytes.extend(0_u32.to_be_bytes());
+        bytes.extend(b"IDAT\0\0\0\0");
+        bytes
+    }
+
+    #[test]
+    fn a_retina_capture_is_half_its_pixels_in_points() {
+        assert_eq!(points(&png(1600, 1256, Some(5669))), Some((800.0, 628.0)));
+        assert_eq!(points(&png(800, 628, Some(2835))), Some((800.0, 628.0)));
+        assert_eq!(points(&png(800, 628, None)), Some((800.0, 628.0)));
+        assert_eq!(points(b"not a png"), None);
+    }
 }

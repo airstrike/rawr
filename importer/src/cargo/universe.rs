@@ -3023,7 +3023,15 @@ fn dependency_spellings(key: &Key) -> Result<Vec<Box<str>>> {
     let versioned = format!("{} {}", key.name, key.version);
     spellings.push(versioned.clone().into_boxed_str());
     if !key.source.is_empty() {
-        spellings.push(format!("{versioned} ({})", key.source).into_boxed_str());
+        // Cargo writes the source without its precise part: a git source's
+        // `#<commit>` is left out of the dependency spelling.
+        let source = key.source.as_ref();
+        let source = if source.starts_with("git+") {
+            source.rsplit_once('#').map_or(source, |(source, _)| source)
+        } else {
+            source
+        };
+        spellings.push(format!("{versioned} ({source})").into_boxed_str());
     }
     Ok(spellings)
 }
@@ -3424,7 +3432,7 @@ mod tests {
              [[package]]\nname = \"types\"\nversion = \"0.0.1\"\n\n\
              [[package]]\nname = \"types\"\nversion = \"0.0.1\"\nsource = \"{git}\"\n\n\
              [[package]]\nname = \"shop\"\nversion = \"0.1.0\"\nsource = \"{git}\"\n\
-             dependencies = [\"types 0.0.1 (git+https://example.com/emporium.git?branch=master#82d4c650)\"]\n"
+             dependencies = [\"types 0.0.1 (git+https://example.com/emporium.git?branch=master)\"]\n"
         );
         super::Closure::parse(lock.as_bytes()).expect("each spelling names one package");
     }

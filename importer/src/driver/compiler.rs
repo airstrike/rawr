@@ -36,6 +36,9 @@ mod completion;
 )]
 mod engine;
 
+#[path = "compiler/scope.rs"]
+mod scope;
+
 #[path = "compiler/table.rs"]
 mod table;
 
@@ -98,10 +101,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // environment, as `Self::Scalar` in an impl that sets it. Schema 43 gives a
 // blanket implementation's application its associated types, normalized in
 // the context it applies through. Schema 48 gives the `impl Trait` a trait's
-// method gives from its default body as the trait's opaque type.
+// method gives from its default body as the trait's opaque type. Schema 55
+// marks a type parameter a struct's or an enum's boxed callable field gives.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 54;
+const PROTOCOL_SCHEMA: u32 = 55;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -186,8 +190,8 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     /// Every crate the session registered, for the handshake's artifacts.
     sysroot: BTreeMap<CrateNum, Sysroot>,
     external: BTreeMap<CrateNum, ExternalCrate>,
-    implementation_index: HashMap<CrateNum, HashMap<DefId, Vec<DefId>>>,
-    obligation_candidates: HashMap<TraitObligationKey<'tcx>, Vec<DefId>>,
+    implementation_index: HashMap<CrateNum, HashMap<DefId, Vec<scope::Reached>>>,
+    obligation_candidates: HashMap<TraitObligationKey<'tcx>, Vec<scope::Reached>>,
     /// While a blanket implementation is applied through a type's own
     /// implementation of the trait its where-clause names, that
     /// implementation and the application's identity, which owns its
@@ -200,9 +204,10 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     /// on to a type, by that type (`passing_alias`).
     passing_aliases: HashMap<DefId, DefId>,
     /// The crates the selected crate reaches, with the sysroot's, found
-    /// once (`reaches`): a member's traits and impls come from these alone,
-    /// so the crate's table is the crate's whatever else is selected.
-    scope: Option<std::collections::BTreeSet<CrateNum>>,
+    /// once (`scope`): every trait and implementation a unit names comes
+    /// from these alone, so the crate's table is the crate's whatever else
+    /// is selected (#1097).
+    scope: Option<scope::Scope>,
     budget: &'budget mut Budget,
     diagnostic: &'diagnostic mut Option<Diagnostic>,
 }
@@ -274,6 +279,14 @@ struct AnonymousAssociatedSupport {
     parent: DefId,
     method: Symbol,
     disambiguator: u32,
+}
+
+/// Whether `ty` is an associated type of a type parameter, as `I::Item`
+/// of a parameter `I` is.
+fn parameter_projection(ty: Ty<'_>) -> bool {
+    matches!(ty.kind(), ty::Alias(_, alias)
+        if matches!(alias.kind, ty::AliasTyKind::Projection { .. })
+            && matches!(alias.self_ty().kind(), ty::Param(_)))
 }
 
 fn take_owned_candidate_bucket<K, V>(index: &mut HashMap<K, Vec<V>>, key: &K) -> Option<Vec<V>>
@@ -642,6 +655,10 @@ enum ParameterKind {
     Type {
         bounds: Vec<Bound>,
         default: Explicit<Type>,
+        /// Whether a field's boxed callable of a struct's or an enum's
+        /// gives it, as `view: Box<dyn Fn(&D) -> W>` gives `W`. False for
+        /// every other owner.
+        given: bool,
     },
     Const {
         ty: Type,
@@ -2068,6 +2085,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         self.budget.items(1)?;
         let class = match obligation.self_ty.kind() {
             ty::Param(_) => engine::Class::Parameter,
+            _ if parameter_projection(obligation.self_ty) => engine::Class::Parameter,
             ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Alias(..) => {
                 engine::Class::Inert
             }
@@ -2095,6 +2113,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 self.request_relation_implementations(obligation)?;
                 return self.process_scalar_predicate_obligation(obligation, *parameter);
             }
+            // A bound on a parameter's projection that ties another
+            // parameter, as rand's `I::Item: SampleBorrow<X>`: the trait's
+            // implementations, as for a parameter's own bound (#1084).
+            _ if selected && parameter_projection(obligation.self_ty) => {
+                return self.request_relation_implementations(obligation);
+            }
             ty::Param(_) | ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Alias(..) => {
                 return Ok(())
             }
@@ -2107,39 +2131,15 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 None => (Vec::new(), true),
             };
         if cache_was_absent {
-            let mut candidate_error = None;
-            let tcx = self.tcx;
-            let budget = &mut *self.budget;
-            tcx.for_each_relevant_impl(obligation.trait_id, obligation.self_ty, |impl_id| {
-                if candidate_error.is_some() {
-                    return;
-                }
-                if candidates.len() >= MAX_DEFINITIONS {
-                    candidate_error =
-                        Some("relevant implementation candidate limit exceeded".to_owned());
-                    return;
-                }
-                if let Err(error) = budget.edge(1) {
-                    candidate_error = Some(error);
-                    return;
-                }
-                if let Err(error) = budget.items(1) {
-                    candidate_error = Some(error);
-                    return;
-                }
-                if let Err(error) = candidates.try_reserve(1) {
-                    candidate_error = Some(format!(
-                        "relevant implementation candidate allocation failed: {error}"
-                    ));
-                    return;
-                }
-                candidates.push(impl_id);
-            });
-            if let Some(error) = candidate_error {
-                return Err(error);
+            candidates = self.relevant_implementations(obligation.trait_id, obligation.self_ty)?;
+            if candidates.len() > MAX_DEFINITIONS {
+                return Err("relevant implementation candidate limit exceeded".to_owned());
             }
-            candidates
-                .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
+            self.budget.edge(candidates.len())?;
+            self.budget.items(candidates.len())?;
+            candidates.sort_unstable_by_key(|implementation| {
+                self.tcx.def_path_hash(implementation.id()).0.to_le_bytes()
+            });
             candidates.dedup();
             self.budget.items(1)?;
             self.obligation_candidates.try_reserve(1).map_err(|error| {
@@ -2147,10 +2147,10 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             })?;
         }
         let result = (|| {
-            for impl_id in candidates.iter().copied() {
+            for implementation in candidates.iter().copied() {
                 let candidate_trait = self
                     .tcx
-                    .impl_opt_trait_ref(impl_id)
+                    .impl_opt_trait_ref(implementation.id())
                     .map(|reference| reference.instantiate_identity().skip_norm_wip())
                     .ok_or_else(|| {
                         "rustc relevant trait candidate is an inherent implementation".to_owned()
@@ -2166,7 +2166,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         arguments: Some(obligation.arguments),
                         param_env: obligation.param_env,
                     });
-                self.request_implementation(impl_id, obligation.relevance, associated)?;
+                self.request_implementation(implementation, obligation.relevance, associated)?;
             }
             Ok(())
         })();
@@ -2207,15 +2207,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             && let ty::Adt(..) = target.kind()
             && let Some(from) = self.tcx.get_diagnostic_item(rustc_span::sym::From)
         {
-            let mut implementations = Vec::new();
-            self.tcx
-                .for_each_relevant_impl(from, target, |impl_id| implementations.push(impl_id));
-            implementations
-                .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
-            for impl_id in implementations.into_iter().take(RELATION_IMPLEMENTATIONS) {
+            let mut implementations = self.relevant_implementations(from, target)?;
+            implementations.sort_unstable_by_key(|implementation| {
+                self.tcx.def_path_hash(implementation.id()).0.to_le_bytes()
+            });
+            for implementation in implementations.into_iter().take(RELATION_IMPLEMENTATIONS) {
                 self.budget.edge(1)?;
-                if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive {
-                    self.request_implementation(impl_id, obligation.relevance, None)?;
+                if self.tcx.impl_polarity(implementation.id()) == ty::ImplPolarity::Positive {
+                    self.request_implementation(implementation, obligation.relevance, None)?;
                 }
             }
             return Ok(());
@@ -2240,11 +2239,10 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // classifier can read it where a callable fills that parameter.
             if self.tcx.opt_rpitit_info(trait_item).is_some() {
                 let mut implementations = Vec::new();
-                for impl_id in self.tcx.all_impls(obligation.trait_id) {
+                for implementation in self.implementations(obligation.trait_id)? {
                     self.budget.edge(1)?;
-                    if !self.reaches(impl_id.krate)?
-                        || self.tcx.impl_polarity(impl_id) != ty::ImplPolarity::Positive
-                    {
+                    let impl_id = implementation.id();
+                    if self.tcx.impl_polarity(impl_id) != ty::ImplPolarity::Positive {
                         continue;
                     }
                     let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
@@ -2258,11 +2256,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                             .kind(),
                         ty::Param(_)
                     ) {
-                        implementations.push(impl_id);
+                        implementations.push(implementation);
                     }
                 }
-                implementations.sort_unstable_by_key(|impl_id| {
-                    self.tcx.def_path_hash(*impl_id).0.to_le_bytes()
+                implementations.sort_unstable_by_key(|implementation| {
+                    self.tcx.def_path_hash(implementation.id()).0.to_le_bytes()
                 });
                 let associated = Some(AssociatedObligation {
                     kind: AssociatedDemandKind::SelectedMember,
@@ -2270,8 +2268,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     arguments: Some(obligation.arguments),
                     param_env: obligation.param_env,
                 });
-                for impl_id in implementations {
-                    self.request_implementation(impl_id, obligation.relevance, associated)?;
+                for implementation in implementations {
+                    self.request_implementation(implementation, obligation.relevance, associated)?;
                 }
                 return Ok(());
             }
@@ -2292,16 +2290,15 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             let mut implementations = Vec::new();
             for self_ty in selves {
                 self.budget.edge(1)?;
-                self.tcx
-                    .for_each_relevant_impl(obligation.trait_id, self_ty, |impl_id| {
-                        implementations.push(impl_id)
-                    });
+                implementations
+                    .extend(self.relevant_implementations(obligation.trait_id, self_ty)?);
                 if implementations.len() > RELATION_IMPLEMENTATIONS {
                     return Ok(());
                 }
             }
-            implementations
-                .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
+            implementations.sort_unstable_by_key(|implementation| {
+                self.tcx.def_path_hash(implementation.id()).0.to_le_bytes()
+            });
             implementations.dedup();
             let associated = Some(AssociatedObligation {
                 kind: AssociatedDemandKind::SelectedMember,
@@ -2309,7 +2306,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 arguments: Some(obligation.arguments),
                 param_env: obligation.param_env,
             });
-            for impl_id in implementations {
+            for implementation in implementations {
+                let impl_id = implementation.id();
                 // One that passes the item on from a parameter of its own,
                 // as `impl<P: Program> Program for Application<P>` gives
                 // `P::State`, tells nothing of its own.
@@ -2325,7 +2323,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
                     && !matches!(value.kind(), ty::Alias(..))
                 {
-                    self.request_implementation(impl_id, obligation.relevance, associated)?;
+                    self.request_implementation(implementation, obligation.relevance, associated)?;
                 }
             }
             return Ok(());
@@ -2345,11 +2343,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         // has one, as lilt's `Float` is `f32` alone (#1028).
         if obligation.arguments.len() < 2 {
             let mut implementations = Vec::new();
-            for impl_id in self.tcx.all_impls(obligation.trait_id) {
+            for implementation in self.implementations(obligation.trait_id)? {
                 self.budget.edge(1)?;
-                if !self.reaches(impl_id.krate)? {
-                    continue;
-                }
+                let impl_id = implementation.id();
                 let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
                     continue;
                 };
@@ -2360,37 +2356,30 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 };
                 if lends_or_numbers && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
                 {
-                    implementations.push(impl_id);
+                    implementations.push(implementation);
                 }
             }
-            implementations
-                .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
-            for impl_id in implementations {
-                self.request_implementation(impl_id, obligation.relevance, None)?;
+            implementations.sort_unstable_by_key(|implementation| {
+                self.tcx.def_path_hash(implementation.id()).0.to_le_bytes()
+            });
+            for implementation in implementations {
+                self.request_implementation(implementation, obligation.relevance, None)?;
             }
             return Ok(());
         }
-        let mut implementations = Vec::new();
-        for impl_id in self.tcx.all_impls(obligation.trait_id) {
-            if implementations.len() == RELATION_IMPLEMENTATIONS {
-                return Ok(());
-            }
-            self.budget.edge(1)?;
-            // The selected crate's own relations: another selected crate's
-            // impls are its own table's (#672).
-            if !self.reaches(impl_id.krate)? {
-                continue;
-            }
-            implementations
-                .try_reserve(1)
-                .map_err(|error| format!("relation implementation allocation failed: {error}"))?;
-            implementations.push(impl_id);
+        // The selected crate's own relations: another selected crate's
+        // impls are its own table's (#672).
+        let mut implementations = self.implementations(obligation.trait_id)?;
+        if implementations.len() > RELATION_IMPLEMENTATIONS {
+            return Ok(());
         }
-        implementations
-            .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
-        for impl_id in implementations {
-            if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive {
-                self.request_implementation(impl_id, obligation.relevance, None)?;
+        self.budget.edge(implementations.len())?;
+        implementations.sort_unstable_by_key(|implementation| {
+            self.tcx.def_path_hash(implementation.id()).0.to_le_bytes()
+        });
+        for implementation in implementations {
+            if self.tcx.impl_polarity(implementation.id()) == ty::ImplPolarity::Positive {
+                self.request_implementation(implementation, obligation.relevance, None)?;
             }
         }
         Ok(())
@@ -2444,7 +2433,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             let mut direct = None;
             let mut ambiguous = false;
             if applies {
-                for impl_id in candidates.iter().copied() {
+                for implementation in candidates.iter().copied() {
+                    let impl_id = implementation.id();
                     let Some(reference) = self
                         .tcx
                         .impl_opt_trait_ref(impl_id)
@@ -2779,6 +2769,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     self.tcx.def_path_hash(*impl_id).0.to_le_bytes()
                 });
                 inherent.dedup();
+                let scope = self.scope()?;
+                let inherent = inherent
+                    .into_iter()
+                    .filter_map(|implementation| scope.reached(implementation))
+                    .collect::<Vec<_>>();
                 let nominal_demand = Some(AssociatedObligation {
                     kind: AssociatedDemandKind::NominalSurface,
                     trait_item: None,
@@ -2821,16 +2816,21 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         if self.implementation_index.contains_key(&crate_num) {
             return Ok(());
         }
-        let mut index: HashMap<DefId, Vec<DefId>> = HashMap::new();
-        for impl_id in self.tcx.trait_impls_in_crate(crate_num) {
-            let self_type = self
-                .tcx
-                .type_of(*impl_id)
+        let tcx = self.tcx;
+        let scope = self.scope()?;
+        let implementations = tcx
+            .trait_impls_in_crate(crate_num)
+            .iter()
+            .filter_map(|implementation| scope.reached(*implementation))
+            .collect::<Vec<_>>();
+        let mut index: HashMap<DefId, Vec<scope::Reached>> = HashMap::new();
+        for implementation in implementations {
+            let self_type = tcx
+                .type_of(implementation.id())
                 .instantiate_identity()
                 .skip_norm_wip();
-            let trait_ref = self
-                .tcx
-                .impl_opt_trait_ref(*impl_id)
+            let trait_ref = tcx
+                .impl_opt_trait_ref(implementation.id())
                 .map(|reference| reference.instantiate_identity().skip_norm_wip());
             for argument in self_type.walk().chain(
                 trait_ref
@@ -2849,19 +2849,20 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         })?;
                     }
                     let candidates = index.entry(nominal).or_default();
-                    if candidates.last() != Some(impl_id) {
+                    if candidates.last() != Some(&implementation) {
                         self.budget.items(1)?;
                         candidates.try_reserve(1).map_err(|error| {
                             format!("implementation index allocation failed: {error}")
                         })?;
-                        candidates.push(*impl_id);
+                        candidates.push(implementation);
                     }
                 }
             }
         }
         for candidates in index.values_mut() {
-            candidates
-                .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
+            candidates.sort_unstable_by_key(|implementation| {
+                tcx.def_path_hash(implementation.id()).0.to_le_bytes()
+            });
             candidates.dedup();
         }
         self.budget.items(1)?;
@@ -4331,6 +4332,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             DefKind::Struct | DefKind::Enum | DefKind::Union
         )
         .then(|| self.tcx.variances_of(def_id));
+        let given = self.given_parameters(def_id);
         let mut parameters = Vec::new();
         for parameter in &generics.own_params {
             let name = self.budget.owned(parameter.name.as_str())?;
@@ -4382,6 +4384,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     } else {
                         Explicit::Absent
                     },
+                    given: given.contains(&parameter.index),
                 },
                 ty::GenericParamDefKind::Const { has_default, .. } => {
                     if !bounds.is_empty() {
@@ -4433,6 +4436,46 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             parameters,
             predicates,
         })
+    }
+
+    /// The type parameters of the struct, enum or union `def_id` that one
+    /// of its fields' boxed callables gives, by index: `W` of iced's
+    /// `Lazy<'a, W, D>`, whose `view: Box<dyn Fn(&D) -> W + 'a>` makes its
+    /// content. Empty for any other item.
+    fn given_parameters(&self, def_id: DefId) -> BTreeSet<u32> {
+        let mut given = BTreeSet::new();
+        let (DefKind::Struct | DefKind::Enum | DefKind::Union) = self.tcx.def_kind(def_id) else {
+            return given;
+        };
+        let Some(output) = self.tcx.lang_items().fn_once_output() else {
+            return given;
+        };
+        for field in self.tcx.adt_def(def_id).all_fields() {
+            let ty = self
+                .tcx
+                .type_of(field.did)
+                .instantiate_identity()
+                .skip_norm_wip();
+            for argument in ty.walk() {
+                let ty::GenericArgKind::Type(ty) = argument.kind() else {
+                    continue;
+                };
+                let ty::Dynamic(predicates, _) = ty.kind() else {
+                    continue;
+                };
+                for predicate in predicates.iter() {
+                    if let ty::ExistentialPredicate::Projection(projection) =
+                        predicate.skip_binder()
+                        && projection.def_id == output
+                        && let Some(value) = projection.term.as_type()
+                        && let ty::Param(parameter) = value.kind()
+                    {
+                        given.insert(parameter.index);
+                    }
+                }
+            }
+        }
+        given
     }
 
     fn predicate(&mut self, owner: DefId, clause: ty::Clause<'tcx>) -> Result<Predicate, String> {

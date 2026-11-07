@@ -364,6 +364,12 @@ pub struct Parameter {
     /// and parameters.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     covariant: bool,
+    /// Whether a field's boxed callable of the struct or enum that declares
+    /// this type parameter gives it, as `view: Box<dyn Fn(&D) -> W>` of
+    /// iced's `Lazy<'a, W, D>` gives `W`. False for other owners and
+    /// parameters.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    given: bool,
 }
 
 /// The closed kinds of Rust generic parameters.
@@ -1727,6 +1733,21 @@ impl Parameter {
         self.covariant
     }
 
+    /// The parameter, with whether a field's boxed callable of its type
+    /// gives it.
+    #[must_use]
+    pub(crate) const fn with_given(mut self, given: bool) -> Self {
+        self.given = given;
+        self
+    }
+
+    /// Whether a field's boxed callable of the type that declares this
+    /// type parameter gives it.
+    #[must_use]
+    pub const fn given(&self) -> bool {
+        self.given
+    }
+
     pub(crate) fn new(
         owner: identity::Definition,
         index: u32,
@@ -1739,6 +1760,7 @@ impl Parameter {
             name,
             kind,
             covariant: false,
+            given: false,
         }
     }
 
