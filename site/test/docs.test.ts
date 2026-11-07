@@ -8,22 +8,42 @@ import { highlightRust, highlightToml } from "../src/lib/highlight.ts";
 
 test("Rust gets the site's syntax classes", () => {
   const html = highlightRust('// rawr\nfn main() { let s: String = "a<b".into(); println!("{}", 1.5); }');
-  assert.ok(html.startsWith('<span class="c">// rawr</span>\n<span class="k">fn</span> main()'));
+  assert.ok(html.startsWith('<span class="c">// rawr</span>\n<span class="k">fn</span> <span class="f">main</span>()'));
   assert.ok(html.includes('<span class="t">String</span>'));
   assert.ok(html.includes('<span class="s">"a&lt;b"</span>'), "text is escaped");
-  assert.ok(html.includes('<span class="t">println</span><span class="t">!</span>'));
-  assert.ok(html.includes('<span class="s">1.5</span>'));
+  assert.ok(html.includes('<span class="f">println</span><span class="f">!</span>'));
+  assert.ok(html.includes('<span class="n">1.5</span>'));
   assert.equal(decode(html.replace(/<[^>]+>/g, "")), '// rawr\nfn main() { let s: String = "a<b".into(); println!("{}", 1.5); }');
 });
 
-test("TOML: tables are keywords, strings and numbers literals", () => {
-  assert.equal(highlightToml('[dependencies]\ntokio = { version = "1" } # x'), '<span class="k">[dependencies]</span>\ntokio = { version = <span class="s">"1"</span> } <span class="c"># x</span>');
+test("Rust: functions, macros, escapes, attributes, lifetimes, doc comments and type paths each get a class", () => {
+  const html = highlightRust(String.raw`//! crate
+/// item
+// note
+#[derive(Debug)]
+struct A<'a>(&'a str);
+fn f() { let v = Vec::new(); x.cost(); std::mem::drop("a\n"); true }`);
+  assert.ok(html.startsWith('<span class="d">//! crate</span>\n<span class="d">/// item</span>\n<span class="c">// note</span>\n<span class="a">#[derive(Debug)]</span>'));
+  assert.ok(html.includes(`&lt;<span class="a">'a</span>&gt;`), "a lifetime");
+  assert.ok(html.includes('<span class="k">fn</span> <span class="f">f</span>()'), "a function's name");
+  assert.ok(html.includes('<span class="t">Vec</span>::<span class="f">new</span>()'), "a type in a path, and a path call");
+  assert.ok(html.includes('x.<span class="f">cost</span>()'), "a method call");
+  assert.ok(html.includes('std::mem::<span class="f">drop</span>'), "a module keeps the text's colour");
+  assert.ok(html.includes(String.raw`<span class="s">"a</span><span class="x">\n</span><span class="s">"</span>`), "an escape");
+  assert.ok(html.includes('<span class="n">true</span>'));
+  assert.equal(highlightRust("let x = Some(MAX);"), '<span class="k">let</span> x = <span class="t">Some</span>(MAX);', "a variant is a type's colour, a constant the text's");
+  assert.equal(highlightRust("#[derive(Debug)] struct S;"), '<span class="a">#[derive(Debug)]</span> <span class="k">struct</span> <span class="t">S</span>;', "an attribute is one colour");
+  assert.equal(highlightRust("/** a\n b */ /**/ //// c"), '<span class="d">/** a</span>\n<span class="d"> b */</span> <span class="c">/**/</span> <span class="c">//// c</span>');
+});
+
+test("TOML: tables are keywords, strings literals, numbers and booleans numbers", () => {
+  assert.equal(highlightToml('[dependencies]\ntokio = { version = "1", n = 2 } # x'), '<span class="k">[dependencies]</span>\ntokio = { version = <span class="s">"1"</span>, n = <span class="n">2</span> } <span class="c"># x</span>');
 });
 
 test("a run block keeps its plain text for /play/run, with its highlighted copy beside it", () => {
   const html = highlightBlocks('<pre><code data-lang="rust" data-run="x.rs" id="src-x">let a = &amp;1;</code></pre><pre><code data-lang="rust">fn f() {}</code></pre>');
-  assert.ok(html.startsWith('<pre><code data-lang="rust" data-run="x.rs" id="src-x">let a = &amp;1;</code><template data-hl><span class="k">let</span> a = &amp;<span class="s">1</span>;</template></pre>'));
-  assert.ok(html.endsWith('<pre><code data-lang="rust"><span class="k">fn</span> f() {}</code></pre>'));
+  assert.ok(html.startsWith('<pre><code data-lang="rust" data-run="x.rs" id="src-x">let a = &amp;1;</code><template data-hl><span class="k">let</span> a = &amp;<span class="n">1</span>;</template></pre>'));
+  assert.ok(html.endsWith('<pre><code data-lang="rust"><span class="k">fn</span> <span class="f">f</span>() {}</code></pre>'));
   // A block that already holds markup is left alone.
   const marked = '<code data-lang="rust"><span class="k">?play</span></code>';
   assert.equal(highlightBlocks(marked), marked);
