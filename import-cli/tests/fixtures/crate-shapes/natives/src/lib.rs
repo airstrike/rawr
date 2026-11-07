@@ -335,11 +335,11 @@ pub mod form {
         }
     }
 
-    /// A generic type's `&self` method that gives an opaque iterator of
-    /// values borrowing it, as `slice.iter().copied()` gives.
-    impl<T: Copy> Holder<T> {
-        pub fn items(&self) -> impl Iterator<Item = T> + '_ {
-            self.0.iter().copied()
+    /// A generic type's method that gives an opaque iterator of the values
+    /// it owns, as `Vec::into_iter` behind `impl Iterator<Item = T>` does.
+    impl<T> Holder<T> {
+        pub fn into_items(self) -> impl Iterator<Item = T> {
+            self.0.into_iter()
         }
     }
 

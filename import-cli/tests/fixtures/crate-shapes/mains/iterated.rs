@@ -10,10 +10,10 @@ fn main() {
     println!("{}", countdown(4).count());
     let doubled: Vec<u32> = countdown(3).map(|step| step * 2).collect();
     println!("{doubled:?}");
-    let held = Holder(vec![1_u32, 2, 3]);
     let mut total = 0;
-    for item in held.items() {
+    for item in Holder(vec![1_u32, 2, 3]).into_items() {
         total += item;
     }
-    println!("{total} {}", held.items().filter(|item| *item > 1).count());
+    let big = Holder(vec![1_u32, 2, 3]).into_items().filter(|item| *item > 1).count();
+    println!("{total} {big}");
 }

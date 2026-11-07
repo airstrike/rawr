@@ -11134,18 +11134,6 @@ fn borrows_receiver(
         return false;
     };
     let output = signature.output();
-    // An opaque output that captures the receiver's lifetime, as `fn
-    // items(&self) -> impl Iterator<Item = T> + '_` gives, borrows it the
-    // same way: its region holds it by the family of the wrapper that
-    // makes it (`bridge::generate::family`).
-    if let model::Type::ImplTrait { captures, .. } = output {
-        return !signature.async_function()
-            && signature.binders().len() == 1
-            && !signature.inputs().any(names_late_lifetime)
-            && captures
-                .iter()
-                .any(|capture| matches!(capture, model::Argument::Lifetime(named) if named == receiver));
-    }
     // A nominal output, as `QName<'_>`: a borrow guard is read through its
     // target, an async method's future holds its receiver (D513.6), and an
     // opaque or reference output is held to its own rules.

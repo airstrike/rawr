@@ -175,9 +175,9 @@ fn an_opaque_types_members_import() {
 /// its header with the default filled in. The const one used to give
 /// `Table` no arguments and stop the import.
 /// A crate's opaque `impl Iterator<Item = u32>`, as a function gives it
-/// and as a generic type's `&self` method gives one borrowing it: `next`,
-/// a `for` loop and the iterator's adaptors (`count`, `map`, `filter`)
-/// pull from it as rustc's do, through `Iterator::next`.
+/// and as a generic type's method gives one: `next`, a `for` loop and the
+/// iterator's adaptors (`count`, `map`, `filter`) pull from it as rustc's
+/// do, through `Iterator::next`.
 #[test]
 fn a_crates_opaque_iterator_is_iterated() {
     runs_as_cargo_does("iterated", "Some(3)\nstep 2\nstep 1\n4\n[6, 4, 2]\n6 2\n");
