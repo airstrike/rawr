@@ -2,7 +2,8 @@
    sections, in the work plan's look on the tokens in tokens.css. */
 @property --pos { syntax: "<percentage>"; inherits: true; initial-value: 50%; }
 body { font-size: var(--fs-read); line-height: 1.5; overflow-x: hidden; }
-:is(p, li, td, th, figcaption) code { font-size: 0.88em; color: var(--ink); background: var(--wash); padding: 0 3px; overflow-wrap: anywhere; }
+/* Inline code sits in the line: a light chip, a little smaller than the text. */
+:is(p, li, td, th, figcaption) code { font-size: 0.84em; color: var(--ink); background: var(--chip); padding: 0 2px; overflow-wrap: anywhere; }
 
 .wrap { max-width: 1280px; margin: 0 auto; padding: 0 var(--pad); }
 
@@ -17,7 +18,7 @@ body { font-size: var(--fs-read); line-height: 1.5; overflow-x: hidden; }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
 /* Buttons are the work plan's: square, uppercase, ink on paper; the main one inverted. */
 .btn {
-  display: inline-block; padding: 10px 16px; border: 2px solid var(--ink); background: transparent; color: var(--ink);
+  display: inline-block; padding: 10px 16px; text-decoration: none; border: 2px solid var(--ink); background: transparent; color: var(--ink);
   font-size: var(--fs-label); font-weight: var(--w-strong); line-height: 1.2; text-transform: uppercase; letter-spacing: var(--track-label);
 }
 .btn:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
@@ -65,14 +66,29 @@ body { font-size: var(--fs-read); line-height: 1.5; overflow-x: hidden; }
 .compare figcaption code { white-space: nowrap; }
 .compare figcaption small { display: block; margin-top: 8px; font-size: var(--fs-small); color: var(--quiet); }
 
-/* Sections: a thick rule, the heading on the left, the material on the right. */
-section { border-top: var(--rule-thick) solid var(--rule); padding: 14px 0 64px; }
+/* Sections: a rule between them, with room above each heading; the heading
+   on the left, the material on the right. */
+section { border-top: var(--rule-mid) solid var(--rule); padding: 36px 0 48px; }
 main > section { margin: 0 var(--pad); }
 main > section > .wrap { padding: 0; }
 .sec { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 56px; align-items: start; }
 .sec h2 { font-weight: var(--w-heavy); font-size: var(--fs-head); line-height: 1.05; letter-spacing: var(--track-head); margin: 0 0 18px; }
 .sec .side p + p { margin-top: 12px; }
 .sec .side .actions { margin-top: 24px; }
+
+/* The same idea in several libraries: radio buttons pick the panel, so the
+   tabs work without JavaScript. */
+.libs { display: flex; flex-wrap: wrap; gap: 0 24px; min-width: 0; border-top: 1px solid var(--rule); }
+.libs input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.libs label {
+  padding: 8px 0 6px; border-bottom: 3px solid transparent; cursor: pointer; color: var(--quiet);
+  font-size: var(--fs-label); font-weight: var(--w-strong); letter-spacing: var(--track-label); text-transform: uppercase;
+}
+.libs label:hover { color: var(--ink); }
+.libs input:checked + label { color: var(--ink); border-bottom-color: var(--red); }
+.libs input:focus-visible + label { outline: 2px solid var(--red); outline-offset: 2px; }
+.libs .lib { display: none; flex-basis: 100%; min-width: 0; margin-top: 10px; }
+#lib-iced:checked ~ #lib-iced-panel, #lib-ratatui:checked ~ #lib-ratatui-panel, #lib-std:checked ~ #lib-std-panel { display: block; }
 
 .cmds { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .cmd { display: flex; align-items: stretch; border: 1px solid var(--grid); background: var(--wash); min-width: 0; }
@@ -106,7 +122,7 @@ main > section > .wrap { padding: 0; }
 @media (max-width: 640px) {
   .hero { padding-top: 28px; }
   .hero .tag { font-size: 20px; }
-  section { padding-bottom: 48px; }
+  section { padding: 28px 0 40px; }
   .sec h2 { font-size: 24px; }
   .stage { min-width: max-content; }
   .pane pre { font-size: 11.5px; padding: 12px; }

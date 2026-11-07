@@ -3,6 +3,7 @@
 <h1>ratatui</h1>
 <p class="lede">Run a ratatui app under rawr. Its <code>main</code> stays native, and a save of the module you mark shows on the screen at once.</p>
 <p>A ratatui app needs no rawr crate and no special API. You write it as ratatui&rsquo;s own examples do. <code>main</code> owns the terminal, the loop, the keys and the drawing. One module that starts with <code>// rawr</code> holds what the keys do and what the screen says. Under <code>rawr run</code> that module is interpreted, and <code>cargo build --release</code> compiles all of it natively.</p>
+<p>rawr runs apps on other libraries the same way. <a href="/docs/apps">Apps and libraries</a> covers them.</p>
 
 <h2 id="setup">Set up</h2>
 <p>The app is an ordinary Cargo crate with ratatui and crossterm:</p>

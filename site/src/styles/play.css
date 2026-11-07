@@ -8,8 +8,8 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 .playcap, .playfoot { font-size: var(--fs-label); font-weight: var(--w-strong); letter-spacing: var(--track-label); text-transform: uppercase; color: var(--quiet); }
 .playcap { color: var(--ink); }
 .playcap #status { color: var(--quiet); font-weight: 600; }
-.playfoot a { color: var(--quiet); border-bottom-color: var(--grid); }
-.playfoot a:hover { color: var(--ink); border-bottom-color: currentColor; }
+.playfoot a { color: var(--quiet); text-decoration-color: var(--grid); }
+.playfoot a:hover { color: var(--ink); text-decoration-color: currentColor; }
 
 .editor { display: flex; flex-direction: column; min-width: 0; }
 .editor > .cm-editor { flex: 1; min-height: 0; }

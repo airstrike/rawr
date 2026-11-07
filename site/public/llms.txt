@@ -92,7 +92,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - Any other program: restarts on save with the same args ("rawr: the source changed; restarting the program"); stdin continues where the old one stopped.
 - A save that fails the check prints its error; the last good code keeps running.
 - ratatui loops blocked in `event::read()`: rawr sends SIGWINCH after a swap (only if stdin is a terminal) so the loop redraws. rawr saves/restores terminal settings, leaves alt screen, shows cursor, even after SIGKILL restarts; its own lines wait while the terminal is raw.
-- Full: https://rawr.airstrike.fyi/docs/run#reload, https://rawr.airstrike.fyi/docs/iced/reload, https://rawr.airstrike.fyi/docs/ratatui
+- Full: https://rawr.airstrike.fyi/docs/run#reload, https://rawr.airstrike.fyi/docs/apps (any library: iced, ratatui, winit, a plain loop), https://rawr.airstrike.fyi/docs/iced/reload, https://rawr.airstrike.fyi/docs/ratatui
 
 ## Scripts (cargo -Zscript)
 

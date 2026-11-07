@@ -31,9 +31,12 @@
     font-family: var(--sans); font-size: var(--fs-base); font-weight: var(--w-base); line-height: 1.5;
     font-kerning: normal; -webkit-font-smoothing: antialiased;
   }
-  /* A link is underlined in red, as a rule, and turns red under the pointer. */
-  a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--red); }
+  /* Every link in running text looks the same: ink, a thin red underline,
+     and red under the pointer. Navigation and buttons drop the underline. */
+  a { color: inherit; text-decoration: underline 1px var(--red); text-underline-offset: 0.2em; }
   a:hover { color: var(--red); }
+  /* Headings wrap in even lines, so none ends on a lone word. */
+  h1, h2, h3 { text-wrap: balance; }
   :focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
   code, pre, kbd { font-family: var(--mono); }
   b, strong { font-weight: var(--w-strong); }
@@ -52,7 +55,7 @@
     display: flex; align-items: center; justify-content: space-between; gap: 16px;
     padding: 0 var(--pad); border-bottom: 1px solid var(--rule); background: var(--paper);
   }
-  .bar a { border-bottom: 0; }
+  .bar a { text-decoration: none; }
   .brand { display: flex; align-items: baseline; gap: 12px; }
   .brand b { font-size: 16px; font-weight: var(--w-heavy); letter-spacing: 0.01em; color: var(--ink); }
   .links { display: flex; align-items: center; gap: 24px; }
@@ -62,8 +65,8 @@
 
   footer.site { border-top: var(--rule-thick) solid var(--rule); margin: 64px var(--pad) 0; }
   footer.site .foot { padding: 12px 0 28px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-  footer.site a { color: inherit; border-bottom-color: var(--grid); }
-  footer.site a:hover { color: var(--ink); border-bottom-color: currentColor; }
+  footer.site a { color: inherit; text-decoration-color: var(--grid); }
+  footer.site a:hover { color: var(--ink); text-decoration-color: currentColor; }
 
   /* Syntax: red keywords, blue literals, plain names, quiet comments. The
      build and the playground's editor both write these classes (highlight.ts). */
