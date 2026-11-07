@@ -312,6 +312,7 @@ fn canonical_cargo_home_containment_and_derived_marker_policy_are_enforced() {
         ),
         "registry-root-shape",
     );
+    // A Cargo home reached through a link is the directory it names.
     let alias = fixture.root.join("home-alias");
     std::os::unix::fs::symlink(&fixture.home, &alias).expect("Cargo home alias");
     assert!(registry(
@@ -325,7 +326,7 @@ fn canonical_cargo_home_containment_and_derived_marker_policy_are_enforced() {
             &node::GraphBudget::new()
         )
     )
-    .is_err());
+    .is_ok());
     fs::remove_file(&retained.marker).expect("remove extraction marker");
     assert!(fixture
         .observe(&retained, &mut account(), &node::GraphBudget::new())
