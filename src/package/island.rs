@@ -9,12 +9,13 @@
 //! code can call, a trampoline with its signature whose body hands the
 //! arguments to the interpreter and takes the result back. Values cross by
 //! the small wire format of [`crate::island`], which both sides speak:
-//! numbers, `bool`, `char`, strings, `Vec`, `Option`, `Result` and the
-//! marked crate's own structs and enums made of them. A result can also be
-//! a `Result`, or an alias of one such as `iced::Result`, whose `Ok` or
-//! `Err` is a native type: the interpreter moves that native value itself.
-//! A function whose values can't cross gets a trampoline that panics with a
-//! message naming it.
+//! numbers, `bool`, `char`, strings, `Vec`, `Option`, `Result`, tuples and
+//! the marked crate's own structs and enums made of them. A value of a
+//! native type, as the app's own `Message` or the `iced::Error` of an
+//! `iced::Result`, moves itself: back from the interpreter, bare or as a
+//! part of any of those, and in by value, which the interpreter keeps. A
+//! borrow of one is lent for the call. A function whose values can't cross
+//! gets a trampoline that panics with a message naming it.
 //!
 //! The generated files are the island's shape: a save that changes them
 //! (a signature, a struct's fields, a constant native code reads) needs a

@@ -24876,12 +24876,18 @@ impl<'a> Parser<'a> {
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
         // `a.b = v` or `a.b.c = v`: the fields after this one up to a plain
-        // `=`, each a field of the one before.
+        // `=`, each a field of the one before. `a.b += v` and its kin store
+        // the operator's value, `a.b = a.b + v` as Rust's `Copy` fields do.
         let mut ahead = self.input.clone();
         let mut after = Vec::new();
+        let mut operator = None;
         let stored = loop {
             match ahead.next() {
                 Some((Token::Equals, _)) => break true,
+                Some((token, _)) if after.is_empty() && compound_operator(&token).is_some() => {
+                    operator = compound_operator(&token);
+                    break true;
+                }
                 Some((Token::Period, _)) => match ahead.next() {
                     Some((Token::Identifier(name), position)) => {
                         let name = ImmutableString::from(name.as_str());
@@ -24899,7 +24905,7 @@ impl<'a> Parser<'a> {
         for _ in 0..after.len() * 2 + 1 {
             self.next();
         }
-        let mut fields = vec![(member, member_span)];
+        let mut fields = vec![(member.clone(), member_span)];
         fields.extend(after);
         // Rust evaluates the right side before evaluating the assigned
         // place, including before reading any intermediate Copy field.
@@ -24910,6 +24916,11 @@ impl<'a> Parser<'a> {
         source.push_text("; ");
         value.prelude = origin::Fragment::default();
         value.source = origin::Fragment::plain(temporary);
+        if let Some(operator) = operator {
+            let current =
+                self.read_imported_field(receiver.clone(), definition.clone(), member, member_span)?;
+            value = self.compound_assignment(operator, current, value)?;
+        }
         let mut stored = self.store_imported_field(receiver, definition, &fields, false, value)?;
         source.push(stored.rendered_source());
         stored.source = source.surrounded("{ ", " }");
