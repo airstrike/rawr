@@ -18,3 +18,7 @@ impl Counter {
 pub fn label(counter: &Counter) -> String {
     format!("value {}", counter.ticks * SCALE)
 }
+
+pub fn greeting() -> String {
+    crate::features::greeting().to_owned()
+}
