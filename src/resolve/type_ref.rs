@@ -883,7 +883,6 @@ fn resolve_path(
                 source: span,
             });
         }
-        content_messages(definition, &mut arguments, host);
         defaulted_arguments(definition, owner.as_ref(), &mut arguments, host, span);
         let actual = arguments
             .iter()
@@ -1044,85 +1043,6 @@ fn host_type(
         }
         _ => return None,
     })
-}
-
-/// iced's widgets are generic over their content: `Column<Element<'_,
-/// Message>>`, `Container<'a, W>`, `Button<'a, Message, &str>`. A facade
-/// widget (a type projecting to what a facade trait erases to) is generic
-/// over its Message only, so a content argument names its Message, and a
-/// content without one (`&str`, `Text`) is dropped when the arguments
-/// overflow; extra Messages (`Scrollable<'a, Message, W>`) are one.
-fn content_messages(
-    definition: &host::type_def::Definition,
-    arguments: &mut Vec<Argument>,
-    host: &host::Registry,
-) {
-    let erased = host
-        .trait_types()
-        .filter(|(definition, _)| !matches!(definition.shape(), host::type_def::Shape::Trait(_)))
-        .flat_map(|(definition, _)| definition.projections().iter().map(|p| p.target()))
-        .collect::<Vec<_>>();
-    let widget = |definition: &host::type_def::Definition| {
-        definition
-            .projections()
-            .iter()
-            .any(|projection| erased.contains(&projection.target()))
-    };
-    if !widget(definition) {
-        return;
-    }
-    // The content's Message: `Some(None)` for content without one.
-    let content = |argument: &Argument| match argument {
-        Argument::Type(Type::Path(Path {
-            target: Target::Host { definition, .. },
-            arguments,
-            ..
-        })) if widget(definition) || erased.contains(&definition.path()) => Some(
-            definition
-                .parameters()
-                .iter()
-                .position(|parameter| parameter == "Message")
-                .and_then(|index| {
-                    arguments
-                        .iter()
-                        .filter(|argument| matches!(argument, Argument::Type(_)))
-                        .nth(index)
-                        .cloned()
-                }),
-        ),
-        Argument::Type(Type::Path(Path {
-            target: Target::Builtin,
-            name,
-            ..
-        })) if name == "String" => Some(None),
-        _ => None,
-    };
-    let types = arguments
-        .iter()
-        .filter(|argument| matches!(argument, Argument::Type(_)))
-        .count();
-    if types == definition.parameters().len()
-        && !arguments
-            .iter()
-            .any(|argument| content(argument).is_some_and(|message| message.is_some()))
-    {
-        return;
-    }
-    let mut kept = 0;
-    *arguments = std::mem::take(arguments)
-        .into_iter()
-        .filter_map(|argument| match content(&argument) {
-            Some(message) => message,
-            None => Some(argument),
-        })
-        .filter(|argument| {
-            let Argument::Type(_) = argument else {
-                return true;
-            };
-            kept += 1;
-            kept <= definition.parameters().len()
-        })
-        .collect();
 }
 
 /// `path` as std writes it when it names a crate's re-export of a std type,

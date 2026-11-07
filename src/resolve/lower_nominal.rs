@@ -49535,24 +49535,6 @@ impl<'a> Parser<'a> {
                 }
                 return self.parse_tokio_macro(name, first_span);
             }
-            // `tokio::spawn` has no place to run without tokio.
-            if matches!(
-                full.as_str(),
-                "tokio::spawn" | "tokio::task::spawn" | "tokio::task::spawn_local"
-            ) && crate::resolve::std_reexport("tokio::task::yield_now", &self.models.host)
-                != "tokio::task::yield_now"
-            {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
-                        "`{full}` in a program without a tokio dependency is not supported, as \
-                         its async code runs on iced's UI thread; run futures at once with \
-                         `tokio::join!`, run blocking work with `tokio::task::spawn_blocking`, or \
-                         return a `Task` from `update`"
-                    )
-                    .into(),
-                    source: span(first_span.start(), path_end),
-                });
-            }
             // `std::thread::spawn(f)` and `std::sync::mpsc::channel()`.
             let turbofish = matches!(self.peek(), Token::DoubleColon)
                 && matches!(self.peek_second(), Token::LessThan);
@@ -49561,24 +49543,6 @@ impl<'a> Parser<'a> {
                     "std::thread::spawn" => return self.parse_thread_spawn(first_span.start()),
                     "std::sync::mpsc::channel" => return self.parse_channel(first_span.start()),
                     _ => {}
-                }
-            }
-            // `tokio::time::sleep(d)` without tokio: the facade's own
-            // (`resolve::std_reexport`).
-            if full.starts_with("tokio::") && matches!(self.peek(), Token::LeftParen | Token::Unit)
-            {
-                let reexported = crate::resolve::std_reexport(&full, &self.models.host);
-                if let Some(items) = (reexported != full)
-                    .then(|| self.models.host_items(&reexported).map(<[_]>::to_vec))
-                    .flatten()
-                {
-                    let owner = self.models.item_owner(&reexported).cloned();
-                    let (mut arguments, end) = self.parse_call_arguments("call arguments")?;
-                    for argument in &mut arguments {
-                        self.move_local(argument)?;
-                    }
-                    let call = span(first_span.start(), end);
-                    return self.call_host_function(&items, owner, arguments, call);
                 }
             }
             if let Some((value, single)) = crate::resolve::float_constant(&full) {
@@ -50346,6 +50310,17 @@ impl<'a> Parser<'a> {
                     owner,
                     member: member.clone(),
                     reference: member_span,
+                }
+            } else if let [(root, root_span), _, ..] = &segments[..]
+                && self.unresolved_root(root)
+            {
+                // rustc stops at the first segment it can't resolve: a
+                // crate the program doesn't depend on, as `tokio` in
+                // `tokio::task::spawn_local(..)` without tokio (#1149).
+                Error::UnknownType {
+                    name: root.clone(),
+                    reference: span(root_span.start(), text_end(root_span.start(), root)),
+                    path: true,
                 }
             } else {
                 Error::UnknownType {
@@ -51657,9 +51632,6 @@ impl<'a> Parser<'a> {
                     _ => None,
                 })
         });
-        if let Some((definition, _)) = &host {
-            self.content_messages(definition, &mut arguments);
-        }
         match host {
             Some((definition, owner)) if generic || !definition.parameters().is_empty() => {
                 self.default_host_arguments(&definition, owner.as_ref(), &mut arguments);
@@ -51724,70 +51696,6 @@ impl<'a> Parser<'a> {
             }
             _ => self.resolve_type(&name, name_span),
         }
-    }
-
-    /// iced master's widgets are generic over their content, as
-    /// `Row<Element<'static, Message>>`; a facade widget is generic over its
-    /// Message. A content argument names its Message, a content without one
-    /// (`String`) is dropped when the arguments overflow, as an item header
-    /// reads them (`type_ref::content_messages`).
-    fn content_messages(
-        &self,
-        definition: &crate::host::type_def::Definition,
-        arguments: &mut Vec<Ty>,
-    ) {
-        let erased = self
-            .models
-            .host
-            .trait_types()
-            .filter(|(definition, _)| {
-                !matches!(definition.shape(), crate::host::type_def::Shape::Trait(_))
-            })
-            .flat_map(|(definition, _)| definition.projections().iter().map(|p| p.target()))
-            .collect::<Vec<_>>();
-        let widget = |definition: &crate::host::type_def::Definition| {
-            definition
-                .projections()
-                .iter()
-                .any(|projection| erased.contains(&projection.target()))
-        };
-        if !widget(definition) {
-            return;
-        }
-        let content = |argument: &Ty| -> Option<Option<Ty>> {
-            match argument {
-                Ty::Host { proof, arguments }
-                    if widget(&proof.definition) || erased.contains(&proof.definition.path()) =>
-                {
-                    Some(
-                        proof
-                            .definition
-                            .parameters()
-                            .iter()
-                            .position(|parameter| parameter == "Message")
-                            .and_then(|index| arguments.get(index).cloned()),
-                    )
-                }
-                Ty::String | Ty::Str => Some(None),
-                _ => None,
-            }
-        };
-        if arguments.len() == definition.parameters().len()
-            && !arguments
-                .iter()
-                .any(|argument| content(argument).is_some_and(|message| message.is_some()))
-        {
-            return;
-        }
-        let limit = definition.parameters().len();
-        *arguments = std::mem::take(arguments)
-            .into_iter()
-            .filter_map(|argument| match content(&argument) {
-                Some(message) => message,
-                None => Some(argument),
-            })
-            .take(limit)
-            .collect();
     }
 
     /// `(A, ..) -> B` after `fn` or `dyn Fn` in a local type.
@@ -51972,6 +51880,22 @@ impl<'a> Parser<'a> {
             tokens.push((Token::Identifier(Box::new(segment.into())), start));
         }
         self.splice_tokens(tokens);
+    }
+
+    /// Whether a path's first segment `root` names nothing in scope: no
+    /// crate the program reaches, no `use`, item or local of that name.
+    fn unresolved_root(&self, root: &str) -> bool {
+        !matches!(root, "std" | "core" | "crate" | "self" | "super")
+            && self.models.host.entry(root).is_none()
+            && self.models.import(root).is_none()
+            && self.models.get(root).is_none()
+            && self.models.function(root).is_none()
+            && !self.bindings.contains_key(root)
+            && self
+                .models
+                .crates
+                .as_ref()
+                .is_none_or(|crates| crates.reach(root, Span::default()).is_err())
     }
 
     /// The std path `name`, whose first segment is `first`, names through a
