@@ -2,7 +2,11 @@
   "repo": "airstrike/rawr",
   "updated": "2026-11-07",
   "version": "0.3.171",
-  "examples": {"running":30,"total":56,"note":"0.3.160 sweep plus the_matrix (0.3.169): 30 run; progress_bar now builds its runner"},
+  "examples": {
+    "running": 32,
+    "total": 56,
+    "note": "0.3.160 sweep plus the_matrix, lazy and progress_bar: 32 run; modal and pane_grid wait on a region holding an opaque-typed value"
+  },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {
@@ -29,7 +33,16 @@
         {"text":"A program may name its types and modules anything, `Program`, `Error` and `Message` included: the generated runner keeps its own items in a module no program names.","issues":[1163]},
         {"text":"A marked `src/main.rs` names its package's library by the crate name, as a Cargo binary does: the library is built, read and bound like any dependency.","issues":[1164]},
         {"text":"A crate function whose `impl Trait` output captures a parameter a closure fills, such as iced's `markdown::code_block`, no longer panics rawr-import when a member of that output is called.","issues":[1098]},
-        {"text":"The site's Run buttons run snippets in your browser, as the playground does, with no server round trip and no browser check after an edit. The landing page runs its hello program and a bouncing-ball loop, and the borrow-checking examples in How it works run and show their errors. A few blocks that need what the browser lacks (threads, the clock, wide integers) still run on rawr's server and say so. The site bar is plain at the top of the page and takes a light shade and a hairline once the page scrolls.","issues":[1179]}
+        {"text":"The site's Run buttons run snippets in your browser, as the playground does, with no server round trip and no browser check after an edit. The landing page runs its hello program and a bouncing-ball loop, and the borrow-checking examples in How it works run and show their errors. A few blocks that need what the browser lacks (threads, the clock, wide integers) still run on rawr's server and say so. The site bar is plain at the top of the page and takes a light shade and a hairline once the page scrolls.","issues":[1179]},
+        {"text":"A widget moved into a `row!` in one branch and a `column!` in the other runs: each container's methods are that container's own. iced's progress_bar runs.","issues":[1129]},
+        {"text":"A view closure that captures nothing and takes a crate value native code lends it, as `transition`'s `|animation, at| ..`, runs: the value is lent for that call.","issues":[1130]},
+        {"text":"iced's lazy runs: the widgets its closure makes are `'static`, and a string literal they take outside the view, as `button(\"Delete\")`, is a `&'static str`.","issues":[1081]},
+        {"text":"A program's impl of a crate's generic method passes a value of a parameter's associated type from one call to the next, as `painter.fits(painter.font())`.","issues":[1022]},
+        {"text":"Two default methods of one trait that give opaque types, as `explain` and `outlined` of one extension trait, each have the members of their own type.","issues":[943]},
+        {"text":"An idle app under `rawr run`, such as a paused simulation or a window waiting for events, is no longer stopped after a few minutes with \"the runner did not finish a frame before its deadline\". The owner waits for the runner's reply for as long as the runner lives.","issues":[1165]},
+        {"text":"A program under `rawr run` can tell it is and hears what each save did. `RAWR_RELOAD_EVENTS` names a socket that carries one JSON event per line: `restarted` first in a process a save restarted, then `queued`, `swapped`, `failed` with its message, file, line and column, and `restarting` with its reason. Under cargo the variable is absent. The new dependency-free `rawr-reload` crate reads it: `rawr_reload::outcomes()` gives each `Outcome` as it comes, and is `None` outside `rawr run`.","issues":[1166]},
+        {"text":"The old engine is gone from rawr: try/catch, do/until loops, import/export and the module resolvers, custom syntax and operators, and the old built-ins (type_of, is_shared, is_def_var, is_def_fn, eval, Fn). The lexer reads ?., ?[, ??, !in, ===, !==, := and :; as rustc does, and code writing them gets rustc errors such as \"invalid comparison operator `===`\" and \"keyword `catch` cannot follow a `try` block\". The reserved words are exactly Rust own.","issues":[1196]},
+        {"text":"A crate's `impl Iterator<Item = T>`, given by a function or a type's method, is an iterator: `next()`, `for` and the iterator's adaptors pull from it. A type's method that gives an `impl Trait` has the trait's methods.","issues":[1187]}
       ]
     },
     "releases": [
@@ -1965,7 +1978,7 @@
     {"issue":325,"title":"A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":326,"title":"A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.28"},
-    {"issue":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":329,"title":"`copies_tests::a_proxy_lends_its_state_to_script_functions_without_a_copy` counts 1000 copies…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":330,"title":"Calling a `&self` trait method on an opaque value fails in the runner build with E0282, because…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":331,"title":"A method's opaque `impl Trait` output gets no members","state":"open","category":"Shared dependency cache (D607)"},
@@ -2580,7 +2593,7 @@
     {"issue":940,"title":"background cargo check test waits on a deadline, not an event","state":"closed","category":"Health"},
     {"issue":941,"title":"rawr-cli breakpoint test sets its breakpoint before the program has compiled","state":"closed","category":"Health"},
     {"issue":942,"title":"Build the std bindings once per machine, not once per process (0.4)","state":"open","category":"Health"},
-    {"issue":943,"title":"Two default methods of one trait that give opaque types mix up their members","state":"open","category":"Divergences from rustc"},
+    {"issue":943,"title":"Two default methods of one trait that give opaque types mix up their members","state":"closed","category":"Divergences from rustc"},
     {"issue":944,"title":"Type::try_from(&v[..]) of untyped integers picks the [T; N] impl","state":"closed","category":"Divergences from rustc","release":"0.3.138"},
     {"issue":945,"title":"`-` on an unsigned value or literal is E0600","state":"open","category":"Divergences from rustc"},
     {"issue":946,"title":"`let x;` follow-ups: Drop types, patterns, flow-exact E0384","state":"open","category":"Divergences from rustc"},
@@ -2659,7 +2672,7 @@
     {"issue":1019,"title":"Universe build overflows the stack at \"building API\" since 0.3.150","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
     {"issue":1020,"title":"Universe main panics: a value reached an adapter as a type its signature doesn't take","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
     {"issue":1021,"title":"rawr-play lib tests fail: endless-loop snippets, D683.4 refusals, a 100 ms budget","state":"closed","category":"Health","release":"0.3.152"},
-    {"issue":1022,"title":"A generic impl's frame entry takes a projection value from the arena, needing 'static (E0310)","state":"open","category":"Divergences from rustc"},
+    {"issue":1022,"title":"A generic impl's frame entry takes a projection value from the arena, needing 'static (E0310)","state":"closed","category":"Divergences from rustc"},
     {"issue":1023,"title":"A crate unit struct used as a value is refused","state":"open","category":"Divergences from rustc"},
     {"issue":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open","category":"Health"},
     {"issue":1025,"title":"Intrinsic facts captured this run under a stale nightly build-script output aren't recaptured after the clean","state":"open","category":"Shared dependency cache (D607)"},
@@ -2718,7 +2731,7 @@
     {"issue":1078,"title":"Assigning through an Arc is E0594, as rustc reports (rustlings threads2)","state":"closed","category":"Divergences from rustc"},
     {"issue":1079,"title":"for over an Option iterates it, as Option is IntoIterator (rustlings clippy2)","state":"closed","category":"Divergences from rustc"},
     {"issue":1080,"title":"std::thread::spawn in a lone-file program (rustlings smart_pointers3)","state":"closed","category":"Divergences from rustc"},
-    {"issue":1081,"title":"A region family writes a closure-filled type argument at the region's lifetime, not 'static (lazy, pane_grid)","state":"open","category":"Divergences from rustc"},
+    {"issue":1081,"title":"A region family writes a closure-filled type argument at the region's lifetime, not 'static (lazy, pane_grid)","state":"closed","category":"Divergences from rustc"},
     {"issue":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"open","category":"Divergences from rustc"},
     {"issue":1083,"title":"progress_bar's runner: transition(..) in a region closure gives 'lifetime may not live long enough'","state":"closed","category":"Divergences from rustc","release":"0.3.169"},
     {"issue":1084,"title":"the_matrix's runner: WeightedIndex<_> where X is fixed only through I::Item: SampleBorrow<X>","state":"closed","category":"Divergences from rustc","release":"0.3.169"},
@@ -2766,8 +2779,8 @@
     {"issue":1126,"title":"A direct dependency whose only library is a Rust dylib stops the build","state":"open","category":"Health"},
     {"issue":1127,"title":"A native main announces a restart on a changed field but keeps running the old program","state":"open","category":"Health"},
     {"issue":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"open","category":"Health"},
-    {"issue":1129,"title":"progress_bar: a transition moved into a row! in one branch and a column! in the other fails with a lent-value mismatch","state":"open","category":"Divergences from rustc"},
-    {"issue":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"open","category":"Divergences from rustc"},
+    {"issue":1129,"title":"progress_bar: a transition moved into a row! in one branch and a column! in the other fails with a lent-value mismatch","state":"closed","category":"Divergences from rustc"},
+    {"issue":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"closed","category":"Divergences from rustc"},
     {"issue":1131,"title":"Embedding: Engine::script refuses an inline module","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
     {"issue":1132,"title":"Embedding: a script function's leading &mut parameter becomes `this`, but bind_this_ptr says typed scripts can't read it","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
     {"issue":1133,"title":"Embedding: the call-stack depth limit is 8 in debug builds and 64 in release","state":"closed","category":"Health","release":"0.3.170"},
@@ -2802,8 +2815,8 @@
     {"issue":1162,"title":"The landing page's reload section covers any library","state":"open","category":"Health"},
     {"issue":1163,"title":"The generated runner's own items share a namespace with the program's types (a program `struct Program` fails to build)","state":"closed","category":"Divergences from rustc"},
     {"issue":1164,"title":"A marked src/main.rs can't name its own package's lib by the crate name","state":"closed","category":"Divergences from rustc"},
-    {"issue":1165,"title":"An idle but live iced app is stopped after a few minutes with 'the runner did not finish a frame before its deadline'","state":"open","category":"Health"},
-    {"issue":1166,"title":"A program running under rawr run can tell it is, and can observe reload outcomes as events","state":"open","category":"Health"},
+    {"issue":1165,"title":"An idle but live iced app is stopped after a few minutes with 'the runner did not finish a frame before its deadline'","state":"closed","category":"Health"},
+    {"issue":1166,"title":"A program running under rawr run can tell it is, and can observe reload outcomes as events","state":"closed","category":"Health"},
     {"issue":1167,"title":"A crossing test's 120 s budget counts time spent waiting for Cargo's build-directory lock","state":"open","category":"Health"},
     {"issue":1168,"title":"A crate's tuple-struct constructor isn't callable from marked code","state":"open","category":"Divergences from rustc"},
     {"issue":1169,"title":"A tuple of script values passed to a native generic crosses as an array","state":"open","category":"Divergences from rustc"},
@@ -2823,7 +2836,22 @@
     {"issue":1183,"title":"A snippet rejects an inner attribute at its top","state":"open","category":"Divergences from rustc"},
     {"issue":1184,"title":"ratatui snippets run in the browser","state":"open","category":"Platforms"},
     {"issue":1185,"title":"A marked module can't name items of the native crate root it lives in (`crate::Message`)","state":"open","category":"Divergences from rustc"},
-    {"issue":1186,"title":"A workspace root bin with member path dependencies fails: 'complete package membership witness is unavailable'","state":"open","category":"Health"}
+    {"issue":1186,"title":"A workspace root bin with member path dependencies fails: 'complete package membership witness is unavailable'","state":"open","category":"Health"},
+    {"issue":1187,"title":"Run opaque iterators and inherent methods' opaque members","state":"closed","category":"Divergences from rustc"},
+    {"issue":1188,"title":"An iterator whose items are references, as Vec::iter_mut's are","state":"open","category":"Divergences from rustc"},
+    {"issue":1189,"title":"An opaque output that borrows its receiver, as `fn items(&self) -> impl Iterator + '_`","state":"open","category":"Divergences from rustc"},
+    {"issue":1190,"title":"Hold a region value whose type contains an opaque type behind a boxed proxy (D745.4b; modal, pane_grid, loupe)","state":"open","category":"Divergences from rustc"},
+    {"issue":1191,"title":"A capturing closure whose output carries the region lifetime gives it in a region of its own (pane_grid)","state":"open","category":"Divergences from rustc"},
+    {"issue":1192,"title":"An update that calls retain on a field gives the slot a non-unit value","state":"open","category":"Divergences from rustc"},
+    {"issue":1193,"title":"The runner writes each protocol frame in one write, so a stalled runner never leaves the owner holding half a frame","state":"open","category":"Health"},
+    {"issue":1194,"title":"A path dependency whose manifest names a file outside its package panics the importer","state":"open","category":"Health"},
+    {"issue":1195,"title":"The old engine is gone: dead statements, module resolvers, custom syntax, old built-ins and non-Rust lexer symbols","state":"closed","category":"Health"},
+    {"issue":1196,"title":"The old engine is gone","state":"closed","category":"Health"},
+    {"issue":1197,"title":"Delete the runtime import stack that import fed","state":"open","category":"Health"},
+    {"issue":1198,"title":"A `try` block without `catch` is rustc E0658","state":"open","category":"Divergences from rustc"},
+    {"issue":1199,"title":"`#{` and binary `**` in user code give rustc errors","state":"open","category":"Divergences from rustc"},
+    {"issue":1200,"title":"`Fn(\"name\")` is rustc E0423","state":"open","category":"Divergences from rustc"},
+    {"issue":1201,"title":"Drop the old engine binary `in` operator","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3285,8 +3313,9 @@
             {"number":951,"title":"The generated runner reads a crate struct's borrowing field by reference: Stroke.line_dash escapes its closure (E0521)","state":"closed"},
             {"number":955,"title":"Generated adapters for borrowing widgets miss lifetimes: modal's E0106 and pane_grid's region lifetime","state":"open"},
             {"number":957,"title":"Generated adapter bounds the program doesn't need: geometry's Shell: Clone, progress_bar's f64, the_matrix's ThreadRng","state":"closed"},
-            {"number":1081,"title":"A region family writes a closure-filled type argument at the region's lifetime, not 'static (lazy, pane_grid)","state":"open"},
-            {"number":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"open"}
+            {"number":1081,"title":"A region family writes a closure-filled type argument at the region's lifetime, not 'static (lazy, pane_grid)","state":"closed"},
+            {"number":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"open"},
+            {"number":1191,"title":"A capturing closure whose output carries the region lifetime gives it in a region of its own (pane_grid)","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3300,7 +3329,7 @@
           "issues": [
             {"number":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"open"},
             {"number":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open"},
-            {"number":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"open"},
+            {"number":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"closed"},
             {"number":334,"title":"No-glue stops after #313","state":"closed"},
             {"number":345,"title":"No-glue stops after #312 and #338","state":"open"},
             {"number":593,"title":"serde's derives on program types","state":"closed"},
@@ -3342,7 +3371,7 @@
             {"number":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"closed"},
             {"number":1017,"title":"serde attributes and types todos needs: default = path, skip, uuid, unit enums, Vec fields, to_string_pretty","state":"open"},
             {"number":1018,"title":"pokedex: nested Deserialize structs decoded by reqwest's .json().await on tokio's threads","state":"open"},
-            {"number":1022,"title":"A generic impl's frame entry takes a projection value from the arena, needing 'static (E0310)","state":"open"},
+            {"number":1022,"title":"A generic impl's frame entry takes a projection value from the arena, needing 'static (E0310)","state":"closed"},
             {"number":1023,"title":"A crate unit struct used as a value is refused","state":"open"},
             {"number":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed"},
             {"number":1030,"title":"A member missed on a std type such as `String` no longer makes the next request fail","state":"closed"},
@@ -3371,8 +3400,8 @@
             {"number":1098,"title":"markdown: code_block's opaque type gets 4 arguments where 5 are declared (panic in host/type_ref.rs:790)","state":"closed"},
             {"number":1099,"title":"gallery: image(handle) fixes Handle from its argument, not from the renderer (54 x E0271)","state":"open"},
             {"number":1100,"title":"screenshot: &screenshot.rgba (a &Bytes) isn't deref-coerced to &[u8]","state":"open"},
-            {"number":1129,"title":"progress_bar: a transition moved into a row! in one branch and a column! in the other fails with a lent-value mismatch","state":"open"},
-            {"number":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"open"}
+            {"number":1129,"title":"progress_bar: a transition moved into a row! in one branch and a column! in the other fails with a lent-value mismatch","state":"closed"},
+            {"number":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"closed"}
           ],
           "milestone": "0.4"
         },
@@ -3393,10 +3422,14 @@
             {"number":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"open"},
             {"number":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open"},
             {"number":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"closed"},
-            {"number":943,"title":"Two default methods of one trait that give opaque types mix up their members","state":"open"},
+            {"number":943,"title":"Two default methods of one trait that give opaque types mix up their members","state":"closed"},
             {"number":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open"},
             {"number":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"open"},
-            {"number":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"open"}
+            {"number":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"open"},
+            {"number":1187,"title":"Run opaque iterators and inherent methods' opaque members","state":"closed"},
+            {"number":1188,"title":"An iterator whose items are references, as Vec::iter_mut's are","state":"open"},
+            {"number":1189,"title":"An opaque output that borrows its receiver, as `fn items(&self) -> impl Iterator + '_`","state":"open"},
+            {"number":1190,"title":"Hold a region value whose type contains an opaque type behind a boxed proxy (D745.4b; modal, pane_grid, loupe)","state":"open"}
           ]
         }
       ]
@@ -3625,13 +3658,14 @@
             {"number":1153,"title":"Names the old engine reserved are ordinary names, as in Rust","state":"closed"},
             {"number":1163,"title":"The generated runner's own items share a namespace with the program's types (a program `struct Program` fails to build)","state":"closed"},
             {"number":1164,"title":"A marked src/main.rs can't name its own package's lib by the crate name","state":"closed"},
-            {"number":1165,"title":"An idle but live iced app is stopped after a few minutes with 'the runner did not finish a frame before its deadline'","state":"open"},
-            {"number":1166,"title":"A program running under rawr run can tell it is, and can observe reload outcomes as events","state":"open"},
+            {"number":1165,"title":"An idle but live iced app is stopped after a few minutes with 'the runner did not finish a frame before its deadline'","state":"closed"},
+            {"number":1166,"title":"A program running under rawr run can tell it is, and can observe reload outcomes as events","state":"closed"},
             {"number":1168,"title":"A crate's tuple-struct constructor isn't callable from marked code","state":"open"},
             {"number":1170,"title":"A marked binary with native modules or an async main beside its package's library names two crates the same way","state":"open"},
             {"number":1171,"title":"A build input reached through a symlink is refused","state":"closed"},
             {"number":1185,"title":"A marked module can't name items of the native crate root it lives in (`crate::Message`)","state":"open"},
-            {"number":1186,"title":"A workspace root bin with member path dependencies fails: 'complete package membership witness is unavailable'","state":"open"}
+            {"number":1186,"title":"A workspace root bin with member path dependencies fails: 'complete package membership witness is unavailable'","state":"open"},
+            {"number":1194,"title":"A path dependency whose manifest names a file outside its package panics the importer","state":"open"}
           ]
         }
       ]
