@@ -111,7 +111,7 @@ fn main() {
   <tr><td><code>{"event":"restarted","reason":"`Scale` changed its fields"}</code></td><td>A save restarted this process, for that reason. It comes first, and only in a restarted process. A first start gets none.</td></tr>
   <tr><td><code>{"event":"queued"}</code></td><td>A save compiled. The program takes it at its next call into marked code.</td></tr>
   <tr><td><code>{"event":"swapped"}</code></td><td>The program runs the saved code now. It kept its state.</td></tr>
-  <tr><td><code>{"event":"failed","message":"no field `missing` on type `Scale`","file":"/app/src/main.rs","line":11,"column":44,…}</code></td><td>A save failed. The program keeps running the last good code. <code>file</code>, <code>line</code> and <code>column</code> are the error&rsquo;s position, or <code>null</code> when it has none. Columns count from 1.</td></tr>
+  <tr><td><code>{"event":"failed","message":"no field `missing` on type `Scale`","file":"/app/src/main.rs","line":11,"column":45,…}</code></td><td>A save failed. The program keeps running the last good code. <code>file</code>, <code>line</code> and <code>column</code> are the error&rsquo;s position, or <code>null</code> when it has none. Columns count from 1.</td></tr>
   <tr><td><code>{"event":"restarting","reason":"`Scale` changed its fields"}</code></td><td>A save can&rsquo;t swap into this process. rawr ends it and starts the program again.</td></tr>
 </table>
 <p>The lines are the ones <a href="/docs/agents">rawr mcp</a> reads. Other events, such as <code>running</code>, may appear on the stream as well. A reader skips any event it doesn&rsquo;t know.</p>
