@@ -374,3 +374,74 @@ fn native_builds(target: &Path) -> Vec<(std::path::PathBuf, std::time::SystemTim
     found.sort();
     found
 }
+
+/// A workspace whose root package is a plain bin with two marked leaf
+/// modules, path dependencies on two members and on a crate outside the
+/// workspace, and build scripts that print no `rerun-if` line, so Cargo
+/// runs each again when any file of its package changes. `rawr run`
+/// prints what `cargo run` prints, a second run replays without building
+/// the API again, and an edit to a file only such a build script reads
+/// reaches the next run as it reaches Cargo's.
+#[test]
+fn a_workspace_whose_build_scripts_watch_their_whole_package_runs_and_replays() {
+    const WORKSPACE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-workspace"
+    );
+    let project = crate::support::scratch().join("islands-workspace");
+    let _ = fs::remove_dir_all(&project);
+    copy(Path::new(WORKSPACE), &project);
+    let root = project.join("app");
+    let cargo = || {
+        let native = std::process::Command::new("cargo")
+            .args(["run", "--quiet"])
+            .current_dir(&root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap();
+        assert!(
+            native.status.success(),
+            "{}",
+            String::from_utf8_lossy(&native.stderr)
+        );
+        String::from_utf8_lossy(&native.stdout).into_owned()
+    };
+    let rawr = || {
+        let run = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .arg("run")
+            .arg(&root)
+            .env("RAWR_HOME", crate::support::runtime_home())
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let printed = String::from_utf8_lossy(&run.stdout).into_owned();
+        let reported = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "{printed}\n{reported}");
+        (printed, reported)
+    };
+    let printed = cargo();
+    assert_eq!(
+        printed,
+        "icons save,open\nlogo logo bytes\nsibling hello\n\
+         panel expr = term (10 logo bytes) / hello\nbadge 9\n"
+    );
+    assert_eq!(rawr().0, printed);
+    let (replayed, reported) = rawr();
+    assert_eq!(replayed, printed);
+    assert!(!reported.contains("building API"), "{reported}");
+
+    // Each file only a build script reads, and Cargo watches only as part
+    // of its package, reaches the next run as it reaches Cargo's.
+    edit(&root.join("model/grammar.txt"), "term", "factor");
+    edit(&root.join("icons.txt"), "open", "close");
+    let printed = cargo();
+    assert_eq!(
+        printed,
+        "icons save,close\nlogo logo bytes\nsibling hello\n\
+         panel expr = factor (10 logo bytes) / hello\nbadge 9\n"
+    );
+    assert_eq!(rawr().0, printed);
+}
