@@ -11651,6 +11651,16 @@ println!("end {{}}", v.len());
 }
 
 #[test]
+fn language_inner_attributes_open_a_text_of_items_or_statements() {
+    for source in [
+        "#![allow(dead_code)]\nfn main() { println!(\"ok\"); }\nmain();",
+        "#![allow(dead_code)]\n#![cfg_attr(test, allow(unused))]\nprintln!(\"ok\");",
+    ] {
+        assert_eq!(printed(source), "ok\n", "{source}");
+    }
+}
+
+#[test]
 fn language_drop_temporaries_and_assignments() {
     let printed = dropped(
         r#"
