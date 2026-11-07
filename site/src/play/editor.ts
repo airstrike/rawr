@@ -7,29 +7,30 @@ import { rustLanguage } from "@codemirror/lang-rust";
 import { LanguageSupport, bracketMatching, indentUnit, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { EditorState, RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, drawSelection, keymap } from "@codemirror/view";
-import { highlighter, refine, rustTags } from "../lib/highlight.ts";
+import { eachRefined, highlighter, rustTags } from "../lib/highlight.ts";
 
 // The static highlighter's grammar: lezer's Rust with highlight.ts's tags.
 const rust = new LanguageSupport(rustLanguage.configure({ props: [rustTags] }));
 
-// The classes a token's text gives it (refine), as marks over what is in view.
+// The classes a token's text gives it (highlight.ts's refine), as marks over what is in view.
 const marks = new Map<string, Decoration>();
 function refined(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   // A node across two visible ranges is met twice; it is marked once.
   let last = -1;
   for (const { from, to } of view.visibleRanges) {
-    syntaxTree(view.state).iterate({
+    eachRefined(
+      syntaxTree(view.state),
+      (from, to) => view.state.sliceDoc(from, to),
+      (from, to, cls) => {
+        if (from < last) return;
+        last = from;
+        if (!marks.has(cls)) marks.set(cls, Decoration.mark({ class: cls }));
+        builder.add(from, to, marks.get(cls)!);
+      },
       from,
       to,
-      enter: (node) => {
-        const cls = refine(node.name, view.state.sliceDoc(node.from, node.to));
-        if (!cls || node.from < last) return;
-        last = node.from;
-        if (!marks.has(cls)) marks.set(cls, Decoration.mark({ class: cls }));
-        builder.add(node.from, node.to, marks.get(cls)!);
-      },
-    });
+    );
   }
   return builder.finish();
 }

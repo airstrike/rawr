@@ -79,7 +79,8 @@
      editor both write these classes (highlight.ts); names and punctuation stay
      ink. A diagnostic's gutter (.diag .c) is a comment's grey. */
   :where(code, .cm-content) .k { color: var(--syn-key); }
-  :where(code, .cm-content) .t { color: var(--syn-type); }
+  /* In the editor a refined mark (highlight.ts) may wrap the tag's span. */
+  :where(code, .cm-content) :is(.t, .t .f) { color: var(--syn-type); }
   :where(code, .cm-content) .f { color: var(--syn-fn); }
   :where(code, .cm-content) .s { color: var(--syn-str); }
   :where(code, .cm-content) :is(.n, .x) { color: var(--syn-num); }

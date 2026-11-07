@@ -28,9 +28,11 @@ fn f() { let v = Vec::new(); x.cost(); std::mem::drop("a\n"); true }`);
   assert.ok(html.includes('<span class="k">fn</span> <span class="f">f</span>()'), "a function's name");
   assert.ok(html.includes('<span class="t">Vec</span>::<span class="f">new</span>()'), "a type in a path, and a path call");
   assert.ok(html.includes('x.<span class="f">cost</span>()'), "a method call");
-  assert.ok(html.includes('<span class="p">std</span>::<span class="p">mem</span>::'), "a module keeps the text's colour");
+  assert.ok(html.includes('std::mem::<span class="f">drop</span>'), "a module keeps the text's colour");
   assert.ok(html.includes(String.raw`<span class="s">"a</span><span class="x">\n</span><span class="s">"</span>`), "an escape");
   assert.ok(html.includes('<span class="n">true</span>'));
+  assert.equal(highlightRust("let x = Some(MAX);"), '<span class="k">let</span> x = <span class="t">Some</span>(MAX);', "a variant is a type's colour, a constant the text's");
+  assert.equal(highlightRust("#[derive(Debug)] struct S;"), '<span class="a">#[derive(Debug)]</span> <span class="k">struct</span> <span class="t">S</span>;', "an attribute is one colour");
   assert.equal(highlightRust("/** a\n b */ /**/ //// c"), '<span class="d">/** a</span>\n<span class="d"> b */</span> <span class="c">/**/</span> <span class="c">//// c</span>');
 });
 

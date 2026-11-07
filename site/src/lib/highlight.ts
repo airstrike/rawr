@@ -9,11 +9,12 @@
 //   n  numbers and booleans       x  escapes inside a string
 //   a  attributes, lifetimes and loop labels
 //   c  comments                   d  doc comments (/// //! /** /*!)
-//   p  a lowercase path segment (std::), in the text's colour
 //
 // Two classes the grammar's tags can't tell, so they come from a token's text
-// (refine), here and in the editor: a doc comment, and a capitalised path
-// segment (String::from, Vec::new), which is a type.
+// (refine), here and in the editor: a doc comment, and a capitalised name in
+// a path or a call (String::from, Some(x), Ok(())), which is a type or one of
+// its variants.
+import type { Tree } from "@lezer/common";
 import { highlightCode, styleTags, tagHighlighter, tags as t } from "@lezer/highlight";
 import { parser as rustParser } from "@lezer/rust";
 
@@ -34,18 +35,33 @@ export const highlighter = tagHighlighter([
   { tag: t.escape, class: "x" },
   { tag: [t.meta, t.special(t.variableName), t.labelName], class: "a" },
   { tag: t.comment, class: "c" },
-  // A path segment keeps the text's colour; its own span lets refine find it.
-  { tag: t.namespace, class: "p" },
 ]);
 
 /**
  * The class a node's text gives it over its tags: d for a doc comment, as
- * rustdoc reads one, and t for a path segment that names a type.
+ * rustdoc reads one, and t for a capitalised name that isn't a constant
+ * (Vec, Some; not MAX), which Rust's naming makes a type or a variant.
  */
-export function refine(node: string, text: string): string | null {
+function refine(node: string, text: string): string | null {
   if (node === "LineComment" || node === "BlockComment") return /^(\/\/\/(?!\/)|\/\/!|\/\*\*(?![*/])|\/\*!)/.test(text) ? "d" : null;
-  if (node === "ScopeIdentifier") return /^[A-Z]/.test(text) ? "t" : null;
+  if (node === "ScopeIdentifier" || node === "Identifier") return /^[A-Z](?![A-Z0-9_]*$)/.test(text) ? "t" : null;
   return null;
+}
+
+/**
+ * Each refined node of a tree between from and to, in order. An attribute
+ * keeps one class throughout, so its names are left alone.
+ */
+export function eachRefined(tree: Tree, read: (from: number, to: number) => string, add: (from: number, to: number, cls: string) => void, from?: number, to?: number): void {
+  tree.iterate({
+    from,
+    to,
+    enter: (node) => {
+      if (node.name === "Attribute") return false;
+      const cls = refine(node.name, read(node.from, node.to));
+      if (cls) add(node.from, node.to, cls);
+    },
+  });
 }
 
 const escape = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -54,25 +70,26 @@ const span = (cls: string, text: string) => (cls ? `<span class="${cls}">${escap
 /** Rust source as HTML: escaped text, with a span for each highlighted token. */
 export function highlightRust(code: string): string {
   const tree = parser.parse(code);
-  // Each refined node's class and end, by where it starts.
-  const refined = new Map<number, [string, number]>();
-  tree.iterate({
-    enter: (node) => {
-      const cls = refine(node.name, code.slice(node.from, node.to));
-      if (cls) refined.set(node.from, [cls, node.to]);
-    },
-  });
+  // The refined nodes, in order: where each starts and ends, and its class.
+  const refined: [number, number, string][] = [];
+  eachRefined(tree, (from, to) => code.slice(from, to), (from, to, cls) => refined.push([from, to, cls]));
   let html = "";
   let at = 0;
-  let over: [string, number] = ["", -1];
+  let next = 0;
   highlightCode(
     code,
     tree,
     highlighter,
+    // A run of text in one style may hold refined nodes: each is its own span.
     (text, classes) => {
-      over = refined.get(at) ?? over;
-      html += span(at < over[1] ? over[0] : classes, text);
-      at += text.length;
+      const end = at + text.length;
+      while (at < end) {
+        while (next < refined.length && refined[next][1] <= at) next++;
+        const [from, to, cls] = refined[next] ?? [end, end, ""];
+        const cut = Math.min(end, from > at ? from : to);
+        html += span(from > at ? classes : cls, code.slice(at, cut));
+        at = cut;
+      }
     },
     () => {
       html += "\n";
