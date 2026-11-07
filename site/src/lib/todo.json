@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A package with `src/main.rs` and `src/lib.rs` whose marked modules are all in the library's tree runs from its library. The binary stays native and reaches the marked modules through the library as `cargo build` builds it, and so do the library's native modules. `rawr run` and `rawr check` both work, and the crate still builds unchanged with `cargo build --release`. Marked modules in both trees, or a marked `src/lib.rs` beside a native binary, stop with an error that says what to mark.","issues":[1107]},
+        {"text":"A Cargo.lock where a path package and a git package share a name and version, as a `[patch]` of a git dependency can leave it, no longer stops rawr-import with \"dependency identity is ambiguous\".","issues":[1120]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.166",
@@ -2674,13 +2680,20 @@
     {"issue":1104,"title":"collect() on a crate iterator is ambiguous after a lane's history: two identical aliases","state":"open","category":"Health"},
     {"issue":1105,"title":"a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"open","category":"Divergences from rustc"},
     {"issue":1106,"title":"range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc"},
-    {"issue":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"open","category":"Divergences from rustc"},
+    {"issue":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed","category":"Divergences from rustc"},
     {"issue":1108,"title":"A git dependency on a branch with a slash panics rawr-import while it reads Cargo metadata","state":"closed","category":"Health","release":"0.3.165"},
     {"issue":1109,"title":"Error messages that don't read like a program's error messages","state":"closed","category":"Health","release":"0.3.166"},
     {"issue":1110,"title":"A Git dependency whose branch or tag has `&` or `#` is declared with the wrong reference","state":"open","category":"Health"},
     {"issue":1111,"title":"A package from an alternative sparse registry panics rawr-import instead of a plain unsupported-registry error","state":"open","category":"Health"},
     {"issue":1112,"title":"Unsupported-construct messages depend on a \"not supported\" substring","state":"open","category":"Health"},
-    {"issue":1113,"title":"Flaky rawr-cli test a_template_is_written_by_the_binary_offering_it","state":"open","category":"Health"}
+    {"issue":1113,"title":"Flaky rawr-cli test a_template_is_written_by_the_binary_offering_it","state":"open","category":"Health"},
+    {"issue":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open","category":"Divergences from rustc"},
+    {"issue":1115,"title":"A marked src/lib.rs beside a native src/main.rs","state":"open","category":"Divergences from rustc"},
+    {"issue":1116,"title":"Binaries under src/bin/ and [[bin]] targets are not found","state":"open","category":"Divergences from rustc"},
+    {"issue":1117,"title":"`use crate::native_mod;` then `native_mod::ITEM` fails in marked code","state":"open","category":"Divergences from rustc"},
+    {"issue":1118,"title":"Native code can't get a Result, such as iced::Result, back from a marked function","state":"open","category":"Divergences from rustc"},
+    {"issue":1119,"title":"A marked function that native main calls runs off the main thread, so winit panics on macOS","state":"open","category":"Divergences from rustc"},
+    {"issue":1120,"title":"A lock with a path package and a git package of one name and version is refused as ambiguous","state":"closed","category":"Health"}
   ],
   "groups": [
     {
@@ -3439,6 +3452,24 @@
             {"number":1078,"title":"Assigning through an Arc is E0594, as rustc reports (rustlings threads2)","state":"open"},
             {"number":1079,"title":"for over an Option iterates it, as Option is IntoIterator (rustlings clippy2)","state":"open"},
             {"number":1080,"title":"std::thread::spawn in a lone-file program (rustlings smart_pointers3)","state":"open"}
+          ]
+        },
+        {
+          "id": "real-app-shapes",
+          "name": "Real app shapes: a library and a thin main",
+          "start": 78,
+          "size": 2,
+          "state": "now",
+          "note": "Library markers run from a native main in 0.3.167 (#1107). Next: a Result back to native code (#1118), the main thread (#1119), `use crate::m` (#1117), both trees (#1114), src/bin (#1116)",
+          "issues": [
+            {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
+            {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
+            {"number":1115,"title":"A marked src/lib.rs beside a native src/main.rs","state":"open"},
+            {"number":1116,"title":"Binaries under src/bin/ and [[bin]] targets are not found","state":"open"},
+            {"number":1117,"title":"`use crate::native_mod;` then `native_mod::ITEM` fails in marked code","state":"open"},
+            {"number":1118,"title":"Native code can't get a Result, such as iced::Result, back from a marked function","state":"open"},
+            {"number":1119,"title":"A marked function that native main calls runs off the main thread, so winit panics on macOS","state":"open"},
+            {"number":1120,"title":"A lock with a path package and a git package of one name and version is refused as ambiguous","state":"closed"}
           ]
         }
       ]
