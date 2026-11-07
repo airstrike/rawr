@@ -285,201 +285,185 @@ fn session(
     // A save whose runner build found a cache entry stale is attempted
     // again, whose preparation rebuilds it (#613).
     let mut restarts = crate::Restarts::default();
-    loop {
-        match lane.reap_if_exited() {
-            Ok(true) => return Ok(Ended::Exit(0)),
-            Ok(false) => {}
-            // A panic after a swap, such as a framework's own check that
-            // its hooks keep their order, restarts the program with the
-            // new code instead of ending the run (D553.6): the framework
-            // may be half-changed, so going back is not safe.
-            Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
-                101,
-            )))) if swapped_marked && lifecycle == rawr_import::process::Lifecycle::Run => {
-                let reason = "the program panicked after a save";
-                rawr_import::process::say(format_args!("rawr: {reason}; restarting the program"));
-                rawr_cli::events::restarting(reason);
-                return Ok(Ended::Restart(reason.to_owned()));
+    // The program's run, as a block whose failures are checked against
+    // the program's own end below.
+    let ran = (|| -> Result<Ended, diagnostic::Report> {
+        loop {
+            if let Some(ended) = reaped(&mut lane, swapped_marked, lifecycle, &source)? {
+                return Ok(ended);
             }
-            Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
-                code,
-            )))) if lifecycle == rawr_import::process::Lifecycle::Run => {
-                return Ok(Ended::Exit(code));
-            }
-            Err(error) => return Err(framework(error, source.clone())),
-        }
 
-        adapter.poll();
-        let now = Instant::now();
-        if now >= refresh_at {
-            refresh_at = now + REFRESH_POLL;
-            if lane
-                .take_refresh()
-                .map_err(|error| framework(error, source.clone()))?
-            {
-                refresh_required = true;
-                adapter
-                    .gate()
-                    .observe(now)
-                    .map_err(|error| framework(error, source.clone()))?;
-            }
-        }
-        if let Some(watch_request) = adapter.start(now) {
-            let revision = match lane.revision() {
-                Ok(revision) => revision,
-                Err(error) => {
-                    settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
-                    continue;
-                }
-            };
-            // An async `main` runs on its runtime's thread, which a new
-            // generation can't reach: each save that prepares restarts the
-            // program (D500.1), and one that fails leaves it running.
-            if program.is_some() && !manifests.has_islands() && !marked {
-                let next = rawr::project::Target::discover(&target_path);
-                let changed = next.as_ref().ok().and_then(contents);
-                if changed.is_some() && changed == started_from {
-                    continue;
-                }
-                let prepared = next
-                    .map_err(|error| rawr::diagnostic::Report::from_project(&error))
-                    .and_then(|next| {
-                        profile
-                            .prepare(
-                                &next,
-                                None,
-                                revision,
-                                &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
-                            )
-                            .map_err(|error| import(error, source.clone()))
-                    });
-                match prepared {
-                    Ok(prepared) => {
-                        let reason = manifests.restart_line(&prepared.manifests);
-                        rawr_import::process::say(format_args!(
-                            "rawr: {reason}; restarting the program"
-                        ));
-                        rawr_cli::events::restarting(&reason);
-                        return Ok(Ended::Restart(reason));
-                    }
-                    // Latest wins: a newer save reports for itself.
-                    Err(_) if adapter.deadline().is_some() => {}
-                    Err(report) => {
-                        rawr_import::process::say(diagnostic::render(&report));
-                        rawr_cli::events::failed(&report);
-                    }
-                }
-                // A failed save is reported once.
-                started_from = changed;
-                continue;
-            }
-            let started = lane
-                .begin_compile()
-                .map_err(|error| framework(error, source.clone()))?;
-            let scope = rawr_import::supervisor::snapshot::attempt::Scope::begin();
-            let next_target = match rawr::project::Target::discover(&target_path) {
-                Ok(target) => target,
-                Err(error) => {
-                    lane.cancel_compile(started)
+            adapter.poll();
+            let now = Instant::now();
+            if now >= refresh_at {
+                refresh_at = now + REFRESH_POLL;
+                if lane
+                    .take_refresh()
+                    .map_err(|error| framework(error, source.clone()))?
+                {
+                    refresh_required = true;
+                    adapter
+                        .gate()
+                        .observe(now)
                         .map_err(|error| framework(error, source.clone()))?;
-                    settle_failure(
-                        &mut lane,
-                        &adapter,
-                        rawr::diagnostic::Report::from_project(&error),
-                    )?;
-                    continue;
                 }
-            };
-            let _fallback_inputs = match resident::attempt(
-                &mut lane,
-                &adapter,
-                &watch_request,
-                started,
-                revision,
-                &next_target,
-                &manifests,
-                &native_baseline,
-                refresh_required,
-                &mut native_inputs,
-                &scope,
-                &source,
-            ) {
-                Ok(resident::Attempt::Settled) => continue,
-                // The runner admits the generation at its
-                // next call from native code, and says `swapped` then
-                // (D553.3).
-                Ok(resident::Attempt::Swapped) if admits => {
-                    swapped_marked = true;
-                    rawr_cli::events::queued();
-                    continue;
-                }
-                Ok(resident::Attempt::Swapped) => {
-                    rawr_cli::events::swapped();
-                    continue;
-                }
-                Ok(resident::Attempt::Prepare(staged)) => staged,
-                Err(report) => {
-                    settle_failure(&mut lane, &adapter, report)?;
-                    continue;
-                }
-            };
-            let prepared = match profile.prepare(&next_target, None, revision, &scope) {
-                Ok(prepared) => prepared,
-                // A newer save; its own attempt follows.
-                Err(crate::Error::Rawr(error)) if error.source_changed() => continue,
-                Err(error) => {
-                    settle_failure(&mut lane, &adapter, import(error, source.clone()))?;
-                    continue;
-                }
-            };
-            let next_manifests = prepared.manifests.clone();
-            let limits = prepared.limits();
-            let (request, snapshot, _, inputs) = prepared.into_parts();
-            let observation = match inputs.encode_observation() {
-                Ok(observation) => observation,
-                Err(error) => {
-                    settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
-                    continue;
-                }
-            };
-            // A program with native islands (D501) keeps its runner while
-            // the native build stays the same: the new generation swaps in
-            // at its next call through a trampoline. Any other program's
-            // swap went by the resident route above.
-            let started = if next_manifests.has_islands() || marked {
-                match lane.begin_compile() {
-                    Ok(started) => started,
-                    Err(error) => {
-                        settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
-                        continue;
-                    }
-                }
-            } else {
-                None
-            };
-            let preparation =
-                match lane.prepare_started_compile(started, request, snapshot, &observation) {
-                    Ok(preparation) => preparation,
-                    // The runner refused a generation the running
-                    // `main` can't take, and said why (D553.6).
-                    Err(crate::native::Error::Process(
-                        rawr_import::process::RunnerError::ProfileRejected(reason),
-                    )) if admits => {
-                        rawr_import::process::say(format_args!(
-                            "rawr: {reason}; restarting the program"
-                        ));
-                        rawr_cli::events::restarting(&reason);
-                        return Ok(Ended::Restart(reason.into()));
-                    }
+            }
+            if let Some(watch_request) = adapter.start(now) {
+                let revision = match lane.revision() {
+                    Ok(revision) => revision,
                     Err(error) => {
                         settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
                         continue;
                     }
                 };
-            let staged = match adapter.prepare_inputs(inputs) {
-                Ok(staged) => staged,
-                Err(error) => {
-                    let report = match preparation {
+                // An async `main` runs on its runtime's thread, which a new
+                // generation can't reach: each save that prepares restarts the
+                // program (D500.1), and one that fails leaves it running.
+                if program.is_some() && !manifests.has_islands() && !marked {
+                    let next = rawr::project::Target::discover(&target_path);
+                    let changed = next.as_ref().ok().and_then(contents);
+                    if changed.is_some() && changed == started_from {
+                        continue;
+                    }
+                    let prepared = next
+                        .map_err(|error| rawr::diagnostic::Report::from_project(&error))
+                        .and_then(|next| {
+                            profile
+                                .prepare(
+                                    &next,
+                                    None,
+                                    revision,
+                                    &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
+                                )
+                                .map_err(|error| import(error, source.clone()))
+                        });
+                    match prepared {
+                        Ok(prepared) => {
+                            let reason = manifests.restart_line(&prepared.manifests);
+                            rawr_import::process::say(format_args!(
+                                "rawr: {reason}; restarting the program"
+                            ));
+                            rawr_cli::events::restarting(&reason);
+                            return Ok(Ended::Restart(reason));
+                        }
+                        // Latest wins: a newer save reports for itself.
+                        Err(_) if adapter.deadline().is_some() => {}
+                        Err(report) => {
+                            rawr_import::process::say(diagnostic::render(&report));
+                            rawr_cli::events::failed(&report);
+                        }
+                    }
+                    // A failed save is reported once.
+                    started_from = changed;
+                    continue;
+                }
+                let started = lane
+                    .begin_compile()
+                    .map_err(|error| framework(error, source.clone()))?;
+                let scope = rawr_import::supervisor::snapshot::attempt::Scope::begin();
+                let next_target = match rawr::project::Target::discover(&target_path) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        lane.cancel_compile(started)
+                            .map_err(|error| framework(error, source.clone()))?;
+                        settle_failure(
+                            &mut lane,
+                            &adapter,
+                            rawr::diagnostic::Report::from_project(&error),
+                        )?;
+                        continue;
+                    }
+                };
+                let _fallback_inputs = match resident::attempt(
+                    &mut lane,
+                    &adapter,
+                    &watch_request,
+                    started,
+                    revision,
+                    &next_target,
+                    &manifests,
+                    &native_baseline,
+                    refresh_required,
+                    &mut native_inputs,
+                    &scope,
+                    &source,
+                ) {
+                    Ok(resident::Attempt::Settled) => continue,
+                    // The runner admits the generation at its
+                    // next call from native code, and says `swapped` then
+                    // (D553.3).
+                    Ok(resident::Attempt::Swapped) if admits => {
+                        swapped_marked = true;
+                        rawr_cli::events::queued();
+                        continue;
+                    }
+                    Ok(resident::Attempt::Swapped) => {
+                        rawr_cli::events::swapped();
+                        continue;
+                    }
+                    Ok(resident::Attempt::Prepare(staged)) => staged,
+                    Err(report) => {
+                        settle_failure(&mut lane, &adapter, report)?;
+                        continue;
+                    }
+                };
+                let prepared = match profile.prepare(&next_target, None, revision, &scope) {
+                    Ok(prepared) => prepared,
+                    // A newer save; its own attempt follows.
+                    Err(crate::Error::Rawr(error)) if error.source_changed() => continue,
+                    Err(error) => {
+                        settle_failure(&mut lane, &adapter, import(error, source.clone()))?;
+                        continue;
+                    }
+                };
+                let next_manifests = prepared.manifests.clone();
+                let limits = prepared.limits();
+                let (request, snapshot, _, inputs) = prepared.into_parts();
+                let observation = match inputs.encode_observation() {
+                    Ok(observation) => observation,
+                    Err(error) => {
+                        settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
+                        continue;
+                    }
+                };
+                // A program with native islands (D501) keeps its runner while
+                // the native build stays the same: the new generation swaps in
+                // at its next call through a trampoline. Any other program's
+                // swap went by the resident route above.
+                let started = if next_manifests.has_islands() || marked {
+                    match lane.begin_compile() {
+                        Ok(started) => started,
+                        Err(error) => {
+                            settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+                let preparation =
+                    match lane.prepare_started_compile(started, request, snapshot, &observation) {
+                        Ok(preparation) => preparation,
+                        // The runner refused a generation the running
+                        // `main` can't take, and said why (D553.6).
+                        Err(crate::native::Error::Process(
+                            rawr_import::process::RunnerError::ProfileRejected(reason),
+                        )) if admits => {
+                            rawr_import::process::say(format_args!(
+                                "rawr: {reason}; restarting the program"
+                            ));
+                            rawr_cli::events::restarting(&reason);
+                            return Ok(Ended::Restart(reason.into()));
+                        }
+                        Err(error) => {
+                            settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
+                            continue;
+                        }
+                    };
+                let staged = match adapter.prepare_inputs(inputs) {
+                    Ok(staged) => staged,
+                    Err(error) => {
+                        let report = match preparation {
                         rawr_import::process::hot::Preparation::Prepared(prepared) => {
                             match lane.abort_compile(prepared) {
                                 Ok(()) => framework(error, source.clone()),
@@ -493,170 +477,213 @@ fn session(
                             framework(error, source.clone())
                         }
                     };
-                    settle_failure(&mut lane, &adapter, report)?;
-                    continue;
-                }
-            };
-            // Capture before the full path's final current validation, never
-            // after adoption where an intervening native event could disappear.
-            let next_native_baseline = adapter.native_baseline();
-            // A hot commit swaps; a new runner restarts the program.
-            let swapped = matches!(
-                preparation,
-                rawr_import::process::hot::Preparation::Prepared(_)
-            );
-            let mut stale = false;
-            let admitted = match preparation {
-                rawr_import::process::hot::Preparation::Prepared(prepared) => lane
-                    .revalidate_compile(prepared)
-                    // Child callbacks revoke the retained request on the exact
-                    // UI gate. Parent notices only schedule work; never hold
-                    // the parent gate through validation, pinning or hot IPC.
-                    .and_then(|prepared| lane.commit_compile(prepared))
-                    .map(|_| crate::native::Watched::Installed)
-                    .or_else(|error| {
-                        // A newer save supersedes it, and its attempt follows.
-                        if error.source_changed() {
-                            Ok(crate::native::Watched::Obsolete)
-                        } else {
-                            Err(framework(error, source.clone()))
-                        }
-                    }),
-                // A new native build restarts a marked `main` as a
-                // new session, which builds it.
-                rawr_import::process::hot::Preparation::Miss(_) if marked => {
-                    drop(staged);
-                    let reason = manifests.restart_line(&next_manifests);
-                    rawr_import::process::say(format_args!(
-                        "rawr: {reason}; restarting the program"
-                    ));
-                    rawr_cli::events::restarting(&reason);
-                    return Ok(Ended::Restart(reason));
-                }
-                rawr_import::process::hot::Preparation::Miss(miss) => {
-                    // D500.4: a new native build restarts the program, and
-                    // says why in one line, once for each new build.
-                    if (announced.as_ref() != Some(&next_manifests) || manifests.restarts_on_save())
-                        && let Some(reason) = manifests.restart_reason(&next_manifests)
-                    {
+                        settle_failure(&mut lane, &adapter, report)?;
+                        continue;
+                    }
+                };
+                // Capture before the full path's final current validation, never
+                // after adoption where an intervening native event could disappear.
+                let next_native_baseline = adapter.native_baseline();
+                // A hot commit swaps; a new runner restarts the program.
+                let swapped = matches!(
+                    preparation,
+                    rawr_import::process::hot::Preparation::Prepared(_)
+                );
+                let mut stale = false;
+                let admitted = match preparation {
+                    rawr_import::process::hot::Preparation::Prepared(prepared) => lane
+                        .revalidate_compile(prepared)
+                        // Child callbacks revoke the retained request on the exact
+                        // UI gate. Parent notices only schedule work; never hold
+                        // the parent gate through validation, pinning or hot IPC.
+                        .and_then(|prepared| lane.commit_compile(prepared))
+                        .map(|_| crate::native::Watched::Installed)
+                        .or_else(|error| {
+                            // A newer save supersedes it, and its attempt follows.
+                            if error.source_changed() {
+                                Ok(crate::native::Watched::Obsolete)
+                            } else {
+                                Err(framework(error, source.clone()))
+                            }
+                        }),
+                    // A new native build restarts a marked `main` as a
+                    // new session, which builds it.
+                    rawr_import::process::hot::Preparation::Miss(_) if marked => {
+                        drop(staged);
+                        let reason = manifests.restart_line(&next_manifests);
                         rawr_import::process::say(format_args!(
                             "rawr: {reason}; restarting the program"
                         ));
                         rawr_cli::events::restarting(&reason);
-                        announced = Some(next_manifests.clone());
+                        return Ok(Ended::Restart(reason));
                     }
-                    let (request, snapshot) = miss.into_parts();
-                    let mut report = |error: &dyn std::fmt::Display, again: bool| {
-                        stale |= again;
-                        framework(error, source.clone())
-                    };
-                    request
-                        .generate(&limits)
-                        .map_err(|error| report(&error, restarts.again(&error)))
-                        .and_then(|generated| {
-                            lane.build(generated)
-                                .map_err(|error| report(&error, restarts.again(&error)))
-                        })
-                        .and_then(|mut built| {
-                            built
-                                .retain_startup(&snapshot)
-                                .map_err(|error| report(&error, restarts.again(&error)))?;
-                            built
-                                .revalidate_prepared()
-                                .map_err(|error| framework(error, source.clone()))?;
-                            lane.replace_built_started_request(
-                                built,
-                                snapshot,
-                                &adapter,
-                                &observation,
-                                watch_request,
-                            )
-                            .map_err(|error| framework(error, source.clone()))
-                        })
-                }
-            };
-            match admitted {
-                Ok(crate::native::Watched::Installed) => {
-                    // The runner admits the generation at
-                    // its next call from native code, and says `swapped`
-                    // then (D553.3).
-                    if swapped && admits {
-                        swapped_marked = true;
-                        rawr_cli::events::queued();
-                    } else if swapped {
-                        rawr_cli::events::swapped();
-                    } else {
-                        rawr_cli::events::running();
+                    rawr_import::process::hot::Preparation::Miss(miss) => {
+                        // D500.4: a new native build restarts the program, and
+                        // says why in one line, once for each new build.
+                        if (announced.as_ref() != Some(&next_manifests)
+                            || manifests.restarts_on_save())
+                            && let Some(reason) = manifests.restart_reason(&next_manifests)
+                        {
+                            rawr_import::process::say(format_args!(
+                                "rawr: {reason}; restarting the program"
+                            ));
+                            rawr_cli::events::restarting(&reason);
+                            announced = Some(next_manifests.clone());
+                        }
+                        let (request, snapshot) = miss.into_parts();
+                        let mut report = |error: &dyn std::fmt::Display, again: bool| {
+                            stale |= again;
+                            framework(error, source.clone())
+                        };
+                        request
+                            .generate(&limits)
+                            .map_err(|error| report(&error, restarts.again(&error)))
+                            .and_then(|generated| {
+                                lane.build(generated)
+                                    .map_err(|error| report(&error, restarts.again(&error)))
+                            })
+                            .and_then(|mut built| {
+                                built
+                                    .retain_startup(&snapshot)
+                                    .map_err(|error| report(&error, restarts.again(&error)))?;
+                                built
+                                    .revalidate_prepared()
+                                    .map_err(|error| framework(error, source.clone()))?;
+                                lane.replace_built_started_request(
+                                    built,
+                                    snapshot,
+                                    &adapter,
+                                    &observation,
+                                    watch_request,
+                                )
+                                .map_err(|error| framework(error, source.clone()))
+                            })
                     }
-                    manifests = next_manifests;
-                    native_baseline = next_native_baseline;
-                    native_inputs = None;
-                    refresh_required = false;
-                    restarts = crate::Restarts::default();
-                    for error in adapter
-                        .commit_inputs(staged)
-                        .map_err(|error| framework(error, source.clone()))?
-                    {
-                        rawr_import::process::say(format_args!("warning: file watcher: {error}"));
+                };
+                match admitted {
+                    Ok(crate::native::Watched::Installed) => {
+                        // The runner admits the generation at
+                        // its next call from native code, and says `swapped`
+                        // then (D553.3).
+                        if swapped && admits {
+                            swapped_marked = true;
+                            rawr_cli::events::queued();
+                        } else if swapped {
+                            rawr_cli::events::swapped();
+                        } else {
+                            rawr_cli::events::running();
+                        }
+                        manifests = next_manifests;
+                        native_baseline = next_native_baseline;
+                        native_inputs = None;
+                        refresh_required = false;
+                        restarts = crate::Restarts::default();
+                        for error in adapter
+                            .commit_inputs(staged)
+                            .map_err(|error| framework(error, source.clone()))?
+                        {
+                            rawr_import::process::say(format_args!(
+                                "warning: file watcher: {error}"
+                            ));
+                        }
                     }
-                }
-                Ok(crate::native::Watched::Obsolete) => drop(staged),
-                // The save is attempted again, and its preparation rebuilds
-                // the entry that went stale.
-                Err(_) if stale => {
-                    drop(staged);
-                    adapter
-                        .gate()
-                        .observe(Instant::now())
-                        .map_err(|error| framework(error, source.clone()))?;
-                }
-                Err(report) => {
-                    drop(staged);
-                    settle_failure(&mut lane, &adapter, report)?;
+                    Ok(crate::native::Watched::Obsolete) => drop(staged),
+                    // The save is attempted again, and its preparation rebuilds
+                    // the entry that went stale.
+                    Err(_) if stale => {
+                        drop(staged);
+                        adapter
+                            .gate()
+                            .observe(Instant::now())
+                            .map_err(|error| framework(error, source.clone()))?;
+                    }
+                    Err(report) => {
+                        drop(staged);
+                        settle_failure(&mut lane, &adapter, report)?;
+                    }
                 }
             }
-        }
 
-        let now = Instant::now();
-        let timeout = adapter
-            .deadline()
-            .map_or(IDLE_POLL, |deadline| {
-                deadline.saturating_duration_since(now)
-            })
-            .min(IDLE_POLL);
-        match adapter.notices().recv_timeout(timeout) {
-            Ok(rawr_watch::Notice::Changed(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Ok(rawr_watch::Notice::Backend(error)) => {
-                retain_report(
+            let now = Instant::now();
+            let timeout = adapter
+                .deadline()
+                .map_or(IDLE_POLL, |deadline| {
+                    deadline.saturating_duration_since(now)
+                })
+                .min(IDLE_POLL);
+            match adapter.notices().recv_timeout(timeout) {
+                Ok(rawr_watch::Notice::Changed(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Ok(rawr_watch::Notice::Backend(error)) => {
+                    retain_report(
                     &mut lane,
                     framework(
                         format!("the file watcher stopped, so saves no longer reload the program: {error}"),
                         source.clone(),
                     ),
                 )?;
-                return wait_for_window(lane, source).map(|()| Ended::Exit(0));
-            }
-            Ok(rawr_watch::Notice::Schedule(error)) => {
-                retain_report(
+                    return wait_for_window(&mut lane, &source).map(|()| Ended::Exit(0));
+                }
+                Ok(rawr_watch::Notice::Schedule(error)) => {
+                    retain_report(
                     &mut lane,
                     framework(
                         format!("the reload scheduler stopped, so saves no longer reload the program: {error}"),
                         source.clone(),
                     ),
                 )?;
-                return wait_for_window(lane, source).map(|()| Ended::Exit(0));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                retain_report(
-                    &mut lane,
-                    framework(
-                        "the file watcher stopped, so saves no longer reload the program",
-                        source.clone(),
-                    ),
-                )?;
-                return wait_for_window(lane, source).map(|()| Ended::Exit(0));
+                    return wait_for_window(&mut lane, &source).map(|()| Ended::Exit(0));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    retain_report(
+                        &mut lane,
+                        framework(
+                            "the file watcher stopped, so saves no longer reload the program",
+                            source.clone(),
+                        ),
+                    )?;
+                    return wait_for_window(&mut lane, &source).map(|()| Ended::Exit(0));
+                }
             }
         }
+    })();
+    match ran {
+        // A program that ended as its owner asked its runner something
+        // ended the run: its status stands, not the ask's failure.
+        Err(report) if lane.exited() => {
+            reaped(&mut lane, swapped_marked, lifecycle, &source)?.ok_or(report)
+        }
+        ran => ran,
+    }
+}
+
+/// How the session ends when its program ended: `None` while it runs.
+fn reaped(
+    lane: &mut Lane,
+    swapped_marked: bool,
+    lifecycle: rawr_import::process::Lifecycle,
+    source: &diagnostic::Source,
+) -> Result<Option<Ended>, diagnostic::Report> {
+    match lane.reap_if_exited() {
+        Ok(true) => Ok(Some(Ended::Exit(0))),
+        Ok(false) => Ok(None),
+        // A panic after a swap, such as a framework's own check that its
+        // hooks keep their order, restarts the program with the new code
+        // instead of ending the run (D553.6): the framework may be
+        // half-changed, so going back is not safe.
+        Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(101))))
+            if swapped_marked && lifecycle == rawr_import::process::Lifecycle::Run =>
+        {
+            let reason = "the program panicked after a save";
+            rawr_import::process::say(format_args!("rawr: {reason}; restarting the program"));
+            rawr_cli::events::restarting(reason);
+            Ok(Some(Ended::Restart(reason.to_owned())))
+        }
+        Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(code))))
+            if lifecycle == rawr_import::process::Lifecycle::Run =>
+        {
+            Ok(Some(Ended::Exit(code)))
+        }
+        Err(error) => Err(framework(error, source.clone())),
     }
 }
 
@@ -934,7 +961,9 @@ fn settle_failure(
     adapter: &rawr_watch::Adapter,
     report: diagnostic::Report,
 ) -> Result<(), diagnostic::Report> {
-    if adapter.deadline().is_some() {
+    // A newer save reports for itself, and a program that ended as the
+    // save ran ends the run at the next reap.
+    if adapter.deadline().is_some() || lane.exited() {
         return Ok(());
     }
     retain_report(lane, report)
@@ -950,7 +979,7 @@ fn retain_report(lane: &mut Lane, report: diagnostic::Report) -> Result<(), diag
         .map_err(|error| framework(error, None))
 }
 
-fn wait_for_window(mut lane: Lane, source: diagnostic::Source) -> Result<(), diagnostic::Report> {
+fn wait_for_window(lane: &mut Lane, source: &diagnostic::Source) -> Result<(), diagnostic::Report> {
     loop {
         if lane
             .reap_if_exited()

@@ -438,6 +438,12 @@ impl<B> Lane<B> {
         self.slot.reap_if_exited().map_err(Error::Process)
     }
 
+    /// Whether the program ended on its own, as its runner was asked
+    /// something or between asks: [`Self::reap_if_exited`] says how.
+    pub fn exited(&self) -> bool {
+        self.slot.exited()
+    }
+
     /// Explicitly stop and reap the current whole-process epoch.
     pub fn shutdown(&mut self) -> Result<(), Error> {
         if let Some(current) = self.slot.take() {

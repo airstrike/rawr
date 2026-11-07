@@ -21,14 +21,10 @@ impl<B> Candidate<super::Admitted, B> {
             let response = super::receive_reply(inner, None)?;
             refresh_status(&response, &key)
         })
-        .or_else(|error| match error {
-            // A window closed between the caller's reap check and this poll;
-            // the next reap reports the clean exit.
-            Error::WorkPeer {
-                status: Some(0), ..
-            } => Ok(false),
-            error @ Error::WorkPeer { .. } => Err(error),
-            error => Err(super::terminal_owner_loss(inner, error)),
+        .map_err(|error| match error {
+            // The program ended as it was polled: the next reap says how.
+            error @ Error::WorkPeer { .. } => error,
+            error => super::terminal_owner_loss(inner, error),
         })
     }
 

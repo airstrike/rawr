@@ -61,6 +61,24 @@ impl Run {
             }
         }
     }
+
+    /// Wait for the run to end, and keep the output it printed since the
+    /// last [`Run::until`].
+    pub fn wait(&mut self) -> std::process::ExitStatus {
+        let status = self.child.wait().unwrap();
+        // A process the run left behind may hold its pipes open.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while let Ok(line) = self
+            .lines
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            self.seen.push(match line {
+                Line::Out(line) => line,
+                Line::Err(line) => format!("stderr: {line}"),
+            });
+        }
+        status
+    }
 }
 
 impl Drop for Run {
