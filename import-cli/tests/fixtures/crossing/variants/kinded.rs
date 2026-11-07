@@ -10,7 +10,10 @@ use events::paired::Paired;
 fn main() {
     let low: isize = -1;
     let columns = low..=1;
-    let pairs = (0u8..2).cartesian_product(columns).collect::<Vec<_>>();
+    let mut pairs = Vec::new();
+    for (row, column) in (0u8..2).cartesian_product(columns) {
+        pairs.push((row, column));
+    }
     println!("{pairs:?}");
 
     let rows = low.saturating_sub(1)..=low.saturating_add(1);
