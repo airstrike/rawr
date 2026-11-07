@@ -793,3 +793,113 @@ fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_acro
     drop(client.input.take());
     assert!(client.child.wait().unwrap().success());
 }
+
+#[test]
+fn input_tools_are_listed_and_reach_the_started_program_which_says_what_it_takes() {
+    let sandbox = Sandbox::new("mcp-input");
+    let mut client = Client::start(&sandbox);
+    client.request("initialize", json!({ "protocolVersion": "2025-06-18" }));
+    let listed = client.request("tools/list", json!({}));
+    let tools = listed["result"]["tools"].as_array().unwrap();
+    let schema = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("no `{name}` in {listed}"))["inputSchema"]
+            .clone()
+    };
+    for (name, required) in [
+        ("move", json!(["x", "y"])),
+        ("click", json!(["x", "y"])),
+        ("drag", json!(["x", "y", "to_x", "to_y"])),
+        ("scroll", json!(["x", "y"])),
+        ("key", json!(["key"])),
+        ("type", json!(["text"])),
+    ] {
+        let schema = schema(name);
+        assert_eq!(schema["required"], required, "{name}: {schema}");
+        for common in ["path", "title", "timeout_ms"] {
+            assert!(
+                schema["properties"].get(common).is_some(),
+                "{name}: {schema}"
+            );
+        }
+    }
+
+    // Nothing started: the tool says to start it.
+    let unstarted = client.call("click", json!({ "path": "looper", "x": 1, "y": 1 }));
+    assert_eq!(unstarted["isError"], true, "{unstarted}");
+
+    let made = client.call("new", json!({ "path": "looper" }));
+    assert_eq!(made["isError"], false, "{made}");
+    let main = sandbox.work().join("looper/src/main.rs");
+    std::fs::write(
+        &main,
+        "// rawr\n\
+         fn tick(count: u64) -> u64 {\n    count + 1\n}\n\
+         \n\
+         fn main() {\n    let mut count = 0;\n    loop {\n        count = tick(count);\n        std::thread::sleep(std::time::Duration::from_millis(2));\n    }\n}\n",
+    )
+    .unwrap();
+    let started = client.call("start", json!({ "path": "looper", "wait_ms": 20000 }));
+    assert_eq!(
+        started["structuredContent"]["state"], "running",
+        "{started}"
+    );
+    let read = client.call(
+        "inspect",
+        json!({ "path": "looper", "name": "count", "timeout_ms": 120000 }),
+    );
+    assert_eq!(read["isError"], false, "{read}");
+
+    let text = |answer: &Value| {
+        answer["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    // The program checks what it is sent: a key it doesn't know, a click
+    // with no point.
+    let unknown = client.call("key", json!({ "path": "looper", "key": "Hyper" }));
+    assert_eq!(unknown["isError"], true, "{unknown}");
+    assert!(
+        text(&unknown).starts_with("unknown key `Hyper`"),
+        "{unknown}"
+    );
+    let pointless = client.call("click", json!({ "path": "looper", "x": 4 }));
+    assert!(
+        text(&pointless).starts_with("this input needs `y`"),
+        "{pointless}"
+    );
+
+    // A program with no window takes no input, and says so at once.
+    let windowless = client.call(
+        "click",
+        json!({ "path": "looper", "x": 10, "y": 10, "timeout_ms": 2000 }),
+    );
+    assert_eq!(windowless["isError"], true, "{windowless}");
+    let expected = if cfg!(target_os = "macos") {
+        "the program shows no window"
+    } else {
+        "sending a window input needs macOS here"
+    };
+    assert!(text(&windowless).starts_with(expected), "{windowless}");
+
+    // A paused program holds its event loop: input waits for `continue`.
+    let set = client.call(
+        "break",
+        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 9, "timeout_ms": 5000 }),
+    );
+    assert_eq!(paused(&set).0, 9, "{set}");
+    let held = client.call("type", json!({ "path": "looper", "text": "hi" }));
+    assert_eq!(held["isError"], true, "{held}");
+    assert!(text(&held).contains("is paused at "), "{held}");
+    assert!(text(&held).contains("main.rs:9"), "{held}");
+    client.call("clear", json!({ "path": "looper" }));
+    client.call("continue", json!({ "path": "looper", "timeout_ms": 100 }));
+
+    let stopped = client.call("stop", json!({ "path": "looper" }));
+    assert_eq!(stopped["structuredContent"]["stopped"], true, "{stopped}");
+    drop(client.input.take());
+    assert!(client.child.wait().unwrap().success());
+}
