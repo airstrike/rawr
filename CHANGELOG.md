@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.170 (2026-11-07)
+
 - A native `main`'s calls into marked code run on the thread that makes them, the process's main thread for `main` itself, as cargo's build runs them. A library whose marked `app.rs` starts iced runs from a `main.rs` that only calls it, and a save to `app.rs` shows at iced's next `update` or `view`, keeping the app's state. (#1119)
 - A marked function can return a `Result` to native code: a `Result` of crossable types, one whose `Ok` or `Err` is another crate's type, or an alias such as `iced::Result`. The native value itself goes back, so `fn main() -> iced::Result { mycrate::app::run() }` gets iced's own error. (#1118)
 - An embedded script can hold inline modules: `Engine::script`, `load`, `compile`, `eval` and `run` resolve `mod m { .. }` with rustc's paths, `pub`, `use`, `super` and E0603, and the host calls the root's functions by name. A file module (`mod m;`) still needs a package. (#1131)

@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-07",
-  "version": "0.3.169",
+  "version": "0.3.170",
   "examples": {"running":30,"total":56,"note":"0.3.160 sweep plus the_matrix (0.3.169): 30 run; progress_bar now builds its runner"},
   "groups": [
     {

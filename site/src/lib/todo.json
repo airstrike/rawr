@@ -1,23 +1,25 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-07",
-  "version": "0.3.169",
+  "version": "0.3.170",
   "examples": {"running":30,"total":56,"note":"0.3.160 sweep plus the_matrix (0.3.169): 30 run; progress_bar now builds its runner"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A native `main`'s calls into marked code run on the thread that makes them, the process's main thread for `main` itself, as cargo's build runs them. A library whose marked `app.rs` starts iced runs from a `main.rs` that only calls it, and a save to `app.rs` shows at iced's next `update` or `view`, keeping the app's state.","issues":[1119]},
-        {"text":"A marked function can return a `Result` to native code: a `Result` of crossable types, one whose `Ok` or `Err` is another crate's type, or an alias such as `iced::Result`. The native value itself goes back, so `fn main() -> iced::Result { mycrate::app::run() }` gets iced's own error.","issues":[1118]},
-        {"text":"An embedded script can hold inline modules: `Engine::script`, `load`, `compile`, `eval` and `run` resolve `mod m { .. }` with rustc's paths, `pub`, `use`, `super` and E0603, and the host calls the root's functions by name. A file module (`mod m;`) still needs a package.","issues":[1131]},
-        {"text":"`call_fn` calls a script function with the parameters it is written with, a `&mut` one included, so `call_fn(\"update\", (model, by))` works. `CallFnOptions::bind_this_ptr` still lends that value apart.","issues":[1132]},
-        {"text":"The default call-depth limit is 64 in debug and release builds alike. A script call that finds the host thread's stack nearly full gets more stack, so the limit, not the thread, ends deep recursion.","issues":[1133]},
-        {"text":"A package with marked modules builds its native side with the package's own files: `include_bytes!` and `include_str!` through `env!(\"CARGO_MANIFEST_DIR\")` or a path relative to the source file, even outside the package, and its build script, which runs in the package's directory with its build-dependencies. Cargo reruns the script on the files its `rerun-if-changed` lines name, never on a save to a marked module.","issues":[1136]},
-        {"text":"A native `src/main.rs` with marked modules no longer prints Cargo's warning that the file is in both the lib and bin targets.","issues":[1135]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.170",
+        "date": "2026-11-07",
+        "entries": [
+          {"text":"A native `main`'s calls into marked code run on the thread that makes them, the process's main thread for `main` itself, as cargo's build runs them. A library whose marked `app.rs` starts iced runs from a `main.rs` that only calls it, and a save to `app.rs` shows at iced's next `update` or `view`, keeping the app's state.","issues":[1119]},
+          {"text":"A marked function can return a `Result` to native code: a `Result` of crossable types, one whose `Ok` or `Err` is another crate's type, or an alias such as `iced::Result`. The native value itself goes back, so `fn main() -> iced::Result { mycrate::app::run() }` gets iced's own error.","issues":[1118]},
+          {"text":"An embedded script can hold inline modules: `Engine::script`, `load`, `compile`, `eval` and `run` resolve `mod m { .. }` with rustc's paths, `pub`, `use`, `super` and E0603, and the host calls the root's functions by name. A file module (`mod m;`) still needs a package.","issues":[1131]},
+          {"text":"`call_fn` calls a script function with the parameters it is written with, a `&mut` one included, so `call_fn(\"update\", (model, by))` works. `CallFnOptions::bind_this_ptr` still lends that value apart.","issues":[1132]},
+          {"text":"The default call-depth limit is 64 in debug and release builds alike. A script call that finds the host thread's stack nearly full gets more stack, so the limit, not the thread, ends deep recursion.","issues":[1133]},
+          {"text":"A package with marked modules builds its native side with the package's own files: `include_bytes!` and `include_str!` through `env!(\"CARGO_MANIFEST_DIR\")` or a path relative to the source file, even outside the package, and its build script, which runs in the package's directory with its build-dependencies. Cargo reruns the script on the files its `rerun-if-changed` lines name, never on a save to a marked module.","issues":[1136]},
+          {"text":"A native `src/main.rs` with marked modules no longer prints Cargo's warning that the file is in both the lib and bin targets.","issues":[1135]}
+        ]
+      },
       {
         "version": "0.3.169",
         "date": "2026-11-07",
@@ -2719,8 +2721,8 @@
     {"issue":1115,"title":"A marked src/lib.rs beside a native src/main.rs","state":"open","category":"Divergences from rustc"},
     {"issue":1116,"title":"Binaries under src/bin/ and [[bin]] targets are not found","state":"open","category":"Divergences from rustc"},
     {"issue":1117,"title":"`use crate::native_mod;` then `native_mod::ITEM` fails in marked code","state":"closed","category":"Divergences from rustc","release":"0.3.169"},
-    {"issue":1118,"title":"Native code can't get a Result, such as iced::Result, back from a marked function","state":"closed","category":"Divergences from rustc"},
-    {"issue":1119,"title":"A marked function that native main calls runs off the main thread, so winit panics on macOS","state":"closed","category":"Divergences from rustc"},
+    {"issue":1118,"title":"Native code can't get a Result, such as iced::Result, back from a marked function","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
+    {"issue":1119,"title":"A marked function that native main calls runs off the main thread, so winit panics on macOS","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
     {"issue":1120,"title":"A lock with a path package and a git package of one name and version is refused as ambiguous","state":"closed","category":"Health","release":"0.3.167"},
     {"issue":1121,"title":"An iced canvas::Program's State written through &mut in update isn't kept between events","state":"open","category":"Divergences from rustc"},
     {"issue":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open","category":"Health"},
@@ -2732,12 +2734,12 @@
     {"issue":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"open","category":"Health"},
     {"issue":1129,"title":"progress_bar: a transition moved into a row! in one branch and a column! in the other fails with a lent-value mismatch","state":"open","category":"Divergences from rustc"},
     {"issue":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"open","category":"Divergences from rustc"},
-    {"issue":1131,"title":"Embedding: Engine::script refuses an inline module","state":"closed","category":"Divergences from rustc"},
-    {"issue":1132,"title":"Embedding: a script function's leading &mut parameter becomes `this`, but bind_this_ptr says typed scripts can't read it","state":"closed","category":"Divergences from rustc"},
-    {"issue":1133,"title":"Embedding: the call-stack depth limit is 8 in debug builds and 64 in release","state":"closed","category":"Health"},
+    {"issue":1131,"title":"Embedding: Engine::script refuses an inline module","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
+    {"issue":1132,"title":"Embedding: a script function's leading &mut parameter becomes `this`, but bind_this_ptr says typed scripts can't read it","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
+    {"issue":1133,"title":"Embedding: the call-stack depth limit is 8 in debug builds and 64 in release","state":"closed","category":"Health","release":"0.3.170"},
     {"issue":1134,"title":"Embedding: the host boundary carries no enums, Vec or &mut","state":"open","category":"Divergences from rustc"},
-    {"issue":1135,"title":"The generated target/rawr/crate manifest puts src/main.rs in both its lib and bin targets, so cargo warns","state":"closed","category":"Health"},
-    {"issue":1136,"title":"The runner's copy of a crate misses the files the crate reads at compile time, such as include_bytes! assets","state":"closed","category":"Divergences from rustc"},
+    {"issue":1135,"title":"The generated target/rawr/crate manifest puts src/main.rs in both its lib and bin targets, so cargo warns","state":"closed","category":"Health","release":"0.3.170"},
+    {"issue":1136,"title":"The runner's copy of a crate misses the files the crate reads at compile time, such as include_bytes! assets","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
     {"issue":1137,"title":"A build script whose rerun-if-env-changed names a variable that Cargo config's [env] sets is refused","state":"open","category":"Health"},
     {"issue":1138,"title":"An alias of a Result under another name doesn't cross back from a marked function","state":"open","category":"Divergences from rustc"},
     {"issue":1139,"title":"A native value can't cross into a marked function, or back inside an Option or a Vec","state":"open","category":"Divergences from rustc"},

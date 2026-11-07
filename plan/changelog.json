@@ -4,17 +4,22 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A native `main`'s calls into marked code run on the thread that makes them, the process's main thread for `main` itself, as cargo's build runs them. A library whose marked `app.rs` starts iced runs from a `main.rs` that only calls it, and a save to `app.rs` shows at iced's next `update` or `view`, keeping the app's state.","issues":[1119]},
-      {"text":"A marked function can return a `Result` to native code: a `Result` of crossable types, one whose `Ok` or `Err` is another crate's type, or an alias such as `iced::Result`. The native value itself goes back, so `fn main() -> iced::Result { mycrate::app::run() }` gets iced's own error.","issues":[1118]},
-      {"text":"An embedded script can hold inline modules: `Engine::script`, `load`, `compile`, `eval` and `run` resolve `mod m { .. }` with rustc's paths, `pub`, `use`, `super` and E0603, and the host calls the root's functions by name. A file module (`mod m;`) still needs a package.","issues":[1131]},
-      {"text":"`call_fn` calls a script function with the parameters it is written with, a `&mut` one included, so `call_fn(\"update\", (model, by))` works. `CallFnOptions::bind_this_ptr` still lends that value apart.","issues":[1132]},
-      {"text":"The default call-depth limit is 64 in debug and release builds alike. A script call that finds the host thread's stack nearly full gets more stack, so the limit, not the thread, ends deep recursion.","issues":[1133]},
-      {"text":"A package with marked modules builds its native side with the package's own files: `include_bytes!` and `include_str!` through `env!(\"CARGO_MANIFEST_DIR\")` or a path relative to the source file, even outside the package, and its build script, which runs in the package's directory with its build-dependencies. Cargo reruns the script on the files its `rerun-if-changed` lines name, never on a save to a marked module.","issues":[1136]},
-      {"text":"A native `src/main.rs` with marked modules no longer prints Cargo's warning that the file is in both the lib and bin targets.","issues":[1135]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.170",
+      "date": "2026-11-07",
+      "entries": [
+        {"text":"A native `main`'s calls into marked code run on the thread that makes them, the process's main thread for `main` itself, as cargo's build runs them. A library whose marked `app.rs` starts iced runs from a `main.rs` that only calls it, and a save to `app.rs` shows at iced's next `update` or `view`, keeping the app's state.","issues":[1119]},
+        {"text":"A marked function can return a `Result` to native code: a `Result` of crossable types, one whose `Ok` or `Err` is another crate's type, or an alias such as `iced::Result`. The native value itself goes back, so `fn main() -> iced::Result { mycrate::app::run() }` gets iced's own error.","issues":[1118]},
+        {"text":"An embedded script can hold inline modules: `Engine::script`, `load`, `compile`, `eval` and `run` resolve `mod m { .. }` with rustc's paths, `pub`, `use`, `super` and E0603, and the host calls the root's functions by name. A file module (`mod m;`) still needs a package.","issues":[1131]},
+        {"text":"`call_fn` calls a script function with the parameters it is written with, a `&mut` one included, so `call_fn(\"update\", (model, by))` works. `CallFnOptions::bind_this_ptr` still lends that value apart.","issues":[1132]},
+        {"text":"The default call-depth limit is 64 in debug and release builds alike. A script call that finds the host thread's stack nearly full gets more stack, so the limit, not the thread, ends deep recursion.","issues":[1133]},
+        {"text":"A package with marked modules builds its native side with the package's own files: `include_bytes!` and `include_str!` through `env!(\"CARGO_MANIFEST_DIR\")` or a path relative to the source file, even outside the package, and its build script, which runs in the package's directory with its build-dependencies. Cargo reruns the script on the files its `rerun-if-changed` lines name, never on a save to a marked module.","issues":[1136]},
+        {"text":"A native `src/main.rs` with marked modules no longer prints Cargo's warning that the file is in both the lib and bin targets.","issues":[1135]}
+      ]
+    },
     {
       "version": "0.3.169",
       "date": "2026-11-07",
