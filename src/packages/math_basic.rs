@@ -33,7 +33,6 @@ def_package! {
         {
             gen_conv_functions!(lib => to_int(i8, u8, i16, u16, i32, u32, i64, u64) -> INT);
 
-            #[cfg(not(target_family = "wasm"))]
             gen_conv_functions!(lib => to_int(i128, u128) -> INT);
         }
 
@@ -49,7 +48,6 @@ def_package! {
             {
                 gen_conv_functions!(lib => to_float(i8, u8, i16, u16, i32, u32, i64, u64) -> FLOAT);
 
-                #[cfg(not(target_family = "wasm"))]
                 gen_conv_functions!(lib => to_float(i128, u128) -> FLOAT);
             }
         }

@@ -510,7 +510,6 @@ def_package! {
         {
             reg_range!(lib => i8, u8, i16, u16, i32, u32, i64, u64);
 
-            #[cfg(not(target_family = "wasm"))]
             reg_range!(lib => i128, u128);
         }
 
@@ -519,7 +518,6 @@ def_package! {
         {
             reg_range!(lib |> i8, u8, i16, u16, i32, u32, i64, u64);
 
-            #[cfg(not(target_family = "wasm"))]
             reg_range!(lib |> i128, u128);
         }
 
