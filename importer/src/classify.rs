@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 124;
+const CLASSIFIER_VERSION: u32 = 125;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6057,9 +6057,7 @@ impl<P: api::Phase> Context<'_, P> {
         if left_out.is_empty() {
             return None;
         }
-        let bounded = |ty: &model::Type| {
-            matches!(ty, model::Type::Parameter { index, .. } if left_out.contains(index))
-        };
+        let bounded = |ty: &model::Type| matches!(ty, model::Type::Parameter { index, .. } if left_out.contains(index));
         let parameters = container
             .parameters()
             .filter(|parameter| !left_out.contains(&parameter.index()))
