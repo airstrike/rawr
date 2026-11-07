@@ -15484,6 +15484,19 @@ fn render_take(
             )
             .map_err(request::unwritable);
         }
+        // A value of a generic impl function's own parameter's opaque type,
+        // as `p.fits(p.font())` passes a `P::Font`, is in the function's
+        // frame at the call's types (`render_frame`), which needn't be
+        // `'static` as the arena's are.
+        convert::Type::Nominal { definition, .. }
+            if let Some((frame, slot)) = frame_slot(definition) =>
+        {
+            return writeln!(
+                output,
+                "    let argument_{local} = {frame}.take_{slot}(arguments, {index})?;"
+            )
+            .map_err(request::unwritable);
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         // A slice of script values a type argument names, as an owned
         // `Vec` of their proxies (`script_slice`).

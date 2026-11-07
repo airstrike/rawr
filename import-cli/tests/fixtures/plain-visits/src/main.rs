@@ -41,8 +41,7 @@ impl visits::Fill for Board {
 
 impl Paint for Seven {
     fn paint<P: Painter>(&self, painter: P) -> bool {
-        let _font = painter.font();
-        painter.size() == 12
+        painter.fits(painter.font()) && painter.size() == 12
     }
 }
 

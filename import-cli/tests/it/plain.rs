@@ -1918,7 +1918,9 @@ fn a_rename_in_a_derived_type_swaps_into_the_running_program() {
 /// code passes it, and passes it on to a function of its own. An opaque
 /// parameter's associated type whose bound names it again, as
 /// `PartialEq<Self>` of iced's `type Font: Copy + PartialEq` does, is read
-/// once, not without end. A member of such a parameter's opaque type whose
+/// once, not without end, and a value of it passes from one call to another
+/// in the frame, as `painter.fits(painter.font())` (#1022). A member of such
+/// a parameter's opaque type whose
 /// signature names the trait's own parameter, as tracing-subscriber's
 /// `Layer<S>::and_then` gives `Layered<L, Self, S>`, isn't written into the
 /// crate's facade, and the rest of the crate runs (#1032). A trait's

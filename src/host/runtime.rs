@@ -713,7 +713,8 @@ impl Builder {
     /// A trait's method has one selector for every type that implements
     /// it, and its instance's types leave out `Self`, so `Row::boxed` and
     /// `Column::boxed` of one `Widget<M, T, R>` share both. The adapter of
-    /// the item at `path` serves that item; any other item of the selector
+    /// the item at `path`, spelled from the root or through a macro's
+    /// `$crate`, serves that item; any other item of the selector
     /// takes the first adapter that reaches it, as an alias's path reaches
     /// its target's.
     #[cfg(feature = "rust-import")]
@@ -735,7 +736,12 @@ impl Builder {
                     .imported_identity()
                     .is_some_and(|identity| identity.fingerprint() == selector)
             })
-            .map(|definition| (definition.fingerprint(), definition.path() == path))
+            .map(|definition| {
+                (
+                    definition.fingerprint(),
+                    visible(&definition.path()) == visible(path),
+                )
+            })
             .collect::<Vec<_>>();
         if definitions.is_empty() {
             return Err(Error::UnknownItem {
@@ -1563,6 +1569,17 @@ mod witness_tests {
 }
 
 impl std::error::Error for Error {}
+
+/// `path` as the crate's own root names it: a macro's `$crate` path to an
+/// item, `__rawr_crate_<..>::widgets::Row::boxed`, is the item at
+/// `widgets::Row::boxed`.
+#[cfg(feature = "rust-import")]
+fn visible(path: &str) -> &str {
+    match path.split_once("::") {
+        Some((first, rest)) if first.starts_with(rawr_import::api::ledger::CRATE_SEGMENT) => rest,
+        _ => path,
+    }
+}
 
 #[cfg(test)]
 mod tests {
