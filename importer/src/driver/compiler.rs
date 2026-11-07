@@ -103,9 +103,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // the context it applies through. Schema 48 gives the `impl Trait` a trait's
 // method gives from its default body as the trait's opaque type. Schema 55
 // marks a type parameter a struct's or an enum's boxed callable field gives.
+// Schema 56 keeps an alias's own type's implementation of a trait whose
+// associated type it passes on from the type's arguments.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 55;
+const PROTOCOL_SCHEMA: u32 = 56;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2274,24 +2276,36 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 return Ok(());
             }
             self.find_aliases();
-            let mut selves = self
+            let aliased = self
                 .instance_aliases
                 .iter()
                 .flatten()
                 .map(|(_, aliased)| *aliased)
                 .collect::<Vec<_>>();
             let mut arguments = Vec::new();
-            for self_ty in &selves {
+            for self_ty in &aliased {
                 if let ty::Adt(_, adt_arguments) = self_ty.kind() {
                     arguments.extend(adt_arguments.types());
                 }
             }
-            selves.extend(arguments);
+            // An alias's own type's implementation, as iced's `impl<A, B>
+            // image::Renderer for fallback::Renderer<A, B> { type Handle =
+            // A::Handle; }` at `iced::Renderer`, is kept whatever its value:
+            // the classifier reads its projection at the type's arguments,
+            // whose implementations follow.
             let mut implementations = Vec::new();
-            for self_ty in selves {
+            let mut forwarding = Vec::new();
+            for (self_ty, own) in aliased
+                .iter()
+                .map(|self_ty| (*self_ty, true))
+                .chain(arguments.into_iter().map(|self_ty| (self_ty, false)))
+            {
                 self.budget.edge(1)?;
-                implementations
-                    .extend(self.relevant_implementations(obligation.trait_id, self_ty)?);
+                let found = self.relevant_implementations(obligation.trait_id, self_ty)?;
+                if own {
+                    forwarding.extend(found.iter().map(|implementation| implementation.id()));
+                }
+                implementations.extend(found);
                 if implementations.len() > RELATION_IMPLEMENTATIONS {
                     return Ok(());
                 }
@@ -2321,7 +2335,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     .instantiate_identity()
                     .skip_norm_wip();
                 if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
-                    && !matches!(value.kind(), ty::Alias(..))
+                    && (!matches!(value.kind(), ty::Alias(..)) || forwarding.contains(&impl_id))
                 {
                     self.request_implementation(implementation, obligation.relevance, associated)?;
                 }

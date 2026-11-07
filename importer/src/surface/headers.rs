@@ -567,8 +567,11 @@ impl<'g, P: api::Phase> Headers<'g, P> {
             );
         let mut cases = Vec::new();
         for candidate in candidates {
-            let Some(at) = crate::classify::associated_at(self.graph, trait_id, name, candidate, 0)
-            else {
+            let at = crate::classify::associated_at(self.graph, trait_id, name, candidate, 0);
+            if std::env::var_os("RAWR_DEBUG_PROJ").is_some() {
+                eprintln!("DEBUGPROJ header {name} candidate {candidate:?} at {at:?} ty {:?} {:?}", self.ty(candidate), at.as_ref().map(|at| self.ty(at)));
+            }
+            let Some(at) = at else {
                 continue;
             };
             let (Some(case), Some(at)) = (self.ty(candidate), self.ty(&at)) else {

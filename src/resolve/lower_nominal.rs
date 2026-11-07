@@ -9923,6 +9923,11 @@ struct Inference {
     /// `T::Output = i64` of the bounds in scope (`T: Shape<Output = i64>`),
     /// by parameter, trait and name.
     equalities: BTreeMap<(ImmutableString, ImmutableString, ImmutableString), Ty>,
+    /// The crate impls' bounds `<ty as Trait>::Name == value` whose `ty`
+    /// wasn't known where their impl was chosen: each fixes its `value`
+    /// once a later use fixes `ty`. A rollback drops those it made.
+    #[cfg(feature = "rust-import")]
+    projections: Vec<ImplProjection>,
 }
 
 /// The associated types of `impl Trait for Owner` blocks.
@@ -9957,6 +9962,8 @@ struct Checkpoint {
     next: usize,
     journal: usize,
     depth: usize,
+    #[cfg(feature = "rust-import")]
+    projections: usize,
 }
 
 #[derive(Debug)]
@@ -9993,6 +10000,8 @@ impl Inference {
             next: self.next,
             journal: self.journal.len(),
             depth: self.depth,
+            #[cfg(feature = "rust-import")]
+            projections: self.projections.len(),
         };
         self.depth += 1;
         checkpoint
@@ -10015,6 +10024,8 @@ impl Inference {
         }
         self.next = checkpoint.next;
         self.depth = checkpoint.depth;
+        #[cfg(feature = "rust-import")]
+        self.projections.truncate(checkpoint.projections);
     }
 
     fn commit(&mut self, checkpoint: Checkpoint) {
@@ -13615,8 +13626,12 @@ impl<'a> Parser<'a> {
             }
             // A bound the others fixed the type of fixes its associated
             // type in turn.
-            let _ = self.project_impl(&mut bounds, owner);
+            bounds.projections = self
+                .project_impl(std::mem::take(&mut bounds.projections))
+                .unwrap_or_default();
         }
+        // One whose type a later use fixes waits for it.
+        self.inference.projections.extend(bounds.projections);
         Ok(())
     }
 
@@ -13822,28 +13837,29 @@ impl<'a> Parser<'a> {
                 ty,
                 value,
                 cases: projection.cases.clone(),
+                owner: owner.cloned(),
             });
         }
-        let mut bounds = ImplBounds {
+        if std::env::var_os("RAWR_DEBUG_PROJ").is_some() {
+            eprintln!("DEBUGPROJ apply_impl self={:?} projections={:?} header_proj={}", self.inference.resolve(ty).name(&self.models).to_string(), projections.iter().map(|p| (self.inference.resolve(&p.ty).name(&self.models).to_string(), self.inference.resolve(&p.value).name(&self.models).to_string(), p.cases.len())).collect::<Vec<_>>(), header.projections.len());
+        }
+        let projections = self.project_impl(projections)?;
+        Some(ImplBounds {
             traits,
             projections,
-        };
-        self.project_impl(&mut bounds, owner).then_some(bounds)
+        })
     }
 
     /// Each of an impl's bounds `<ty as Trait>::Name == value` whose `ty`
     /// is known fixes `value` to the associated type the crate's impls give
-    /// `ty`, as rustc's projection does, and leaves the bounds still open.
-    /// `false` when one contradicts: `ty` is a case whose associated type
-    /// `value` can't be, so the impl doesn't apply (rustc's E0271).
+    /// `ty`, as rustc's projection does: the bounds still open. `None` when
+    /// one contradicts: `ty` is a case whose associated type `value` can't
+    /// be, so the impl doesn't apply (rustc's E0271).
     #[cfg(feature = "rust-import")]
-    fn project_impl(
-        &mut self,
-        bounds: &mut ImplBounds,
-        owner: Option<&crate::host::facade::Dependency>,
-    ) -> bool {
+    fn project_impl(&mut self, projections: Vec<ImplProjection>) -> Option<Vec<ImplProjection>> {
         let mut open = Vec::new();
-        for projection in std::mem::take(&mut bounds.projections) {
+        for projection in projections {
+            let owner = projection.owner.as_ref();
             let ty = self.inference.resolve(&projection.ty);
             if contains_inference(&ty) {
                 open.push(projection);
@@ -13878,14 +13894,30 @@ impl<'a> Parser<'a> {
                 }
                 if !self.unify_type(&value, &projection.value) {
                     self.inference.rollback(checkpoint);
-                    return false;
+                    return None;
                 }
                 self.inference.commit(checkpoint);
                 break;
             }
         }
-        bounds.projections = open;
-        true
+        Some(open)
+    }
+
+    /// Each pending impl bound `<ty as Trait>::Name == value` (`Inference::
+    /// projections`) whose `ty` is known by now fixes its `value`, until
+    /// none does more.
+    #[cfg(feature = "rust-import")]
+    fn finish_projections(&mut self) {
+        loop {
+            let pending = std::mem::take(&mut self.inference.projections);
+            let count = pending.len();
+            let open = self.project_impl(pending).unwrap_or_default();
+            let settled = open.len() == count;
+            self.inference.projections.extend(open);
+            if settled {
+                break;
+            }
+        }
     }
 
     /// The body's output, when `output` is opaque, as the type its body
@@ -20575,6 +20607,9 @@ impl<'a> Parser<'a> {
                 && matches!(self.inference.resolve(target), Ty::Infer(_))
                 && !matches!(actual, Ty::Int(_) | Ty::Float(_))
             {
+                if std::env::var_os("RAWR_DEBUG_PROJ").is_some() {
+                    eprintln!("DEBUGPROJ deferred reflexive {} for {}", item.path(), actual.name(&self.models));
+                }
                 self.structural_defaults
                     .push((target.clone(), actual.clone(), span));
                 continue;
@@ -54357,6 +54392,7 @@ impl<'a> Parser<'a> {
 
     #[cfg(feature = "rust-import")]
     fn finish_structural_instances(&mut self) -> Result<(), Error> {
+        self.finish_projections();
         for (parameter, default, span) in std::mem::take(&mut self.structural_defaults) {
             if matches!(self.inference.resolve(&parameter), Ty::Infer(_)) {
                 self.require_type(&parameter, &default, span)?;
@@ -55151,10 +55187,12 @@ struct ImplBounds {
 /// the associated type each type `ty` may be gives (`facade::
 /// ImplProjection`).
 #[cfg(feature = "rust-import")]
+#[derive(Debug)]
 struct ImplProjection {
     ty: Ty,
     value: Ty,
     cases: Box<[(crate::host::type_ref::Type, crate::host::type_ref::Type)]>,
+    owner: Option<crate::host::facade::Dependency>,
 }
 
 /// Why no impl fixed an `impl Trait`'s hidden type (D604): none fits the
