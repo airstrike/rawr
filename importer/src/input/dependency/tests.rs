@@ -160,3 +160,33 @@ fn duplicate_environment_storage_spends_the_original_account_before_rejecting() 
         Err(Error::InputAccountRefused)
     ));
 }
+
+/// Cargo names a build script's executable after its file's stem, so a
+/// package with `build = "builder/main.rs"` has `build-script-main`, whose
+/// dep-info is `build_script_main-<hash>.d`.
+#[test]
+fn a_build_script_named_after_its_file_has_dep_info_of_that_name() {
+    let fixture = Fixture::open();
+    let commit = toolchain::supported_cargo_commit();
+    for (stem, crate_name) in [
+        ("build", "build"),
+        ("main", "main"),
+        ("gen-code", "gen_code"),
+    ] {
+        let directory = fixture.0.join(format!("pkg-{stem}-0123abcd"));
+        fs::create_dir_all(&directory).expect("build script directory");
+        let executable = directory.join(format!("build-script-{stem}"));
+        fs::write(&executable, b"").expect("build script executable");
+        let path = super::build_script_path(commit, &executable)
+            .expect("a build script's dep-info path")
+            .expect("an executable build script has dep-info");
+        assert_eq!(
+            path,
+            directory.join(format!("build_script_{crate_name}-0123abcd.d"))
+        );
+    }
+    let other = fixture.0.join("pkg-0123abcd").join("script");
+    fs::create_dir_all(other.parent().unwrap()).expect("other directory");
+    fs::write(&other, b"").expect("other executable");
+    assert!(super::build_script_path(commit, &other).is_err());
+}

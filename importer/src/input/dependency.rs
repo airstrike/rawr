@@ -7,7 +7,8 @@ use crate::cargo::toolchain;
 use crate::input::Allocation;
 use crate::{Error, Result};
 
-const BUILD_SCRIPT_EXECUTABLE: &str = "build-script-build";
+/// The prefix of a build script's executable; the rest is its file's stem.
+const BUILD_SCRIPT_EXECUTABLE: &str = "build-script-";
 
 pub(in crate::input) mod observed;
 pub(in crate::input) mod scan;
@@ -108,12 +109,15 @@ pub(super) fn build_script_path(cargo_commit: &str, output: &Path) -> Result<Opt
     if output.extension().is_some() || !output.is_file() {
         return Ok(None);
     }
-    if output.file_name().and_then(|name| name.to_str()) != Some(BUILD_SCRIPT_EXECUTABLE) {
-        return Err(super::input(
-            "custom-build-dep-info-layout",
-            output.display(),
-        ));
-    }
+    // Cargo names a build script's target `build-script-<stem>` after its
+    // file (`build.rs` gives `build-script-build`, `builder/main.rs` gives
+    // `build-script-main`), and its dep-info `<target as a crate name>-<hash>.d`.
+    let stem = output
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(BUILD_SCRIPT_EXECUTABLE))
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| super::input("custom-build-dep-info-layout", output.display()))?;
     let directory = output
         .parent()
         .ok_or_else(|| super::input("custom-build-dep-info-layout", output.display()))?;
@@ -123,7 +127,10 @@ pub(super) fn build_script_path(cargo_commit: &str, output: &Path) -> Result<Opt
         .and_then(|name| name.rsplit_once('-').map(|(_, hash)| hash))
         .filter(|hash| !hash.is_empty())
         .ok_or_else(|| super::input("custom-build-dep-info-layout", output.display()))?;
-    Ok(Some(directory.join(format!("build_script_build-{hash}.d"))))
+    let crate_name = stem.replace('-', "_");
+    Ok(Some(
+        directory.join(format!("build_script_{crate_name}-{hash}.d")),
+    ))
 }
 
 #[allow(
