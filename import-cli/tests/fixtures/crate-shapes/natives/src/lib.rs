@@ -630,3 +630,63 @@ pub mod angle {
         }
     }
 }
+
+/// A method whose own lifetime its output borrows a format at, as jiff's
+/// `DateTime::strftime<'f, F>`.
+pub mod lifetimes {
+    use std::fmt;
+
+    /// A time of day, as jiff's `civil::DateTime`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Clock {
+        hour: u8,
+        minute: u8,
+    }
+
+    impl Clock {
+        pub fn new(hour: u8, minute: u8) -> Self {
+            Clock { hour, minute }
+        }
+
+        /// As jiff's `strftime`: the output borrows the format at an
+        /// early-bound lifetime, which `F: 'f` makes early.
+        pub fn strftime<'f, F: 'f + ?Sized + AsRef<[u8]>>(&self, format: &'f F) -> Shown<'f> {
+            Shown {
+                format: format.as_ref(),
+                clock: *self,
+            }
+        }
+    }
+
+    /// A clock with the format it borrows, as jiff's `strtime::Display<'f>`.
+    #[derive(Debug)]
+    pub struct Shown<'f> {
+        format: &'f [u8],
+        clock: Clock,
+    }
+
+    impl fmt::Display for Shown<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let mut directive = false;
+            for &byte in self.format {
+                match (directive, byte) {
+                    (false, b'%') => directive = true,
+                    (false, byte) => write!(f, "{}", char::from(byte))?,
+                    (true, b'H') => {
+                        write!(f, "{:02}", self.clock.hour)?;
+                        directive = false;
+                    }
+                    (true, b'M') => {
+                        write!(f, "{:02}", self.clock.minute)?;
+                        directive = false;
+                    }
+                    (true, byte) => {
+                        write!(f, "%{}", char::from(byte))?;
+                        directive = false;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}

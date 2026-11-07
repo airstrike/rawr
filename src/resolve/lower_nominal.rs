@@ -2109,6 +2109,8 @@ fn imported_surface_type(
                 ty: Box::new(Type::Builtin(Builtin::Str)),
             }
         }
+        // `str` itself, as `F` of a `&F` a `&str` fills.
+        Ty::UnsizedStr => Type::Builtin(Builtin::Str),
         // A script closure a crate value holds, as iced's `Map<W, F, A>`
         // from `Widget::map` does: the `Box<dyn Fn(..) -> ..>` the bridge
         // boxed it as (T417).
@@ -53547,6 +53549,15 @@ impl<'a> Parser<'a> {
                 expected_mutable == actual_mutable
                     && self.unify_type(expected_target, actual_target)
             }
+            // A `&str` is a `&T` whose `T` is `str`, as jiff's
+            // `strftime<'f, F: ?Sized>(&self, format: &'f F)` takes a literal.
+            (
+                Ty::Reference {
+                    mutable: false,
+                    target,
+                },
+                Ty::Str,
+            ) => self.unify_type(target, &Ty::UnsizedStr),
             (
                 Ty::Array {
                     element: expected_element,

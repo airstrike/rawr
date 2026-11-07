@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 117;
+const CLASSIFIER_VERSION: u32 = 118;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7824,6 +7824,8 @@ impl<P: api::Phase> Context<'_, P> {
             });
         let normalized = self.self_projections(signature);
         let signature = normalized.as_ref().unwrap_or(signature);
+        let chosen = argument_binders_static(signature);
+        let signature = chosen.as_ref().unwrap_or(signature);
         let opens_copies = self.late_binders_open_copies(signature);
         let borrows_receiver = borrows_receiver(signature, |id| {
             self.graph
@@ -8153,11 +8155,15 @@ impl<P: api::Phase> Context<'_, P> {
         } else if opens_copies {
             Some(representability::signature::Scope::Opens)
         } else if signature.inputs().any(borrows_at_early_lifetime) {
-            if matches!(signature.receiver(), model::Receiver::None)
+            // So does a method that borrows its receiver for the call alone
+            // and whose output borrows a `&F` the call fills with a `&str`
+            // or a value made for it, as jiff's `strftime<'f, F: 'f +
+            // ?Sized>(&self, format: &'f F) -> Display<'f>`.
+            if receiver_lent_for_call(signature)
                 && signature
                     .inputs()
                     .filter(|input| borrows_at_early_lifetime(input))
-                    .all(is_str_reference)
+                    .all(|input| is_str_reference(input) || is_parameter_reference(input))
                 && names_early_lifetime(signature.output())
             {
                 Some(representability::signature::Scope::Opens)
@@ -10529,6 +10535,27 @@ fn is_str_reference(ty: &model::Type) -> bool {
         if matches!(&**ty, model::Type::Primitive(name) if &**name == "str"))
 }
 
+/// Whether `ty` is a shared borrow of a type parameter, as `&'f F`.
+fn is_parameter_reference(ty: &model::Type) -> bool {
+    matches!(ty, model::Type::Reference { mutability: model::Mutability::Shared, ty, .. }
+        if matches!(&**ty, model::Type::Parameter { .. }))
+}
+
+/// Whether a call reaches its receiver for the call alone: it has none, or
+/// borrows it at a late-bound lifetime its output doesn't name.
+fn receiver_lent_for_call(signature: &model::Signature) -> bool {
+    match signature.receiver() {
+        model::Receiver::None => true,
+        model::Receiver::Reference {
+            lifetime: lifetime @ model::Lifetime::Late { .. },
+            ..
+        } => !names_lifetime(signature.output(), lifetime),
+        model::Receiver::Reference { .. }
+        | model::Receiver::Value { .. }
+        | model::Receiver::Explicit { .. } => false,
+    }
+}
+
 /// A trait's provided method, as iced's `Widget::_boxed`, as a member of
 /// `implementation`: it names the trait's parameters, which the
 /// implementation's trait arguments are, and its own parameters follow the
@@ -10695,6 +10722,105 @@ fn output_binders_early(
         early = map_signature_types(&early, |ty| rebind_lifetime(ty, &late, &bound));
     }
     (kept.len() < signature.binders().len()).then(|| early.with_binders(kept.into()))
+}
+
+/// `signature` with each of its own late-bound lifetimes that it names
+/// only as a crate type's lifetime argument in its inputs, as serde's
+/// `invalid_value(unexp: Unexpected<'_>, ..)` names one, at `'static`.
+/// The call picks such a lifetime, and the values Rawr holds are at
+/// `'static` (D558 tier 0), so rustc picks it there too. `None` where it
+/// names none of them.
+fn argument_binders_static(signature: &model::Signature) -> Option<model::Signature> {
+    let mut chosen = signature.clone();
+    let mut kept = Vec::new();
+    for binder in signature.binders() {
+        let late = model::Lifetime::Late {
+            binder: binder.clone(),
+            index: binder.index(),
+        };
+        let receiver = match signature.receiver() {
+            model::Receiver::None => Naming::Not,
+            model::Receiver::Value { ty } | model::Receiver::Explicit { ty } => naming(ty, &late),
+            model::Receiver::Reference { lifetime, ty, .. } if *lifetime != late => {
+                naming(ty, &late)
+            }
+            model::Receiver::Reference { .. } => Naming::Otherwise,
+        };
+        let named = signature
+            .inputs()
+            .fold(receiver, |named, input| named.and(naming(input, &late)))
+            .and(match naming(signature.output(), &late) {
+                Naming::Not => Naming::Not,
+                Naming::Argument | Naming::Otherwise => Naming::Otherwise,
+            });
+        if named != Naming::Argument {
+            kept.push(binder.clone());
+            continue;
+        }
+        chosen = map_signature_types(&chosen, |ty| {
+            rebind_lifetime(ty, &late, &model::Lifetime::Static)
+        });
+    }
+    (kept.len() < signature.binders().len()).then(|| chosen.with_binders(kept.into()))
+}
+
+/// How a type names a lifetime ([`naming`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Naming {
+    Not,
+    /// Only as a lifetime argument of a crate's type, as `Unexpected<'a>`.
+    Argument,
+    /// As a reference's lifetime, or where its binders may be another's: a
+    /// function pointer, a trait object, an opaque type or a projection.
+    Otherwise,
+}
+
+impl Naming {
+    const fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Otherwise, _) | (_, Self::Otherwise) => Self::Otherwise,
+            (Self::Argument, _) | (_, Self::Argument) => Self::Argument,
+            (Self::Not, Self::Not) => Self::Not,
+        }
+    }
+}
+
+/// How `ty` names `lifetime`.
+fn naming(ty: &model::Type, lifetime: &model::Lifetime) -> Naming {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => naming(ty, lifetime),
+        model::Argument::Lifetime(named) if named == lifetime => Naming::Argument,
+        model::Argument::Lifetime(_) | model::Argument::Const(_) => Naming::Not,
+    };
+    match ty {
+        model::Type::Definition { arguments, .. } => arguments
+            .iter()
+            .fold(Naming::Not, |named, next| named.and(argument(next))),
+        model::Type::Reference {
+            lifetime: named, ..
+        } if named == lifetime => Naming::Otherwise,
+        model::Type::Reference { ty, .. }
+        | model::Type::Slice(ty)
+        | model::Type::Array { element: ty, .. }
+        | model::Type::RawPointer { ty, .. } => naming(ty, lifetime),
+        model::Type::Tuple(types) => types
+            .iter()
+            .fold(Naming::Not, |named, ty| named.and(naming(ty, lifetime))),
+        model::Type::FunctionPointer(_)
+        | model::Type::TraitObject { .. }
+        | model::Type::ImplTrait { .. }
+        | model::Type::Projection { .. } => {
+            if names_lifetime(ty, lifetime) {
+                Naming::Otherwise
+            } else {
+                Naming::Not
+            }
+        }
+        model::Type::Primitive(_)
+        | model::Type::Parameter { .. }
+        | model::Type::SelfType(_)
+        | model::Type::Never => Naming::Not,
+    }
 }
 
 /// `ty` with each `from` lifetime in it as `to`, in an opaque type's

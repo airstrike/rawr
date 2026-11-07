@@ -109,7 +109,7 @@ pub struct Definition {
     guard: Option<Guard>,
     /// The output borrows what the call takes: the call opens a scope
     /// frame the statement it is in runs inside (D558 tier 1).
-    opens: bool,
+    opens: Option<Frame>,
     /// The arguments, by bit, that only a `&'static str` fills, as iced's
     /// `Font::with_name(&'static str)` and `title(impl Title<State>)`
     /// take: a borrow of a local passed there is rustc's E0597.
@@ -147,6 +147,18 @@ pub enum Guard {
     OptionMutable,
 }
 
+/// What the scope frame an imported call opens holds borrowed while its
+/// output lives (D558 tier 1).
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Frame {
+    /// What the call takes besides its receiver, which it borrows for the
+    /// call alone, as `Parser::new(&text)` and jiff's `strftime(&self,
+    /// format)` hold their `&str`.
+    Inputs,
+    /// The receiver, as quick-xml's `BytesStart::name(&self)` holds it.
+    Receiver,
+}
+
 /// A deterministic proof of a host item's complete callable contract.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Fingerprint {
@@ -158,7 +170,7 @@ pub struct Fingerprint {
     evaluation: host::usage::Evaluation,
     imported: Option<[u8; 32]>,
     guard: Option<Guard>,
-    opens: bool,
+    opens: Option<Frame>,
     lent_static: u32,
     lends: u32,
     rules: Option<Box<[u8; 32]>>,
@@ -237,7 +249,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             imported: None,
             guard: None,
-            opens: false,
+            opens: None,
             lent_static: 0,
             lends: 0,
             application: None,
@@ -272,7 +284,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             imported: None,
             guard: None,
-            opens: false,
+            opens: None,
             lent_static: 0,
             lends: 0,
             application: None,
@@ -297,7 +309,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             imported: None,
             guard: None,
-            opens: false,
+            opens: None,
             lent_static: 0,
             lends: 0,
             application: None,
@@ -320,7 +332,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             imported: None,
             guard: None,
-            opens: false,
+            opens: None,
             lent_static: 0,
             lends: 0,
             application: None,
@@ -343,7 +355,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             imported: None,
             guard: None,
-            opens: false,
+            opens: None,
             lent_static: 0,
             lends: 0,
             application: None,
@@ -369,7 +381,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             imported: None,
             guard: None,
-            opens: false,
+            opens: None,
             lent_static: 0,
             lends: 0,
             application: None,
@@ -392,7 +404,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             imported: None,
             guard: None,
-            opens: false,
+            opens: None,
             lent_static: 0,
             lends: 0,
             application: None,
@@ -416,7 +428,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             imported: None,
             guard: None,
-            opens: false,
+            opens: None,
             lent_static: 0,
             lends: 0,
             application: None,
@@ -440,7 +452,7 @@ impl Definition {
             evaluation: host::usage::Evaluation::Required,
             imported: None,
             guard: None,
-            opens: false,
+            opens: None,
             lent_static: 0,
             lends: 0,
             application: None,
@@ -549,15 +561,29 @@ impl Definition {
         self.guard
     }
 
-    /// The item's output borrows what the call takes (D558 tier 1).
+    /// The item's output borrows what the call takes, as `scope` says
+    /// (D558 tier 1).
     #[cfg(feature = "rust-import")]
-    pub(crate) fn opening(mut self, opens: bool) -> Self {
-        self.opens = opens;
+    pub(crate) fn opening(
+        mut self,
+        scope: Option<rawr_import::classify::representability::signature::Scope>,
+    ) -> Self {
+        use rawr_import::classify::representability::signature::Scope;
+        self.opens = scope.map(|scope| match scope {
+            Scope::Opens => Frame::Inputs,
+            Scope::Borrows => Frame::Receiver,
+        });
         self
     }
 
     /// Whether the call opens a scope frame (D558 tier 1).
     pub(crate) const fn opens(&self) -> bool {
+        self.opens.is_some()
+    }
+
+    /// What the scope frame the call opens holds borrowed, when it opens
+    /// one.
+    pub(crate) const fn frame(&self) -> Option<Frame> {
         self.opens
     }
 
@@ -880,8 +906,13 @@ impl crate::digest::Write for Fingerprint {
                 Guard::OptionMutable => 0x2564,
             });
         }
-        if self.opens {
-            writer.tag(0x2563);
+        match self.opens {
+            Some(Frame::Inputs) => writer.tag(0x2563),
+            Some(Frame::Receiver) => {
+                writer.tag(0x2563);
+                writer.tag(0x2565);
+            }
+            None => {}
         }
         if let Some(rules) = &self.rules {
             writer.tag(0x250a);

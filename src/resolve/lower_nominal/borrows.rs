@@ -769,19 +769,24 @@ impl Parser<'_> {
             into: Path::ROOT,
             from: Source::Input(input, Path::OWN),
         };
-        // `Parser::new(&text)`'s value borrows its `&str` inputs; a method
-        // whose frame holds what it takes may borrow its receiver or them.
-        if item.opens() {
-            return match mode {
-                None => Summary::taps(
-                    Some(signature::Receiver::Owned),
+        // `Parser::new(&text)`'s value borrows its `&str` inputs, and so
+        // does a method's whose frame holds what it takes, as jiff's
+        // `strftime(&self, format: &'f F)` and quick-xml's
+        // `read_event_into(&mut self, buf)` give: it borrows its receiver
+        // for the call alone. One whose frame holds its receiver borrowed
+        // is left to rustc.
+        match item.frame() {
+            Some(crate::host::item::Frame::Inputs) => {
+                return Summary::taps(
+                    mode.or(Some(signature::Receiver::Owned)),
                     (0..arguments)
                         .map(|index| all(Input::Argument(index)))
                         .collect(),
                     Vec::new(),
-                ),
-                Some(_) => Summary::unknown(),
-            };
+                );
+            }
+            Some(crate::host::item::Frame::Receiver) => return Summary::unknown(),
+            None => {}
         }
         // `view<'a>(items: &'a [Item]) -> impl Show + 'a`'s value keeps
         // the borrows of the inputs at the lifetime its type names.

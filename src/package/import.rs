@@ -2658,7 +2658,7 @@ fn imported_item(
             )?
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
-            .opening(plan.signature().scope().is_some())
+            .opening(plan.signature().scope())
             .lending_static(lent_static(plan.signature()))
             .lending(lends(plan.signature())),
         ),
@@ -2704,7 +2704,7 @@ fn imported_item(
             }
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
-            .opening(plan.signature().scope().is_some())
+            .opening(plan.signature().scope())
             .lending_static(lent_static(plan.signature()))
             .lending(lends(plan.signature())),
         ),
@@ -2748,7 +2748,7 @@ fn imported_item(
             }
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
-            .opening(plan.signature().scope().is_some())
+            .opening(plan.signature().scope())
             .lending_static(lent_static(plan.signature()))
             .lending(lends(plan.signature())),
         ),
@@ -2888,7 +2888,7 @@ fn imported_values(
         definition
             .imported(selector.try_clone()?)
             .guarded(guard(values.signature()))
-            .opening(values.signature().scope().is_some())
+            .opening(values.signature().scope())
             .lending_static(lent_static(values.signature()))
             .lending(lends(values.signature())),
     ))
