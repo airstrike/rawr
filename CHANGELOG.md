@@ -5,6 +5,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- Two projects that share a dependency now both check, whichever runs first. A dependency's shared bindings used to include implementations from other crates the first project had loaded, so the second project failed with `external crate was not loaded`. A crate's bindings now hold only what its own dependencies reach, and bindings saved before this are extracted again once. (#1097)
+- A widget that keeps your closure to make its content, as iced's `transition(..)` and `lazy(..)` do, now builds in a view beside widgets that borrow your state. progress_bar's runner now builds. (#1083)
+- A bound on an iterator's items can fix another type parameter, as rustc infers it: rand's `WeightedIndex::new([10, 4, 2, 1])` makes a `WeightedIndex<i32>`, so iced's the_matrix runs. (#1084)
+- In a marked module, a `use` that binds a native module (`use crate::units;`, `use crate::units as u;`) binds it as a module, and its constants, functions, types and nested modules are reached through the name as rustc reaches them. (#1117)
+- A project that depends directly on a proc-macro crate, such as `rust_decimal_macros`, now checks and runs instead of failing as if `Cargo.toml` changed during the build. Its macros expand in native modules through Cargo's build. A `cdylib` or `staticlib` dependency builds as Cargo builds it, and a dependency whose only library is a Rust `dylib` stops with an error that names it. (#1124)
 
 ## 0.3.168 (2026-11-07)
 
