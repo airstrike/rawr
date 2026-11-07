@@ -99,7 +99,7 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
 #[cfg(unix)]
 #[test]
 fn an_idle_native_main_outlives_every_deadline_and_takes_a_save_at_its_next_call() {
-    use nix::sys::signal::{Signal, kill};
+    use nix::sys::signal::{kill, Signal};
     use nix::unistd::Pid;
 
     const IDLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-idle");
@@ -120,17 +120,20 @@ fn an_idle_native_main_outlives_every_deadline_and_takes_a_save_at_its_next_call
     let pid = run.until(Duration::from_secs(900), |line| line.starts_with("pid "));
     let pid = Pid::from_raw(pid["pid ".len()..].parse().unwrap());
     run.until(Duration::from_secs(30), |line| line == "value 1");
-    let pause = || {
+    // A runner the owner stopped is gone, and its output says why.
+    let pause = |run: &mut crate::support::Run| {
         kill(pid, Signal::SIGSTOP).unwrap();
         std::thread::sleep(STOPPED);
-        kill(pid, Signal::SIGCONT).unwrap();
+        if kill(pid, Signal::SIGCONT).is_err() {
+            run.until(Duration::from_secs(5), |_| false);
+        }
     };
 
     // The owner polls an idle program while it can't answer.
-    pause();
+    pause(&mut run);
     // A save reaches it while it can't answer either.
     edit(&physics, "const SCALE: i64 = 1;", "const SCALE: i64 = 100;");
-    pause();
+    pause(&mut run);
     let queued = Instant::now() + Duration::from_secs(120);
     while !fs::read_to_string(&events).is_ok_and(|text| text.contains("\"queued\"")) {
         assert!(
