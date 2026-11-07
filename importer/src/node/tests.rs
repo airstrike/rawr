@@ -5066,7 +5066,7 @@ fn cache_check_separates_entries_to_rebuild_from_failures() {
 /// What a stored entry may legitimately fail with is a rawr bug in a fresh
 /// build, which panics naming the invariant (#522, D664).
 #[test]
-#[should_panic(expected = "cannot read Cargo unit graph: missing field `units`")]
+#[should_panic(expected = "internal error: rawr misread Cargo unit graph: missing field `units`")]
 fn fresh_build_panics_when_rawr_misreads_cargo() {
     let _ = Error::from(crate::Error::Schema {
         document: "Cargo unit graph",

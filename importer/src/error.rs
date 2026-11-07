@@ -129,7 +129,7 @@ pub enum Error {
 
     /// rawr could not read what Cargo, rustup or its own cache wrote: a bug
     /// in rawr, never in the program, so it says so as rustc's ICEs do.
-    #[error("internal error: cannot read {document}: {reason}; this is a rawr bug")]
+    #[error("internal error: rawr misread {document}: {reason}. This is a rawr bug")]
     Schema {
         /// The bounded document being decoded.
         document: &'static str,
@@ -167,7 +167,7 @@ pub enum Error {
 
     /// rawr could not read what its rustc driver wrote: a bug in rawr,
     /// never in the program, so it says so as rustc's own ICEs do.
-    #[error("internal error: cannot read the rustc driver's output (`{code}`): {reason}")]
+    #[error("internal error: rawr misread rustc's output (`{code}`): {reason}")]
     Extraction {
         /// Stable machine-readable rejection code.
         code: &'static str,
@@ -191,12 +191,14 @@ impl Error {
     pub fn invariant(&self) -> Option<String> {
         match self {
             Self::Node { source, .. } => source.invariant(),
-            Self::Schema { document, reason } => Some(format!("cannot read {document}: {reason}")),
-            Self::Input { code, reason } if input_condition(code, reason).is_none() => {
-                Some(format!("lost track of a build input (`{code}`): {reason}"))
+            Self::Schema { document, reason } => {
+                Some(format!("internal error: rawr misread {document}: {reason}"))
             }
+            Self::Input { code, reason } if input_condition(code, reason).is_none() => Some(
+                format!("internal error: rawr lost track of a build input (`{code}`): {reason}"),
+            ),
             Self::Extraction { code, reason } => Some(format!(
-                "cannot read the rustc driver's output (`{code}`): {reason}"
+                "internal error: rawr misread rustc's output (`{code}`): {reason}"
             )),
             _ => None,
         }
@@ -209,8 +211,8 @@ impl Error {
 fn input_message(code: &str, reason: &str) -> String {
     input_condition(code, reason).unwrap_or_else(|| {
         format!(
-            "internal error: lost track of a build input (`{code}`): {reason}; \
-             this is a rawr bug"
+            "internal error: rawr lost track of a build input (`{code}`): {reason}. \
+             This is a rawr bug"
         )
     })
 }
@@ -293,8 +295,8 @@ mod tests {
                     document: "Cargo unit graph",
                     reason: "missing field `units`".into(),
                 },
-                "internal error: cannot read Cargo unit graph: missing field `units`; \
-                 this is a rawr bug",
+                "internal error: rawr misread Cargo unit graph: missing field `units`. \
+                 This is a rawr bug",
             ),
             (
                 Error::Input {
@@ -315,8 +317,8 @@ mod tests {
                     code: "protected-build-package-owner-missing",
                     reason: "crunchy 0.2.4".into(),
                 },
-                "internal error: lost track of a build input \
-                 (`protected-build-package-owner-missing`): crunchy 0.2.4; this is a rawr bug",
+                "internal error: rawr lost track of a build input \
+                 (`protected-build-package-owner-missing`): crunchy 0.2.4. This is a rawr bug",
             ),
         ];
         for (error, expected) in cases {
