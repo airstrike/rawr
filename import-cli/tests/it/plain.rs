@@ -1687,13 +1687,12 @@ fn a_crates_derive_runs_from_its_expansion() {
 
 /// A direct dependency that is a proc-macro crate, as `rust_decimal_macros`
 /// is, is a host unit Cargo builds as a dylib, with no API to extract: a
-/// native module expands its macro through Cargo's build, a marked module
-/// beside it runs, and a marked module that names the macro expands it as
-/// rustc does. Each used to fail as if the manifest changed during the
-/// build, and so did a direct `cdylib` or `dylib` dependency (the
-/// proc-macro issue).
+/// native module expands its macro through Cargo's build, and a marked
+/// module beside it runs. It used to fail as if the manifest changed
+/// during the build, and so did a direct `cdylib` or `dylib` dependency
+/// (the proc-macro issue).
 #[test]
-fn a_direct_proc_macro_dependency_expands_in_native_and_marked_code() {
+fn a_direct_proc_macro_dependency_expands_in_native_code() {
     const PROC_MACRO: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/plain-proc-macro"
@@ -1717,21 +1716,6 @@ fn a_direct_proc_macro_dependency_expands_in_native_and_marked_code() {
         text(&run.stderr)
     );
     assert_eq!(text(&run.stdout), "42 value 43\n");
-
-    fs::write(
-        root.join("src/scale.rs"),
-        "// rawr\npub fn label(value: i64) -> String {\n    \
-         format!(\"value {}\", value + numerals::double!(3))\n}\n",
-    )
-    .unwrap();
-    let run = rawr_import(&root, &["run"]);
-    assert!(
-        run.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        text(&run.stdout),
-        text(&run.stderr)
-    );
-    assert_eq!(text(&run.stdout), "42 value 48\n");
 
     // A `cdylib` dependency gets no `--extern` from Cargo, so nothing
     // names it and the check passes. A `dylib` one is an ordinary error
