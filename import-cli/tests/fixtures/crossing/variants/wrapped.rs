@@ -1,56 +1,59 @@
 // rawr
-// iced's modal (#955), without what borrows the view: a script function
-// generic over its widget's type and lifetime, `wrapped<'a, Message>(content:
-// impl Widget<Message> + 'a, ..) -> impl Widget<Message> + 'a`, puts a rule
-// in an opaque widget, a container and a mouse area, whose types name that
-// lifetime, and that in another opaque widget. The runner names each type
-// with its lifetimes, as rustc does. Beside it, a field borrows the state's
-// email for the view's lifetime, as `Field<'a, ..>::value(self, &'a str) ->
-// Self` says (#598).
+// iced's loupe: a program function whose output names `impl Widget` inside
+// another type. `zoomed` gives the program's own `Zoomed<impl Widget<M> +
+// 'a>`, whose hidden type is the crate's `Column` of a `Button`, which the
+// body makes from crate calls, as rustc infers it. The view passes it on
+// to `column!` and reads its zoom.
 
-use events::controls::application;
-use events::widgets::{column, container, field, mouse_area, opaque, rule, Widget};
+use events::widgets::{button, center, column, text, Widget};
 
 #[derive(Default)]
-struct App {
-    width: u16,
-    email: String,
+struct Counter {
+    value: i64,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    Widen,
-    Submit,
-    Blurred,
+    Increment,
+    Decrement,
 }
 
-impl App {
+/// A program's own wrapper of a widget.
+struct Zoomed<W> {
+    zoom: u16,
+    content: W,
+}
+
+fn zoomed<'a, Message: Clone + 'a>(
+    zoom: u16,
+    label: &'a str,
+    message: Message,
+) -> Zoomed<impl Widget<Message> + 'a> {
+    Zoomed {
+        zoom,
+        content: center(button(label).on_press(message)),
+    }
+}
+
+impl Counter {
     fn update(&mut self, message: Message) {
         match message {
-            Message::Widen => self.width += 1,
-            Message::Submit => self.email = format!("me{}@rawr", self.width),
-            Message::Blurred => self.width = 0,
+            Message::Increment => self.value += 1,
+            Message::Decrement => self.value -= 1,
         }
     }
 
     fn view(&self) -> impl Widget<Message> {
+        let zoomed = zoomed(3, "Increment", Message::Increment);
+        let padding = zoomed.zoom;
         column![
-            field("Email").value(&self.email).on_submit(Message::Submit),
-            wrapped(rule(self.width, Message::Widen), Message::Blurred),
+            zoomed.content,
+            text(self.value).size(50),
+            center(button("Decrement").on_press(Message::Decrement)).padding(padding),
         ]
     }
 }
 
-fn wrapped<'a, Message>(
-    content: impl Widget<Message> + 'a,
-    on_blur: Message,
-) -> impl Widget<Message> + 'a
-where
-    Message: Clone + 'a,
-{
-    opaque(mouse_area(container(opaque(content)).padding(2)).on_press(on_blur))
-}
-
 fn main() {
-    application(App::default, App::update, App::view).run()
+    events::widgets::run(Counter::update, Counter::view);
 }
