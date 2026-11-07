@@ -138,26 +138,24 @@ fn main() {
   </div>
 </section>
 
-<section id="iced">
+<section id="apps">
   <div class="wrap sec">
     <div class="side">
-      <h2>iced apps that reload when you save</h2>
-      <p><code>rawr run</code> runs an <a href="https://github.com/iced-rs/iced">iced</a> app with its marked files interpreted. Cargo compiles iced and the rest of the app. Your marked files call iced through bindings generated from iced&rsquo;s own API.</p>
-      <p>Saving a marked file reaches the running app at its next message. The app keeps its state when the new code is compatible with it. Otherwise it starts again. A save that fails the check prints its error and leaves the last good version running.</p>
-      <p>An edit to a native module or a dependency is rebuilt by Cargo first.</p>
-      <div class="actions"><a class="btn" href="/docs/iced">Run an iced app</a></div>
+      <h2>Hot reload in the app you already have</h2>
+      <p>rawr has no framework of its own. Your app keeps its libraries, and Cargo compiles them as <code>cargo run</code> does.</p>
+      <p>Mark the files you are working on with <code>// rawr</code>. <code>rawr run</code> interprets them, and they call each library through its own API.</p>
+      <p>A save reaches the running app at its next call into marked code. The app keeps its state when the new code fits it. Otherwise rawr restarts the app and prints why.</p>
+      <p>A save that fails the check prints its error. The last good version keeps running.</p>
+      <div class="actions"><a class="btn" href="/docs/apps">Apps and libraries</a></div>
     </div>
-      <figure class="compare" style="--pos: 50%" data-left="cargo run" data-right="rawr run">
-        <div class="tabs">
-          <button type="button" data-to="100" aria-pressed="false" aria-controls="stage-counter">cargo run</button>
-          <span class="hint">drag the divider</span>
-          <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-counter">rawr run</button>
-        </div>
-        <div class="scroller">
-        <div class="stage" id="stage-counter">
-          <div class="pane rs" aria-hidden="true">
-            <div class="file"><b>src/main.rs</b><span>compiled by Cargo</span></div>
-            <pre><code data-lang="rust">// rawr
+    <figure class="libs">
+      <input type="radio" name="lib" id="lib-iced" checked><label for="lib-iced">iced</label>
+      <input type="radio" name="lib" id="lib-ratatui"><label for="lib-ratatui">ratatui</label>
+      <input type="radio" name="lib" id="lib-std"><label for="lib-std">A plain loop</label>
+      <div class="lib" id="lib-iced-panel">
+        <div class="block">
+          <div class="file"><b>src/main.rs</b><span>a window, from iced&rsquo;s counter example</span></div>
+          <pre><code data-lang="rust">// rawr
 use iced::Center;
 use iced::widget::{Widget, button, column, text};
 
@@ -165,28 +163,10 @@ pub fn main() -&gt; iced::Result {
     iced::run(Counter::update, Counter::view)
 }
 
-#[derive(Default)]
-struct Counter {
-    value: i64,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Message {
-    Increment,
-    Decrement,
-}
+// ...
 
 impl Counter {
-    fn update(&amp;mut self, message: Message) {
-        match message {
-            Message::Increment =&gt; {
-                self.value += 1;
-            }
-            Message::Decrement =&gt; {
-                self.value -= 1;
-            }
-        }
-    }
+    // ...
 
     fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
         column![
@@ -198,64 +178,60 @@ impl Counter {
         .align_x(Center)
     }
 }</code></pre>
-            <div class="run"><b>cargo run</b><span class="quiet">(opens a window)</span></div>
-          </div>
-          <div class="pane rawr">
-            <div class="file"><b>src/main.rs</b><span>interpreted by rawr</span></div>
-            <pre><code data-lang="rust">// rawr
-use iced::Center;
-use iced::widget::{Widget, button, column, text};
+          <div class="run"><small>on your machine</small><b>rawr run</b><span class="quiet">(opens a window)</span></div>
+          <p class="fig-note">iced runs the window and calls <code>update</code> and <code>view</code> back. Change the text size and save. The next click draws the new view, and the count stays.</p>
+        </div>
+      </div>
+      <div class="lib" id="lib-ratatui-panel">
+        <div class="block">
+          <div class="file"><b>src/ui.rs</b><span>a terminal app, from examples/tui</span></div>
+          <pre><code data-lang="rust">// rawr
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout};
+use ratatui::widgets::{Block, Paragraph};
 
-pub fn main() -&gt; iced::Result {
-    iced::run(Counter::update, Counter::view)
-}
+use crate::app::App;
 
-#[derive(Default)]
-struct Counter {
-    value: i64,
-}
+pub fn draw(frame: &amp;mut Frame, app: &amp;mut App) {
+    let areas = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(frame.area());
+    frame.render_widget(
+        Paragraph::new(app.input.clone()).block(Block::bordered().title(" New to-do ")),
+        areas[0],
+    );
+    // ...
+}</code></pre>
+          <div class="run"><small>on your machine</small><b>rawr run -p tui</b><span class="quiet">(draws in the terminal)</span></div>
+          <p class="fig-note">The native <code>main.rs</code> owns the terminal and calls <code>ui::draw</code> to draw each screen. Change a title and save. The screen repaints with no key pressed, and the to-dos stay.</p>
+        </div>
+      </div>
+      <div class="lib" id="lib-std-panel">
+        <div class="block">
+          <div class="file"><b>src/physics.rs</b><span>std only, from examples/islands</span></div>
+          <pre><code data-lang="rust">// rawr
+const GRAVITY: f64 = 9.8;
+const BOUNCE: f64 = 0.8;
 
-#[derive(Debug, Clone, Copy)]
-enum Message {
-    Increment,
-    Decrement,
-}
-
-impl Counter {
-    fn update(&amp;mut self, message: Message) {
-        match message {
-            Message::Increment =&gt; {
-                self.value += 1;
-            }
-            Message::Decrement =&gt; {
-                self.value -= 1;
-            }
+impl Ball {
+    pub fn advance(&amp;mut self, step: f64, width: f64) {
+        self.up -= GRAVITY * step;
+        self.height += self.up * step;
+        if self.height &lt; 0.0 {
+            self.height = 0.0;
+            self.up = -self.up * BOUNCE;
         }
-    }
-
-    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
-        column![
-            button("Increment").on_press(Message::Increment),
-            text(self.value).size(50),
-            button("Decrement").on_press(Message::Decrement)
-        ]
-        .padding(20)
-        .align_x(Center)
+        // ...
     }
 }</code></pre>
-            <div class="run"><b>rawr run</b><span class="quiet">(opens a window)</span></div>
-          </div>
-          <div class="divider">
-            <span class="hit" aria-hidden="true"></span>
-            <button type="button" class="grip" role="slider" aria-label="Show more of the file compiled by Cargo or of the file interpreted by rawr" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="50% cargo run, 50% rawr run" aria-controls="stage-counter"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
-          </div>
+          <div class="run"><small>on your machine</small><b>rawr run -p islands</b><span class="quiet">(prints the ball each tick)</span></div>
+          <p class="fig-note">The native <code>main.rs</code> loops and calls <code>advance</code> each tick. Change <code>BOUNCE</code> and save. The next tick uses it, and the ball carries on from where it was.</p>
         </div>
-        </div>
-        <figcaption>
-          The same counter runs with rawr and compiles with Cargo.
-          <small>Based on iced&rsquo;s <code>examples/counter</code> at revision <code>be88873d</code>, with <code>// rawr</code> as its first line.</small>
-        </figcaption>
-      </figure>
+      </div>
+    </figure>
   </div>
 </section>
 

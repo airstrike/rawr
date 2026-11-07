@@ -2,6 +2,7 @@
 <article>
 <h1>iced</h1>
 <p class="lede"><code>rawr run</code> runs an <a href="https://github.com/iced-rs/iced">iced</a> app with its marked files interpreted. Cargo compiles iced and the rest of the app. Saving a marked file reaches the running app.</p>
+<p>rawr runs apps on other libraries the same way. <a href="/docs/apps">Apps and libraries</a> covers them.</p>
 <h2 id="when">How rawr runs iced</h2>
 <p>iced is a Rust dependency like any other. <code>rawr run</code> and <code>rawr check</code> hand an iced app to <a href="/docs/imports">rawr-import</a>, as they hand over any program with dependencies in <code>Cargo.toml</code>. rawr-import reads iced&rsquo;s API and generates the bindings your marked files call. Nothing in rawr is written by hand for iced. Set <code>RAWR_VERBOSE=1</code> to see which binary ran a program.</p>
 <p>Your <code>main</code> calls iced&rsquo;s own <code>iced::run(update, view)</code> or <code>iced::application(..).run()</code>, as an ordinary generic call. iced runs the event loop, the window and the drawing. Your <code>State</code> and <code>Message</code> cross into it as Rust types of their own, named as you name them, so the window&rsquo;s title is iced&rsquo;s default for your crate. Your <code>update</code> and <code>view</code> cross as Rust functions the runner makes, which call the version of your code that is current. <a href="/docs/imports#generics">Generic items</a> says how.</p>
