@@ -1161,6 +1161,7 @@
     {"t":"T1158","issue":1158,"title":"T1158: Embedding: a host's enums, Vec, usize and derives cross as they are, and an export root takes a glob import","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1159","issue":1159,"title":"T1159: Embedding: a typed handle over the script's own type, checked at lookup and lent by &mut, and Script::replace","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1160","issue":1160,"title":"T1160: std::thread::spawn fails in the browser playground","state":"open","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1161","issue":1161,"title":"T1161: A Rustlings group in the playground","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1161","issue":1161,"title":"T1161: A Rustlings group in the playground","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1162","issue":1162,"title":"T1162: The landing page's reload section covers any library","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

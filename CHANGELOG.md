@@ -13,6 +13,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The whole site now has the work plan's look: Abitaro Sans, black on white with one red, heavy headings and thick rules. Every page, /todo included, has a dark mode that follows the system, with a switch in the site bar that remembers the choice. (#1155)
 - The playground's examples have a Rustlings group: 13 programs from the rustlings solutions (ownership, enums, Option, strings, HashMap, errors with ? and Box<dyn Error>, traits, lifetimes, iterators, Box, Rc and TryFrom), each crediting its source under rustlings' MIT licence. (#1161)
 - A module, its file, a function, a field or a binding can be named `switch`, `import`, `print`, `this` or any other word the old engine reserved, in marked code and in a crate's items, as in Rust: `mod switch;` opens `switch.rs`. rawr's grammar is Rust's, so the old engine's `switch`, `do`/`until`, `try`/`catch` and `import`/`export` syntax is gone. (#1153)
+- The landing page's reload section now covers any library: tabs show the same idea in iced, ratatui and a plain std loop, and a new docs page, Apps and libraries, explains how libraries are compiled by Cargo, called from marked code and reloaded on save. Section rules, headings, links and inline code read more evenly. (#1162)
 
 ## 0.3.171 (2026-11-07)
 

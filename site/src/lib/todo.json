@@ -15,7 +15,8 @@
         {"text":"A crate whose method returns an `impl Trait`, such as polars-core's `downcast_iter_mut`, no longer crashes rawr-import's driver with a rustc internal error about a missing visibility.","issues":[1151]},
         {"text":"The whole site now has the work plan's look: Abitaro Sans, black on white with one red, heavy headings and thick rules. Every page, /todo included, has a dark mode that follows the system, with a switch in the site bar that remembers the choice.","issues":[1155]},
         {"text":"The playground's examples have a Rustlings group: 13 programs from the rustlings solutions (ownership, enums, Option, strings, HashMap, errors with ? and Box<dyn Error>, traits, lifetimes, iterators, Box, Rc and TryFrom), each crediting its source under rustlings' MIT licence.","issues":[1161]},
-        {"text":"A module, its file, a function, a field or a binding can be named `switch`, `import`, `print`, `this` or any other word the old engine reserved, in marked code and in a crate's items, as in Rust: `mod switch;` opens `switch.rs`. rawr's grammar is Rust's, so the old engine's `switch`, `do`/`until`, `try`/`catch` and `import`/`export` syntax is gone.","issues":[1153]}
+        {"text":"A module, its file, a function, a field or a binding can be named `switch`, `import`, `print`, `this` or any other word the old engine reserved, in marked code and in a crate's items, as in Rust: `mod switch;` opens `switch.rs`. rawr's grammar is Rust's, so the old engine's `switch`, `do`/`until`, `try`/`catch` and `import`/`export` syntax is gone.","issues":[1153]},
+        {"text":"The landing page's reload section now covers any library: tabs show the same idea in iced, ratatui and a plain std loop, and a new docs page, Apps and libraries, explains how libraries are compiled by Cargo, called from marked code and reloaded on save. Section rules, headings, links and inline code read more evenly.","issues":[1162]}
       ]
     },
     "releases": [
@@ -2784,7 +2785,8 @@
     {"issue":1158,"title":"Embedding: a host's enums, Vec, usize and derives cross as they are, and an export root takes a glob import","state":"open","category":"Divergences from rustc"},
     {"issue":1159,"title":"Embedding: a typed handle over the script's own type, checked at lookup and lent by &mut, and Script::replace","state":"open","category":"Divergences from rustc"},
     {"issue":1160,"title":"std::thread::spawn fails in the browser playground","state":"open","category":"Platforms"},
-    {"issue":1161,"title":"A Rustlings group in the playground","state":"open","category":"Health"}
+    {"issue":1161,"title":"A Rustlings group in the playground","state":"open","category":"Health"},
+    {"issue":1162,"title":"The landing page's reload section covers any library","state":"open","category":"Health"}
   ],
   "groups": [
     {
