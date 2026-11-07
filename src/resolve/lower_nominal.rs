@@ -20459,12 +20459,21 @@ impl<'a> Parser<'a> {
                 // A program's iterator that fills the parameter gives its
                 // items as `I::Item`, and an iterator is its own `IntoIter`,
                 // as the `Product<Self, J::IntoIter>` of itertools'
-                // `cartesian_product` holds two.
+                // `cartesian_product` holds two. An integer range a crate
+                // takes by value is one too, of its own kind.
                 #[cfg(feature = "rust-import")]
                 if let Some((_, name)) = relation.associated()
                     && let [declared] = relation.arguments()
                     && let Some(item) = match (name.as_str(), &actual) {
                         ("Item", Ty::Iter(item, _)) => Some((**item).clone()),
+                        ("Item", Ty::InclusiveRange(kind)) => Some(Ty::Int(*kind)),
+                        ("Item", Ty::Range(element)) if matches!(**element, Ty::Int(_)) => {
+                            Some((**element).clone())
+                        }
+                        ("IntoIter", Ty::InclusiveRange(_)) => Some(actual.clone()),
+                        ("IntoIter", Ty::Range(element)) if matches!(**element, Ty::Int(_)) => {
+                            Some(actual.clone())
+                        }
                         ("Item", Ty::Host { .. }) => self.host_iterator_item(&actual, span),
                         ("IntoIter", Ty::Iter(..)) => Some(actual.clone()),
                         ("IntoIter", Ty::Host { .. })
