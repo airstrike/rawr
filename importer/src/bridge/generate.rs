@@ -1745,6 +1745,10 @@ impl Arena {
     }
 
     fn index<T: 'static>(&self, handle: &NativeHandle) -> Result<usize, Error> {
+        self.index_where(handle, |value| value.is::<T>())
+    }
+
+    fn index_where(&self, handle: &NativeHandle, is: impl Fn(&dyn Any) -> bool) -> Result<usize, Error> {
         if handle.epoch != self.epoch { return Err(Error::StaleHandle); }
         let index = handle.slot as usize;
         let entry = self.slots.get(index).ok_or(Error::StaleHandle)?;
@@ -1754,27 +1758,38 @@ impl Arena {
         if entry.generation != handle.generation || entry.value.is_none() {
             return Err(Error::StaleHandle);
         }
-        if !entry.value.as_ref().is_some_and(|value| value.is::<T>()) {
+        if !entry.value.as_deref().is_some_and(is) {
             return Err(Error::TypeMismatch);
         }
         Ok(index)
     }
 
     fn take<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
-        self.settle(&handle);
+        self.take_where(&handle, |value| value.is::<T>())?
+            .downcast::<T>()
+            .map(|value| *value)
+            .map_err(|_| Error::TypeMismatch)
+    }
+
+    /// The value `handle` names, of whatever type it is: a marked
+    /// function's result native code takes (#1118).
+    fn take_any(&mut self, handle: &NativeHandle) -> Result<Box<dyn Any>, Error> {
+        self.take_where(handle, |_| true)
+    }
+
+    /// The value `handle` names when `is` holds for it: moved out by the
+    /// last copy of the handle, and else copied out by its `Clone`.
+    fn take_where(&mut self, handle: &NativeHandle, is: impl Fn(&dyn Any) -> bool) -> Result<Box<dyn Any>, Error> {
+        self.settle(handle);
         // A homed value is copied out by its `Clone`, as a slot's is; one
         // without it stays where the view borrows it.
-        if let Some(homed) = self.homed(&handle) {
+        if let Some(homed) = self.homed(handle) {
             let clone = self.slots[handle.slot as usize].clone.ok_or(Error::Leased)?;
             let mut copied = None;
             homed.shared(&mut |value| copied = clone(value))?;
-            return copied
-                .ok_or(Error::TypeMismatch)?
-                .downcast::<T>()
-                .map(|value| *value)
-                .map_err(|_| Error::TypeMismatch);
+            return copied.filter(|value| is(value.as_ref())).ok_or(Error::TypeMismatch);
         }
-        let index = self.index::<T>(&handle)?;
+        let index = self.index_where(handle, is)?;
         // A script copies a handle where it copies the value, so while
         // another copy of the handle lives, a `Clone` value is cloned out
         // and its slot stays valid for that copy. The last copy moves the
@@ -1786,8 +1801,7 @@ impl Arena {
             .is_none_or(|release| std::sync::Arc::strong_count(release) > 1);
         if shared && let Some(clone) = self.slots[index].clone {
             let value = self.slots[index].value.as_deref().ok_or(Error::StaleHandle)?;
-            let value = clone(value).ok_or(Error::TypeMismatch)?;
-            return value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch);
+            return clone(value).ok_or(Error::TypeMismatch);
         }
         let reusable = self.slots[index].generation.checked_add(1);
         if reusable.is_some() {
@@ -1804,7 +1818,7 @@ impl Arena {
             }
             None => self.slots[index].generation = u64::MAX,
         }
-        value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch)
+        Ok(value)
     }
 
     fn project(
@@ -2093,7 +2107,18 @@ impl Arena {
     }
 }
 
+/// The native value `value` holds, moved out of this thread's arena for
+/// native code that called a marked function (#1118).
+fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
+    let handle = value.read_lock::<NativeHandle>()?;
+    Some(
+        arena_access(|arena| arena.take_any(&handle).map_err(|error| format!("{:?}", error.reported())))
+            .unwrap_or_else(|| Err("a native value can't move from another thread's arena".to_owned())),
+    )
+}
+
 fn install_arena(epoch: [u8; 32]) {
+    __rawr_internal::island::moves(moved);
     __rawr_internal::host::debug::register::<NativeHandle>();
     __rawr_internal::host::display::register::<NativeHandle>();
     __rawr_internal::host::debug::register::<__rawr_internal::scope::Scoped>();
@@ -4018,38 +4043,33 @@ mod __rawr_profile {
     }
 
     thread_local! {
-        /// A marked `main`'s runtime registry, which each generation it
-        /// admits binds a next generation of (D475.2, D553.4), so native
+        /// The running program's runtime registry, which each generation
+        /// it admits binds a next generation of (D475.2, D553.4), so native
         /// values keep their witnesses.
         static RUNTIME: std::cell::RefCell<Option<__rawr_internal::host::runtime::Registry>> =
             const { std::cell::RefCell::new(None) };
-        /// The program a marked `main` admitted last, kept while it runs.
+        /// The program the owner thread admitted last, kept while it runs.
         static ADMITTED: std::cell::RefCell<Option<super::Program>> =
             const { std::cell::RefCell::new(None) };
     }
 
     fn bind(program: &mut super::Program) -> Result<__rawr_internal::reload::installation::Bootstrap, String> {
         let candidate = program.candidate.take().ok_or("generation program unavailable")?;
-        let kept = program
-            .marked_main
-            .then(|| RUNTIME.with_borrow(|runtime| runtime.as_ref().map(|runtime| runtime.next_generation())))
-            .flatten();
+        let kept = RUNTIME.with_borrow(|runtime| runtime.as_ref().map(|runtime| runtime.next_generation()));
         let runtime = match kept {
             Some(runtime) => runtime,
             None => {
                 let runtime = super::imported_runtime(&program.engine, &program._bindings)
                     .map_err(|error| error.to_string())?;
-                if program.marked_main {
-                    RUNTIME.set(Some(runtime.next_generation()));
-                }
+                RUNTIME.set(Some(runtime.next_generation()));
                 runtime
             }
         };
         candidate.bind(&program.engine, runtime).map_err(|error| error.to_string())
     }
 
-    /// Make `program`, compiled beside a running marked `main`, the
-    /// generation its next calls from native code run in (D553.3). This
+    /// Make `program`, compiled beside the running program, the generation
+    /// its next calls from native code run in (D553.3). This
     /// runs on the thread that owns the program, at an outermost entry. The
     /// arena stays: its native values live on (D553.4).
     pub fn admit(mut program: super::Program) -> Result<(), String> {
@@ -4065,13 +4085,9 @@ mod __rawr_profile {
     /// status is the process's.
     ///
     /// A program whose crate root is native (D501) registers its native
-    /// `main` from its Rawr one. `None` is that `main` running on a thread
-    /// of its own, its calls into marked code handed to `forward` for this
-    /// thread to answer; the process exits when it returns.
-    pub fn run(
-        program: &mut super::Program,
-        forward: impl Fn(__rawr_internal::island::Call) + Send + Sync + 'static,
-    ) -> super::Started {
+    /// `main` from its Rawr one, for this thread to run: its calls into
+    /// marked code run here, as cargo's build runs them (#1119).
+    pub fn run(program: &mut super::Program) -> super::Started {
         let bootstrap = match bind(program) {
             Ok(bootstrap) => bootstrap,
             Err(error) => {
@@ -4100,8 +4116,8 @@ mod __rawr_profile {
                 }
             };
         }
-        if __rawr_internal::island::start(forward) {
-            return super::Started::Serving;
+        if let Some(entry) = __rawr_internal::island::take_entry() {
+            return super::Started::Entry(entry);
         }
         super::Started::Exit(match result {
             None => 0,
@@ -4117,12 +4133,6 @@ mod __rawr_profile {
                 101
             }
         })
-    }
-
-    /// Make a committed generation the one a running native `main` calls.
-    pub fn publish(program: &mut super::Program) -> Result<(), String> {
-        __rawr_internal::island::publish(bind(program)?);
-        Ok(())
     }
 
     pub fn compile_generation(
@@ -4216,33 +4226,24 @@ fn decode_hex(value: &str) -> std::io::Result<[u8; 32]> {
     Ok(output)
 }
 
-/// What the protocol thread waits for: the parent's next frame, or a call
-/// from the program's native `main` into marked code (D501). Its name is
-/// one no script type takes, since a script type's proxy is declared at the
-/// crate root beside it (`table`'s `Event`).
-enum __RawrProtocolEvent {
-    Frame(std::io::Result<(u8, Vec<u8>)>),
-    Call(__rawr_internal::island::Call),
-}
+/// One frame from the parent, as the protocol's reader thread received it.
+/// Its name is one no script type takes, since a script type's proxy is
+/// declared at the crate root beside it.
+type __RawrFrame = std::io::Result<(u8, Vec<u8>)>;
 
-/// The parent's next frame, answering the native calls that come first.
-fn next_frame(events: &std::sync::mpsc::Receiver<__RawrProtocolEvent>) -> std::io::Result<(u8, Vec<u8>)> {
-    loop {
-        match events.recv() {
-            Ok(__RawrProtocolEvent::Frame(frame)) => return frame,
-            Ok(__RawrProtocolEvent::Call(call)) => call.answer(),
-            Err(_) => return Err(std::io::Error::other("protocol reader stopped")),
-        }
-    }
+/// The parent's next frame.
+fn next_frame(frames: &std::sync::mpsc::Receiver<__RawrFrame>) -> std::io::Result<(u8, Vec<u8>)> {
+    frames
+        .recv()
+        .unwrap_or_else(|_| Err(std::io::Error::other("protocol reader stopped")))
 }
 
 /// What starting the program left this thread to do.
 enum Started {
     /// The program ended with this status.
     Exit(i32),
-    /// A native `main` runs on its own thread, and this one serves its calls.
-    Serving,
-    /// An async `main`'s runtime entry, for this thread to run.
+    /// The entry the program registered, for this thread to run: its
+    /// native `main` (D501), or an async `main`'s runtime entry (D513.4).
     Entry(fn() -> i32),
 }
 
@@ -4453,7 +4454,7 @@ fn admitted() {
 /// restarts the program with it.
 fn serve_entry(
     mut stream: std::os::unix::net::UnixStream,
-    received: std::sync::mpsc::Receiver<__RawrProtocolEvent>,
+    received: std::sync::mpsc::Receiver<__RawrFrame>,
     mut key: [u8; 32],
     mut live: Option<Live>,
 ) {
@@ -4579,16 +4580,6 @@ fn open_protocol() -> std::io::Result<(std::os::unix::net::UnixStream, [u8; 32],
     Ok((stream, key, first))
 }
 
-/// Whether the first frame prepares a program whose crate root is marked,
-/// so its `main` is Rawr code and nothing native needs the main thread
-/// kept for it.
-fn marked_main(key: &[u8; 32], (tag, payload): &(u8, Vec<u8>)) -> bool {
-    *tag == 3
-        && payload.len() >= 80
-        && payload[..32] == *key
-        && decode_snapshot(&payload[80..]).is_ok_and(|snapshot| snapshot.marked_root())
-}
-
 fn run_protocol(
     mut stream: std::os::unix::net::UnixStream,
     mut key: [u8; 32],
@@ -4601,13 +4592,12 @@ fn run_protocol(
     let mut admitted = false;
     let mut hot = Hot::default();
     let mut first = Some(first);
-    let (events, received) = std::sync::mpsc::channel::<__RawrProtocolEvent>();
+    let (frames, received) = std::sync::mpsc::channel::<__RawrFrame>();
     let mut reader = stream.try_clone()?;
-    let frames = events.clone();
     std::thread::spawn(move || loop {
         let frame = receive_frame(&mut reader);
         let end = frame.is_err();
-        if frames.send(__RawrProtocolEvent::Frame(frame)).is_err() || end {
+        if frames.send(frame).is_err() || end {
             break;
         }
     });
@@ -4711,13 +4701,6 @@ fn run_protocol(
                 install_arena(next);
                 key = next;
                 program = candidate.program;
-                // A running native `main` calls the new generation next.
-                if __rawr_internal::island::running()
-                    && let Some(program) = &mut program
-                    && let Err(error) = __rawr_profile::publish(program)
-                {
-                    eprintln!("rawr: native code keeps calling the previous generation: {error}");
-                }
                 send_frame(&mut stream, 8, &payload)?;
             }
             26 if payload.len() == 48 => {
@@ -4764,54 +4747,37 @@ fn run_protocol(
             }
             20 if admitted && payload.as_slice() == key => {
                 send_frame(&mut stream, 21, &key)?;
-                // A marked `main` runs here, on the thread that owns the
-                // program, for as long as it runs; the protocol goes on
-                // beside it, and a save restarts it (D500.1). That thread
-                // is the process's main thread, so a windowing crate's
-                // event loop runs as under `cargo run`. A panic in it ends
-                // the program with Rust's status, 101.
-                if let Some(running) = program.as_mut().filter(|program| program.marked_main) {
-                    let stream = stream.try_clone()?;
-                    let live = running.candidate.as_ref().map(|candidate| Live {
-                        engine: running.engine.clone(),
-                        generation: candidate.generation().clone(),
-                        bindings: running._bindings.clone(),
-                        contract: running.application_contract.clone(),
-                    });
-                    std::thread::Builder::new()
-                        .name("rawr protocol".into())
-                        .spawn(move || serve_entry(stream, received, key, live))?;
-                    let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        __rawr_profile::run(running, |_| {})
-                    }));
-                    match started {
-                        Ok(Started::Exit(status)) => exit(status),
-                        Ok(Started::Entry(entry)) => exit(std::panic::catch_unwind(entry).unwrap_or(101)),
-                        Ok(Started::Serving) | Err(_) => exit(101),
-                    }
-                }
-                let calls = events.clone();
-                let forward = move |call| {
-                    let _ = calls.send(__RawrProtocolEvent::Call(call));
+                // The program runs here, on the thread that owns it, for as
+                // long as it runs; the protocol goes on beside it. That
+                // thread is the process's main thread, so a windowing
+                // crate's event loop runs as under `cargo run`, whether a
+                // marked `main` or the native `main` of a native root
+                // (D501, #1119) starts it. A save is offered to this thread,
+                // which admits it at its next call from native code
+                // (D553.3), or restarts the program when it can't take it.
+                // A panic ends the program with Rust's status, 101.
+                let Some(running) = program.as_mut() else {
+                    exit(0);
                 };
-                let started = match &mut program {
-                    Some(program) => __rawr_profile::run(program, forward),
-                    None => Started::Exit(0),
-                };
+                let stream = stream.try_clone()?;
+                let live = running.candidate.as_ref().map(|candidate| Live {
+                    engine: running.engine.clone(),
+                    generation: candidate.generation().clone(),
+                    bindings: running._bindings.clone(),
+                    contract: running.application_contract.clone(),
+                });
+                std::thread::Builder::new()
+                    .name("rawr protocol".into())
+                    .spawn(move || serve_entry(stream, received, key, live))?;
+                let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    __rawr_profile::run(running)
+                }));
                 match started {
-                    // A native `main` runs on its own thread; this one serves it.
-                    Started::Serving => {}
-                    Started::Exit(status) => exit(status),
-                    // An async `main`'s runtime entry runs here, on the thread
-                    // that owns the program, and the protocol goes on beside
-                    // it (D527).
-                    Started::Entry(entry) => {
-                        let stream = stream.try_clone()?;
-                        std::thread::Builder::new()
-                            .name("rawr protocol".into())
-                            .spawn(move || serve_entry(stream, received, key, None))?;
-                        exit(std::panic::catch_unwind(entry).unwrap_or(101));
-                    }
+                    Ok(Started::Exit(status)) => exit(status),
+                    // A native `main`, or an async `main`'s runtime entry
+                    // (D527).
+                    Ok(Started::Entry(entry)) => exit(std::panic::catch_unwind(entry).unwrap_or(101)),
+                    Err(_) => exit(101),
                 }
             }
             17 if admitted => match invoke_adapter(&key, &payload) {
@@ -4948,19 +4914,18 @@ fn run_snippet(mut program: Program) -> ! {
         exit(101);
     }
     let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        __rawr_profile::run(&mut program, |_| {})
+        __rawr_profile::run(&mut program)
     }));
     match started {
         Ok(Started::Exit(status)) => exit(status),
         Ok(Started::Entry(entry)) => exit(std::panic::catch_unwind(entry).unwrap_or(101)),
-        Ok(Started::Serving) | Err(_) => exit(101),
+        Err(_) => exit(101),
     }
 }
 
-/// A program whose `main` is Rawr code runs its protocol and interpreter on
-/// the process's main thread, where its `main` then runs. Otherwise they
-/// run on a thread of their own, so the main thread is free for a native
-/// `main`. winit's event loop must run there either way (D533).
+/// The protocol and the interpreter run on the process's main thread, where
+/// the program's `main` then runs, a marked one or a native one (D533,
+/// #1119): winit's event loop must run there.
 fn main() {
     register_native_sequences();
     for adapter in adapters() {
@@ -4976,20 +4941,7 @@ fn main() {
         Ok(opened) => opened,
         Err(error) => finish(Err(error)),
     };
-    if marked_main(&key, &first) {
-        finish(run_protocol(stream, key, first));
-    }
-    let main_thread = __rawr_internal::island::keep_main_thread();
-    let protocol = std::thread::Builder::new()
-        .name("rawr protocol".into())
-        // The stack a process's own main thread usually has.
-        .stack_size(8 << 20)
-        .spawn(move || finish(run_protocol(stream, key, first)));
-    if let Err(error) = protocol {
-        eprintln!("runner protocol failed: {error}");
-        exit(1);
-    }
-    main_thread.serve()
+    finish(run_protocol(stream, key, first))
 }
 "#;
 const PROFILE_RUNNER_MAIN: &[u8] = br#"
@@ -20871,24 +20823,23 @@ mod tests {
         // bound to the imported runtime.
         assert!(neutral.contains("candidate.bind(&program.engine, runtime)"));
         assert!(neutral.contains("__rawr_internal::island::invoke_main()"));
-        // A native `main` (D501) is started after the Rawr one registers it,
-        // and each committed generation is published for its calls.
-        assert!(neutral.contains("__rawr_internal::island::start(forward)"));
+        // A native `main` (D501) is an entry the Rawr one registers, which
+        // the thread that owns the program runs (#1119), and a reply's
+        // native values move out of that thread's arena (#1118).
+        assert!(neutral.contains(
+            "if let Some(entry) = __rawr_internal::island::take_entry() {\n            return super::Started::Entry(entry);"
+        ));
+        let runtime = std::str::from_utf8(RUNTIME_SOURCE).expect("runtime source is UTF-8");
+        assert!(runtime.contains("__rawr_internal::island::moves(moved);"));
         let runner = std::str::from_utf8(RUNNER_MAIN).expect("runner source is UTF-8");
         assert!(runner.contains("20 if admitted && payload.as_slice() == key"));
-        assert!(runner.contains("__rawr_profile::run(program, forward)"));
-        assert!(runner.contains("__rawr_profile::publish(program)"));
-        assert!(runner.contains("Ok(__RawrProtocolEvent::Call(call)) => call.answer(),"));
-        // The process's main thread is kept for a native `main`, and the
-        // protocol runs beside it. A marked `main` runs the protocol, and
-        // then itself, on the main thread.
+        assert!(runner.contains(".spawn(move || serve_entry(stream, received, key, live))?;"));
+        assert!(runner.contains("__rawr_profile::run(running)"));
+        // Every program runs its protocol, and then itself, on the main
+        // thread.
         let main = runner.split_once("fn main() {").expect("runner main").1;
-        assert!(main.contains(
-            "if marked_main(&key, &first) {\n        finish(run_protocol(stream, key, first));"
-        ));
-        assert!(main.contains("__rawr_internal::island::keep_main_thread()"));
-        assert!(main.contains(".spawn(move || finish(run_protocol(stream, key, first)))"));
-        assert!(main.contains("main_thread.serve()"));
+        assert!(main.contains("finish(run_protocol(stream, key, first))"));
+        assert!(!main.contains("keep_main_thread"));
     }
 
     #[test]

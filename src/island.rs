@@ -342,6 +342,15 @@ impl crate::future::Host for Current {
 pub(crate) fn shared(
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
+) -> crate::future::Program {
+    share(authority, runtime)
+}
+
+/// [`shared`], as the island's own calls from other threads reach it.
+#[cfg(feature = "sync")]
+fn share(
+    authority: program::Authority,
+    runtime: crate::Shared<crate::host::runtime::Registry>,
 ) -> Arc<Shared> {
     let methods = |name: &str| {
         authority
@@ -627,7 +636,7 @@ pub fn refusal(
 /// evaluation of their own, checks of values native code gives, and each
 /// script type's own `Clone`.
 #[cfg(feature = "sync")]
-pub(crate) struct Shared {
+struct Shared {
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
     clones: HashMap<type_def::Identity, item::Value>,
@@ -748,7 +757,7 @@ impl Current {
         #[cfg(feature = "sync")]
         let shared = {
             let (authority, runtime) = bootstrap.catalog().shared();
-            shared(authority, runtime)
+            share(authority, runtime)
         };
         Self {
             bootstrap,
@@ -938,6 +947,50 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    /// A result crosses as its variant and its value (#1118), and a native
+    /// value in it, as the `iced::Error` of an `iced::Result`, is moved out
+    /// as the runner's [`super::moves`] moves it, its tag naming its place
+    /// among the reply's natives.
+    #[test]
+    fn a_result_crosses_and_its_native_value_moves() {
+        use crate::program::model::island::{ERR, NATIVE, OK, STR};
+
+        #[derive(Clone)]
+        struct Handle(u8);
+        super::moves(|value| {
+            value
+                .read_lock::<Handle>()
+                .map(|handle| Ok(Box::new(handle.0) as Box<dyn std::any::Any>))
+        });
+        let engine = Shared::new(Engine::new());
+        let authority = engine
+            .compile_authority("pub fn keep() {}")
+            .unwrap_or_else(|error| panic!("{error}"));
+        let model = authority.model();
+        let mut natives = Vec::new();
+
+        let mut out = Vec::new();
+        let error = crate::result::err(Dynamic::from(crate::ImmutableString::from("no")));
+        model.island_write(&error, &mut out, &mut natives, 0).unwrap();
+        let mut expected = vec![ERR, STR];
+        expected.extend_from_slice(&2_u64.to_le_bytes());
+        expected.extend_from_slice(b"no");
+        assert_eq!(out, expected);
+
+        let mut out = Vec::new();
+        let ok = crate::result::ok(Dynamic::UNIT);
+        let failed = crate::result::err(Dynamic::from(Handle(7)));
+        model.island_write(&ok, &mut out, &mut natives, 0).unwrap();
+        model.island_write(&failed, &mut out, &mut natives, 0).unwrap();
+        let mut expected = vec![OK, crate::program::model::island::UNIT, ERR, NATIVE];
+        expected.extend_from_slice(&0_u64.to_le_bytes());
+        assert_eq!(out, expected);
+        let [moved] = natives.as_slice() else {
+            panic!("{} natives", natives.len());
+        };
+        assert_eq!(moved.downcast_ref::<u8>(), Some(&7));
     }
 
     /// Native code that clones or prints a script value it holds as
