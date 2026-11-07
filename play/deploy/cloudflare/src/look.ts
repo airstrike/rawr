@@ -11,9 +11,13 @@ import { TOKENS } from "./tokens.gen.ts";
 
 const FONT = "https://abitaro-sans.pages.dev/abitaro-sans.css?v=0.300";
 
-/** The <head>'s theme, font and tokens, in the order the site's pages have them. */
+/**
+ * The <head>'s theme, icon, font and tokens, in the order the site's pages
+ * have them. The bot's pages take the playground's icon (site/public/play.svg).
+ */
 export const HEAD = `<meta name="theme-color" content="${CHROME.light}" data-follow>
 <script>${THEME_INIT}</script>
+<link rel="icon" href="/play.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://abitaro-sans.pages.dev" crossorigin>
 <link rel="stylesheet" href="${FONT}">
 <script>${FONT_GATE}</script>

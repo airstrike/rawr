@@ -1,15 +1,23 @@
-// The link preview for rawr.airstrike.fyi/todo, drawn by rawr itself in the
-// work plan's style: black on white, one red, Abitaro Sans.
-// site/public/og/todo.png is committed as it was drawn. rawr-play no longer
-// renders iced, so nothing draws it again until generated bindings reach
-// ?play.
+// The link preview for rawr.airstrike.fyi/todo, drawn in iced in the
+// work plan's style: black on white, one red, Abitaro Sans, and the site's
+// mark (site/public/favicon.svg). site/public/og/todo.png is committed as it
+// was drawn: ?play's headless shell (play/universe/shell) writes the frame
+// to the file PLAY_FRAME names, at 600 by 315 points and twice the scale.
+// It builds in a Cargo project whose [patch] puts that shell in place of
+// iced_winit, as play/universe/Cargo.toml does.
 use iced::font::Weight;
-use iced::widget::{column, container, row, space, text};
-use iced::{Border, Center, Color, Fill, Font, Length, Theme, Widget};
+use iced::widget::canvas::{Frame, Geometry, Path};
+use iced::widget::{canvas, column, container, row, space, text};
+use iced::{
+    mouse, Border, Center, Color, Fill, Font, Length, Point, Rectangle, Renderer, Size, Theme,
+    Widget,
+};
 
 pub fn main() -> iced::Result {
     iced::application(Card::default, Card::update, Card::view)
         .theme(Card::theme)
+        .window_size((600.0, 315.0))
+        .scale_factor(|_| 2.0)
         .run()
 }
 
@@ -33,16 +41,22 @@ enum State {
     Next,
 }
 
-/// The chart's epics, each spanning its rows on the page's axis of 66 units
-/// of complexity (plan/gantt.json at 0.3.28).
-const ROWS: [(&str, &str, u16, u16, State); 7] = [
+/// The page's axis, in units of complexity.
+const AXIS: u16 = 88;
+
+/// The chart's groups, each spanning its rows on the page's axis, with the
+/// last milestone it reaches (plan/gantt.json at 0.3.171).
+const ROWS: [(&str, &str, u16, u16, State); 10] = [
     ("0.2", "Foundations", 0, 26, State::Done),
     ("0.3", "Shared dependency cache", 26, 10, State::Done),
-    ("0.4", "No glue", 22, 31, State::Now),
-    ("0.4", "Shared bindings", 37, 14, State::Now),
     ("0.3", "The gnarly snippet", 51, 6, State::Done),
-    ("", "Playground", 36, 27, State::Next),
-    ("", "Retire rawr-iced", 63, 3, State::Next),
+    ("0.4", "Shared bindings", 37, 14, State::Now),
+    ("0.4", "No glue", 22, 31, State::Now),
+    ("0.3", "Retire rawr-iced", 63, 3, State::Done),
+    ("0.3", "Rust as rustc has it", 66, 14, State::Now),
+    ("0.3", "Shipping", 70, 16, State::Now),
+    ("0.3", "Playground", 36, 52, State::Now),
+    ("0.5", "Debugger", 53, 14, State::Now),
 ];
 
 impl Card {
@@ -54,6 +68,8 @@ impl Card {
 
     fn view(&self) -> impl Widget<Message> {
         let header = row![
+            mark(14.0),
+            space().width(8),
             text("rawr").size(12).font(abitaro(Weight::ExtraBold)),
             space().width(Fill),
             text("rawr.airstrike.fyi/todo")
@@ -64,14 +80,14 @@ impl Card {
         .align_y(Center);
 
         let title = text("Work plan")
-            .size(54)
+            .size(46)
             .line_height(1.0)
             .font(abitaro(Weight::ExtraBold));
 
         let chart = column(ROWS.iter().map(|&(milestone, name, start, size, state)| {
             chart_row(milestone, name, start, size, state)
         }))
-        .spacing(5);
+        .spacing(1);
 
         let legend = row![
             key(State::Done, "Done"),
@@ -121,7 +137,7 @@ fn chart_row<'a>(
     let track = row![
         space().width(Length::FillPortion(start.max(1))),
         bar(state, Length::FillPortion(size)),
-        space().width(Length::FillPortion((66 - start - size).max(1))),
+        space().width(Length::FillPortion((AXIS - start - size).max(1))),
     ];
     let track = container(track)
         .width(Fill)
@@ -166,4 +182,38 @@ fn key<'a>(state: State, label: &'a str) -> impl Widget<Message> + 'a {
 fn rule<'a>(height: f32, color: Color) -> impl Widget<Message> + 'a {
     container(space().height(height).width(Fill))
         .style(move |_| container::Style::default().background(color))
+}
+
+/// The site's mark, as site/public/favicon.svg draws it on its 32-unit
+/// grid: a red disc over a heavy rule.
+fn mark<'a>(size: f32) -> impl Widget<Message> + 'a {
+    canvas(Mark).width(size).height(size)
+}
+
+struct Mark;
+
+impl canvas::Program<Message> for Mark {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let unit = bounds.width / 32.0;
+        frame.fill(
+            &Path::circle(Point::new(16.0 * unit, 12.5 * unit), 8.5 * unit),
+            RED,
+        );
+        frame.fill_rectangle(
+            Point::new(3.0 * unit, 24.0 * unit),
+            Size::new(26.0 * unit, 5.0 * unit),
+            INK,
+        );
+        vec![frame.into_geometry()]
+    }
 }
