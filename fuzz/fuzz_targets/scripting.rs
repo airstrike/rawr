@@ -29,10 +29,7 @@ fuzz_target!(|ctx: Ctx| {
 
     // Don't actually print to stdout, but also don't optimise
     // printing code away.
-    engine.on_debug(|x, src, pos| _ = black_box((x, src, pos)));
-    engine.on_print(move |s| {
-        _ = black_box(s);
-    });
+    engine.on_output(|_, s| _ = black_box(s));
 
     // Limit the length of scripts.
     let script = ctx.script.chars().take(32 * 1024).collect::<String>();

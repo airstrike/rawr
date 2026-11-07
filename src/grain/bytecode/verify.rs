@@ -421,7 +421,6 @@ fn effect(op: &Op, pools: Pools) -> (usize, usize) {
         // The buffer is an ordinary operand: started, appended to, then
         // replaced by the string it built.
         // A name in, a pointer out.
-        Op::MakeFnPtr | Op::IsShared => (1, 1),
         // The arguments and the pointer itself, leaving one of each.
         Op::Curry(argc) => (*argc as usize + 1, 1),
         Op::CallFnPtr { argc, .. } => (*argc as usize + 1, 1),

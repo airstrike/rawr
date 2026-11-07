@@ -1,7 +1,7 @@
 //! Module defining script statements.
 
 use super::{ASTFlags, ASTNode, BinaryExpr, Expr, FnCallExpr, Ident};
-use crate::engine::{KEYWORD_EVAL, OP_EQUALS};
+use crate::engine::OP_EQUALS;
 use crate::func::StraightHashMap;
 use crate::tokenizer::Token;
 use crate::types::dynamic::Union;
@@ -935,8 +935,7 @@ impl Stmt {
     /// A statement that depends on its containing block behaves differently when promoted to an
     /// upper block.
     ///
-    /// Currently only variable definitions (i.e. `let` and `const`) and `eval` calls (which may
-    /// in turn define variables) fall under this category.
+    /// Currently only variable definitions (i.e. `let` and `const`) fall under this category.
     #[inline]
     #[must_use]
     pub fn is_block_dependent(&self) -> bool {
@@ -945,14 +944,8 @@ impl Stmt {
 
             Self::Expr(e) => match &**e {
                 Expr::Stmt(s) => s.iter().all(Self::is_block_dependent),
-                Expr::FnCall(x, ..) if x.is_qualified() => false,
-                Expr::FnCall(x, ..) => x.name == KEYWORD_EVAL,
                 _ => false,
             },
-
-            Self::FnCall(x, ..) if x.is_qualified() => false,
-
-            Self::FnCall(x, ..) => x.name == KEYWORD_EVAL,
 
             _ => false,
         }

@@ -3040,27 +3040,6 @@ impl<'e> Vm<'e> {
                     );
                 }
 
-                code::tag::IS_SHARED => {
-                    let value = self.pop()?;
-                    self.stack.push(value.is_shared().into());
-                }
-
-                code::tag::MAKE_FN_PTR => {
-                    let name = self.pop()?;
-                    let name = name
-                        .into_immutable_string()
-                        .map_err(|actual| self.mismatch::<ImmutableString>(actual, pos()))?;
-                    // Validates that the name is an identifier, as rawr's own
-                    // `Fn(..)` does (`func/call.rs:1215`).
-                    let pointer = FnPtr::new(name).map_err(|mut err| {
-                        if err.position().is_none() {
-                            err.set_position(pos());
-                        }
-                        err
-                    })?;
-                    self.stack.push(pointer.into());
-                }
-
                 code::tag::CURRY => {
                     let argc = code[pc + 1] as usize;
                     let at = self

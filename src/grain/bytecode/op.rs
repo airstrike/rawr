@@ -335,34 +335,11 @@ pub enum Op {
         op: Option<u32>,
     },
 
-    /// Pop a value and push whether it is a shared cell.
-    ///
-    /// Rawr answers `is_shared` before dispatch and registers no function for
-    /// it (`func/call.rs:1240`), so there is nothing to call — and the value
-    /// has to arrive unflattened, or the answer is always false.
-    IsShared,
-
     /// Push a function pointer to the compiled function named `.0`.
     ///
-    /// A closure's, whose name the parser makes up (`anon$…`) and which
-    /// [`Op::MakeFnPtr`] would refuse — rawr only builds pointers to names a
-    /// script could have written. The name is known here, so unlike
-    /// `MakeFnPtr` it needs no operand on the stack.
+    /// A closure's, whose name the parser makes up (`anon$…`). The name is
+    /// known here, so it needs no operand on the stack.
     MakeClosure(u32),
-
-    /// Pop a name and push a function pointer to it.
-    ///
-    /// Deliberately the *late-bound* kind, carrying a name and nothing else.
-    /// Rawr's other kind embeds a `ScriptFuncDef` — an AST body — which is
-    /// both unreachable from outside the crate and exactly the allocation this
-    /// project exists to remove. Building our own means a pointer resolves
-    /// through the compiled function table like any other call, and a program
-    /// holding one can still be written to an artifact.
-    ///
-    /// The cost is that a `Normal` pointer is late-bound where rawr's is
-    /// early-bound: redefining the function after taking a pointer to it is
-    /// visible here and not in the walker.
-    MakeFnPtr,
 
     /// Pop `.0` arguments and a function pointer, and push the pointer with
     /// those arguments bound to the front of it.

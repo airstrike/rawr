@@ -4,10 +4,7 @@ use crate::ast::{
     ASTFlags, Expr, FlowControl, OpAssignment, Stmt, StmtBlock, StmtBlockContainer,
     SwitchCasesCollection,
 };
-use crate::engine::{
-    KEYWORD_DEBUG, KEYWORD_EVAL, KEYWORD_FN_PTR, KEYWORD_FN_PTR_CURRY, KEYWORD_PRINT,
-    KEYWORD_TYPE_OF, OP_NOT,
-};
+use crate::engine::{KEYWORD_FN_PTR_CURRY, OP_NOT};
 use crate::eval::{Caches, GlobalRuntimeState};
 use crate::func::builtin::get_builtin_binary_op_fn;
 use crate::func::hashing::get_hasher;
@@ -947,13 +944,6 @@ fn move_constant_arg(arg_expr: &mut Expr) -> bool {
 
 /// Optimize an [expression][Expr].
 fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
-    // These keywords are handled specially
-    const DONT_EVAL_KEYWORDS: &[&str] = &[
-        KEYWORD_PRINT, // side effects
-        KEYWORD_DEBUG, // side effects
-        KEYWORD_EVAL,  // arbitrary scripts
-    ];
-
     let start_pos = expr.position();
 
     match expr {
@@ -999,21 +989,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             },
             // var.rhs or this.rhs
             (Expr::Variable(..) | Expr::ThisPtr(..), rhs) => optimize_expr(rhs, state, true),
-            // const.type_of()
-            (lhs, Expr::MethodCall(x, pos)) if lhs.is_constant() && x.name == KEYWORD_TYPE_OF && x.args.is_empty() => {
-                if let Some(value) = lhs.get_literal_value(None) {
-                    state.set_dirty();
-                    let typ = state.engine.map_type_name(value.type_name()).into();
-                    *expr = Expr::from_dynamic(typ, *pos);
-                }
-            }
-            // const.is_shared()
-            (lhs, Expr::MethodCall(x, pos)) if lhs.is_constant() && x.name == crate::engine::KEYWORD_IS_SHARED && x.args.is_empty() => {
-                if lhs.get_literal_value(None).is_some() {
-                    state.set_dirty();
-                    *expr = Expr::from_dynamic(Dynamic::FALSE, *pos);
-                }
-            }
             // lhs.rhs
             (lhs, rhs) => { optimize_expr(lhs, state, false); optimize_expr(rhs, state, true); }
         }
@@ -1267,24 +1242,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
                 state.set_dirty();
             }
         }),
-        // eval!
-        Expr::FnCall(x, ..) if x.name == KEYWORD_EVAL => {
-            state.propagate_constants = false;
-        }
-        // Fn
-        Expr::FnCall(x, pos) if x.args.len() == 1 && x.name == KEYWORD_FN_PTR && x.constant_args() => {
-            let fn_name = match x.args[0] {
-                Expr::StringConstant(ref s, ..) => s.clone().into(),
-                _ => Dynamic::UNIT
-            };
-
-            if let Ok(fn_ptr) = fn_name.into_immutable_string().map_err(Into::into).and_then(FnPtr::try_from) {
-                state.set_dirty();
-                *expr = Expr::DynamicConstant(Box::new(fn_ptr.into()), *pos);
-            } else {
-                optimize_expr(&mut x.args[0], state, false);
-            }
-        }
         // curry(FnPtr, constants...)
         Expr::FnCall(x, pos) if x.args.len() >= 2
                                 && x.name == KEYWORD_FN_PTR_CURRY
@@ -1297,11 +1254,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             *expr = Expr::DynamicConstant(Box::new(fn_ptr.into()), *pos);
         }
 
-        // Do not call some special keywords that may have side effects
-        Expr::FnCall(x, ..) if DONT_EVAL_KEYWORDS.contains(&x.name.as_str()) => {
-            x.args.iter_mut().for_each(|arg_expr| optimize_expr(arg_expr, state, false));
-        }
-
         // Call built-in operators
         Expr::FnCall(x, pos) if state.optimization_level == OptimizationLevel::Simple // simple optimizations
                                 && x.constant_args() // all arguments are constants
@@ -1310,17 +1262,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             let arg_types = arg_values.iter().map(Dynamic::type_id).collect::<FnArgsVec<_>>();
 
             match x.name.as_str() {
-                KEYWORD_TYPE_OF if arg_values.len() == 1 => {
-                    state.set_dirty();
-                    let typ = state.engine.map_type_name(arg_values[0].type_name()).into();
-                    *expr = Expr::from_dynamic(typ, *pos);
-                    return;
-                }
-                crate::engine::KEYWORD_IS_SHARED if arg_values.len() == 1 => {
-                    state.set_dirty();
-                    *expr = Expr::from_dynamic(Dynamic::FALSE, *pos);
-                    return;
-                }
                 // Overloaded operators can override built-in.
                 _ if x.args.len() == 2 && x.is_operator_call() && (state.engine.fast_operators() || !state.engine.has_native_fn_override(x.hashes.native(), &arg_types)) => {
                     if let Some((f, ctx)) = get_builtin_binary_op_fn(x.op_token.as_ref().unwrap(), &arg_values[0], &arg_values[1]) {
@@ -1356,11 +1297,7 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             if !_has_script_fn {
                 let arg_values = &mut x.args.iter().map(|a| a.get_literal_value(None)).collect::<Option<FnArgsVec<_>>>().unwrap();
 
-                let result = match x.name.as_str() {
-                    KEYWORD_TYPE_OF if arg_values.len() == 1 => Some(state.engine.map_type_name(arg_values[0].type_name()).into()),
-                    crate::engine::KEYWORD_IS_SHARED if arg_values.len() == 1 => Some(Dynamic::FALSE),
-                    _ => state.call_fn_with_const_args(&x.name, x.op_token.as_ref(), arg_values)
-                };
+                let result = state.call_fn_with_const_args(&x.name, x.op_token.as_ref(), arg_values);
 
                 if let Some(r) = result {
                     state.set_dirty();

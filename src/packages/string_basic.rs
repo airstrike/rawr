@@ -60,21 +60,11 @@ pub fn print_with_func(
 #[export_module]
 mod print_debug_functions {
     /// Convert the value of the `item` into a string.
-    #[rawr_fn(name = "__rawr_print", pure)]
-    pub fn print_generic(ctx: NativeCallContext, item: &mut Dynamic) -> ImmutableString {
-        print_with_func(FUNC_TO_STRING, &ctx, item)
-    }
-    /// Convert the value of the `item` into a string.
     #[rawr_fn(name = "to_string", pure)]
     pub fn to_string_generic(ctx: NativeCallContext, item: &mut Dynamic) -> ImmutableString {
         let mut buf = SmartString::new_const();
         write!(&mut buf, "{item}").unwrap();
         ctx.engine().map_type_name(&buf).into()
-    }
-    /// Convert the value of the `item` into a string in debug format.
-    #[rawr_fn(name = "__rawr_debug", pure)]
-    pub fn debug_generic(ctx: NativeCallContext, item: &mut Dynamic) -> ImmutableString {
-        print_with_func(FUNC_TO_DEBUG, &ctx, item)
     }
     /// Convert the value of the `item` into a string in debug format.
     #[rawr_fn(name = "to_debug", pure)]
@@ -84,19 +74,13 @@ mod print_debug_functions {
         ctx.engine().map_type_name(&buf).into()
     }
 
-    /// Return the empty string.
-    #[rawr_fn(name = "__rawr_print", name = "__rawr_debug")]
-    pub fn print_empty_string(ctx: NativeCallContext) -> ImmutableString {
-        ctx.engine().const_empty_string()
-    }
-
     /// Return the `string`.
-    #[rawr_fn(name = "__rawr_print", name = "to_string")]
+    #[rawr_fn(name = "to_string")]
     pub const fn print_string(string: ImmutableString) -> ImmutableString {
         string
     }
     /// Convert the string into debug format.
-    #[rawr_fn(name = "__rawr_debug", name = "to_debug")]
+    #[rawr_fn(name = "to_debug")]
     pub fn debug_string(string: &str) -> ImmutableString {
         let mut buf = SmartString::new_const();
         write!(&mut buf, "{string:?}").unwrap();
@@ -104,14 +88,14 @@ mod print_debug_functions {
     }
 
     /// Return the character into a string.
-    #[rawr_fn(name = "__rawr_print", name = "to_string")]
+    #[rawr_fn(name = "to_string")]
     pub fn print_char(character: char) -> ImmutableString {
         let mut buf = SmartString::new_const();
         buf.push(character);
         buf.into()
     }
     /// Convert the string into debug format.
-    #[rawr_fn(name = "__rawr_debug", name = "to_debug")]
+    #[rawr_fn(name = "to_debug")]
     pub fn debug_char(character: char) -> ImmutableString {
         let mut buf = SmartString::new_const();
         buf.push(character);
@@ -119,7 +103,7 @@ mod print_debug_functions {
     }
 
     /// Convert the function pointer into a string in debug format.
-    #[rawr_fn(name = "__rawr_debug", name = "to_debug", pure)]
+    #[rawr_fn(name = "to_debug", pure)]
     pub fn debug_fn_ptr(f: &mut FnPtr) -> ImmutableString {
         let mut buf = SmartString::new_const();
         write!(&mut buf, "{f}").unwrap();
@@ -127,14 +111,14 @@ mod print_debug_functions {
     }
 
     /// Return the boolean value into a string.
-    #[rawr_fn(name = "__rawr_print", name = "to_string")]
+    #[rawr_fn(name = "to_string")]
     pub fn print_bool(value: bool) -> ImmutableString {
         let mut buf = SmartString::new_const();
         write!(&mut buf, "{value}").unwrap();
         buf.into()
     }
     /// Convert the boolean value into a string in debug format.
-    #[rawr_fn(name = "__rawr_debug", name = "to_debug")]
+    #[rawr_fn(name = "to_debug")]
     pub fn debug_bool(value: bool) -> ImmutableString {
         let mut buf = SmartString::new_const();
         write!(&mut buf, "{value:?}").unwrap();
@@ -143,40 +127,40 @@ mod print_debug_functions {
 
     /// Return the empty string.
     #[allow(unused_variables)]
-    #[rawr_fn(name = "__rawr_print", name = "to_string")]
+    #[rawr_fn(name = "to_string")]
     pub fn print_unit(ctx: NativeCallContext, unit: ()) -> ImmutableString {
         ctx.engine().const_empty_string()
     }
     /// Convert the unit into a string in debug format.
     #[allow(unused_variables)]
-    #[rawr_fn(name = "__rawr_debug", name = "to_debug")]
+    #[rawr_fn(name = "to_debug")]
     pub fn debug_unit(unit: ()) -> ImmutableString {
         "()".into()
     }
 
     /// Convert the value of `number` into a string.
-    #[rawr_fn(name = "__rawr_print", name = "to_string")]
+    #[rawr_fn(name = "to_string")]
     pub fn print_f64(number: f64) -> ImmutableString {
         let mut buf = SmartString::new_const();
         write!(&mut buf, "{}", crate::types::FloatWrapper::new(number)).unwrap();
         buf.into()
     }
     /// Convert the value of `number` into a string.
-    #[rawr_fn(name = "__rawr_print", name = "to_string")]
+    #[rawr_fn(name = "to_string")]
     pub fn print_f32(number: f32) -> ImmutableString {
         let mut buf = SmartString::new_const();
         write!(&mut buf, "{}", crate::types::FloatWrapper::new(number)).unwrap();
         buf.into()
     }
     /// Convert the value of `number` into a string.
-    #[rawr_fn(name = "__rawr_debug", name = "to_debug")]
+    #[rawr_fn(name = "to_debug")]
     pub fn debug_f64(number: f64) -> ImmutableString {
         let mut buf = SmartString::new_const();
         write!(&mut buf, "{:?}", crate::types::FloatWrapper::new(number)).unwrap();
         buf.into()
     }
     /// Convert the value of `number` into a string.
-    #[rawr_fn(name = "__rawr_debug", name = "to_debug")]
+    #[rawr_fn(name = "to_debug")]
     pub fn debug_f32(number: f32) -> ImmutableString {
         let mut buf = SmartString::new_const();
         write!(&mut buf, "{:?}", crate::types::FloatWrapper::new(number)).unwrap();
@@ -184,13 +168,7 @@ mod print_debug_functions {
     }
 
     /// Convert the array into a string.
-    #[rawr_fn(
-        name = "__rawr_print",
-        name = "to_string",
-        name = "__rawr_debug",
-        name = "to_debug",
-        pure
-    )]
+    #[rawr_fn(name = "to_string", name = "to_debug", pure)]
     pub fn format_array(ctx: NativeCallContext, array: &mut Array) -> ImmutableString {
         let len = array.len();
         let mut result = SmartString::new_const();
@@ -208,13 +186,7 @@ mod print_debug_functions {
     }
 
     /// Convert the object map into a string.
-    #[rawr_fn(
-        name = "__rawr_print",
-        name = "to_string",
-        name = "__rawr_debug",
-        name = "to_debug",
-        pure
-    )]
+    #[rawr_fn(name = "to_string", name = "to_debug", pure)]
     pub fn format_map(ctx: NativeCallContext, map: &mut Map) -> ImmutableString {
         let len = map.len();
         let mut result = SmartString::new_const();

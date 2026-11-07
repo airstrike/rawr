@@ -107,8 +107,6 @@ pub mod tag {
     pub const INTERPOLATE_APPEND: u8 = 0x26;
     /// [`Op::InterpolateEnd`](super::Op::InterpolateEnd).
     pub const INTERPOLATE_END: u8 = 0x27;
-    /// [`Op::MakeFnPtr`](super::Op::MakeFnPtr).
-    pub const MAKE_FN_PTR: u8 = 0x28;
     /// [`Op::Curry`](super::Op::Curry).
     pub const CURRY: u8 = 0x29;
     /// [`Op::CallFnPtr`](super::Op::CallFnPtr) in call position.
@@ -123,8 +121,6 @@ pub mod tag {
     pub const LOAD_SHARED: u8 = 0x2e;
     /// [`Op::MakeClosure`](super::Op::MakeClosure).
     pub const MAKE_CLOSURE: u8 = 0x2f;
-    /// [`Op::IsShared`](super::Op::IsShared).
-    pub const IS_SHARED: u8 = 0x30;
     /// [`Op::Checkpoint`](super::Op::Checkpoint).
     pub const CHECKPOINT: u8 = 0x31;
     /// [`Op::CheckSize`](super::Op::CheckSize) against the array limit.
@@ -190,8 +186,6 @@ static WIDTHS: [u8; 256] = {
     widths[tag::INTERPOLATE_START as usize] = 1;
     widths[tag::INTERPOLATE_APPEND as usize] = 1;
     widths[tag::INTERPOLATE_END as usize] = 1;
-    widths[tag::MAKE_FN_PTR as usize] = 1;
-    widths[tag::IS_SHARED as usize] = 1;
 
     widths[tag::CURRY as usize] = 2;
     widths[tag::ROTATE as usize] = 2;
@@ -543,8 +537,6 @@ pub fn assemble(ops: &[Op]) -> Result<(Vec<u8>, Vec<u32>), AssembleError> {
                 code.push(tag::MAKE_CLOSURE);
                 code.extend_from_slice(&small(*name as usize, "names")?.to_le_bytes());
             }
-            Op::MakeFnPtr => code.push(tag::MAKE_FN_PTR),
-            Op::IsShared => code.push(tag::IS_SHARED),
             Op::Curry(argc) => {
                 code.push(tag::CURRY);
                 code.push(*argc);
@@ -679,8 +671,6 @@ fn encoded_width(op: &Op) -> usize {
         | Op::InterpolateStart
         | Op::InterpolateAppend
         | Op::InterpolateEnd
-        | Op::MakeFnPtr
-        | Op::IsShared
         | Op::LoadThis
         | Op::LoadThisShared
         | Op::RequireThis
@@ -842,8 +832,6 @@ pub fn decode(code: &[u8], at: usize) -> Option<Op> {
         tag::LOAD_SHARED => Op::LoadShared(small(1)?),
         tag::LOAD_SHARED_NAMED => Op::LoadSharedNamed(u32::from(small(1)?)),
         tag::MAKE_CLOSURE => Op::MakeClosure(u32::from(small(1)?)),
-        tag::MAKE_FN_PTR => Op::MakeFnPtr,
-        tag::IS_SHARED => Op::IsShared,
         tag::CURRY => Op::Curry(code[at + 1]),
         tag::CALL_FN_PTR => Op::CallFnPtr {
             argc: code[at + 1],

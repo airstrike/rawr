@@ -2188,20 +2188,6 @@ impl Engine {
             )),
             // lhs.nnn::func(...) - syntax error
             (.., Expr::FnCall(f, ..)) if f.is_qualified() => unreachable!("lhs.ns::func()"),
-            // lhs.Fn() or lhs.eval()
-            (.., Expr::FnCall(f, func_pos))
-                if f.args.is_empty()
-                    && matches!(
-                        &*f.name,
-                        crate::engine::KEYWORD_FN_PTR | crate::engine::KEYWORD_EVAL
-                    ) =>
-            {
-                let err_msg = format!(
-                    "'{}' should not be called in method style. Try {}(...);",
-                    f.name, f.name
-                );
-                Err(LexError::ImproperSymbol(f.name.to_string(), err_msg).into_err(func_pos))
-            }
             // lhs.func!(...)
             (.., Expr::FnCall(f, func_pos)) if f.capture_parent_scope => {
                 Err(PERR::MalformedCapture(

@@ -216,7 +216,7 @@ pub(crate) fn makes_fn_pointers(code: &[u8]) -> bool {
     use crate::grain::bytecode::code::tag;
 
     crate::grain::bytecode::disassemble(code)
-        .any(|(at, ..)| matches!(code[at], tag::MAKE_CLOSURE | tag::MAKE_FN_PTR | tag::CURRY))
+        .any(|(at, ..)| matches!(code[at], tag::MAKE_CLOSURE | tag::CURRY))
 }
 
 /// Whether a chunk reads or writes the frame's receiver.

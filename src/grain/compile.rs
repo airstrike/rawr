@@ -2,10 +2,7 @@ mod cases;
 mod poolable;
 mod slots;
 
-use crate::engine::{
-    KEYWORD_EVAL, KEYWORD_FN_PTR, KEYWORD_FN_PTR_CALL, KEYWORD_FN_PTR_CURRY, KEYWORD_IS_DEF_FN,
-    KEYWORD_IS_DEF_VAR, KEYWORD_IS_SHARED,
-};
+use crate::engine::{KEYWORD_FN_PTR_CALL, KEYWORD_FN_PTR_CURRY};
 use core::mem;
 
 use crate::ast::{
@@ -811,12 +808,6 @@ impl Lowering {
                 true
             }
 
-            // Standing alone is the position `eval` is usually written in, and
-            // rawr gives it its own node — so this is the arm that catches it,
-            // not the `Expr::FnCall` one. See there for why it defeats the
-            // lowering rather than becoming a fragment.
-            Stmt::FnCall(call, ..) if call.name == crate::engine::KEYWORD_EVAL => false,
-
             // `this` on the left. Ahead of the two variable arms because rawr's
             // parser puts it there too (`parser.rs:2002`), and because the
             // chain arm below would otherwise take `this.x = 1`'s sibling.
@@ -1242,18 +1233,6 @@ impl Lowering {
                 self.lower_call(call, *pos);
             }
 
-            // `eval` evaluates a script in the *caller's* scope, so what it
-            // declares outlives it and the next statement can name it. The
-            // slot model resolved its indices against a scope that does not
-            // have those entries, so a lowered read past an `eval` looks in
-            // the wrong place — `eval("let x = 40"); x + 2` found no `x` where
-            // the walker found 40. Refusing the lowering hands the body to the
-            // walker, which is the only thing that knows the real shape.
-            Expr::FnCall(call, ..) if call.name == crate::engine::KEYWORD_EVAL => {
-                self.residual_expr(expr);
-                self.defeated = true;
-            }
-
             // A literal whose elements are all constant never reaches here —
             // rawr's optimizer folds it into a `DynamicConstant` first — so
             // this is the one that has to be built at run time.
@@ -1328,15 +1307,14 @@ impl Lowering {
                 self.emit(Op::InterpolateEnd);
             }
 
-            // `f.call(x)` and `f.curry(x)` are the method spellings of the two
-            // above. They arrive as chains, so they have to be taken before
-            // the chain walker sees them.
+            // `f.call(x)` is the method spelling of `call(f, x)`. It arrives
+            // as a chain, so it has to be taken before the chain walker sees
+            // it.
             // An `rhs` that is a bare `MethodCall` is the whole chain: a
             // further step would make it a `Dot` or an `Index` instead.
             Expr::Dot(binary, ..)
                 if matches!(&binary.rhs, Expr::MethodCall(m, ..)
-                    if matches!(m.name.as_str(), KEYWORD_FN_PTR_CALL | KEYWORD_FN_PTR_CURRY)
-                        && m.args.len() <= u8::MAX as usize) =>
+                    if m.name == KEYWORD_FN_PTR_CALL && m.args.len() <= u8::MAX as usize) =>
             {
                 let Expr::MethodCall(method, ..) = &binary.rhs else {
                     unreachable!("checked by the guard");
@@ -1367,23 +1345,15 @@ impl Lowering {
                 // cannot come from one position-table entry, and using the
                 // argument's instead was measured to move the divergence onto
                 // the common path rather than remove it.
-                //
-                // Method style only. `curry(f, ..)` written as a call is a
-                // different path in rawr and takes the *argument's* position —
-                // see `fn_ptr_call`. The two disagreeing is deliberate.
                 let pos = binary.rhs.position();
-                if method.name == KEYWORD_FN_PTR_CALL {
-                    self.emit_at(
-                        Op::CallFnPtr {
-                            argc,
-                            method: true,
-                            receiver,
-                        },
-                        pos,
-                    );
-                } else {
-                    self.emit_at(Op::Curry(argc), pos);
-                }
+                self.emit_at(
+                    Op::CallFnPtr {
+                        argc,
+                        method: true,
+                        receiver,
+                    },
+                    pos,
+                );
             }
 
             Expr::Dot(..) | Expr::Index(..) => {
@@ -1592,9 +1562,9 @@ impl Lowering {
         }
     }
 
-    /// Lower `Fn(name)`, `curry(f, ..)` or `call(f, ..)`, if this is one.
+    /// Lower `curry(f, ..)` or `call(f, ..)`, if this is one.
     ///
-    /// Rawr resolves these three by name before dispatch, but only at the
+    /// Rawr resolves these two by name before dispatch, but only at the
     /// arities it recognises (`func/call.rs:1109-1245`); anything else is an
     /// ordinary call that will not find a function. Matching those arities
     /// exactly is what keeps the two agreeing on the failures as well as the
@@ -1606,22 +1576,9 @@ impl Lowering {
         let argc = call.args.len();
 
         match (call.name.as_str(), argc) {
-            // The argument has to arrive as the cell, not its contents, or the
-            // answer is always false.
-            (KEYWORD_IS_SHARED, 1) => {
-                self.unflattened(&call.args[0]);
-                self.emit_at(Op::IsShared, pos);
-            }
-            // Both of these are reported against the *argument* rather than
-            // against the call: rawr reads it, and everything it can then
-            // complain about — a name that is not a string, a string that is
-            // not an identifier, a first argument that is not a pointer — is
-            // filled in with the argument's position (`func/call.rs:1217`,
-            // `:1220`, `:1232`).
-            (KEYWORD_FN_PTR, 1) => {
-                self.expression(&call.args[0]);
-                self.emit_at(Op::MakeFnPtr, call.args[0].position());
-            }
+            // Reported against the *argument* rather than against the call:
+            // rawr reads it, and a first argument that is not a pointer is
+            // filled in with the argument's position.
             (KEYWORD_FN_PTR_CURRY, _) if argc > 1 => {
                 let mut args = call.args.iter();
                 self.expression(args.next().expect("checked by the arity"));
@@ -1660,18 +1617,12 @@ impl Lowering {
     /// captures the enclosing scope is closure construction, and a qualified
     /// name resolves against imported modules; neither is a plain call.
     fn is_lowerable_call(&self, call: &FnCallExpr) -> bool {
-        // `is_shared` belongs here for a sharper reason than the rest: rawr
-        // answers it syntactically in both call positions (`func/call.rs:1240`
-        // and `:929`) and registers no function for it anywhere, so a lowered
-        // call raises `ErrorFunctionNotFound` where the walker returns a bool.
-        const SYNTACTIC: &[&str] = &[KEYWORD_EVAL, KEYWORD_IS_DEF_VAR, KEYWORD_IS_DEF_FN];
-
         // These are handled by `fn_ptr_call` above, but only at the arities
         // rawr treats syntactically — at any other arity it falls through to
         // ordinary dispatch, and so must this.
         if matches!(
             call.name.as_str(),
-            KEYWORD_FN_PTR | KEYWORD_FN_PTR_CALL | KEYWORD_FN_PTR_CURRY | KEYWORD_IS_SHARED
+            KEYWORD_FN_PTR_CALL | KEYWORD_FN_PTR_CURRY
         ) {
             return false;
         }
@@ -1686,7 +1637,6 @@ impl Lowering {
             && !native_only
             && call.namespace.is_empty()
             && call.args.len() <= u8::MAX as usize
-            && !SYNTACTIC.contains(&call.name.as_str())
     }
 
     /// Lower `&&` or `||`: evaluate operands left to right, stopping at the

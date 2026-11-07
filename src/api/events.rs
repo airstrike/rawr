@@ -1,7 +1,7 @@
 //! Module that defines public event handlers for [`Engine`].
 
 use crate::func::SendSync;
-use crate::{Dynamic, Engine, EvalContext, Position, RawrResultOf, VarDefInfo};
+use crate::{Dynamic, Engine, EvalContext, RawrResultOf, VarDefInfo};
 
 /// Where `print!`/`println!` (standard output) and `eprint!`/`eprintln!`
 /// (standard error) send their text.
@@ -198,7 +198,7 @@ impl Engine {
         &mut self,
         callback: impl Fn(
                 crate::tokenizer::Token,
-                Position,
+                crate::Position,
                 &crate::tokenizer::TokenizeState,
             ) -> crate::tokenizer::Token
             + SendSync
@@ -259,31 +259,6 @@ impl Engine {
         self.progress = Some(Box::new(callback));
         self
     }
-    /// Override default action of `print` (print to stdout using [`println!`])
-    ///
-    /// Typed scripts can't call `print` yet. Their `print!` and `println!` text goes to
-    /// [`on_output`][Engine::on_output] instead.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use std::sync::RwLock;
-    /// # use std::sync::Arc;
-    /// use rawr::Engine;
-    ///
-    /// let result = Arc::new(RwLock::new(String::new()));
-    ///
-    /// let mut engine = Engine::new();
-    ///
-    /// // Override action of 'print' function
-    /// let logger = result.clone();
-    /// engine.on_print(move |s| logger.write().unwrap().push_str(s));
-    /// ```
-    #[inline(always)]
-    pub fn on_print(&mut self, callback: impl Fn(&str) + SendSync + 'static) -> &mut Self {
-        self.print = Some(Box::new(callback));
-        self
-    }
     /// Override default action of `print!`, `println!`, `eprint!` and
     /// `eprintln!` (write to stdout or stderr). The text is exactly what the
     /// macro writes, its newline included for `println!` and `eprintln!`.
@@ -315,47 +290,6 @@ impl Engine {
     #[inline(always)]
     pub fn on_output(&mut self, callback: impl Fn(Output, &str) + SendSync + 'static) -> &mut Self {
         self.output = Some(Box::new(callback));
-        self
-    }
-    /// Override default action of `debug` (print to stdout using [`println!`])
-    ///
-    /// # Callback Function Signature
-    ///
-    /// The callback function signature passed takes the following form:
-    ///
-    /// `Fn(text: &str, source: Option<&str>, pos: Position)`
-    ///
-    /// where:
-    /// * `text`: the text to display
-    /// * `source`: current source, if any
-    /// * [`pos`][`Position`]: location of the `debug` call
-    ///
-    /// Typed scripts can't call `debug` yet. Their `eprint!` and `eprintln!` text goes to
-    /// [`on_output`][Engine::on_output] instead.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use std::sync::RwLock;
-    /// # use std::sync::Arc;
-    /// use rawr::Engine;
-    ///
-    /// let result = Arc::new(RwLock::new(String::new()));
-    ///
-    /// let mut engine = Engine::new();
-    ///
-    /// // Override action of 'debug' function
-    /// let logger = result.clone();
-    /// engine.on_debug(move |s, src, pos| logger.write().unwrap().push_str(
-    ///                     &format!("{} @ {:?} > {}", src.unwrap_or("unknown"), pos, s)
-    ///                ));
-    /// ```
-    #[inline(always)]
-    pub fn on_debug(
-        &mut self,
-        callback: impl Fn(&str, Option<&str>, Position) + SendSync + 'static,
-    ) -> &mut Self {
-        self.debug = Some(Box::new(callback));
         self
     }
     /// _(internals)_ Register a callback for access to [`Map`][crate::Map] properties that do not exist.
@@ -578,7 +512,7 @@ impl Engine {
                 crate::eval::DebuggerEvent,
                 crate::ast::ASTNode,
                 Option<&str>,
-                Position,
+                crate::Position,
             ) -> RawrResultOf<crate::eval::DebuggerCommand>
             + SendSync
             + 'static,

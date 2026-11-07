@@ -439,3 +439,26 @@ fn the_old_engines_statements_are_rustc_syntax_errors() {
         )
     );
 }
+
+#[test]
+fn the_old_engines_intrinsics_are_unknown_functions() {
+    for name in [
+        "__rawr_type_of",
+        "__rawr_print",
+        "__rawr_debug",
+        "__rawr_eval",
+        "__rawr_fn_ptr",
+        "__rawr_is_shared",
+        "__rawr_is_def_var",
+        "__rawr_is_def_fn",
+    ] {
+        assert_eq!(
+            refused(&format!("fn main() {{\n    let x = {name}(1);\n}}\n")),
+            (
+                "E0425".into(),
+                format!("cannot find function `{name}` in this scope"),
+                label("not found in this scope")
+            )
+        );
+    }
+}
