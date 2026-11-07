@@ -40,16 +40,20 @@ pub(in crate::cargo) fn relocate(
         }
         let destination = bundle.join(relative);
         copy_tree(Path::new(path), &destination, from, to)?;
-        // rustc names dep-info `<stem without lib>.d`; a build script's is
-        // `build_script_build-<hash>.d` beside it.
+        // rustc names dep-info `<stem without lib>.d`; a build script's
+        // executable is `build-script-<stem>` after its file, and its
+        // dep-info is `build_script_<stem>-<hash>.d` beside it.
         let Some(name) = destination.file_name().and_then(|name| name.to_str()) else {
             return Ok(());
         };
-        let dep_info = if name == "build-script-build" {
+        let dep_info = if let Some(stem) = name
+            .strip_prefix("build-script-")
+            .filter(|stem| !stem.is_empty() && !stem.contains('.'))
+        {
             destination
                 .parent()
                 .and_then(|parent| parent.file_name()?.to_str()?.rsplit_once('-'))
-                .map(|(_, hash)| format!("build_script_build-{hash}.d"))
+                .map(|(_, hash)| format!("build_script_{}-{hash}.d", stem.replace('-', "_")))
         } else {
             name.strip_prefix("lib")
                 .and_then(|stem| stem.rsplit_once('.'))
@@ -392,6 +396,39 @@ mod tests {
     #[test]
     fn relocation_spells_paths_with_spaces_and_make_characters_per_file() {
         relocates_under("rawr-relocate My Counter #1 $x:y");
+    }
+
+    /// A build script named after another file (`builder/main.rs`) is
+    /// `build-script-main`, and its dep-info `build_script_main-<hash>.d`
+    /// goes into the bundle beside it, as `build-script-build`'s does.
+    #[test]
+    fn relocation_keeps_the_dep_info_of_a_build_script_named_after_its_file() {
+        let root = std::env::temp_dir().join(format!("relocate-named-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (shared, bundle) = (root.join("shared"), root.join("bundle/build/final"));
+        for (stem, crate_name) in [
+            ("build", "build"),
+            ("main", "main"),
+            ("gen-code", "gen_code"),
+        ] {
+            let script = shared.join(format!("t/debug/build/s-{stem}-0a1b"));
+            fs::create_dir_all(&script).unwrap();
+            fs::write(script.join(format!("build-script-{stem}")), b"exe").unwrap();
+            let dep_info = format!("build_script_{crate_name}-0a1b.d");
+            fs::write(script.join(&dep_info), b"deps").unwrap();
+            let messages = format!(
+                "{{\"reason\":\"compiler-artifact\",\"filenames\":[{}],\"executable\":null}}\n",
+                serde_json::to_string(&script.join(format!("build-script-{stem}"))).unwrap(),
+            );
+            super::relocate(messages.as_bytes(), &shared, &bundle).unwrap();
+            let copied = bundle.join(format!("t/debug/build/s-{stem}-0a1b"));
+            assert!(
+                copied.join(format!("build-script-{stem}")).is_file(),
+                "{stem}"
+            );
+            assert_eq!(fs::read(copied.join(&dep_info)).unwrap(), b"deps", "{stem}");
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn relocates_under(name: &str) {
