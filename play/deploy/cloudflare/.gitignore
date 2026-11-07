@@ -4,3 +4,4 @@ node_modules/
 dist/
 src/runnable.gen.ts
 public/web/
+src/tokens.gen.ts
