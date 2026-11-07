@@ -440,6 +440,105 @@ pub(crate) fn widened(
     widened
 }
 
+/// `text`, a crate root, with `pub ` before each of its own items that has
+/// no visibility: its modules, functions, types, constants, statics, traits
+/// and `use` declarations. The marked modules are the root's descendants, so
+/// rustc lets them name every one of these; the runner reaches them from
+/// outside the crate, so they must be public there (#1185). An `impl`, an
+/// `extern` block or crate, a macro and an item written `pub(self)` are
+/// left as written.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+pub(crate) fn root_items_public(text: &str) -> String {
+    let tokens = tokens(text);
+    let mut inserts = Vec::new();
+    let mut depth = 0_usize;
+    let mut start = true;
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = tokens[index];
+        if depth == 0 && start {
+            if token == Token::Punct(b'#') {
+                index = attribute_end(&tokens, index);
+                continue;
+            }
+            start = false;
+            if let Some(at) = private_item(&tokens, index) {
+                inserts.push(at);
+            }
+        }
+        match token {
+            Token::Punct(b'{' | b'(' | b'[') => depth += 1,
+            Token::Punct(close @ (b'}' | b')' | b']')) => {
+                depth = depth.saturating_sub(1);
+                start = depth == 0 && close == b'}';
+            }
+            Token::Punct(b';') if depth == 0 => start = true,
+            _ => {}
+        }
+        index += 1;
+    }
+    let mut public = String::with_capacity(text.len() + 4 * inserts.len());
+    let mut cursor = 0;
+    for at in inserts {
+        public.push_str(&text[cursor..at]);
+        public.push_str("pub ");
+        cursor = at;
+    }
+    public.push_str(&text[cursor..]);
+    public
+}
+
+/// Where `pub ` goes for the item whose first token (past its attributes)
+/// is at `index`, when it has no visibility and may take one.
+fn private_item(tokens: &[Token<'_>], index: usize) -> Option<usize> {
+    let Token::Ident(word, at) = tokens[index] else {
+        return None;
+    };
+    let word_at = |offset: usize| match tokens.get(index + offset) {
+        Some(Token::Ident(word, _)) => Some(*word),
+        _ => None,
+    };
+    match word {
+        "fn" | "const" | "static" | "struct" | "enum" | "type" | "trait" | "union" | "use"
+        | "mod" | "async" => Some(at),
+        // `unsafe fn`, `unsafe trait` and `unsafe extern "C" fn`; never
+        // `unsafe impl` or an `unsafe extern` block.
+        "unsafe" => match word_at(1) {
+            Some("impl") => None,
+            Some("extern") => (word_at(2) == Some("fn")).then_some(at),
+            _ => Some(at),
+        },
+        "extern" => (word_at(1) == Some("fn")).then_some(at),
+        _ => None,
+    }
+}
+
+/// The index just past the attribute (`#[…]` or `#![…]`) at `index`.
+fn attribute_end(tokens: &[Token<'_>], index: usize) -> usize {
+    let mut cursor = index + 1;
+    if tokens.get(cursor) == Some(&Token::Punct(b'!')) {
+        cursor += 1;
+    }
+    if tokens.get(cursor) != Some(&Token::Punct(b'[')) {
+        return cursor;
+    }
+    let mut depth = 0_usize;
+    while let Some(token) = tokens.get(cursor) {
+        cursor += 1;
+        match token {
+            Token::Punct(b'[') => depth += 1,
+            Token::Punct(b']') => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    cursor
+}
+
 /// `text`, a crate root, with its own `fn main` renamed `name`: `None` when
 /// it declares none.
 #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
@@ -740,6 +839,48 @@ mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
         );
         // A module a `.rs` module declares: its `super` is Rust, not Rawr.
         assert!(widened(text, false, file, Path::new("/app")).contains("pub(super) fn up()"));
+    }
+
+    #[test]
+    fn a_crate_roots_own_items_become_public() {
+        let text = "#![allow(dead_code)]\n//! fn hidden\nmod page;\npub mod open;\npub(self) mod own;\n\
+                    #[derive(Debug)]\nenum Message { Page(usize, page::Message), Noop }\n\
+                    type Element<'a> = &'a [u8; 3];\nconst SCALE: [u8; 2] = [1, 2];\nstatic mut N: u8 = 0;\n\
+                    use std::fmt;\nstruct Unit;\nunsafe trait Marker {}\nunsafe impl Marker for Unit {}\n\
+                    impl Unit { fn inner() {} }\nunsafe extern \"C\" { fn c(); }\nextern crate core;\n\
+                    extern \"C\" fn exported() {}\nmacro_rules! m { () => {}; }\nm!();\n\
+                    async fn wait() {}\nconst fn konst() -> u8 { 1 }\nfn main() { let x = 1; }\n";
+        let public = super::root_items_public(text);
+        for line in [
+            "pub mod page;",
+            "pub mod open;",
+            "pub(self) mod own;",
+            "pub enum Message { Page(usize, page::Message), Noop }",
+            "pub type Element<'a> = &'a [u8; 3];",
+            "pub const SCALE: [u8; 2] = [1, 2];",
+            "pub static mut N: u8 = 0;",
+            "pub use std::fmt;",
+            "pub struct Unit;",
+            "pub unsafe trait Marker {}",
+            "unsafe impl Marker for Unit {}",
+            "impl Unit { fn inner() {} }",
+            "unsafe extern \"C\" { fn c(); }",
+            "extern crate core;",
+            "pub extern \"C\" fn exported() {}",
+            "macro_rules! m { () => {}; }",
+            "m!();",
+            "pub async fn wait() {}",
+            "pub const fn konst() -> u8 { 1 }",
+            "pub fn main() { let x = 1; }",
+            "//! fn hidden",
+            "#![allow(dead_code)]",
+            "#[derive(Debug)]",
+        ] {
+            assert!(
+                public.lines().any(|kept| kept == line),
+                "{line} in\n{public}"
+            );
+        }
     }
 
     #[test]

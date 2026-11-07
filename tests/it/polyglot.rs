@@ -234,6 +234,62 @@ fn a_use_bound_rust_module_names_the_app_crate() {
     }
 }
 
+/// A marked module of a native crate root names the root's own items
+/// (`crate::helper`, `super::SCALE`, `use crate::Thing;`) as rustc does:
+/// the root is native, so they are the app crate's items (#1185). The
+/// root's marked and native modules keep their own spellings.
+#[test]
+fn a_marked_module_names_its_native_roots_items_through_the_app_crate() {
+    use rawr::host;
+    struct Thing;
+    let project = Project::new("root-items");
+    project.write("Cargo.toml", "[package]\nname = \"poly-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    project.write(
+        "src/main.rs",
+        "mod badge;\nmod units;\n\nconst SCALE: i64 = 3;\nstruct Thing;\nfn make() -> Thing { Thing }\nfn helper(n: i64) -> i64 { n * 2 }\n\n\
+         fn main() {\n    println!(\"{}\", badge::total());\n}\n",
+    );
+    project.write(
+        "src/badge.rs",
+        "// rawr\nuse crate::Thing;\nuse crate::helper;\n\n\
+         pub fn keep(t: crate::Thing) -> Thing {\n    t\n}\n\n\
+         pub fn total() -> i64 {\n    let t: Thing = keep(crate::make());\n    \
+         crate::helper(1) + helper(2) + super::SCALE + crate::units::BONUS\n}\n",
+    );
+    project.write("src/units.rs", "pub const BONUS: i64 = 7;\n");
+
+    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let i64 = || host::type_ref::Type::builtin(host::type_ref::Builtin::I64);
+    let mut facade = host::facade::Builder::new("poly_app", host::facade::Abi::new(1).unwrap()).unwrap();
+    facade.module("units").unwrap();
+    facade.module("__rawr_island").unwrap();
+    facade.type_::<Thing>("Thing", &[], &[]).unwrap();
+    facade.item(host::item::Definition::value("SCALE", i64()).unwrap()).unwrap();
+    facade.item(host::item::Definition::value("units::BONUS", i64()).unwrap()).unwrap();
+    let mut make = host::signature::Builder::new();
+    make.output(host::type_ref::Type::registered("Thing").unwrap());
+    facade.item(host::item::Definition::function("make", make.finish()).unwrap()).unwrap();
+    let mut helper = host::signature::Builder::new();
+    helper.parameter(i64());
+    helper.output(i64());
+    facade.item(host::item::Definition::function("helper", helper.finish()).unwrap()).unwrap();
+    facade
+        .item(host::item::Definition::function("__rawr_island::main", host::signature::Builder::new().finish()).unwrap())
+        .unwrap();
+    let mut engine = Engine::new();
+    engine.register_host_facade(facade.finish().unwrap()).unwrap();
+    engine.compile_package_executable(&target).unwrap();
+
+    #[cfg(feature = "rust-import")]
+    {
+        let seed = Graph::load(&engine, &target).unwrap().rust_demand_seed();
+        for path in ["poly_app::Thing", "poly_app::helper", "poly_app::make", "poly_app::SCALE", "poly_app::units::BONUS"] {
+            assert!(seed.contains(&Box::<str>::from(path)), "{path} in {seed:?}");
+        }
+        assert!(!seed.iter().any(|path| path.starts_with("poly_app::badge")), "{seed:?}");
+    }
+}
+
 /// The app's own crate is a Cargo dependency generated from its
 /// `Cargo.toml` and its native modules; `view.rs` uses `crate::model::Thing`
 /// defined in `model.rs`, through the real importer.
