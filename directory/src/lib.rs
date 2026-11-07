@@ -91,7 +91,7 @@ pub enum Storage {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error<E> {
-    #[error("directory work was not admitted")]
+    #[error("cannot schedule a directory read")]
     Admission(E),
     #[error("{operation}: {source}")]
     Io {
@@ -102,7 +102,7 @@ pub enum Error<E> {
     Framing(#[from] Framing),
     #[error("directory storage cannot be represented or allocated")]
     Allocation,
-    #[error("directory reader is already terminal")]
+    #[error("the directory reader has already finished")]
     Terminal,
 }
 

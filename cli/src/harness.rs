@@ -119,7 +119,7 @@ pub fn run(loaded: base::Loaded, options: &Options) -> ExitCode {
         engine.on_output(move |_, text| {
             captured
                 .lock()
-                .expect("a test's output is never held across a panic")
+                .expect("test output lock poisoned")
                 .push_str(text);
         });
     }
@@ -167,11 +167,7 @@ pub fn run(loaded: base::Loaded, options: &Options) -> ExitCode {
             test.function(),
             (),
         );
-        let mut output = std::mem::take(
-            &mut *captured
-                .lock()
-                .expect("a test's output is never held across a panic"),
-        );
+        let mut output = std::mem::take(&mut *captured.lock().expect("test output lock poisoned"));
         let panic = match returned {
             Ok(value) => {
                 if let Some(Err(error)) = value.try_cast::<Result<Dynamic, Dynamic>>() {

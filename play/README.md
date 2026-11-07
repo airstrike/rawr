@@ -78,7 +78,7 @@ called. A snippet's native calls are checked against the uses the runner
 was built for, by path and by the types each call takes. One that the
 universe program doesn't make, such as `text` of an `f64` where the program
 takes text of an `i64`, a `&str` and a `String`, fails to compile where the
-snippet makes it: `this use of a crate isn't among the universe's bindings`.
+snippet makes it: `this use of a crate is not available in this prebuilt runner`.
 So does a crate item the program doesn't use at all. Neither reaches the
 runner's bindings.
 

@@ -334,16 +334,16 @@ mod tests {
     fn a_compile_error_points_into_the_snippet_as_written() {
         let source = "fn main() {\n    let x = 1;\n    nothing(x);\n}\n";
         let program = super::program(source);
-        let rendered = "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate isn't among the universe's bindings\n \
+        let rendered = "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate is not available in this prebuilt runner\n \
              --> /universe/src/main.rs:4:5-4:12\n \
              4 |     nothing(x);\n   \
-             |     ^^^^^^^ the universe's program doesn't make it\n";
+             |     ^^^^^^^ the runner was not built with this call\n";
         assert_eq!(
             super::unmarked(rendered, "/universe/src/main.rs", &program, source),
-            "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate isn't among the universe's bindings\n \
+            "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate is not available in this prebuilt runner\n \
              --> play.rs:3:5-3:12\n \
              3 |     nothing(x);\n   \
-             |     ^^^^^^^ the universe's program doesn't make it\n"
+             |     ^^^^^^^ the runner was not built with this call\n"
         );
     }
 }

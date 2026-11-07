@@ -218,8 +218,12 @@ fn session(
     // restarts it only when this changed.
     let mut started_from = program.and_then(|_| contents(target));
     let source = fallback(target)?;
-    let root = project(target)
-        .ok_or_else(|| framework("a native owner requires a Rawr crate", source.clone()))?;
+    let root = project(target).ok_or_else(|| {
+        framework(
+            "cannot find a Cargo project for this program",
+            source.clone(),
+        )
+    })?;
     // Where a save finds the program again: the crate's root, or a
     // script's own file.
     let target_path = location(target);
@@ -454,7 +458,7 @@ fn session(
                             match lane.abort_compile(prepared) {
                                 Ok(()) => framework(error, source.clone()),
                                 Err(cleanup) => framework(
-                                    format!("watcher registration failed: {error}; hot abort also failed: {cleanup}"),
+                                    format!("cannot watch the program's files: {error}; cancelling the reload also failed: {cleanup}"),
                                     source.clone(),
                                 ),
                             }
@@ -567,9 +571,7 @@ fn session(
                         .commit_inputs(staged)
                         .map_err(|error| framework(error, source.clone()))?
                     {
-                        rawr_import::process::say(format_args!(
-                            "Rawr imported-owner watcher warning: {error}"
-                        ));
+                        rawr_import::process::say(format_args!("warning: file watcher: {error}"));
                     }
                 }
                 Ok(crate::native::Watched::Obsolete) => drop(staged),
@@ -602,7 +604,7 @@ fn session(
                 retain_report(
                     &mut lane,
                     framework(
-                        format!("Rawr imported-owner watcher stopped: {error}"),
+                        format!("the file watcher stopped, so saves no longer reload the program: {error}"),
                         source.clone(),
                     ),
                 )?;
@@ -612,7 +614,7 @@ fn session(
                 retain_report(
                     &mut lane,
                     framework(
-                        format!("Rawr imported-owner scheduler stopped: {error}"),
+                        format!("the reload scheduler stopped, so saves no longer reload the program: {error}"),
                         source.clone(),
                     ),
                 )?;
@@ -622,7 +624,7 @@ fn session(
                 retain_report(
                     &mut lane,
                     framework(
-                        "Rawr imported-owner watcher event channel disconnected",
+                        "the file watcher stopped, so saves no longer reload the program",
                         source.clone(),
                     ),
                 )?;
@@ -757,9 +759,7 @@ fn initial_watched_program(
                     .commit_inputs(staged)
                     .map_err(|error| framework(error, source.clone()))?
                 {
-                    rawr_import::process::say(format_args!(
-                        "Rawr imported-owner watcher warning: {error}"
-                    ));
+                    rawr_import::process::say(format_args!("warning: file watcher: {error}"));
                 }
                 return Ok((lane, adapter, initial.manifests, native_baseline));
             }
@@ -793,7 +793,7 @@ fn open_lane(
 ) -> Result<Lane, diagnostic::Report> {
     let project = project(target).ok_or_else(|| {
         framework(
-            "a native owner requires a discovered Rawr crate",
+            "cannot find a Cargo project for this program",
             source.clone(),
         )
     })?;
@@ -918,7 +918,7 @@ fn retain_report(lane: &mut Lane, report: diagnostic::Report) -> Result<(), diag
     rawr_cli::events::failed(&report);
     let rendered = diagnostic::render(&report);
     rawr_import::process::say(format_args!(
-        "Rawr imported owner kept the last good generation:\n{rendered}"
+        "rawr: the save failed; the last good program keeps running\n{rendered}"
     ));
     lane.report(&rendered)
         .map_err(|error| framework(error, None))

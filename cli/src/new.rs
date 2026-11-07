@@ -430,8 +430,8 @@ fn workspace_refusal(root: &Path) -> Option<String> {
             continue;
         }
         return Some(format!(
-            "{} is inside the Cargo workspace of {}, which doesn't list it, so Cargo would reject the crate. \
-             Add \"{}\" to `workspace.members` there, or create the crate outside {}",
+            "cannot create {}: it is inside the Cargo workspace of {}, whose `workspace.members` \
+             does not list it. Add \"{}\" to `workspace.members` there, or create the crate outside {}",
             root.display(),
             manifest.display(),
             relative.display(),
@@ -640,9 +640,8 @@ impl fmt::Display for Error {
             }
             ErrorKind::InvalidName(path) => write!(
                 formatter,
-                "`{}` cannot name a Cargo package. \
-                 A package name must start with a letter or `_`. \
-                 Pick a directory name that does.",
+                "invalid package name `{}`: a package name must start with a letter or `_`; \
+                 pick a directory name that does",
                 path.file_name()
                     .unwrap_or(path.as_os_str())
                     .to_string_lossy()
@@ -963,7 +962,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "`2048` cannot name a Cargo package. A package name must start with a letter or `_`. Pick a directory name that does."
+            "invalid package name `2048`: a package name must start with a letter or `_`; pick a directory name that does"
         );
         assert!(!target.exists());
         std::fs::remove_dir(&sandbox).unwrap();

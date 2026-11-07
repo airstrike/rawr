@@ -126,7 +126,7 @@ fn same_build_as(
         return Ok(());
     }
     Err(format!(
-        "`{}` cannot build as Rawr builds it. {}",
+        "cannot build `{}` with rawr. {}",
         root.display(),
         needed.join("\n")
     ))

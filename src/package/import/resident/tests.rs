@@ -585,7 +585,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
     };
     let report = error.to_string();
     assert!(
-        report.contains("this use of a crate isn't among the universe's bindings"),
+        report.contains("this use of a crate is not available in this prebuilt runner"),
         "{report}"
     );
     assert_eq!(owners(&engine), retained);

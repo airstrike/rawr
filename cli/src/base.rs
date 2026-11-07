@@ -306,7 +306,7 @@ pub(crate) fn compile_report(
     error.report().unwrap_or_else(|report_error| {
         report(
             diagnostic::code::ENVIRONMENT_DIAGNOSTIC,
-            format!("cannot retain exact package diagnostic evidence: {report_error}"),
+            format!("cannot report the package's error: {report_error}"),
             source(target),
         )
     })

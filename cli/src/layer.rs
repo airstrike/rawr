@@ -187,18 +187,21 @@ impl Manifest {
 /// The binaries of [`CATALOG`].
 #[must_use]
 pub fn catalog() -> Vec<Known> {
-    let document = CATALOG.parse::<DocumentMut>().expect("the catalog is TOML");
+    let document = CATALOG
+        .parse::<DocumentMut>()
+        .expect("the built-in catalog is not valid TOML");
     document
         .get("binary")
         .and_then(Item::as_array_of_tables)
-        .expect("the catalog lists [[binary]] tables")
+        .expect("the built-in catalog has no [[binary]] tables")
         .iter()
         .map(|table| Known {
-            manifest: Manifest::from_table(table).expect("each catalog entry is a manifest"),
+            manifest: Manifest::from_table(table)
+                .expect("a built-in catalog entry is not a valid manifest"),
             install: table
                 .get("install")
                 .and_then(Item::as_array)
-                .expect("each catalog entry says how to install it")
+                .expect("a built-in catalog entry has no `install` list")
                 .iter()
                 .filter_map(|line| line.as_str().map(str::to_owned))
                 .collect(),
@@ -255,7 +258,7 @@ pub fn claimed<'a>(
         (Some(first), Some(second)) => Err(diagnostic::Report::error(
             diagnostic::code::FRAMEWORK_EXTENSION,
             format!(
-                "this program uses {} and {}; {} serves the first and {} the second",
+                "cannot run a program that uses both {} and {}: {} serves the first and {} the second",
                 first.manifest.claims.reason(facts).unwrap_or_default(),
                 second.manifest.claims.reason(facts).unwrap_or_default(),
                 first.manifest.name,
@@ -546,7 +549,7 @@ mod tests {
         let report = claimed(&both, &mixed).unwrap_err();
         let rendered = rawr::diagnostic::render(&report);
         assert!(
-            rendered.contains("this program uses `alpha` and `beta`; rawr-one serves the first and rawr-two the second"),
+            rendered.contains("cannot run a program that uses both `alpha` and `beta`: rawr-one serves the first and rawr-two the second"),
             "{rendered}"
         );
     }
