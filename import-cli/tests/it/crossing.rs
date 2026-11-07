@@ -1727,6 +1727,37 @@ fn a_widget_whose_closure_reads_the_state_is_boxed_in_a_view() {
     );
 }
 
+/// iced's progress_bar with a view closure that captures nothing (#1130):
+/// native code lends the closure a crate value, `&Spring`, as
+/// `transition`'s view takes `&Animation<f32>`, and the closure gives a
+/// widget at the view's lifetime. The closure is a function native code
+/// calls with the value it lends. The output is `cargo run`'s.
+#[test]
+fn a_view_function_lent_a_crate_value_is_boxed_in_a_view() {
+    let (rawr, cargo) = both_printed("animated.rs", "Add,Add");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 animated 22@20 [Add]"),
+        "{rawr}"
+    );
+}
+
+/// iced's progress_bar (#1129): a transition made before an `if` moves
+/// into a `row!` in one branch and a `column!` in the other, and each
+/// branch's widget is spaced or padded, boxed and centered. Each region
+/// value keeps its own family whichever container it joins. The output is
+/// `cargo run`'s.
+#[test]
+fn a_region_value_moved_into_a_row_or_a_column_keeps_its_family() {
+    let (rawr, cargo) = both_printed("oriented.rs", "Add,Flip,Add,Flip");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("row 2 transition 20@21 [Flip]")
+            && rawr.ends_with("last view pad 0 pad 0 pad 3 transition 20@20 [Flip] [Add]"),
+        "{rawr}"
+    );
+}
+
 /// iced's pick_list: `column!` boxes a string literal through the crate's
 /// impl of its trait for `&str`, and a choice takes an `Option` of a script
 /// enum, a script `&[T]` constant as its `L: Borrow<[T]>`, and the enum's

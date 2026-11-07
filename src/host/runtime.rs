@@ -130,6 +130,10 @@ pub struct Builder {
     /// item and its instance's types (`rand::random::<f64>` and `::<u8>`).
     #[cfg(feature = "rust-import")]
     instances: BTreeMap<(host::item::Fingerprint, [u8; 32]), Shared<dyn Callback>>,
+    /// The instances bound by the adapter generated for their own item's
+    /// path, which no adapter of another path replaces.
+    #[cfg(feature = "rust-import")]
+    owned_instances: std::collections::BTreeSet<(host::item::Fingerprint, [u8; 32])>,
     /// One binding per proof-backed application, by its identity.
     #[cfg(feature = "rust-import")]
     applications: BTreeMap<[u8; 32], Shared<dyn Callback>>,
@@ -362,6 +366,8 @@ impl Builder {
             bindings: BTreeMap::new(),
             #[cfg(feature = "rust-import")]
             instances: BTreeMap::new(),
+            #[cfg(feature = "rust-import")]
+            owned_instances: std::collections::BTreeSet::new(),
             #[cfg(feature = "rust-import")]
             applications: BTreeMap::new(),
             structural: BTreeMap::new(),
@@ -701,18 +707,27 @@ impl Builder {
     }
 
     /// Bind one generated adapter to one instance of a generic imported
-    /// item: the item's selector and its instance's types.
+    /// item: the item's selector, its instance's types, and the facade path
+    /// of the item the adapter was generated for.
+    ///
+    /// A trait's method has one selector for every type that implements
+    /// it, and its instance's types leave out `Self`, so `Row::boxed` and
+    /// `Column::boxed` of one `Widget<M, T, R>` share both. The adapter of
+    /// the item at `path` serves that item; any other item of the selector
+    /// takes the first adapter that reaches it, as an alias's path reaches
+    /// its target's.
     #[cfg(feature = "rust-import")]
     #[doc(hidden)]
     pub fn bind_imported_instance(
         &mut self,
         selector: [u8; 32],
         instance: [u8; 32],
+        path: &str,
         callback: impl Fn(&Call<'_>, &mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>
             + SendSync
             + 'static,
     ) -> Result<&mut Self, Error> {
-        let fingerprints = self
+        let definitions = self
             .definition
             .items()
             .filter(|definition| {
@@ -720,20 +735,25 @@ impl Builder {
                     .imported_identity()
                     .is_some_and(|identity| identity.fingerprint() == selector)
             })
-            .map(host::item::Definition::fingerprint)
+            .map(|definition| (definition.fingerprint(), definition.path() == path))
             .collect::<Vec<_>>();
-        if fingerprints.is_empty() {
+        if definitions.is_empty() {
             return Err(Error::UnknownItem {
                 facade: self.definition.root().into(),
                 item: format!("<imported selector {selector:02x?}>").into(),
             });
         }
-        // An instance reached through two paths is bound once.
         let callback: Shared<dyn Callback> = Shared::new(Contextual(callback));
-        for fingerprint in fingerprints {
-            self.instances
-                .entry((fingerprint, instance))
-                .or_insert_with(|| callback.clone());
+        for (fingerprint, own) in definitions {
+            let key = (fingerprint, instance);
+            if own {
+                self.owned_instances.insert(key.clone());
+                self.instances.insert(key, callback.clone());
+            } else if !self.owned_instances.contains(&key) {
+                self.instances
+                    .entry(key)
+                    .or_insert_with(|| callback.clone());
+            }
         }
         Ok(self)
     }

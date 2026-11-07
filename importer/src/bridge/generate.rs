@@ -68,7 +68,7 @@ use std::cell::RefCell;
 use __rawr_internal::{Dynamic, ImmutableString};
 
 #[derive(Clone, Copy)]
-struct Adapter { identity: [u8; 32], signature: [u8; 32], selector: [u8; 32], instance: [u8; 32], bound: bool, application: bool, root: &'static str, witness: u8, arguments: u32, invoke: Invoke }
+struct Adapter { identity: [u8; 32], signature: [u8; 32], selector: [u8; 32], instance: [u8; 32], item: &'static str, bound: bool, application: bool, root: &'static str, witness: u8, arguments: u32, invoke: Invoke }
 type Invoke = fn(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>;
 type Project = fn(
     Box<dyn Any>,
@@ -3598,7 +3598,7 @@ fn imported_runtime(
             // Each instance of a generic item has its own adapter, which
             // a call reaches by the key of its instance's types.
             if adapter.instance != [0; 32] {
-                builder.bind_imported_instance(adapter.selector, adapter.instance, move |call, values| runtime_invoke(adapter, call, values))?;
+                builder.bind_imported_instance(adapter.selector, adapter.instance, adapter.item, move |call, values| runtime_invoke(adapter, call, values))?;
             }
             if builder.accepts_imported(&adapter.selector) {
                 builder.bind_imported(adapter.selector, move |call, values| runtime_invoke(adapter, call, values))?;
@@ -6930,7 +6930,8 @@ fn render_source(
             byte_array(&mut file, &instance_key(plan))?;
             write!(
                 file,
-                ", bound: {}, application: {}, root: {:?}, witness: {}",
+                ", item: {:?}, bound: {}, application: {}, root: {:?}, witness: {}",
+                facade_item_path(plan),
                 plan.selector().is_some(),
                 plan.application_invocation().is_some(),
                 plan.export().root_alias(),
@@ -6957,7 +6958,7 @@ fn render_source(
                 // witness: a field's reader gives the field's value alone.
                 writeln!(
                     file,
-                    ", bound: false, application: false, root: {:?}, witness: 1, arguments: 1, invoke: {} }},",
+                    ", item: \"\", bound: false, application: false, root: {:?}, witness: 1, arguments: 1, invoke: {} }},",
                     plan.export().root_alias(),
                     matcher.name(plan)
                 )
@@ -6974,7 +6975,7 @@ fn render_source(
                 byte_array(&mut file, &[0; 32])?;
                 writeln!(
                     file,
-                    ", bound: false, application: false, root: {:?}, witness: 0, arguments: 2, invoke: {} }},",
+                    ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 2, invoke: {} }},",
                     plan.export().root_alias(),
                     store_name(plan)
                 )
@@ -6991,7 +6992,7 @@ fn render_source(
                 byte_array(&mut file, &[0; 32])?;
                 writeln!(
                     file,
-                    ", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
+                    ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
                     plan.export().root_alias(),
                     lender_name(plan)
                 )
@@ -7074,6 +7075,19 @@ fn hidden_segments(source: &[u8]) -> std::collections::BTreeSet<String> {
         found.insert(segment.to_owned());
     }
     found
+}
+
+/// The path below the crate root of the facade item the adapter is for, as
+/// the runtime's facade names it: a method after the type it is on, as
+/// `widgets::Row::boxed`. A trait's method has one selector on every type,
+/// so the runtime binds the instance of each type's item by this path.
+fn facade_item_path(plan: &Plan) -> String {
+    let mut segments = plan.export().path().collect::<Vec<_>>();
+    if matches!(plan.operation(), Operation::Method { .. }) && segments.last() != Some(&plan.name())
+    {
+        segments.push(plan.name());
+    }
+    segments.join("::")
 }
 
 /// The key a call of this adapter's instance carries, or zeros for an
@@ -13555,11 +13569,15 @@ fn render_slot(
             // call alone, as a script impl's function is (D558.3). A
             // closure gives each `&mut` parameter back after its value, as
             // `Path::new(|p| ..)`'s does, so it is one of the call's places.
+            // So is one it borrows shared where its output is at the slot's
+            // `'x`, as `transition`'s view takes `&Animation<f32>` and gives
+            // a widget of the view: the output's type is one for every
+            // borrow of the input, so it borrows nothing of it, and the
+            // input's borrow is a lifetime of its own.
             convert::Type::Borrowed {
                 mutable: borrowed_mutably,
                 ty,
-            } if family.is_none()
-                && matches!(**ty, convert::Type::Nominal { .. })
+            } if matches!(**ty, convert::Type::Nominal { .. })
                 && !is_value(ty)
                 && !carries_lifetime(ty) =>
             {
@@ -13668,9 +13686,8 @@ fn render_slot(
                 );
                 format!("&PINS_{local}")
             });
-            (
-                "<'x>",
-                format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
+            let (items, body) = lent_around(
+                &lends,
                 format!(
                     "let mut values = {values};
         let mut region = __rawr_internal::scope::Region::anchored({pins});
@@ -13683,6 +13700,11 @@ fn render_slot(
             .take::<{family}>(scoped)
             .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"))"
                 ),
+            );
+            (
+                "<'x>",
+                format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
+                format!("{items}{body}"),
             )
         }
         None => {
