@@ -2071,7 +2071,21 @@ fn imported_surface_type(
                 ));
             }
         }),
-        Ty::InclusiveRange(_) => Type::Builtin(Builtin::InclusiveRange),
+        // `a..=b` of `i64`, or of literals rustc types from the call, is
+        // Rawr's own range. One of another integer is a range of it, as
+        // rustc fills a type parameter with it.
+        Ty::InclusiveRange(kind) => match inference.resolve(&Ty::Int(*kind)) {
+            Ty::Int(Int::I64 | Int::Var(_)) => Type::Builtin(Builtin::InclusiveRange),
+            element => {
+                imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
+                Type::Nominal {
+                    definition: rawr_import::surface::identity::Definition::range_inclusive(),
+                    arguments: Box::new([imported_surface_type(
+                        inference, models, &element, operation, imported,
+                    )?]),
+                }
+            }
+        },
         Ty::InclusiveOf(element) => {
             imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
             Type::Nominal {
@@ -2526,7 +2540,13 @@ fn instance_surface_type(
             Int::Usize => Builtin::Usize,
             Int::I128 | Int::U128 => return None,
         }),
-        Ty::InclusiveRange(_) => Type::Builtin(Builtin::InclusiveRange),
+        Ty::InclusiveRange(kind) => match inference.resolve(&Ty::Int(*kind)) {
+            Ty::Int(Int::I64 | Int::Var(_)) => Type::Builtin(Builtin::InclusiveRange),
+            element => Type::Nominal {
+                definition: rawr_import::surface::identity::Definition::range_inclusive(),
+                arguments: Box::new([instance_surface_type(inference, models, &element)?]),
+            },
+        },
         Ty::InclusiveOf(element) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::range_inclusive(),
             arguments: Box::new([instance_surface_type(inference, models, element)?]),
@@ -14839,6 +14859,14 @@ impl<'a> Parser<'a> {
             Ty::Script(id, _) if self.models.implements(trait_name, *id) => true,
             // Rawr's iterator type: a `Range`, a chain, `impl Iterator`.
             Ty::Iter(..) if is_iterator_trait(trait_name) => true,
+            // An integer range a crate holds by value, as itertools'
+            // `Product<I, RangeInclusive<isize>>` does: std's `Iterator`.
+            Ty::InclusiveRange(_) if is_iterator_trait(trait_name) => true,
+            Ty::Range(element)
+                if is_iterator_trait(trait_name) && matches!(**element, Ty::Int(_)) =>
+            {
+                true
+            }
             // An imported type the crate implements `Iterator`,
             // `PartialOrd` or `Ord` for.
             Ty::Host { proof, .. }
@@ -18902,7 +18930,24 @@ impl<'a> Parser<'a> {
                 capability == capability::Kind::Copy
                     || crate::capability::builtin_supports("String", capability)
             }
-            Ty::InclusiveRange(_) | Ty::FloatRange => false,
+            // `RangeInclusive<T>` is `Clone` and `Debug`, as `T` is, and an
+            // `Iterator` of an integer.
+            Ty::InclusiveRange(_) if capability == capability::Kind::Iterator => true,
+            range @ (Ty::InclusiveRange(_) | Ty::FloatRange) => {
+                let element = match range {
+                    Ty::InclusiveRange(kind) => Ty::Int(kind),
+                    _ => Ty::Float(Float::F64),
+                };
+                matches!(
+                    capability,
+                    capability::Kind::Clone | capability::Kind::Debug
+                ) && self.type_provides(&element, capability)
+            }
+            Ty::Range(element)
+                if capability == capability::Kind::Iterator && matches!(*element, Ty::Int(_)) =>
+            {
+                true
+            }
             // `Range<T>` and `RangeInclusive<T>` derive from `T`, but are
             // never `Copy`.
             Ty::Range(element) | Ty::InclusiveOf(element) => {
@@ -20439,12 +20484,21 @@ impl<'a> Parser<'a> {
                 // A program's iterator that fills the parameter gives its
                 // items as `I::Item`, and an iterator is its own `IntoIter`,
                 // as the `Product<Self, J::IntoIter>` of itertools'
-                // `cartesian_product` holds two.
+                // `cartesian_product` holds two. An integer range a crate
+                // takes by value is one too, of its own kind.
                 #[cfg(feature = "rust-import")]
                 if let Some((_, name)) = relation.associated()
                     && let [declared] = relation.arguments()
                     && let Some(item) = match (name.as_str(), &actual) {
                         ("Item", Ty::Iter(item, _)) => Some((**item).clone()),
+                        ("Item", Ty::InclusiveRange(kind)) => Some(Ty::Int(*kind)),
+                        ("Item", Ty::Range(element)) if matches!(**element, Ty::Int(_)) => {
+                            Some((**element).clone())
+                        }
+                        ("IntoIter", Ty::InclusiveRange(_)) => Some(actual.clone()),
+                        ("IntoIter", Ty::Range(element)) if matches!(**element, Ty::Int(_)) => {
+                            Some(actual.clone())
+                        }
                         ("Item", Ty::Host { .. }) => self.host_iterator_item(&actual, span),
                         ("IntoIter", Ty::Iter(..)) => Some(actual.clone()),
                         ("IntoIter", Ty::Host { .. })
@@ -44798,10 +44852,12 @@ impl<'a> Parser<'a> {
                 source
             }
             // `Range<usize>` a crate gives (#707): its `Range<i64>` value,
-            // which shows as Rust's `0..5` does.
+            // which shows as Rust's `0..5` does, and an integer `a..=b` of
+            // any kind, its `RangeInclusive<i64>`.
             Ty::Range(element) if matches!(**element, Ty::Int(_)) => {
                 self.prelude_op(PreludeOp::GenericDebug, [value])
             }
+            Ty::InclusiveRange(_) => self.prelude_op(PreludeOp::GenericDebug, [value]),
             // A facade type providing `Debug`: Rust's text, as its facade
             // registered it (`host::debug`).
             Ty::Host { proof, .. }

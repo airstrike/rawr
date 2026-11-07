@@ -39,6 +39,16 @@ pub fn length<I: Iterator>(items: I) -> usize {
     items.count()
 }
 
+/// `value` itself, as a crate function over any type gives it back.
+pub fn same<T>(value: T) -> T {
+    value
+}
+
+/// The items of `items`, as a crate function over any `IntoIterator`.
+pub fn gathered<J: IntoIterator>(items: J) -> Vec<J::Item> {
+    items.into_iter().collect()
+}
+
 /// The cartesian product of two iterators, as itertools' `Product`.
 #[derive(Debug, Clone)]
 pub struct Product<I, J>

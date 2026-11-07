@@ -15618,7 +15618,9 @@ fn render_give(
         ty if boxed_element(ty).is_some()
             || counted_element(ty).is_some()
             || keyed_element(ty).is_some()
-            || matches!(range_inclusive_element(ty), Some(convert::Type::Nominal { .. })) =>
+            || matches!(range_inclusive_element(ty), Some(convert::Type::Nominal { .. }))
+            || matches!(range_inclusive_element(ty), Some(convert::Type::Builtin(builtin))
+                if *builtin == convert::Builtin::I64 || builtin.is_narrow_integer()) =>
         {
             let mut converted = String::new();
             render_to_dynamic(ty, value, 0, &mut converted)?;
@@ -16086,6 +16088,16 @@ fn render_to_dynamic(
             write!(
                 output,
                 "{{ let (start_{depth}, end_{depth}) = {value}.into_inner(); ({start}).and_then(|start| ({end}).map(|end| Dynamic::from(start..=end))) }}"
+            )
+        }
+        // std's `RangeInclusive` of an integer, as a type parameter it
+        // filled gives it back: Rawr's `RangeInclusive<i64>`.
+        ty if let Some(convert::Type::Builtin(builtin)) = range_inclusive_element(ty)
+            && (*builtin == convert::Builtin::I64 || builtin.is_narrow_integer()) =>
+        {
+            write!(
+                output,
+                "{{ let (start_{depth}, end_{depth}) = {value}.into_inner(); int_into(start_{depth}).and_then(|start| int_into(end_{depth}).map(|end| Dynamic::from(start..=end))) }}"
             )
         }
         // std's map or set, as rawr's of its kind: its entries sorted by
