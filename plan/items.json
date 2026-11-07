@@ -1162,6 +1162,8 @@
     {"t":"T1159","issue":1159,"title":"T1159: Embedding: a typed handle over the script's own type, checked at lookup and lent by &mut, and Script::replace","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1160","issue":1160,"title":"T1160: std::thread::spawn fails in the browser playground","state":"open","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1161","issue":1161,"title":"T1161: A Rustlings group in the playground","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1162","issue":1162,"title":"T1162: The landing page's reload section covers any library","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1162","issue":1162,"title":"T1162: The landing page's reload section covers any library","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1163","issue":1163,"title":"T1163: The generated runner's own items share a namespace with the program's types (a program `struct Program` fails to build)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
+    {"t":"T1164","issue":1164,"title":"T1164: A marked src/main.rs can't name its own package's lib by the crate name","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null}
   ]
 }
