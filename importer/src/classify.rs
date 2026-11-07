@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 125;
+const CLASSIFIER_VERSION: u32 = 127;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -5035,13 +5035,19 @@ impl<P: api::Phase> Context<'_, P> {
                         export.target(),
                     )?,
                 };
+                let implementations = match &substitutions {
+                    Some(_) => Box::default(),
+                    None => {
+                        self.inherent_opaque_implementations(export, implementation, definition)?
+                    }
+                };
                 associated.push(OutcomeRecord {
                     export: export.key().clone(),
                     identity: item_identity,
                     name: name.into(),
                     origin: Some(origin),
                     evidence,
-                    implementations: Box::default(),
+                    implementations,
                     variant: None,
                     member: trait_member(implementation, definition)
                         .then(|| crate::surface::identity::Definition::of(definition.id())),
@@ -5148,6 +5154,41 @@ impl<P: api::Phase> Context<'_, P> {
         let mut opaques = Vec::new();
         impl_traits(signature.output(), &mut opaques);
         self.opaque_records(export, definition, generics, &opaques)
+    }
+
+    /// The methods of each trait an opaque `impl Trait` type the inherent
+    /// method `method` of `implementation` gives implements, as
+    /// `opaque_implementations` gives a function's: polars'
+    /// `ChunkedArray::downcast_iter_mut` gives an `impl Iterator` whose
+    /// `next` a program calls. The impl's parameters come first, then the
+    /// method's own, as the method's signature declares them.
+    fn inherent_opaque_implementations(
+        &self,
+        export: &ledger::Export,
+        implementation: &model::Implementation,
+        method: &model::Definition,
+    ) -> Result<Box<[ImplementationRecord]>, Error> {
+        let model::Kind::Function {
+            signature,
+            generics,
+        } = method.kind()
+        else {
+            return Ok(Box::default());
+        };
+        if !matches!(implementation.trait_ref(), model::Trait::Inherent) {
+            return Ok(Box::default());
+        }
+        let mut opaques = Vec::new();
+        impl_traits(signature.output(), &mut opaques);
+        if opaques.is_empty() {
+            return Ok(Box::default());
+        }
+        let Ok(generics) = model::Generics::inherited(implementation.generics(), generics) else {
+            return Ok(Box::default());
+        };
+        Ok(self
+            .opaque_records(export, method, &generics, &opaques)?
+            .into_boxed_slice())
     }
 
     /// The methods of each trait an opaque `impl Trait` type the method
@@ -5314,8 +5355,11 @@ impl<P: api::Phase> Context<'_, P> {
                         selector => selector,
                     };
                     self.retain_selector(&selector)?;
-                    let identity =
-                        crate::surface::identity::Identity::imported(export, None, selector)?;
+                    let identity = crate::surface::identity::Identity::opaque_member(
+                        export,
+                        crate::surface::identity::Implementation::opaque(id, trait_id),
+                        selector,
+                    );
                     self.retain_outcome_common(export.key(), name)?;
                     self.retain_span(export.span())?;
                     self.retain_span(method.span())?;
@@ -9175,6 +9219,18 @@ impl<P: api::Phase> Context<'_, P> {
                         associated.push((
                             representability::signature::Associated::new(
                                 *crate::surface::identity::Definition::future().as_bytes(),
+                                name.into(),
+                            ),
+                            position,
+                        ));
+                    }
+                    // So is an iterator, whose `Item` a `for` loop and the
+                    // iterator's adaptors take, as rustc reads them from
+                    // `impl Iterator<Item = T>`.
+                    if name == "Item" && self.is_core_trait(&trait_id, "Iterator") {
+                        associated.push((
+                            representability::signature::Associated::new(
+                                *crate::surface::identity::Definition::iterator().as_bytes(),
                                 name.into(),
                             ),
                             position,

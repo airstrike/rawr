@@ -130,6 +130,14 @@ pub struct Builder {
     /// item and its instance's types (`rand::random::<f64>` and `::<u8>`).
     #[cfg(feature = "rust-import")]
     instances: BTreeMap<(host::item::Fingerprint, [u8; 32]), Shared<dyn Callback>>,
+    /// The instances bound by the adapter generated for their own item's
+    /// path, which no adapter of another path replaces.
+    #[cfg(feature = "rust-import")]
+    owned_instances: std::collections::BTreeSet<(host::item::Fingerprint, [u8; 32])>,
+    /// The items bound by the adapter generated for their own path, as
+    /// [`Builder::owned_instances`] are.
+    #[cfg(feature = "rust-import")]
+    owned_bindings: std::collections::BTreeSet<host::item::Fingerprint>,
     /// One binding per proof-backed application, by its identity.
     #[cfg(feature = "rust-import")]
     applications: BTreeMap<[u8; 32], Shared<dyn Callback>>,
@@ -363,6 +371,10 @@ impl Builder {
             #[cfg(feature = "rust-import")]
             instances: BTreeMap::new(),
             #[cfg(feature = "rust-import")]
+            owned_instances: std::collections::BTreeSet::new(),
+            #[cfg(feature = "rust-import")]
+            owned_bindings: std::collections::BTreeSet::new(),
+            #[cfg(feature = "rust-import")]
             applications: BTreeMap::new(),
             structural: BTreeMap::new(),
             projections: BTreeMap::new(),
@@ -386,10 +398,23 @@ impl Builder {
     #[doc(hidden)]
     #[must_use]
     pub fn accepts_imported(&self, selector: &[u8; 32]) -> bool {
+        self.accepts_imported_at(selector, "")
+    }
+
+    /// [`Builder::accepts_imported`] of the adapter generated for the item
+    /// at `path`, which also takes an item at its own path that another
+    /// adapter of the selector reached first ([`Builder::bind_imported_at`]).
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn accepts_imported_at(&self, selector: &[u8; 32], path: &str) -> bool {
         self.imported_items().any(|item| {
             item.imported_identity()
                 .is_some_and(|identity| identity.fingerprint() == *selector)
-                && !self.bindings.contains_key(&item.fingerprint())
+                && (!self.bindings.contains_key(&item.fingerprint())
+                    || (!path.is_empty()
+                        && visible(&item.path()) == visible(path)
+                        && !self.owned_bindings.contains(&item.fingerprint())))
         })
     }
 
@@ -701,18 +726,28 @@ impl Builder {
     }
 
     /// Bind one generated adapter to one instance of a generic imported
-    /// item: the item's selector and its instance's types.
+    /// item: the item's selector, its instance's types, and the facade path
+    /// of the item the adapter was generated for.
+    ///
+    /// A trait's method has one selector for every type that implements
+    /// it, and its instance's types leave out `Self`, so `Row::boxed` and
+    /// `Column::boxed` of one `Widget<M, T, R>` share both. The adapter of
+    /// the item at `path`, spelled from the root or through a macro's
+    /// `$crate`, serves that item; any other item of the selector
+    /// takes the first adapter that reaches it, as an alias's path reaches
+    /// its target's.
     #[cfg(feature = "rust-import")]
     #[doc(hidden)]
     pub fn bind_imported_instance(
         &mut self,
         selector: [u8; 32],
         instance: [u8; 32],
+        path: &str,
         callback: impl Fn(&Call<'_>, &mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>
             + SendSync
             + 'static,
     ) -> Result<&mut Self, Error> {
-        let fingerprints = self
+        let definitions = self
             .definition
             .items()
             .filter(|definition| {
@@ -720,20 +755,30 @@ impl Builder {
                     .imported_identity()
                     .is_some_and(|identity| identity.fingerprint() == selector)
             })
-            .map(host::item::Definition::fingerprint)
+            .map(|definition| {
+                (
+                    definition.fingerprint(),
+                    visible(&definition.path()) == visible(path),
+                )
+            })
             .collect::<Vec<_>>();
-        if fingerprints.is_empty() {
+        if definitions.is_empty() {
             return Err(Error::UnknownItem {
                 facade: self.definition.root().into(),
                 item: format!("<imported selector {selector:02x?}>").into(),
             });
         }
-        // An instance reached through two paths is bound once.
         let callback: Shared<dyn Callback> = Shared::new(Contextual(callback));
-        for fingerprint in fingerprints {
-            self.instances
-                .entry((fingerprint, instance))
-                .or_insert_with(|| callback.clone());
+        for (fingerprint, own) in definitions {
+            let key = (fingerprint, instance);
+            if own {
+                self.owned_instances.insert(key.clone());
+                self.instances.insert(key, callback.clone());
+            } else if !self.owned_instances.contains(&key) {
+                self.instances
+                    .entry(key)
+                    .or_insert_with(|| callback.clone());
+            }
         }
         Ok(self)
     }
@@ -765,6 +810,25 @@ impl Builder {
             + SendSync
             + 'static,
     ) -> Result<&mut Self, Error> {
+        self.bind_imported_at(selector, "", callback)
+    }
+
+    /// [`Builder::bind_imported`] of the adapter generated for the item at
+    /// `path`. A trait's method has one selector on every type that
+    /// implements it, so the adapter of the item at `path`, spelled from the
+    /// root or through a macro's `$crate`, serves that item, and any other
+    /// item of the selector takes the first adapter that reaches it, as an
+    /// alias's path reaches its target's.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    pub fn bind_imported_at(
+        &mut self,
+        selector: [u8; 32],
+        path: &str,
+        callback: impl Fn(&Call<'_>, &mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>
+            + SendSync
+            + 'static,
+    ) -> Result<&mut Self, Error> {
         // The same Rust item under several paths (`TimeDelta::num_minutes`
         // and its alias `Duration::num_minutes`) is one binding.
         let definitions = self
@@ -781,23 +845,31 @@ impl Builder {
                 item: format!("<imported selector {selector:02x?}>").into(),
             });
         };
-        if definitions
+        let definitions = definitions
             .iter()
-            .all(|definition| self.bindings.contains_key(&definition.fingerprint()))
-        {
+            .map(|definition| {
+                let own = !path.is_empty() && visible(&definition.path()) == visible(path);
+                (definition.fingerprint(), own)
+            })
+            .collect::<Vec<_>>();
+        if definitions.iter().all(|(fingerprint, own)| {
+            self.bindings.contains_key(fingerprint)
+                && !(*own && !self.owned_bindings.contains(fingerprint))
+        }) {
             return Err(Error::DuplicateBinding {
                 item: first.path().to_string().into(),
             });
         }
         let callback: Shared<dyn Callback> = Shared::new(Contextual(callback));
-        let fingerprints = definitions
-            .iter()
-            .map(|definition| definition.fingerprint())
-            .collect::<Vec<_>>();
-        for fingerprint in fingerprints {
-            self.bindings
-                .entry(fingerprint)
-                .or_insert_with(|| callback.clone());
+        for (fingerprint, own) in definitions {
+            if own {
+                self.owned_bindings.insert(fingerprint.clone());
+                self.bindings.insert(fingerprint, callback.clone());
+            } else if !self.owned_bindings.contains(&fingerprint) {
+                self.bindings
+                    .entry(fingerprint)
+                    .or_insert_with(|| callback.clone());
+            }
         }
         Ok(self)
     }
@@ -1543,6 +1615,17 @@ mod witness_tests {
 }
 
 impl std::error::Error for Error {}
+
+/// `path` with any segment of a macro's `$crate` path left out, so
+/// `events::__rawr_crate_<..>::widgets::Row::boxed` is the item at
+/// `events::widgets::Row::boxed`.
+#[cfg(feature = "rust-import")]
+fn visible(path: &str) -> String {
+    path.split("::")
+        .filter(|segment| !segment.starts_with(rawr_import::api::ledger::CRATE_SEGMENT))
+        .collect::<Vec<_>>()
+        .join("::")
+}
 
 #[cfg(test)]
 mod tests {

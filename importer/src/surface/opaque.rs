@@ -171,11 +171,14 @@ pub fn parameters(
     )],
 ) -> Box<[Box<str>]> {
     let mut names = named.into_vec();
-    let future = *crate::surface::identity::Definition::future().as_bytes();
+    let marks = [
+        *crate::surface::identity::Definition::future().as_bytes(),
+        *crate::surface::identity::Definition::iterator().as_bytes(),
+    ];
     for (associated, position) in associated {
-        // The mark that the type is a future names the same argument as
-        // its `Future::Output` does.
-        if associated.trait_identity() == future {
+        // The mark that the type is a future or an iterator names the same
+        // argument as its `Future::Output` or `Iterator::Item` does.
+        if marks.contains(&associated.trait_identity()) {
             continue;
         }
         let Some(at) = usize::try_from(*position)

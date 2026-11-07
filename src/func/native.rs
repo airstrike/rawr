@@ -516,9 +516,8 @@ impl<'a> NativeCallContext<'a> {
         let op_token = Token::lookup_symbol_from_syntax(fn_name);
         let args_len = args.len();
 
-        // The names rawr answers by name rather than by dispatch
-        // (`__rawr_type_of`) have no registered implementation: dispatch
-        // would report them unknown.
+        // The names that are only syntax (`__rawr_curry`) have no
+        // registered implementation: dispatch would report them unknown.
         if let Some(result) =
             self.engine()
                 .exec_syntactic_fn_call(fn_name, args, self.call_position())
@@ -708,26 +707,12 @@ pub type OnProgressCallback = dyn Fn(u64) -> Option<Dynamic>;
 #[cfg(feature = "sync")]
 pub type OnProgressCallback = dyn Fn(u64) -> Option<Dynamic> + Send + Sync;
 
-/// Callback function for printing.
-#[cfg(not(feature = "sync"))]
-pub type OnPrintCallback = dyn Fn(&str);
-/// Callback function for printing.
-#[cfg(feature = "sync")]
-pub type OnPrintCallback = dyn Fn(&str) + Send + Sync;
-
 /// Callback function for `print!`, `println!`, `eprint!` and `eprintln!`.
 #[cfg(not(feature = "sync"))]
 pub type OnOutputCallback = dyn Fn(crate::Output, &str);
 /// Callback function for `print!`, `println!`, `eprint!` and `eprintln!`.
 #[cfg(feature = "sync")]
 pub type OnOutputCallback = dyn Fn(crate::Output, &str) + Send + Sync;
-
-/// Callback function for debugging.
-#[cfg(not(feature = "sync"))]
-pub type OnDebugCallback = dyn Fn(&str, Option<&str>, Position);
-/// Callback function for debugging.
-#[cfg(feature = "sync")]
-pub type OnDebugCallback = dyn Fn(&str, Option<&str>, Position) + Send + Sync;
 
 /// _(internals)_ Callback function when a property accessed is not found in a [`Map`][crate::Map].
 /// Exported under the `internals` feature only.

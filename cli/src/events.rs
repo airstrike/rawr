@@ -10,6 +10,10 @@
 //! and an `exec` into the binary that serves the program opens it again.
 //! The human lines on stderr stay as they are.
 //!
+//! The same lines go to the program itself, on the socket [`reload`]
+//! serves: `queued`, `swapped`, `failed` and `restarting` are what a
+//! program with an editor of its own shows (#1166).
+//!
 //! The server also names its own pid in [`PARENT`]. A process it started
 //! directly watches that pid: when the server dies, even by SIGKILL, the
 //! process ends what it owns and then its own process group.
@@ -20,6 +24,9 @@ use std::sync::{Mutex, Once, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
+
+#[cfg(unix)]
+pub mod reload;
 
 /// The file a supervised `rawr run` appends its events to.
 pub const EVENTS: &str = "RAWR_MCP_EVENTS";
@@ -60,13 +67,16 @@ pub fn supervised() -> bool {
     std::env::var_os(EVENTS).is_some_and(|path| !path.is_empty())
 }
 
-/// Append `event` as one line, when supervised.
+/// Append `event` as one line, when supervised, and send it to the
+/// program's [`reload`] stream.
 pub fn emit(event: &Value) {
+    let mut line = event.to_string();
+    line.push('\n');
+    #[cfg(unix)]
+    reload::broadcast(&line);
     let Some(file) = file() else {
         return;
     };
-    let mut line = event.to_string();
-    line.push('\n');
     let mut file = file
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -100,14 +110,27 @@ pub fn restarting(reason: &str) {
 }
 
 /// A start or a save failed. The last good program, if any, keeps running.
+/// The first diagnostic's message and position are the event's own, for a
+/// reader that shows one line.
 pub fn failed(report: &rawr::diagnostic::Report) {
-    if file().is_none() {
+    #[cfg(unix)]
+    let streamed = reload::path().is_some();
+    #[cfg(not(unix))]
+    let streamed = false;
+    if file().is_none() && !streamed {
         return;
     }
     let base = std::env::current_dir().unwrap_or_default();
+    let diagnostics = crate::diagnostic::shape(report, &base);
+    let first = diagnostics.first();
+    let field = |name: &str| first.and_then(|first| first.get(name)).cloned();
     emit(&json!({
         "event": "failed",
-        "diagnostics": crate::diagnostic::shape(report, &base),
+        "message": field("message").unwrap_or(Value::Null),
+        "file": field("file").unwrap_or(Value::Null),
+        "line": field("line").unwrap_or(Value::Null),
+        "column": field("column").unwrap_or(Value::Null),
+        "diagnostics": diagnostics,
         "rendered": rawr::diagnostic::render(report),
     }));
 }

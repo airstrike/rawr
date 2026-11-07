@@ -101,20 +101,6 @@ pub mod tag {
     pub const STORE_SHARED: u8 = 0x20;
     /// [`Op::IterNext`](super::Op::IterNext) that also pushes the count.
     pub const ITER_NEXT_INDEXED: u8 = 0x21;
-    /// [`Op::PopHandler`](super::Op::PopHandler).
-    pub const POP_HANDLER: u8 = 0x22;
-    /// [`Op::PushHandler`](super::Op::PushHandler) for a bare `catch`.
-    pub const PUSH_HANDLER: u8 = 0x23;
-    /// [`Op::PushHandler`](super::Op::PushHandler) binding a catch variable.
-    pub const PUSH_HANDLER_VAR: u8 = 0x24;
-    /// [`Op::InterpolateStart`](super::Op::InterpolateStart).
-    pub const INTERPOLATE_START: u8 = 0x25;
-    /// [`Op::InterpolateAppend`](super::Op::InterpolateAppend).
-    pub const INTERPOLATE_APPEND: u8 = 0x26;
-    /// [`Op::InterpolateEnd`](super::Op::InterpolateEnd).
-    pub const INTERPOLATE_END: u8 = 0x27;
-    /// [`Op::MakeFnPtr`](super::Op::MakeFnPtr).
-    pub const MAKE_FN_PTR: u8 = 0x28;
     /// [`Op::Curry`](super::Op::Curry).
     pub const CURRY: u8 = 0x29;
     /// [`Op::CallFnPtr`](super::Op::CallFnPtr) in call position.
@@ -129,8 +115,6 @@ pub mod tag {
     pub const LOAD_SHARED: u8 = 0x2e;
     /// [`Op::MakeClosure`](super::Op::MakeClosure).
     pub const MAKE_CLOSURE: u8 = 0x2f;
-    /// [`Op::IsShared`](super::Op::IsShared).
-    pub const IS_SHARED: u8 = 0x30;
     /// [`Op::Checkpoint`](super::Op::Checkpoint).
     pub const CHECKPOINT: u8 = 0x31;
     /// [`Op::CheckSize`](super::Op::CheckSize) against the array limit.
@@ -193,12 +177,6 @@ static WIDTHS: [u8; 256] = {
 
     widths[tag::ITER_NEXT as usize] = 5;
     widths[tag::ITER_NEXT_INDEXED as usize] = 5;
-    widths[tag::POP_HANDLER as usize] = 1;
-    widths[tag::INTERPOLATE_START as usize] = 1;
-    widths[tag::INTERPOLATE_APPEND as usize] = 1;
-    widths[tag::INTERPOLATE_END as usize] = 1;
-    widths[tag::MAKE_FN_PTR as usize] = 1;
-    widths[tag::IS_SHARED as usize] = 1;
 
     widths[tag::CURRY as usize] = 2;
     widths[tag::ROTATE as usize] = 2;
@@ -224,8 +202,6 @@ static WIDTHS: [u8; 256] = {
     widths[tag::CALL_FN_PTR_ON_NAMED as usize] = 4;
     widths[tag::CALL_FN_PTR_ON_THIS as usize] = 2;
     widths[tag::MAKE_CLOSURE as usize] = 3;
-    widths[tag::PUSH_HANDLER as usize] = 5;
-    widths[tag::PUSH_HANDLER_VAR as usize] = 7;
 
     widths[tag::CONST as usize] = 3;
     widths[tag::LOAD_LOCAL as usize] = 3;
@@ -552,8 +528,6 @@ pub fn assemble(ops: &[Op]) -> Result<(Vec<u8>, Vec<u32>), AssembleError> {
                 code.push(tag::MAKE_CLOSURE);
                 code.extend_from_slice(&small(*name as usize, "names")?.to_le_bytes());
             }
-            Op::MakeFnPtr => code.push(tag::MAKE_FN_PTR),
-            Op::IsShared => code.push(tag::IS_SHARED),
             Op::Curry(argc) => {
                 code.push(tag::CURRY);
                 code.push(*argc);
@@ -583,10 +557,6 @@ pub fn assemble(ops: &[Op]) -> Result<(Vec<u8>, Vec<u32>), AssembleError> {
                 }
             }
 
-            Op::InterpolateStart => code.push(tag::INTERPOLATE_START),
-            Op::InterpolateAppend => code.push(tag::INTERPOLATE_APPEND),
-            Op::InterpolateEnd => code.push(tag::INTERPOLATE_END),
-
             // The table's own targets are instruction indices too, but they
             // are not in the code — see `resolve_switch_targets`.
             Op::Switch(index) => {
@@ -604,22 +574,6 @@ pub fn assemble(ops: &[Op]) -> Result<(Vec<u8>, Vec<u32>), AssembleError> {
             Op::Throw => code.push(tag::THROW),
             Op::IterInit => code.push(tag::ITER_INIT),
             Op::IterDrop => code.push(tag::ITER_DROP),
-            Op::PopHandler => code.push(tag::POP_HANDLER),
-
-            Op::PushHandler {
-                target: to,
-                catch_var,
-            } => {
-                code.push(match catch_var {
-                    Some(..) => tag::PUSH_HANDLER_VAR,
-                    None => tag::PUSH_HANDLER,
-                });
-                code.extend_from_slice(&target(*to)?.to_le_bytes());
-                if let Some(name) = catch_var {
-                    code.extend_from_slice(&small(*name as usize, "names")?.to_le_bytes());
-                }
-            }
-
             Op::IterNext { exit, indexed } => {
                 code.push(if *indexed {
                     tag::ITER_NEXT_INDEXED
@@ -701,12 +655,6 @@ fn encoded_width(op: &Op) -> usize {
         | Op::Throw
         | Op::IterInit
         | Op::IterDrop
-        | Op::PopHandler
-        | Op::InterpolateStart
-        | Op::InterpolateAppend
-        | Op::InterpolateEnd
-        | Op::MakeFnPtr
-        | Op::IsShared
         | Op::LoadThis
         | Op::LoadThisShared
         | Op::RequireThis
@@ -747,14 +695,7 @@ fn encoded_width(op: &Op) -> usize {
         | Op::Jump(..)
         | Op::JumpIfTrue { .. }
         | Op::JumpIfFalse { .. }
-        | Op::IterNext { .. }
-        | Op::PushHandler {
-            catch_var: None, ..
-        } => 5,
-        Op::PushHandler {
-            catch_var: Some(..),
-            ..
-        } => 7,
+        | Op::IterNext { .. } => 5,
         Op::Call { op: Some(..), .. }
         | Op::CallRef {
             receiver: Receiver::Local(..) | Receiver::Named(..),
@@ -875,8 +816,6 @@ pub fn decode(code: &[u8], at: usize) -> Option<Op> {
         tag::LOAD_SHARED => Op::LoadShared(small(1)?),
         tag::LOAD_SHARED_NAMED => Op::LoadSharedNamed(u32::from(small(1)?)),
         tag::MAKE_CLOSURE => Op::MakeClosure(u32::from(small(1)?)),
-        tag::MAKE_FN_PTR => Op::MakeFnPtr,
-        tag::IS_SHARED => Op::IsShared,
         tag::CURRY => Op::Curry(code[at + 1]),
         tag::CALL_FN_PTR => Op::CallFnPtr {
             argc: code[at + 1],
@@ -903,9 +842,6 @@ pub fn decode(code: &[u8], at: usize) -> Option<Op> {
             method: true,
             receiver: Some(Receiver::This),
         },
-        tag::INTERPOLATE_START => Op::InterpolateStart,
-        tag::INTERPOLATE_APPEND => Op::InterpolateAppend,
-        tag::INTERPOLATE_END => Op::InterpolateEnd,
         tag::UNWIND_TO => Op::UnwindTo(small(1)?),
         tag::TICK => Op::Tick,
         tag::CHECKPOINT => Op::Checkpoint,
@@ -921,15 +857,6 @@ pub fn decode(code: &[u8], at: usize) -> Option<Op> {
             indexed: true,
         },
         tag::STORE_SHARED => Op::StoreShared(small(1)?),
-        tag::POP_HANDLER => Op::PopHandler,
-        tag::PUSH_HANDLER => Op::PushHandler {
-            target: u32_at(code, at + 1)?,
-            catch_var: None,
-        },
-        tag::PUSH_HANDLER_VAR => Op::PushHandler {
-            target: u32_at(code, at + 1)?,
-            catch_var: Some(u32::from(small(5)?)),
-        },
         tag::RETURN => Op::Return,
 
         tag::EVAL_AST => Op::EvalAst {

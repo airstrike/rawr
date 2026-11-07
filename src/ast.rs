@@ -10,7 +10,6 @@ pub mod script_fn;
 pub mod stmt;
 
 pub use ast::{ASTNode, EncapsulatedEnviron, AST};
-pub use expr::CustomExpr;
 pub use expr::{BinaryExpr, Expr, FnCallExpr, FnCallHashes};
 pub use flags::{ASTFlags, FnAccess};
 pub use ident::Ident;

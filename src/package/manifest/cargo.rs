@@ -37,6 +37,9 @@ pub(crate) struct Cargo {
     /// `[package] links` as TOML text, which a generated package standing
     /// in for this one repeats.
     pub(crate) links: Option<String>,
+    /// Where Cargo looks for the package's library root, absolute: `[lib]
+    /// path`, else `src/lib.rs` beside the manifest. A script has none.
+    pub(crate) library: Option<PathBuf>,
 }
 
 impl Cargo {
@@ -154,6 +157,15 @@ impl Cargo {
             .get("links")
             .and_then(Item::as_value)
             .map(|links| links.clone().decorated("", "").to_string());
+        let library = Some(
+            directory.join(
+                table
+                    .get("lib")
+                    .and_then(|item| item.get("path"))
+                    .and_then(Item::as_str)
+                    .unwrap_or("src/lib.rs"),
+            ),
+        );
         Ok(Some(Self {
             path,
             package: name,
@@ -165,6 +177,7 @@ impl Cargo {
             features,
             build,
             links,
+            library,
             text,
         }))
     }

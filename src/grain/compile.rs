@@ -2,10 +2,7 @@ mod cases;
 mod poolable;
 mod slots;
 
-use crate::engine::{
-    KEYWORD_EVAL, KEYWORD_FN_PTR, KEYWORD_FN_PTR_CALL, KEYWORD_FN_PTR_CURRY, KEYWORD_IS_DEF_FN,
-    KEYWORD_IS_DEF_VAR, KEYWORD_IS_SHARED,
-};
+use crate::engine::{KEYWORD_FN_PTR_CALL, KEYWORD_FN_PTR_CURRY};
 use core::mem;
 
 use crate::ast::{
@@ -186,7 +183,6 @@ impl Compiler {
                 switches: lowering.switches,
                 lib,
                 has_compiler_support,
-                resolver: ast.resolver.clone(),
                 source: ast.source().map(Into::into),
             },
         );
@@ -214,15 +210,12 @@ struct Loop {
     /// one field cannot be both.
     continue_depth: u16,
     /// How many iterators are live *inside* this loop, so a jump out of it
-    /// can drop whatever was made since. A `break` inside a `try` inside a
-    /// `for` skips the straight-line path that would have cleaned up.
+    /// can drop whatever was made since. A `break` inside a `for` skips the
+    /// straight-line path that would have cleaned up.
     iters: usize,
     /// Whether the loop owns an iterator of its own. `break` drops it and
     /// `continue` must not, which is the other thing one field cannot be.
     owns_iterator: bool,
-    /// How many `try` regions were armed when the loop began, so a jump out
-    /// of the loop disarms the ones inside it.
-    handlers: usize,
     /// `Jump` sites awaiting the address after the loop.
     breaks: Vec<usize>,
 }
@@ -266,7 +259,6 @@ struct FunctionCheckpoint {
     switches: usize,
     max_stack: u16,
     iters: usize,
-    handlers: usize,
 }
 
 #[derive(Default)]
@@ -288,9 +280,6 @@ struct Lowering {
     /// How many iterators are live at this point in the lowering, so a jump
     /// out of a loop knows how many to drop.
     iters: usize,
-    /// The same for `try` regions: a `break` out of one has to disarm it, or
-    /// the next unrelated error is caught into a block already left.
-    handlers: usize,
     /// Names that are script functions rather than variables.
     script_fns: Vec<ImmutableString>,
     /// Set when something nested inside an expression defeated the slot model.
@@ -321,7 +310,6 @@ impl Lowering {
             switches: self.switches.len(),
             max_stack: self.max_stack,
             iters: self.iters,
-            handlers: self.handlers,
         }
     }
 
@@ -337,7 +325,6 @@ impl Lowering {
         self.switches.truncate(checkpoint.switches);
         self.max_stack = checkpoint.max_stack;
         self.iters = checkpoint.iters;
-        self.handlers = checkpoint.handlers;
     }
 
     /// Lower a statement list as a whole chunk. Returns false if something
@@ -755,7 +742,6 @@ impl Lowering {
         }
 
         self.iters = checkpoint.iters;
-        self.handlers = checkpoint.handlers;
 
         Some(LoweredFn {
             name: self.push_name(def.name.clone()),
@@ -785,9 +771,7 @@ impl Lowering {
     fn statement(&mut self, stmt: &Stmt) -> bool {
         match stmt {
             Stmt::Var(payload, flags, ..) => {
-                // `export let x = ...` also binds a module alias, which the
-                // slot model does not represent.
-                if flags.intersects(ASTFlags::EXPORTED) || self.slots.is_full() {
+                if self.slots.is_full() {
                     return false;
                 }
 
@@ -823,12 +807,6 @@ impl Lowering {
                 self.lower_call(call, *pos);
                 true
             }
-
-            // Standing alone is the position `eval` is usually written in, and
-            // rawr gives it its own node — so this is the arm that catches it,
-            // not the `Expr::FnCall` one. See there for why it defeats the
-            // lowering rather than becoming a fragment.
-            Stmt::FnCall(call, ..) if call.name == crate::engine::KEYWORD_EVAL => false,
 
             // `this` on the left. Ahead of the two variable arms because rawr's
             // parser puts it there too (`parser.rs:2002`), and because the
@@ -941,66 +919,6 @@ impl Lowering {
             }
 
             Stmt::Block(block) => self.block(block.statements()),
-
-            // `try { .. } catch (e) { .. }`.
-            //
-            // The catch block's value is thrown away: rawr's whole statement
-            // is the try block's value on the way through and *unit* when
-            // something was caught (`.map(|_| Dynamic::UNIT)`,
-            // `eval/stmt.rs:863`). So `try { throw 7 } catch (e) { e * 2 }` is
-            // unit, not 14.
-            Stmt::TryCatch(payload, ..) => {
-                let FlowControl { expr, body, branch } = &**payload;
-
-                // An absent catch variable is `Expr::Unit`; a present one is
-                // an `Expr::Variable` whose position is what rawr reports
-                // `ErrorTooManyVariables` against.
-                let catch_var = match expr {
-                    Expr::Variable(v, ..) => Some(v.1.clone()),
-                    _ => None,
-                };
-
-                let catch_name = catch_var.clone().map(|name| self.push_name(name));
-                let site = self.code.len();
-                self.emit_at(
-                    Op::PushHandler {
-                        target: u32::MAX,
-                        catch_var: catch_name,
-                    },
-                    expr.position(),
-                );
-                self.handlers += 1;
-
-                if !self.block(body.statements()) {
-                    return false;
-                }
-                self.emit(Op::PopHandler);
-                self.handlers -= 1;
-                let past = self.emit_jump();
-
-                // The catch block, entered with the scope back where the `try`
-                // began and the variable already pushed on top of it. The
-                // handler is still armed here — that is what makes a bare
-                // `throw;` in this block a re-raise — so the depth goes back
-                // up, and the `PopHandler` below is what ends the region.
-                self.patch_to(site, self.here());
-                self.handlers += 1;
-                let depth = self.slots.depth();
-                if let Some(name) = catch_var {
-                    self.slots.declare(name);
-                }
-                if !self.block(branch.statements()) {
-                    return false;
-                }
-                self.emit(Op::Pop);
-                self.unwind_to(depth);
-                self.emit(Op::PopHandler);
-                self.handlers -= 1;
-                self.emit(Op::Unit);
-
-                self.patch_here(past);
-                true
-            }
 
             // `for x in seq` / `for (x, i) in seq`.
             //
@@ -1140,39 +1058,6 @@ impl Lowering {
                 true
             }
 
-            Stmt::Do(payload, flags, ..) => {
-                let FlowControl { expr, body, .. } = &**payload;
-                let until = flags.intersects(ASTFlags::NEGATED);
-
-                let top = self.here();
-                self.emit_at(Op::Tick, body.position());
-
-                self.begin_loop(top);
-                if !self.block_discarding(body.statements()) {
-                    return false;
-                }
-                let breaks = self.end_loop();
-
-                self.expression(expr);
-                if until {
-                    // `do ... until c` loops while `c` is false, which is a
-                    // false-jump straight back to the top.
-                    self.emit_at(Op::JumpIfFalse { target: top }, expr.position());
-                } else {
-                    let exit = self.emit_jump_if_false(expr.position());
-                    self.emit(Op::Jump(top));
-                    self.patch_here(exit);
-                }
-
-                self.emit(Op::Unit);
-                let past = self.emit_jump();
-                for site in breaks {
-                    self.patch_here(site);
-                }
-                self.patch_here(past);
-                true
-            }
-
             Stmt::BreakLoop(value, flags, ..) => {
                 let Some(active) = self.loops.last() else {
                     // Outside any loop this is a parse error in rawr, so it
@@ -1182,16 +1067,15 @@ impl Lowering {
                 };
                 let continue_target = active.continue_target;
                 let loop_iters = active.iters;
-                let loop_handlers = active.handlers;
                 let owns_iterator = active.owns_iterator;
                 let (break_depth, continue_depth) = (active.break_depth, active.continue_depth);
                 let is_break = flags.intersects(ASTFlags::BREAK);
 
                 // A jump out of a loop skips whatever the straight-line path
                 // would have cleaned up. The nesting is lexical, so how many
-                // iterators are live is known here — a `break` inside a `try`
-                // inside a `for` has one to drop, and `continue` has none
-                // because it re-enters the loop that owns it.
+                // iterators are live is known here — a `break` inside a `for`
+                // has one to drop, and `continue` has none because it re-enters
+                // the loop that owns it.
                 if is_break {
                     match value {
                         Some(expr) => self.expression(expr),
@@ -1200,7 +1084,6 @@ impl Lowering {
                     // Out of the loop entirely, so its own iterator goes too —
                     // `loop_iters` counts from inside the loop and therefore
                     // already includes it.
-                    self.pop_handlers(loop_handlers);
                     self.drop_iterators(loop_iters - usize::from(owns_iterator));
                     self.emit(Op::UnwindTo(break_depth));
                     let site = self.emit_jump();
@@ -1208,7 +1091,6 @@ impl Lowering {
                 } else {
                     // Back into the same loop, so its iterator and its loop
                     // variable both have to survive.
-                    self.pop_handlers(loop_handlers);
                     self.drop_iterators(loop_iters);
                     self.emit(Op::UnwindTo(continue_depth));
                     self.emit(Op::Jump(continue_target));
@@ -1245,19 +1127,8 @@ impl Lowering {
                 true
             }
 
-            // The one statement the fragment fallback below cannot hold.
-            //
-            // `import` declares into the imports stack rather than the scope,
-            // and a fragment that rewinds truncates that stack on the way out
-            // (`eval/stmt.rs:55`) — so the alias would be gone before the next
-            // statement could name it, and a qualified call is its own
-            // fragment. Refusing the lowering hands the body to the walker
-            // whole, which is where the alias lives long enough to be used.
-            Stmt::Import(..) => false,
-
             // Not lowered yet, and listed rather than matched with `_` on
-            // purpose. A wildcard here silently turned `import` and `eval`
-            // into fragments that answered differently from the walker; naming
+            // purpose. A wildcard here silently turned `eval` into fragments that answered differently from the walker; naming
             // every kind means a new one added to rawr's AST stops the build
             // until someone has decided which of the three it is — lowered,
             // fragment, or too scope-shaped to be either.
@@ -1270,15 +1141,6 @@ impl Lowering {
             | Stmt::FnCall(..)
             | Stmt::Assignment(..)
             | Stmt::Return(..)) => {
-                let residual = self.push_residual(wrap_statements(vec![other.clone()]));
-                self.emit(Op::EvalAst {
-                    residual,
-                    rewind_scope: true,
-                });
-                true
-            }
-
-            other @ Stmt::Export(..) => {
                 let residual = self.push_residual(wrap_statements(vec![other.clone()]));
                 self.emit(Op::EvalAst {
                     residual,
@@ -1371,18 +1233,6 @@ impl Lowering {
                 self.lower_call(call, *pos);
             }
 
-            // `eval` evaluates a script in the *caller's* scope, so what it
-            // declares outlives it and the next statement can name it. The
-            // slot model resolved its indices against a scope that does not
-            // have those entries, so a lowered read past an `eval` looks in
-            // the wrong place — `eval("let x = 40"); x + 2` found no `x` where
-            // the walker found 40. Refusing the lowering hands the body to the
-            // walker, which is the only thing that knows the real shape.
-            Expr::FnCall(call, ..) if call.name == crate::engine::KEYWORD_EVAL => {
-                self.residual_expr(expr);
-                self.defeated = true;
-            }
-
             // A literal whose elements are all constant never reaches here —
             // rawr's optimizer folds it into a `DynamicConstant` first — so
             // this is the one that has to be built at run time.
@@ -1444,28 +1294,14 @@ impl Lowering {
                 }
             }
 
-            // The optimizer folds an all-constant interpolation away before
-            // this sees it, so what arrives has at least two segments.
-            Expr::InterpolatedString(segments, ..) => {
-                self.emit(Op::InterpolateStart);
-                for segment in segments.iter() {
-                    self.expression(segment);
-                    // The append carries the segment's own position, because
-                    // that is what rawr blames when the size limit goes over.
-                    self.emit_at(Op::InterpolateAppend, segment.position());
-                }
-                self.emit(Op::InterpolateEnd);
-            }
-
-            // `f.call(x)` and `f.curry(x)` are the method spellings of the two
-            // above. They arrive as chains, so they have to be taken before
-            // the chain walker sees them.
+            // `f.call(x)` is the method spelling of `call(f, x)`. It arrives
+            // as a chain, so it has to be taken before the chain walker sees
+            // it.
             // An `rhs` that is a bare `MethodCall` is the whole chain: a
             // further step would make it a `Dot` or an `Index` instead.
             Expr::Dot(binary, ..)
                 if matches!(&binary.rhs, Expr::MethodCall(m, ..)
-                    if matches!(m.name.as_str(), KEYWORD_FN_PTR_CALL | KEYWORD_FN_PTR_CURRY)
-                        && m.args.len() <= u8::MAX as usize) =>
+                    if m.name == KEYWORD_FN_PTR_CALL && m.args.len() <= u8::MAX as usize) =>
             {
                 let Expr::MethodCall(method, ..) = &binary.rhs else {
                     unreachable!("checked by the guard");
@@ -1496,23 +1332,15 @@ impl Lowering {
                 // cannot come from one position-table entry, and using the
                 // argument's instead was measured to move the divergence onto
                 // the common path rather than remove it.
-                //
-                // Method style only. `curry(f, ..)` written as a call is a
-                // different path in rawr and takes the *argument's* position —
-                // see `fn_ptr_call`. The two disagreeing is deliberate.
                 let pos = binary.rhs.position();
-                if method.name == KEYWORD_FN_PTR_CALL {
-                    self.emit_at(
-                        Op::CallFnPtr {
-                            argc,
-                            method: true,
-                            receiver,
-                        },
-                        pos,
-                    );
-                } else {
-                    self.emit_at(Op::Curry(argc), pos);
-                }
+                self.emit_at(
+                    Op::CallFnPtr {
+                        argc,
+                        method: true,
+                        receiver,
+                    },
+                    pos,
+                );
             }
 
             Expr::Dot(..) | Expr::Index(..) => {
@@ -1523,16 +1351,6 @@ impl Lowering {
                     self.rewind(mark);
                     self.residual_expr(expr);
                 }
-            }
-
-            // Custom syntax runs host code against an `EvalContext`, which can
-            // declare into the caller's scope. What it declares is invisible
-            // here, so the slot model would be resolved against a scope shape
-            // that is not the one at runtime. Refusing the lowering keeps the
-            // walker's answer, as it does for `eval` above.
-            Expr::Custom(..) => {
-                self.residual_expr(expr);
-                self.defeated = true;
             }
 
             // Listed rather than matched with `_`, for the reason
@@ -1549,8 +1367,7 @@ impl Lowering {
             // position, because that is what `ErrorUnboundThis` carries.
             Expr::ThisPtr(pos) => self.emit_at(Op::LoadThis, *pos),
 
-            Expr::Coalesce(..)
-            | Expr::MethodCall(..)
+            Expr::MethodCall(..)
             | Expr::Property(..)
             | Expr::DynamicConstant(..)
             | Expr::FnCall(..)
@@ -1731,9 +1548,9 @@ impl Lowering {
         }
     }
 
-    /// Lower `Fn(name)`, `curry(f, ..)` or `call(f, ..)`, if this is one.
+    /// Lower `curry(f, ..)` or `call(f, ..)`, if this is one.
     ///
-    /// Rawr resolves these three by name before dispatch, but only at the
+    /// Rawr resolves these two by name before dispatch, but only at the
     /// arities it recognises (`func/call.rs:1109-1245`); anything else is an
     /// ordinary call that will not find a function. Matching those arities
     /// exactly is what keeps the two agreeing on the failures as well as the
@@ -1745,22 +1562,9 @@ impl Lowering {
         let argc = call.args.len();
 
         match (call.name.as_str(), argc) {
-            // The argument has to arrive as the cell, not its contents, or the
-            // answer is always false.
-            (KEYWORD_IS_SHARED, 1) => {
-                self.unflattened(&call.args[0]);
-                self.emit_at(Op::IsShared, pos);
-            }
-            // Both of these are reported against the *argument* rather than
-            // against the call: rawr reads it, and everything it can then
-            // complain about — a name that is not a string, a string that is
-            // not an identifier, a first argument that is not a pointer — is
-            // filled in with the argument's position (`func/call.rs:1217`,
-            // `:1220`, `:1232`).
-            (KEYWORD_FN_PTR, 1) => {
-                self.expression(&call.args[0]);
-                self.emit_at(Op::MakeFnPtr, call.args[0].position());
-            }
+            // Reported against the *argument* rather than against the call:
+            // rawr reads it, and a first argument that is not a pointer is
+            // filled in with the argument's position.
             (KEYWORD_FN_PTR_CURRY, _) if argc > 1 => {
                 let mut args = call.args.iter();
                 self.expression(args.next().expect("checked by the arity"));
@@ -1799,18 +1603,12 @@ impl Lowering {
     /// captures the enclosing scope is closure construction, and a qualified
     /// name resolves against imported modules; neither is a plain call.
     fn is_lowerable_call(&self, call: &FnCallExpr) -> bool {
-        // `is_shared` belongs here for a sharper reason than the rest: rawr
-        // answers it syntactically in both call positions (`func/call.rs:1240`
-        // and `:929`) and registers no function for it anywhere, so a lowered
-        // call raises `ErrorFunctionNotFound` where the walker returns a bool.
-        const SYNTACTIC: &[&str] = &[KEYWORD_EVAL, KEYWORD_IS_DEF_VAR, KEYWORD_IS_DEF_FN];
-
         // These are handled by `fn_ptr_call` above, but only at the arities
         // rawr treats syntactically — at any other arity it falls through to
         // ordinary dispatch, and so must this.
         if matches!(
             call.name.as_str(),
-            KEYWORD_FN_PTR | KEYWORD_FN_PTR_CALL | KEYWORD_FN_PTR_CURRY | KEYWORD_IS_SHARED
+            KEYWORD_FN_PTR_CALL | KEYWORD_FN_PTR_CURRY
         ) {
             return false;
         }
@@ -1825,7 +1623,6 @@ impl Lowering {
             && !native_only
             && call.namespace.is_empty()
             && call.args.len() <= u8::MAX as usize
-            && !SYNTACTIC.contains(&call.name.as_str())
     }
 
     /// Lower `&&` or `||`: evaluate operands left to right, stopping at the
@@ -1955,8 +1752,7 @@ impl Lowering {
             Op::Jump(slot)
             | Op::JumpIfFalse { target: slot, .. }
             | Op::JumpIfTrue { target: slot, .. }
-            | Op::IterNext { exit: slot, .. }
-            | Op::PushHandler { target: slot, .. } => *slot = target,
+            | Op::IterNext { exit: slot, .. } => *slot = target,
             other => unreachable!("patched a {other:?}, which is not a jump"),
         }
     }
@@ -1968,20 +1764,8 @@ impl Lowering {
         }
     }
 
-    /// Disarm every `try` region entered above `floor`.
-    ///
-    /// A `break` or `continue` jumps over the `PopHandler` the straight-line
-    /// path would have run. Left armed, the handler keeps a stale target and a
-    /// stale set of depths, and the next error anywhere in the frame is caught
-    /// into a `catch` block that has already been left.
-    fn pop_handlers(&mut self, floor: usize) {
-        for _ in floor..self.handlers {
-            self.emit(Op::PopHandler);
-        }
-    }
-
     /// Open a loop whose `break` and `continue` unwind to the same place —
-    /// `while`, `loop` and `do`, which declare nothing of their own.
+    /// `while` and `loop`, which declare nothing of their own.
     fn begin_loop(&mut self, continue_target: u32) {
         let depth = u16::try_from(self.slots.depth()).expect("slot count is bounded");
         self.loops.push(Loop {
@@ -1989,7 +1773,6 @@ impl Lowering {
             break_depth: depth,
             continue_depth: depth,
             iters: self.iters,
-            handlers: self.handlers,
             owns_iterator: false,
             breaks: Vec::new(),
         });
@@ -2004,7 +1787,6 @@ impl Lowering {
             break_depth,
             continue_depth: u16::try_from(self.slots.depth()).expect("slot count is bounded"),
             iters: self.iters,
-            handlers: self.handlers,
             owns_iterator: true,
             breaks: Vec::new(),
         });
@@ -2129,8 +1911,7 @@ enum ChainStep<'a> {
 /// that says the first one's `b[0]` is an index expression rather than two
 /// steps (`eval/chaining.rs:698`).
 ///
-/// Returns `None` for `?.` and `?[]`, which short-circuit on unit rather than
-/// stepping, and for a dot onto anything but a property or a method.
+/// Returns `None` for a dot onto anything but a property or a method.
 fn flatten_chain(expr: &Expr) -> Option<(&Expr, Vec<ChainStep<'_>>)> {
     /// A chain node's parts: operand side, continuation side, and whether the
     /// step it introduces is a property rather than an index.
@@ -2150,10 +1931,6 @@ fn flatten_chain(expr: &Expr) -> Option<(&Expr, Vec<ChainStep<'_>>)> {
     let mut bracket = expr.position();
 
     loop {
-        if flags.intersects(ASTFlags::NEGATED) {
-            return None;
-        }
-
         // `rest` is the continuation only when it is a chain node *and* this
         // node is not marked as the last one. Otherwise it is this step's own
         // operand — the index expression, or the property being read.
@@ -2193,9 +1970,9 @@ fn flatten_chain(expr: &Expr) -> Option<(&Expr, Vec<ChainStep<'_>>)> {
 
 /// Wrap statements as a block expression.
 ///
-/// `Expr::Stmt` is the one shape `eval_expression_tree_raw` routes to
-/// `eval_stmt_block` rather than `eval_expr`, which is what lets statements go
-/// back through the walker at all.
+/// `Expr::Stmt` is the one shape the VM hands to `eval_stmt_block` rather than
+/// `eval_expr`, which is what lets statements go back through the walker at
+/// all.
 fn wrap_statements(statements: Vec<Stmt>) -> Expr {
     let span = statements.first().zip(statements.last()).map_or_else(
         || Span::new(Position::NONE, Position::NONE),

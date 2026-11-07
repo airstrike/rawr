@@ -10,12 +10,11 @@ use crate::ast::{
     Ident, OpAssignment, RangeCase, ScriptFuncDef, Stmt, StmtBlock, StmtBlockContainer,
     SwitchCasesCollection, NOMINAL_MATCH_SENTINEL,
 };
-use crate::engine::{Precedence, OP_CONTAINS, OP_NOT};
+use crate::engine::{Precedence, OP_CONTAINS};
 use crate::eval::{Caches, GlobalRuntimeState};
 use crate::func::{hashing::get_hasher, StraightHashMap};
 use crate::tokenizer::{
-    is_reserved_keyword_or_symbol, is_valid_function_name, is_valid_identifier, Token, TokenStream,
-    TokenizerControl,
+    is_valid_function_name, is_valid_identifier, Token, TokenStream, TokenizerControl,
 };
 use crate::types::dynamic::{AccessMode, Union};
 use crate::{
@@ -290,7 +289,6 @@ impl Expr {
             Self::FloatConstant(..) => "a floating-point number",
             Self::CharConstant(..) => "a character",
             Self::StringConstant(..) => "a string",
-            Self::InterpolatedString(..) => "a string",
             Self::Array(..) => "an array",
             Self::Map(..) => "an object map",
             _ => return Ok(self),
@@ -816,7 +814,7 @@ impl Engine {
                     .into_err(idx_expr.start_position())),
 
                     // lhs[string]
-                    Expr::StringConstant(..) | Expr::InterpolatedString(..) => Ok(()),
+                    Expr::StringConstant(..) => Ok(()),
 
                     // lhs[float]
                     Expr::FloatConstant(..) => Err(PERR::MalformedIndexExpr(
@@ -843,45 +841,43 @@ impl Engine {
                     _ => Ok(()),
                 },
 
-                Expr::IntegerConstant(..)
-                | Expr::Array(..)
-                | Expr::StringConstant(..)
-                | Expr::InterpolatedString(..) => match *idx_expr {
-                    // lhs[int]
-                    Expr::IntegerConstant(..) => Ok(()),
+                Expr::IntegerConstant(..) | Expr::Array(..) | Expr::StringConstant(..) => {
+                    match *idx_expr {
+                        // lhs[int]
+                        Expr::IntegerConstant(..) => Ok(()),
 
-                    // lhs[string]
-                    Expr::StringConstant(..) | Expr::InterpolatedString(..) => {
-                        Err(PERR::MalformedIndexExpr(
+                        // lhs[string]
+                        Expr::StringConstant(..) => Err(PERR::MalformedIndexExpr(
                             "Array, string or bit-field expects numeric index, not a string".into(),
                         )
-                        .into_err(idx_expr.start_position()))
-                    }
-                    // lhs[float]
-                    Expr::FloatConstant(..) => Err(PERR::MalformedIndexExpr(
-                        "Array, string or bit-field expects integer index, not a float".into(),
-                    )
-                    .into_err(idx_expr.start_position())),
-                    // lhs[char]
-                    Expr::CharConstant(..) => Err(PERR::MalformedIndexExpr(
-                        "Array, string or bit-field expects integer index, not a character".into(),
-                    )
-                    .into_err(idx_expr.start_position())),
-                    // lhs[()]
-                    Expr::Unit(..) => Err(PERR::MalformedIndexExpr(
-                        "Array, string or bit-field expects integer index, not ()".into(),
-                    )
-                    .into_err(idx_expr.start_position())),
-                    // lhs[??? && ???], lhs[??? || ???], lhs[true], lhs[false]
-                    Expr::And(..) | Expr::Or(..) | Expr::BoolConstant(..) => {
-                        Err(PERR::MalformedIndexExpr(
-                            "Array, string or bit-field expects integer index, not a boolean"
+                        .into_err(idx_expr.start_position())),
+                        // lhs[float]
+                        Expr::FloatConstant(..) => Err(PERR::MalformedIndexExpr(
+                            "Array, string or bit-field expects integer index, not a float".into(),
+                        )
+                        .into_err(idx_expr.start_position())),
+                        // lhs[char]
+                        Expr::CharConstant(..) => Err(PERR::MalformedIndexExpr(
+                            "Array, string or bit-field expects integer index, not a character"
                                 .into(),
                         )
-                        .into_err(idx_expr.start_position()))
+                        .into_err(idx_expr.start_position())),
+                        // lhs[()]
+                        Expr::Unit(..) => Err(PERR::MalformedIndexExpr(
+                            "Array, string or bit-field expects integer index, not ()".into(),
+                        )
+                        .into_err(idx_expr.start_position())),
+                        // lhs[??? && ???], lhs[??? || ???], lhs[true], lhs[false]
+                        Expr::And(..) | Expr::Or(..) | Expr::BoolConstant(..) => {
+                            Err(PERR::MalformedIndexExpr(
+                                "Array, string or bit-field expects integer index, not a boolean"
+                                    .into(),
+                            )
+                            .into_err(idx_expr.start_position()))
+                        }
+                        _ => Ok(()),
                     }
-                    _ => Ok(()),
-                },
+                }
                 _ => Ok(()),
             }
         }
@@ -900,17 +896,13 @@ impl Engine {
                 // Any more indexing following?
                 match state.input.peek().unwrap() {
                     // If another indexing level, right-bind it
-                    (Token::LeftBracket | Token::QuestionBracket, ..) => {
-                        let (token, pos) = state.input.next().unwrap();
+                    (Token::LeftBracket, ..) => {
+                        let (_, pos) = state.input.next().unwrap();
                         let prev_pos = settings.pos;
                         settings.pos = pos;
                         let settings = settings.level_up()?;
                         // Recursively parse the indexing chain, right-binding each
-                        let options = match token {
-                            Token::LeftBracket => ASTFlags::empty(),
-                            Token::QuestionBracket => ASTFlags::NEGATED,
-                            _ => unreachable!("`[` or `?[`"),
-                        };
+                        let options = ASTFlags::empty();
                         let idx_expr =
                             self.parse_index_chain(state, settings, idx_expr, options, false)?;
                         // Indexing binds to right
@@ -1042,9 +1034,6 @@ impl Engine {
                         return Err(PERR::DuplicatedProperty(s.to_string()).into_err(pos));
                     }
                     (*s, pos)
-                }
-                (Token::InterpolatedString(..), pos) => {
-                    return Err(PERR::PropertyExpected.into_err(pos))
                 }
                 (Token::Reserved(s), pos) if is_valid_identifier(&s) => {
                     return Err(PERR::Reserved(s.to_string()).into_err(pos));
@@ -1593,84 +1582,11 @@ impl Engine {
                 self.parse_anon_fn(state, settings, false)?
             }
 
-            // Interpolated string
-            Token::InterpolatedString(..) => {
-                let mut segments = ThinVec::new();
-                let settings = settings.level_up()?;
-
-                match state.input.next().unwrap() {
-                    (Token::InterpolatedString(s), ..) if s.is_empty() => (),
-                    (Token::InterpolatedString(s), pos) => {
-                        segments.push(Expr::StringConstant(self.get_interned_string(*s), pos))
-                    }
-                    token => {
-                        unreachable!("Token::InterpolatedString expected but gets {:?}", token)
-                    }
-                }
-
-                loop {
-                    let expr = match self.parse_block(state, settings, false)? {
-                        block @ Stmt::Block(..) => Expr::Stmt(Box::new(block.into())),
-                        stmt => unreachable!("Stmt::Block expected but gets {:?}", stmt),
-                    };
-                    match expr {
-                        Expr::StringConstant(s, ..) if s.is_empty() => (),
-                        _ => segments.push(expr),
-                    }
-
-                    // Make sure to parse the following as text
-                    state.tokenizer_control.borrow_mut().is_within_text = true;
-
-                    match state.input.next().unwrap() {
-                        (Token::StringConstant(s), pos) => {
-                            if !s.is_empty() {
-                                segments
-                                    .push(Expr::StringConstant(self.get_interned_string(*s), pos));
-                            }
-                            // End the interpolated string if it is terminated by a back-tick.
-                            break;
-                        }
-                        (Token::InterpolatedString(s), pos) => {
-                            if !s.is_empty() {
-                                segments
-                                    .push(Expr::StringConstant(self.get_interned_string(*s), pos));
-                            }
-                        }
-                        (Token::LexError(err), pos) => match *err {
-                            LexError::UnterminatedString | LexError::StringTooLong(_) => {
-                                return Err(err.into_err(pos))
-                            }
-                            _ => unreachable!("improper lex error: {:?}", err),
-                        },
-                        (token, ..) => unreachable!(
-                            "string within an interpolated string literal expected but gets {:?}",
-                            token
-                        ),
-                    }
-                }
-
-                if segments.is_empty() {
-                    Expr::StringConstant(self.get_interned_string(""), settings.pos)
-                } else {
-                    segments.shrink_to_fit();
-                    Expr::InterpolatedString(segments, settings.pos)
-                }
-            }
-
             // Array literal
             Token::LeftBracket => self.parse_array_literal(state, settings.level_up()?)?,
 
             // Map literal
             Token::MapStart => self.parse_map_literal(state, settings.level_up()?)?,
-
-            // Custom syntax.
-            Token::Custom(key) | Token::Reserved(key) | Token::Identifier(key)
-                if self.custom_syntax.contains_key(&**key) =>
-            {
-                let (key, syntax) = self.custom_syntax.get_key_value(&**key).unwrap();
-                let _ = state.input.next().unwrap();
-                self.parse_custom_syntax(state, settings.level_up()?, key, syntax)?
-            }
 
             // Identifier
             Token::Identifier(..) => {
@@ -1749,26 +1665,12 @@ impl Engine {
 
             // Reserved keyword or symbol
             Token::Reserved(..) => {
-                let ns = crate::ast::Namespace::default();
-
                 let s = match state.input.next().unwrap() {
                     (Token::Reserved(s), ..) => s,
                     token => unreachable!("Token::Reserved expected but gets {:?}", token),
                 };
 
-                match state.input.peek().unwrap().0 {
-                    // Function call is allowed to have reserved keyword
-                    Token::LeftParen | Token::Bang | Token::Unit
-                        if is_reserved_keyword_or_symbol(&s).1 =>
-                    {
-                        Expr::Variable(
-                            (None, self.get_interned_string(*s), ns, 0).into(),
-                            None,
-                            settings.pos,
-                        )
-                    }
-                    _ => return Err(PERR::Reserved(s.to_string()).into_err(settings.pos)),
-                }
+                return Err(PERR::Reserved(s.to_string()).into_err(settings.pos));
             }
 
             Token::LexError(..) => match state.input.next().unwrap() {
@@ -1877,35 +1779,25 @@ impl Engine {
                     Expr::Variable((None, var_name, namespace, 0).into(), None, pos2)
                 }
                 // Indexing
-                (expr, token @ (Token::LeftBracket | Token::QuestionBracket)) => {
-                    let opt = match token {
-                        Token::LeftBracket => ASTFlags::empty(),
-                        Token::QuestionBracket => ASTFlags::NEGATED,
-                        _ => unreachable!("`[` or `?[`"),
-                    };
+                (expr, Token::LeftBracket) => {
                     let settings = settings.level_up()?;
-                    self.parse_index_chain(state, settings, expr, opt, true)?
+                    self.parse_index_chain(state, settings, expr, ASTFlags::empty(), true)?
                 }
                 // Property access
-                (expr, op @ (Token::Period | Token::Elvis)) => {
+                (expr, Token::Period) => {
                     // Expression after dot must start with an identifier
                     match state.input.peek().unwrap() {
                         (Token::Identifier(..), ..) => {
                             // Prevents capturing of the object properties as vars: xxx.<var>
                             state.allow_capture = false;
                         }
-                        (Token::Reserved(s), ..) if is_reserved_keyword_or_symbol(s).2 => (),
                         (Token::Reserved(s), pos) => {
                             return Err(PERR::Reserved(s.to_string()).into_err(*pos))
                         }
                         (.., pos) => return Err(PERR::PropertyExpected.into_err(*pos)),
                     }
 
-                    let op_flags = match op {
-                        Token::Period => ASTFlags::empty(),
-                        Token::Elvis => ASTFlags::NEGATED,
-                        _ => unreachable!("`.` or `?.`"),
-                    };
+                    let op_flags = ASTFlags::empty();
                     let options = ChainingFlags::PROPERTY | ChainingFlags::DISALLOW_NAMESPACES;
                     let rhs = self.parse_primary(state, settings.level_up()?, options)?;
 
@@ -2151,8 +2043,8 @@ impl Engine {
             ref expr if expr.is_constant() => {
                 Err(PERR::AssignmentToConstant(String::new()).into_err(lhs.start_position()))
             }
-            // ??? && ??? = rhs, ??? || ??? = rhs, xxx ?? xxx = rhs
-            Expr::And(..) | Expr::Or(..) | Expr::Coalesce(..) if !op_info.is_op_assignment() => {
+            // ??? && ??? = rhs, ??? || ??? = rhs
+            Expr::And(..) | Expr::Or(..) if !op_info.is_op_assignment() => {
                 Err(LexError::ImproperSymbol(
                     Token::Equals.literal_syntax().into(),
                     "Possibly a typo of '=='?".into(),
@@ -2197,20 +2089,6 @@ impl Engine {
             )),
             // lhs.nnn::func(...) - syntax error
             (.., Expr::FnCall(f, ..)) if f.is_qualified() => unreachable!("lhs.ns::func()"),
-            // lhs.Fn() or lhs.eval()
-            (.., Expr::FnCall(f, func_pos))
-                if f.args.is_empty()
-                    && matches!(
-                        &*f.name,
-                        crate::engine::KEYWORD_FN_PTR | crate::engine::KEYWORD_EVAL
-                    ) =>
-            {
-                let err_msg = format!(
-                    "'{}' should not be called in method style. Try {}(...);",
-                    f.name, f.name
-                );
-                Err(LexError::ImproperSymbol(f.name.to_string(), err_msg).into_err(func_pos))
-            }
             // lhs.func!(...)
             (.., Expr::FnCall(f, func_pos)) if f.capture_parent_scope => {
                 Err(PERR::MalformedCapture(
@@ -2322,11 +2200,6 @@ impl Engine {
             }
 
             let precedence = match current_op {
-                Token::Custom(c) => self
-                    .custom_keywords
-                    .get(&**c)
-                    .copied()
-                    .ok_or_else(|| PERR::Reserved(c.to_string()).into_err(*current_pos))?,
                 Token::Reserved(c) if !is_valid_identifier(c) => {
                     return Err(PERR::UnknownOperator(c.to_string()).into_err(*current_pos))
                 }
@@ -2347,16 +2220,6 @@ impl Engine {
 
             // Parse the RHS
             let rhs = match op_token {
-                Token::DoubleQuestion
-                    if matches!(
-                        state.input.peek().unwrap().0,
-                        Token::Break | Token::Continue | Token::Return | Token::Throw
-                    ) =>
-                {
-                    let stmt = self.parse_stmt(state, settings)?;
-                    let block: StmtBlock = stmt.into();
-                    Expr::Stmt(block.into())
-                }
                 // [xxx..] | (xxx..) | {xxx..} | xxx.., | xxx..; | xxx.. =>
                 // [xxx..=] | (xxx..=) | {xxx..=} | xxx..=, | xxx..=; | xxx..= =>
                 Token::ExclusiveRange | Token::InclusiveRange
@@ -2378,11 +2241,6 @@ impl Engine {
 
             let (next_op, next_pos) = state.input.peek().unwrap();
             let next_precedence = match next_op {
-                Token::Custom(c) => self
-                    .custom_keywords
-                    .get(&**c)
-                    .copied()
-                    .ok_or_else(|| PERR::Reserved(c.to_string()).into_err(*next_pos))?,
                 Token::Reserved(c) if !is_valid_identifier(c) => {
                     return Err(PERR::UnknownOperator(c.to_string()).into_err(*next_pos))
                 }
@@ -2457,26 +2315,7 @@ impl Engine {
                         Expr::Or(Box::new(vec![lhs, rhs].into()), pos)
                     }
                 }
-                Token::DoubleQuestion => {
-                    let mut lhs = op_base.args[0].take();
-                    let mut rhs = op_base.args[1].take();
-
-                    if let Expr::Coalesce(ref mut x, ..) = lhs {
-                        if let Expr::Coalesce(x2, ..) = rhs {
-                            x.extend(*x2);
-                        } else {
-                            x.push(rhs);
-                        }
-                        lhs
-                    } else if let Expr::Coalesce(ref mut x, ..) = rhs {
-                        x.insert(0, lhs);
-                        rhs.set_position(pos);
-                        rhs
-                    } else {
-                        Expr::Coalesce(Box::new(vec![lhs, rhs].into()), pos)
-                    }
-                }
-                Token::In | Token::NotIn => {
+                Token::In => {
                     // Swap the arguments
                     let (lhs, rhs) = op_base.args.split_first_mut().unwrap();
                     std::mem::swap(lhs, &mut rhs[0]);
@@ -2484,300 +2323,13 @@ impl Engine {
                     // Convert into a call to `contains`
                     op_base.hashes = FnCallHashes::from_hash(calc_fn_hash(None, OP_CONTAINS, 2));
                     op_base.name = self.get_interned_string(OP_CONTAINS);
-                    let fn_call = op_base.into_fn_call_expr(pos);
-
-                    if op_token == Token::In {
-                        fn_call
-                    } else {
-                        // Put a `!` call in front
-                        let not_base = FnCallExpr {
-                            namespace: crate::ast::Namespace::default(),
-                            name: self.get_interned_string(OP_NOT),
-                            hashes: FnCallHashes::from_native_only(calc_fn_hash(None, OP_NOT, 1)),
-                            args: IntoIterator::into_iter([fn_call]).collect(),
-                            op_token: Some(Token::Bang),
-                            capture_parent_scope: false,
-                        };
-                        not_base.into_fn_call_expr(pos)
-                    }
-                }
-                Token::ExclusiveRange | Token::InclusiveRange => op_base.into_fn_call_expr(pos),
-
-                Token::Custom(s) if self.custom_keywords.contains_key(&*s) => {
-                    op_base.hashes = if native_only {
-                        FnCallHashes::from_native_only(calc_fn_hash(None, &s, 2))
-                    } else {
-                        FnCallHashes::from_hash(calc_fn_hash(None, &s, 2))
-                    };
                     op_base.into_fn_call_expr(pos)
                 }
+                Token::ExclusiveRange | Token::InclusiveRange => op_base.into_fn_call_expr(pos),
 
                 _ => op_base.into_fn_call_expr(pos),
             };
         }
-    }
-
-    /// Parse a custom syntax.
-    fn parse_custom_syntax(
-        &self,
-        state: &mut ParseState,
-        settings: ParseSettings,
-        key: impl Into<ImmutableString>,
-        syntax: &crate::api::custom_syntax::CustomSyntax,
-    ) -> ParseResult<Expr> {
-        #[allow(clippy::wildcard_imports)]
-        use crate::api::custom_syntax::markers::*;
-
-        const KEYWORD_SEMICOLON: &str = Token::SemiColon.literal_syntax();
-        const KEYWORD_CLOSE_BRACE: &str = Token::RightBrace.literal_syntax();
-
-        let key_pos = settings.pos;
-
-        let mut inputs = FnArgsVec::new();
-        let mut segments = FnArgsVec::new();
-        let mut tokens = FnArgsVec::new();
-
-        // Adjust the variables stack
-        if syntax.scope_may_be_changed {
-            // Add a barrier variable to the stack so earlier variables will not be matched.
-            // Variable searches stop at the first barrier.
-            state.stack.push_constant_dynamic(
-                self.get_interned_string(SCOPE_SEARCH_BARRIER_MARKER),
-                Dynamic::UNIT,
-            );
-        }
-
-        let mut user_state = Dynamic::UNIT;
-        let parse_func = &*syntax.parse;
-        let mut required_token: ImmutableString = key.into();
-
-        tokens.push(required_token.clone());
-        segments.push(required_token.clone());
-
-        loop {
-            let (fwd_token, fwd_pos) = if syntax.use_look_ahead {
-                let (token, pos) = state.input.peek().unwrap();
-                (token.into(), *pos)
-            } else {
-                (SmartString::new_const(), settings.pos)
-            };
-
-            let settings = settings.level_up()?;
-
-            required_token = match parse_func(&segments, &fwd_token, &mut user_state) {
-                Ok(Some(seg))
-                    if seg.starts_with(CUSTOM_SYNTAX_MARKER_SYNTAX_VARIANT)
-                        && seg.len() > CUSTOM_SYNTAX_MARKER_SYNTAX_VARIANT.len() =>
-                {
-                    inputs.push(Expr::StringConstant(self.get_interned_string(seg), key_pos));
-                    break;
-                }
-                Ok(Some(seg)) if syntax.use_look_ahead && seg == CUSTOM_SYNTAX_MARKER_RAW => {
-                    // If using look-ahead, the next token is always a symbol
-                    self.get_interned_string(CUSTOM_SYNTAX_MARKER_TOKEN)
-                }
-                Ok(Some(seg)) => seg,
-                Ok(None) => break,
-                Err(err) => return Err(err.0.into_err(fwd_pos)),
-            };
-
-            match required_token.as_str() {
-                CUSTOM_SYNTAX_MARKER_RAW => {
-                    {
-                        state.tokenizer_control.borrow_mut().in_char_mode = true;
-                    }
-
-                    match state.input.next().unwrap() {
-                        (Token::EOF, _) => break,
-                        (Token::UnprocessedRawChar(ch), _) => {
-                            segments.push(ch.to_string().into());
-
-                            if tokens.last().unwrap() != CUSTOM_SYNTAX_MARKER_RAW {
-                                tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_RAW));
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                CUSTOM_SYNTAX_MARKER_IDENT => {
-                    let (name, pos) = parse_var_name(state.input)?;
-                    let name = self.get_interned_string(name);
-
-                    segments.push(name.clone());
-                    tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_IDENT));
-
-                    inputs.push(Expr::Variable(
-                        (None, name, crate::ast::Namespace::default(), 0).into(),
-                        None,
-                        pos,
-                    ));
-                }
-                CUSTOM_SYNTAX_MARKER_SYMBOL => {
-                    let (symbol, pos) = match state.input.next().unwrap() {
-                        // Standard symbol
-                        (token, pos) if token.is_standard_symbol() => {
-                            Ok((token.literal_syntax().into(), pos))
-                        }
-                        // Reserved symbol
-                        (Token::Reserved(s), pos) if !is_valid_identifier(s.as_str()) => {
-                            Ok((*s, pos))
-                        }
-                        // Bad symbol
-                        (Token::LexError(err), pos) => Err(err.into_err(pos)),
-                        // Not a symbol
-                        (.., pos) => Err(PERR::MissingSymbol(String::new()).into_err(pos)),
-                    }?;
-                    let symbol = self.get_interned_string(symbol);
-                    segments.push(symbol.clone());
-                    tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_SYMBOL));
-                    inputs.push(Expr::StringConstant(symbol, pos));
-                }
-                CUSTOM_SYNTAX_MARKER_TOKEN => {
-                    let (token, pos): (SmartString, _) = match state.input.next().unwrap() {
-                        // Bad token
-                        (Token::LexError(err), pos) => Err(err.into_err(pos)),
-                        // Change to text
-                        (token, pos) => Ok((token.into(), pos)),
-                    }?;
-                    let token = self.get_interned_string(token);
-                    segments.push(token.clone());
-                    tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_TOKEN));
-                    inputs.push(Expr::StringConstant(token, pos));
-                }
-                CUSTOM_SYNTAX_MARKER_EXPR => {
-                    inputs.push(self.parse_expr(state, settings)?);
-                    let keyword = self.get_interned_string(CUSTOM_SYNTAX_MARKER_EXPR);
-                    segments.push(keyword.clone());
-                    tokens.push(keyword);
-                }
-                CUSTOM_SYNTAX_MARKER_BLOCK => match self.parse_block(state, settings, false)? {
-                    block @ Stmt::Block(..) => {
-                        inputs.push(Expr::Stmt(Box::new(block.into())));
-                        let keyword = self.get_interned_string(CUSTOM_SYNTAX_MARKER_BLOCK);
-                        segments.push(keyword.clone());
-                        tokens.push(keyword);
-                    }
-                    stmt => unreachable!("Stmt::Block expected but gets {:?}", stmt),
-                },
-                CUSTOM_SYNTAX_MARKER_INNER => match self.parse_block(state, settings, true)? {
-                    block @ Stmt::Block(..) => {
-                        inputs.push(Expr::Stmt(Box::new(block.into())));
-                        let keyword = self.get_interned_string(CUSTOM_SYNTAX_MARKER_INNER);
-                        segments.push(keyword.clone());
-                        tokens.push(keyword);
-                    }
-                    stmt => unreachable!("Stmt::Block expected but gets {:?}", stmt),
-                },
-                CUSTOM_SYNTAX_MARKER_FUNC => {
-                    let skip = match state.input.peek().unwrap() {
-                        (Token::Or | Token::Pipe, _) => false,
-                        (Token::LeftBrace, _) => true,
-                        (_, pos) => {
-                            return Err(
-                                PERR::MissingSymbol("Expecting '{' or '|'".into()).into_err(*pos)
-                            )
-                        }
-                    };
-                    inputs.push(self.parse_anon_fn(state, settings, skip)?);
-                    let keyword = self.get_interned_string(CUSTOM_SYNTAX_MARKER_FUNC);
-                    segments.push(keyword.clone());
-                    tokens.push(keyword);
-                }
-                CUSTOM_SYNTAX_MARKER_BOOL => match state.input.next().unwrap() {
-                    (b @ (Token::True | Token::False), pos) => {
-                        inputs.push(Expr::BoolConstant(b == Token::True, pos));
-                        segments.push(self.get_interned_string(b.literal_syntax()));
-                        tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_BOOL));
-                    }
-                    (.., pos) => {
-                        return Err(
-                            PERR::MissingSymbol("Expecting 'true' or 'false'".into()).into_err(pos)
-                        )
-                    }
-                },
-                CUSTOM_SYNTAX_MARKER_INT => match state.input.next().unwrap() {
-                    (Token::IntegerConstant(i), pos) => {
-                        inputs.push(Expr::IntegerConstant(i, pos));
-                        segments.push(i.to_string().into());
-                        tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_INT));
-                    }
-                    (.., pos) => {
-                        return Err(
-                            PERR::MissingSymbol("Expecting an integer number".into()).into_err(pos)
-                        )
-                    }
-                },
-                CUSTOM_SYNTAX_MARKER_FLOAT => match state.input.next().unwrap() {
-                    (Token::FloatConstant(f), pos) => {
-                        inputs.push(Expr::FloatConstant(f.0, pos));
-                        segments.push(f.1.into());
-                        tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_FLOAT));
-                    }
-                    (.., pos) => {
-                        return Err(
-                            PERR::MissingSymbol("Expecting a floating-point number".into())
-                                .into_err(pos),
-                        )
-                    }
-                },
-                CUSTOM_SYNTAX_MARKER_STRING => match state.input.next().unwrap() {
-                    (Token::StringConstant(s), pos) => {
-                        let s = self.get_interned_string(*s);
-                        inputs.push(Expr::StringConstant(s.clone(), pos));
-                        segments.push(s);
-                        tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_STRING));
-                    }
-                    (.., pos) => {
-                        return Err(PERR::MissingSymbol("Expecting a string".into()).into_err(pos))
-                    }
-                },
-                s => match state.input.next().unwrap() {
-                    (Token::LexError(err), pos) => return Err(err.into_err(pos)),
-                    (Token::Identifier(t) | Token::Reserved(t) | Token::Custom(t), ..)
-                        if *t == s =>
-                    {
-                        segments.push(required_token.clone());
-                        tokens.push(required_token.clone());
-                    }
-                    (t, ..) if t.is_literal() && t.literal_syntax() == s => {
-                        segments.push(required_token.clone());
-                        tokens.push(required_token.clone());
-                    }
-                    (.., pos) => {
-                        return Err(PERR::MissingToken(
-                            s.into(),
-                            format!("for '{}' expression", segments[0]),
-                        )
-                        .into_err(pos))
-                    }
-                },
-            }
-        }
-
-        inputs.shrink_to_fit();
-        tokens.shrink_to_fit();
-
-        let self_terminated = matches!(
-            &*required_token,
-            // It is self-terminating if the last symbol is a block
-            CUSTOM_SYNTAX_MARKER_BLOCK |
-            // If the last symbol is `;` or `}`, it is self-terminating
-            KEYWORD_SEMICOLON | KEYWORD_CLOSE_BRACE
-        );
-        // It is self-terminating if the last symbol is a block
-        let self_terminated = required_token == CUSTOM_SYNTAX_MARKER_FUNC || self_terminated;
-
-        Ok(Expr::Custom(
-            crate::ast::CustomExpr {
-                inputs,
-                tokens,
-                state: user_state,
-                scope_may_be_changed: syntax.scope_may_be_changed,
-                self_terminated,
-            }
-            .into(),
-            key_pos,
-        ))
     }
 
     /// Parse an expression.
@@ -2948,7 +2500,6 @@ impl Engine {
         state: &mut ParseState,
         mut settings: ParseSettings,
         access: AccessMode,
-        is_export: bool,
     ) -> ParseResult<Stmt> {
         // let/const... (specified in `var_type`)
         settings.pos = state.input.next().unwrap().1;
@@ -3001,12 +2552,6 @@ impl Engine {
             Expr::Unit(Position::NONE)
         };
 
-        let export = if is_export {
-            ASTFlags::EXPORTED
-        } else {
-            ASTFlags::empty()
-        };
-
         let (existing, hit_barrier) = state.find_var(&name);
 
         let existing = if !hit_barrier && existing > 0 {
@@ -3029,19 +2574,13 @@ impl Engine {
             None
         };
 
-        if is_export {
-            state
-                .stack
-                .add_alias_by_index(state.stack.len() - 1, name.clone());
-        }
-
         let var_def = (Ident { name, pos }, expr, idx).into();
 
         Ok(match access {
             // let name = expr
-            AccessMode::ReadWrite => Stmt::Var(var_def, export, settings.pos),
+            AccessMode::ReadWrite => Stmt::Var(var_def, ASTFlags::empty(), settings.pos),
             // const name = { expr:constant }
-            AccessMode::ReadOnly => Stmt::Var(var_def, ASTFlags::CONSTANT | export, settings.pos),
+            AccessMode::ReadOnly => Stmt::Var(var_def, ASTFlags::CONSTANT, settings.pos),
         })
     }
 
@@ -3419,8 +2958,8 @@ impl Engine {
                 }
             }
 
-            Token::Let => self.parse_let(state, settings.level_up()?, ReadWrite, false),
-            Token::Const => self.parse_let(state, settings.level_up()?, ReadOnly, false),
+            Token::Let => self.parse_let(state, settings.level_up()?, ReadWrite),
+            Token::Const => self.parse_let(state, settings.level_up()?, ReadOnly),
 
             _ => self.parse_expr_stmt(state, settings.level_up()?),
         }
@@ -3473,7 +3012,6 @@ impl Engine {
         };
 
         let name = match token {
-            Token::Custom(s) if is_valid_function_name(&s) => *s,
             Token::Identifier(s) if is_valid_function_name(&s) => *s,
             Token::Reserved(s) => return Err(PERR::Reserved(s.to_string()).into_err(pos)),
             _ => return Err(PERR::FnMissingName.into_err(pos)),

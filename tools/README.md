@@ -6,4 +6,3 @@ This directory contains input files for various build tools required for buildin
 | File           | Build tool  | Description                                                        |
 | -------------- | :---------: | ------------------------------------------------------------------ |
 | `keywords.txt` | GNU `gperf` | Input file for the tokenizer &ndash; keywords recognition.         |
-| `reserved.txt` | GNU `gperf` | Input file for the tokenizer &ndash; reserved symbols recognition. |

@@ -35,10 +35,6 @@ pub struct Limits {
     ///
     /// Set to zero to effectively disable defining any function.
     pub num_functions: usize,
-    /// Maximum number of [modules][crate::Module] allowed to load.
-    ///
-    /// Set to zero to effectively disable loading any [module][crate::Module].
-    pub num_modules: usize,
     /// Maximum length of a [string][crate::ImmutableString].
     pub string_len: Option<NonZeroUsize>,
     /// Maximum length of an [array][crate::Array].
@@ -58,7 +54,6 @@ impl Limits {
             num_operations: None,
             num_variables: usize::MAX,
             num_functions: usize::MAX,
-            num_modules: usize::MAX,
             string_len: None,
             array_size: None,
             map_size: None,
@@ -141,18 +136,6 @@ impl Engine {
     #[must_use]
     pub const fn max_functions(&self) -> usize {
         self.limits.num_functions
-    }
-    /// Set the maximum number of imported [modules][crate::Module] allowed for a script.
-    #[inline(always)]
-    pub fn set_max_modules(&mut self, modules: usize) -> &mut Self {
-        self.limits.num_modules = modules;
-        self
-    }
-    /// The maximum number of imported [modules][crate::Module] allowed for a script.
-    #[inline(always)]
-    #[must_use]
-    pub const fn max_modules(&self) -> usize {
-        self.limits.num_modules
     }
     /// Set the depth limits for expressions (0 for unlimited).
     #[inline(always)]

@@ -18,7 +18,7 @@ impl<B> Candidate<super::Admitted, B> {
                 inner,
                 &protocol::Frame::new(Tag::RefreshPoll, Box::from(key))?,
             )?;
-            let response = super::receive_guarded(inner, super::IO_TIMEOUT)?;
+            let response = super::receive_reply(inner, None)?;
             refresh_status(&response, &key)
         })
         .or_else(|error| match error {
@@ -46,7 +46,7 @@ impl<B> Candidate<super::Admitted, B> {
                 inner,
                 &protocol::Frame::new(Tag::ExportState, Box::from(key))?,
             )?;
-            let response = super::receive_guarded(inner, super::IO_TIMEOUT)?;
+            let response = super::receive_reply(inner, None)?;
             exported_state(&response, &key)
         })
         .or_else(|error| match error {
@@ -75,7 +75,7 @@ impl<B> Candidate<super::Admitted, B> {
                 inner,
                 &protocol::Frame::new(Tag::SeedState, payload.into_boxed_slice())?,
             )?;
-            let response = super::receive_guarded(inner, super::IO_TIMEOUT)?;
+            let response = super::receive_reply(inner, None)?;
             flag_status(&response, Tag::StateSeeded, &key)
         })
     }
@@ -266,7 +266,7 @@ pub(super) fn retire<B>(inner: &mut super::Inner<B>, refresh: &mut bool) -> Resu
             inner,
             &protocol::Frame::new(Tag::Shutdown, Box::from(payload))?,
         )?;
-        let response = super::receive_guarded(inner, super::IO_TIMEOUT)?;
+        let response = super::receive_reply(inner, None)?;
         *refresh |= flag_status(&response, Tag::Exited, &key)?;
         Ok(())
     })

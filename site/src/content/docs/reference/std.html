@@ -87,7 +87,7 @@ println!("{angle:?} {wrapped:?}");</code></pre>
 <p><code>std::thread::spawn</code> runs its closure on a thread of its own, in parallel with the others, as Rust does. <code>join</code> waits for it and gives what the closure returned, or <code>Err</code> when it panicked. The program exits when <code>main</code> returns, ending the threads still running. The closure must be <code>Send</code> and <code>'static</code>: one that captures an <code>Rc</code> is rustc&rsquo;s E0277, and one that borrows a local without <code>move</code> is E0373.</p>
 <p><code>Arc&lt;Mutex&lt;T&gt;&gt;</code> shares a value between threads. An <code>Arc</code> or an <code>Rc</code> alone has no <code>DerefMut</code>, so assigning to what it points to is rustc&rsquo;s E0594.<code>lock().unwrap()</code> waits for the thread holding the lock, and the lock is held until the guard&rsquo;s statement or block ends. <code>std::sync::mpsc::channel()</code> gives a <code>Sender</code> and a <code>Receiver</code>. <code>send</code>, <code>clone</code>, <code>recv</code>, <code>iter</code> and <code>for v in rx</code> work, and the loop ends once every sender is gone.</p>
 <div class="block">
-  <pre><code data-lang="rust">use std::sync::{mpsc, Arc, Mutex};
+  <pre><code data-lang="rust" data-run="threads.rs" id="src-threads" data-where="server">use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
 let counter = Arc::new(Mutex::new(0));
@@ -104,19 +104,20 @@ drop(tx);
 let mut ids: Vec&lt;i32&gt; = rx.iter().collect();
 ids.sort();
 println!("{ids:?} {}", *counter.lock().unwrap()); // [0, 10, 20, 30] 4</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-threads" data-out="out-threads" aria-label="Run threads.rs on rawr's server" hidden></button><small>on rawr&rsquo;s server</small><b>rawr run threads.rs</b><span id="out-threads" aria-live="polite">[0, 10, 20, 30] 4</span></div>
 </div>
 <h2 id="time"><code>Duration</code>, <code>Instant</code> and <code>SystemTime</code></h2>
 <p><code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code> and <code>duration_since</code> work. So do <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>std::thread::sleep(duration)</code> pauses the program. In an iced app, these are <code>iced::time</code>&rsquo;s, which are std&rsquo;s own.</p>
 <p><code>SystemTime</code> is Rust&rsquo;s own, read from the system clock. <code>SystemTime::now</code>, <code>UNIX_EPOCH</code>, <code>duration_since</code>, <code>elapsed</code>, <code>checked_add</code> and <code>checked_sub</code> work, and a <code>SystemTimeError</code> has its <code>duration</code>.</p>
 <div class="block">
-  <pre><code data-lang="rust" data-run="time.rs" id="src-time">use std::time::{Duration, Instant};
+  <pre><code data-lang="rust" data-run="time.rs" id="src-time" data-where="server">use std::time::{Duration, Instant};
 
 let start = Instant::now();
 let step = Duration::from_millis(500) * 3;
 println!("{step:?}"); // 1.5s
 let spent = start.elapsed();
 println!("{}", spent &lt; step);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-time" data-out="out-time" aria-label="Run time.rs" hidden></button><b>rawr run time.rs</b><span id="out-time" aria-live="polite">1.5s
+  <div class="run"><button type="button" class="runbtn" data-source="src-time" data-out="out-time" aria-label="Run time.rs on rawr's server" hidden></button><small>on rawr&rsquo;s server</small><b>rawr run time.rs</b><span id="out-time" aria-live="polite">1.5s
 true</span></div>
 </div>
 <h2 id="futures">Futures</h2>

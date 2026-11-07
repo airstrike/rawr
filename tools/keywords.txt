@@ -46,9 +46,6 @@ struct keyword;
 _,          Token::Underscore
 ",",        Token::Comma
 .,          Token::Period
-?.,         Token::Elvis
-??,         Token::DoubleQuestion
-?[,         Token::QuestionBracket
 ..,         Token::ExclusiveRange
 ..=,        Token::InclusiveRange
 "#{",       Token::MapStart
@@ -71,7 +68,6 @@ while,      Token::While
 loop,       Token::Loop
 for,        Token::For
 in,         Token::In
-!in,        Token::NotIn
 <,          Token::LessThan
 >,          Token::GreaterThan
 <=,         Token::LessThanEqualsTo

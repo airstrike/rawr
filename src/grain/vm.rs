@@ -3,7 +3,6 @@ use core::mem;
 use crate::engine::{FN_IDX_GET, FN_IDX_SET};
 use crate::eval::calc_data_sizes;
 use crate::func::{get_builtin_binary_op_fn, get_builtin_op_assignment_fn};
-use crate::packages::string_basic::print_with_func;
 use crate::types::dynamic::DynamicWriteLock;
 use crate::types::fn_ptr::FnPtrType;
 // `Variant` is only re-exported from the crate root under `internals`, so it
@@ -14,9 +13,7 @@ use crate::{
     eval::Caches, eval::GlobalRuntimeState, CallFnOptions, Dynamic, Engine, EvalAltResult,
     EvalContext, Scope,
 };
-use crate::{
-    Array, FnPtr, ImmutableString, Map, NativeCallContext, Position, ThinVec, FUNC_TO_STRING, INT,
-};
+use crate::{Array, FnPtr, Map, NativeCallContext, Position, ThinVec, INT};
 
 mod callback;
 
@@ -246,10 +243,6 @@ pub struct Vm<'e> {
     /// escaping error drops whatever its loops were holding without the
     /// compiler emitting anything.
     iterators: Vec<Iteration>,
-    /// One entry per `try` region currently armed or catching. Frame-floored
-    /// the same way the iterators are, so an error in a called function can
-    /// never find its caller's handler and jump into another chunk.
-    handlers: Vec<Handler>,
     /// The running data-size total of each literal currently being built,
     /// innermost last.
     ///
@@ -314,23 +307,6 @@ fn unbind_this(receiver: &mut Dynamic, taken: Option<Dynamic>, write_back: bool)
     }
 }
 
-/// A `try` region.
-struct Handler {
-    target: usize,
-    catch_var: Option<u32>,
-    /// Where the three stacks were when the region was entered. An error can
-    /// be raised at any depth of all three, and the catch block has to begin
-    /// where the `try` did.
-    operands: usize,
-    scope_len: usize,
-    iters: usize,
-    /// Set once the catch block is running, holding the error it caught. That
-    /// is what a bare `throw;` in the catch block re-raises, and its presence
-    /// is what tells an escaping error it is leaving a catch rather than
-    /// entering one.
-    caught: Option<Box<EvalAltResult>>,
-}
-
 impl<'e> Vm<'e> {
     /// A VM that dispatches through `engine`.
     #[must_use]
@@ -341,7 +317,6 @@ impl<'e> Vm<'e> {
             caches: Caches::new(),
             stack: Vec::new(),
             iterators: Vec::new(),
-            handlers: Vec::new(),
             sizes: Vec::new(),
             unwind_floor: 0,
             this: None,
@@ -377,7 +352,6 @@ impl<'e> Vm<'e> {
             caches: Caches::new(),
             stack: Vec::new(),
             iterators: Vec::new(),
-            handlers: Vec::new(),
             sizes: Vec::new(),
             unwind_floor: 0,
             // A crossing carries no receiver: rawr binds one only where it
@@ -689,16 +663,8 @@ impl<'e> Vm<'e> {
         if let Some(wrappers) = wrappers {
             self.global.lib.push(wrappers);
         }
-        let orig_resolver = mem::replace(
-            &mut self.global.embedded_module_resolver,
-            program.resolver().cloned(),
-        );
-
         let result = f(self);
 
-        {
-            self.global.embedded_module_resolver = orig_resolver;
-        }
         self.global.lib.truncate(orig_lib_len);
         self.global.source = orig_source;
 
@@ -1838,64 +1804,6 @@ impl<'e> Vm<'e> {
         Ok(())
     }
 
-    /// Concatenate the segments of an interpolated string, reproducing
-    /// `eval/expr.rs:280-304`.
-    ///
-    /// Every step of it is load-bearing. A **string** segment is written
-    /// straight out and never reaches dispatch, so a host's `to_string` for
-    /// strings is not consulted here even though `+` would consult it.
-    /// Anything else goes through rawr's own rendering, which calls **native**
-    /// functions only — a script `fn to_string` is invisible to it — and
-    /// substitutes the mapped type name when the call returns a non-string.
-    /// The size limit is checked after every segment against the running
-    /// total, not once at the end.
-    #[inline(never)]
-    fn append_segment(
-        &mut self,
-        segment: Dynamic,
-        pos: Position,
-    ) -> Result<(), Box<EvalAltResult>> {
-        use core::fmt::Write;
-
-        let mut item = segment.flatten();
-        let mut rendered = None;
-
-        // A string is written straight out and never reaches dispatch, so a
-        // host's `to_string` for strings is not consulted here even though `+`
-        // would consult it.
-        if !item.is_string() {
-            let context = native_context(self.engine, FUNC_TO_STRING, None, &self.global, pos);
-            rendered = Some(print_with_func(FUNC_TO_STRING, &context, &mut item));
-        }
-
-        let mut buffer = self
-            .stack
-            .last_mut()
-            .and_then(|value| value.write_lock::<ImmutableString>())
-            .ok_or_else(|| malformed("interpolation lost its buffer".into()))?;
-
-        // `make_mut` is in place while the buffer is uniquely held, which on
-        // the operand stack it is — so this is one growing allocation rather
-        // than one per segment.
-        match rendered {
-            Some(text) => write!(buffer.make_mut(), "{text}"),
-            None => write!(buffer.make_mut(), "{item}"),
-        }
-        .expect("writing to a string cannot fail");
-        let len = buffer.len();
-        drop(buffer);
-
-        // After every segment, against the running total — a script must not
-        // be able to build a string past `max_string_size` and hand it over
-        // whole.
-        self.engine.throw_on_size((0, 0, len)).map_err(|mut err| {
-            if err.position().is_none() {
-                err.set_position(pos);
-            }
-            err
-        })
-    }
-
     /// Start iterating a value, the way rawr's `for` does
     /// (`eval/stmt.rs:680-703`).
     ///
@@ -2312,40 +2220,14 @@ impl<'e> Vm<'e> {
         reached: &mut usize,
     ) -> VmResult {
         let iter_base = self.iterators.len();
-        let handler_base = self.handlers.len();
         let size_base = self.sizes.len();
         // Each frame's floor is its own. A checkpoint inside a function this
         // one calls must not become what this one unwinds to.
         let outer_floor = mem::replace(&mut self.unwind_floor, base);
 
-        // The dispatch loop uses `?` throughout, so an error leaves it rather
-        // than being examined inside it. Catching therefore happens out here:
-        // the loop stops, a handler this frame armed gets the error, and the
-        // loop restarts at the catch block. `run_frame` keeps `pc` in a
-        // register and the fault address arrives through `reached`, which is
-        // written every instruction anyway, so none of this costs the common
-        // path anything.
-        let mut start = chunk.entry() as usize;
-        let result = loop {
-            match self.run_frame(program, scope, base, reached, start) {
-                Ok(value) => break Ok(value),
-                Err(err) => match self.catch(program, err, handler_base, scope) {
-                    // Metered like a backward jump, and for the same reason:
-                    // a catch block that sits before the throw is a cycle the
-                    // dispatch loop never sees as one, because control got
-                    // there through the error path rather than through a jump.
-                    Ok(resume) => {
-                        self.engine
-                            .track_operation(&mut self.global, program.position(resume))?;
-                        start = resume;
-                    }
-                    Err(err) => break Err(err),
-                },
-            }
-        };
+        let result = self.run_frame(program, scope, base, reached, chunk.entry() as usize);
 
         self.iterators.truncate(iter_base);
-        self.handlers.truncate(handler_base);
         self.sizes.truncate(size_base);
 
         if result.is_err() {
@@ -2472,126 +2354,10 @@ impl<'e> Vm<'e> {
         }
     }
 
-    /// Hand an error to the innermost handler this frame armed, if any.
+    /// The dispatch loop, from `start`: the chunk's entry.
     ///
-    /// `Ok` is the address the catch block starts at. `Err` means nothing here
-    /// wanted it and it should keep going up.
-    ///
-    /// Kept out of line for the reason [`Vm::call_compiled`] is: it sits on
-    /// the dispatch loop's error edge, and letting it inline there costs every
-    /// instruction that never fails.
-    #[inline(never)]
-    fn catch(
-        &mut self,
-        program: &Program,
-        err: Box<EvalAltResult>,
-        handler_base: usize,
-        scope: &mut Scope,
-    ) -> Result<usize, Box<EvalAltResult>> {
-        // Only handlers this frame armed. A callee must never resume into its
-        // caller's catch block — that is a jump into another chunk, which the
-        // verifier forbids and nothing would catch at run time. The callee's
-        // error propagates normally instead, and `ErrorInFunctionCall` is
-        // catchable, so the caller's own frame still sees it.
-        // Walking outwards, because leaving one region can land the error in
-        // the next: `try { try { throw 1 } catch { throw; } } catch (e) { .. }`
-        // re-raises from the inner catch and the outer `try` still has to see
-        // it.
-        let mut err = err;
-        let handler = loop {
-            if self.handlers.len() <= handler_base {
-                return Err(err);
-            }
-            let handler = self.handlers.last_mut().expect("checked");
-
-            // Leaving a catch block rather than entering one. A bare `throw;`
-            // there — an `ErrorRuntime` carrying unit — means "re-raise what
-            // was caught, from here" (`eval/stmt.rs:866`).
-            let Some(original) = handler.caught.take() else {
-                break handler;
-            };
-            self.handlers.pop();
-            let rethrown =
-                matches!(&*err, EvalAltResult::ErrorRuntime(value, ..) if value.is_unit());
-            if rethrown {
-                let pos = err.position();
-                err = original;
-                err.set_position(pos);
-            }
-        };
-
-        // `return`, `break`, `continue`, `exit` and the system exceptions
-        // unwind as errors and are not exceptions a script may catch.
-        if !err.is_catchable() {
-            return Err(err);
-        }
-
-        let (target, catch_var) = (handler.target, handler.catch_var);
-        let (operands, scope_len, iters) = (handler.operands, handler.scope_len, handler.iters);
-
-        let mut err = err;
-        let value = self.catch_value(&mut err, catch_var.is_some());
-
-        // Back to where the `try` began, at all three depths.
-        self.stack.truncate(operands);
-        self.iterators.truncate(iters);
-        scope.rewind(scope_len);
-
-        if let Some(index) = catch_var {
-            let name = program
-                .name(index)
-                .ok_or_else(|| malformed(format!("no name {index}")))?;
-            if scope.len() >= self.engine.max_variables() {
-                return Err(Box::new(EvalAltResult::ErrorTooManyVariables(
-                    program.position(target),
-                )));
-            }
-            scope.push_dynamic(name, value);
-        }
-
-        self.handlers.last_mut().expect("checked").caught = Some(err);
-        Ok(target)
-    }
-
-    /// What the catch variable is bound to (`eval/stmt.rs:809-845`).
-    ///
-    /// Three shapes: nothing at all without a variable, the raw thrown value
-    /// for a `throw`, and a map of the error's parts for anything else. The
-    /// unwrapping matters — a `throw` inside a called function arrives wrapped
-    /// in `ErrorInFunctionCall`, and rawr still binds the bare value.
-    fn catch_value(&self, err: &mut Box<EvalAltResult>, wanted: bool) -> Dynamic {
-        if !wanted {
-            return Dynamic::UNIT;
-        }
-        if let EvalAltResult::ErrorRuntime(value, ..) = err.unwrap_inner() {
-            return value.clone();
-        }
-
-        let mut map = Map::new();
-        // Read *and cleared*, as rawr does, so the message below carries no
-        // trailing position and a re-raise starts from the catch site.
-        let pos = err.take_position();
-
-        map.insert("message".into(), err.to_string().into());
-        if let Some(source) = &self.global.source {
-            map.insert("source".into(), source.into());
-        }
-        if !pos.is_none() {
-            let line = pos.line().unwrap_or(0) as INT;
-            map.insert("line".into(), line.into());
-            let column = pos.position().unwrap_or(0) as INT;
-            map.insert("position".into(), column.into());
-        }
-        err.dump_fields(&mut map);
-        map.into()
-    }
-
-    /// The dispatch loop. `start` is the chunk's entry, or a catch block's
-    /// address when [`Vm::execute`] resumes one after an error.
-    ///
-    /// Inlined into its one caller: splitting the loop out so errors could be
-    /// caught outside it cost 1.55x to 1.40x on the tight-loop benchmark until
-    /// this was here.
+    /// Inlined into its one caller: a dispatch loop split out of
+    /// [`Vm::execute`] costs the tight-loop benchmark without it.
     #[inline(always)]
     fn run_frame(
         &mut self,
@@ -2923,17 +2689,10 @@ impl<'e> Vm<'e> {
                         .ok_or_else(|| malformed(format!("no residual {index}")))?;
                     let rewind_scope = tag == code::tag::EVAL_AST;
 
-                    // Straight to the walker's own entry points rather than
-                    // through `EvalContext::eval_expression_tree_raw`, which
-                    // is the same two calls behind a shim that only exists
-                    // under `custom_syntax`. Total language coverage rests on
-                    // this, so it must not depend on a feature.
-                    //
                     // The frame's receiver goes with it, by reference. A body
-                    // that uses `this` can still hold a fragment — `this?.x`,
-                    // or a `this` body containing an `import` — and the walker
-                    // has to read and write the same receiver the surrounding
-                    // instructions do. The engine is copied out first so the
+                    // that uses `this` can still hold a fragment, and the
+                    // walker has to read and write the same receiver the
+                    // surrounding instructions do. The engine is copied out first so the
                     // four borrows below are of disjoint fields.
                     let engine = self.engine;
                     let value = match expr {
@@ -3220,27 +2979,6 @@ impl<'e> Vm<'e> {
                     );
                 }
 
-                code::tag::IS_SHARED => {
-                    let value = self.pop()?;
-                    self.stack.push(value.is_shared().into());
-                }
-
-                code::tag::MAKE_FN_PTR => {
-                    let name = self.pop()?;
-                    let name = name
-                        .into_immutable_string()
-                        .map_err(|actual| self.mismatch::<ImmutableString>(actual, pos()))?;
-                    // Validates that the name is an identifier, as rawr's own
-                    // `Fn(..)` does (`func/call.rs:1215`).
-                    let pointer = FnPtr::new(name).map_err(|mut err| {
-                        if err.position().is_none() {
-                            err.set_position(pos());
-                        }
-                        err
-                    })?;
-                    self.stack.push(pointer.into());
-                }
-
                 code::tag::CURRY => {
                     let argc = code[pc + 1] as usize;
                     let at = self
@@ -3279,27 +3017,6 @@ impl<'e> Vm<'e> {
                     self.stack.push(value);
                 }
 
-                code::tag::INTERPOLATE_START => {
-                    self.stack.push(self.engine.const_empty_string().into());
-                }
-
-                code::tag::INTERPOLATE_APPEND => {
-                    let segment = self.pop()?;
-                    self.append_segment(segment, pos())?;
-                }
-
-                code::tag::INTERPOLATE_END => {
-                    let buffer = self.pop()?;
-                    let text = buffer
-                        .into_immutable_string()
-                        .map_err(|_| malformed("interpolation lost its buffer".into()))?;
-                    // Interned, as rawr does: the same rendered string in ten
-                    // places is one allocation, which is the whole reason the
-                    // engine keeps an interner.
-                    let value = self.engine.get_interned_string(text.as_str());
-                    self.stack.push(value.into());
-                }
-
                 code::tag::CHAIN => {
                     let index = u32::from(small(1)?);
                     let chain = program
@@ -3324,27 +3041,6 @@ impl<'e> Vm<'e> {
                 code::tag::TICK => self.engine.track_operation(&mut self.global, pos())?,
 
                 code::tag::CHECKPOINT => self.unwind_floor = scope.len(),
-
-                code::tag::PUSH_HANDLER | code::tag::PUSH_HANDLER_VAR => {
-                    let target = wide(1)? as usize;
-                    let catch_var = if tag == code::tag::PUSH_HANDLER_VAR {
-                        Some(u32::from(small(5)?))
-                    } else {
-                        None
-                    };
-                    self.handlers.push(Handler {
-                        target,
-                        catch_var,
-                        operands: self.stack.len(),
-                        scope_len: scope.len(),
-                        iters: self.iterators.len(),
-                        caught: None,
-                    });
-                }
-
-                code::tag::POP_HANDLER => {
-                    self.handlers.pop();
-                }
 
                 code::tag::ITER_INIT => {
                     let iterable = self.pop()?;
@@ -3521,7 +3217,6 @@ mod tests {
                 switches: Vec::new(),
                 lib: None,
                 has_compiler_support: false,
-                resolver: None,
                 source: None,
             },
         )

@@ -381,7 +381,7 @@ fn sandbox(
 ) {
     let deadline = Mutex::new(deadline);
     let depth = engine.max_call_levels().min(limits.call_depth);
-    let (output, print, debug, progress) = (sink.clone(), sink.clone(), sink.clone(), sink.clone());
+    let (output, progress) = (sink.clone(), sink.clone());
     engine
         .set_max_operations(limits.operations)
         .set_max_call_levels(depth)
@@ -404,25 +404,7 @@ fn sandbox(
                 Stream::Stdout
             };
             output.lock().unwrap().push(stream, text);
-        })
-        // Untyped `fn f(x) { .. }` bodies reach the base language's
-        // `print` and `debug`: their text goes with the rest.
-        .on_print(move |text| {
-            print
-                .lock()
-                .unwrap()
-                .push(Stream::Stdout, &format!("{text}\n"))
-        })
-        .on_debug(move |text, _, _| {
-            debug
-                .lock()
-                .unwrap()
-                .push(Stream::Stderr, &format!("{text}\n"))
-        })
-        .set_module_resolver(rawr::module_resolvers::DummyModuleResolver::new());
-    for symbol in ["import", "eval"] {
-        engine.disable_symbol(symbol);
-    }
+        });
     let refuse = || Err::<(), Box<rawr::EvalAltResult>>("sleep is not available in ?play".into());
     engine
         .register_fn("sleep", move |_: rawr::INT| refuse())

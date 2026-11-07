@@ -1,30 +1,43 @@
 // Run buttons for the site's runnable snippets, on the landing page and in
 // the docs. Each snippet is editable in place. Its Run button sits in a
-// terminal strip and shows what the program printed on rawr's server. It
-// doesn't run the command the strip shows on your machine. Without JS the
-// code stays read-only, the buttons stay hidden and the strips keep their
-// static output.
+// terminal strip and shows what the program printed. Without JS the code
+// stays read-only, the buttons stay hidden and the strips keep their static
+// output.
 //
-// The site's own text goes to POST /play/run, which accepts only the exact
-// sources on the site's pages and caches their results. Edited text goes to
-// POST /play/render, the playground's endpoint, with the playground's checks:
-// its pass cookie or a Turnstile token, and its per-IP limits.
+// A snippet runs in the browser, through rawr-web, the playground's module,
+// which loads at the page's first run. A block marked `data-where="server"`
+// runs on rawr's server instead, for what a page's one thread can't do yet,
+// such as spawning a thread. The server also runs a snippet when rawr-web
+// doesn't load or stops.
+//
+// On the server, the site's own text goes to POST /play/run, which accepts
+// only the exact sources on the site's pages and caches their results. Edited
+// text goes to POST /play/render, the playground's endpoint, with the
+// playground's checks: its pass cookie or a Turnstile token, and its per-IP
+// limits.
 //
 // After a run the play icon becomes an ×, which clears the output. A Reset
 // button at the code's top-right shows while the code differs from the
 // original, and restores it. An edited snippet is highlighted again when it
 // loses focus, by the build's highlighter, loaded only then.
 
+/** rawr-web's API (web/src/lib.rs), as the playground uses it. */
+export interface Web {
+  run_text(code: string): string;
+}
+
 /** What the script touches, so a test can hand it a stand-in DOM. */
 export interface Env {
   document: Document;
   window: Window & { turnstile?: any };
   fetch: typeof fetch;
+  /** Imports rawr-web and initializes it. Without it every run goes to the server. */
+  web?: () => Promise<Web>;
 }
 
 const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
-export function setup({ document, window, fetch }: Env): void {
+export function setup({ document, window, fetch, web }: Env): void {
   const SVG = "http://www.w3.org/2000/svg";
   const icon = (cls: string, d: string) => {
     const svg = document.createElementNS(SVG, "svg");
@@ -99,6 +112,21 @@ export function setup({ document, window, fetch }: Env): void {
     return response;
   };
 
+  // rawr-web, loaded once for the page. A load that fails, or a run that
+  // traps, sends this run and later ones to the server.
+  let module: Promise<Web> | null = null;
+  let broken = !web;
+  const browser = async (code: string): Promise<any> => {
+    if (broken) return null;
+    try {
+      const m = await (module ??= web!());
+      return JSON.parse(m.run_text(code));
+    } catch {
+      broken = true;
+      return null;
+    }
+  };
+
   // Plain-text editing where the browser has it. Elsewhere a paste is
   // reduced to its text.
   const probe = document.createElement("div");
@@ -111,7 +139,8 @@ export function setup({ document, window, fetch }: Env): void {
     if (!out || !source) continue;
     const strip = out.closest(".run")!;
     const name = source.dataset.run || "this snippet";
-    const label = button.getAttribute("aria-label") || `Run ${name} on rawr's server`;
+    const onServer = source.dataset.where === "server";
+    const label = button.getAttribute("aria-label") || `Run ${name}`;
     const original = source.textContent ?? "";
     const originalHtml = source.innerHTML;
     const staticOut = [...out.childNodes].map((node) => node.cloneNode(true));
@@ -233,16 +262,26 @@ export function setup({ document, window, fetch }: Env): void {
       button.closest(".compare")?.querySelector<HTMLButtonElement>('.tabs button[data-to="0"]')?.click();
       const code = text();
       try {
-        const response = edited()
-          ? await render(code, strip)
-          : await fetch("/play/run", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ code }),
-            });
-        const type = response.headers.get("content-type") || "";
-        if (response.ok && type.startsWith("application/json")) {
-          const result = await response.json();
+        let result = onServer ? null : await browser(code);
+        if (!result) {
+          const response = edited()
+            ? await render(code, strip)
+            : await fetch("/play/run", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ code }),
+              });
+          const type = response.headers.get("content-type") || "";
+          if (response.ok && type.startsWith("application/json")) result = await response.json();
+          // 422 is a program that doesn't compile, and its text is rawr's report.
+          else if (response.status === 422) result = { kind: "error", text: await response.text() };
+          else result = { failed: (await response.text()).trim().slice(0, 2000) };
+        }
+        if (result.failed !== undefined) {
+          fail("The code could not run. " + result.failed);
+        } else if (result.kind === "error") {
+          fail((result.text ?? "").replace(/\n$/, ""));
+        } else {
           const lines = document.createDocumentFragment();
           // What an iced program drew, above what it printed.
           if (result.frame) {
@@ -264,8 +303,6 @@ export function setup({ document, window, fetch }: Env): void {
           if (last) last.textContent = (last.textContent ?? "").replace(/\n$/, "");
           if (result.status !== 0) add((last ? "\n" : "") + "exit status " + result.status, "exit");
           show(lines);
-        } else {
-          fail("The code could not run. " + (await response.text()).trim().slice(0, 2000));
         }
       } catch (error) {
         // fetch throws a TypeError when the network fails.

@@ -113,8 +113,6 @@ impl Engine {
         global.lib.push(ast.shared_lib().clone());
         global.lib.push(ast.shared_support().clone());
 
-        global.embedded_module_resolver.clone_from(&ast.resolver);
-
         let _ = self.eval_global_statements(global, caches, scope, ast.statements(), true)?;
 
         #[cfg(feature = "debugging")]

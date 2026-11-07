@@ -565,10 +565,6 @@ impl Builder {
                 self.sequence(items.iter_mut().collect())?;
                 Ok(Expr::Array(items, position))
             }
-            Expr::InterpolatedString(mut items, position) => {
-                self.sequence(items.iter_mut().collect())?;
-                Ok(Expr::InterpolatedString(items, position))
-            }
             Expr::Map(mut map, position) => {
                 self.sequence(map.0.iter_mut().map(|(_, value)| value).collect())?;
                 Ok(Expr::Map(map, position))
@@ -708,9 +704,7 @@ fn variable_at(name: &ImmutableString, position: Position) -> Expr {
 
 fn stmt_awaits(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::If(flow, _) | Stmt::While(flow, _) | Stmt::Do(flow, ..) | Stmt::TryCatch(flow, _) => {
-            flow_awaits(flow)
-        }
+        Stmt::If(flow, _) | Stmt::While(flow, _) => flow_awaits(flow),
         Stmt::For(for_loop, _) => flow_awaits(&for_loop.2),
         Stmt::Switch(switch, _) => {
             expr_awaits(&switch.0)
@@ -744,15 +738,12 @@ fn expr_awaits(expr: &Expr) -> bool {
             call.name == AWAIT || call.args.iter().any(expr_awaits)
         }
         Expr::Stmt(block) => block.iter().any(stmt_awaits),
-        Expr::InterpolatedString(items, _) | Expr::Array(items, _) => items.iter().any(expr_awaits),
+        Expr::Array(items, _) => items.iter().any(expr_awaits),
         Expr::Map(map, _) => map.0.iter().any(|(_, value)| expr_awaits(value)),
         Expr::Dot(binary, ..) | Expr::Index(binary, ..) => {
             expr_awaits(&binary.lhs) || expr_awaits(&binary.rhs)
         }
-        Expr::And(operands, _) | Expr::Or(operands, _) | Expr::Coalesce(operands, _) => {
-            operands.iter().any(expr_awaits)
-        }
-        Expr::Custom(custom, _) => custom.inputs.iter().any(expr_awaits),
+        Expr::And(operands, _) | Expr::Or(operands, _) => operands.iter().any(expr_awaits),
         _ => false,
     }
 }
@@ -766,7 +757,7 @@ fn forget_indices(stmt: &mut Stmt) {
             forget_expr(&mut var.1);
         }
         Stmt::Share(shared) => shared.iter_mut().for_each(|(_, index)| *index = None),
-        Stmt::If(flow, _) | Stmt::While(flow, _) | Stmt::Do(flow, ..) | Stmt::TryCatch(flow, _) => {
+        Stmt::If(flow, _) | Stmt::While(flow, _) => {
             forget_flow(flow);
         }
         Stmt::For(for_loop, _) => forget_flow(&mut for_loop.2),
@@ -807,7 +798,7 @@ fn forget_expr(expr: &mut Expr) {
             call.args.iter_mut().for_each(forget_expr)
         }
         Expr::Stmt(block) => block.statements_mut().iter_mut().for_each(forget_indices),
-        Expr::InterpolatedString(items, _) | Expr::Array(items, _) => {
+        Expr::Array(items, _) => {
             items.iter_mut().for_each(forget_expr);
         }
         Expr::Map(map, _) => map.0.iter_mut().for_each(|(_, value)| forget_expr(value)),
@@ -815,7 +806,7 @@ fn forget_expr(expr: &mut Expr) {
             forget_expr(&mut binary.lhs);
             forget_expr(&mut binary.rhs);
         }
-        Expr::And(operands, _) | Expr::Or(operands, _) | Expr::Coalesce(operands, _) => {
+        Expr::And(operands, _) | Expr::Or(operands, _) => {
             operands.iter_mut().for_each(forget_expr);
         }
         _ => {}

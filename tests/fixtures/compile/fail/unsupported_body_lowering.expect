@@ -1,5 +1,5 @@
 category=syntax error
-name=expected expression, found `do`
+name=expected expression, found reserved keyword `do`
 primary=1:20-22
 secondary=none
-message=expected expression, found `do` (line 1, position 20)
+message=expected expression, found reserved keyword `do` (line 1, position 20)

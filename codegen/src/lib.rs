@@ -5,12 +5,9 @@
 //! ```
 //! use rawr::{Engine, EvalAltResult, FLOAT};
 //! use rawr::plugin::*;
-//! use rawr::module_resolvers::*;
 //!
 //! #[export_module]
 //! mod advanced_math {
-//!     pub const MYSTIC_NUMBER: FLOAT = 42.0;
-//!
 //!     pub fn euclidean_distance(x1: FLOAT, y1: FLOAT, x2: FLOAT, y2: FLOAT) -> FLOAT {
 //!         ((y2 - y1).abs().powf(2.0) + (x2 -x1).abs().powf(2.0)).sqrt()
 //!     }
@@ -18,16 +15,9 @@
 //!
 //! # fn main() -> Result<(), Box<EvalAltResult>> {
 //! let mut engine = Engine::new();
-//! let m = exported_module!(advanced_math);
-//! let mut r = StaticModuleResolver::new();
-//! r.insert("Math::Advanced", m);
-//! engine.set_module_resolver(r);
+//! engine.register_global_module(exported_module!(advanced_math).into());
 //!
-//! assert_eq!(engine.eval::<FLOAT>(
-//!     r#"
-//!         import "Math::Advanced" as math;
-//!         math::euclidean_distance(0.0, 1.0, 0.0, math::MYSTIC_NUMBER)
-//!     "#)?, 41.0);
+//! assert_eq!(engine.eval::<FLOAT>("euclidean_distance(0.0, 1.0, 0.0, 42.0)")?, 41.0);
 //! #   Ok(())
 //! # }
 //! ```

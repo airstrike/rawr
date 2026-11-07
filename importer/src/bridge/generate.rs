@@ -68,7 +68,7 @@ use std::cell::RefCell;
 use __rawr_internal::{Dynamic, ImmutableString};
 
 #[derive(Clone, Copy)]
-struct Adapter { identity: [u8; 32], signature: [u8; 32], selector: [u8; 32], instance: [u8; 32], bound: bool, application: bool, root: &'static str, witness: u8, arguments: u32, invoke: Invoke }
+struct Adapter { identity: [u8; 32], signature: [u8; 32], selector: [u8; 32], instance: [u8; 32], item: &'static str, bound: bool, application: bool, root: &'static str, witness: u8, arguments: u32, invoke: Invoke }
 type Invoke = fn(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>;
 type Project = fn(
     Box<dyn Any>,
@@ -3598,10 +3598,10 @@ fn imported_runtime(
             // Each instance of a generic item has its own adapter, which
             // a call reaches by the key of its instance's types.
             if adapter.instance != [0; 32] {
-                builder.bind_imported_instance(adapter.selector, adapter.instance, move |call, values| runtime_invoke(adapter, call, values))?;
+                builder.bind_imported_instance(adapter.selector, adapter.instance, adapter.item, move |call, values| runtime_invoke(adapter, call, values))?;
             }
-            if builder.accepts_imported(&adapter.selector) {
-                builder.bind_imported(adapter.selector, move |call, values| runtime_invoke(adapter, call, values))?;
+            if builder.accepts_imported_at(&adapter.selector, adapter.item) {
+                builder.bind_imported_at(adapter.selector, adapter.item, move |call, values| runtime_invoke(adapter, call, values))?;
             }
         }
         // A proof-backed application has no facade selector: a call reaches
@@ -4415,15 +4415,16 @@ fn serve_hot(
     Ok(true)
 }
 
-/// A generation the owner thread admitted, for a `rawr mcp` that
-/// supervises the run: the owner said `queued` when it committed (D553.3).
+/// A generation the owner thread admitted: the owner said `queued` when it
+/// committed (D553.3), and says `swapped` to the program and to a `rawr
+/// mcp` that supervises the run once this writes it to the reload stream.
 fn admitted() {
     use std::io::Write as _;
-    let Some(path) = std::env::var_os("RAWR_MCP_EVENTS").filter(|path| !path.is_empty()) else {
+    let Some(path) = std::env::var_os("RAWR_RELOAD_EVENTS").filter(|path| !path.is_empty()) else {
         return;
     };
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = file.write_all(b"{\"event\":\"swapped\"}\n");
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) {
+        let _ = stream.write_all(b"{\"event\":\"swapped\"}\n");
     }
 }
 
@@ -6929,7 +6930,8 @@ fn render_source(
             byte_array(&mut file, &instance_key(plan))?;
             write!(
                 file,
-                ", bound: {}, application: {}, root: {:?}, witness: {}",
+                ", item: {:?}, bound: {}, application: {}, root: {:?}, witness: {}",
+                facade_item_path(plan),
                 plan.selector().is_some(),
                 plan.application_invocation().is_some(),
                 plan.export().root_alias(),
@@ -6956,7 +6958,7 @@ fn render_source(
                 // witness: a field's reader gives the field's value alone.
                 writeln!(
                     file,
-                    ", bound: false, application: false, root: {:?}, witness: 1, arguments: 1, invoke: {} }},",
+                    ", item: \"\", bound: false, application: false, root: {:?}, witness: 1, arguments: 1, invoke: {} }},",
                     plan.export().root_alias(),
                     matcher.name(plan)
                 )
@@ -6973,7 +6975,7 @@ fn render_source(
                 byte_array(&mut file, &[0; 32])?;
                 writeln!(
                     file,
-                    ", bound: false, application: false, root: {:?}, witness: 0, arguments: 2, invoke: {} }},",
+                    ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 2, invoke: {} }},",
                     plan.export().root_alias(),
                     store_name(plan)
                 )
@@ -6990,7 +6992,7 @@ fn render_source(
                 byte_array(&mut file, &[0; 32])?;
                 writeln!(
                     file,
-                    ", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
+                    ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
                     plan.export().root_alias(),
                     lender_name(plan)
                 )
@@ -7074,6 +7076,21 @@ fn hidden_segments(source: &[u8]) -> std::collections::BTreeSet<String> {
         found.insert(segment.to_owned());
     }
     found
+}
+
+/// The path of the facade item the adapter is for, as the runtime's facade
+/// names it: from the crate's root, with a method after the type it is on,
+/// as `events::widgets::Row::boxed`. A trait's method has one selector on every type,
+/// so the runtime binds the instance of each type's item by this path.
+fn facade_item_path(plan: &Plan) -> String {
+    let mut segments = std::iter::once(plan.export().root_alias())
+        .chain(plan.export().path())
+        .collect::<Vec<_>>();
+    if matches!(plan.operation(), Operation::Method { .. }) && segments.last() != Some(&plan.name())
+    {
+        segments.push(plan.name());
+    }
+    segments.join("::")
 }
 
 /// The key a call of this adapter's instance carries, or zeros for an
@@ -10835,6 +10852,26 @@ fn render_anchored_opening(
         .map_err(|error| Error::Lent(\"a slot's region\", error))?;
     }}"
     )
+    .map_err(encoding)?;
+    // Out of any region, as in a closure a widget calls while it lays out,
+    // a type parameter a `&str` fills is a `&'static str`, as rustc types
+    // the literal `button("Delete")` takes: the string is pinned for the
+    // runner's life and the value is an arena value at `'static`, which may
+    // leave the scope it was made in. An item whose own signature borrows
+    // its inputs, as `Parser::new(&text)`, keeps its scope frame.
+    if signature.scope().is_some() || !instance_opens(signature, substitutions) {
+        return Ok(());
+    }
+    let mut owned = String::new();
+    render_to_dynamic(&returned, "made", 0, &mut owned)?;
+    writeln!(
+        output,
+        "    {{
+{taken}        let pins = static_pins();{pinned}
+        let made = lend(arguments.arena, || {call});
+        return {owned};
+    }}"
+    )
     .map_err(encoding)
 }
 
@@ -13568,11 +13605,15 @@ fn render_slot(
             // call alone, as a script impl's function is (D558.3). A
             // closure gives each `&mut` parameter back after its value, as
             // `Path::new(|p| ..)`'s does, so it is one of the call's places.
+            // So is one it borrows shared where its output is at the slot's
+            // `'x`, as `transition`'s view takes `&Animation<f32>` and gives
+            // a widget of the view: the output's type is one for every
+            // borrow of the input, so it borrows nothing of it, and the
+            // input's borrow is a lifetime of its own.
             convert::Type::Borrowed {
                 mutable: borrowed_mutably,
                 ty,
-            } if family.is_none()
-                && matches!(**ty, convert::Type::Nominal { .. })
+            } if matches!(**ty, convert::Type::Nominal { .. })
                 && !is_value(ty)
                 && !carries_lifetime(ty) =>
             {
@@ -13681,9 +13722,8 @@ fn render_slot(
                 );
                 format!("&PINS_{local}")
             });
-            (
-                "<'x>",
-                format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
+            let (items, body) = lent_around(
+                &lends,
                 format!(
                     "let mut values = {values};
         let mut region = __rawr_internal::scope::Region::anchored({pins});
@@ -13696,6 +13736,11 @@ fn render_slot(
             .take::<{family}>(scoped)
             .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"))"
                 ),
+            );
+            (
+                "<'x>",
+                format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
+                format!("{items}{body}"),
             )
         }
         None => {
@@ -15475,6 +15520,19 @@ fn render_take(
             )
             .map_err(request::unwritable);
         }
+        // A value of a generic impl function's own parameter's opaque type,
+        // as `p.fits(p.font())` passes a `P::Font`, is in the function's
+        // frame at the call's types (`render_frame`), which needn't be
+        // `'static` as the arena's are.
+        convert::Type::Nominal { definition, .. }
+            if let Some((frame, slot)) = frame_slot(definition) =>
+        {
+            return writeln!(
+                output,
+                "    let argument_{local} = {frame}.take_{slot}(arguments, {index})?;"
+            )
+            .map_err(request::unwritable);
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         // A slice of script values a type argument names, as an owned
         // `Vec` of their proxies (`script_slice`).
@@ -17224,9 +17282,10 @@ fn opaque_traits<'s>(
     }
     // Each associated type the bounds bind, as `Item = T`, on the trait
     // that declares it, or else on the first, which reaches a supertrait's.
-    // The marks of a future or a callable are no trait's.
+    // The marks of a future, an iterator or a callable are no trait's.
     let marks = [
         *crate::surface::identity::Definition::future().as_bytes(),
+        *crate::surface::identity::Definition::iterator().as_bytes(),
         *crate::surface::identity::Definition::callable().as_bytes(),
     ];
     for (associated, position) in opaque.associated() {

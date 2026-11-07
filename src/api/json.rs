@@ -73,13 +73,6 @@ impl Engine {
                             LexError::ImproperSymbol(t.literal_syntax().to_string(), String::new())
                                 .into(),
                         ),
-                        Token::InterpolatedString(..) => Token::LexError(
-                            LexError::ImproperSymbol(
-                                "interpolated string".to_string(),
-                                String::new(),
-                            )
-                            .into(),
-                        ),
                         // All others
                         _ => token,
                     }
@@ -99,13 +92,6 @@ impl Engine {
                         t @ (Token::Unit | Token::MapStart) => Token::LexError(
                             LexError::ImproperSymbol(t.literal_syntax().to_string(), String::new())
                                 .into(),
-                        ),
-                        Token::InterpolatedString(..) => Token::LexError(
-                            LexError::ImproperSymbol(
-                                "interpolated string".to_string(),
-                                String::new(),
-                            )
-                            .into(),
                         ),
                         // All others
                         _ => token,

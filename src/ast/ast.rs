@@ -30,8 +30,6 @@ pub struct AST {
     /// The exported host items this program calls, bound to its engine's
     /// registry on first evaluation.
     host: Option<crate::Shared<crate::program::hosted::Hosted>>,
-    /// Embedded module resolver, if any.
-    pub(crate) resolver: Option<crate::Shared<crate::module::resolvers::StaticModuleResolver>>,
     /// [`AST`] documentation.
     #[cfg(feature = "metadata")]
     pub(crate) doc: crate::SmartString,
@@ -53,7 +51,6 @@ impl fmt::Debug for AST {
         fp.field("source", &self.source);
         #[cfg(feature = "metadata")]
         fp.field("doc", &self.doc);
-        fp.field("resolver", &self.resolver);
 
         fp.field("body", &self.body);
 
@@ -84,7 +81,6 @@ impl AST {
             lib: functions.into(),
             support: crate::Module::new().into(),
             host: None,
-            resolver: None,
         }
     }
     /// _(internals)_ Create a new [`AST`] with a source name.
@@ -126,7 +122,6 @@ impl AST {
             lib: crate::Module::new().into(),
             support: crate::Module::new().into(),
             host: None,
-            resolver: None,
         }
     }
     /// Get the source, if any.
@@ -221,16 +216,6 @@ impl AST {
             crate::func::shared_make_mut(&mut self.support).merge(&support);
         }
     }
-    /// _(internals)_ Get the embedded [module resolver][crate::ModuleResolver].
-    /// Exported under the `internals` feature only.
-    #[cfg(feature = "internals")]
-    #[inline(always)]
-    #[must_use]
-    pub const fn resolver(
-        &self,
-    ) -> Option<&crate::Shared<crate::module::resolvers::StaticModuleResolver>> {
-        self.resolver.as_ref()
-    }
     /// Clone the [`AST`]'s functions into a new [`AST`].
     /// No statements are cloned.
     ///
@@ -260,7 +245,6 @@ impl AST {
             lib: lib.into(),
             support: self.support.clone(),
             host: self.host.clone(),
-            resolver: self.resolver.clone(),
         }
     }
     /// Clone the [`AST`]'s script statements into a new [`AST`].
@@ -276,7 +260,6 @@ impl AST {
             lib: crate::Module::new().into(),
             support: self.support.clone(),
             host: self.host.clone(),
-            resolver: self.resolver.clone(),
         }
     }
     /// Merge two [`AST`] into one.  Both [`AST`]'s are untouched and a new, merged,
@@ -483,22 +466,6 @@ impl AST {
         }
         _ast.host = self.host.clone().or_else(|| other.host.clone());
 
-        match (
-            self.resolver.as_deref().is_none_or(|r| r.is_empty()),
-            other.resolver.as_deref().is_none_or(|r| r.is_empty()),
-        ) {
-            (true, true) => (),
-            (false, true) => _ast.resolver.clone_from(&self.resolver),
-            (true, false) => _ast.resolver.clone_from(&other.resolver),
-            (false, false) => {
-                let mut resolver = self.resolver.as_deref().unwrap().clone();
-                for (k, v) in other.resolver.as_deref().unwrap() {
-                    resolver.insert(k.clone(), v.as_ref().clone());
-                }
-                _ast.resolver = Some(resolver.into());
-            }
-        }
-
         #[cfg(feature = "metadata")]
         match (other.doc.as_str(), _ast.doc.as_str()) {
             ("", _) => (),
@@ -573,21 +540,6 @@ impl AST {
         other: Self,
         _filter: impl Fn(FnNamespace, FnAccess, bool, &str, usize) -> bool,
     ) -> &mut Self {
-        match (
-            self.resolver.as_deref().is_none_or(|r| r.is_empty()),
-            other.resolver.as_deref().is_none_or(|r| r.is_empty()),
-        ) {
-            (_, true) => (),
-            (true, false) => self.resolver.clone_from(&other.resolver),
-            (false, false) => {
-                let resolver = crate::func::shared_make_mut(self.resolver.as_mut().unwrap());
-                let other_resolver = crate::func::shared_take_or_clone(other.resolver.unwrap());
-                for (k, v) in other_resolver {
-                    resolver.insert(k, crate::func::shared_take_or_clone(v));
-                }
-            }
-        }
-
         if self.host.is_none() {
             self.host = other.host.clone();
         }

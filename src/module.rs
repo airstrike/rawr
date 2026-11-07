@@ -2685,8 +2685,3 @@ impl Module {
         self.type_iterators.get(&id).map(|f| &**f)
     }
 }
-
-/// Module containing all built-in [module resolvers][ModuleResolver].
-pub mod resolvers;
-
-pub use resolvers::ModuleResolver;

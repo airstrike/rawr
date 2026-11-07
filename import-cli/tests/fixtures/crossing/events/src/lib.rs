@@ -449,9 +449,9 @@ impl<T, E> Task<Result<T, E>> {
 /// A message no program sends: std's `Infallible`, as iced's `Never` is.
 pub use std::convert::Infallible as Never;
 
-/// `Framed` and `Outline` at the root too, as iced re-exports
+/// `Framed` at the root too, as iced re-exports
 /// `iced_widget::Widget` as `iced::Widget`.
-pub use widgets::{Framed, Outline};
+pub use widgets::Framed;
 
 /// iced's `advanced`: iced_graphics's modules, which another crate defines.
 pub mod advanced {
@@ -698,16 +698,10 @@ pub mod widgets {
                 color: color.into(),
             }
         }
-    }
 
-    /// One more method every widget has through a blanket impl: its own
-    /// trait, as one trait's two default methods that give opaque types
-    /// aren't held apart yet.
-    pub trait Outline<Message, Theme = crate::Theme, Renderer = crate::widgets::Renderer>:
-        Widget<Message, Theme, Renderer>
-    {
-        /// The widget, outlined: an opaque type the trait's own default
-        /// body gives, of a type no public path names.
+        /// The widget, outlined: a second opaque type of the trait's own
+        /// default bodies, of a type no public path names, whose members
+        /// are its own and not `explain`'s.
         fn outlined(self) -> impl Widget<Message, Theme, Renderer>
         where
             Self: Sized,
@@ -716,12 +710,7 @@ pub mod widgets {
         }
     }
 
-    impl<T, Message, Theme, Renderer> Outline<Message, Theme, Renderer> for T where
-        T: Widget<Message, Theme, Renderer>
-    {
-    }
-
-    /// The widget `Outline::outlined` gives, which no public path names.
+    /// The widget `Framed::outlined` gives, which no public path names.
     mod outline {
         pub struct Outlined<W>(pub(super) W);
 
@@ -1018,6 +1007,45 @@ pub mod widgets {
     {
         fn labels(&self, labels: &mut Vec<String>) {
             labels.push(format!("pad {}", self.padding));
+            for child in &self.children {
+                child.labels(labels);
+            }
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.children.iter().find_map(|child| child.press(label))
+        }
+    }
+
+    /// Widgets side by side, as iced's `Row`: a type of its own beside
+    /// `Column`, which `row!` makes.
+    pub struct Row<W> {
+        children: Vec<W>,
+        spacing: u16,
+    }
+
+    impl<W> Row<W> {
+        /// A row of `children`.
+        pub fn with_children(children: impl IntoIterator<Item = W>) -> Self {
+            Row {
+                children: children.into_iter().collect(),
+                spacing: 0,
+            }
+        }
+
+        /// The row with `spacing` between its children.
+        pub fn spacing(mut self, spacing: u16) -> Self {
+            self.spacing = spacing;
+            self
+        }
+    }
+
+    impl<W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Row<W>
+    where
+        W: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("row {}", self.spacing));
             for child in &self.children {
                 child.labels(labels);
             }
@@ -1331,6 +1359,59 @@ pub mod widgets {
         }
     }
 
+    /// Where an animated value is at a moment, as iced's `Animation<T>`: a
+    /// crate value its widget lends the view closure.
+    #[derive(Clone, Debug)]
+    pub struct Spring {
+        start: u32,
+    }
+
+    impl Spring {
+        /// The value at `at`, past the spring's start.
+        pub fn at(&self, at: u32) -> u32 {
+            self.start + at
+        }
+    }
+
+    /// A widget that makes its content from a spring it lends and a moment,
+    /// as iced's `Transition<'a, Message, W, P>` with its `view: Box<dyn
+    /// Fn(&P, Instant) -> W + 'a>`.
+    pub struct Animated<'a, Message, W> {
+        spring: Spring,
+        value: u32,
+        view: Box<dyn Fn(&Spring, u32) -> W + 'a>,
+        message: std::marker::PhantomData<Message>,
+    }
+
+    /// A widget of what `view` makes of a spring starting at `start` and
+    /// `value`, as iced's `transition(value, init, view)`.
+    pub fn animate<'a, Message, W>(
+        start: u32,
+        value: u32,
+        view: impl Fn(&Spring, u32) -> W + 'a,
+    ) -> Animated<'a, Message, W> {
+        Animated {
+            spring: Spring { start },
+            value,
+            view: Box::new(view),
+            message: std::marker::PhantomData,
+        }
+    }
+
+    impl<W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Animated<'_, Message, W>
+    where
+        W: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push("animated".to_owned());
+            (self.view)(&self.spring, self.value).labels(labels);
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            (self.view)(&self.spring, self.value).press(label)
+        }
+    }
+
     /// A column of one widget, as iced's `center` is a container of one.
     pub fn center<W>(content: W) -> Column<W> {
         Column {
@@ -1349,6 +1430,16 @@ pub mod widgets {
     }
 
     pub use crate::widgets_column as column;
+
+    /// A row of widgets, each boxed, as iced's `row!`.
+    #[macro_export]
+    macro_rules! widgets_row {
+        ($($x:expr),+ $(,)?) => (
+            $crate::widgets::Row::with_children([$($crate::widgets::Widget::boxed($x)),+])
+        );
+    }
+
+    pub use crate::widgets_row as row;
 
     /// The view logic of a program: any `Fn(&State)` that gives a widget.
     pub trait ViewFn<'a, State, Message, Theme, Renderer> {

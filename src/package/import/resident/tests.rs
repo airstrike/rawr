@@ -395,42 +395,6 @@ mod top_level {
     }
 
     #[test]
-    fn resolver_cached_module_retains_support_until_its_last_resolved_copy_retires() {
-        use crate::ModuleResolver as _;
-
-        let engine = retained();
-        let baseline = owners(&engine);
-        let source = "struct State { value: i64 }\n\
-            #[preview] pub fn sample() -> iced::Element<()> {\n\
-                let state = State { value: 7 };\n\
-                panic!(\"not invoked\");\n\
-            }\n\
-            fn answer() -> i64 { 42 }";
-        let (candidate, ast) = engine
-            .compile_package_snapshot_generation_with_top_level(&snapshot(source))
-            .unwrap();
-        assert!(has_own_support(&ast));
-        let support = Shared::downgrade(ast.shared_support());
-        let module = crate::Module::eval_ast_as_new(crate::Scope::new(), &ast, &engine).unwrap();
-        let mut resolver = crate::module_resolvers::StaticModuleResolver::new();
-        resolver.insert("saved", module);
-        let resolved = resolver
-            .resolve(&engine, None, "saved", crate::Position::NONE)
-            .unwrap();
-        let live = owners(&engine);
-        drop(candidate);
-        drop(ast);
-        assert!(support.upgrade().is_some());
-        assert_eq!(owners(&engine), live);
-        resolver.clear();
-        assert!(support.upgrade().is_some());
-        assert_eq!(owners(&engine), live);
-        drop(resolved);
-        assert!(support.upgrade().is_none());
-        assert_eq!(owners(&engine), baseline);
-    }
-
-    #[test]
     fn empty_support_receipt_retires_with_the_executable() {
         let engine = retained();
         let baseline = owners(&engine);

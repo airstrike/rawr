@@ -3,29 +3,21 @@
 use crate::api::default_limits::MAX_STRINGS_INTERNED;
 use crate::api::options::LangOptions;
 use crate::func::native::{
-    locked_write, OnDebugCallback, OnDefVarCallback, OnOutputCallback, OnParseTokenCallback,
-    OnPrintCallback, OnVarCallback,
+    locked_write, OnDefVarCallback, OnOutputCallback, OnParseTokenCallback, OnVarCallback,
 };
 use crate::packages::{Package, StandardPackage};
 use crate::tokenizer::Token;
 use crate::types::enums::EnumRegistration;
 use crate::types::StringsInterner;
 use crate::{Dynamic, Identifier, ImmutableString, Locked, SharedModule};
-use std::{collections::BTreeSet, fmt, num::NonZeroU8};
+use std::{fmt, num::NonZeroU8};
 
 pub type Precedence = NonZeroU8;
 
 // The old engine's intrinsics, which the lowered script calls by names no
 // Rust name spells.
-pub const KEYWORD_PRINT: &str = "__rawr_print";
-pub const KEYWORD_DEBUG: &str = "__rawr_debug";
-pub const KEYWORD_TYPE_OF: &str = "__rawr_type_of";
-pub const KEYWORD_EVAL: &str = "__rawr_eval";
-pub const KEYWORD_FN_PTR: &str = "__rawr_fn_ptr";
 pub const KEYWORD_FN_PTR_CALL: &str = "__rawr_call";
 pub const KEYWORD_FN_PTR_CURRY: &str = "__rawr_curry";
-pub const KEYWORD_IS_SHARED: &str = "__rawr_is_shared";
-pub const KEYWORD_IS_DEF_VAR: &str = "__rawr_is_def_var";
 /// A move out of a local, which checked Rawr writes where Rust moves a
 /// value that is not `Copy`: the value, with `()` left in the local.
 pub const KEYWORD_MOVE: &str = "__rawr_move";
@@ -76,7 +68,6 @@ pub const KEYWORD_LEND: &str = "__rawr_lend";
 pub const KEYWORD_HELD: &str = "__rawr_in_held_";
 /// The suffix of the local holding a held place's path ([`KEYWORD_HELD`]).
 pub const HELD_STEPS: &str = "_at";
-pub const KEYWORD_IS_DEF_FN: &str = "__rawr_is_def_fn";
 /// The receiver of a method in the lowered script: Rust's `self`.
 pub const KEYWORD_THIS: &str = "self";
 pub const FN_GET: &str = "get$";
@@ -133,14 +124,9 @@ pub struct Engine {
     /// A collection of all sub-modules directly loaded into the Engine.
     pub(crate) global_sub_modules: std::collections::BTreeMap<Identifier, SharedModule>,
 
-    /// A module resolution service.
-    pub(crate) module_resolver: Option<Box<dyn crate::ModuleResolver>>,
-
     /// Strings interner.
     pub(crate) interned_strings: Option<Locked<StringsInterner>>,
 
-    /// A set of symbols to disable.
-    pub(crate) disabled_symbols: BTreeSet<Identifier>,
     /// Registered Rust enum types available to `switch` patterns.
     pub(crate) registered_enums: std::collections::BTreeMap<Identifier, EnumRegistration>,
     /// Host type paths available while resolving Rawr item headers.
@@ -161,11 +147,6 @@ pub struct Engine {
     /// borrowing this compiler. It does not attest a live runner by itself.
     #[cfg(feature = "rust-import")]
     pub(crate) imported_native: Option<crate::package::import::runner::account::Native>,
-    /// A map containing custom keywords and precedence to recognize.
-    pub(crate) custom_keywords: std::collections::BTreeMap<Identifier, Option<Precedence>>,
-    /// Custom syntax.
-    pub(crate) custom_syntax:
-        std::collections::BTreeMap<Identifier, Box<crate::api::custom_syntax::CustomSyntax>>,
 
     /// Callback closure for filtering variable definition.
     pub(crate) def_var_filter: Option<Box<OnDefVarCallback>>,
@@ -184,10 +165,6 @@ pub struct Engine {
     #[cfg(feature = "internals")]
     pub(crate) missing_function: Option<Box<crate::func::native::OnMissingFunctionCallback>>,
 
-    /// Callback closure for implementing the `print` command.
-    pub(crate) print: Option<Box<OnPrintCallback>>,
-    /// Callback closure for implementing the `debug` command.
-    pub(crate) debug: Option<Box<OnDebugCallback>>,
     /// Callback closure for `print!`, `println!`, `eprint!` and `eprintln!`.
     pub(crate) output: Option<Box<OnOutputCallback>>,
     /// Callback closure for progress reporting.
@@ -238,8 +215,6 @@ impl fmt::Debug for Engine {
 
         f.field("global_sub_modules", &self.global_sub_modules);
 
-        f.field("disabled_symbols", &self.disabled_symbols);
-
         f.field(
             "registered_enums",
             &self.registered_enums.keys().collect::<Vec<_>>(),
@@ -247,15 +222,6 @@ impl fmt::Debug for Engine {
         .field("host_registry", &self.host_registry)
         .field("access", &self.access)
         .field("test", &self.test);
-
-        f.field("custom_keywords", &self.custom_keywords).field(
-            "custom_syntax",
-            &self
-                .custom_syntax
-                .keys()
-                .map(crate::SmartString::as_str)
-                .collect::<String>(),
-        );
 
         f.field("def_var_filter", &self.def_var_filter.is_some())
             .field("resolve_var", &self.resolve_var.is_some())
@@ -319,10 +285,7 @@ impl Engine {
 
         global_sub_modules: std::collections::BTreeMap::new(),
 
-        module_resolver: None,
-
         interned_strings: None,
-        disabled_symbols: BTreeSet::new(),
         registered_enums: std::collections::BTreeMap::new(),
         host_registry: crate::host::Current::new(),
         access: crate::Access::none(),
@@ -331,8 +294,6 @@ impl Engine {
         exports_frozen: core::sync::atomic::AtomicBool::new(false),
         #[cfg(feature = "rust-import")]
         imported_native: None,
-        custom_keywords: std::collections::BTreeMap::new(),
-        custom_syntax: std::collections::BTreeMap::new(),
 
         def_var_filter: None,
         resolve_var: None,
@@ -345,8 +306,6 @@ impl Engine {
         #[cfg(feature = "internals")]
         missing_function: None,
 
-        print: None,
-        debug: None,
         output: None,
 
         progress: None,
@@ -386,25 +345,11 @@ impl Engine {
         // Create the new scripting Engine
         let mut engine = Self::new_raw();
 
-        #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
-        {
-            engine.module_resolver =
-                Some(Box::new(crate::module::resolvers::FileModuleResolver::new()));
-        }
-
         // Turn on the strings interner
         engine.set_max_strings_interned(MAX_STRINGS_INTERNED);
 
-        // default print/debug implementations
         #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
         {
-            engine.print = Some(Box::new(|s| println!("{s}")));
-            engine.debug = Some(Box::new(|s, source, pos| match (source, pos) {
-                (Some(source), crate::Position::NONE) => println!("{source} | {s}"),
-                (Some(source), pos) => println!("{source} @ {pos:?} | {s}"),
-                (None, crate::Position::NONE) => println!("{s}"),
-                (None, pos) => println!("{pos:?} | {s}"),
-            }));
             engine.output = Some(Box::new(|output, text| match output {
                 crate::Output::Stdout => print!("{text}"),
                 crate::Output::Stderr => eprint!("{text}"),

@@ -204,6 +204,7 @@ pub(crate) fn cargo(script: &Path, text: &str) -> Result<Option<Cargo>, Error> {
         features,
         build: None,
         links: None,
+        library: None,
     }))
 }
 
