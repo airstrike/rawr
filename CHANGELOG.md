@@ -8,6 +8,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A package with marked modules builds its native side with its `[features]`, as `cargo run` does: its default features are on, code under `#[cfg(feature = "…")]` builds as under Cargo, and an optional dependency a feature enables is there, inherited from a workspace or not. (#1144)
 - A build script that declares modules with `mod`, at `build.rs` or wherever `build` puts it, finds them beside it, nested modules included. (#1143)
 - A dependency whose build script isn't named `build.rs` no longer loses its dependency information in rawr's store. (#1147)
+- A call through a crate the program doesn't depend on, as `tokio::spawn(..)` without tokio, is rustc's E0433 naming that crate, and a panic in a native async call reaches you as cargo shows it. (#1149)
+- A crate whose method returns an `impl Trait`, such as polars-core's `downcast_iter_mut`, no longer crashes rawr-import's driver with a rustc internal error about a missing visibility. (#1151)
 
 ## 0.3.171 (2026-11-07)
 
