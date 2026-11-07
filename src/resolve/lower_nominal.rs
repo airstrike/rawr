@@ -2071,7 +2071,21 @@ fn imported_surface_type(
                 ));
             }
         }),
-        Ty::InclusiveRange(_) => Type::Builtin(Builtin::InclusiveRange),
+        // `a..=b` of `i64`, or of literals rustc types from the call, is
+        // Rawr's own range. One of another integer is a range of it, as
+        // rustc fills a type parameter with it.
+        Ty::InclusiveRange(kind) => match inference.resolve(&Ty::Int(*kind)) {
+            Ty::Int(Int::I64 | Int::Var(_)) => Type::Builtin(Builtin::InclusiveRange),
+            element => {
+                imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
+                Type::Nominal {
+                    definition: rawr_import::surface::identity::Definition::range_inclusive(),
+                    arguments: Box::new([imported_surface_type(
+                        inference, models, &element, operation, imported,
+                    )?]),
+                }
+            }
+        },
         Ty::InclusiveOf(element) => {
             imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
             Type::Nominal {
@@ -2526,7 +2540,13 @@ fn instance_surface_type(
             Int::Usize => Builtin::Usize,
             Int::I128 | Int::U128 => return None,
         }),
-        Ty::InclusiveRange(_) => Type::Builtin(Builtin::InclusiveRange),
+        Ty::InclusiveRange(kind) => match inference.resolve(&Ty::Int(*kind)) {
+            Ty::Int(Int::I64 | Int::Var(_)) => Type::Builtin(Builtin::InclusiveRange),
+            element => Type::Nominal {
+                definition: rawr_import::surface::identity::Definition::range_inclusive(),
+                arguments: Box::new([instance_surface_type(inference, models, &element)?]),
+            },
+        },
         Ty::InclusiveOf(element) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::range_inclusive(),
             arguments: Box::new([instance_surface_type(inference, models, element)?]),
