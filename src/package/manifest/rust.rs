@@ -151,7 +151,7 @@ pub(super) fn cargo_dependencies(
     text: &str,
     root: &Path,
     item: Option<&Item>,
-    inherited: Option<&super::workspace::Inherited>,
+    inherited: Option<&std::collections::BTreeMap<String, Dependency>>,
 ) -> Result<Box<[Dependency]>, Error> {
     let Some(item) = item else {
         return Ok(Box::default());
@@ -210,7 +210,7 @@ pub(super) fn cargo_dependencies(
                 });
                 continue;
             };
-            let dependency = inherited.dependencies.get(key).ok_or_else(|| Error {
+            let dependency = inherited.get(key).ok_or_else(|| Error {
                 message: format!(
                     "Cargo dependency `{key}` inherits from a workspace that Cargo could not read"
                 )

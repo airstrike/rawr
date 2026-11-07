@@ -181,3 +181,52 @@ fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin(
         run.seen.join("\n")
     );
 }
+
+/// The generated crate rawr builds a package's native side from sees the
+/// package's files where Cargo's own build sees them (#1136): an asset
+/// through `CARGO_MANIFEST_DIR`, one through a path relative to a source
+/// file, one outside the package, and a build script's input and output.
+/// Each file is in one target, so Cargo prints no warning (#1135), and a
+/// body edit swaps in without building the native crate again.
+#[test]
+fn a_native_crate_reads_its_package_files_where_cargo_does() {
+    const ASSETS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-assets");
+    let project = crate::support::scratch().join("islands-assets");
+    let _ = fs::remove_dir_all(project.join("app/src"));
+    copy(Path::new(ASSETS), &project);
+    let root = project.join("app");
+    let _ = fs::remove_file(root.join("stop"));
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    for expected in [
+        "logo logo bytes",
+        "icon icon text",
+        "shared shared note",
+        "icons save,open",
+    ] {
+        run.until(Duration::from_secs(900), |line| line == expected);
+    }
+    run.until(Duration::from_secs(30), |line| {
+        parse(line).is_some_and(|(tick, _)| tick >= 3)
+    });
+    let built = run.seen.len();
+
+    edit(
+        &root.join("src/physics.rs"),
+        "const SCALE: i64 = 1;",
+        "const SCALE: i64 = 100;",
+    );
+    run.until(Duration::from_secs(120), |line| {
+        parse(line).is_some_and(|(tick, value)| tick > 3 && value == tick * 100)
+    });
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.child.wait().unwrap();
+    let seen = run.seen.join("\n");
+    assert!(status.success(), "{status}\n{seen}");
+    assert!(!seen.contains("multiple build targets"), "{seen}");
+    assert!(
+        !run.seen[built..]
+            .iter()
+            .any(|line| line.contains("restarting") || line.contains("Compiling")),
+        "{seen}"
+    );
+}

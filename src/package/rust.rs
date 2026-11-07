@@ -270,6 +270,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
         .unwrap_or(entry.root())
         .to_path_buf();
     let directory = rawr_import::location::rawr_directory(entry.root(), environment).join("crate");
+    let package = cargo.path.parent().unwrap_or(entry.root());
     let copies = directory.join("src");
     let mut files = if let Some(root) = entry.native_root() {
         let shadow = graph
@@ -293,7 +294,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
                 directory.join("Cargo.toml"),
                 app_manifest(cargo, &Path::new("src").join(relative)),
             ),
-            (copies.join(relative), native_root(root)),
+            (copies.join(relative), native_root(root, package)),
         ];
         files.extend(
             shadow
@@ -322,10 +323,13 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
         let declared_by_rawr = !declared_by_rust(entry, module.modules());
         files.push((
             copies.join(relative),
-            super::polyglot::widened(module.text(), declared_by_rawr, module.path()),
+            super::polyglot::widened(module.text(), declared_by_rawr, module.path(), package),
         ));
     }
     write_changed(files)?;
+    if !entry.is_script() {
+        mirror(package, &directory, &module_root)?;
+    }
     let mut crates = vec![Dependency::path(alias, &directory)?.package(&cargo.package)?];
     if let Some(bin) = entry.bin() {
         crates.push(bin_crate(bin, cargo, &directory, &module_root)?);
@@ -342,10 +346,11 @@ fn bin_crate(
     module_root: &Path,
 ) -> rawr_import::Result<Dependency> {
     let directory = library.with_file_name("bin");
+    let package = cargo.path.parent().unwrap_or(module_root);
     let copies = directory.join("src");
     let mut files = vec![
         (directory.join("Cargo.toml"), bin_manifest(cargo, library)),
-        (copies.join("main.rs"), native_root(bin.root())),
+        (copies.join("main.rs"), native_root(bin.root(), package)),
     ];
     for module in bin.modules() {
         let Ok(relative) = module.path().strip_prefix(module_root) else {
@@ -353,11 +358,98 @@ fn bin_crate(
         };
         files.push((
             copies.join(relative),
-            super::polyglot::widened(module.text(), false, module.path()),
+            super::polyglot::widened(module.text(), false, module.path(), package),
         ));
     }
     write_changed(files)?;
+    mirror(package, &directory, module_root)?;
     Dependency::path(super::island::BIN, &directory)?.package(&bin_package(cargo))
+}
+
+/// Link each top-level entry of `package` into `directory`, the generated
+/// package that stands in for it, so its build script, its
+/// `rerun-if-changed` paths and a path through `CARGO_MANIFEST_DIR` reach
+/// the package's own files where Cargo's build of the package reaches them
+/// (#1136). Not linked: what the generated package holds itself
+/// (`Cargo.toml`, `src/`, `lib.rs`), `target/`, `.git/`, and the entries
+/// holding `module_root` and `directory`, so a save to a marked module
+/// changes no file of the generated package. A link in place is kept; one
+/// for an entry that is gone is removed.
+fn mirror(package: &Path, directory: &Path, module_root: &Path) -> rawr_import::Result<()> {
+    use std::ffi::OsStr;
+    let io = |operation, path: &Path| {
+        let path = path.to_path_buf();
+        move |source| rawr_import::Error::Io {
+            operation,
+            path,
+            source,
+        }
+    };
+    let top = |path: &Path| {
+        path.strip_prefix(package)
+            .ok()
+            .and_then(|relative| relative.components().next())
+            .map(|component| component.as_os_str().to_owned())
+    };
+    let own = ["Cargo.toml", "src", "lib.rs"].map(OsStr::new);
+    let skipped = [top(module_root), top(directory)];
+    let linked = |name: &OsStr| {
+        !own.contains(&name)
+            && name != "target"
+            && name != ".git"
+            && !skipped.iter().flatten().any(|skip| skip == name)
+    };
+    let entries = std::fs::read_dir(package).map_err(io("read directory", package))?;
+    let mut wanted = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(io("read directory", package))?;
+        let name = entry.file_name();
+        if linked(&name) {
+            wanted.push(name);
+        }
+    }
+    for name in &wanted {
+        let target = package.join(name);
+        let link = directory.join(name);
+        match std::fs::symlink_metadata(&link) {
+            Ok(metadata) if metadata.is_symlink() => {
+                if std::fs::read_link(&link).is_ok_and(|to| to == target) {
+                    continue;
+                }
+                std::fs::remove_file(&link).map_err(io("remove", &link))?;
+            }
+            Ok(metadata) if metadata.is_dir() => {
+                std::fs::remove_dir_all(&link).map_err(io("remove", &link))?;
+            }
+            Ok(_) => std::fs::remove_file(&link).map_err(io("remove", &link))?,
+            Err(_) => {}
+        }
+        symlink(&target, &link).map_err(io("link", &link))?;
+    }
+    let generated = std::fs::read_dir(directory).map_err(io("read directory", directory))?;
+    for entry in generated {
+        let entry = entry.map_err(io("read directory", directory))?;
+        let name = entry.file_name();
+        let link = entry.path();
+        let stale = !wanted.contains(&name)
+            && std::fs::symlink_metadata(&link).is_ok_and(|metadata| metadata.is_symlink());
+        if stale {
+            std::fs::remove_file(&link).map_err(io("remove", &link))?;
+        }
+    }
+    Ok(())
+}
+
+/// A symbolic link at `link` to `target`.
+fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
 }
 
 /// The package name of a binary's generated package.
@@ -392,8 +484,8 @@ fn write_changed(files: Vec<(std::path::PathBuf, String)>) -> rawr_import::Resul
 /// `include_str!` paths absolute, and the island's runtime support at the
 /// end. A `forbid(unsafe_code)` becomes `deny`, which the support module's
 /// own `allow` can lift for its two calls into the runner.
-fn native_root(root: &super::graph::RustModule) -> String {
-    let text = super::polyglot::widened(root.text(), false, root.path());
+fn native_root(root: &super::graph::RustModule, package: &Path) -> String {
+    let text = super::polyglot::widened(root.text(), false, root.path(), package);
     let mut public = String::with_capacity(text.len() + 64);
     let mut cursor = 0;
     for declaration in super::polyglot::declarations(&text) {
@@ -455,7 +547,9 @@ fn bin_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path) -> String
 }
 
 /// A generated manifest up to its `[dependencies]` header: `package`, a
-/// library named `library` at `path`, and `cargo`'s version and edition.
+/// library named `library` at `path`, and `cargo`'s version, edition and
+/// build script. The library is the package's one target: Cargo discovers
+/// no other among the package files the generated package links (#1135).
 fn manifest_head(
     cargo: &super::manifest::cargo::Cargo,
     what: &str,
@@ -473,20 +567,43 @@ fn manifest_head(
     if let Some(edition) = &cargo.edition {
         let _ = writeln!(text, "edition = {edition:?}");
     }
+    if let Some(build) = &cargo.build {
+        let _ = writeln!(text, "build = {build}");
+    }
+    // Two packages may not link one native library, so only the package's
+    // own library says it does.
+    if package == cargo.package
+        && let Some(links) = &cargo.links
+    {
+        let _ = writeln!(text, "links = {links}");
+    }
     let _ = write!(
         text,
-        "publish = false\n\n[lib]\nname = {library:?}\npath = {:?}\n\n[dependencies]\n",
+        "autobins = false\nautoexamples = false\nautotests = false\nautobenches = false\n\
+         publish = false\n\n[lib]\nname = {library:?}\npath = {:?}\n\n[dependencies]\n",
         path.display().to_string(),
     );
     text
 }
 
-/// `cargo`'s dependencies as `[dependencies]` lines, then the empty
-/// `[workspace]` that keeps a generated package out of any other.
+/// `cargo`'s dependencies as `[dependencies]` lines, its
+/// `[build-dependencies]`, then the empty `[workspace]` that keeps a
+/// generated package out of any other.
 fn dependency_table(cargo: &super::manifest::cargo::Cargo) -> String {
+    let mut text = dependency_lines(&cargo.dependencies);
+    if !cargo.build_dependencies.is_empty() {
+        text.push_str("\n[build-dependencies]\n");
+        text.push_str(&dependency_lines(&cargo.build_dependencies));
+    }
+    text.push_str("\n[workspace]\n");
+    text
+}
+
+/// One `alias = { .. }` line per dependency.
+fn dependency_lines(dependencies: &[super::manifest::rust::Dependency]) -> String {
     use std::fmt::Write as _;
     let mut text = String::new();
-    for dependency in &cargo.dependencies {
+    for dependency in dependencies {
         let mut fields = Vec::new();
         if let Some(package) = &dependency.package {
             fields.push(format!("package = {package:?}"));
@@ -518,7 +635,6 @@ fn dependency_table(cargo: &super::manifest::cargo::Cargo) -> String {
         }
         let _ = writeln!(text, "{} = {{ {} }}", dependency.alias, fields.join(", "));
     }
-    text.push_str("\n[workspace]\n");
     text
 }
 

@@ -4,6 +4,7 @@
 //! `[package]`, its `[dependencies]` are the program's Rust dependencies,
 //! and its native modules are importable as that crate.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use toml_edit::{Document, Item};
@@ -24,6 +25,12 @@ pub(crate) struct Cargo {
     pub(crate) edition: Option<String>,
     /// `[dependencies]`, normalized to Rawr's Rust dependency form.
     pub(crate) dependencies: Box<[rust::Dependency]>,
+    /// `[build-dependencies]`, in the same form.
+    pub(crate) build_dependencies: Box<[rust::Dependency]>,
+    /// `[package]`'s `build` and `links` values as TOML text, which a
+    /// generated package standing in for this one repeats.
+    pub(crate) build: Option<String>,
+    pub(crate) links: Option<String>,
 }
 
 impl Cargo {
@@ -70,10 +77,12 @@ impl Cargo {
         let inheriting = ["version", "edition"]
             .iter()
             .any(|key| package.get(key).is_some_and(inherits))
-            || table
-                .get("dependencies")
-                .and_then(Item::as_table_like)
-                .is_some_and(|dependencies| dependencies.iter().any(|(_, item)| inherits(item)));
+            || ["dependencies", "build-dependencies"].iter().any(|kind| {
+                table
+                    .get(kind)
+                    .and_then(Item::as_table_like)
+                    .is_some_and(|dependencies| dependencies.iter().any(|(_, item)| inherits(item)))
+            });
         let inherited = if inheriting && ask_cargo {
             Some(
                 super::workspace::inherited(&path, &text).map_err(|message| Error {
@@ -101,7 +110,28 @@ impl Cargo {
             .and_then(|item| item.get("name"))
             .and_then(|item| item.as_str())
             .map_or_else(|| name.replace('-', "_"), str::to_owned);
-        let dependencies = dependencies(&text, root, table, inherited.as_ref())?;
+        let dependencies = self::dependencies(
+            &text,
+            root,
+            table,
+            "dependencies",
+            inherited.as_ref().map(|inherited| &inherited.dependencies),
+        )?;
+        let build_dependencies = self::dependencies(
+            &text,
+            root,
+            table,
+            "build-dependencies",
+            inherited
+                .as_ref()
+                .map(|inherited| &inherited.build_dependencies),
+        )?;
+        let toml = |key: &str| {
+            package
+                .get(key)
+                .and_then(Item::as_value)
+                .map(|value| value.clone().decorated("", "").to_string())
+        };
         Ok(Some(Self {
             path,
             package: name,
@@ -109,22 +139,28 @@ impl Cargo {
             version,
             edition,
             dependencies,
+            build_dependencies,
+            build: toml("build"),
+            links: toml("links"),
             text,
         }))
     }
 }
 
-/// A manifest's `[dependencies]`, then its
-/// `[target.'cfg(..)'.dependencies]` whose `cfg` holds here, as Cargo builds
-/// them for this target. `table` is the manifest parsed from `text`.
+/// A manifest's dependencies of one `kind` (`dependencies` or
+/// `build-dependencies`), then its `[target.'cfg(..)'.<kind>]` whose `cfg`
+/// holds here, as Cargo builds them for this target. `table` is the
+/// manifest parsed from `text`, and `inherited` the workspace's entries of
+/// that kind.
 pub(super) fn dependencies(
     text: &str,
     root: &Path,
     table: &toml_edit::Table,
-    inherited: Option<&super::workspace::Inherited>,
+    kind: &str,
+    inherited: Option<&BTreeMap<String, rust::Dependency>>,
 ) -> Result<Box<[rust::Dependency]>, Error> {
     let mut dependencies =
-        rust::cargo_dependencies(text, root, table.get("dependencies"), inherited)?.into_vec();
+        rust::cargo_dependencies(text, root, table.get(kind), inherited)?.into_vec();
     for (key, target) in table
         .get("target")
         .and_then(Item::as_table_like)
@@ -137,9 +173,7 @@ pub(super) fn dependencies(
         let more = rust::cargo_dependencies(
             text,
             root,
-            target
-                .as_table_like()
-                .and_then(|target| target.get("dependencies")),
+            target.as_table_like().and_then(|target| target.get(kind)),
             inherited,
         )?;
         for dependency in more {
