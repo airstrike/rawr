@@ -99,9 +99,9 @@ export function render(d: Dashboard): string {
     .reverse()
     .map(
       (e) =>
-        `<tr><td class="t">${when(e.t)}</td><td class="src">${e.source}</td><td class="phase${
+        `<tr><td class="t">${when(e.t).replace(/^(\S+) (.*)$/, "<span>$1</span> <span>$2</span>")}</td><td class="src">${e.source}</td><td class="phase${
           /error|unreachable|stopped|restart/.test(e.phase) ? " red" : ""
-        }">${escape(e.phase)}</td><td>${escape(e.detail)}</td></tr>`,
+        }">${escape(e.phase)}</td><td class="detail">${escape(e.detail)}</td></tr>`,
     )
     .join("");
   return `<!DOCTYPE html>
@@ -124,9 +124,11 @@ section > h2 {
   font-size: var(--fs-small); font-weight: var(--w-heavy); text-transform: uppercase; letter-spacing: 0.06em;
   border-top: var(--rule-mid) solid var(--rule); padding: 9px 0 7px;
 }
-/* The counters: /todo's figures, which wrap; the clip hides each row's first rule. */
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); overflow: hidden; margin-left: -16px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
-.cell { padding: 16px 16px 18px; margin: 0 0 -1px -1px; border-left: 1px solid var(--rule); border-bottom: 1px solid var(--grid); }
+/* The counters: /todo's figures, which wrap. The grid sits 17px left of its
+   clip, so each row's first rule is hidden and its text lines up with the page. */
+.figures { overflow: hidden; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); margin: 0 0 -1px -17px; }
+.cell { padding: 16px 16px 18px; border-left: 1px solid var(--rule); border-bottom: 1px solid var(--grid); }
 .num { font-size: 40px; font-weight: var(--w-heavy); letter-spacing: -0.045em; line-height: 1; margin-top: 8px; }
 .note { color: var(--quiet); font-size: var(--fs-label); margin-top: 6px; }
 .rows { margin-top: 16px; border-top: 1px solid var(--rule); }
@@ -136,7 +138,7 @@ section > h2 {
 table { width: 100%; border-collapse: collapse; font-size: var(--fs-small); }
 th, td { text-align: left; vertical-align: top; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--grid); }
 th { border-bottom: var(--rule-mid) solid var(--rule); font-weight: var(--w-strong); font-size: var(--fs-label); text-transform: uppercase; letter-spacing: var(--track-label); white-space: nowrap; }
-td { overflow-wrap: anywhere; }
+td.detail { overflow-wrap: anywhere; }
 td.t { white-space: nowrap; color: var(--quiet); font-family: var(--mono); font-size: var(--fs-label); }
 td.src { color: var(--quiet); }
 td.phase { white-space: nowrap; }
@@ -144,6 +146,8 @@ td.phase { white-space: nowrap; }
   .num { font-size: 32px; }
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .row { grid-template-columns: 1fr; row-gap: 2px; }
+  td.t:has(span) { white-space: normal; }
+  td.t span { white-space: nowrap; }
 }
 </style>
 </head>
@@ -159,7 +163,7 @@ td.phase { white-space: nowrap; }
 ${line ? `<p class="lede">${line}</p>` : ""}
 <section>
 <h2>Last 24 hours</h2>
-<div class="grid">
+<div class="figures"><div class="grid">
 ${cell("Renders", n(day.renders), `${n(totals.renders)} in all`)}
 ${cell("Images", n(day.ok))}
 ${cell("Code errors", n(day.code), `${n(totals.code)} in all`)}
@@ -167,25 +171,25 @@ ${cell("Limits", n(day.limit))}
 ${cell("Median", ms(d.summary.p50))}
 ${cell("p95", ms(d.summary.p95))}
 ${cell("Rate-limited", n(day.rate_limited), `${n(totals.rate_limited)} in all`)}
-</div>
+</div></div>
 </section>
 <section>
 <h2>Playground · last 24 hours</h2>
-<div class="grid">
+<div class="figures"><div class="grid">
 ${cell("Runs", n(day.web), `${n(totals.web)} in all`)}
 ${cell("Images", n(day.web_ok))}
 ${cell("Code errors", n(day.web_code))}
 ${cell("Limits", n(day.web_limit))}
 ${cell("Shares", d.purge ? n(d.purge.stored) : "—", d.purge ? `${n(d.purge.purged)} purged last pass` : "")}
 ${cell("Rate-limited", n(day.web_rate_limited))}
-</div>
+</div></div>
 </section>
 <section>
 <h2>Bot</h2>
-<div class="grid">
+<div class="figures"><div class="grid">
 ${cell("Servers", s ? n(s.servers) : "—")}
 ${cell("Channels", s ? n(s.channels) : "—", s && !s.channels_loaded ? '<span class="red">not loaded</span>' : "")}
-</div>
+</div></div>
 <div class="rows">
 <div class="row"><span class="label">Image</span><span>${version}</span></div>
 <div class="row"><span class="label">Container</span><span>${d.running ? "running" : "stopped"}${
