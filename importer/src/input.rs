@@ -1451,7 +1451,7 @@ impl Baseline {
                     script,
                     package,
                     &declarations,
-                    config.cargo_env_overrides,
+                    &config.env,
                     &build.evidence.environment,
                     &mut allocation,
                     |value, allocation| {
@@ -1811,12 +1811,6 @@ fn begin_array_value(stack: &mut [JsonContainer], items: &mut usize) -> Result<(
         *items = items.saturating_add(1);
     }
     Ok(())
-}
-
-fn environment_value<'a>(environment: &'a [(OsString, OsString)], key: &str) -> Option<&'a str> {
-    environment
-        .iter()
-        .find_map(|(name, value)| (name == key).then(|| value.to_str()).flatten())
 }
 
 fn optional_file_digest_accounted(

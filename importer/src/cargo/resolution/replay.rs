@@ -188,9 +188,6 @@ impl Request {
             crate::Error::Node { source, .. } => stored::Error::Bundle(*source),
             error => stored::Error::Input(error),
         })?;
-        let config = self.config.input_config()?;
-        let cargo_env_overrides = config.cargo_env_overrides;
-        drop(config);
         let manifest =
             budget.digest(cargo::render_manifest(self, Some(&decoded.internal))?.as_bytes())?;
         let source = budget.digest(cargo::HARNESS_SOURCE.as_bytes())?;
@@ -210,7 +207,7 @@ impl Request {
             &self.profile,
             &decoded.retained,
             &decoded.metadata,
-            cargo_env_overrides,
+            self.config.env(),
             cargo_home,
             &self.project_root,
             &decoded.graph,

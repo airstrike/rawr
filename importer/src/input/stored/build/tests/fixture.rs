@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::json;
 
+use crate::cargo::config::env;
 use crate::cargo::{toolchain, unit, Limits};
 use crate::input::declaration::Declarations;
 use crate::input::dependency::Dependency;
@@ -19,6 +20,8 @@ pub(super) struct Fixture {
     pub(super) id: String,
     pub(super) build: build::Retained,
     pub(super) metadata: unit::Metadata,
+    /// The `[env]` table the cold build ran under.
+    pub(super) env: env::Table,
 }
 
 impl Fixture {
@@ -122,6 +125,7 @@ impl Fixture {
             id,
             build: build::Retained { build },
             metadata,
+            env: env::Table::default(),
         }
     }
 
@@ -196,7 +200,7 @@ impl Fixture {
                 script,
                 package,
                 &declarations,
-                false,
+                &self.env,
                 &evidence.environment,
                 &mut allocation,
                 |value, allocation| {

@@ -51,9 +51,6 @@ impl Account for Budget<'_> {
             account::Failure::Render | account::Failure::ProvenanceRender(_) => {
                 Error::Encoding("owner scalar formatting failed")
             }
-            account::Failure::CargoEnvironmentOverrides => {
-                Error::Encoding("cargo-env-config-unproved")
-            }
         }
     }
 }

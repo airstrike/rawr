@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::scalar::account::{self, Account};
 use super::{build, declaration, proof, Allocation};
+use crate::cargo::config::env;
 use crate::Result;
 
 /// Payloads only: neither variant establishes current input or execution proof.
@@ -85,11 +86,13 @@ impl Value<'_> {
 
 /// Emit already-acquired declarations in recipe order, returning the borrowed
 /// execution spelling for the caller's subsequent fallback and output handling.
+/// A declared variable has the value Cargo's fingerprint records: `env` over
+/// the `environment` Cargo ran with.
 pub(super) fn declarations<'script, A: Account>(
     script: &'script build::Script,
     package: &build::Package,
     declarations: &declaration::Declarations,
-    cargo_env_overrides: bool,
+    env: &env::Table,
     environment: &[(OsString, OsString)],
     allocation: &mut A,
     mut emit: impl FnMut(Value<'_>, &mut A) -> std::result::Result<(), A::Error>,
@@ -97,9 +100,6 @@ pub(super) fn declarations<'script, A: Account>(
     allocation.check()?;
     allocation.package_path(&script.out_dir)?;
     let execution = allocation.path_text("build-script execution OUT_DIR", &script.out_dir)?;
-    if cargo_env_overrides && !declarations.environment.is_empty() {
-        return Err(allocation.failure(account::Failure::CargoEnvironmentOverrides));
-    }
     emit(
         Value::SavedOutput {
             package_id: &script.package_id,
@@ -134,7 +134,7 @@ pub(super) fn declarations<'script, A: Account>(
                 package_id: &script.package_id,
                 execution,
                 key,
-                value: super::environment_value(environment, key),
+                value: env.value(key, environment),
             },
             allocation,
         )?;
