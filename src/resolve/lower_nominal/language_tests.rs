@@ -3407,11 +3407,15 @@ fn language_generic_traits() {
     let traits = "trait Convert<T> { fn convert(&self) -> T; } struct C { n: i64 } \
                   impl Convert<i64> for C { fn convert(&self) -> i64 { 1 } } \
                   impl Convert<String> for C { fn convert(&self) -> String { \"a\".to_string() } }";
-    // Two impls and nothing to choose between them (E0283).
+    // Two impls and nothing to choose between them: rustc's E0283, whose
+    // code `trait_instance_tests` checks.
     let ambiguous = rejected(&format!(
         "{traits} pub fn run() -> i64 {{ let c = C {{ n: 1 }}; let x = c.convert(); 0 }} run()"
     ));
-    assert!(ambiguous.contains("E0283"), "{ambiguous}");
+    assert!(
+        ambiguous.contains("multiple `impl`s satisfying `C: Convert<_>` found"),
+        "{ambiguous}"
+    );
     // No `impl Convert<bool> for C`.
     let missing = rejected(&format!(
         "{traits} fn f<U: Convert<bool>>(u: &U) -> bool {{ u.convert() }} \

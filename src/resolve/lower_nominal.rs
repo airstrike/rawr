@@ -57,6 +57,8 @@ mod std_impl_tests;
 mod std_method_tests;
 #[cfg(test)]
 mod str_tests;
+#[cfg(test)]
+mod trait_instance_tests;
 
 use super::borrowck::{
     record,
@@ -3648,10 +3650,17 @@ fn write_into_dispatchers(
             "__rawr_private fn {}() {{\nlet __rawr_type = {type_index}(self);\n",
             instance_dispatcher_name("Into", "into", index)
         );
+        // A builtin owner's conversions are into each of its Self types:
+        // `From<Roar> for f32` is not into `f64`.
         for conversion in owner_id(&target)
             .and_then(|id| models.conversions.get(&id))
             .into_iter()
             .flatten()
+            .filter(|conversion| {
+                conversion
+                    .builtin_owner()
+                    .is_none_or(|owner| Ty::from_resolved(owner) == target)
+            })
         {
             let from =
                 Ty::from_resolved(conversion.conversion().expect("conversions have a source"));
@@ -8486,6 +8495,16 @@ enum Int {
     Var(usize),
 }
 
+/// The kind an unsuffixed literal of `ty` falls back to, as rustc's: an
+/// `i32` or an `f64`.
+fn literal_fallback(ty: &Ty) -> Option<Ty> {
+    match ty {
+        Ty::Int(Int::Var(_)) => Some(Ty::Int(Int::I32)),
+        Ty::Float(Float::Var(_)) => Some(Ty::Float(Float::F64)),
+        _ => None,
+    }
+}
+
 /// The `kind_code`s of `i128` and `u128`, past the other kinds' and the
 /// floats' and casts' codes.
 const WIDE_I128: INT = 17;
@@ -12053,7 +12072,7 @@ impl ImportedContext<'_> {
 }
 
 /// A trait call whose generic trait's dispatcher waits for inference:
-/// `(placeholder, trait, method, arguments, span, static)`.
+/// `(placeholder, trait, method, arguments, span, static, Self)`.
 type PendingInstance = (
     String,
     ImmutableString,
@@ -12061,6 +12080,7 @@ type PendingInstance = (
     Box<[Ty]>,
     Span,
     bool,
+    Ty,
 );
 
 /// The host type a host callable returns, and how many type arguments it
@@ -14607,7 +14627,7 @@ impl<'a> Parser<'a> {
     /// of `Color::try_from(&v[..])`) takes the types of the one impl whose
     /// arguments it unifies with.
     fn settle_instance_literals(&mut self) {
-        for (_, trait_name, _, arguments, _, _) in self.pending_instances.clone() {
+        for (_, trait_name, _, arguments, _, _, _) in self.pending_instances.clone() {
             let arguments = arguments
                 .iter()
                 .map(|ty| self.inference.resolve(ty))
@@ -14638,7 +14658,7 @@ impl<'a> Parser<'a> {
     }
 
     fn finish_instances(&mut self) -> Result<(), Error> {
-        for (placeholder, trait_name, method, arguments, span, by_witness) in
+        for (placeholder, trait_name, method, arguments, span, by_witness, self_ty) in
             std::mem::take(&mut self.pending_instances)
         {
             let arguments = arguments
@@ -14646,16 +14666,26 @@ impl<'a> Parser<'a> {
                 .map(|ty| self.inference.resolve(ty))
                 .collect::<Vec<_>>();
             if arguments.iter().any(contains_inference) {
-                return Err(Error::InvalidMethodCall {
-                    owner: trait_name.clone(),
-                    method: method.clone(),
-                    reason: format!(
-                        "type annotations needed: cannot infer the type arguments of \
-                         `{trait_name}` for this call (E0283)"
-                    )
-                    .into(),
-                    call: span,
-                });
+                let instance = arguments
+                    .iter()
+                    .map(|argument| match argument {
+                        Ty::Infer(_) => "_".to_string(),
+                        argument => argument.name(&self.models).to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let self_ty = match self.inference.resolve(&self_ty) {
+                    Ty::Infer(_) => "_".to_string(),
+                    self_ty => self_ty.name(&self.models).to_string(),
+                };
+                let note = format!(
+                    "multiple `impl`s satisfying `{self_ty}: {trait_name}<{instance}>` found"
+                );
+                return Err(self.annotations_needed(
+                    &Ty::Tuple(arguments.into_boxed_slice()),
+                    note,
+                    span,
+                ));
             }
             let index = self
                 .models
@@ -14775,6 +14805,62 @@ impl<'a> Parser<'a> {
             .filter(|(rank, _)| *rank < inherent)
             .map(|(_, definition)| definition.clone())
             .or(found)
+    }
+
+    /// The trait function `member` of the builtin owner's impl whose Self
+    /// type is `self_ty`'s (through its references): `f32`'s `half` beside
+    /// `f64`'s, which share one impl owner and one runtime type, so the
+    /// call selects it here as rustc selects the impl. An unsuffixed
+    /// literal both fit is its fallback kind. `None` where the impls have
+    /// one Self type, or the type fits other than one.
+    fn self_typed_function(
+        &mut self,
+        owner: type_def::Id,
+        member: &str,
+        self_ty: &Ty,
+    ) -> Option<method::Definition> {
+        owner.builtin_code()?;
+        let definitions = self
+            .models
+            .trait_methods
+            .get(&(owner, member.into()))?
+            .clone();
+        let selves = definitions
+            .iter()
+            .filter_map(method::Definition::builtin_owner)
+            .map(crate::resolve::full_type_name)
+            .collect::<BTreeSet<_>>();
+        if selves.len() < 2 {
+            return None;
+        }
+        let mut self_ty = self.inference.resolve(self_ty);
+        while let Ty::Reference { target, .. } = self_ty {
+            self_ty = self.inference.resolve(&target);
+        }
+        let fitting = definitions
+            .into_iter()
+            .filter(|definition| {
+                let probe = definition
+                    .generics()
+                    .iter()
+                    .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+                    .collect();
+                let owner = impl_self_ty(definition, &probe);
+                self.unifies(&owner, &self_ty)
+            })
+            .collect::<Vec<_>>();
+        match &fitting[..] {
+            [definition] => Some(definition.clone()),
+            _ => literal_fallback(&self_ty).and_then(|fallback| {
+                let mut preferred = fitting.into_iter().filter(|definition| {
+                    definition
+                        .builtin_owner()
+                        .is_some_and(|owner| Ty::from_resolved(owner) == fallback)
+                });
+                let definition = preferred.next()?;
+                preferred.next().is_none().then_some(definition)
+            }),
+        }
     }
 
     /// Whether the trait of `definition`, a trait impl's function, is in
@@ -15803,6 +15889,18 @@ impl<'a> Parser<'a> {
             &function.output.as_ref().map_or(Ty::Unit, Ty::from_resolved),
             &substitution,
         );
+        // `f32::unit()` beside `f64::unit()`: one runtime type, so the impl
+        // is the Self type's, selected here.
+        let resolved = self.inference.resolve(&self_ty);
+        if let Some(definition) = owner_id(&resolved)
+            .and_then(|owner| self.self_typed_function(owner, &function.name.text, &resolved))
+        {
+            let source = origin::Fragment::call(
+                method_name(definition.id()),
+                arguments.iter().map(ParsedExpr::rendered_source),
+            );
+            return Ok(self.operator_expr(source, output, call));
+        }
         let dispatcher = if trait_arguments.is_empty() {
             static_dispatcher_name(trait_name, &function.name.text)
         } else {
@@ -15818,6 +15916,7 @@ impl<'a> Parser<'a> {
                 trait_arguments.into_boxed_slice(),
                 call,
                 true,
+                self_ty.clone(),
             ));
             placeholder
         };
@@ -17588,6 +17687,7 @@ impl<'a> Parser<'a> {
                 trait_arguments.into_boxed_slice(),
                 call,
                 false,
+                self_ty.clone(),
             ));
             placeholder
         };
@@ -18192,13 +18292,20 @@ impl<'a> Parser<'a> {
     /// leaves open, or that `impls` impls fit: at the local whose type it
     /// is, as rustc asks for that local's type, or at the call.
     fn ambiguous_conversion(&self, target: &Ty, source: &Ty, call: Span, impls: usize) -> Error {
-        let target = self.inference.resolve(target);
         let bound = format!("From<{}>", source.name(&self.models));
         let note = if impls > 1 {
             format!("multiple `impl`s satisfying `_: {bound}` found")
         } else {
             format!("the type must implement `{bound}`")
         };
+        self.annotations_needed(target, note, call)
+    }
+
+    /// rustc's E0283 for a call whose types `target` leaves open, with
+    /// `note`: at the local whose type holds them, as rustc asks for that
+    /// local's type, or at the call.
+    fn annotations_needed(&self, target: &Ty, note: String, call: Span) -> Error {
+        let target = self.inference.resolve(target);
         let open = |ty: &Ty| {
             matches!(
                 ty,
@@ -34465,6 +34572,21 @@ impl<'a> Parser<'a> {
             })
             .unwrap_or_default();
         let operand_ty = rhs.as_ref().map(|rhs| self.inference.resolve(&rhs.ty));
+        // An unsuffixed literal that impls for two kinds fit (`2.0 * v` of
+        // `impl Mul<V>` for both `f32` and `f64`) is the literal's
+        // fallback kind, as rustc settles it.
+        let candidates = match literal_fallback(&lhs_ty) {
+            Some(fallback) => {
+                let (preferred, others): (Vec<_>, Vec<_>) =
+                    candidates.into_iter().partition(|candidate| {
+                        candidate
+                            .builtin_owner()
+                            .is_some_and(|owner| Ty::from_resolved(owner) == fallback)
+                    });
+                preferred.into_iter().chain(others).collect()
+            }
+            None => candidates,
+        };
         let mut chosen = None;
         for candidate in candidates {
             let probe = candidate
@@ -39000,9 +39122,11 @@ impl<'a> Parser<'a> {
         end: Position,
     ) -> Result<Result<ParsedExpr, (ParsedExpr, Vec<ParsedExpr>)>, Error> {
         let member = member.clone();
+        let self_typed = self.self_typed_function(owner, &member, &value.ty);
         // Two impls of one generic trait: the call's trait arguments
         // pick one, by inference.
-        if self.receiver_method(owner, &member).is_none()
+        if self_typed.is_none()
+            && self.receiver_method(owner, &member).is_none()
             && let Some((trait_name, function)) = self.generic_trait_method(owner, &member)
         {
             let receiver = match self.inference.resolve(&value.ty) {
@@ -39021,7 +39145,9 @@ impl<'a> Parser<'a> {
                 )
                 .map(Ok);
         }
-        if let Some(definition) = self.probed_method(owner, &member, &value.ty) {
+        if let Some(definition) =
+            self_typed.or_else(|| self.probed_method(owner, &member, &value.ty))
+        {
             let summary = self.method_summary(&definition);
             self.note_call(end, summary);
             let Some(mode) = definition.receiver() else {
@@ -49460,8 +49586,10 @@ impl<'a> Parser<'a> {
                 let source = argument.rendered_source();
                 return Ok(self.operator_expr(source, Ty::String, expression));
             }
+            // The impl for this Self type: `f32::from` beside `f64::from`,
+            // which share one impl owner.
             if let Some((definition, from, _)) =
-                owner.and_then(|id| self.select_conversion(id, None, &source, expression))
+                owner.and_then(|id| self.select_conversion(id, Some(&builtin), &source, expression))
             {
                 self.coerce_expr(&from, argument)?;
                 return Ok(self.operator_expr(
@@ -50621,6 +50749,41 @@ impl<'a> Parser<'a> {
                 owner,
                 call,
             ));
+        }
+        // `Owner::from` as a value where several `impl From` give it: the
+        // closure `|value| value.into()` into `Owner`, whose use selects
+        // the impl by the value's type, as rustc infers `From`'s argument.
+        if member == "from"
+            && !matches!(self.peek(), Token::LeftParen | Token::Unit)
+            && self
+                .models
+                .method(model.definition().id(), &member)
+                .is_none()
+            && self
+                .models
+                .conversions
+                .get(&model.definition().id())
+                .is_some_and(|conversions| conversions.len() > 1)
+        {
+            let at = member_span.start();
+            let argument = || (Token::Identifier(Box::new("__rawr_from_value".into())), at);
+            self.splice_tokens(vec![
+                argument(),
+                (Token::Pipe, at),
+                argument(),
+                (Token::Period, at),
+                (Token::Identifier(Box::new("into".into())), at),
+                (Token::Unit, at),
+            ]);
+            let closure = self.parse_closure(
+                Token::Pipe,
+                span(owner_span.start(), member_span.end()),
+                false,
+            )?;
+            if let Ty::Fn { output, .. } = self.inference.resolve(&closure.ty) {
+                self.unify_type(&output, &model.ty());
+            }
+            return Ok(closure);
         }
         // `C::make(x)` where impls of one generic trait for several of its
         // instances give `make`: the arguments pick one, by inference.
