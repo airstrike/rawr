@@ -1685,6 +1685,54 @@ fn a_crates_derive_runs_from_its_expansion() {
     assert_eq!(text(&run.stdout), "Square Square\nTile\nCircle\nRing\n");
 }
 
+/// A direct dependency that is a proc-macro crate, as `rust_decimal_macros`
+/// is, is a host unit Cargo builds as a dylib, with no API to extract: a
+/// native module expands its macro through Cargo's build, a marked module
+/// beside it runs, and a marked module that names the macro expands it as
+/// rustc does. Each used to fail as if the manifest changed during the
+/// build.
+#[test]
+fn a_direct_proc_macro_dependency_expands_in_native_and_marked_code() {
+    const PROC_MACRO: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-proc-macro"
+    );
+    let root = crate::support::scratch().join("plain-proc-macro");
+    let _ = fs::remove_dir_all(&root);
+    copy(Path::new(PROC_MACRO), &root);
+
+    let checked = rawr_import(&root, &["check"]);
+    assert!(
+        checked.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&checked.stdout),
+        text(&checked.stderr)
+    );
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "42 value 43\n");
+
+    fs::write(
+        root.join("src/scale.rs"),
+        "// rawr\npub fn label(value: i64) -> String {\n    \
+         format!(\"value {}\", value + numerals::double!(3))\n}\n",
+    )
+    .unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "42 value 48\n");
+}
+
 /// An edit that changes only a derive's expansion's bodies, as a new
 /// `#[serde(rename)]` does, swaps into the running program (#1040): rustc
 /// expands the item again, its expansion's source changes in place, and the
