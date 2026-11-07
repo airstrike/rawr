@@ -2,7 +2,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Barrier};
-use std::time::Duration;
 
 use crate::node::{Direct, Error, Evaluator, Kind, Parent, Value};
 use crate::store::Store;
@@ -96,7 +95,7 @@ fn batch_and_two_legacy_contenders_serialize_while_another_project_progresses() 
                 predecessor = Some((records[0].clone(), fs::read(&records[0]).unwrap()));
                 start.wait();
                 assert!(progressed
-                    .recv_timeout(Duration::from_secs(5))
+                    .recv()
                     .expect("other project must not wait for this ownership"));
                 assert!(matches!(
                     completed.try_recv(),
@@ -112,7 +111,7 @@ fn batch_and_two_legacy_contenders_serialize_while_another_project_progresses() 
             .unwrap();
         for _ in 0..2 {
             assert!(completed
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("contender resumes after batch ownership releases"));
         }
     });

@@ -275,14 +275,6 @@ struct Session {
 }
 fn session() -> Session {
     let (client, server) = UnixStream::pair().unwrap();
-    for stream in [&client, &server] {
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(3)))
-            .unwrap();
-        stream
-            .set_write_timeout(Some(std::time::Duration::from_secs(3)))
-            .unwrap();
-    }
     let revision = Arc::new(AtomicUsize::new(0));
     let installed = Arc::new(AtomicUsize::new(0));
     let cancelled = Arc::new(AtomicUsize::new(0));

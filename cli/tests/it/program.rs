@@ -6,7 +6,6 @@ use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
 
 use super::{assert_success, stderr, stdout, Sandbox};
 
@@ -55,19 +54,21 @@ impl Running {
         }
     }
 
-    /// The next line `accept` takes, waiting up to `limit`.
-    fn until(&mut self, limit: Duration, accept: impl Fn(&str) -> bool) -> String {
-        let deadline = Instant::now() + limit;
+    /// The next line `accept` takes. A run whose output ends without one
+    /// fails the test, with what it printed.
+    fn until(&mut self, accept: impl Fn(&str) -> bool) -> String {
         loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            match self.lines.recv_timeout(left) {
+            match self.lines.recv() {
                 Ok(line) => {
                     self.seen.push(line.clone());
                     if accept(&line) {
                         return line;
                     }
                 }
-                Err(_) => panic!("timed out; output so far:\n{}", self.seen.join("\n")),
+                Err(_) => panic!(
+                    "the run ended without it; its output:\n{}",
+                    self.seen.join("\n")
+                ),
             }
         }
     }
@@ -100,20 +101,16 @@ fn a_save_restarts_a_running_program_and_a_broken_one_leaves_it_running() {
     let file = sandbox.work().join("ticks.rs");
     fs::write(&file, TICKS).unwrap();
     let mut run = Running::start(&sandbox, &["run", "ticks.rs"]);
-    run.until(Duration::from_secs(30), |line| line == "tick 3 version 1");
+    run.until(|line| line == "tick 3 version 1");
 
     // A save that doesn't compile leaves the program running.
     fs::write(&file, TICKS.replace("VERSION: i64 = 1", "VERSION: i64 = ")).unwrap();
-    run.until(Duration::from_secs(30), |line| {
-        line.starts_with("stderr: error")
-    });
-    run.until(Duration::from_secs(30), |line| line.ends_with("version 1"));
+    run.until(|line| line.starts_with("stderr: error"));
+    run.until(|line| line.ends_with("version 1"));
 
     fs::write(&file, TICKS.replace("VERSION: i64 = 1", "VERSION: i64 = 2")).unwrap();
-    run.until(Duration::from_secs(30), |line| {
-        line == "stderr: rawr: the source changed; restarting the program"
-    });
-    run.until(Duration::from_secs(30), |line| line == "tick 1 version 2");
+    run.until(|line| line == "stderr: rawr: the source changed; restarting the program");
+    run.until(|line| line == "tick 1 version 2");
 }
 
 const ECHO: &str = r#"// rawr

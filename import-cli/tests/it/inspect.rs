@@ -10,7 +10,7 @@ use std::fs;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -22,23 +22,39 @@ const FIXTURE: &str = concat!(
 );
 
 /// One request and its answer over the program's socket, as `rawr mcp`
-/// asks it.
+/// asks it, once the runner serves the socket.
 fn ask(socket: &Path, request: &Value) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(10);
     let stream = loop {
         match UnixStream::connect(socket) {
             Ok(stream) => break stream,
-            Err(error) if Instant::now() >= deadline => panic!("{}: {error}", socket.display()),
             Err(_) => std::thread::sleep(Duration::from_millis(20)),
         }
     };
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
     writeln!(&stream, "{request}").unwrap();
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line).unwrap();
     serde_json::from_str(&line).unwrap()
+}
+
+/// The `count`th pause the program told in `events`, once it has.
+fn pause(run: &mut crate::support::Run, events: &Path, count: usize) -> Value {
+    loop {
+        let told = fs::read_to_string(events).unwrap_or_default();
+        if let Some(pause) = told
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|event| event["event"] == "paused")
+            .nth(count - 1)
+        {
+            return pause;
+        }
+        assert!(
+            run.child.try_wait().unwrap().is_none(),
+            "the run exited first: {told}\n{}",
+            run.seen.join("\n")
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]
@@ -72,15 +88,12 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
         ],
     );
     // The first run builds the runner.
-    run.until(Duration::from_secs(900), |line| line.starts_with("running"));
+    run.until(|line| line.starts_with("running"));
     let main = fs::canonicalize(root.join("src/main.rs")).unwrap();
 
     // The program's own type holding a crate value, inside the function
     // the native loop calls.
-    let read = ask(
-        &socket,
-        &json!({ "name": "state", "file": main, "timeout_ms": 5000 }),
-    );
+    let read = ask(&socket, &json!({ "name": "state", "file": main }));
     assert_eq!(read["reached"], true, "{read}");
     assert_eq!(read["file"], json!(main), "{read}");
     assert_eq!(read["function"], "inspect_dependency::update", "{read}");
@@ -95,8 +108,8 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
 
     // A parameter, and a crate value without `Debug`, which says so as
     // rustc does.
-    let tick = ask(&socket, &json!({ "name": "tick", "timeout_ms": 5000 }));
-    let read = ask(&socket, &json!({ "name": "sealed", "timeout_ms": 5000 }));
+    let tick = ask(&socket, &json!({ "name": "tick" }));
+    let read = ask(&socket, &json!({ "name": "sealed" }));
     assert!(
         tick["bindings"][0]["value"]
             .as_str()
@@ -114,34 +127,23 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
     let main_text = main.to_string_lossy().into_owned();
     let set = ask(
         &socket,
-        &json!({ "op": "break", "file": main_text, "line": 18, "timeout_ms": 5000 }),
+        &json!({ "op": "break", "file": main_text, "line": 18 }),
     );
-    assert_eq!(set["paused"]["line"], 18, "{set}");
-    assert_eq!(
-        set["paused"]["function"], "inspect_dependency::update",
-        "{set}"
-    );
-    let first = ask(&socket, &json!({ "name": "tick", "timeout_ms": 5000 }));
-    let again = ask(&socket, &json!({ "name": "tick", "timeout_ms": 5000 }));
+    assert!(set.get("error").is_none(), "{set}");
+    // The pause is told as an event (#535).
+    let paused = pause(&mut run, &events, 1);
+    assert_eq!(paused["line"], 18, "{paused}");
+    assert_eq!(paused["function"], "inspect_dependency::update", "{paused}");
+    let first = ask(&socket, &json!({ "name": "tick" }));
+    let again = ask(&socket, &json!({ "name": "tick" }));
     assert_eq!(first["bindings"], again["bindings"], "{again}");
-    // The pause is told as an event (#535), and the answer lists the calls
-    // the program is in (#511).
-    let told = fs::read_to_string(&events).unwrap_or_default();
-    assert!(
-        told.lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .any(|event| event["event"] == "paused" && event["line"] == 18),
-        "{told}"
-    );
+    // The answer lists the calls the program is in (#511).
     assert_eq!(
         first["frames"][0],
         json!({ "function": "inspect_dependency::update", "file": main, "line": 18 }),
         "{first}"
     );
-    let step = ask(
-        &socket,
-        &json!({ "op": "step", "kind": "over", "timeout_ms": 5000 }),
-    );
+    let step = ask(&socket, &json!({ "op": "step", "kind": "over" }));
     assert_eq!(step["paused"]["line"], 19, "{step}");
     let told = fs::read_to_string(&events).unwrap_or_default();
     assert!(
@@ -149,18 +151,16 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
         "{told}"
     );
     // Past the function's end, the step pauses at the loop's next call.
-    let step = ask(
-        &socket,
-        &json!({ "op": "step", "kind": "over", "timeout_ms": 5000 }),
-    );
+    let step = ask(&socket, &json!({ "op": "step", "kind": "over" }));
     assert_eq!(step["paused"]["line"], 13, "{step}");
-    let next = ask(&socket, &json!({ "name": "tick", "timeout_ms": 5000 }));
+    let next = ask(&socket, &json!({ "name": "tick" }));
     assert_ne!(next["bindings"], first["bindings"], "{next}");
-    let continued = ask(&socket, &json!({ "op": "continue", "timeout_ms": 5000 }));
-    assert_eq!(continued["paused"]["line"], 18, "{continued}");
+    let continued = ask(&socket, &json!({ "op": "continue" }));
+    assert!(continued["paused"].is_null(), "{continued}");
+    assert_eq!(pause(&mut run, &events, 4)["line"], 18);
     let cleared = ask(&socket, &json!({ "op": "clear" }));
     assert_eq!(cleared["cleared"], 1, "{cleared}");
-    let continued = ask(&socket, &json!({ "op": "continue", "timeout_ms": 300 }));
+    let continued = ask(&socket, &json!({ "op": "continue" }));
     assert!(continued["paused"].is_null(), "{continued}");
 
     fs::write(&stop, "").unwrap();

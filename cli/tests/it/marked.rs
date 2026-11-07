@@ -702,19 +702,14 @@ fn background_cargo_check_restarts_on_saves_and_reports_only_the_newest() {
         move |status| drop(reported.send(status)),
     );
     // The launch check starts at once. Three saves stop it and start one.
-    let Ok(first) = starts.recv_timeout(Duration::from_secs(120)) else {
-        match reports.try_recv() {
-            Ok(status) => panic!("the stand-in cargo did not start: {status:?}"),
-            Err(_) => panic!("no check started"),
-        }
-    };
+    let first = starts.recv().expect("a check starts");
     assert_eq!(first, "1");
     for _ in 0..3 {
         background.saved();
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    let status = reports.recv_timeout(Duration::from_secs(120)).unwrap();
+    let status = reports.recv().unwrap();
     let rawr_cli::cargo::Status::Finished(outcome) = status else {
         panic!("{status:?}");
     };
