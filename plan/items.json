@@ -1135,6 +1135,7 @@
     {"t":"T1132","issue":1132,"title":"T1132: Embedding: a script function's leading &mut parameter becomes `this`, but bind_this_ptr says typed scripts can't read it","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1133","issue":1133,"title":"T1133: Embedding: the call-stack depth limit is 8 in debug builds and 64 in release","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1134","issue":1134,"title":"T1134: Embedding: the host boundary carries no enums, Vec or &mut","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1135","issue":1135,"title":"T1135: The generated target/rawr/crate manifest puts src/main.rs in both its lib and bin targets, so cargo warns","state":"open","category":"Health","labels":["health"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null}
+    {"t":"T1135","issue":1135,"title":"T1135: The generated target/rawr/crate manifest puts src/main.rs in both its lib and bin targets, so cargo warns","state":"open","category":"Health","labels":["health"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
+    {"t":"T1136","issue":1136,"title":"T1136: The runner's copy of a crate misses the files the crate reads at compile time, such as include_bytes! assets","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null}
   ]
 }
