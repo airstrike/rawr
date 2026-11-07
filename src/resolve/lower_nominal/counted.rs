@@ -645,10 +645,13 @@ impl Parser<'_> {
                 // Its parts can't be moved out of (rustc's E0507).
                 self.unmovable.insert(
                     value.span,
-                    (
-                        "E0507",
-                        format!("cannot move out of an `{}`", counter.name()),
-                    ),
+                    Unplaced {
+                        moved: (
+                            "E0507",
+                            format!("cannot move out of an `{}`", counter.name()),
+                        ),
+                        assigned: Some(counter.unassignable()),
+                    },
                 );
 
                 value.ty = Ty::Reference {

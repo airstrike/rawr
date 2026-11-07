@@ -539,3 +539,41 @@ main();
         "{report}"
     );
 }
+
+/// `AsRef` and `AsMut` bounds of std's types hold by std's impls, and
+/// `as_ref` and `as_mut` through them run (rustlings' as_ref_mut).
+#[test]
+fn language_std_as_ref_and_as_mut_bounds_hold_for_std_types() {
+    let source = r#"
+fn bytes<T: AsRef<str>>(arg: T) -> usize {
+    arg.as_ref().len()
+}
+fn chars<T: AsRef<str>>(arg: T) -> usize {
+    arg.as_ref().chars().count()
+}
+fn square<T: AsMut<u32>>(arg: &mut T) {
+    let arg = arg.as_mut();
+    *arg *= *arg;
+}
+fn main() {
+    let s = String::from("Café");
+    println!("{} {}", bytes(s.clone()), chars(s));
+    println!("{} {}", bytes("Café"), chars("Café"));
+    let mut n: Box<u32> = Box::new(3);
+    square(&mut n);
+    println!("{}", *n);
+}
+main();
+"#;
+    assert_eq!(printed(source), "5 4\n5 4\n9\n");
+    // A bound std's impls don't cover is rustc's E0277, with the trait's
+    // arguments.
+    let report = refused(
+        "fn bytes<T: AsRef<str>>(arg: T) -> usize { arg.as_ref().len() }\n\
+         fn main() { bytes(1u8); }\nmain();\n",
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `u8: AsRef<str>` is not satisfied"),
+        "{report}"
+    );
+}

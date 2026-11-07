@@ -22,7 +22,8 @@
 # - `exercise` rows run an unsolved exercise both ways. Each side's outcome
 #   is its first error code, else the program's exit status, else the
 #   outcome of its tests (`tests-build:CODE` or `tests-fail`). They match
-#   when both fail to compile with the same code, or both run alike.
+#   when both fail to compile with the same first error's code (`error`
+#   for one with none), or both run alike.
 #
 # Every copy starts with `// rawr`. `rawr` is the one on PATH. RAWR_BIN names
 # a development build's directory (with `rawr-import` and
@@ -52,17 +53,20 @@ printf 'kind\tfile\trustc\trawr\tverdict\tdetail\n' >"$results"
 
 row() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >>"$results"; }
 
-# The first error code in a file (`E0308`, or rawr's own such as
-# `RAWR-RESOLVE-…`), else `error` when it has an error line, else nothing.
+# The code of the first error in a file (`E0308`, or rawr's own such as
+# `RAWR-RESOLVE-…`), else `error` when that error has none, else nothing.
+# rawr stops at its first error, so a later one of rustc's never counts.
 code() {
-    local found
-    found=$(grep -o -m1 'error\[[^]]*\]' "$1" | head -1)
-    if [ -n "$found" ]; then
-        found=${found#error[}
-        echo "${found%]}"
-    elif grep -q -m1 '^error' "$1"; then
-        echo error
-    fi
+    local first
+    first=$(grep -m1 '^error' "$1")
+    case $first in
+        "") ;;
+        error\[*)
+            first=${first#error[}
+            echo "${first%%]*}"
+            ;;
+        *) echo error ;;
+    esac
 }
 
 # The first error line (else the first stderr line), on one line.

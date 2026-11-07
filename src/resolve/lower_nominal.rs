@@ -8793,6 +8793,22 @@ impl Counter {
             Self::Arc => ("alloc::sync::Arc", "alloc::sync::Weak"),
         }
     }
+
+    /// rustc's E0594 for an assignment through the pointer, which has no
+    /// `DerefMut`.
+    fn unassignable(self) -> ImmutableString {
+        format!("cannot assign to data in an `{}`", self.name()).into()
+    }
+}
+
+/// What Rust refuses of a place the lowering gives no place of its own.
+#[derive(Clone)]
+struct Unplaced {
+    /// rustc's code and message for a move out of it.
+    moved: (&'static str, String),
+    /// rustc's E0594 message for an assignment to it, where it is behind a
+    /// pointer with no `DerefMut`.
+    assigned: Option<ImmutableString>,
 }
 
 /// Which `PartialEq` impl an `==` resolves to.
@@ -12136,9 +12152,9 @@ struct Parser<'a> {
     /// move (`move_local`).
     shared_field_reads: BTreeSet<Span>,
     /// Places Rust can't move out of that the lowering gives no place of
-    /// their own (`*r`, `*rc`, `[s][0]`), by their span: rustc's code and
-    /// message for a move out of one.
-    unmovable: BTreeMap<Span, (&'static str, String)>,
+    /// their own (`*r`, `*rc`, `[s][0]`), by their span: what rustc
+    /// refuses of each.
+    unmovable: BTreeMap<Span, Unplaced>,
     /// The closures that own a capture which is not `Copy`, so they move
     /// as values that are not `Copy` do.
     owning_closures: BTreeSet<crate::item::Key>,
@@ -15030,6 +15046,23 @@ impl<'a> Parser<'a> {
                 self.unifies(&resolved, &argument)
             };
         }
+        // std's impls of a std trait for a type std declares: `String:
+        // AsRef<str>`, `Box<u32>: AsMut<u32>` (D711 step 3).
+        if self.models.std_traits.contains(trait_name)
+            && self.std_declared(&resolved)
+            && let Some(definition) = crate::resolve::std_trait::anywhere(trait_name)
+            && std_impl::holds(
+                &mut std_impl::Probe(self),
+                definition,
+                &resolved,
+                arguments,
+                true,
+                0,
+            )
+            .is_ok()
+        {
+            return true;
+        }
         let candidates: Vec<Vec<Ty>> = match self.inference.resolve(ty) {
             Ty::Dyn(name, bindings) if name == trait_name => vec![dyn_arguments(&bindings)],
             Ty::Dyn(name, bindings) => {
@@ -15210,7 +15243,13 @@ impl<'a> Parser<'a> {
                 "a type with `Display` in `format!`"
             };
             let rendered = match &ty {
-                Ty::Infer(_) => return Err(mismatch(expected)),
+                // A type nothing settles is rustc's E0282 at the first
+                // `let` whose type holds it.
+                Ty::Infer(_) => {
+                    return Err(self
+                        .unsettled(&ty, pending.span, None)
+                        .unwrap_or_else(|| mismatch(expected)));
+                }
                 // A value that never comes is never written.
                 Ty::Never => name,
                 Ty::Float(kind) => {
@@ -24095,7 +24134,10 @@ impl<'a> Parser<'a> {
             self.flow().moved(value.span.start());
             return Ok(());
         }
-        if let Some((code, message)) = self.unmovable.get(&value.span)
+        if let Some(Unplaced {
+            moved: (code, message),
+            ..
+        }) = self.unmovable.get(&value.span)
             && self.moves_by_value(&value.ty)
         {
             return Err(Error::BorrowConflict {
@@ -27050,6 +27092,21 @@ impl<'a> Parser<'a> {
     fn parse_assignment(&mut self, value: ParsedExpr) -> Result<(origin::Fragment, Span), Error> {
         let assignment = self.next().0;
         let Some(lvalue) = value.lvalue else {
+            // rustc's borrow check comes after the value's type check, and
+            // points at the whole assignment.
+            if let Some(Unplaced {
+                assigned: Some(message),
+                ..
+            }) = self.unmovable.get(&value.span).cloned()
+            {
+                let replacement = self.parse_expr()?;
+                return Err(Error::BorrowConflict {
+                    code: "E0594",
+                    message,
+                    access: span(value.span.start(), replacement.span.end()),
+                    borrow: Span::NONE,
+                });
+            }
             return Err(self.unsupported("assignment target"));
         };
         let binding_name = lvalue.binding().clone();
@@ -30517,6 +30574,38 @@ impl<'a> Parser<'a> {
         (binding.clone(), parts)
     }
 
+    /// Whether `for` loops over `ty.into_iter()` by std's `IntoIterator`
+    /// impl for it: a std type the loop doesn't walk itself, as an
+    /// `Option`, a `Result` or a reference to one.
+    fn std_into_iterator(&self, ty: &Ty) -> bool {
+        let inner = match ty {
+            Ty::Reference { target, .. } => self.inference.resolve(target),
+            ty => ty.clone(),
+        };
+        let walked = matches!(
+            inner,
+            Ty::Iter(..)
+                | Ty::Array { .. }
+                | Ty::Keyed(..)
+                | Ty::Range(_)
+                | Ty::InclusiveRange(_)
+                | Ty::Thread(..)
+                | Ty::Boxed(_)
+        );
+        !walked
+            && inner.script().is_none()
+            && self.std_declared(ty)
+            && std_impl::holds(
+                &mut std_impl::Probe(self),
+                "core::iter::traits::collect::IntoIterator",
+                ty,
+                &[],
+                true,
+                0,
+            )
+            .is_ok()
+    }
+
     /// `for x in a..b` and `for x in a..=b` over `i64`.
     fn parse_for(
         &mut self,
@@ -30562,11 +30651,14 @@ impl<'a> Parser<'a> {
         }
         let mut lhs = self.parse_head(|parser| parser.parse_binary(0))?;
         // `for x in bag` of a program's type that implements `IntoIterator`
-        // loops over `bag.into_iter()`, as Rust's `for` desugars it.
+        // loops over `bag.into_iter()`, as Rust's `for` desugars it, as
+        // does one of a std type std implements it for that the loop
+        // doesn't walk itself: `Option`, `Result` and references to them.
         let iterated = self.inference.resolve(&lhs.ty);
         if iterated.script().is_some()
             && !self.type_implements(&iterated, "Iterator")
             && self.type_implements(&iterated, "IntoIterator")
+            || self.std_into_iterator(&iterated)
         {
             let at = lhs.span.end();
             self.splice_tokens(vec![
@@ -37255,9 +37347,16 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
             if let Some(behind) = behind {
+                let assigned = match self.inference.resolve(&base.1) {
+                    Ty::Counted(counter, _) => Some(counter.unassignable()),
+                    _ => None,
+                };
                 self.unmovable.insert(
                     operand.span,
-                    ("E0507", format!("cannot move out of {behind}")),
+                    Unplaced {
+                        moved: ("E0507", format!("cannot move out of {behind}")),
+                        assigned,
+                    },
                 );
             }
             // `*x` of a `&&T` is the `&T` it refers to.
@@ -39306,8 +39405,13 @@ impl<'a> Parser<'a> {
                 _ => format!("cannot move out of index of `{}`", owner.name(&self.models)),
             };
             let code = if length.is_some() { "E0508" } else { "E0507" };
-            self.unmovable
-                .insert(span(value.span.start(), end), (code, message));
+            self.unmovable.insert(
+                span(value.span.start(), end),
+                Unplaced {
+                    moved: (code, message),
+                    assigned: None,
+                },
+            );
         }
         let mut indexed = self.operator_expr(source, element, span(value.span.start(), end));
         indexed.lvalue = lvalue;
@@ -40205,6 +40309,7 @@ impl<'a> Parser<'a> {
     /// with Rust's messages. A panic throws its message.
     #[inline(never)]
     fn parse_panic_macro(&mut self, name: &str, name_span: Span) -> Result<ParsedExpr, Error> {
+        let unit = matches!(self.peek(), Token::Unit);
         let (tokens, end) = self.take_argument_tokens()?;
         let call = span(name_span.start(), end);
         let name = name.strip_prefix("debug_").unwrap_or(name);
@@ -40216,13 +40321,26 @@ impl<'a> Parser<'a> {
             return self.parse_assert_compare(operator, tokens, name_span, end);
         }
         if name == "assert" {
-            let mut parts = split_arguments(tokens);
-            if parts.first().is_none_or(Vec::is_empty) {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "`assert!` without a condition".into(),
-                    source: call,
+            // rustc's errors for a missing condition: none at all, or an
+            // argument list that starts with its comma.
+            if let Some((Token::Comma, comma)) = tokens.first() {
+                return Err(Error::Syntax {
+                    message: "expected expression, found `,`".into(),
+                    label: "expected expression".into(),
+                    help: None,
+                    at: point_span(*comma),
                 });
             }
+            if tokens.is_empty() {
+                let closing = if unit { text_end(end, "(") } else { end };
+                return Err(Error::Syntax {
+                    message: "macro requires a boolean expression as an argument".into(),
+                    label: "boolean expression required".into(),
+                    help: None,
+                    at: span(name_span.start(), text_end(closing, ")")),
+                });
+            }
+            let mut parts = split_arguments(tokens);
             let condition_tokens = parts.remove(0);
             let text = format!("assertion failed: {}", token_text(&condition_tokens));
             let mut spliced = condition_tokens;
@@ -43699,6 +43817,12 @@ impl<'a> Parser<'a> {
                 source.push_text(" }");
                 Ty::Result(Box::new(element), Box::new(self.inference.resolve(&error)))
             }
+            "iter" | "into_iter" => {
+                arity(0, &arguments)?;
+                let item = self.held_item(&value.ty, &member, element);
+                let parts = [is(self), unwrap(self)];
+                return Ok(self.held_iterator(source, parts, item, expression));
+            }
             "as_ref" | "as_mut" => {
                 arity(0, &arguments)?;
                 source.push_text(o.as_str());
@@ -44129,6 +44253,12 @@ impl<'a> Parser<'a> {
                 let test = is(self);
                 branch(&mut source, test, r.as_str().into(), produced);
                 Ty::Result(Box::new(ok), Box::new(self.inference.resolve(&output)))
+            }
+            "iter" | "into_iter" => {
+                arity(0, &arguments)?;
+                let item = self.held_item(&value.ty, &member, ok);
+                let parts = [is(self), value_of(self)];
+                return Ok(self.held_iterator(source, parts, item, expression));
             }
             "as_ref" | "as_mut" => {
                 arity(0, &arguments)?;
@@ -49393,7 +49523,9 @@ impl<'a> Parser<'a> {
     }
 
     /// A path expression from its first segment. One that names a std
-    /// item Rawr can't run yet says so (D712.1).
+    /// item Rawr can't run yet says so (D712.1). An unknown name in the
+    /// path's arguments, as one in `thread::spawn`'s closure, is that name's
+    /// error.
     fn parse_qualified(
         &mut self,
         first: ImmutableString,
@@ -49407,7 +49539,9 @@ impl<'a> Parser<'a> {
                 | Error::UnknownFunction { .. }
                 | Error::UnknownMember { .. }
                 | Error::NotInModule { .. }),
-            ) => Err(self.std_not_yet(&path, reference).unwrap_or(error)),
+            ) if error.primary_span().start() <= reference.end() => {
+                Err(self.std_not_yet(&path, reference).unwrap_or(error))
+            }
             parsed => parsed,
         }
     }
