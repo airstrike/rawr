@@ -986,6 +986,44 @@ pub mod widgets {
         Opaque(content)
     }
 
+    /// A label of `title` that sends what `on_press` makes of its width
+    /// when pressed, as iced's `markdown::code_block(viewer: &impl Viewer,
+    /// .., on_link_click: impl Fn(Uri) -> Message + Clone + 'a) -> impl
+    /// Widget<..>`: two `impl Trait` inputs, one a callable, behind an
+    /// opaque widget.
+    pub fn titled<'a, Message, Theme, Renderer>(
+        title: &impl ToString,
+        on_press: impl Fn(u16) -> Message + Clone + 'a,
+    ) -> impl Widget<Message, Theme, Renderer> + 'a
+    where
+        Message: 'a,
+        Theme: 'a,
+        Renderer: 'a,
+    {
+        struct Titled<F> {
+            title: String,
+            on_press: F,
+        }
+
+        impl<F, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Titled<F>
+        where
+            F: Fn(u16) -> Message,
+        {
+            fn labels(&self, labels: &mut Vec<String>) {
+                labels.push(format!("titled {}", self.title));
+            }
+
+            fn press(&self, label: &str) -> Option<Message> {
+                (label == self.title).then(|| (self.on_press)(self.title.len() as u16))
+            }
+        }
+
+        Titled {
+            title: title.to_string(),
+            on_press,
+        }
+    }
+
     /// `top` over `base`, as iced's `hover`: a widget of both, whose type
     /// names no lifetime of its own. A press `top` doesn't take presses
     /// `base`'s rule.

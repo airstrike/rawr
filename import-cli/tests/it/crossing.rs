@@ -1366,14 +1366,42 @@ fn an_opaque_output_that_borrows_an_element_is_held_in_its_region() {
 }
 
 /// `outlined` gives an opaque type of a type no public path names, on an
-/// `Element<'_, ..>`, held in its region as `explain`'s is (#936). The
-/// output is `cargo run`'s.
+/// `Element<'_, ..>`, held in its region as `explain`'s is (#936). It is a
+/// default method of the trait `explain` is one of, and each method's
+/// opaque type has members of its own (#943). The output is `cargo run`'s.
 #[test]
 fn an_opaque_output_of_a_private_type_that_borrows_an_element_is_held() {
     let (rawr, cargo) = both_printed("outlined_element.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.ends_with("last view pad 0 [Increment] 2@50 outlined rule 4 [Decrement]"),
+        "{rawr}"
+    );
+}
+
+/// iced's markdown (#1098): `titled(&title, on_press)` takes two `impl
+/// Trait` inputs, one a callable, as `code_block` does, and `explain` on
+/// what it gives names that opaque type as its `Self` with the arguments
+/// the function's output has. The output is `cargo run`'s.
+#[test]
+fn a_member_of_an_opaque_type_that_leaves_out_a_callable_names_it_whole() {
+    let (rawr, cargo) = both_printed("titled_explained.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 [Increment] 3@50 explain #00ff00 titled code"),
+        "{rawr}"
+    );
+}
+
+/// #916: a local holds what `opaque(caption(..))` gives, an opaque widget
+/// over a type that declares a lifetime, before `column!` boxes it. The
+/// output is `cargo run`'s.
+#[test]
+fn a_held_opaque_widget_over_a_borrowing_type_runs() {
+    let (rawr, cargo) = both_printed("held_caption.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 1..=100@50/None opaque \"50\""),
         "{rawr}"
     );
 }

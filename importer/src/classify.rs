@@ -287,6 +287,10 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// it gives does not take as arguments. `None` elsewhere, where an
     /// opaque type is refused.
     opaque_output: std::cell::RefCell<Option<Box<[u32]>>>,
+    /// The type parameters each opaque type a function gives leaves out
+    /// (`opaque_output`), by its definition, so the opaque type is the
+    /// same where a member of it names it as its `Self`.
+    opaque_excluded: std::cell::RefCell<BTreeMap<api::identity::Definition, Box<[u32]>>>,
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
     opaque_self: std::cell::RefCell<Option<model::Type>>,
@@ -625,6 +629,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             instance_aliases: std::cell::OnceCell::new(),
             sole_aliases: std::cell::OnceCell::new(),
             opaque_output: std::cell::RefCell::new(None),
+            opaque_excluded: std::cell::RefCell::new(BTreeMap::new()),
             opaque_self: std::cell::RefCell::new(None),
             opaque_projecting: std::cell::RefCell::new(Vec::new()),
             opaque_associated: std::cell::RefCell::new(Vec::new()),
@@ -5289,7 +5294,6 @@ impl<P: api::Phase> Context<'_, P> {
         opaques: &[&model::Type],
     ) -> Result<Vec<ImplementationRecord>, Error> {
         let mut records = Vec::new();
-        rawr_dbg(format!("RAWRDBG opaque_records {:?} {}", definition.display_path().collect::<Vec<_>>(), opaques.len()));
         for &opaque in opaques {
             let model::Type::ImplTrait { id, bounds, .. } = opaque else {
                 continue;
@@ -5314,12 +5318,8 @@ impl<P: api::Phase> Context<'_, P> {
                     .definition_index(trait_id)
                     .and_then(|index| self.graph.definitions().nth(index))
                 else {
-                    rawr_dbg(format!("RAWRDBG no trait definition {:?}", definition.display_path().collect::<Vec<_>>()));
                     continue;
                 };
-                if let model::Kind::Trait { associated, .. } = trait_definition.kind() {
-                    rawr_dbg(format!("RAWRDBG {:?} trait {:?} {}", definition.display_path().collect::<Vec<_>>(), trait_definition.display_path().collect::<Vec<_>>(), associated.len()));
-                }
                 let model::Kind::Trait { associated, .. } = trait_definition.kind() else {
                     continue;
                 };
@@ -5402,13 +5402,6 @@ impl<P: api::Phase> Context<'_, P> {
                         method_signature,
                         method_generics,
                     )?;
-                    if let OutcomeEvidence::Inline(plan) = &evidence {
-                        if let representability::Representability::Rejected(reason) = &**plan {
-                            rawr_dbg(format!("RAWRDBG member {name} rejected {:?}", reason.kind()));
-                        } else {
-                            rawr_dbg(format!("RAWRDBG member {name} ok"));
-                        }
-                    }
                     outcomes.push(OutcomeRecord {
                         export: export.key().clone(),
                         identity,
@@ -9121,6 +9114,18 @@ impl<P: api::Phase> Context<'_, P> {
                 let Some(excluded) = excluded else {
                     return Err(representability::reject::Kind::OpaqueType.into());
                 };
+                let excluded = if excluded.is_empty() {
+                    self.opaque_excluded
+                        .borrow()
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    self.opaque_excluded
+                        .borrow_mut()
+                        .insert(id.clone(), excluded.clone());
+                    excluded
+                };
                 let mut arguments = Vec::new();
                 for capture in captures.iter() {
                     let model::Argument::Type(ty) = capture else {
@@ -11129,6 +11134,18 @@ fn borrows_receiver(
         return false;
     };
     let output = signature.output();
+    // An opaque output that captures the receiver's lifetime, as `fn
+    // items(&self) -> impl Iterator<Item = T> + '_` gives, borrows it the
+    // same way: its region holds it by the family of the wrapper that
+    // makes it (`bridge::generate::family`).
+    if let model::Type::ImplTrait { captures, .. } = output {
+        return !signature.async_function()
+            && signature.binders().len() == 1
+            && !signature.inputs().any(names_late_lifetime)
+            && captures
+                .iter()
+                .any(|capture| matches!(capture, model::Argument::Lifetime(named) if named == receiver));
+    }
     // A nominal output, as `QName<'_>`: a borrow guard is read through its
     // target, an async method's future holds its receiver (D513.6), and an
     // opaque or reference output is held to its own rules.
@@ -14976,9 +14993,3 @@ mod tests {
     }
 }
 
-fn rawr_dbg(line: String) {
-    use std::io::Write as _;
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/andy/projects/rawr/.claude/worktrees/agent-ad30241c1ee9329b8/target/scratch/dbg.log") {
-        let _ = writeln!(file, "{line}");
-    }
-}
