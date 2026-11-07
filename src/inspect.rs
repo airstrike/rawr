@@ -41,6 +41,10 @@
 //!   `timeout_ms` for the next pause: `{"paused": .. or null}`, or
 //!   `{"error": "not paused"}`.
 //!
+//! It also sends the program's window input (#989), with `{"op": "input",
+//! "action": ..}`: a pointer move, a click, a drag, a scroll, a key press or
+//! typed text; `{"error": "paused", "paused": ..}` while it is paused.
+//!
 //! Under `rawr mcp`, a pause and its end are also told as `paused` (with
 //! the file, line, function and reason) and `resumed` events in the file
 //! `RAWR_MCP_DEBUG_EVENTS` names, so `wait` and `status` say so (#535).
@@ -53,6 +57,7 @@
 //! called pauses at the program's next call from it.
 #![cfg(feature = "debugging")]
 
+mod input;
 mod stops;
 
 use std::collections::HashSet;
@@ -668,6 +673,7 @@ impl Shared {
             .and_then(Value::as_u64)
             .map_or(TIMEOUT, Duration::from_millis);
         let answer = match request.get("op").and_then(Value::as_str) {
+            Some("input") => self.input(&request, timeout),
             Some("break") => self.set(&request, timeout),
             Some("clear") => self.clear(&request),
             Some("continue") => self.resume(Resume::Continue, timeout),
@@ -683,6 +689,15 @@ impl Shared {
         };
         let mut stream = stream;
         let _ = writeln!(stream, "{answer}");
+    }
+
+    /// Send the program's window an input. A paused program holds its
+    /// event loop, so it takes none until it goes on.
+    fn input(&self, request: &Value, timeout: Duration) -> Value {
+        if let Some(paused) = self.state().paused.clone() {
+            return json!({ "error": "paused", "paused": paused });
+        }
+        input::answer(request, timeout)
     }
 
     /// Read values: answered at the program's next matching step, or where
