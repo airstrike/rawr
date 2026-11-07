@@ -200,7 +200,6 @@ pub(super) fn baseline() -> Baseline {
         universe_build: Some(universe::BuildProjection::from_canonical(
             b"[4,[]]\n".as_slice().into(),
         )),
-        package_replay: None,
     }
 }
 
@@ -219,7 +218,6 @@ fn empty() -> Baseline {
             &cargo::Limits::standard(),
         ),
         universe_build: None,
-        package_replay: None,
     }
 }
 
@@ -374,8 +372,8 @@ fn capture_keeps_spending_after_actual_proof_and_protected_projection() {
                 .expect("actual recipe transformation"),
         ]);
     let recipe_allocation = allocation.usage();
-    let proof = proof::evaluate(&recipes, false, &limits, &mut allocation)
-        .expect("actual cold proof evaluation");
+    let proof =
+        proof::evaluate(&recipes, &limits, &mut allocation).expect("actual cold proof evaluation");
     let proof_usage = allocation.usage();
     assert!(proof_usage.items > recipe_allocation.items);
     assert!(proof_usage.bytes > recipe_allocation.bytes);
@@ -412,7 +410,6 @@ fn capture_keeps_spending_after_actual_proof_and_protected_projection() {
         recipe_allocation,
         allocation,
         universe_build: Some(projection),
-        package_replay: None,
     };
     let (stored, mut allocation) = Stored::capture(baseline, &limits, &graph).into_parts();
     let stored = stored.expect("capture uses final account");
@@ -467,28 +464,22 @@ fn already_refused_baseline_cannot_capture_even_an_empty_record() {
     ));
 }
 
+/// A path or Git package keeps only its package and root, which replay
+/// walks again; nothing of its cold walk needs a witness of its own.
 #[test]
-fn path_and_git_capture_refuse_missing_witness_before_any_owned_work() {
-    for git in [false, true] {
-        let mut baseline = empty();
-        baseline.recipes = vec![proof::Recipe::Package(package::Set::fixture_stored_listed(
-            git,
-        ))]
-        .into_boxed_slice();
-        let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
-        let capture = Stored::capture(baseline, &limits, &graph);
-        assert_eq!(capture.allocations, 0);
-        let (result, allocation) = capture.into_parts();
-        assert!(matches!(result, Err(Error::IncompleteWitness)));
-        assert_eq!(
-            allocation.usage(),
-            Usage {
-                items: 7,
-                bytes: 31
-            }
-        );
-    }
+fn a_package_tree_keeps_its_package_and_root_through_the_codec() {
+    let mut baseline = empty();
+    baseline.recipes =
+        vec![proof::Recipe::Package(package::Set::fixture_stored_tree())].into_boxed_slice();
+    let limits = cargo::Limits::standard();
+    let graph = node::GraphBudget::new();
+    let (stored, _) = Stored::capture(baseline, &limits, &graph).into_parts();
+    let decoded = decode(&encode(&stored.expect("a package tree is stored"))).unwrap();
+    let [Recipe::Package(Package::Tree { package_id, root })] = decoded.recipes() else {
+        panic!("one stored package tree");
+    };
+    assert_eq!(&**package_id, "path+file:///unobserved/package#pkg@1.2.3");
+    assert_eq!(root, &PathBuf::from("/unobserved/package"));
 }
 
 #[test]
@@ -747,8 +738,8 @@ fn native_paths_and_derived_proof_text_do_not_gain_a_new_scalar_cap() {
 }
 
 #[test]
-fn undefined_path_and_git_wire_tags_are_not_missing_witness_success_values() {
-    for tag in [1, 3] {
+fn an_undefined_package_wire_tag_is_malformed() {
+    for tag in [0, 3] {
         let limits = cargo::Limits::standard();
         let graph = node::GraphBudget::new();
         let mut allocation = Allocation::new(&limits);
@@ -763,7 +754,7 @@ fn undefined_path_and_git_wire_tags_are_not_missing_witness_success_values() {
             writer.byte(0)
         })
         .expect("malformed fixture encodes");
-        assert!(matches!(decode(&bytes), Err(Error::IncompleteWitness)));
+        assert!(matches!(decode(&bytes), Err(Error::Encoding(_))));
     }
 }
 

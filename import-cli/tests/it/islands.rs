@@ -376,14 +376,15 @@ fn native_builds(target: &Path) -> Vec<(std::path::PathBuf, std::time::SystemTim
 }
 
 /// A workspace whose root package is a plain bin with two marked leaf
-/// modules, path dependencies on two members and on a crate outside the
-/// workspace, and build scripts that print no `rerun-if` line, so Cargo
-/// runs each again when any file of its package changes. `rawr run`
-/// prints what `cargo run` prints, a second run replays without building
-/// the API again, and an edit to a file only such a build script reads
-/// reaches the next run as it reaches Cargo's.
+/// modules, a build script that generates its icons, and path dependencies
+/// on two members and on a crate outside the workspace. One member reads an
+/// asset at the workspace root; the other's build script prints no
+/// `rerun-if` line, so Cargo runs it again when any file of that member
+/// changes. `rawr run` prints what `cargo run` prints, a second run replays
+/// without building the API again, and an edit to a file only that build
+/// script reads reaches the next run as it reaches Cargo's.
 #[test]
-fn a_workspace_whose_build_scripts_watch_their_whole_package_runs_and_replays() {
+fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_replays() {
     const WORKSPACE: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-workspace"
@@ -433,8 +434,9 @@ fn a_workspace_whose_build_scripts_watch_their_whole_package_runs_and_replays() 
     assert_eq!(replayed, printed);
     assert!(!reported.contains("building API"), "{reported}");
 
-    // Each file only a build script reads, and Cargo watches only as part
-    // of its package, reaches the next run as it reaches Cargo's.
+    // A file only the member's build script reads, which Cargo watches as
+    // part of the member, and the root's declared input both reach the
+    // next run as they reach Cargo's.
     edit(&root.join("model/grammar.txt"), "term", "factor");
     edit(&root.join("icons.txt"), "open", "close");
     let printed = cargo();

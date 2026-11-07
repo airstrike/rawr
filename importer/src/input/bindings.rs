@@ -13,7 +13,7 @@ use sha2::{Digest as _, Sha256};
 use super::{build, proof, Allocation, Baseline};
 use crate::cargo;
 
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 
 /// Current request authority, captured before any shared API is consumed.
 pub(crate) struct Current {
@@ -86,7 +86,19 @@ pub(crate) struct Inputs {
 struct File {
     package: String,
     path: PathBuf,
-    tree: bool,
+    read: Read,
+}
+
+/// How a baseline read one input path.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Read {
+    /// One file's bytes.
+    File,
+    /// A declared path: a file, or every file of the directory it names.
+    Tree,
+    /// A package's source tree, walked as Cargo lists a package.
+    Package,
 }
 
 /// A historical witness whose current request and filesystem agree.
@@ -181,7 +193,11 @@ impl Inputs {
                     paths.insert(File {
                         package: package.to_string(),
                         path: path.clone(),
-                        tree: matches!(recipe, proof::Recipe::Path { .. }),
+                        read: if matches!(recipe, proof::Recipe::Path { .. }) {
+                            Read::Tree
+                        } else {
+                            Read::File
+                        },
                     });
                 }
                 proof::Recipe::Environment {
@@ -226,33 +242,36 @@ impl Inputs {
                 _ => {}
             }
         }
-        // Default rerun membership has already been authenticated by Cargo.
-        // Registry extraction is immutable and witnessed by its marker. A git
-        // fallback uses the existing bounded tree evaluator so additions, not
-        // only changes to previously listed files, also invalidate it.
+        // A build script without `rerun-if` inputs reruns when its package
+        // changes. Registry extraction is immutable and witnessed by its
+        // marker; a path or Git package is walked again as a whole, so an
+        // added file invalidates it as a changed one does.
         for entry in baseline.proof.stored_parts().1 {
-            let (package, path, tree) = match entry {
+            let (package, path, read) = match entry {
                 proof::Entry::Registry {
                     package_id, root, ..
                 } if selected.contains(package_id.as_ref()) => (
                     package_id,
                     Path::new(root.as_ref()).join(".cargo-ok"),
-                    false,
+                    Read::File,
                 ),
-                proof::Entry::Git {
-                    package_id, root, ..
+                proof::Entry::Directory {
+                    role: proof::Role::DefaultPackageSource,
+                    package_id: Some(package_id),
+                    path,
+                    ..
                 } if selected.contains(package_id.as_ref()) => {
-                    (package_id, PathBuf::from(root.as_ref()), true)
+                    (package_id, PathBuf::from(path.as_ref()), Read::Package)
                 }
                 _ => continue,
             };
-            if path.starts_with(&current.project) {
+            if !project && path.starts_with(&current.project) {
                 return None;
             }
             paths.insert(File {
                 package: package.to_string(),
                 path,
-                tree,
+                read,
             });
         }
         let paths = paths.into_iter().collect::<Vec<_>>();
@@ -307,12 +326,12 @@ impl Inputs {
         let mut inputs = Self::fixture();
         inputs.paths = files
             .iter()
-            .map(|path| (path, false))
-            .chain(trees.iter().map(|path| (path, true)))
-            .map(|(path, tree)| File {
+            .map(|path| (path, Read::File))
+            .chain(trees.iter().map(|path| (path, Read::Tree)))
+            .map(|(path, read)| File {
                 package: "registry+https://example.invalid/index#fixture@1.0.0".to_owned(),
                 path: path.clone(),
-                tree,
+                read,
             })
             .collect();
         inputs.fingerprint =
@@ -329,23 +348,29 @@ fn evaluate(paths: &[File], limits: &cargo::Limits) -> Option<proof::Proof> {
     let recipes = paths
         .iter()
         .map(|file| {
-            if file.tree {
-                proof::Recipe::Path {
-                    role: proof::Role::DeclaredInput,
-                    package_id: Some(file.package.as_str().into()),
-                    path: file.path.clone(),
-                }
-            } else {
-                proof::Recipe::File {
+            let package_id = Some(file.package.as_str().into());
+            let path = file.path.clone();
+            match file.read {
+                Read::File => proof::Recipe::File {
                     role: proof::Role::DependencySource,
-                    package_id: Some(file.package.as_str().into()),
-                    path: file.path.clone(),
-                }
+                    package_id,
+                    path,
+                },
+                Read::Tree => proof::Recipe::Path {
+                    role: proof::Role::DeclaredInput,
+                    package_id,
+                    path,
+                },
+                Read::Package => proof::Recipe::Directory {
+                    role: proof::Role::DefaultPackageSource,
+                    package_id,
+                    path,
+                },
             }
         })
         .collect::<Vec<_>>();
     let mut allocation = Allocation::for_replay(limits);
-    proof::evaluate(&recipes, false, limits, &mut allocation).ok()
+    proof::evaluate(&recipes, limits, &mut allocation).ok()
 }
 
 /// Cargo owns these compile-time variables for every invocation. Their value
@@ -442,7 +467,7 @@ mod tests {
         ]
         .into_boxed_slice();
         let mut allocation = Allocation::for_replay(&current.limits);
-        let proof = proof::evaluate(&recipes, false, &current.limits, &mut allocation).unwrap();
+        let proof = proof::evaluate(&recipes, &current.limits, &mut allocation).unwrap();
         let baseline = Baseline {
             #[cfg(feature = "rustc-driver")]
             partitions: None,
@@ -451,7 +476,6 @@ mod tests {
             recipe_allocation: super::super::Usage { items: 0, bytes: 0 },
             allocation,
             universe_build: None,
-            package_replay: None,
         };
         let build = build::Build {
             evidence: build::Evidence {
@@ -538,6 +562,28 @@ mod tests {
         assert!(inputs.validate(&current).is_none());
         let inputs = Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap();
         fs::write(root.join("missing/new.txt"), "new").unwrap();
+        assert!(inputs.validate(&current).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A build script without `rerun-if` inputs runs again when its package
+    /// changes, so a table its package's tree fed replays only while that
+    /// tree is unchanged: a file added to it invalidates the table too.
+    #[test]
+    fn a_package_tree_is_rechecked_before_api_replay() {
+        let (root, mut baseline, build, current) = fixture();
+        let mut recipes = baseline.recipes.into_vec();
+        recipes.push(proof::Recipe::Directory {
+            role: proof::Role::DefaultPackageSource,
+            package_id: Some(PACKAGE.into()),
+            path: root.join("source"),
+        });
+        let mut allocation = Allocation::for_replay(&current.limits);
+        baseline.proof = proof::evaluate(&recipes, &current.limits, &mut allocation).unwrap();
+        baseline.recipes = recipes.into_boxed_slice();
+        let inputs = Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap();
+        assert!(inputs.validate(&current).is_some());
+        fs::write(root.join("source/added.rs"), "").unwrap();
         assert!(inputs.validate(&current).is_none());
         fs::remove_dir_all(root).unwrap();
     }

@@ -1967,7 +1967,6 @@ impl Request {
             limits,
             &workspace,
         )?;
-        let package_scope = uncached(execution::Operation::Package);
         #[cfg(feature = "rustc-driver")]
         let probe_scope = uncached(execution::Operation::Probe);
         let receipt_path = harness_root.join(UNIVERSE_RECEIPT);
@@ -2002,7 +2001,6 @@ impl Request {
             limits,
             [manifest_path, source_path, lock_path],
             &receipt_path,
-            Some(&package_scope),
             #[cfg(feature = "rustc-driver")]
             Some(&probe_scope),
             #[cfg(feature = "rustc-driver")]
@@ -2031,7 +2029,6 @@ impl Request {
         limits: &Limits,
         files: [PathBuf; 3],
         receipt_path: &Path,
-        package_scope: Option<&execution::Scope>,
         #[cfg(feature = "rustc-driver")] probe_scope: Option<&execution::Scope>,
         #[cfg(feature = "rustc-driver")] reserved_layout: Option<&resolution::layout::Layout>,
     ) -> Result<Resolution> {
@@ -2042,7 +2039,6 @@ impl Request {
             limits,
             files,
             receipt_path,
-            package_scope,
             #[cfg(feature = "rustc-driver")]
             probe_scope,
             #[cfg(feature = "rustc-driver")]
@@ -2057,13 +2053,19 @@ impl Request {
     )]
     fn complete_harness_parts(
         &self,
+        #[cfg_attr(
+            not(feature = "rustc-driver"),
+            expect(
+                unused_variables,
+                reason = "only the extraction plan launches from completion"
+            )
+        )]
         native: &impl ProductionReplay,
         harness: Harness,
         mut build: crate::input::build::Build,
         limits: &Limits,
         files: [PathBuf; 3],
         receipt_path: &Path,
-        package_scope: Option<&execution::Scope>,
         #[cfg(feature = "rustc-driver")] probe_scope: Option<&execution::Scope>,
         #[cfg(feature = "rustc-driver")] reserved_layout: Option<&resolution::layout::Layout>,
     ) -> Result<CompletedHarness> {
@@ -2096,18 +2098,13 @@ impl Request {
                 code: "missing-fallback-package-authority",
                 reason: package_id.clone(),
             })?;
-            let files = cargo_package_files(
-                native,
-                package_scope,
+            let files = fallback_files(
                 self,
                 package,
                 &package_manifest,
-                &command_target,
                 toolchain.cargo_commit(),
                 build.usage(),
                 limits,
-                #[cfg(feature = "rustc-driver")]
-                reserved_layout,
             )?;
             build.bind_package_files(&package_id, files, limits)?;
         }
@@ -3651,21 +3648,16 @@ fn cargo_execute_build(
     Ok((bytes, command.into_environment()))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "fallback capture binds one package to its replay command, active allocation lineage, and pinned Cargo authority"
-)]
-fn cargo_package_files(
-    native: &impl ProductionReplay,
-    execution: Option<&execution::Scope>,
+/// What a build script that declares no `rerun-if` input watches: its whole
+/// package. A registry package is proved by its extraction marker; a path or
+/// Git package by its source tree, which replay walks again with no process.
+fn fallback_files(
     request: &Request,
     package: &unit::Package,
     manifest: &Path,
-    target_dir: &Path,
     cargo_commit: &str,
     usage: crate::input::Usage,
     limits: &Limits,
-    #[cfg(feature = "rustc-driver")] reserved_layout: Option<&resolution::layout::Layout>,
 ) -> Result<crate::input::package::Set> {
     if package.manifest() != manifest {
         return Err(Error::Input {
@@ -3673,86 +3665,23 @@ fn cargo_package_files(
             reason: package.id().into(),
         });
     }
-    if matches!(package.source(), unit::PackageSource::Registry { .. }) {
-        let cargo_home = request.config.cargo_home()?.ok_or_else(|| Error::Input {
-            code: "missing-cargo-home-authority",
-            reason: package.id().into(),
-        })?;
-        return crate::input::package::Set::capture_registry(
-            cargo_commit,
-            package,
-            &cargo_home,
-            usage,
-            limits,
-        );
-    }
-    let action = match package.source() {
-        unit::PackageSource::Path { .. } => process::CargoAction::PackagePath,
-        unit::PackageSource::Git { .. } => process::CargoAction::PackageGit,
-        unit::PackageSource::Registry { .. } => {
-            return Err(Error::Input {
-                code: "package-source-dispatch",
-                reason: package.id().into(),
-            });
-        }
-    };
-    #[cfg(feature = "rustc-driver")]
-    let prefix = match reserved_layout {
-        Some(layout) => {
-            resolution::cold::require_configs(layout)?;
-            resolution::cold::prefix(request, layout.final_form().config())?
-        }
-        None => config_arguments(request.config.explicit_configs()),
-    };
-    #[cfg(not(feature = "rustc-driver"))]
-    let prefix = config_arguments(request.config.explicit_configs());
-    let tail = Vec::from([
-        "--list".into(),
-        "--allow-dirty".into(),
-        "--manifest-path".into(),
-        manifest.as_os_str().to_owned(),
-    ]);
-    let command = process::Command::cargo(
-        prefix,
-        action,
-        tail,
-        request.project_root.clone(),
-        request.config.command_environment(target_dir, native)?,
-    )?;
-    let run = || {
-        native
-            .run(&command, limits.process)?
-            .checked(Program::Cargo)
-    };
-    let bytes = match execution {
-        Some(scope) => scope.run(run)?,
-        None => run()?,
-    };
     match package.source() {
-        unit::PackageSource::Path { .. } => crate::input::package::Set::capture_path(
-            cargo_commit,
-            package.id(),
-            manifest,
-            native.cargo(),
-            command,
-            &bytes,
-            usage,
-            limits,
-        ),
-        unit::PackageSource::Git { .. } => crate::input::package::Set::capture_git(
-            cargo_commit,
-            package,
-            manifest,
-            native.cargo(),
-            command,
-            &bytes,
-            usage,
-            limits,
-        ),
-        unit::PackageSource::Registry { .. } => Err(Error::Input {
-            code: "package-source-dispatch",
-            reason: package.id().into(),
-        }),
+        unit::PackageSource::Registry { .. } => {
+            let cargo_home = request.config.cargo_home()?.ok_or_else(|| Error::Input {
+                code: "missing-cargo-home-authority",
+                reason: package.id().into(),
+            })?;
+            crate::input::package::Set::capture_registry(
+                cargo_commit,
+                package,
+                &cargo_home,
+                usage,
+                limits,
+            )
+        }
+        unit::PackageSource::Path { .. } | unit::PackageSource::Git { .. } => {
+            crate::input::package::Set::capture_tree(cargo_commit, package, manifest, usage, limits)
+        }
     }
 }
 

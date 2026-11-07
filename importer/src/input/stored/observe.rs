@@ -64,6 +64,23 @@ pub(in crate::input) fn entry<Package>(
     }
 }
 
+/// A path or Git package's source tree, walked as its cold capture walked
+/// it: a build script without `rerun-if` inputs reruns when any of it changes.
+pub(in crate::input) fn package_tree(
+    package_id: &str,
+    root: &Path,
+    base: &Path,
+    budget: &mut Budget<'_>,
+) -> Result<Entry> {
+    directory::entry(
+        Role::DefaultPackageSource,
+        Some(package_id),
+        root,
+        base,
+        budget,
+    )
+}
+
 /// Record a file's length, then stream it into its digest.
 pub(in crate::input) fn file(
     role: Role,

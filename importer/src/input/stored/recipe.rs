@@ -69,6 +69,11 @@ pub(crate) enum Recipe {
 }
 
 pub(crate) enum Package {
+    /// A path or Git package's source tree, walked again at replay.
+    Tree {
+        package_id: Box<str>,
+        root: PathBuf,
+    },
     Registry(package::Stored),
 }
 
@@ -225,8 +230,9 @@ impl Recipe {
             proof::Recipe::Package(package::Set::Registry(registry)) => {
                 Self::Package(Package::Registry(registry.into_stored()))
             }
-            proof::Recipe::Package(package::Set::Path(_) | package::Set::Git(_)) => {
-                return Err(Error::IncompleteWitness)
+            proof::Recipe::Package(package::Set::Tree(tree)) => {
+                let (package_id, root) = tree.into_stored();
+                Self::Package(Package::Tree { package_id, root })
             }
             proof::Recipe::Environment {
                 package_id,
@@ -407,6 +413,11 @@ impl Writer<'_> {
 
     fn package(&mut self, package: &Package) -> Result<()> {
         match package {
+            Package::Tree { package_id, root } => {
+                self.byte(1)?;
+                self.text(package_id)?;
+                self.path(root)
+            }
             Package::Registry(registry) => {
                 self.byte(2)?;
                 self.usage(registry.base_usage)?;
@@ -517,7 +528,10 @@ impl Reader<'_, '_, '_> {
 
     fn package(&mut self) -> Result<Package> {
         match self.byte()? {
-            1 | 3 => Err(Error::IncompleteWitness),
+            1 => Ok(Package::Tree {
+                package_id: self.text()?,
+                root: self.path()?,
+            }),
             2 => {
                 let base_usage = self.usage()?;
                 let usage = self.usage()?;

@@ -230,7 +230,7 @@ impl Fixture {
             })
             .expect("cold output producer");
         }
-        let expected = proof::evaluate(&recipes, false, &limits, &mut allocation)
+        let expected = proof::evaluate(&recipes, &limits, &mut allocation)
             .expect("actual cold entry evaluator");
         let (_, entries, _) = expected.into_stored_parts();
         let recipes = recipes

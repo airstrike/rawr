@@ -335,7 +335,7 @@ fn registry_fallback_is_required_once_per_package_before_each_scripts_outputs() 
 }
 
 #[test]
-fn fallback_metadata_must_match_build_and_path_git_remain_incomplete() {
+fn fallback_metadata_and_its_stored_recipe_must_match_build() {
     let mut fixture = Fixture::open(true, true);
     let (recipes, _) = fixture.cold();
     let original = fixture
@@ -375,9 +375,10 @@ fn fallback_metadata_must_match_build_and_path_git_remain_incomplete() {
             fixture.root.clone(),
             source,
         )]);
+        // The stored recipe is the registry's, not a package tree.
         assert!(matches!(
             observe(&fixture, &recipes),
-            Err(Error::IncompleteWitness)
+            Err(Error::Encoding("stored fallback recipe differs"))
         ));
     }
 }

@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::slice;
 
-use super::observe::slots::Slots;
+use super::observe::{self, slots::Slots};
 use super::{Budget, Error, Package, Recipe, Result};
 use crate::cargo::config::env;
 use crate::cargo::unit;
@@ -120,19 +120,27 @@ pub(in crate::input) fn require(
                     "fallback metadata and Build package differ",
                 ));
             }
-            match current.source() {
-                unit::PackageSource::Path { .. } | unit::PackageSource::Git { .. } => {
-                    return Err(Error::IncompleteWitness);
+            match (current.source(), next(recipes, budget)?) {
+                (
+                    unit::PackageSource::Registry { .. },
+                    Recipe::Package(Package::Registry(registry)),
+                ) => {
+                    let cargo_home =
+                        cargo_home.ok_or(Error::Encoding("missing-cargo-home-authority"))?;
+                    push(entries, budget, |budget| {
+                        package::observed::registry(registry, current, cargo_home, base, budget)
+                    })?;
                 }
-                unit::PackageSource::Registry { .. } => {}
+                (
+                    unit::PackageSource::Path { .. } | unit::PackageSource::Git { .. },
+                    Recipe::Package(Package::Tree { package_id, root }),
+                ) if package_id.as_ref() == script.package_id.as_ref() => {
+                    push(entries, budget, |budget| {
+                        observe::package_tree(package_id, root, base, budget)
+                    })?;
+                }
+                _ => return Err(Error::Encoding("stored fallback recipe differs")),
             }
-            let Recipe::Package(Package::Registry(registry)) = next(recipes, budget)? else {
-                return Err(Error::Encoding("stored fallback recipe differs"));
-            };
-            let cargo_home = cargo_home.ok_or(Error::Encoding("missing-cargo-home-authority"))?;
-            push(entries, budget, |budget| {
-                package::observed::registry(registry, current, cargo_home, base, budget)
-            })?;
         }
         script::outputs(script, execution, budget, |value, budget| {
             compare::script(&value, next(recipes, budget)?)?;

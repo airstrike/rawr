@@ -1071,7 +1071,6 @@ impl Harness {
 
 pub(super) fn evaluate(
     recipes: &[Recipe],
-    replay_packages: bool,
     limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Proof> {
@@ -1126,7 +1125,7 @@ pub(super) fn evaluate(
                 package_id,
                 out_dir,
             } => super::replay::saved_output_entry(package_id, out_dir, allocation)?,
-            View::Package(set) => set.entry(replay_packages, allocation)?,
+            View::Package(set) => set.entry(allocation, limits)?,
             View::Environment {
                 package_id,
                 execution,
@@ -1311,7 +1310,7 @@ fn path_entry(
     }
 }
 
-fn directory_entry(
+pub(super) fn directory_entry(
     role: Role,
     package_id: Option<&str>,
     path: &Path,
@@ -1319,6 +1318,7 @@ fn directory_entry(
     limits: &cargo::Limits,
 ) -> Result<Entry> {
     allocation.path(path)?;
+    let tree = role == Role::DefaultPackageSource;
     let root = super::canonical_directory("freshness directory", path)?;
     allocation.items(1)?;
     let mut pending = Vec::new();
@@ -1391,6 +1391,19 @@ fn directory_entry(
             };
             if followed && metadata.is_dir() && ancestors.encloses(&directory, &child_path) {
                 continue;
+            }
+            if tree {
+                let omitted =
+                    walk::package_omits(&child.file_name(), depth, metadata.is_dir(), || {
+                        allocation.items(1)?;
+                        allocation.path(&child_path)?;
+                        Ok::<_, Error>(child_path.join("Cargo.toml").exists())
+                    })?;
+                // Cargo's listing skips what is neither a file nor a
+                // directory, and so does a package's walk.
+                if omitted || !metadata.is_dir() && !metadata.is_file() {
+                    continue;
+                }
             }
             allocation.items(1)?;
             allocation.bytes(
@@ -2376,7 +2389,6 @@ mod tests {
             };
             evaluate(
                 &[recipe],
-                false,
                 &limits,
                 &mut Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits),
             )
@@ -2396,23 +2408,12 @@ mod tests {
             value: value.map(Box::from),
         };
         let limits = Limits::standard();
-        let unset = evaluate(
-            &[recipe(None)],
-            false,
-            &limits,
-            &mut Allocation::new(&limits),
-        )
-        .expect("unset declared environment evaluates");
-        let empty = evaluate(
-            &[recipe(Some(""))],
-            false,
-            &limits,
-            &mut Allocation::new(&limits),
-        )
-        .expect("empty declared environment evaluates");
+        let unset = evaluate(&[recipe(None)], &limits, &mut Allocation::new(&limits))
+            .expect("unset declared environment evaluates");
+        let empty = evaluate(&[recipe(Some(""))], &limits, &mut Allocation::new(&limits))
+            .expect("empty declared environment evaluates");
         let changed = evaluate(
             &[recipe(Some("changed"))],
-            false,
             &limits,
             &mut Allocation::new(&limits),
         )
@@ -2560,7 +2561,7 @@ mod tests {
         let limits = Limits::standard();
         let mut allocation = Allocation::new(&limits);
         let recipe = Recipe::path(Role::Config, &spelled, &mut allocation).unwrap();
-        let proof = evaluate(&[recipe], false, &limits, &mut allocation)
+        let proof = evaluate(&[recipe], &limits, &mut allocation)
             .expect("Cargo follows a symlinked .cargo");
         assert!(matches!(
             &proof.entries[..],
@@ -2576,7 +2577,7 @@ mod tests {
                 ]
         );
         let recipe = Recipe::path(Role::DeclaredInput, &spelled, &mut allocation).unwrap();
-        let proof = evaluate(&[recipe], false, &limits, &mut allocation)
+        let proof = evaluate(&[recipe], &limits, &mut allocation)
             .expect("a declared input through a symlink is its target");
         let target = root.join("shared/config.toml");
         assert!(matches!(
@@ -2622,7 +2623,7 @@ mod tests {
         let observe = |path: &Path, allocation: &mut Allocation| {
             let recipe =
                 Recipe::package_path(Role::DeclaredInput, "pkg", path, allocation).unwrap();
-            let proof = evaluate(&[recipe], false, &limits, allocation)
+            let proof = evaluate(&[recipe], &limits, allocation)
                 .expect("an input through a symlink is its target");
             proof.entries.into_vec().pop().unwrap()
         };
