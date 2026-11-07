@@ -12390,6 +12390,12 @@ struct Parser<'a> {
     /// The closures that stand for a path to a function (`Vec::len`,
     /// `Look::name`), which rustc's notes call functions.
     path_values: HashSet<crate::item::Key>,
+    /// The output each closure that stands for a path to a method of the
+    /// program's is written with, by the closure's key: an `impl Trait`
+    /// there is what rustc knows the closure's value by
+    /// (`take_opaque_arguments`).
+    #[cfg(feature = "rust-import")]
+    path_outputs: BTreeMap<crate::item::Key, type_ref::Type>,
     /// The crate trait each `Trait::method(receiver, ..)` call names, by
     /// the position of the method it was rewritten to (`path_method_call`):
     /// a text receiver takes the method the trait's impl for `&str` gives.
@@ -12719,6 +12725,8 @@ impl<'a> Parser<'a> {
             pending_turbofish: None,
             trait_turbofish: None,
             path_values: HashSet::new(),
+            #[cfg(feature = "rust-import")]
+            path_outputs: BTreeMap::new(),
             spliced_traits: BTreeMap::new(),
             spliced_turbofish: BTreeMap::new(),
             std_probed: BTreeMap::new(),
@@ -16232,9 +16240,24 @@ impl<'a> Parser<'a> {
                 self.inference.rollback(checkpoint);
             }
         }
+        #[cfg(feature = "rust-import")]
+        let written = match inputs.first().map(|input| self.inference.resolve(input)) {
+            Some(Ty::Script(owner, _)) => Some(owner),
+            Some(Ty::Reference { target, .. }) => match *target {
+                Ty::Script(owner, _) => Some(owner),
+                _ => None,
+            },
+            _ => None,
+        }
+        .and_then(|owner| self.models.method(owner, &member))
+        .and_then(|method| method.lifetimes().written_output.as_deref().cloned());
         self.splice_tokens(tokens);
         self.closure_hint = Some(inputs);
         let value = self.parse_closure(Token::Pipe, owner_span, false)?;
+        #[cfg(feature = "rust-import")]
+        if let (Some(written), Ty::FnItem { key, .. }) = (written, &value.ty) {
+            self.path_outputs.insert((**key).clone(), written);
+        }
         Ok(self.path_value(value))
     }
 
@@ -20753,6 +20776,7 @@ impl<'a> Parser<'a> {
         &mut self,
         item: &crate::host::item::Definition,
         requirements: &[(ImmutableString, Ty, capability::Set)],
+        operands: &[(Ty, Span, bool)],
         span: Span,
     ) -> Result<(), Error> {
         let signature = item.signature();
@@ -20795,7 +20819,7 @@ impl<'a> Parser<'a> {
                     owner.as_ref(),
                 )?);
             }
-            self.take_opaque_arguments(&bounded, identity, &arguments, requirements);
+            self.take_opaque_arguments(&bounded, identity, &arguments, operands);
             // A script type in the bound is followed even when nothing is
             // open, for the script impls it uses (D629).
             if !arguments
@@ -20830,9 +20854,9 @@ impl<'a> Parser<'a> {
         bounded: &Ty,
         identity: [u8; 32],
         arguments: &[Ty],
-        requirements: &[(ImmutableString, Ty, capability::Set)],
+        operands: &[(Ty, Span, bool)],
     ) {
-        let written = requirements.iter().find_map(|(_, ty, _)| {
+        let written = operands.iter().find_map(|(ty, _, _)| {
             let Ty::Callable {
                 output,
                 item: Some(value),
@@ -20845,6 +20869,9 @@ impl<'a> Parser<'a> {
                 return None;
             }
             let key = value.key();
+            if let Some(written) = self.path_outputs.get(key) {
+                return Some(written.clone());
+            }
             let lifetimes = match self.models.functions_by_key.get(key) {
                 Some(function) => &function.definition.lifetimes,
                 None => self
@@ -20871,7 +20898,32 @@ impl<'a> Parser<'a> {
         let Some(header) = self.models.host.trait_header(&path).cloned() else {
             return;
         };
-        if header.identity != identity {
+        // The bound's trait is the written one, or one the written one
+        // holds at the same arguments: a trait every type of the bound's
+        // implements through a blanket impl that passes its arguments on,
+        // as iced's `Widget` is for each `core::Widget`.
+        let passes_on = |headers: &[crate::host::facade::ImplHeader]| {
+            headers.iter().any(|implementation| {
+                matches!(
+                    implementation.self_type.shape(),
+                    crate::host::type_ref::Shape::Parameter(_)
+                ) && implementation.bounds.iter().any(|bound| {
+                    bound.trait_identity == identity
+                        && bound.ty == implementation.self_type
+                        && bound.arguments == implementation.arguments
+                })
+            })
+        };
+        if header.identity != identity
+            && !passes_on(
+                &self
+                    .models
+                    .host
+                    .impl_headers(header.identity)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        {
             return;
         }
         let owner = self.models.host.type_owner(&trait_name).cloned();
@@ -21560,7 +21612,7 @@ impl<'a> Parser<'a> {
             }
         });
         #[cfg(feature = "rust-import")]
-        self.fix_bounds_by_impls(&item, &requirements, call)?;
+        self.fix_bounds_by_impls(&item, &requirements, &operands, call)?;
         Ok(self.push_op(Op::Intrinsic {
             operation: Box::new(IntrinsicOperation {
                 facade,
