@@ -18726,7 +18726,12 @@ fn render_impl_function(
                 let target =
                     concrete_type(ty).ok_or_else(|| drift("a script impl function's input"))?;
                 values.push(lent_value(position, *borrowed_mutably, &target));
-                lends.push(LentInput::scoped(position, *borrowed_mutably, target, family));
+                lends.push(LentInput::scoped(
+                    position,
+                    *borrowed_mutably,
+                    target,
+                    family,
+                ));
             }
             convert::Type::Borrowed { ty, .. } => {
                 // A copy of a value Rawr holds by value, as a `&str` or a

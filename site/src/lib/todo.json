@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.161",
+  "version": "0.3.162",
   "examples": {
     "running": 29,
     "total": 56,
@@ -11,6 +11,16 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.162",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"A crate method whose value's type has a lifetime keeps what it borrows shared for as long as the value lives, as rustc reads its signature, for any crate rather than only iced's widgets, and the runner names each crate type's lifetimes as rustc does, so a script function that wraps an `impl Widget` in a container and a mouse area builds.","issues":[598],"refs":[955]},
+          {"text":"A crate's `&mut` value with lifetimes that it lends your trait impl, as iced lends a widget's `update` its `&mut Shell<'_, Message>`, is lent for the call, not cloned, so iced's geometry runs, and a crate value a call borrows, as rand's `ThreadRng`, no longer needs `Send`.","issues":[957]},
+          {"text":"A float or integer literal whose only constraint is a crate trait bound takes the one number type that implements it, as rustc infers: iced's `Animation::new(0.)` is an `Animation<f32>`.","issues":[1028]},
+          {"text":"The site serves /llms.txt, a short summary of rawr's docs for coding agents: every command and flag, the environment variables, the MCP tools and their arguments, previews, imports and their limits, hot reload, embedding and ?play. Each section links to its full page, and the docs index links to it.","issues":[1089]}
+        ]
+      },
       {
         "version": "0.3.161",
         "date": "2026-11-06",
@@ -2127,7 +2137,7 @@
     {"issue":595,"title":"solar_system: canvas::LineDash { .. } is refused as having private fields","state":"closed","category":"Divergences from rustc","release":"0.3.67"},
     {"issue":596,"title":"A crate value borrowed by a call outside any view stays shared for the rest of the run","state":"open","category":"No glue (D593)"},
     {"issue":597,"title":"Move Message::X.with(id) off the literal iced::Function check","state":"closed","category":"No glue (D593)","release":"0.3.109"},
-    {"issue":598,"title":"Replace the classifier's iced Renderer view-lifetime rule","state":"open","category":"No glue (D593)"},
+    {"issue":598,"title":"Replace the classifier's iced Renderer view-lifetime rule","state":"closed","category":"No glue (D593)","release":"0.3.162"},
     {"issue":599,"title":"geometry: an impl Widget whose body is nested containers can't be named","state":"closed","category":"No glue (D593)","release":"0.3.70"},
     {"issue":600,"title":"loading_spinners: a crate module's constant through a module path","state":"open","category":"No glue (D593)"},
     {"issue":601,"title":"Remove the runner's always-None event mapper","state":"open","category":"Importer"},
@@ -2486,7 +2496,7 @@
     {"issue":954,"title":"solar_system and sierpinski_triangle panic in the runner at start","state":"closed","category":"Divergences from rustc","release":"0.3.145"},
     {"issue":955,"title":"Generated adapters for borrowing widgets miss lifetimes: modal's E0106 and pane_grid's region lifetime","state":"open","category":"Divergences from rustc"},
     {"issue":956,"title":"Rawr's types disagree with rustc's in ferris, styling and vectorial_text","state":"closed","category":"Divergences from rustc","release":"0.3.142"},
-    {"issue":957,"title":"Generated adapter bounds the program doesn't need: geometry's Shell: Clone, progress_bar's f64, the_matrix's ThreadRng","state":"open","category":"Divergences from rustc"},
+    {"issue":957,"title":"Generated adapter bounds the program doesn't need: geometry's Shell: Clone, progress_bar's f64, the_matrix's ThreadRng","state":"closed","category":"Divergences from rustc","release":"0.3.162"},
     {"issue":958,"title":"changelog's rawr check never completes and fills the disk","state":"closed","category":"Health","release":"0.3.151"},
     {"issue":959,"title":"rawr run inside a git worktree under another workspace fails with 'malformed filesystem observation transport'","state":"closed","category":"Health","release":"0.3.141"},
     {"issue":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"closed","category":"Health","release":"0.3.149"},
@@ -2557,7 +2567,7 @@
     {"issue":1025,"title":"Intrinsic facts captured this run under a stale nightly build-script output aren't recaptured after the clean","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"open","category":"Health"},
     {"issue":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
-    {"issue":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"open","category":"Divergences from rustc"},
+    {"issue":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"closed","category":"Divergences from rustc","release":"0.3.162"},
     {"issue":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open","category":"Divergences from rustc"},
     {"issue":1030,"title":"A member missed on a std type such as `String` no longer makes the next request fail","state":"closed","category":"Divergences from rustc","release":"0.3.154"},
     {"issue":1031,"title":"serde's enum Deserialize: a crate value whose type has a lifetime (de::Unexpected<'a>)","state":"closed","category":"Divergences from rustc","release":"0.3.160"},
@@ -2609,7 +2619,23 @@
     {"issue":1077,"title":"A Vec<_> whose element type nothing fixes is E0282, as rustc reports (rustlings threads1)","state":"open","category":"Divergences from rustc"},
     {"issue":1078,"title":"Assigning through an Arc is E0594, as rustc reports (rustlings threads2)","state":"open","category":"Divergences from rustc"},
     {"issue":1079,"title":"for over an Option iterates it, as Option is IntoIterator (rustlings clippy2)","state":"open","category":"Divergences from rustc"},
-    {"issue":1080,"title":"std::thread::spawn in a lone-file program (rustlings smart_pointers3)","state":"open","category":"Divergences from rustc"}
+    {"issue":1080,"title":"std::thread::spawn in a lone-file program (rustlings smart_pointers3)","state":"open","category":"Divergences from rustc"},
+    {"issue":1081,"title":"A region family writes a closure-filled type argument at the region's lifetime, not 'static (lazy, pane_grid)","state":"open","category":"Divergences from rustc"},
+    {"issue":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"open","category":"Divergences from rustc"},
+    {"issue":1083,"title":"progress_bar's runner: transition(..) in a region closure gives 'lifetime may not live long enough'","state":"open","category":"Divergences from rustc"},
+    {"issue":1084,"title":"the_matrix's runner: WeightedIndex<_> where X is fixed only through I::Item: SampleBorrow<X>","state":"open","category":"Divergences from rustc"},
+    {"issue":1085,"title":"A generic program impl of a crate trait isn't generated for a crate function's bound at a concrete argument","state":"open","category":"Divergences from rustc"},
+    {"issue":1086,"title":"Relation cases for a std type are written as the value rawr holds, not the Rust type (f32 is f64)","state":"open","category":"Divergences from rustc"},
+    {"issue":1087,"title":"A crate_shapes strftime test panicked once in a parallel run: a value reached an adapter as a type it doesn't take","state":"open","category":"Health"},
+    {"issue":1088,"title":"cargo test -p rawr --lib without the rust-import feature doesn't compile","state":"open","category":"Health"},
+    {"issue":1089,"title":"The site serves /llms.txt, a short summary of rawr's docs for coding agents: every command and…","state":"closed","category":"Health","release":"0.3.162"},
+    {"issue":1090,"title":"Previews render nowhere since rawr-iced was removed: bring them back on generated bindings","state":"open","category":"Health"},
+    {"issue":1091,"title":"README contradicts Imports on project setup and links a missing page","state":"open","category":"Health"},
+    {"issue":1092,"title":"Overview lists std::fs as unsupported though rawr runs it","state":"open","category":"Health"},
+    {"issue":1093,"title":"Commands reference misses exit status 2 and some CLI forms; per-command --help prints the top-level help","state":"open","category":"Health"},
+    {"issue":1094,"title":"Agents page leaves out some MCP tool arguments and defaults","state":"open","category":"Health"},
+    {"issue":1095,"title":"rawr-macros comments claim previews render and #[widget] runs","state":"open","category":"Health"},
+    {"issue":1096,"title":"Docs index cards leave out Agents and ratatui","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3068,7 +3094,9 @@
             {"number":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed"},
             {"number":951,"title":"The generated runner reads a crate struct's borrowing field by reference: Stroke.line_dash escapes its closure (E0521)","state":"closed"},
             {"number":955,"title":"Generated adapters for borrowing widgets miss lifetimes: modal's E0106 and pane_grid's region lifetime","state":"open"},
-            {"number":957,"title":"Generated adapter bounds the program doesn't need: geometry's Shell: Clone, progress_bar's f64, the_matrix's ThreadRng","state":"open"}
+            {"number":957,"title":"Generated adapter bounds the program doesn't need: geometry's Shell: Clone, progress_bar's f64, the_matrix's ThreadRng","state":"closed"},
+            {"number":1081,"title":"A region family writes a closure-filled type argument at the region's lifetime, not 'static (lazy, pane_grid)","state":"open"},
+            {"number":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3146,7 +3174,10 @@
             {"number":1072,"title":"url_handler: the runner fails with E0283 at iced::application(..) with an undetermined renderer argument","state":"open"},
             {"number":1073,"title":"toast: Task::perform with a tokio future and a move closure isn't supported","state":"open"},
             {"number":1074,"title":"tour: a generic fn's type parameter is inferred only from its arguments, not from a later use (padded_button)","state":"open"},
-            {"number":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open"}
+            {"number":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open"},
+            {"number":1083,"title":"progress_bar's runner: transition(..) in a region closure gives 'lifetime may not live long enough'","state":"open"},
+            {"number":1084,"title":"the_matrix's runner: WeightedIndex<_> where X is fixed only through I::Item: SampleBorrow<X>","state":"open"},
+            {"number":1085,"title":"A generic program impl of a crate trait isn't generated for a crate function's bound at a concrete argument","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3523,7 +3554,7 @@
             {"number":1020,"title":"Universe main panics: a value reached an adapter as a type its signature doesn't take","state":"closed"},
             {"number":1021,"title":"rawr-play lib tests fail: endless-loop snippets, D683.4 refusals, a 100 ms budget","state":"closed"},
             {"number":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open"},
-            {"number":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"open"},
+            {"number":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"closed"},
             {"number":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open"},
             {"number":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"closed"}
           ]

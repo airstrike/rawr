@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 120;
+const CLASSIFIER_VERSION: u32 = 122;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2574,9 +2574,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 let cases = self
                     .graph
                     .implementations_of(trait_id)
-                    .filter(|implementation| {
-                        implementation.polarity() == model::Polarity::Positive
-                    })
+                    .filter(|implementation| implementation.polarity() == model::Polarity::Positive)
                     .filter_map(|implementation| match implementation.self_type() {
                         // The Rust number itself: `convert` gives the
                         // value Rawr holds, an `f64` for an `f32`.
@@ -5692,14 +5690,19 @@ impl<P: api::Phase> Context<'_, P> {
         let origin =
             representability::origin::Set::new(export.span().clone(), method.span().clone());
         self.retain_inline_representability()?;
+        // A type no function gives, as one that names the trait's own
+        // parameter (#1032), has no members a facade can declare.
+        let implementations = match converted {
+            Ok(_) => self
+                .opaque_records(export, method, &generics, &[opaque])?
+                .into_boxed_slice(),
+            Err(_) => Box::default(),
+        };
         let evidence = OutcomeEvidence::Inline(Box::new(converted.unwrap_or_else(|kind| {
             representability::Representability::Rejected(
                 representability::reject::Reason::classification(kind, method.span().clone()),
             )
         })));
-        let implementations = self
-            .opaque_records(export, method, &generics, &[opaque])?
-            .into_boxed_slice();
         Ok(Some(OutcomeRecord {
             export: export.key().clone(),
             identity,
@@ -11553,18 +11556,27 @@ fn declares_its_parameters(plan: &representability::Representability) -> bool {
             }
         }
     }
-    let signature = match plan {
-        Representability::Function(plan) => plan.signature(),
-        Representability::Method(plan) => plan.signature(),
-        Representability::FunctionItem(item) => item.signature(),
-        Representability::Invocation(plan) => plan.item().signature(),
+    let (signature, item) = match plan {
+        Representability::Function(plan) => (plan.signature(), None),
+        Representability::Method(plan) => (plan.signature(), None),
+        Representability::FunctionItem(item) => (item.signature(), Some(item)),
+        Representability::Invocation(plan) => (plan.item().signature(), Some(plan.item())),
         _ => return true,
     };
     let parameters = signature.parameters();
+    // A callable parameter's inputs and output, too, as rayon's
+    // `ParallelIterator::any<P: Fn(Self::Item) -> bool>` takes a closure of
+    // the item, which an opaque type of `from_par_iter<I:
+    // IntoParallelIterator<Item = T>>` sets to the trait's `T`.
+    let calls = item
+        .into_iter()
+        .flat_map(|item| item.call().into_iter().chain(item.crossings()))
+        .flat_map(|call| call.inputs().iter().chain(std::iter::once(call.output())));
     signature
         .inputs()
         .iter()
         .chain(std::iter::once(signature.output()))
+        .chain(calls)
         .all(|ty| declared(ty, parameters))
 }
 
@@ -11576,19 +11588,24 @@ fn parameter_opaque_id(id: &api::identity::Definition) -> bool {
 
 /// Whether `signature` names `Self` of the trait `trait_id`.
 fn names_self(signature: &model::Signature, trait_id: &api::identity::Definition) -> bool {
-    let this = model::Type::Parameter {
-        owner: trait_id.clone(),
-        index: 0,
-    };
     let found = std::cell::Cell::new(false);
     let _ = map_signature_types(signature, |ty| {
-        let replaced = self_replaced(ty, trait_id, &model::Type::Never);
-        if replaced != *ty || type_names(ty, &this) {
+        if type_names_self(ty, trait_id) {
             found.set(true);
         }
         ty.clone()
     });
     found.get()
+}
+
+/// Whether `ty` names `Self` of the trait `trait_id`, as `Self` or as the
+/// trait's parameter 0.
+fn type_names_self(ty: &model::Type, trait_id: &api::identity::Definition) -> bool {
+    let this = model::Type::Parameter {
+        owner: trait_id.clone(),
+        index: 0,
+    };
+    self_replaced(ty, trait_id, &model::Type::Never) != *ty || type_names(ty, &this)
 }
 
 /// Whether `ty` names `target` at any depth.
@@ -11612,6 +11629,13 @@ fn type_names(ty: &model::Type, target: &model::Type) -> bool {
 /// The opaque type the type parameter `parameter` of `method`, whose
 /// generics are `generics`, is where native code calls a program's impl of
 /// the method (`parameter_members`): bounded as the parameter is.
+///
+/// A projection its bounds set to a type that names the method's `Self`,
+/// as image's `copy_from<O: GenericImageView<Pixel = Self::Pixel>>` sets
+/// `O::Pixel`, stays open: that `Self` is the impl's type, which the opaque
+/// type's members don't have, and inside them `Self` is the opaque type
+/// itself. The projection is then an opaque type of its own
+/// (`opaque_projection`), bounded as the trait declares it.
 fn parameter_opaque(
     method: &model::Definition,
     parameter: &model::Parameter,
@@ -11627,11 +11651,18 @@ fn parameter_opaque(
         }
         ty => *ty == this,
     };
+    let owner = match method.owner() {
+        model::Owner::Definition(owner) => Some(owner),
+        _ => None,
+    };
+    let names_owner = |ty: &model::Type| owner.is_some_and(|owner| type_names_self(ty, owner));
     let mut bounds = generics
         .predicates()
         .filter(|predicate| match predicate {
             model::Predicate::Bound { ty, .. } => *ty == this,
-            model::Predicate::ProjectionEquality { projection, .. } => names(projection),
+            model::Predicate::ProjectionEquality { projection, ty } => {
+                names(projection) && !names_owner(ty)
+            }
             _ => false,
         })
         .cloned()

@@ -19,6 +19,26 @@ impl Visit for Seven {
     }
 }
 
+/// A board of one cell, which fills from any view of the same cells. It
+/// doesn't read `other.cell()`: Rawr doesn't yet read `O::Cell` as the
+/// impl's own `u8`.
+struct Board(u8);
+
+impl visits::Cells for Board {
+    type Cell = u8;
+    fn cell(&self) -> u8 {
+        self.0
+    }
+}
+
+impl visits::Fill for Board {
+    fn fill_from<O: visits::Cells<Cell = u8>>(&mut self, other: O) -> bool {
+        let _ = other;
+        self.0 = 4;
+        true
+    }
+}
+
 impl Paint for Seven {
     fn paint<P: Painter>(&self, painter: P) -> bool {
         let _font = painter.font();
@@ -175,4 +195,10 @@ fn main() {
     );
     println!("{}", visits::read::<Small>(&[]));
     println!("{}", visits::unexpected(Unexpected::Unsigned(4)));
+    println!(
+        "{} {} {}",
+        visits::filled(9),
+        visits::refilled(Board(0)),
+        visits::counted()
+    );
 }
