@@ -1,5 +1,5 @@
 // rawr
-use crate::thread::{Failure, Outcome};
+use crate::thread::Failure;
 
 pub fn answer() -> i64 {
     6 * 7
@@ -25,7 +25,7 @@ pub fn checked(n: i64) -> Result<i64, String> {
 }
 
 /// An alias of a `Result` whose `Err` is a native type, as `iced::Result`.
-pub fn run(fail: bool) -> Outcome {
+pub fn run(fail: bool) -> crate::thread::Result {
     if fail {
         return Err(Failure::new("no window"));
     }

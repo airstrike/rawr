@@ -105,9 +105,13 @@ pub fn __rawr_island_call_v3(
     natives: &mut Natives,
 ) -> Vec<u8> {
     let lent = lent.iter().map(|&lent| Loan(lent)).collect::<Vec<_>>();
-    if let Some(current) = current() {
+    if current().is_some() {
+        // The generation offered last is admitted first, so this call
+        // runs in it.
         let _entry = crate::future::trampoline();
-        return current.answer(path, arguments, &lent, natives);
+        if let Some(current) = current() {
+            return current.answer(path, arguments, &lent, natives);
+        }
     }
     #[cfg(feature = "sync")]
     if let Some((calls, shared)) = elsewhere() {

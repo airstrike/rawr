@@ -11,8 +11,8 @@ impl Failure {
     }
 }
 
-/// A run's outcome, as `iced::Result` is iced's.
-pub type Outcome = Result<(), Failure>;
+/// A run's outcome, as `iced::Result` is iced's, by the same name.
+pub type Result = std::result::Result<(), Failure>;
 
 #[cfg(target_os = "macos")]
 pub fn on_main_thread() -> bool {
