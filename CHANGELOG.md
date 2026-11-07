@@ -26,6 +26,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A program may name its types and modules anything, `Program`, `Error` and `Message` included: the generated runner keeps its own items in a module no program names. (#1163)
 - A marked `src/main.rs` names its package's library by the crate name, as a Cargo binary does: the library is built, read and bound like any dependency. (#1164)
 - A crate function whose `impl Trait` output captures a parameter a closure fills, such as iced's `markdown::code_block`, no longer panics rawr-import when a member of that output is called. (#1098)
+- The site's Run buttons run snippets in your browser, as the playground does, with no server round trip and no browser check after an edit. The landing page runs its hello program and a bouncing-ball loop, and the borrow-checking examples in How it works run and show their errors. A few blocks that need what the browser lacks (threads, the clock, wide integers) still run on rawr's server and say so. The site bar is plain at the top of the page and takes a light shade and a hairline once the page scrolls. (#1179)
 
 ## 0.3.171 (2026-11-07)
 
