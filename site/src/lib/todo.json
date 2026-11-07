@@ -2821,7 +2821,9 @@
     {"issue":1181,"title":"rawr-web prints u128 and i128 as their type names","state":"open","category":"Platforms"},
     {"issue":1182,"title":"rawr-web traps on Instant::now","state":"open","category":"Platforms"},
     {"issue":1183,"title":"A snippet rejects an inner attribute at its top","state":"open","category":"Divergences from rustc"},
-    {"issue":1184,"title":"ratatui snippets run in the browser","state":"open","category":"Platforms"}
+    {"issue":1184,"title":"ratatui snippets run in the browser","state":"open","category":"Platforms"},
+    {"issue":1185,"title":"A marked module can't name items of the native crate root it lives in (`crate::Message`)","state":"open","category":"Divergences from rustc"},
+    {"issue":1186,"title":"A workspace root bin with member path dependencies fails: 'complete package membership witness is unavailable'","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3627,7 +3629,9 @@
             {"number":1166,"title":"A program running under rawr run can tell it is, and can observe reload outcomes as events","state":"open"},
             {"number":1168,"title":"A crate's tuple-struct constructor isn't callable from marked code","state":"open"},
             {"number":1170,"title":"A marked binary with native modules or an async main beside its package's library names two crates the same way","state":"open"},
-            {"number":1171,"title":"A build input reached through a symlink is refused","state":"closed"}
+            {"number":1171,"title":"A build input reached through a symlink is refused","state":"closed"},
+            {"number":1185,"title":"A marked module can't name items of the native crate root it lives in (`crate::Message`)","state":"open"},
+            {"number":1186,"title":"A workspace root bin with member path dependencies fails: 'complete package membership witness is unavailable'","state":"open"}
           ]
         }
       ]
