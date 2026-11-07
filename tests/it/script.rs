@@ -178,3 +178,112 @@ fn two_roots_types_of_one_name_are_different_types() {
     let amount = script.func::<(ledger::Transaction,), f64>("amount").unwrap();
     assert_eq!(amount.call(ledger::Transaction { amount: 2.5 }).unwrap(), 2.5);
 }
+
+#[test]
+fn an_inline_module_compiles_in_a_script() {
+    let script = Engine::new().script("mod m { pub fn f() -> i64 { 1 } }\nfn g() -> i64 { m::f() }").unwrap();
+    assert_eq!(script.func::<(), i64>("g").unwrap().call().unwrap(), 1);
+}
+
+const GAME: &str = "mod game {
+    pub mod rules {
+        pub fn score(hits: i64) -> i64 {
+            super::bonus() + hits * 10
+        }
+    }
+
+    fn bonus() -> i64 {
+        5
+    }
+
+    pub struct Board {
+        pub hits: i64,
+    }
+
+    impl Board {
+        pub fn score(&self) -> i64 {
+            rules::score(self.hits)
+        }
+    }
+}
+
+use game::rules;
+use game::Board;
+
+fn score(hits: i64) -> i64 {
+    rules::score(hits) + Board { hits }.score()
+}
+";
+
+#[test]
+fn inline_modules_resolve_paths_use_and_super_as_rustc_does() {
+    let script = Engine::new().script(GAME).unwrap();
+    assert_eq!(script.func::<(i64,), i64>("score").unwrap().call(2).unwrap(), 50);
+
+    let engine = Engine::new();
+    let ast = engine.compile(GAME).unwrap();
+    let score: i64 = engine.call_fn(&mut rawr::Scope::new(), &ast, "score", (3_i64,)).unwrap();
+    assert_eq!(score, 70);
+}
+
+#[test]
+fn a_private_item_of_an_inline_module_is_e0603() {
+    let error = failure(Engine::new().script("mod m { fn f() -> i64 { 1 } }\nfn g() -> i64 { m::f() }"));
+    assert!(error.starts_with("error[E0603]: function `f` is private"), "{error}");
+}
+
+#[test]
+fn a_file_module_in_a_script_needs_a_package() {
+    let error = failure(Engine::new().script("mod m;\nfn g() -> i64 { 1 }"));
+    assert!(error.contains("file modules require project/package compilation"), "{error}");
+    let error = failure(Engine::new().script("mod m { mod n; }\nfn g() -> i64 { 1 }"));
+    assert!(error.contains("file modules require project/package compilation"), "{error}");
+}
+
+const UPDATE: &str = "use bank::Transaction;
+
+fn update(tx: &mut Transaction, fee: f64) -> f64 {
+    tx.amount -= fee;
+    tx.amount
+}
+
+fn settle(label: String, tx: &mut Transaction) -> String {
+    tx.payee = format!(\"{label} {}\", tx.payee);
+    tx.payee.clone()
+}
+";
+
+#[test]
+fn call_fn_passes_a_leading_mut_parameter_as_written() {
+    let engine = engine();
+    let ast = engine.compile(UPDATE).unwrap();
+    let mut scope = rawr::Scope::new();
+    let amount: f64 = engine.call_fn(&mut scope, &ast, "update", (coffee(), 0.5)).unwrap();
+    assert_eq!(amount, -5.0);
+    // A `&mut` parameter after another one.
+    let payee: String = engine.call_fn(&mut scope, &ast, "settle", ("paid".to_string(), coffee())).unwrap();
+    assert_eq!(payee, "paid Blue Bottle");
+    // The arity the function is written with is the one a call names.
+    let error = engine.call_fn::<f64>(&mut scope, &ast, "update", (0.5,)).unwrap_err();
+    assert!(matches!(*error, rawr::EvalAltResult::ErrorFunctionNotFound(..)), "{error}");
+}
+
+#[test]
+fn bind_this_ptr_still_lends_a_leading_mut_parameter() {
+    let engine = engine();
+    let ast = engine.compile(UPDATE).unwrap();
+    let mut tx = rawr::Dynamic::from(coffee());
+    let options = rawr::CallFnOptions::new().bind_this_ptr(&mut tx);
+    let amount = engine.call_fn_with_options::<f64>(options, &mut rawr::Scope::new(), &ast, "update", (0.5,)).unwrap();
+    assert_eq!(amount, -5.0);
+    assert_eq!(tx.cast::<Transaction>().amount, -5.0);
+}
+
+#[test]
+fn a_typed_handle_lends_a_mut_parameter_the_handle_s_value() {
+    let script = engine().script(UPDATE).unwrap();
+    let update = script.func::<(Transaction, f64), f64>("update").unwrap();
+    assert_eq!(update.call(coffee(), 0.5).unwrap(), -5.0);
+    let settle = script.func::<(String, Transaction), String>("settle").unwrap();
+    assert_eq!(settle.call("paid".into(), coffee()).unwrap(), "paid Blue Bottle");
+}
