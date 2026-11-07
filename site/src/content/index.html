@@ -88,7 +88,7 @@ fn main() {
     let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
     println!("total: {}", total(&amp;cart));
 }</code></pre>
-          <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run this file on rawr's server" hidden></button><b>rawr run</b><span id="out-cart" aria-live="polite">total: 27</span></div>
+          <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run this file" hidden></button><b>rawr run</b><span id="out-cart" aria-live="polite">total: 27</span></div>
         </div>
         <div class="divider">
           <span class="hit" aria-hidden="true"></span>
@@ -98,7 +98,7 @@ fn main() {
       </div>
       <figcaption>
         Both sides show the same <code>src/main.rs</code>. Cargo compiles it and rawr interprets it. Both print <code>total: 27</code>.
-        <small>Edit the file and press run. It runs on rawr&rsquo;s server.</small>
+        <small>Edit the file and press run. It runs in your browser.</small>
       </figcaption>
     </figure>
   </div>
@@ -122,7 +122,31 @@ fn main() {
       </div>
       <div class="block">
         <div class="file"><b>hello/src/main.rs</b><span>written by rawr new</span></div>
-        <div class="run"><small>on your machine</small><b>rawr run</b><span>1. Hello, rawr!
+        <pre><code data-lang="rust" data-run="hello.rs" id="src-hello">// rawr
+// `rawr run` interprets this file, and `cargo build` compiles it as
+// ordinary Rust.
+
+struct Greeting {
+    name: String,
+    times: i64,
+}
+
+impl Greeting {
+    fn line(&amp;self, count: i64) -&gt; String {
+        format!("{count}. Hello, {}!", self.name)
+    }
+}
+
+fn main() {
+    let greeting = Greeting {
+        name: String::from("rawr"),
+        times: 3,
+    };
+    for count in 1..=greeting.times {
+        println!("{}", greeting.line(count));
+    }
+}</code></pre>
+        <div class="run"><button type="button" class="runbtn" data-source="src-hello" data-out="out-hello" aria-label="Run this file" hidden></button><b>rawr run</b><span id="out-hello" aria-live="polite">1. Hello, rawr!
 2. Hello, rawr!
 3. Hello, rawr!</span></div>
       </div>
@@ -178,7 +202,7 @@ impl Counter {
         .align_x(Center)
     }
 }</code></pre>
-          <div class="run"><small>on your machine</small><b>rawr run</b><span class="quiet">(opens a window)</span></div>
+          <div class="run"><b>rawr run</b><span class="quiet">(opens a window)</span></div>
           <p class="fig-note">iced runs the window and calls <code>update</code> and <code>view</code> back. Change the text size and save. The next click draws the new view, and the count stays.</p>
         </div>
       </div>
@@ -205,32 +229,60 @@ pub fn draw(frame: &amp;mut Frame, app: &amp;mut App) {
     );
     // ...
 }</code></pre>
-          <div class="run"><small>on your machine</small><b>rawr run -p tui</b><span class="quiet">(draws in the terminal)</span></div>
+          <div class="run"><b>rawr run -p tui</b><span class="quiet">(draws in the terminal)</span></div>
           <p class="fig-note">The native <code>main.rs</code> owns the terminal and calls <code>ui::draw</code> to draw each screen. Change a title and save. The screen repaints with no key pressed, and the to-dos stay.</p>
         </div>
       </div>
       <div class="lib" id="lib-std-panel">
         <div class="block">
-          <div class="file"><b>src/physics.rs</b><span>std only, from examples/islands</span></div>
-          <pre><code data-lang="rust">// rawr
+          <div class="file"><b>bounce.rs</b><span>std only, the ball from examples/islands</span></div>
+          <pre><code data-lang="rust" data-run="bounce.rs" id="src-bounce">// rawr
 const GRAVITY: f64 = 9.8;
 const BOUNCE: f64 = 0.8;
 
+struct Ball {
+    height: f64,
+    up: f64,
+}
+
 impl Ball {
-    pub fn advance(&amp;mut self, step: f64, width: f64) {
+    fn advance(&amp;mut self, step: f64) {
         self.up -= GRAVITY * step;
         self.height += self.up * step;
         if self.height &lt; 0.0 {
             self.height = 0.0;
             self.up = -self.up * BOUNCE;
         }
-        // ...
+    }
+}
+
+fn main() {
+    let mut ball = Ball {
+        height: 8.0,
+        up: 0.0,
+    };
+    for tick in 1..=12 {
+        ball.advance(0.25);
+        let column = (ball.height * 2.0).round() as usize;
+        println!("{tick:&gt;2} |{}o", " ".repeat(column));
     }
 }</code></pre>
-          <div class="run"><small>on your machine</small><b>rawr run -p islands</b><span class="quiet">(prints the ball each tick)</span></div>
-          <p class="fig-note">The native <code>main.rs</code> loops and calls <code>advance</code> each tick. Change <code>BOUNCE</code> and save. The next tick uses it, and the ball carries on from where it was.</p>
+          <div class="run"><button type="button" class="runbtn" data-source="src-bounce" data-out="out-bounce" aria-label="Run bounce.rs" hidden></button><b>rawr run bounce.rs</b><span id="out-bounce" aria-live="polite"> 1 |               o
+ 2 |            o
+ 3 |         o
+ 4 |    o
+ 5 |o
+ 6 |    o
+ 7 |      o
+ 8 |       o
+ 9 |       o
+10 |      o
+11 |    o
+12 |o</span></div>
+          <p class="fig-note">Change <code>BOUNCE</code> and run it again. In <code>examples/islands</code> a native <code>main.rs</code> calls <code>advance</code> each tick, so a save reaches the next tick and the ball carries on from where it was.</p>
         </div>
       </div>
+      <p class="later">The iced and ratatui code runs natively under <code>rawr run</code>. iced will run on this page when the browser gets iced bindings (<a href="https://github.com/airstrike/rawr/issues/435">#435</a>).</p>
     </figure>
   </div>
 </section>

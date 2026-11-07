@@ -28,7 +28,8 @@
         {"text":"The play bot's status page and its invite page now look like the rest of the site, in light and dark themes that follow the system or the site's theme switch.","issues":[1156]},
         {"text":"A program may name its types and modules anything, `Program`, `Error` and `Message` included: the generated runner keeps its own items in a module no program names.","issues":[1163]},
         {"text":"A marked `src/main.rs` names its package's library by the crate name, as a Cargo binary does: the library is built, read and bound like any dependency.","issues":[1164]},
-        {"text":"A crate function whose `impl Trait` output captures a parameter a closure fills, such as iced's `markdown::code_block`, no longer panics rawr-import when a member of that output is called.","issues":[1098]}
+        {"text":"A crate function whose `impl Trait` output captures a parameter a closure fills, such as iced's `markdown::code_block`, no longer panics rawr-import when a member of that output is called.","issues":[1098]},
+        {"text":"The site's Run buttons run snippets in your browser, as the playground does, with no server round trip and no browser check after an edit. The landing page runs its hello program and a bouncing-ball loop, and the borrow-checking examples in How it works run and show their errors. A few blocks that need what the browser lacks (threads, the clock, wide integers) still run on rawr's server and say so. The site bar is plain at the top of the page and takes a light shade and a hairline once the page scrolls.","issues":[1179]}
       ]
     },
     "releases": [
@@ -2814,7 +2815,13 @@
     {"issue":1175,"title":"rawr runs a Cargo package's [[bin]] file only as a lone file, without the package's dependencies","state":"open","category":"Divergences from rustc"},
     {"issue":1176,"title":"A package's `panic = \"abort\"` profile: a panic aborts, as cargo's build does","state":"open","category":"Divergences from rustc"},
     {"issue":1177,"title":"A generic body's trait call picks among f32/f64 or &str/String impls by runtime type","state":"open","category":"Divergences from rustc"},
-    {"issue":1178,"title":"impls of one trait for Vec<i64> and Vec<String> (or Foo<i32> and Foo<i64>) are a duplicate method","state":"open","category":"Divergences from rustc"}
+    {"issue":1178,"title":"impls of one trait for Vec<i64> and Vec<String> (or Foo<i32> and Foo<i64>) are a duplicate method","state":"open","category":"Divergences from rustc"},
+    {"issue":1179,"title":"The site's Run buttons run snippets in the browser","state":"open","category":"Health"},
+    {"issue":1180,"title":"Top-level statements don't drop their last locals at the end of the snippet","state":"open","category":"Divergences from rustc"},
+    {"issue":1181,"title":"rawr-web prints u128 and i128 as their type names","state":"open","category":"Platforms"},
+    {"issue":1182,"title":"rawr-web traps on Instant::now","state":"open","category":"Platforms"},
+    {"issue":1183,"title":"A snippet rejects an inner attribute at its top","state":"open","category":"Divergences from rustc"},
+    {"issue":1184,"title":"ratatui snippets run in the browser","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -3763,7 +3770,8 @@
           "state": "next",
           "note": "rawr-web",
           "issues": [
-            {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"}
+            {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"},
+            {"number":1184,"title":"ratatui snippets run in the browser","state":"open"}
           ]
         },
         {

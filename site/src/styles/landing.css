@@ -89,6 +89,9 @@ main > section > .wrap { padding: 0; }
 .libs input:focus-visible + label { outline: 2px solid var(--red); outline-offset: 2px; }
 .libs .lib { display: none; flex-basis: 100%; min-width: 0; margin-top: 10px; }
 #lib-iced:checked ~ #lib-iced-panel, #lib-ratatui:checked ~ #lib-ratatui-panel, #lib-std:checked ~ #lib-std-panel { display: block; }
+/* Under the iced and ratatui tabs, which don't run on the page yet. */
+.libs .later { flex-basis: 100%; margin-top: 10px; font-size: var(--fs-small); color: var(--quiet); }
+#lib-std:checked ~ .later { display: none; }
 
 .cmds { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .cmd { display: flex; align-items: stretch; border: 1px solid var(--grid); background: var(--wash); min-width: 0; }
