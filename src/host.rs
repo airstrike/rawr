@@ -221,6 +221,46 @@ impl Default for Registry {
     }
 }
 
+/// The registry an engine holds. Each compile shares it as it stands
+/// instead of copying it, so a compile costs what its program uses, not
+/// what the engine registered: a universe runner's registry holds every
+/// binding of its crates (#1065). A registration after a compile copies it
+/// then, once, and the compile keeps the registry it read.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Current(std::sync::OnceLock<crate::Shared<Registry>>);
+
+impl Current {
+    /// An engine's registry before anything is registered.
+    pub(crate) const fn new() -> Self {
+        Self(std::sync::OnceLock::new())
+    }
+
+    /// The registry as it stands, for a compile to keep.
+    pub(crate) fn share(&self) -> crate::Shared<Registry> {
+        crate::Shared::clone(self.held())
+    }
+
+    fn held(&self) -> &crate::Shared<Registry> {
+        self.0.get_or_init(|| crate::Shared::new(Registry::new()))
+    }
+}
+
+impl std::ops::Deref for Current {
+    type Target = Registry;
+
+    fn deref(&self) -> &Registry {
+        self.held()
+    }
+}
+
+impl std::ops::DerefMut for Current {
+    fn deref_mut(&mut self) -> &mut Registry {
+        self.held();
+        let held = self.0.get_mut().expect("the registry was just made");
+        crate::Shared::make_mut(held)
+    }
+}
+
 impl Registry {
     /// Create a registry containing Rawr's built-in header types.
     #[must_use]

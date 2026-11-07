@@ -122,14 +122,11 @@ type ImplArguments = Vec<(Box<[ImmutableString]>, Box<[type_ref::Type]>)>;
 pub(super) fn imported<A: crate::host::ImportAllocation>(
     engine: &Engine,
     program: &Program,
-    host: &crate::host::Registry,
+    host: &Shared<crate::host::Registry>,
     allocation: &mut A,
 ) -> Result<ImportedOutput, super::ImportedFailure> {
     let runtime = crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
-    let compiler_host = host
-        .clone_for_import(allocation)
-        .map_err(super::ImportedFailure::Surface)?;
-    let models = Models::new(program, runtime, compiler_host, engine);
+    let models = Models::new(program, runtime, Shared::clone(host), engine);
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
     let mut allocation_failure = None;
@@ -323,7 +320,7 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
 pub(crate) fn reveal<A: crate::host::ImportAllocation>(
     engine: &Engine,
     program: &mut Program,
-    host: &crate::host::Registry,
+    host: &Shared<crate::host::Registry>,
     allocation: &mut A,
 ) -> Result<(), super::ImportedFailure> {
     instance_templates(program);
@@ -396,10 +393,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         }
         let runtime =
             crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
-        let compiler_host = host
-            .clone_for_import(allocation)
-            .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine);
+        let models = Models::new(program, runtime, Shared::clone(host), engine);
         let mut revealed = Vec::new();
         let mut waiting = Vec::new();
         let mut first_failure = None;
@@ -991,7 +985,7 @@ fn instance_templates(program: &mut Program) -> bool {
 fn body_templates<A: crate::host::ImportAllocation>(
     engine: &Engine,
     program: &mut Program,
-    host: &crate::host::Registry,
+    host: &Shared<crate::host::Registry>,
     allocation: &mut A,
 ) -> Result<bool, super::ImportedFailure> {
     // A function's or method's key, with its index among its kind.
@@ -1025,10 +1019,7 @@ fn body_templates<A: crate::host::ImportAllocation>(
         }
         let runtime =
             crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
-        let compiler_host = host
-            .clone_for_import(allocation)
-            .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine);
+        let models = Models::new(program, runtime, Shared::clone(host), engine);
         let mut promoted = Vec::new();
         for (key, candidate) in &candidates {
             let mut uses = Vec::new();
@@ -1133,7 +1124,7 @@ const MAX_INSTANCE_ROUNDS: usize = 32;
 fn instance_round<A: crate::host::ImportAllocation>(
     engine: &Engine,
     program: &mut Program,
-    host: &crate::host::Registry,
+    host: &Shared<crate::host::Registry>,
     allocation: &mut A,
 ) -> Result<Vec<Added>, super::ImportedFailure> {
     let templates = program
@@ -1145,10 +1136,7 @@ fn instance_round<A: crate::host::ImportAllocation>(
     {
         let runtime =
             crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
-        let compiler_host = host
-            .clone_for_import(allocation)
-            .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host, engine);
+        let models = Models::new(program, runtime, Shared::clone(host), engine);
         let mut found = Vec::<(crate::item::Key, Vec<Ty>)>::new();
         let mut impl_uses = Vec::new();
         for shell in program.items.iter() {
@@ -2806,7 +2794,7 @@ pub(super) fn lower(
     let models = Models::new(
         program,
         runtime_model.clone(),
-        engine.host_registry.clone(),
+        engine.host_registry.share(),
         engine,
     );
     lower_with_context(
@@ -2830,11 +2818,12 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     scope: Option<&Scope>,
     optimization_level: crate::OptimizationLevel,
 ) -> Result<(Output, ImportedOutput), super::ImportedFailure> {
-    let compiler_host = engine
-        .host_registry
-        .clone_for_import(allocation)
-        .map_err(super::ImportedFailure::Surface)?;
-    let mut models = Models::new(program, runtime_model.clone(), compiler_host, engine);
+    let mut models = Models::new(
+        program,
+        runtime_model.clone(),
+        engine.host_registry.share(),
+        engine,
+    );
     models._imported_owner = allocation.support_owner();
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
@@ -4558,7 +4547,7 @@ struct Tables {
     /// indexed (`indexed_place`).
     index_mut: BTreeMap<type_def::Id, (ImmutableString, String)>,
     runtime: crate::program::model::Model,
-    host: crate::host::Registry,
+    host: Shared<crate::host::Registry>,
     /// What the program may reach while it compiles: the files
     /// `include_str!` reads and the variables `env!` reads (D683.4).
     access: crate::Access,
@@ -4723,7 +4712,7 @@ impl Models {
     fn new(
         program: &Program,
         runtime: crate::program::model::Model,
-        host: crate::host::Registry,
+        host: Shared<crate::host::Registry>,
         engine: &Engine,
     ) -> Self {
         let definitions: BTreeMap<_, _> = program
@@ -59146,8 +59135,13 @@ mod tests {
         program: &resolve::Program,
     ) -> Result<Box<[super::ImportedUse]>, resolve::ImportedFailure> {
         let mut allocation = host::TestImportAllocation::default();
-        super::imported(engine, program, &engine.host_registry, &mut allocation)
-            .map(|output| output.uses)
+        super::imported(
+            engine,
+            program,
+            &engine.host_registry.share(),
+            &mut allocation,
+        )
+        .map(|output| output.uses)
     }
 
     #[test]
@@ -60238,8 +60232,18 @@ pub fn run() -> i64 {
         let new_generation = crate::program::GenerationId::issue();
         let old_runtime = crate::program::model::Model::new(old_generation, &old);
         let new_runtime = crate::program::model::Model::new(new_generation, &new);
-        let old_models = Models::new(&old, old_runtime, host::Registry::new(), &Engine::new_raw());
-        let new_models = Models::new(&new, new_runtime, host::Registry::new(), &Engine::new_raw());
+        let old_models = Models::new(
+            &old,
+            old_runtime,
+            Shared::new(host::Registry::new()),
+            &Engine::new_raw(),
+        );
+        let new_models = Models::new(
+            &new,
+            new_runtime,
+            Shared::new(host::Registry::new()),
+            &Engine::new_raw(),
+        );
         let old_outer = old_models.get("Outer").unwrap();
         let new_outer = new_models.get("Outer").unwrap();
         let retained = default_value(old_outer, &old_models, &mut Vec::new()).unwrap();

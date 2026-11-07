@@ -163,6 +163,12 @@ interface Env {
   PLAY_MAX_MS: string;
   PLAY_VERSION: string;
   /**
+   * The Worker version this code is (`version_metadata` in wrangler.jsonc).
+   * /bot/health reports the Durable Object's: a deploy resets the Durable
+   * Object, and deploy.sh waits until it runs the version just deployed.
+   */
+  CF_VERSION_METADATA: WorkerVersionMetadata;
+  /**
    * Secret: the key the bot makes server tokens with. The Worker only
    * derives keys from it (HMAC) for hashing IPs and the admin header.
    */
@@ -500,10 +506,15 @@ export class PlayBot extends Container<Env> {
     return status && status.boot >= startedAt ? status.version : null;
   }
 
-  /** /bot/health: whether the bot runs, and the image it reported running. */
-  async health(): Promise<{ running: boolean; image: string | null; deployed: string }> {
+  /** /bot/health: whether the bot runs, the image it reported, and the Worker version this Durable Object runs. */
+  async health(): Promise<{ running: boolean; image: string | null; deployed: string; version: string }> {
     const running = await this.ensure();
-    return { running, image: running ? await this.reportedImage() : null, deployed: this.env.PLAY_VERSION };
+    return {
+      running,
+      image: running ? await this.reportedImage() : null,
+      deployed: this.env.PLAY_VERSION,
+      version: this.env.CF_VERSION_METADATA.id,
+    };
   }
 
   private async ensureOnce(): Promise<boolean> {
@@ -713,6 +724,9 @@ async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Pr
   const bytes = await response.arrayBuffer();
   const type = response.headers.get("content-type") ?? "text/plain";
   if (!response.ok) return new Response(bytes, { status: response.status, headers: { "content-type": type, "cache-control": "no-store" } });
+  // A run a limit stopped says how busy the bot was, not what the source
+  // does: it is answered, never cached.
+  if (parseTextResult(new TextDecoder().decode(bytes))?.limit) return new Response(bytes, { headers: { "content-type": type, "cache-control": "no-store", "x-run": "ran" } });
   const result = new Response(bytes, { headers: { "content-type": type, "cache-control": "public, max-age=86400" } });
   ctx.waitUntil(cache.put(key, result.clone()));
   result.headers.set("x-run", "ran");

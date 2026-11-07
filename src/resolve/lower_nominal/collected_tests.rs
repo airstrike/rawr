@@ -104,7 +104,7 @@ fn parity(engine: &Engine, source: &str) -> (crate::program::Executable, Importe
     let symbolic = super::imported(
         engine,
         &program,
-        &engine.host_registry,
+        &engine.host_registry.share(),
         &mut symbolic_allocation,
     )
     .unwrap_or_else(|failure| panic!("symbolic fixture: {}", failure.into_error()));
@@ -513,7 +513,7 @@ fn collector_capacity_failures_remain_surface_allocation_errors() {
     for kind in 0..3 {
         let runtime =
             crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
-        let models = super::Models::new(&program, runtime, engine.host_registry.clone(), &engine);
+        let models = super::Models::new(&program, runtime, engine.host_registry.share(), &engine);
         let mut allocation = host::TestImportAllocation::default();
         let mut failure = None;
         let mut uses = Vec::new();
@@ -616,7 +616,7 @@ fn empty_models() -> super::Models {
     let program = program(&engine, "");
     let runtime =
         crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
-    super::Models::new(&program, runtime, engine.host_registry.clone(), &engine)
+    super::Models::new(&program, runtime, engine.host_registry.share(), &engine)
 }
 
 #[test]

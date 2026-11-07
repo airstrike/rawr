@@ -142,7 +142,7 @@ pub struct Engine {
     /// Registered Rust enum types available to `switch` patterns.
     pub(crate) registered_enums: std::collections::BTreeMap<Identifier, EnumRegistration>,
     /// Host type paths available while resolving Rawr item headers.
-    pub(crate) host_registry: crate::host::Registry,
+    pub(crate) host_registry: crate::host::Current,
     /// What the programs this engine runs may reach outside it: none until
     /// the embedder grants it (D683.4).
     pub(crate) access: crate::Access,
@@ -322,7 +322,7 @@ impl Engine {
         interned_strings: None,
         disabled_symbols: BTreeSet::new(),
         registered_enums: std::collections::BTreeMap::new(),
-        host_registry: crate::host::Registry::new(),
+        host_registry: crate::host::Current::new(),
         access: crate::Access::none(),
         test: false,
         host_runtime: None,
