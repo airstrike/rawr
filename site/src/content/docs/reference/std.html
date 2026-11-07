@@ -226,6 +226,7 @@ println!("{c:?} {:?}", "x".parse::&lt;Rgb&gt;());</code></pre>
 </div>
 <h2 id="conversions">Conversions</h2>
 <p><code>From</code> and <code>Into</code> between your own types, and from your own type into a number type. <code>TryFrom</code> between integer types. <code>From::from</code>, <code>Into::into</code>, <code>Clone::clone</code>, <code>ToString::to_string</code>, the methods of <code>Option</code> and <code>Result</code>, and your own associated functions all work as values.</p>
+<p>A type can implement <code>From</code> more than once, as <code>impl From&lt;&amp;str&gt; for Bar</code> beside <code>impl From&lt;String&gt; for Bar</code>. The argument&rsquo;s type picks the impl for <code>Bar::from(x)</code> and <code>x.into()</code>, as rustc selects it, and a parameter <code>impl Into&lt;Bar&gt;</code> takes either. The same goes for any generic trait of yours implemented at two type arguments for one type, and for a trait implemented for both <code>f32</code> and <code>f64</code>, where an unsuffixed literal is an <code>f64</code>. A call nothing selects an impl for is rustc&rsquo;s E0283.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="conversions.rs" id="src-conversions">struct Celsius(f64);
 
