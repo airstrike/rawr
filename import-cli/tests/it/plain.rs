@@ -1515,6 +1515,91 @@ fn an_undeclared_build_script_input_runs_again_for_the_project_whose_build_diffe
     let _ = fs::remove_dir_all(&root);
 }
 
+/// A variable a build script declares with `rerun-if-env-changed` and that
+/// the project's `.cargo/config.toml` sets in `[env]` has the value Cargo
+/// gives the script, and a change to `[env]` runs the script again (#1137).
+#[test]
+fn a_declared_variable_set_by_cargo_env_config_runs_as_under_cargo() {
+    let base = crate::support::scratch().join("plain-env-config");
+    let root = base.join("app");
+    project(
+        &base,
+        &[
+            (
+                "app/Cargo.toml",
+                "[workspace]\n[package]\nname='env-config-app'\nversion='0.1.0'\nedition='2021'\n[dependencies]\nenv-config-fixture={path='../fixture'}\n",
+            ),
+            (
+                "app/src/main.rs",
+                "// rawr\nfn main() {\n    println!(\"value {}\", env_config_fixture::value());\n}\n",
+            ),
+            (
+                "fixture/Cargo.toml",
+                "[workspace]\n[package]\nname='env-config-fixture'\nversion='0.1.0'\nedition='2021'\n",
+            ),
+            (
+                "fixture/src/lib.rs",
+                "pub fn value() -> &'static str {\n    env!(\"BAKED_ENV_CONFIG_VALUE\")\n}\n",
+            ),
+            (
+                "fixture/build.rs",
+                r#"fn main() {
+    println!("cargo:rerun-if-env-changed=RAWR_ENV_CONFIG_VALUE");
+    let value = std::env::var("RAWR_ENV_CONFIG_VALUE").unwrap();
+    println!("cargo:rustc-env=BAKED_ENV_CONFIG_VALUE={value}");
+}
+"#,
+            ),
+        ],
+    );
+    let configure = |value: &str| {
+        fs::create_dir_all(root.join(".cargo")).unwrap();
+        fs::write(
+            root.join(".cargo/config.toml"),
+            format!("[env]\nRAWR_ENV_CONFIG_VALUE = '{value}'\n"),
+        )
+        .unwrap();
+    };
+    let cargo = || {
+        Command::new("cargo")
+            .args(["run", "-q"])
+            .current_dir(&root)
+            .env_remove("RAWR_ENV_CONFIG_VALUE")
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap()
+    };
+    let rawr = || {
+        Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .arg("run")
+            .arg(&root)
+            .env("RAWR_HOME", base.join("rawr-home"))
+            .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
+            .env_remove("RAWR_ENV_CONFIG_VALUE")
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap()
+    };
+    for value in ["configured", "changed"] {
+        configure(value);
+        let native = cargo();
+        assert!(native.status.success(), "{}", text(&native.stderr));
+        assert_eq!(text(&native.stdout), format!("value {value}\n"));
+        let ran = rawr();
+        assert!(ran.status.success(), "{}", text(&ran.stderr));
+        assert_eq!(
+            text(&ran.stdout),
+            text(&native.stdout),
+            "{}",
+            text(&ran.stderr)
+        );
+    }
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// A marked `main` gets the arguments after `--` and stdin, as under
 /// `cargo run`, and a save while it waits on stdin restarts it on the same
 /// stdin (D500.1).
