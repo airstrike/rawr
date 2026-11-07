@@ -31,6 +31,8 @@ pub struct Package {
     rust_modules: Vec<RustModule>,
     /// The crate root, when it is native Rust that declares marked modules.
     native_root: Option<RustModule>,
+    /// The package's native binary, when the program runs from its library.
+    bin: Option<Bin>,
     /// A marked root's `#[X::main]` above its `async fn main`, as written:
     /// the shadow crate's native entry carries it (D513.4).
     entry: Option<Box<str>>,
@@ -47,6 +49,26 @@ pub struct RustModule {
     modules: Box<[ImmutableString]>,
     path: PathBuf,
     text: String,
+}
+
+/// A package's binary crate when the program runs from its library: an
+/// unmarked `src/main.rs` whose tree has no marked module, beside a
+/// `src/lib.rs` whose tree has one. It is native, its own crate, and it
+/// reaches the library as Cargo builds it, by the library's crate name. Its
+/// `main` is the program's.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Bin {
+    root: RustModule,
+    modules: Vec<RustModule>,
+}
+
+/// The module tree a native module is recorded in.
+#[derive(Clone, Copy)]
+enum Tree {
+    /// The tree of the crate Rawr runs.
+    Crate,
+    /// The tree of a native binary beside it ([`Bin`]).
+    Bin,
 }
 
 /// The file a `mod name;` declaration resolves to under Rust's rules.
@@ -142,15 +164,29 @@ impl Package {
         self.native_root.as_ref()
     }
 
+    /// The package's native binary, when the program runs from its
+    /// library: its `main` is the program's, and the library's marked
+    /// modules are reached from native code through trampolines.
+    #[must_use]
+    pub const fn bin(&self) -> Option<&Bin> {
+        self.bin.as_ref()
+    }
+
+    /// Whether native code reaches the marked modules through generated
+    /// trampolines (D501): the crate root is native, or a native binary
+    /// runs the program from the library.
+    #[must_use]
+    pub const fn is_island(&self) -> bool {
+        self.native_root.is_some() || self.bin.is_some()
+    }
+
     /// The crate name the native modules are imported under, when the
     /// crate has native code and its root `Cargo.toml` is a package.
     #[must_use]
     pub fn rust_crate(&self) -> Option<&str> {
         self.cargo
             .as_ref()
-            .filter(|_| {
-                !self.rust_modules.is_empty() || self.native_root.is_some() || self.entry.is_some()
-            })
+            .filter(|_| !self.rust_modules.is_empty() || self.is_island() || self.entry.is_some())
             .map(|cargo| cargo.crate_name.as_str())
     }
 
@@ -213,6 +249,20 @@ impl RustModule {
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
+    }
+}
+
+impl Bin {
+    /// The binary's crate root, `src/main.rs`.
+    #[must_use]
+    pub const fn root(&self) -> &RustModule {
+        &self.root
+    }
+
+    /// The native modules of the binary's own tree, in discovery order.
+    #[must_use]
+    pub fn modules(&self) -> &[RustModule] {
+        &self.modules
     }
 }
 
@@ -320,11 +370,15 @@ impl Graph {
     /// root's shadow crate.
     pub(crate) fn island_shadow(&self) -> Option<super::island::Shadow> {
         let entry = self.entry_package();
-        let root = entry.native_root()?;
-        let module_root = root.path().parent()?;
+        if !entry.is_island() {
+            return None;
+        }
+        let module_root = self.entry_source().path().parent()?;
+        // A native root has its own copy; a marked one gets trampolines.
+        let native = entry.native_root().map(RustModule::path);
         let sources = self.parsed_units().filter(|(source, _)| {
             source.package() == entry.name()
-                && !(source.modules().is_empty() && source.path() == root.path())
+                && !(source.modules().is_empty() && Some(source.path()) == native)
         });
         Some(super::island::shadow(
             module_root,
@@ -559,6 +613,7 @@ impl<'a> Builder<'a> {
             source: source::Id::from_index(0),
             rust_modules: Vec::new(),
             native_root: None,
+            bin: None,
             entry: None,
             cargo: None,
             rust: None,
@@ -570,18 +625,34 @@ impl<'a> Builder<'a> {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| root.clone());
+        // A library beside a binary whose tree has no marked module runs
+        // from that binary, as `cargo run` does: its `main` is the program's.
+        let bin = if library && !script && cargo.is_some() {
+            self.bin_root(&root, &module_root)?
+        } else {
+            None
+        };
+        let has_bin = bin.is_some();
+        self.packages[package.0].bin = bin.map(|root| Bin {
+            root,
+            modules: Vec::new(),
+        });
         // An unmarked root that declares a marked module is native Rust
         // (D501): Rawr reads only its `mod` declarations, as the root of the
         // marked modules, and the native build compiles the rest.
-        let read = if !crate::project::is_marked(&text) && self.reaches_marked(&module_root, &text)
-        {
-            let declarations = super::island::root_text(&text);
+        let marked = crate::project::is_marked(&text);
+        let read = if !marked && self.reaches_marked(&module_root, &text).is_some() {
+            let declarations = super::island::root_text(&text, has_bin);
             self.packages[package.0].native_root = Some(RustModule {
                 modules: Box::default(),
                 path: canonical,
                 text,
             });
             declarations
+        } else if has_bin {
+            let mut text = text;
+            text.push_str(&super::island::start(true));
+            text
         } else {
             self.packages[package.0].entry =
                 super::entry::attribute(&text).map(String::into_boxed_str);
@@ -598,19 +669,99 @@ impl<'a> Builder<'a> {
             Some(read),
         )?;
         self.packages[package.0].source = root_source;
+        if !library && !script && cargo.is_some() {
+            self.check_one_marked_tree(package, &root, &module_root)?;
+        }
+        if let Some(bin) = &self.packages[package.0].bin {
+            let (path, text) = (bin.root.path.clone(), bin.root.text.clone());
+            self.load_rust_children(package, Tree::Bin, &root, &module_root, &[], &path, &text)?;
+        }
         if let Some(cargo) = cargo {
             self.attach_cargo(package, cargo);
         }
-        if self.packages[package.0].native_root.is_none() {
+        if !self.packages[package.0].is_island() {
             self.check_native_direction(package)?;
         }
         Ok(package)
     }
 
-    /// Whether the native crate root `text` reaches a marked module through
-    /// its `mod` declarations and those of the native modules it declares,
-    /// as project discovery decides.
-    fn reaches_marked(&self, module_root: &Path, text: &str) -> bool {
+    /// A binary whose tree is marked runs, so a marked module in the tree
+    /// of the library beside it would not: an error that names both.
+    fn check_one_marked_tree(
+        &mut self,
+        package: Id,
+        root: &Path,
+        module_root: &Path,
+    ) -> Result<(), Error> {
+        let library = module_root.join("lib.rs");
+        if !self.is_file(&library) {
+            return Ok(());
+        }
+        let Ok(library) = self.canonical_source(library, root, None) else {
+            return Ok(());
+        };
+        let Ok(text) = self.read_to_string(&library) else {
+            return Ok(());
+        };
+        let marked = if crate::project::is_marked(&text) {
+            Some(library.clone())
+        } else {
+            self.reaches_marked(module_root, &text)
+        };
+        let Some(marked) = marked else {
+            return Ok(());
+        };
+        let binary = self.sources[self.packages[package.0].source.index()]
+            .path()
+            .to_path_buf();
+        Err(Error::module(
+            self.evidence.clone(),
+            format!(
+                "the binary `{}` has marked modules, and so does the library `{}`: `{}` starts with `// rawr`. \
+                 Rawr runs the marked modules of one crate of a package, \
+                 the binary's when its tree has one, else the library's. \
+                 Remove `// rawr` from the marked files of one of the two trees.",
+                binary.display(),
+                library.display(),
+                marked.display(),
+            )
+            .into(),
+            self.start_label(),
+            None,
+        ))
+    }
+
+    /// The package's binary root, `src/main.rs` beside the library root's
+    /// directory `module_root`, when it is native and its tree reaches no
+    /// marked module: then the binary runs the program.
+    fn bin_root(&self, root: &Path, module_root: &Path) -> Result<Option<RustModule>, Error> {
+        let path = module_root.join("main.rs");
+        if !self.is_file(&path) {
+            return Ok(None);
+        }
+        let canonical = self.canonical_source(path, root, None)?;
+        let text = self.read_to_string(&canonical).map_err(|source| {
+            Error::resource(
+                self.evidence.clone(),
+                error::resource_message("read Rust module", canonical.clone(), &source),
+                source,
+                None,
+            )
+        })?;
+        if crate::project::is_marked(&text) || self.reaches_marked(module_root, &text).is_some() {
+            return Ok(None);
+        }
+        Ok(Some(RustModule {
+            modules: Box::default(),
+            path: canonical,
+            text,
+        }))
+    }
+
+    /// The first marked module the native crate root `text` reaches
+    /// through its `mod` declarations and those of the native modules it
+    /// declares, as project discovery decides.
+    fn reaches_marked(&self, module_root: &Path, text: &str) -> Option<PathBuf> {
         let mut pending = vec![(Vec::<ImmutableString>::new(), text.to_owned())];
         let mut seen = std::collections::BTreeSet::new();
         while let Some((modules, text)) = pending.pop() {
@@ -638,12 +789,12 @@ impl<'a> Builder<'a> {
                     continue;
                 };
                 if crate::project::is_marked(&text) {
-                    return true;
+                    return Some(path.clone());
                 }
                 pending.push((child, text));
             }
         }
-        false
+        None
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -844,6 +995,7 @@ impl<'a> Builder<'a> {
                 }
                 ModuleFile::Rust(child_path) => self.load_rust_module(
                     package,
+                    Tree::Crate,
                     package_root,
                     module_root,
                     child_modules.into_boxed_slice(),
@@ -1090,13 +1242,16 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Record one native module and, under Rust's rules, the modules it
-    /// declares. A marked module declared by a native one, other than the
-    /// crate root, is an error at load: Rawr reaches marked modules from the
-    /// root through marked modules only.
+    /// Record one native module of `tree` and, under Rust's rules, the
+    /// modules it declares. A marked module declared by a native one, other
+    /// than the crate root, is an error at load: Rawr reaches marked modules
+    /// from the root through marked modules only. A binary's tree is a crate
+    /// of its own, which may declare a file the library's tree declares too.
+    #[allow(clippy::too_many_arguments)]
     fn load_rust_module(
         &mut self,
         package: Id,
+        tree: Tree,
         package_root: &Path,
         module_root: &Path,
         modules: Box<[ImmutableString]>,
@@ -1104,7 +1259,9 @@ impl<'a> Builder<'a> {
         declaration: error::Label,
     ) -> Result<(), Error> {
         let canonical = self.canonical_source(path, package_root, Some(declaration))?;
-        if let Some(previous) = self.module_targets.get(&canonical).copied() {
+        if let Tree::Crate = tree
+            && let Some(previous) = self.module_targets.get(&canonical).copied()
+        {
             return Err(Error::module(
                 self.evidence.clone(),
                 format!(
@@ -1116,7 +1273,9 @@ impl<'a> Builder<'a> {
                 Some(previous),
             ));
         }
-        self.module_targets.insert(canonical.clone(), declaration);
+        if let Tree::Crate = tree {
+            self.module_targets.insert(canonical.clone(), declaration);
+        }
         let text = self.read_to_string(&canonical).map_err(|source| {
             Error::resource(
                 self.evidence.clone(),
@@ -1125,7 +1284,42 @@ impl<'a> Builder<'a> {
                 Some(declaration),
             )
         })?;
-        let declarations = super::polyglot::declarations(&text);
+        self.load_rust_children(
+            package,
+            tree,
+            package_root,
+            module_root,
+            &modules,
+            &canonical,
+            &text,
+        )?;
+        let module = RustModule {
+            modules,
+            path: canonical,
+            text,
+        };
+        let package = &mut self.packages[package.0];
+        match (tree, package.bin.as_mut()) {
+            (Tree::Bin, Some(bin)) => bin.modules.push(module),
+            _ => package.rust_modules.push(module),
+        }
+        Ok(())
+    }
+
+    /// Record the native modules that the native module `modules` of
+    /// `tree`, read from `canonical` as `text`, declares.
+    #[allow(clippy::too_many_arguments)]
+    fn load_rust_children(
+        &mut self,
+        package: Id,
+        tree: Tree,
+        package_root: &Path,
+        module_root: &Path,
+        modules: &[ImmutableString],
+        canonical: &Path,
+        text: &str,
+    ) -> Result<(), Error> {
+        let declarations = super::polyglot::declarations(text);
         let mut evidence = None;
         for child in declarations {
             // `#[path]` is Rust's choice; a `#[cfg]`-disabled one is
@@ -1140,7 +1334,7 @@ impl<'a> Builder<'a> {
                 None => {
                     let source = diagnostic::Source::new(
                         canonical.to_string_lossy().into_owned(),
-                        text.clone(),
+                        text.to_owned(),
                     )
                     .map_err(Error::diagnostic)?;
                     let index = self.push_evidence(source);
@@ -1150,11 +1344,12 @@ impl<'a> Builder<'a> {
             };
             let label = error::Label {
                 source: index,
-                span: manifest::byte_span(&text, child.range.clone()),
+                span: manifest::byte_span(text, child.range.clone()),
             };
             match self.module_file(module_root, &child_modules, label)? {
                 ModuleFile::Rust(child_path) => self.load_rust_module(
                     package,
+                    tree,
                     package_root,
                     module_root,
                     child_modules.into_boxed_slice(),
@@ -1182,11 +1377,6 @@ impl<'a> Builder<'a> {
                 ModuleFile::Missing(_) => {}
             }
         }
-        self.packages[package.0].rust_modules.push(RustModule {
-            modules,
-            path: canonical,
-            text,
-        });
         Ok(())
     }
 
@@ -1274,7 +1464,7 @@ impl<'a> Builder<'a> {
             // runner builds each dependency as its own `cargo build` builds
             // it, never one built into an installed binary.
             let imports = !package.rust_modules.is_empty()
-                || package.native_root.is_some()
+                || package.is_island()
                 || !cargo.dependencies.is_empty();
             if imports {
                 package.rust = Some(manifest::rust::Config::from_cargo(

@@ -116,7 +116,8 @@ impl Graph {
                     .dependencies
                     .iter()
                     .any(|dependency| dependency.alias.as_str() == path[0])
-                    || app == Some(path[0]))
+                    || app == Some(path[0])
+                    || (entry.bin().is_some() && path[0] == super::island::BIN))
         };
         let mut paths = Vec::new();
         for source in self.sources() {
@@ -238,7 +239,17 @@ fn script_project(entry: &super::graph::Package) -> rawr_import::Result<()> {
 /// with the island's runtime support at its end, and in place of each
 /// marked file its generated trampolines (`island::shadow`). A save that
 /// changes no trampoline rewrites nothing, so nothing is built again.
-fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Option<Dependency>> {
+///
+/// A program that runs from the package's library has a native binary
+/// beside it (#1107): the library is laid out with trampolines, as a
+/// native root's crate is, and the binary gets a generated package of its
+/// own under `bin/`, a library named [`island::BIN`] whose root is a copy
+/// of `src/main.rs` with the island's runtime support at its end. It
+/// depends on the library by the library's crate name, as Cargo builds the
+/// binary, so the binary reaches the marked modules through the library.
+///
+/// [`island::BIN`]: super::island::BIN
+fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Vec<Dependency>> {
     let entry = graph.entry_package();
     let (Some(alias), Some(cargo)) = (entry.rust_crate(), entry.cargo()) else {
         if let Some(module) = entry.native_root().or_else(|| entry.rust_modules().first()) {
@@ -250,7 +261,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Op
                 .into_boxed_str(),
             });
         }
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let module_root = graph
         .entry_source()
@@ -260,52 +271,54 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Op
         .to_path_buf();
     let directory = rawr_import::location::rawr_directory(entry.root(), environment).join("crate");
     let copies = directory.join("src");
-    let mut files = match entry.native_root() {
-        Some(root) => {
-            let shadow = graph
-                .island_shadow()
-                .unwrap_or_else(|| super::island::Shadow {
-                    files: Vec::new(),
-                    shape: super::island::Shape::default(),
-                    refused: Vec::new(),
-                });
-            if !shadow.refused.is_empty() {
-                return Err(rawr_import::Error::Request {
-                    reason: shadow.refused.join("\n").into_boxed_str(),
-                });
-            }
-            let relative = root
-                .path()
-                .strip_prefix(&module_root)
-                .unwrap_or(root.path());
-            let mut files = vec![
-                (
-                    directory.join("Cargo.toml"),
-                    app_manifest(cargo, &Path::new("src").join(relative)),
-                ),
-                (copies.join(relative), native_root(root)),
-            ];
-            files.extend(
-                shadow
-                    .files
-                    .into_iter()
-                    .map(|(path, text)| (copies.join(path), text)),
-            );
-            files
+    let mut files = if entry.is_island() {
+        let shadow = graph
+            .island_shadow()
+            .unwrap_or_else(|| super::island::Shadow {
+                files: Vec::new(),
+                shape: super::island::Shape::default(),
+                refused: Vec::new(),
+            });
+        if !shadow.refused.is_empty() {
+            return Err(rawr_import::Error::Request {
+                reason: shadow.refused.join("\n").into_boxed_str(),
+            });
         }
-        None => {
-            let mut library = app_library(entry, &copies);
-            if let Some(attribute) = entry.entry() {
-                library.push_str(&super::entry::source(attribute));
-            }
-            vec![
-                (
-                    directory.join("Cargo.toml"),
-                    app_manifest(cargo, Path::new("lib.rs")),
-                ),
-                (directory.join("lib.rs"), library),
-            ]
+        let root = graph.entry_source().path();
+        let relative = root
+            .strip_prefix(&module_root)
+            .unwrap_or(root)
+            .to_path_buf();
+        let mut files = vec![(
+            directory.join("Cargo.toml"),
+            app_manifest(cargo, &Path::new("src").join(&relative)),
+        )];
+        if let Some(root) = entry.native_root() {
+            files.push((copies.join(&relative), native_root(root)));
         }
+        files.extend(shadow.files.into_iter().map(|(path, text)| {
+            // A marked root's trampolines are the crate root: the
+            // island's runtime support goes at their end.
+            let text = if path == relative {
+                format!("{text}\n{}", super::island::support(false))
+            } else {
+                text
+            };
+            (copies.join(path), text)
+        }));
+        files
+    } else {
+        let mut library = app_library(entry, &copies);
+        if let Some(attribute) = entry.entry() {
+            library.push_str(&super::entry::source(attribute));
+        }
+        vec![
+            (
+                directory.join("Cargo.toml"),
+                app_manifest(cargo, Path::new("lib.rs")),
+            ),
+            (directory.join("lib.rs"), library),
+        ]
     };
     for module in entry.rust_modules() {
         let Ok(relative) = module.path().strip_prefix(&module_root) else {
@@ -317,6 +330,49 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Op
             super::polyglot::widened(module.text(), declared_by_rawr, module.path()),
         ));
     }
+    write_changed(files)?;
+    let mut crates = vec![Dependency::path(alias, &directory)?.package(&cargo.package)?];
+    if let Some(bin) = entry.bin() {
+        crates.push(bin_crate(bin, cargo, &directory, &module_root)?);
+    }
+    Ok(crates)
+}
+
+/// The generated package of a native binary that runs the program from the
+/// library in `library`: [`app_crate`] says how it is laid out.
+fn bin_crate(
+    bin: &super::graph::Bin,
+    cargo: &super::manifest::cargo::Cargo,
+    library: &Path,
+    module_root: &Path,
+) -> rawr_import::Result<Dependency> {
+    let directory = library.with_file_name("bin");
+    let copies = directory.join("src");
+    let mut files = vec![
+        (directory.join("Cargo.toml"), bin_manifest(cargo, library)),
+        (copies.join("main.rs"), native_root(bin.root())),
+    ];
+    for module in bin.modules() {
+        let Ok(relative) = module.path().strip_prefix(module_root) else {
+            continue;
+        };
+        files.push((
+            copies.join(relative),
+            super::polyglot::widened(module.text(), false, module.path()),
+        ));
+    }
+    write_changed(files)?;
+    Dependency::path(super::island::BIN, &directory)?.package(&bin_package(cargo))
+}
+
+/// The package name of a binary's generated package.
+fn bin_package(cargo: &super::manifest::cargo::Cargo) -> String {
+    format!("{}-rawr-bin", cargo.package)
+}
+
+/// Write each file whose text differs from what it holds, so a file that
+/// stays the same is not built again.
+fn write_changed(files: Vec<(std::path::PathBuf, String)>) -> rawr_import::Result<()> {
     let io = |operation, path: &Path| {
         let path = path.to_path_buf();
         move |source| rawr_import::Error::Io {
@@ -333,9 +389,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Op
             std::fs::write(&path, text).map_err(io("write", &path))?;
         }
     }
-    Dependency::path(alias, &directory)?
-        .package(&cargo.package)
-        .map(Some)
+    Ok(())
 }
 
 /// A native crate root as the shadow crate's root: its `mod` declarations
@@ -373,12 +427,52 @@ fn native_root(root: &super::graph::RustModule) -> String {
 }
 
 pub(super) fn app_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path) -> String {
+    let mut text = manifest_head(
+        cargo,
+        "the crate without its marked modules",
+        &cargo.package,
+        &cargo.crate_name,
+        library,
+    );
+    text.push_str(&dependency_table(cargo));
+    text
+}
+
+/// A native binary's generated manifest: a library of the binary's root,
+/// with the package's dependencies and the package's own library in
+/// `library`, by its crate name.
+fn bin_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path) -> String {
+    let mut text = manifest_head(
+        cargo,
+        "the binary, which runs the program from its library",
+        &bin_package(cargo),
+        super::island::BIN,
+        Path::new("src/main.rs"),
+    );
+    text.push_str(&format!(
+        "{} = {{ package = {:?}, path = {:?} }}\n",
+        cargo.crate_name,
+        cargo.package,
+        library.display().to_string()
+    ));
+    text.push_str(&dependency_table(cargo));
+    text
+}
+
+/// A generated manifest up to its `[dependencies]` header: `package`, a
+/// library named `library` at `path`, and `cargo`'s version and edition.
+fn manifest_head(
+    cargo: &super::manifest::cargo::Cargo,
+    what: &str,
+    package: &str,
+    library: &str,
+    path: &Path,
+) -> String {
     use std::fmt::Write as _;
     let mut text = format!(
-        "# Generated by Rawr from {:?}: the crate without its marked modules.\n\
-         [package]\nname = {:?}\nversion = {:?}\n",
+        "# Generated by Rawr from {:?}: {what}.\n\
+         [package]\nname = {package:?}\nversion = {:?}\n",
         cargo.path.display().to_string(),
-        cargo.package,
         cargo.version.as_deref().unwrap_or("0.0.0"),
     );
     if let Some(edition) = &cargo.edition {
@@ -386,10 +480,17 @@ pub(super) fn app_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path
     }
     let _ = write!(
         text,
-        "publish = false\n\n[lib]\nname = {:?}\npath = {:?}\n\n[dependencies]\n",
-        cargo.crate_name,
-        library.display().to_string(),
+        "publish = false\n\n[lib]\nname = {library:?}\npath = {:?}\n\n[dependencies]\n",
+        path.display().to_string(),
     );
+    text
+}
+
+/// `cargo`'s dependencies as `[dependencies]` lines, then the empty
+/// `[workspace]` that keeps a generated package out of any other.
+fn dependency_table(cargo: &super::manifest::cargo::Cargo) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::new();
     for dependency in &cargo.dependencies {
         let mut fields = Vec::new();
         if let Some(package) = &dependency.package {
@@ -868,7 +969,7 @@ fn request_inventory(
     entry: &super::graph::Package,
     config: &Config,
     environment: Environment,
-    app: Option<Dependency>,
+    app: Vec<Dependency>,
     closure: &[Dependency],
     limits: &Limits,
 ) -> rawr_import::Result<Request> {
@@ -886,7 +987,7 @@ fn request_inventory(
         for dependency in dependencies(config)? {
             builder = builder.dependency(dependency);
         }
-        if let Some(app) = app {
+        for app in app {
             builder = builder.dependency(app);
         }
     } else {
@@ -947,7 +1048,7 @@ fn request(
     config: &Config,
     environment: Environment,
     universe: Option<rawr_import::cargo::universe::Catalog>,
-    app: Option<Dependency>,
+    app: Vec<Dependency>,
     demand: &[Box<str>],
     limits: &Limits,
 ) -> rawr_import::Result<Request> {
@@ -962,7 +1063,7 @@ fn request(
     for dependency in dependencies(config)? {
         builder = builder.dependency(dependency);
     }
-    if let Some(app) = app {
+    for app in app {
         builder = builder.dependency(app);
     }
     if let Some(universe) = universe {

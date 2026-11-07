@@ -105,11 +105,18 @@ impl Graph {
                     .path()
                     .to_path_buf(),
                 // A native root is a Rust input too, with its whole text;
-                // its Rawr source holds only its `mod` declarations.
+                // its Rawr source holds only its `mod` declarations. So is
+                // a native binary that runs the program, with its tree.
                 rust_modules: package
                     .native_root()
                     .into_iter()
                     .chain(package.rust_modules())
+                    .chain(
+                        package
+                            .bin()
+                            .into_iter()
+                            .flat_map(|bin| std::iter::once(bin.root()).chain(bin.modules())),
+                    )
                     .map(|module| (module.path().to_path_buf(), module.text().to_owned()))
                     .collect(),
                 cargo: package
