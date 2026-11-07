@@ -1650,7 +1650,7 @@ fn an_option_of_an_opaque_widget_crosses_whole_while_it_is_none() {
 /// it borrowed (#598). The output is `cargo run`'s.
 #[test]
 fn a_script_function_wraps_an_opaque_widget_in_types_that_declare_a_lifetime() {
-    let (rawr, cargo) = both_printed("wrapped.rs", "rule,rule,Email,outside,Email");
+    let (rawr, cargo) = both_printed("areas.rs", "rule,rule,Email,outside,Email");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("3 view pad 0 |Email| opaque area container 2 opaque rule 2")
@@ -1660,7 +1660,7 @@ fn a_script_function_wraps_an_opaque_widget_in_types_that_declare_a_lifetime() {
     );
 }
 
-/// iced's modal (#955) itself: as `wrapped.rs`, but the content the opaque
+/// iced's modal (#955) itself: as `areas.rs`, but the content the opaque
 /// widget wraps borrows the view, so the opaque value is made in the view's
 /// region. The output is `cargo run`'s.
 #[test]
