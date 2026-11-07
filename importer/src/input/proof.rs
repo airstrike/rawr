@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -11,6 +12,7 @@ use sha2::{Digest as _, Sha256};
 use super::fingerprint::Fingerprint;
 use super::package;
 use super::stored::view::View;
+use super::walk::{self, Ancestors};
 use super::Allocation;
 use crate::cargo;
 use crate::{Error, Result};
@@ -1279,9 +1281,6 @@ fn path_entry(
 ) -> Result<Entry> {
     allocation.path(path)?;
     let normalized = super::normalized_absolute(path)?;
-    if !matches!(role, Role::Config) {
-        super::reject_symlinks(&normalized)?;
-    }
     match fs::metadata(&normalized) {
         Ok(metadata) if metadata.is_file() => file_entry(role, package_id, &normalized, allocation),
         Ok(metadata) if metadata.is_dir() => {
@@ -1326,10 +1325,15 @@ fn directory_entry(
     allocation.items(1)?;
     allocation.path(&root)?;
     reserve(&mut pending)?;
-    pending.push((root.clone(), 0_usize));
+    pending.push((
+        root.clone(),
+        PathBuf::new(),
+        0_usize,
+        Ancestors::root(root.clone()),
+    ));
     let mut directories = Vec::new();
     let mut files = Vec::new();
-    while let Some((directory, depth)) = pending.pop() {
+    while let Some((directory, prefix, depth, ancestors)) = pending.pop() {
         super::limited("input directory depth", limits.depth, depth)?;
         let directory_entries = fs::read_dir(&directory).map_err(|source| Error::Io {
             operation: "read freshness directory",
@@ -1355,27 +1359,64 @@ fn directory_entry(
                 path: child_path.clone(),
                 source,
             })?;
-            if file_type.is_symlink() {
-                return Err(super::input("symlink-input", child_path.display()));
+            // Cargo follows a link in the tree and reads what it resolves to;
+            // one that resolves to nothing, or back to a directory the walk
+            // is inside, has nothing to read.
+            let followed = file_type.is_symlink();
+            let (child_path, metadata) = if followed {
+                let target = match fs::canonicalize(&child_path) {
+                    Ok(target) => target,
+                    Err(error) if walk::dangling(&error) => continue,
+                    Err(source) => {
+                        return Err(Error::Io {
+                            operation: "resolve freshness directory link",
+                            path: child_path,
+                            source,
+                        });
+                    }
+                };
+                let metadata = fs::metadata(&target).map_err(|source| Error::Io {
+                    operation: "inspect freshness directory link target",
+                    path: target.clone(),
+                    source,
+                })?;
+                (target, metadata)
+            } else {
+                let metadata = child.metadata().map_err(|source| Error::Io {
+                    operation: "inspect freshness directory entry",
+                    path: child_path.clone(),
+                    source,
+                })?;
+                (child_path, metadata)
+            };
+            if followed && metadata.is_dir() && ancestors.encloses(&directory, &child_path) {
+                continue;
             }
-            let metadata = child.metadata().map_err(|source| Error::Io {
-                operation: "inspect freshness directory entry",
-                path: child_path.clone(),
-                source,
-            })?;
-            let relative = child_path
-                .strip_prefix(&root)
-                .map_err(|_| super::input("directory-escape", child_path.display()))?;
             allocation.items(1)?;
-            allocation.bytes(relative.as_os_str().len())?;
-            let relative: Box<str> = super::path_text("freshness tree entry", relative)?.into();
+            allocation.bytes(
+                prefix
+                    .as_os_str()
+                    .len()
+                    .saturating_add(1)
+                    .saturating_add(child.file_name().len()),
+            )?;
+            let spelled = prefix.join(child.file_name());
+            let relative: Box<str> = super::path_text("freshness tree entry", &spelled)?.into();
             if metadata.is_dir() {
                 let child_depth = depth.saturating_add(1);
                 super::limited("input directory depth", limits.depth, child_depth)?;
                 allocation.items(1)?;
                 allocation.path(&child_path)?;
+                let ancestors = if followed {
+                    allocation.items(1)?;
+                    allocation.path(&directory)?;
+                    allocation.path(&child_path)?;
+                    ancestors.follow(&directory, child_path.clone())
+                } else {
+                    Rc::clone(&ancestors)
+                };
                 reserve(&mut pending)?;
-                pending.push((child_path, child_depth));
+                pending.push((child_path, spelled, child_depth, ancestors));
                 allocation.items(1)?;
                 reserve(&mut directories)?;
                 directories.push(TreeDirectory { path: relative });
@@ -2535,7 +2576,115 @@ mod tests {
                 ]
         );
         let recipe = Recipe::path(Role::DeclaredInput, &spelled, &mut allocation).unwrap();
-        assert!(evaluate(&[recipe], false, &limits, &mut allocation).is_err());
+        let proof = evaluate(&[recipe], false, &limits, &mut allocation)
+            .expect("a declared input through a symlink is its target");
+        let target = root.join("shared/config.toml");
+        assert!(matches!(
+            &proof.entries[..],
+            [Entry::File { role: Role::DeclaredInput, path, bytes: 6, .. }]
+                if path.as_ref() == target.to_str().unwrap()
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A build script's `rerun-if-changed` path reached through symlinks (an
+    /// SDK path under `xcrun --show-sdk-path`'s link) is the file or directory
+    /// the links resolve to, as Cargo reads it. Its entry names the target,
+    /// and the recipe keeps the spelling, so retargeting a link changes the
+    /// entry even to a file of the same bytes, and so does editing the
+    /// target. A tree is walked through its links as Cargo walks it.
+    #[cfg(unix)]
+    #[test]
+    fn a_declared_input_through_symlinks_is_its_target_and_a_retarget_changes_it() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "rawr-proof-declared-link-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("SDKs/MacOSX15.4.sdk/usr/include")).unwrap();
+        std::fs::create_dir_all(root.join("SDKs/MacOSX26.2.sdk/usr/include")).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        for sdk in ["MacOSX15.4.sdk", "MacOSX26.2.sdk"] {
+            std::fs::write(
+                root.join("SDKs").join(sdk).join("usr/include/stdio.h"),
+                b"int puts(const char *);\n",
+            )
+            .unwrap();
+        }
+        symlink("MacOSX15.4.sdk", root.join("SDKs/MacOSX15.sdk")).unwrap();
+        let header = root.join("SDKs/MacOSX15.sdk/usr/include/stdio.h");
+        let sdk = root.join("SDKs/MacOSX15.sdk");
+        let limits = Limits::standard();
+        let mut allocation = Allocation::new(&limits);
+        let observe = |path: &Path, allocation: &mut Allocation| {
+            let recipe =
+                Recipe::package_path(Role::DeclaredInput, "pkg", path, allocation).unwrap();
+            let proof = evaluate(&[recipe], false, &limits, allocation)
+                .expect("an input through a symlink is its target");
+            proof.entries.into_vec().pop().unwrap()
+        };
+        let before = observe(&header, &mut allocation);
+        let target = root.join("SDKs/MacOSX15.4.sdk/usr/include/stdio.h");
+        assert!(matches!(
+            &before,
+            Entry::File { path, bytes: 24, .. } if path.as_ref() == target.to_str().unwrap()
+        ));
+        let Entry::Directory {
+            path,
+            directories,
+            files,
+            ..
+        } = observe(&sdk, &mut allocation)
+        else {
+            panic!("a symlinked directory is a tree");
+        };
+        assert_eq!(
+            path.as_ref(),
+            root.join("SDKs/MacOSX15.4.sdk").to_str().unwrap()
+        );
+        assert_eq!(directories.len(), 2);
+        assert!(matches!(&files[..], [file] if file.path.as_ref() == "usr/include/stdio.h"));
+
+        // The link points elsewhere, at a file of the same bytes.
+        std::fs::remove_file(root.join("SDKs/MacOSX15.sdk")).unwrap();
+        symlink("MacOSX26.2.sdk", root.join("SDKs/MacOSX15.sdk")).unwrap();
+        let retargeted = observe(&header, &mut allocation);
+        assert!(retargeted != before, "a retargeted link is a changed input");
+        // The target's content changes.
+        std::fs::write(
+            root.join("SDKs/MacOSX26.2.sdk/usr/include/stdio.h"),
+            b"int puts(const char *s);\n",
+        )
+        .unwrap();
+        assert!(observe(&header, &mut allocation) != retargeted);
+
+        // Inside a tree, links are followed; one back to a directory the
+        // walk is inside, and one naming nothing, have nothing to read.
+        let tree = root.join("tree");
+        std::fs::create_dir(&tree).unwrap();
+        symlink(root.join("SDKs/MacOSX15.sdk"), tree.join("sdk")).unwrap();
+        symlink(&header, tree.join("header.h")).unwrap();
+        symlink(&tree, tree.join("loop")).unwrap();
+        symlink(root.join("absent"), tree.join("dangling")).unwrap();
+        let Entry::Directory {
+            directories, files, ..
+        } = observe(&tree, &mut allocation)
+        else {
+            panic!("a tree with links");
+        };
+        let directories = directories
+            .iter()
+            .map(|directory| directory.path.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(directories, ["sdk", "sdk/usr", "sdk/usr/include"]);
+        let files = files
+            .iter()
+            .map(|file| file.path.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(files, ["header.h", "sdk/usr/include/stdio.h"]);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

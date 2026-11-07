@@ -1,0 +1,2 @@
+This is an empty cons list: Nil
+This is a non-empty cons list: Cons(42, Nil)

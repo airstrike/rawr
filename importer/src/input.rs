@@ -38,6 +38,7 @@ mod replay;
 pub(crate) mod scalar;
 mod script;
 pub(crate) mod stored;
+mod walk;
 pub(crate) mod workspace;
 
 const LINE_BYTES: usize = 1024 * 1024;
@@ -2046,38 +2047,50 @@ fn canonical_path(field: &'static str, path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// The file `path` names as rustc and Cargo open it: its symlinks resolved,
+/// and on a case-insensitive file system (macOS's default) its case as
+/// stored. An input is recorded at this path and evaluated again from the
+/// path it was named by, so a retargeted link changes the input as a changed
+/// target does.
 fn canonical_file(field: &'static str, path: &Path) -> Result<PathBuf> {
-    let normalized = normalized_absolute(path)?;
-    if canonical::regular_file(&normalized) {
-        return Ok(normalized);
+    // `..` after a symlink leaves the link's target, not the link's
+    // directory, so only a path without it may be read lexically.
+    if !path
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
+        let normalized = normalized_absolute(path)?;
+        if canonical::regular_file(&normalized) {
+            return Ok(normalized);
+        }
     }
     let canonical = fs::canonicalize(path).map_err(|source| Error::Io {
         operation: "canonicalize file",
         path: path.to_path_buf(),
         source,
     })?;
-    if !canonical.is_file() || canonical != normalized {
+    if !canonical.is_file() {
         return Err(Error::Path {
             field,
             path: path.to_path_buf(),
-            reason: "is not a file, or is reached through a symlink".into(),
+            reason: "is not a file".into(),
         });
     }
     Ok(canonical)
 }
 
+/// The directory `path` names, its symlinks resolved as Cargo follows them.
 fn canonical_directory(field: &'static str, path: &Path) -> Result<PathBuf> {
-    let normalized = normalized_absolute(path)?;
     let canonical = fs::canonicalize(path).map_err(|source| Error::Io {
         operation: "canonicalize directory",
         path: path.to_path_buf(),
         source,
     })?;
-    if !canonical.is_dir() || canonical != normalized {
+    if !canonical.is_dir() {
         return Err(Error::Path {
             field,
             path: path.to_path_buf(),
-            reason: "is not a directory, or is reached through a symlink".into(),
+            reason: "is not a directory".into(),
         });
     }
     Ok(canonical)
@@ -2109,32 +2122,6 @@ fn normalized_absolute(path: &Path) -> Result<PathBuf> {
         }
     }
     Ok(normalized)
-}
-
-fn reject_symlinks(path: &Path) -> Result<()> {
-    let mut current = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
-            Component::RootDir | Component::Normal(_) => current.push(component.as_os_str()),
-            Component::CurDir | Component::ParentDir => continue,
-        }
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(input("symlink-input", current.display()));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-            Err(source) => {
-                return Err(Error::Io {
-                    operation: "inspect input ancestor",
-                    path: current,
-                    source,
-                });
-            }
-        }
-    }
-    Ok(())
 }
 
 fn path_text<'a>(field: &'static str, path: &'a Path) -> Result<&'a str> {
@@ -2632,5 +2619,53 @@ mod build_message_tests {
             replaced
         );
         fs::remove_file(&path).expect("the memo fixture is retired");
+    }
+}
+
+#[cfg(test)]
+mod canonical_file_tests {
+    use std::fs;
+
+    /// A path written in another case names the file on a case-insensitive
+    /// file system, as rustc's `include_bytes!` reads it, and a path through
+    /// a symlinked file or directory names the file the links resolve to.
+    #[test]
+    fn a_path_in_another_case_or_through_symlinks_is_the_file_it_opens() {
+        let root = std::env::temp_dir().join(format!("rawr-case-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("assets")).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let file = root.join("assets/Font-SemiBold.ttf");
+        fs::write(&file, b"font").unwrap();
+        assert_eq!(super::canonical_file("include", &file).unwrap(), file);
+        let other_case = root.join("src/../assets/Font-Semibold.ttf");
+        if root.join("assets/Font-Semibold.ttf").is_file() {
+            fs::create_dir_all(root.join("src")).unwrap();
+            assert_eq!(super::canonical_file("include", &other_case).unwrap(), file);
+        }
+        #[cfg(unix)]
+        {
+            let link = root.join("assets/link.ttf");
+            std::os::unix::fs::symlink(&file, &link).unwrap();
+            assert_eq!(super::canonical_file("include", &link).unwrap(), file);
+            std::os::unix::fs::symlink(root.join("assets"), root.join("linked")).unwrap();
+            let through = root.join("linked/Font-SemiBold.ttf");
+            assert_eq!(super::canonical_file("include", &through).unwrap(), file);
+            assert_eq!(
+                super::canonical_directory("include", &root.join("linked")).unwrap(),
+                root.join("assets")
+            );
+            // `..` after a link leaves the link's target, as the OS reads it.
+            fs::create_dir_all(root.join("other/nested")).unwrap();
+            fs::write(root.join("other/beside.txt"), b"beside").unwrap();
+            std::os::unix::fs::symlink(root.join("other/nested"), root.join("assets/nested"))
+                .unwrap();
+            let beside = root.join("assets/nested/../beside.txt");
+            assert_eq!(
+                super::canonical_file("include", &beside).unwrap(),
+                root.join("other/beside.txt")
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }

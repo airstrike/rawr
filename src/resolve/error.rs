@@ -1326,14 +1326,14 @@ impl fmt::Display for AssignTwice<'_> {
     }
 }
 
-/// Names checked Rawr keeps under another spelling (`switch`, `debug`, ..)
-/// read as Rust's in every message (`tokenizer::demangle_names`), and an
+/// A raw identifier reads as Rust writes it in every message
+/// (`tokenizer::raw_names`), and an
 /// item reached through a crate's hidden segment reads from that crate's
 /// root (`host::path::public`).
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let text = Written(self).to_string();
-        let text = crate::tokenizer::demangle_names(&text);
+        let text = crate::tokenizer::raw_names(&text);
         formatter.write_str(&crate::host::path::public(&text))
     }
 }

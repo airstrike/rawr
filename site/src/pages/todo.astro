@@ -16,7 +16,10 @@
 // scroll. The private tabs need JavaScript: they fetch their HTML from the
 // Worker (/todo/private/<doc>), which asks for the password first. None of
 // their content is in this page or the site's build.
+import ThemeSwitch from "../components/ThemeSwitch.astro";
 import Text from "../components/todo/Text.astro";
+import { FONT_GATE, THEME_INIT } from "../lib/theme-init.ts";
+import "../styles/tokens.css";
 import { CHANGELOG, EXAMPLES, GROUPS, ITEMS, REPO, UPDATED, VERSION, categories, issueUrl, parts, type Row } from "../lib/todo.ts";
 
 const rows = GROUPS.flatMap((g) => g.rows);
@@ -83,6 +86,8 @@ const tally = (rows: Row[]) => {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#ffffff" data-follow>
+<script is:inline set:html={THEME_INIT} />
 <title>rawr work plan</title>
 <link rel="icon" href="/todo.svg" type="image/svg+xml">
 <meta name="description" content="rawr's work plan: the chart, the changelog and the open issues.">
@@ -109,25 +114,11 @@ const tally = (rows: Row[]) => {
       ? hash
       : /^v\d/.test(hash) ? "changelog" : "gantt";
   })();
-  // The page shows once its font has loaded, so the data never redraws in
-  // a fallback face first. A font that hasn't come in 3 s shows the page
-  // in the fallback.
-  (() => {
-    const root = document.documentElement;
-    root.dataset.font = "wait";
-    const show = () => delete root.dataset.font;
-    setTimeout(show, 3000);
-    document.fonts?.load('450 14px "Abitaro Sans"').then(show, show) ?? show();
-  })();
 </script>
+<script is:inline set:html={FONT_GATE} />
 <style is:inline>
+  /* The colours and the font are tokens.css's, in both themes. */
   :root {
-    --ink: #000;
-    --paper: #fff;
-    --red: #e4002b;
-    --rule: #000;
-    --grid: #e8e8e8;
-    --quiet: #6b6b6b;
     --name: 13rem;
     --note: 15rem;
     --cols: 8;
@@ -137,7 +128,7 @@ const tally = (rows: Row[]) => {
   html[data-font="wait"] body { visibility: hidden; }
   html { background: var(--paper); color: var(--ink); }
   body {
-    font-family: "Abitaro Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-family: var(--sans);
     font-kerning: normal;
     font-size: 14px;
     font-weight: 450;
@@ -247,7 +238,7 @@ const tally = (rows: Row[]) => {
   :root:not([data-tab]) body:has(#code:target) .tabs a[href="#code"],
   .tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--red); }
   .lede { max-width: 46rem; padding: 20px 0; font-size: 15px; }
-  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.88em; overflow-wrap: anywhere; }
+  code { font-family: var(--mono); font-size: 0.88em; overflow-wrap: anywhere; }
   a.issue { color: inherit; text-decoration: none; border-bottom: 1px solid var(--grid); }
   a.issue:hover { border-bottom-color: currentColor; }
 
@@ -266,7 +257,7 @@ const tally = (rows: Row[]) => {
   .release li { position: relative; scroll-margin-top: 24px; }
   .release .mark { position: absolute; left: -1.1em; color: var(--quiet); opacity: 0; }
   .release li:hover .mark, .release .mark:focus { opacity: 1; }
-  .release li:target { background: #fff5c2; }
+  .release li:target { background: var(--hl); }
   .release:target h2 a { text-decoration: underline; }
 
   /* TODO: radio filters, then the categories. */
@@ -323,9 +314,9 @@ const tally = (rows: Row[]) => {
   .doc a:hover { border-bottom-color: currentColor; }
   .doc strong { font-weight: 700; }
   .doc blockquote { border-left: 3px solid var(--red); padding-left: 14px; color: var(--quiet); }
-  .doc pre { overflow-x: auto; padding: 12px 14px; background: #f4f4f4; font-size: 13px; line-height: 1.45; }
+  .doc pre { overflow-x: auto; padding: 12px 14px; background: var(--wash); font-size: 13px; line-height: 1.45; }
   .doc pre code { font-size: inherit; overflow-wrap: normal; }
-  .doc :not(pre) > code { background: #f4f4f4; padding: 0 3px; }
+  .doc :not(pre) > code { background: var(--wash); padding: 0 3px; }
   .doc table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 13px; }
   .doc th, .doc td { text-align: left; vertical-align: top; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--grid); min-width: 8rem; }
   .doc th { border-bottom: 2px solid var(--rule); font-weight: 700; }
@@ -364,7 +355,7 @@ const tally = (rows: Row[]) => {
     <p class="mark">rawr</p>
     <h1>Work plan</h1>
   </div>
-  <p class="meta">Updated <b>{UPDATED}</b><br>Version <b>{VERSION}</b></p>
+  <p class="meta"><ThemeSwitch /><br>Updated <b>{UPDATED}</b><br>Version <b>{VERSION}</b></p>
 </header>
 
 <nav class="tabs" aria-label="Work plan">

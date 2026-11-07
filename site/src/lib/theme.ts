@@ -1,5 +1,6 @@
-// One dark or light theme for the whole site, on <html data-theme>. The
-// inline script in Base.astro (THEME_INIT) sets it before the first paint:
+// One dark or light theme for the whole site, on <html data-theme>, which
+// picks tokens.css's colours. The inline script (THEME_INIT) in Base.astro
+// and /todo sets it before the first paint:
 // the visitor's choice from localStorage, else the system's. The header's
 // switch and the playground's DARK and LIGHT control both call setTheme,
 // which tells every listener ("rawr-theme").
@@ -47,9 +48,9 @@ export function onTheme(listener: (theme: Theme) => void): () => void {
 
 /** Until the visitor chooses, the page follows the system's theme as it changes. */
 export function followSystem(): void {
-  const query = matchMedia("(prefers-color-scheme: light)");
+  const query = matchMedia("(prefers-color-scheme: dark)");
   query.addEventListener("change", () => {
-    if (!stored()) setTheme(query.matches ? "light" : "dark", false);
+    if (!stored()) setTheme(query.matches ? "dark" : "light", false);
   });
 }
 
