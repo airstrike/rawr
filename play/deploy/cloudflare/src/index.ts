@@ -40,6 +40,7 @@
 // learns the site key and whether it holds a pass from GET /play/gate.
 
 import { Container, ContainerProxy, getContainer, type OutboundHandlerContext } from "@cloudflare/containers";
+import { CARDS } from "./cards.gen.ts";
 import { render, type Dashboard } from "./dashboard.ts";
 import { EXAMPLES, FIRST } from "./examples.ts";
 import {
@@ -794,7 +795,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     title: "rawr playground",
     description: "Write Rust and run it. iced code shows its last frame. An app that moves shows a GIF. Other programs show their output.",
     url: `${SITE}/play`,
-    image: `${SITE}/og/invite.png`,
+    image: `${SITE}/${CARDS["og/invite.png"]}`,
     alt: "rawr: iced code and the frame it renders",
     width: 1200,
     height: 630,
@@ -814,7 +815,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
       title: "rawr playground",
       description: (output && firstOutputLine(output)) || firstLine(snippet.code) || "A Rust program and its output",
       url: `${SITE}/play/${id}`,
-      image: `${SITE}/og/card.png`,
+      image: `${SITE}/${CARDS["og/card.png"]}`,
       alt: "rawr is rust augmented with rust: a Rust interpreter for your dev builds",
       width: 1200,
       height: 630,

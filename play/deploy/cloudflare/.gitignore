@@ -5,3 +5,4 @@ dist/
 src/runnable.gen.ts
 public/web/
 src/tokens.gen.ts
+src/cards.gen.ts

@@ -271,7 +271,7 @@ The bot also reports its boot phases and aggregate stats there each minute
 (runs, code errors, limits, median and p95 time, rate-limited counts,
 servers and channels; no message content, user IDs or server names), and
 `https://rawr.airstrike.fyi/bot` shows them, with the last 50 boot events,
-as a page in RawrGallery's Ink sheet.
+as a page in the site's look (`src/look.ts`).
 
 The same Worker serves all of `rawr.airstrike.fyi`. The landing page, the
 docs and the playground's page come from the site's Astro build
