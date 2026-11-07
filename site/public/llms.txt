@@ -1,0 +1,212 @@
+# rawr
+
+> rawr is a Rust interpreter for dev builds. Put `// rawr` on the first line of a file in a Cargo crate; `rawr run` checks the marked files (names, types, traits, borrows, match exhaustiveness, with rustc's error codes) and interprets them, while Cargo compiles everything else (dependencies, unmarked "native" modules). A save reloads the running program, in place when it can. `cargo build --release` compiles the same files natively; the marker is a comment, so no interpreter ships. rawr is pre-alpha and supports part of Rust; `rawr check` also runs `cargo check`, so rustc has the final word. Separately, the `rawr` crate can be embedded in an app to run user Rust scripts. Docs: https://rawr.airstrike.fyi/docs
+
+## What rawr is and isn't
+
+- Is: a tree-walking interpreter over a fully checked program; calls into native code (crates, native modules, std collections) run at native speed. Keep hot loops native.
+- Is not: a compiler, Miri, a MIR interpreter, or a new language. Marked files are ordinary `.rs` files; rust-analyzer handles them.
+- Not every valid Rust runs. Unsupported code fails the check with an error naming the construct (one error per check). Some invalid Rust passes rawr's check; `cargo check` (run by `rawr check` and beside `rawr run`) catches it.
+- Errors: where rustc has one, rawr uses rustc's code and wording (`error[E0599]`, `E0382`, `E0502`...). rawr-only errors carry `RAWR-<STAGE>-...` codes, which may change.
+- Full: https://rawr.airstrike.fyi/docs/how-it-works, https://rawr.airstrike.fyi/docs/reference/overview
+
+## Install
+
+- macOS/Linux: `curl -LsSf https://rawr.airstrike.fyi/install.sh | sh` puts `rawr`, `cargo-rawr`, `rawr-import`, `rawr-import-driver` in `~/.cargo/bin`.
+- Windows (best effort, no rawr-import, so no dependencies): `irm https://rawr.airstrike.fyi/install.ps1 | iex`.
+- From source (rawr only): `cargo install --locked --git https://github.com/airstrike/rawr rawr-cli` (Rust 1.95+).
+- `cargo rawr run` == `rawr run`.
+- rawr-import: 64-bit macOS/Linux (x86_64, aarch64; prebuilt Linux needs glibc 2.35+). Reads crate APIs with a nightly + `rustc-dev` + `rust-src`, installed through rustup on first need.
+- Full: https://rawr.airstrike.fyi/docs/start, https://rawr.airstrike.fyi/docs/reference/requirements
+
+## The `// rawr` marker
+
+- A file whose first line of Rust is exactly `// rawr` is interpreted. Every other file is native Rust compiled by Cargo.
+- Before it may come only a shebang and a cargo-script frontmatter block (`---cargo ... ---`); the marker must be the very next line (a blank line unmarks the file).
+- Crate root may be marked or native. A native root runs if some module it declares is marked. No marked file: `RAWR-ENVIRONMENT-MISSING-SOURCE`.
+- A single `.rs` file passed to `rawr run` runs with or without the marker; it may hold top-level statements (run first, then `fn main`). Cargo won't build top-level statements.
+- Path dependencies are always native, even if marked. Only the crate you run is interpreted.
+- Inner attributes go after the marker. Lint attrs and build/doc attrs (`windows_subsystem`, `crate_name`, `recursion_limit`, `doc`...) are accepted and ignored. `#![cfg_attr(p, ..)]` applies when `p` holds: `debug_assertions` true, every `feature` false, `test` only under `rawr test`. `no_std`, `no_implicit_prelude`, `no_main`, `feature` are errors.
+- Full: https://rawr.airstrike.fyi/docs/run#the-rawr-marker
+
+## Commands
+
+Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searches the cwd and parents for a crate with a marked file.
+
+- `rawr [run] [path] [-- args]`: check, then run. `run` is the default (`rawr` alone runs the crate here). Args after `--` go to the program; stdin is passed through. Watches and reloads on save. At a terminal, after the program ends, waits for the next save (Ctrl-C quits); with non-terminal stdin, exits with the program's status. `cargo check` errors print after the program ends.
+- `rawr run -p <pkg>` / `--package <pkg>`: a workspace package, as `cargo run -p`. Also for `check` and `test`.
+- `rawr check [path]`: rawr's check (prints `Checked <entry>` or the first error), then `cargo check` (`cargo check passed` or rustc's errors). Exit 1 if either fails.
+- `rawr test [path] [filter] [-- libtest options]`: builds as `cargo test` (`#[cfg(test)]` in, `cfg!(test)` true), runs `#[test]` fns one at a time in name order, cargo-test output format. Supports `#[should_panic]`, `#[should_panic(expected = "..")]`, `#[ignore]`, `#[ignore = ".."]`, tests returning `Result`. Options: `--exact`, `--skip <f>` / `--skip=<f>`, `--ignored`, `--include-ignored`, `--nocapture`; `--test-threads` accepted and ignored.
+- `rawr new <path>`: a Cargo crate with no deps; marked `src/main.rs` that prints three lines. Refuses a non-empty path. `--template <name>`: an extension's template (none exist today). `rawr new --help` lists templates.
+- `rawr mcp [path]`: MCP server on stdio; relative tool paths start at `path` (default cwd). See MCP below.
+- `rawr init [--claude] [--codex] [path]`: registers `rawr mcp`. `--claude` writes `mcpServers.rawr` in `.mcp.json`; `--codex` writes `[mcp_servers.rawr]` in `.codex/config.toml` (tool timeout 120 s, startup 30 s). No flag: detects a `.claude`/`.codex` dir, else exits 2. Entry runs rawr by absolute path, `args = ["mcp"]`, cwd = project. Old file kept as `.bak`; other settings kept. Restart the agent once.
+- `rawr doctor [path]`: where rawr and each extension are, the program found, install commands for missing extensions, each extension's report.
+- `rawr cache clean` (from rawr-import): removes what rawr's home holds that no build used lately (runtimes, shared bindings, nightly check build). Skips anything in use; never waits.
+- `rawr -h|--help|help`, `rawr -V|--version`. `rawr <cmd> --help` prints the same top-level help, except `rawr new --help` and extension commands.
+- Unknown commands go to an installed `rawr-<name>` binary (next to `rawr`, then PATH).
+- Exit status: 0 ok; 1 check failed or `main` returned `Err`; 101 panic or a failed test; 2 usage error. Under rawr-import a panic exits 1 (known gap).
+- `rawr preview` / `rawr snapshot` no longer exist (see Previews).
+- Full: https://rawr.airstrike.fyi/docs/reference/commands
+
+## Environment variables
+
+- `RAWR_VERBOSE=1`: say how the program was loaded and which binary ran it.
+- `RAWR_HOME`: rawr's machine-wide home, default `~/.cargo/rawr` (runtime/, bindings/, drivers/, nightly/, scripts/).
+- `RAWR_RUNTIME_OPT_LEVEL=0|1|2|s|z`: compile rawr's runtime at a lower opt level (default 3): faster first build, slower scripts.
+- `RUSTUP_TOOLCHAIN` (or `cargo +nightly rawr run`, rustup override, `rust-toolchain.toml`): picks the nightly rawr-import reads APIs with.
+- `CARGO_TARGET_DIR`: honored; projects sharing a target share `target/rawr` cache.
+- `NO_COLOR`: plain progress output.
+
+## Files rawr writes
+
+- `target/<host>/debug/`: compiled crates, shared with `cargo build`.
+- `target/rawr/`: cache + generated runner + rawr's copy of the crate (`target/rawr/crate`); workspace members under `target/rawr/members/<path>/`. `cargo clean` removes it. Your crate never depends on rawr.
+- `$RAWR_HOME`: shared runtime per rawr version + toolchain, shared bindings per crate, per-nightly drivers and check build, script manifests/lockfiles. Nothing is written beside a script.
+- Full: https://rawr.airstrike.fyi/docs/reference/commands#files-rawr-writes
+
+## Who runs a program
+
+- No deps, no native modules: `rawr` itself.
+- Deps in `Cargo.toml` (or a script's frontmatter), native modules, or iced: `rawr-import`. Missing extension: rawr names it with install commands.
+- rawr-import builds a runner with your own cargo, toolchain (Rust 1.95+, else `RAWR-ENVIRONMENT-PROJECT-BUILD`), config and profiles in your `target/`. A crate needs only the marker; no extra files.
+- First run with deps takes minutes (deps + runner + once-per-toolchain runtime, ~2 min). Later runs reuse builds; a marked-file edit needs no native build.
+- Nightly: the project's (as rustup picks it), else pinned `nightly-2026-07-11`; a stable/beta project also reads with the pinned one. Allowed range `nightly-2026-07-11`..`nightly-2026-11-02`; outside it the run stops naming the range. A non-pinned nightly builds its own `rawr-import-driver` once ("Building rawr-import-driver for <nightly>").
+- Full: https://rawr.airstrike.fyi/docs/imports#project-setup
+
+## Native modules and a native main
+
+- Marked code calls native modules and deps directly. Native code may call marked modules only when the crate root is native (a marked root can't be called from native code yet).
+- Under a native root, each native-callable fn of a marked module gets a generated stub (same signature) that runs it in the interpreter. Native sees a marked module's pub fns, methods, structs, enums, consts, type aliases.
+- Crosses native<->marked: numbers, bool, char, String, &str, Vec/Option of them, marked structs/enums whose fields cross; by value or reference (`&mut` comes back changed). A reference to another crate's value (e.g. ratatui `&mut Frame`) is lent for the call only (keeping it: E0515/E0521/E0597).
+- A fn whose values can't cross panics when called, naming it. A pub fn returning `impl Trait` stops `rawr run`.
+- Native main runs on the process main thread (winit works); the interpreter has its own thread.
+- Limits: a native module other than the root can't declare a marked module; marked code can't call items written in the native root.
+- Full: https://rawr.airstrike.fyi/docs/run#a-native-main
+
+## Hot reload: what swaps, what restarts
+
+- iced app: save applies at the next message, state kept; window shows the last view until a message arrives.
+- Native main: body edit or private-item edit applies at the next call into that file, state kept.
+- Marked main in a native loop (framework/game loop/timer): applies at the loop's next callback into marked code. New code compiles beside the running program (~80 ms to next callback). A multi-file save arrives whole. Held closures take the new body if the defining fn has the same closures/captures; fns passed by name always do.
+- Restarts (one stderr line, e.g. ``rawr: `physics::Ball` changed its fields; restarting the program``): new fields/variants; signature or pub const change seen by native code; edit to `main` (incl. closures in it); a changed fn main gave native code; a program that never calls back into marked code; a new native call; edit to `Cargo.toml` or a native file; a panic after a save.
+- Any other program: restarts on save with the same args ("rawr: the source changed; restarting the program"); stdin continues where the old one stopped.
+- A save that fails the check prints its error; the last good code keeps running.
+- ratatui loops blocked in `event::read()`: rawr sends SIGWINCH after a swap (only if stdin is a terminal) so the loop redraws. rawr saves/restores terminal settings, leaves alt screen, shows cursor, even after SIGKILL restarts; its own lines wait while the terminal is raw.
+- Full: https://rawr.airstrike.fyi/docs/run#reload, https://rawr.airstrike.fyi/docs/iced/reload, https://rawr.airstrike.fyi/docs/ratatui
+
+## Scripts (cargo -Zscript)
+
+- A `.rs` with a frontmatter block is a cargo script anywhere, run as its own package (ignores the surrounding Cargo.toml). Frontmatter `[dependencies]` work; edition defaults to 2024; name from file.
+- Refused tables (`[workspace]`, `[lib]`, `[build-dependencies]`...): cargo's message, `RAWR-ENVIRONMENT-PACKAGE-MANIFEST`.
+- Manifest + lockfile in `$RAWR_HOME/scripts/<name>-<digest>`; all scripts share `scripts/build`.
+- Full: https://rawr.airstrike.fyi/docs/run#scripts
+
+## Async
+
+- Marked crate root may use `#[tokio::main] async fn main` (or any runtime's attribute, copied as written into rawr's native main). The runtime is the one in your Cargo.toml.
+- Works: async fn/blocks, `.await`, `tokio::spawn`, `spawn_blocking`, `sleep`, `join!`, channels; futures passed to `impl Future` params (e.g. iced `Task::future`).
+- Not yet: `try_join!`, `select!` (an `if` guard in `select!` is refused); imported values inside `spawn_blocking` closures; on multi-thread tokio a spawned future's steps see main's task id/locals.
+- async main without a runtime attribute: E0752. A lone file with no deps may write async code but `#[tokio::main]`/`tokio::join!` is E0433.
+- Full: https://rawr.airstrike.fyi/docs/run#an-async-main
+
+## Crates and imports
+
+- Declare in Cargo.toml, `use` items, write no bindings. rawr-import reads each crate's whole public API once per machine (shared bindings in `$RAWR_HOME/bindings`, keyed per crate) and generates the bindings. Registry/git crates are shared; path deps and workspace members stay in `target/rawr`.
+- Works broadly: constructing imported structs, field access/assignment, methods incl. trait default/blanket methods, Deref, std trait impls (Index, FromStr, From/Into, operators incl. `f32 * Radians`), matching imported enums (by value moves, `&`/`ref` borrows, `&mut` lends), derives on structs holding imported values, imported values as map keys (Hash+Eq or Ord), `impl Trait` returns, generic crate items at your own types (rawr makes a Rust type per your type; `type_name::<State>()` is `crate::State`), your fns/closures as `F: Fn*` params, your iterators to `I: Iterator` params, `&dyn Trait` params of crate fns, borrowing values (pulldown-cmark `Parser`, quick-xml events) via scope frames, `&'static str` params from literals.
+- Trait method resolution follows the traits in scope; two applicable traits imported is rustc's E0034.
+- Known gaps (each a clear error, rustc-like where possible):
+  - a method generic over a sealed trait (`itoa::Buffer::format`);
+  - a guard inside a `Result` (`Mutex::lock` on an imported value); a guard of a Vec/tuple is read-only; guarded values or Deref targets without Clone stop the program;
+  - a borrowing value stored in your struct, kept in a collection past its frame, or held across `.await`; `while let` over a call filling a `&mut` buffer; `let event = reader.read_event_into(&mut buf)?` (match on the call instead); an earlier call in the same statement as a borrowing call; a frame value passed by reference; values from two frames in one call;
+  - a trait method whose signature names a trait type parameter each impl fixes (tracing-subscriber `and_then`);
+  - a result borrowing its args passed by value to a crate fn whose trait methods aren't plain (iced `Widget`): "rawr doesn't move a result that borrows its call's values yet";
+  - std types it can't pass to crates (`Rc<str>`, maps keyed by crate types): "rawr doesn't run `std::rc::Rc` in a crate's signature yet";
+  - your own types to bounds that pick behaviour by type alone (`Default`, `Deserialize`); `Copy`/`Hash`/crate traits your type lacks: runner build fails with rustc's error;
+  - serde's generic derive expansions (`#[derive(Serialize, Deserialize)]`); passing your type to a crate fn generic over the crate's trait;
+  - i128/u128 don't cross to crates; `Widget::map` holding your closure checks but doesn't run.
+- `rawr check` accepts some calls rustc rejects (e.g. methods of an impl that fixes type args); cargo check reports them.
+- Full: https://rawr.airstrike.fyi/docs/imports
+
+## iced
+
+- iced is an ordinary dependency handled by rawr-import with generated bindings; nothing in rawr is hand-written for iced. Docs use iced master `rev = "be88873d38544455e26c7a104eb757da2cbbac6b"`:
+  `rawr new counter && cd counter && cargo add iced --git https://github.com/iced-rs/iced --rev be88873d38544455e26c7a104eb757da2cbbac6b`
+- Write iced as usual: `iced::run(App::update, App::view)` or `iced::application(..).subscription(..).run()`. Tasks, subscriptions, `column!`/`row!`/`text!` (iced's own macros), custom widgets in native Rust, imported values in `Message` all work.
+- Known to run unchanged but for `// rawr`: counter, checkbox, slider, tooltip, pick_list, url_handler. Other examples run as bindings reach their items; a gap errors at the item.
+- Not available: a `#[widget]` written in a marked file; your impl of a crate trait at a type holding an opaque `impl Trait`; rendering previews.
+- `rawr check` checks an app without a window.
+- Full: https://rawr.airstrike.fyi/docs/iced, https://rawr.airstrike.fyi/docs/reference/iced
+
+## Previews (`#[preview]`) and the VS Code extension
+
+- Declare: add `rawr-macros = { git = "https://github.com/airstrike/rawr" }` (library name `rawr`, not on crates.io), then put `#[rawr::preview(name = "empty", size = (320, 200))]` on a view fn, or `use rawr::preview;` and `#[preview]` / `#[preview(..)]`. Arguments `seed = f`, `update = f`, `theme = f`, `themes = [a, b]` name functions.
+- Under Cargo the attribute leaves the item as written, adds `#[allow(dead_code)]`, and references the named functions so cargo doesn't warn.
+- Under rawr the attribute (and `use rawr::preview;`) is parsed and ignored.
+- Show: nothing renders previews today. `rawr preview`/`rawr snapshot` were removed with rawr-iced; `rawr preview` on the plain runner is open work.
+- VS Code extension (`editors/vscode-rawr`, local install by symlinking into `~/.vscode/extensions/rawr-0.0.2`): only sets the `rawr.marked` context key while the active editor is a `.rs` file whose first line is `// rawr`. The planned preview pane (dropdown of `#[preview]` items, rendered beside the code, following reloads) is not built.
+- `#[rawr::widget]` also exists in rawr-macros; under Cargo it is a no-op.
+- Full: https://rawr.airstrike.fyi/docs/iced/previews
+
+## MCP server for agents (`rawr mcp`)
+
+Register with `rawr init`. Every tool takes `path` (crate dir or `.rs`, absolute or relative to the server's project root; default the root). Results carry `structuredContent` plus text. No call takes over ~44 s (`timeout_ms` max 44000); a longer build answers `building` / "still checking": call again. One started program per project.
+
+- `new {path, template?}`: crate with marked `src/main.rs`. Refuses a workspace path that wouldn't accept it, with the fix.
+- `check {path}`: rawr check + cargo check. Diagnostics: absolute `file`, `line`, `column`, `end_line`, `end_column`, `code` (empty for code-less rustc errors), `severity`, `message`, `help`, rustc `suggestion`. Text: `file:line:col: error[CODE]: message`.
+- `run {path, args?, stdin?, timeout_ms=30000}`: run to end; exit status, stdout, stderr. For CLI programs.
+- `start {path, args?, stdin?, wait_ms=30000}`: keep running (windows, servers). Answers `running`, `failed` + diagnostics, or `building`. Restarting replaces it. Refuses terminal-UI (ratatui) programs.
+- `wait {path, cursor?, output_cursor?, timeout_ms=30000}`: next events + output since last call. Events: `running`, `queued` (save waiting for a native loop's next callback), `swapped`, `restarting` (with reason), `failed` (diagnostics; last good keeps running), `ended` (status; next save reruns), `paused` (file, line, function), `resumed`. Events are numbered; `cursor` replays from another.
+- `status {path}`: each started program's state, no waiting.
+- `stop {path}`: ends the program and everything it started.
+- `screenshot {path, title?}`: PNG of the program's window only (`title` picks among several). macOS only; needs Screen Recording permission for the agent's app.
+- `inspect {path, name?, file?, frame=0, timeout_ms=2000}`: location (file, line, fn) and bindings in scope as `{:?}`; `name` one binding (answers at the next step where it's in scope), `file` the next step in that file, `frame` 1 = caller. Types without Debug say so. Waiting-for-event programs answer once they run.
+- `break {path, file+line | function, timeout_ms=2000}`: breakpoint on a line or a fn's first statement (`tick` or `counter::tick`); returns where it paused if within the timeout. Survives saves while the line text exists (moves with it). No breakpoints in dependency code. A pause inside a native callback freezes the window.
+- `step {path, kind=over|into|out, timeout_ms=2000}`: to next statement; native calls run whole.
+- `continue {path, timeout_ms=2000}`: resume; returns the next pause if any.
+- `clear {path, file?, line?, function?}`: remove all or matching breakpoints; paused stays paused.
+- Programs started by the server end when it closes or is killed. stdin is the given string then EOF.
+- Loop: `new` -> edit with your own tools -> `check` -> `run` or `start` -> after each save `wait` -> `screenshot`/`inspect`/`break` -> `stop`.
+- Full: https://rawr.airstrike.fyi/docs/agents
+
+## Supported Rust (summary)
+
+- Items: fns (nested), structs, enums (discriminants, casts), impls, traits (defaults, assoc types/consts, impls for refs only when forwarding), const fn, statics (not `static mut`), generic type aliases, modules (`mod x;` loads `x.rs`/`x/mod.rs`), full visibility, `use` incl. globs and enum variants, raw idents, derives Debug/Clone/Copy/PartialEq/Eq/PartialOrd/Ord/Hash/Default.
+- Types: all ints (debug overflow panics; wrapping/checked/saturating/overflowing), f32/f64, char ranges, tuples, arrays, slices, Vec, VecDeque, Option/Result + `?`, Box, `Box<dyn Trait>`, Rc/Arc/Weak, RefCell/Cell, `impl Trait` args/returns, `Box<dyn Iterator>`, fn pointers, `!` as output, `as` casts.
+- Generics: bounds, where clauses, HRTBs, operator traits, Iterator/FromIterator impls. Not: `&dyn Trait` arguments to your own fns, per-type monomorphization (`size_of::<T>()` only for primitives).
+- Patterns: match with ranges/`|`/guards/`@`, destructuring, slices, let chains (2024), `let else`, labeled loops, break values.
+- Borrow check: NLL over locals, through calls' signatures, structs, collections, closures, temporaries; rustc codes E0499/E0502/E0503/E0505/E0506/E0597/E0716/E0373/E0382/E0507/E0515/E0621/E0106. Some borrows unchecked (closures taking/returning borrows, Drop types, lifetimes in body types); cargo check covers them.
+- Macros: println!/print!/eprintln!/eprint!/dbg!/format!/write!/writeln!/panic!/assert*/debug_assert*/unreachable!/todo!/unimplemented!/vec!/matches!/concat!/stringify!/cfg!/env!/option_env!/line!/column!/file!/module_path!/include_str!/include_bytes!; `macro_rules!` (yours and crates', `$crate`, recursion limit 128). Macro calls in item/type/pattern position: not yet.
+- std: strings, Vec/slices, iterators, collect, HashMap/HashSet/BTreeMap/BTreeSet, numbers, threads, `Arc<Mutex<T>>` (`lock().unwrap()` only), mpsc (no `try_recv`/`recv_timeout`/`sync_channel`), Duration/Instant/SystemTime, mem::swap/replace/take, fmt builders, Error, io::stdin, env::args, std::fs basics, process::id/exit/abort. Missing: BinaryHeap, `Formatter::pad`, `char::from_u32`, `Vec::binary_search`, std::net. Unsupported std items error as "rawr doesn't run `std::..` yet".
+- Differences from cargo run (defects): HashMap iterates in key order; user Display padded to width; panics don't run Drop; u64 generic arithmetic past i64::MAX panics; unsuffixed literal arithmetic is i64; deps-run panics exit 1.
+- Full: https://rawr.airstrike.fyi/docs/reference/overview (and /items, /types, /generics, /patterns, /moves, /closures, /macros, /std under https://rawr.airstrike.fyi/docs/reference/)
+
+## Embedding (the `rawr` crate)
+
+- `cargo add --git https://github.com/airstrike/rawr rawr`. The interpreter ships in your app.
+- `#[rawr::export]` on a struct (pub fields), its impl (pub methods; one impl block per struct), or a free fn. `Exports::new("bank")`, `.add::<T>()`, `engine.export(exports)?` before loading.
+- `engine.load(path)?` / `engine.script(text)?` -> `Script`; `script.func::<(Args,), Ret>("name")?` -> typed `Func` (<= 8 params, Clone); `func.call(..)?`; `script.reload()` -> `Ok(true|false)` or Err (old program keeps running; all-or-nothing).
+- `engine.eval::<T>(src)`, `eval_expression`, `run_with_scope(&mut Scope, src)`, `Scope::push`/`push_constant`/`get_value`; `engine.on_output(|Output, &str| ..)`.
+- Boundary types: i64, f64, bool, char, String, (), Option of these, exported structs. No generics, `&mut` params, or reference returns in exports.
+- Access (default none): `engine.set_access(Access::none().allow_read(dir).allow_write(dir))`, `allow_read_all`, `allow_write_all`, `allow_env`, `allow_process`, `allow_net`, `Access::all()` (what `rawr run` grants). Denied fs -> `PermissionDenied`; denied `env!` -> compile error.
+- Limits: `set_max_operations`, `set_max_call_levels`, `set_max_string_size`, `set_max_array_size`, `set_max_map_size`, `on_progress`.
+- Errors are `Box<EvalAltResult>`, printed rustc-style.
+- Full: https://rawr.airstrike.fyi/docs/embedding
+
+## ?play on Discord and the web playground
+
+- Web: https://rawr.airstrike.fyi/play runs in the browser (WASM) by default; "Run on server" adds `?run=server`. Ctrl/Cmd+Enter runs. `/play#<example>` loads an example; Share gives `/play/<id>` (deleted after 30 idle days). The browser runs rawr's std only, no crates, no iced.
+- Discord: `?play` on the first line, then a ```` ```rust ````/`rs`/bare fence (or ```` ```rust ?play ````). First code block runs; editing reruns. No options (a word after `?play` errors). Moderators: `/play-channel add|remove|list [channel]` (Manage Channels). Invite: https://rawr.airstrike.fyi/bot/invite
+- Snippet: statements run as `main`'s body; a trailing expression prints with `{:?}`. Sandbox: no files, env, process, network; `mod x;` fails (inline modules work); `use` of a crate fails except in ?play/server: iced, iced_test, tokio, limited to the calls the bot's universe program makes (`RAWR-RESOLVE-HOST-OPERATION` otherwise).
+- iced replies attach a PNG of the settled window, or a GIF (20 fps, <= 100 frames, plays once) when it animates.
+- Limits: 256 MB memory, 1,000,000 ops (server), call depth 32, strings/collections 65,536, output 64 KiB, Discord reply 2000 chars, browser run 10 s; rate limits 4/min/user and 12/min/channel on Discord, 6/min and 60/h per playground visitor; code 16 KiB (share 64 KiB).
+- Full: https://rawr.airstrike.fyi/docs/play, https://rawr.airstrike.fyi/docs/play/discord, https://rawr.airstrike.fyi/docs/reference/play
+
+## Troubleshooting
+
+- `rawr doctor`; `RAWR_VERBOSE=1 rawr run`; `rawr --help` lists installed extensions.
+- `RAWR-ENVIRONMENT-MISSING-SOURCE`: add `// rawr` as the first line of the root or a declared module.
+- `RAWR-ENVIRONMENT-PROJECT-BUILD`: toolchain older than 1.95, or a Cargo config sets a profile for the `rawr` crate.
+- Error from rawr only: likely unsupported construct (named in the error). From rustc only: rawr accepted invalid Rust; fix for rustc.
+- iced app ignores a save: the save failed the check (error printed), or no message has arrived yet.
+- Report divergences from Rust at https://github.com/airstrike/rawr/issues with a small reproduction.
+- Full: https://rawr.airstrike.fyi/docs/troubleshooting
