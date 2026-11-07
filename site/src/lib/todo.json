@@ -2,7 +2,11 @@
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
   "version": "0.3.161",
-  "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
+  "examples": {
+    "running": 29,
+    "total": 56,
+    "note": "0.3.160 sweep (scripts/iced-sweep.sh): 29 run; 14 pass check and fail in the runner; 3 overflow the stack"
+  },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
@@ -2593,7 +2597,14 @@
     {"issue":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"closed","category":"Health","release":"0.3.161"},
     {"issue":1066,"title":"The site deploy's snippet check fails on 'Durable Object reset because its code was updated'","state":"closed","category":"Health","release":"0.3.161"},
     {"issue":1067,"title":"An enum variant field &'a str of a crate type can't be built (serde's Unexpected::Str(&text))","state":"open","category":"Divergences from rustc"},
-    {"issue":1068,"title":"The import path copies the engine's host registry once per compile","state":"open","category":"Health"}
+    {"issue":1068,"title":"The import path copies the engine's host registry once per compile","state":"open","category":"Health"},
+    {"issue":1069,"title":"rawr check overflows its stack on iced's gallery, markdown and screenshot","state":"open","category":"Health"},
+    {"issue":1070,"title":"delineate: the runner fails with E0282 on a native handle taken from the arena","state":"open","category":"Divergences from rustc"},
+    {"issue":1071,"title":"ferris: the runner fails with E0271 on Renderer::Handle == &str (an image handle from a str)","state":"open","category":"Divergences from rustc"},
+    {"issue":1072,"title":"url_handler: the runner fails with E0283 at iced::application(..) with an undetermined renderer argument","state":"open","category":"Divergences from rustc"},
+    {"issue":1073,"title":"toast: Task::perform with a tokio future and a move closure isn't supported","state":"open","category":"Divergences from rustc"},
+    {"issue":1074,"title":"tour: a generic fn's type parameter is inferred only from its arguments, not from a later use (padded_button)","state":"open","category":"Divergences from rustc"},
+    {"issue":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3123,7 +3134,14 @@
             {"number":1058,"title":"Program structs a crate decodes on one of tokio's worker threads, such as a reqwest response's…","state":"closed"},
             {"number":1059,"title":"A crate's facts are the same whether Cargo rebuilt it or reused it, so caches keyed on them no…","state":"closed"},
             {"number":1060,"title":"game_of_life: Widget::map on an impl Widget a program function returns","state":"open"},
-            {"number":1061,"title":"todos: std::env::current_dir isn't run","state":"open"}
+            {"number":1061,"title":"todos: std::env::current_dir isn't run","state":"open"},
+            {"number":1069,"title":"rawr check overflows its stack on iced's gallery, markdown and screenshot","state":"open"},
+            {"number":1070,"title":"delineate: the runner fails with E0282 on a native handle taken from the arena","state":"open"},
+            {"number":1071,"title":"ferris: the runner fails with E0271 on Renderer::Handle == &str (an image handle from a str)","state":"open"},
+            {"number":1072,"title":"url_handler: the runner fails with E0283 at iced::application(..) with an undetermined renderer argument","state":"open"},
+            {"number":1073,"title":"toast: Task::perform with a tokio future and a move closure isn't supported","state":"open"},
+            {"number":1074,"title":"tour: a generic fn's type parameter is inferred only from its arguments, not from a later use (padded_button)","state":"open"},
+            {"number":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open"}
           ],
           "milestone": "0.4"
         },
