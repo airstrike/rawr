@@ -337,8 +337,8 @@ impl crate::future::Host for Current {
 }
 
 /// `authority` with `runtime` as any thread may use it, with each script
-/// type's own `Clone` found once.
-#[cfg(feature = "sync")]
+/// type's own `Clone` found once, as a test calls it.
+#[cfg(all(test, feature = "sync"))]
 pub(crate) fn shared(
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
@@ -346,7 +346,8 @@ pub(crate) fn shared(
     share(authority, runtime)
 }
 
-/// [`shared`], as the island's own calls from other threads reach it.
+/// `authority` with `runtime` as any thread may use it, with each script
+/// type's own `Clone` found once.
 #[cfg(feature = "sync")]
 fn share(
     authority: program::Authority,
