@@ -29,6 +29,17 @@
   --shadow: 0 2px 24px rgba(0, 0, 0, 0.1);
   /* Literals in code and a program's output. */
   --lit: #0062b1;
+  /* Rust's syntax (highlight.ts's classes, global.css): ink for names, the red
+     for keywords, and six quiet hues, each at least 4.5:1 on --wash, --paper
+     and --rawr-pane. The light keyword is the red deepened to pass on --wash. */
+  --syn-key: #c4001f;
+  --syn-type: #00706a;
+  --syn-fn: #8a4b00;
+  --syn-str: #2a7a1e;
+  --syn-num: #0062b1;
+  --syn-attr: #7a3db8;
+  --syn-com: #6b6b6b;
+  --syn-doc: #4e6355;
   /* The landing page's rawr side, and its terminal strip. */
   --rawr-pane: #fdf3f5;
   --rawr-term: #f6e6ea;
@@ -52,6 +63,14 @@
     --raised: #222222;
     --shadow: 0 2px 24px rgba(0, 0, 0, 0.4);
     --lit: #00aaff;
+    --syn-key: #f87171;
+    --syn-type: #4fc9bd;
+    --syn-fn: #e5b567;
+    --syn-str: #9ccc7a;
+    --syn-num: #5cb3ff;
+    --syn-attr: #c39ef0;
+    --syn-com: #999999;
+    --syn-doc: #a3b5a8;
     --rawr-pane: #261d1f;
     --rawr-term: #1d1517;
     --hl: #4a4020;
@@ -73,6 +92,14 @@
   --raised: #222222;
   --shadow: 0 2px 24px rgba(0, 0, 0, 0.4);
   --lit: #00aaff;
+  --syn-key: #f87171;
+  --syn-type: #4fc9bd;
+  --syn-fn: #e5b567;
+  --syn-str: #9ccc7a;
+  --syn-num: #5cb3ff;
+  --syn-attr: #c39ef0;
+  --syn-com: #999999;
+  --syn-doc: #a3b5a8;
   --rawr-pane: #261d1f;
   --rawr-term: #1d1517;
   --hl: #4a4020;
