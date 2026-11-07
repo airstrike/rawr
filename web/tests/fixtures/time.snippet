@@ -1,0 +1,11 @@
+use std::time::{Duration, Instant};
+
+let start = Instant::now();
+let step = Duration::from_millis(500) * 3;
+println!("{step:?}");
+let later = start + step;
+println!("{:?} {}", later - start, later > start);
+println!("{:?}", start.checked_duration_since(later));
+println!("{:?}", later.saturating_duration_since(start));
+let spent = start.elapsed();
+println!("{} {}", spent < step, spent >= Duration::ZERO);

@@ -1,0 +1,5 @@
+let big: u128 = u64::MAX as u128 * 3;
+let low = i128::MIN;
+println!("{big} {low} {:?}", big.checked_mul(big));
+let sum: u128 = (1..=3u128).sum();
+println!("{} {:?} {:x}", sum + big, -low.wrapping_add(1), big);
