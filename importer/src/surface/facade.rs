@@ -765,6 +765,10 @@ pub struct Relation {
 pub struct Case {
     this: Type,
     arguments: Box<[Type]>,
+    /// The implementation's bounds that fix an associated type
+    /// (`signature::Projection`): each the type, the value, and the cases.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    projections: Box<[ImplProjection]>,
 }
 
 impl Relation {
@@ -801,6 +805,10 @@ impl Case {
     /// The implementation's trait arguments.
     pub const fn arguments(&self) -> &[Type] {
         &self.arguments
+    }
+    /// The implementation's bounds that fix an associated type.
+    pub const fn projections(&self) -> &[ImplProjection] {
+        &self.projections
     }
 }
 
@@ -3871,9 +3879,30 @@ fn relations(
             else {
                 continue;
             };
+            let projections = case
+                .projections()
+                .iter()
+                .filter_map(|projection| {
+                    Some(ImplProjection {
+                        ty: pattern(projection.ty(), parameters).ok()?,
+                        value: pattern(projection.value(), parameters).ok()?,
+                        cases: projection
+                            .cases()
+                            .iter()
+                            .map(|(this, at)| {
+                                Some((
+                                    pattern(this, parameters).ok()?,
+                                    pattern(at, parameters).ok()?,
+                                ))
+                            })
+                            .collect::<Option<_>>()?,
+                    })
+                })
+                .collect();
             cases.push(Case {
                 this,
                 arguments: implemented,
+                projections,
             });
         }
         if cases.is_empty()

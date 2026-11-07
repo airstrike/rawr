@@ -13824,6 +13824,11 @@ impl<'a> Parser<'a> {
                 Some((bounded, bound.trait_identity, arguments))
             })
             .collect::<Option<Vec<_>>>()?;
+        // A case names no parameter of the impl's.
+        let at_case = |this: &mut Self, ty| {
+            this.instantiate_host_type(ty, &mut BTreeMap::new(), "impl", Span::NONE, owner, None)
+                .ok()
+        };
         let mut projections = Vec::with_capacity(header.projections.len());
         for projection in header.projections.iter() {
             let mut at = |ty| {
@@ -13833,12 +13838,12 @@ impl<'a> Parser<'a> {
             let (Some(ty), Some(value)) = (at(&projection.ty), at(&projection.value)) else {
                 return None;
             };
-            projections.push(ImplProjection {
-                ty,
-                value,
-                cases: projection.cases.clone(),
-                owner: owner.cloned(),
-            });
+            let cases = projection
+                .cases
+                .iter()
+                .filter_map(|(this, at)| Some((at_case(self, this)?, at_case(self, at)?)))
+                .collect();
+            projections.push(ImplProjection { ty, value, cases });
         }
         if std::env::var_os("RAWR_DEBUG_PROJ").is_some() {
             eprintln!("DEBUGPROJ apply_impl self={:?} projections={:?} header_proj={}", self.inference.resolve(ty).name(&self.models).to_string(), projections.iter().map(|p| (self.inference.resolve(&p.ty).name(&self.models).to_string(), self.inference.resolve(&p.value).name(&self.models).to_string(), p.cases.len())).collect::<Vec<_>>(), header.projections.len());
@@ -13859,40 +13864,18 @@ impl<'a> Parser<'a> {
     fn project_impl(&mut self, projections: Vec<ImplProjection>) -> Option<Vec<ImplProjection>> {
         let mut open = Vec::new();
         for projection in projections {
-            let owner = projection.owner.as_ref();
             let ty = self.inference.resolve(&projection.ty);
             if contains_inference(&ty) {
                 open.push(projection);
                 continue;
             }
             for (this, value) in projection.cases.iter() {
-                let mut parameters = BTreeMap::new();
-                let (Ok(this), Ok(value)) = (
-                    self.instantiate_host_type(
-                        this,
-                        &mut parameters,
-                        "impl",
-                        Span::NONE,
-                        owner,
-                        None,
-                    ),
-                    self.instantiate_host_type(
-                        value,
-                        &mut parameters,
-                        "impl",
-                        Span::NONE,
-                        owner,
-                        None,
-                    ),
-                ) else {
-                    continue;
-                };
                 let checkpoint = self.inference.checkpoint();
-                if !self.unify_type(&this, &ty) {
+                if !self.unify_type(this, &ty) {
                     self.inference.rollback(checkpoint);
                     continue;
                 }
-                if !self.unify_type(&value, &projection.value) {
+                if !self.unify_type(value, &projection.value) {
                     self.inference.rollback(checkpoint);
                     return None;
                 }
@@ -20728,6 +20711,30 @@ impl<'a> Parser<'a> {
                 )?;
                 // A mismatch is rustc's to report where it compiles the call.
                 let _ = self.unify_type(&declared, &implemented);
+            }
+            // The case's bounds that fix an associated type, as iced's
+            // `From<Image<Handle>> for Element` fixes `Handle` once the
+            // element's renderer is known, now or by a later use.
+            #[cfg(feature = "rust-import")]
+            for projection in case.projections() {
+                let mut at = |this: &mut Self, pattern, bindings: &mut BTreeMap<u32, Ty>| {
+                    this.pattern_type(pattern, bindings, parameters, (&item_path, span), owner)
+                };
+                let ty = at(self, &projection.ty, &mut bindings)?;
+                let value = at(self, &projection.value, &mut bindings)?;
+                let mut cases = Vec::with_capacity(projection.cases.len());
+                for (this, given) in projection.cases.iter() {
+                    let mut own = BTreeMap::new();
+                    cases.push((at(self, this, &mut own)?, at(self, given, &mut own)?));
+                }
+                let open = self
+                    .project_impl(vec![ImplProjection {
+                        ty,
+                        value,
+                        cases: cases.into_boxed_slice(),
+                    }])
+                    .unwrap_or_default();
+                self.inference.projections.extend(open);
             }
         }
         Ok(())
@@ -55191,8 +55198,7 @@ struct ImplBounds {
 struct ImplProjection {
     ty: Ty,
     value: Ty,
-    cases: Box<[(crate::host::type_ref::Type, crate::host::type_ref::Type)]>,
-    owner: Option<crate::host::facade::Dependency>,
+    cases: Box<[(Ty, Ty)]>,
 }
 
 /// Why no impl fixed an `impl Trait`'s hidden type (D604): none fits the

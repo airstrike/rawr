@@ -15869,10 +15869,18 @@ fn render_from_dynamic(
                 "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| take_handle_like(arguments.arena, handle, _w))"
             )
         }
-        convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
-            output,
-            "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take(handle))"
-        ),
+        // At the type it is, as rustc infers none for a value in an
+        // `Option` (#1070); a parameter's is the context's.
+        convert::Type::Nominal { .. } | convert::Type::Parameter(_) => match concrete_type(ty) {
+            Some(rust) => write!(
+                output,
+                "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))"
+            ),
+            None => write!(
+                output,
+                "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take(handle))"
+            ),
+        },
         convert::Type::ProfileMessage { payload, .. } => {
             return render_from_dynamic(payload, value, depth, output);
         }

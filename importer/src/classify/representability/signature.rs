@@ -327,11 +327,54 @@ impl Associated {
 
 /// One implementation of a [`Relation`]'s trait: its self type and its
 /// trait arguments, with the impl's parameters as [`IMPL_PARAMETER`]
-/// variables.
+/// variables, and the bounds of its where-clause that fix an associated
+/// type.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Case {
     this: super::convert::Type,
     arguments: Box<[super::convert::Type]>,
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    projections: Box<[Projection]>,
+}
+
+/// A bound `<ty as Trait>::Name == value` of a [`Case`]'s implementation,
+/// as `Renderer: image::Renderer<Handle = Handle>` of iced's `From<Image<
+/// Handle>> for Element`: each case is a type `ty` may be, with the
+/// associated type the crate's impls give it there, so the bound fixes
+/// `value` once `ty` is known, as rustc's projection does.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Projection {
+    ty: super::convert::Type,
+    value: super::convert::Type,
+    cases: Box<[(super::convert::Type, super::convert::Type)]>,
+}
+
+impl Projection {
+    pub(crate) const fn new(
+        ty: super::convert::Type,
+        value: super::convert::Type,
+        cases: Box<[(super::convert::Type, super::convert::Type)]>,
+    ) -> Self {
+        Self { ty, value, cases }
+    }
+
+    /// The type whose associated type the bound names.
+    #[must_use]
+    pub const fn ty(&self) -> &super::convert::Type {
+        &self.ty
+    }
+
+    /// The type the associated type is.
+    #[must_use]
+    pub const fn value(&self) -> &super::convert::Type {
+        &self.value
+    }
+
+    /// Each type `ty` may be, with its associated type there.
+    #[must_use]
+    pub const fn cases(&self) -> &[(super::convert::Type, super::convert::Type)] {
+        &self.cases
+    }
 }
 
 impl Relation {
@@ -394,11 +437,22 @@ impl Relation {
 }
 
 impl Case {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         this: super::convert::Type,
         arguments: Box<[super::convert::Type]>,
     ) -> Self {
-        Self { this, arguments }
+        Self {
+            this,
+            arguments,
+            projections: Box::new([]),
+        }
+    }
+
+    /// The case with its implementation's bounds that fix an associated
+    /// type.
+    pub(crate) fn with_projections(mut self, projections: Box<[Projection]>) -> Self {
+        self.projections = projections;
+        self
     }
 
     /// The implementation's self type.
@@ -411,6 +465,12 @@ impl Case {
     #[must_use]
     pub const fn arguments(&self) -> &[super::convert::Type] {
         &self.arguments
+    }
+
+    /// The implementation's bounds that fix an associated type.
+    #[must_use]
+    pub const fn projections(&self) -> &[Projection] {
+        &self.projections
     }
 }
 

@@ -48,6 +48,16 @@ pub struct Relation {
 pub struct Case {
     this: Pattern,
     arguments: Box<[Pattern]>,
+    projections: Box<[Projection]>,
+}
+
+/// A bound `<ty as Trait>::Name == value` of a [`Case`]'s implementation,
+/// with each type `ty` may be and the associated type it gives there.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Projection {
+    pub(crate) ty: Pattern,
+    pub(crate) value: Pattern,
+    pub(crate) cases: Box<[(Pattern, Pattern)]>,
 }
 
 /// A type in a [`Relation`]: the item's type parameter, an
@@ -148,8 +158,20 @@ impl Relation {
 impl Case {
     /// An implementation for `this` with the trait arguments `arguments`.
     #[must_use]
-    pub const fn new(this: Pattern, arguments: Box<[Pattern]>) -> Self {
-        Self { this, arguments }
+    pub fn new(this: Pattern, arguments: Box<[Pattern]>) -> Self {
+        Self {
+            this,
+            arguments,
+            projections: Box::new([]),
+        }
+    }
+
+    /// The case with its implementation's bounds that fix an associated
+    /// type.
+    #[must_use]
+    pub fn with_projections(mut self, projections: Box<[Projection]>) -> Self {
+        self.projections = projections;
+        self
     }
 
     pub(crate) const fn this(&self) -> &Pattern {
@@ -158,6 +180,10 @@ impl Case {
 
     pub(crate) fn arguments(&self) -> &[Pattern] {
         &self.arguments
+    }
+
+    pub(crate) fn projections(&self) -> &[Projection] {
+        &self.projections
     }
 }
 

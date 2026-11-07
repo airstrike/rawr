@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 123;
+const CLASSIFIER_VERSION: u32 = 124;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2604,7 +2604,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     {
                         continue;
                     }
-                    cases.push(Case::new(marked(source), Box::new([marked(target)])));
+                    cases.push(
+                        Case::new(marked(source), Box::new([marked(target)]))
+                            .with_projections(self.case_projections(implementation, marked)),
+                    );
                     if cases.len() > CASES {
                         break;
                     }
@@ -2646,7 +2649,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 else {
                     continue;
                 };
-                cases.push(Case::new(marked(this), implemented));
+                cases.push(
+                    Case::new(marked(this), implemented)
+                        .with_projections(self.case_projections(implementation, marked)),
+                );
                 if cases.len() > CASES {
                     break;
                 }
@@ -2664,6 +2670,77 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
         self.retain_array::<Relation>(relations.len())?;
         Ok(relations.into_boxed_slice())
+    }
+
+    /// The bounds `<ty as Trait>::Name == value` of `implementation`'s
+    /// where-clause, its parameters `marked` as a case's, each with a case
+    /// for every type `ty` may be that Rawr can name: the trait's impls for
+    /// a concrete type, and each type only a crate's alias names, at the
+    /// associated type rustc's impls give it there. A bound of a trait that
+    /// takes arguments besides `Self`, or of a type Rawr can't name, is left
+    /// out.
+    fn case_projections(
+        &self,
+        implementation: &model::Implementation,
+        marked: fn(representability::convert::Type) -> representability::convert::Type,
+    ) -> Box<[representability::signature::Projection]> {
+        let generics = implementation.generics();
+        generics
+            .predicates()
+            .filter_map(|predicate| {
+                let model::Predicate::ProjectionEquality {
+                    projection:
+                        model::Type::Projection {
+                            trait_id,
+                            associated,
+                            arguments,
+                        },
+                    ty: value,
+                } = predicate
+                else {
+                    return None;
+                };
+                let [model::Argument::Type(this)] = arguments
+                    .iter()
+                    .filter(|argument| !matches!(argument, model::Argument::Lifetime(_)))
+                    .collect::<Vec<_>>()[..]
+                else {
+                    return None;
+                };
+                let name = self.definition_name(associated)?;
+                let candidates = self
+                    .graph
+                    .implementations_of(trait_id)
+                    .map(model::Implementation::self_type)
+                    .chain(self.instance_aliases().iter().filter_map(|index| {
+                        match self.graph.definitions().nth(*index)?.kind() {
+                            model::Kind::TypeAlias { ty, .. } => Some(ty),
+                            _ => None,
+                        }
+                    }));
+                let mut cases = Vec::new();
+                for candidate in candidates {
+                    let Some(at) = self.associated_at(trait_id, name, candidate, 0) else {
+                        continue;
+                    };
+                    let (Ok(case), Ok(at)) = (self.convert(candidate), self.convert(&at)) else {
+                        continue;
+                    };
+                    if names_other_parameter(&case, u32::MAX)
+                        || names_other_parameter(&at, u32::MAX)
+                        || cases.iter().any(|(known, _)| *known == case)
+                    {
+                        continue;
+                    }
+                    cases.push((case, at));
+                }
+                Some(representability::signature::Projection::new(
+                    marked(self.convert(this).ok()?),
+                    marked(self.convert(value).ok()?),
+                    cases.into_boxed_slice(),
+                ))
+            })
+            .collect()
     }
 
     /// The cases of `P: Into<target>`: each implementation of `From<S>`

@@ -1157,10 +1157,22 @@ fn signature(
         if let Some(relation) = super::relation(
             relation.parameter(),
             relation.arguments(),
-            relation
-                .cases()
-                .iter()
-                .map(|case| (case.this(), case.arguments())),
+            relation.cases().iter().map(|case| {
+                (
+                    case.this(),
+                    case.arguments(),
+                    case.projections()
+                        .iter()
+                        .map(|projection| {
+                            (
+                                projection.ty(),
+                                projection.value(),
+                                projection.cases().iter().map(|(this, at)| (this, at)).collect(),
+                            )
+                        })
+                        .collect(),
+                )
+            }),
             relation.trait_identity(),
             relation.associated(),
             |source| {
