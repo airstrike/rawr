@@ -31,6 +31,10 @@ pub struct Package {
     rust_modules: Vec<RustModule>,
     /// The crate root, when it is native Rust that declares marked modules.
     native_root: Option<RustModule>,
+    /// The modules a native root declares by `mod name;`: those that are
+    /// not native modules are marked, and every other path from the root,
+    /// as the root's own `Message`, is native.
+    root_modules: Box<[ImmutableString]>,
     /// The package's native binary, when the program runs from its library.
     bin: Option<Bin>,
     /// A marked root's `#[X::main]` above its `async fn main`, as written:
@@ -193,8 +197,9 @@ impl Package {
     }
 
     /// Whether `path`, from the crate root, lands in native code: below a
-    /// native module, or in the island module a native root's shadow crate
-    /// adds (`__rawr_island`).
+    /// native module, or anywhere a native root reaches but its marked
+    /// modules, as the root's own `Message` or the island module its
+    /// shadow crate adds (`__rawr_island`).
     pub(crate) fn is_native_path<S: AsRef<str>>(&self, path: &[S]) -> bool {
         let below = |modules: &[ImmutableString]| {
             path.len() > modules.len()
@@ -207,9 +212,19 @@ impl Package {
             .iter()
             .any(|module| below(&module.modules))
             || (self.native_root.is_some()
-                && path.len() > 1
-                && path[0].as_ref() == super::island::MODULE)
+                && path
+                    .first()
+                    .is_some_and(|first| !self.is_marked_root_module(first.as_ref())))
             || (self.entry.is_some() && path.len() > 1 && path[0].as_ref() == super::entry::MODULE)
+    }
+
+    /// Whether `name` is a marked module a native root declares.
+    fn is_marked_root_module(&self, name: &str) -> bool {
+        self.root_modules.iter().any(|module| module == name)
+            && !self
+                .rust_modules
+                .iter()
+                .any(|module| matches!(&*module.modules, [only] if only == name))
     }
 
     /// Whether `path`, from the crate root, names native code: a native
@@ -618,6 +633,7 @@ impl<'a> Builder<'a> {
             source: source::Id::from_index(0),
             rust_modules: Vec::new(),
             native_root: None,
+            root_modules: Box::default(),
             bin: None,
             entry: None,
             cargo: None,
@@ -648,6 +664,11 @@ impl<'a> Builder<'a> {
         let marked = crate::project::is_marked(&text);
         let read = if !marked && self.reaches_marked(&module_root, &text).is_some() {
             let declarations = super::island::root_text(&text, has_bin);
+            self.packages[package.0].root_modules = super::polyglot::declarations(&text)
+                .into_iter()
+                .filter(|declaration| !declaration.disabled && declaration.path.len() == 1)
+                .map(|declaration| ImmutableString::from(declaration.path[0].as_str()))
+                .collect();
             self.packages[package.0].native_root = Some(RustModule {
                 modules: Box::default(),
                 path: canonical,
