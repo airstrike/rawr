@@ -2851,7 +2851,10 @@
     {"issue":1198,"title":"A `try` block without `catch` is rustc E0658","state":"open","category":"Divergences from rustc"},
     {"issue":1199,"title":"`#{` and binary `**` in user code give rustc errors","state":"open","category":"Divergences from rustc"},
     {"issue":1200,"title":"`Fn(\"name\")` is rustc E0423","state":"open","category":"Divergences from rustc"},
-    {"issue":1201,"title":"Drop the old engine binary `in` operator","state":"open","category":"Health"}
+    {"issue":1201,"title":"Drop the old engine binary `in` operator","state":"open","category":"Health"},
+    {"issue":1202,"title":"A crate's type alias of a std type (`type Names = Vec<String>`) can't be named from marked code","state":"open","category":"Divergences from rustc"},
+    {"issue":1203,"title":"A marked function can't return a native crate value to native code unless it sits in a Result","state":"open","category":"Divergences from rustc"},
+    {"issue":1204,"title":"A marked module can't reach a private field of its native crate root's struct","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3665,7 +3668,10 @@
             {"number":1171,"title":"A build input reached through a symlink is refused","state":"closed"},
             {"number":1185,"title":"A marked module can't name items of the native crate root it lives in (`crate::Message`)","state":"open"},
             {"number":1186,"title":"A workspace root bin with member path dependencies fails: 'complete package membership witness is unavailable'","state":"open"},
-            {"number":1194,"title":"A path dependency whose manifest names a file outside its package panics the importer","state":"open"}
+            {"number":1194,"title":"A path dependency whose manifest names a file outside its package panics the importer","state":"open"},
+            {"number":1202,"title":"A crate's type alias of a std type (`type Names = Vec<String>`) can't be named from marked code","state":"open"},
+            {"number":1203,"title":"A marked function can't return a native crate value to native code unless it sits in a Result","state":"open"},
+            {"number":1204,"title":"A marked module can't reach a private field of its native crate root's struct","state":"open"}
           ]
         }
       ]
