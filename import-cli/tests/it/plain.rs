@@ -1040,7 +1040,8 @@ fn a_shared_table_names_no_crate_outside_its_closure() {
             .filter_map(|entry| {
                 let path = entry.ok()?.path();
                 let meta = fs::read_to_string(path.join("meta.json")).ok()?;
-                meta.contains("\"crate_name\":\"meters\"")
+                let meta = serde_json::from_str::<serde_json::Value>(&meta).ok()?;
+                (meta["crate_name"] == "meters")
                     .then(|| fs::read_to_string(path.join("table.json")).unwrap())
             })
             .collect::<Vec<_>>()
