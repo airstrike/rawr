@@ -54,6 +54,26 @@ impl Builtin {
         })
     }
 
+    /// Whether it is a number type, the kind a literal may leave open.
+    #[must_use]
+    pub const fn is_number(self) -> bool {
+        matches!(
+            self,
+            Self::F64
+                | Self::F32
+                | Self::I64
+                | Self::I8
+                | Self::I16
+                | Self::I32
+                | Self::Isize
+                | Self::U8
+                | Self::U16
+                | Self::U32
+                | Self::U64
+                | Self::Usize
+        )
+    }
+
     /// The Rust name of a primitive builtin.
     #[must_use]
     pub const fn rust_name(self) -> Option<&'static str> {

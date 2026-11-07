@@ -184,6 +184,33 @@ fn a_number_on_the_left_selects_the_crates_impl_for_it() {
     );
 }
 
+/// A float literal whose only constraint is a bound one float type meets,
+/// as iced's progress_bar writes `Animation::new(0.)` with lilt's `Float`
+/// implemented for `bool` and `f32`, is that type, as rustc selects the
+/// one impl it fits (#1028), in a closure too.
+#[test]
+fn a_literal_takes_the_one_impl_its_bound_allows() {
+    runs_as_cargo_does("animation", "f32 0\nf32 0.25\n");
+}
+
+/// A value that isn't `Send`, as rand's `ThreadRng` holds an `Rc`, lent
+/// `&mut` to a call, generic or not, as the_matrix's
+/// `distribution.sample(&mut rng)`: the call holds it on its thread, which
+/// asks no `Send` (#957).
+#[test]
+fn a_value_that_stays_on_its_thread_needs_no_send() {
+    runs_as_cargo_does("random", "[0, 2, 1, 2, 1, 2, 1, 2, 0, 0, 1, 2] 0\n");
+}
+
+/// A script impl of a crate trait whose method takes a `&mut` of a type
+/// with a lifetime, as geometry's `update(.., shell: &mut Shell<'_,
+/// Message>)`: native code lends the shell for the call, and the script's
+/// changes reach it, with no `Clone` (#957).
+#[test]
+fn a_mut_input_with_a_lifetime_is_lent_not_cloned() {
+    runs_as_cargo_does("shell", "2 4\n");
+}
+
 /// A method whose own early-bound lifetime its output borrows a `&F` at,
 /// as jiff's `strftime<'f, F: 'f + ?Sized + AsRef<[u8]>>(&self, format:
 /// &'f F) -> Display<'f>` is (#1014): a literal fills `F` with `str`, and a
