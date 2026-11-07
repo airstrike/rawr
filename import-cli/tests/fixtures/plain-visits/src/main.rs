@@ -175,4 +175,5 @@ fn main() {
     );
     println!("{}", visits::read::<Small>(&[]));
     println!("{}", visits::unexpected(Unexpected::Unsigned(4)));
+    println!("{} {}", visits::filled(9), visits::counted());
 }

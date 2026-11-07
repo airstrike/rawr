@@ -1636,6 +1636,12 @@ fn a_rename_in_a_derived_type_swaps_into_the_running_program() {
 /// Expected)` does, is the opaque `R::Error`'s, called through the trait's
 /// path where the output fixes `Self`, as serde's derives call it, and
 /// through the opaque type (#1031). So is a free function of such a value.
+/// A parameter's projection its bounds set to the method's `Self`, as
+/// image's `copy_from<O: GenericImageView<Pixel = Self::Pixel>>` sets
+/// `O::Pixel`, is an opaque type of its own, not read without end; a member
+/// whose closure names the trait's own parameter, as rayon's
+/// `FromParallelIterator<T>::from_par_iter` gives `I::Iter` an `any` of `T`,
+/// isn't written, nor are the members of a type no function gives (#1069).
 #[test]
 fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     const VISITS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-visits");
@@ -1656,7 +1662,7 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
          expected a str\nexpected 2 numbers\nexpected what I wanted\n6 3\n\
          Counts { odd: 2, even: 1 }\nodd even\n6\ntrue\n2 1\n\
          Small(2) invalid value: integer `7`, expected a number below 3\n\
-         invalid value: boolean `false`, expected a number\ninteger `4`\n"
+         invalid value: boolean `false`, expected a number\ninteger `4`\n9 3\n"
     );
 }
 
