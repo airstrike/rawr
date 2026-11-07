@@ -49,12 +49,19 @@
   .label { font-size: var(--fs-label); font-weight: 600; letter-spacing: var(--track-label); text-transform: uppercase; color: var(--quiet); }
   code.nw { white-space: nowrap; }
 
-  /* The site bar, the same on every page. */
+  /* The site bar, the same on every page. At the top of the page it is the
+     page itself, with no line. Once the page scrolls (Base.astro's sentinel
+     leaves the view), it takes a shade near the page's and a hairline. */
   .bar {
+    --bar: color-mix(in srgb, var(--paper) 96%, var(--ink));
     position: sticky; top: 0; z-index: 10; height: 50px;
     display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    padding: 0 var(--pad); border-bottom: 1px solid var(--rule); background: var(--paper);
+    padding: 0 var(--pad); border-bottom: 1px solid transparent; background: var(--paper);
+    transition: background-color 0.2s ease, border-color 0.2s ease;
   }
+  .bar.scrolled { background: var(--bar); border-bottom-color: var(--grid); }
+  .bar-top { height: 1px; margin-bottom: -1px; }
+  @media (prefers-reduced-motion: reduce) { .bar { transition: none; } }
   .bar a { text-decoration: none; }
   .brand { display: flex; align-items: baseline; gap: 12px; }
   .brand b { font-size: 16px; font-weight: var(--w-heavy); letter-spacing: 0.01em; color: var(--ink); }

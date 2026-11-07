@@ -53,7 +53,16 @@ const alt = og.alt ?? "rawr is rust augmented with rust: a Rust interpreter for 
 <slot name="head" />
 </head>
 <body class={bodyClass}>
+<div class="bar-top" aria-hidden="true"></div>
 <Header current={current} />
 <slot />
+<script is:inline>
+// The bar takes its scrolled shade once the sentinel above it leaves the view.
+(() => {
+  const top = document.querySelector(".bar-top"), bar = document.querySelector(".bar");
+  if (!top || !bar || !("IntersectionObserver" in window)) return;
+  new IntersectionObserver(([entry]) => bar.classList.toggle("scrolled", !entry.isIntersecting)).observe(top);
+})();
+</script>
 </body>
 </html>
