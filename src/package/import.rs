@@ -2547,6 +2547,21 @@ fn build(
                 })
             })
             .collect();
+        let projections = header
+            .projections
+            .iter()
+            .filter_map(|projection| {
+                Some(host::facade::ImplProjection {
+                    ty: convert(&projection.ty)?,
+                    value: convert(&projection.value)?,
+                    cases: projection
+                        .cases
+                        .iter()
+                        .map(|(this, value)| Some((convert(this)?, convert(value)?)))
+                        .collect::<Option<_>>()?,
+                })
+            })
+            .collect();
         builder.impl_header(host::facade::ImplHeader {
             parameters: header
                 .parameters
@@ -2557,6 +2572,7 @@ fn build(
             arguments,
             self_type,
             bounds,
+            projections,
         })?;
     }
     // A re-exported variant names its enum's variant, through a path the

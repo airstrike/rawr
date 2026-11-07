@@ -862,6 +862,21 @@ fn build(
                 })
             })
             .collect();
+        let projections = header
+            .projections()
+            .iter()
+            .filter_map(|projection| {
+                Some(host::facade::ImplProjection {
+                    ty: self::ty(projection.ty()).ok()?,
+                    value: self::ty(projection.value()).ok()?,
+                    cases: projection
+                        .cases()
+                        .iter()
+                        .map(|(this, value)| Some((self::ty(this).ok()?, self::ty(value).ok()?)))
+                        .collect::<Option<_>>()?,
+                })
+            })
+            .collect();
         builder
             .impl_header(host::facade::ImplHeader {
                 parameters: header.parameters().map(ImmutableString::from).collect(),
@@ -869,6 +884,7 @@ fn build(
                 arguments,
                 self_type,
                 bounds,
+                projections,
             })
             .map_err(|source| entry_error(facade.root(), "<impl>", source.into()))?;
     }

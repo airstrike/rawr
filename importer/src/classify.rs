@@ -2195,48 +2195,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         this: &model::Type,
         depth: usize,
     ) -> Option<model::Type> {
-        /// Projections inside a value are read this deep.
-        const DEPTH: usize = 4;
-        if depth > DEPTH || names_type_parameter(this) {
-            return None;
-        }
-        let mut found = None;
-        for implementation in self.graph.implementations_of(trait_id) {
-            let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
-                continue;
-            };
-            if id != trait_id
-                || implementation.polarity() != model::Polarity::Positive
-                || arguments
-                    .iter()
-                    .skip(1)
-                    .any(|argument| !matches!(argument, model::Argument::Lifetime(_)))
-            {
-                continue;
-            }
-            let mut bindings = BTreeMap::new();
-            if !bind_instance(implementation.self_type(), this, &mut bindings) {
-                continue;
-            }
-            let value = implementation.associated().find_map(|associated| {
-                let definition = self
-                    .graph
-                    .definition_index(associated)
-                    .and_then(|index| self.graph.definitions().nth(index))?;
-                match definition.kind() {
-                    model::Kind::AssociatedType {
-                        default: model::Default::Present(ty),
-                        ..
-                    } if definition.display_path().last() == Some(name) => Some(ty),
-                    _ => None,
-                }
-            })?;
-            if found.is_some() {
-                return None;
-            }
-            found = Some(self.normalize_at(&substitute_bindings(value, &bindings), depth + 1)?);
-        }
-        found
+        associated_at(self.graph, trait_id, name, this, depth)
     }
 
     /// Each associated type an opaque type's `bounds` bind, as `(trait,
@@ -2375,57 +2334,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         (found, seen)
     }
 
-    /// `ty` with each projection on a concrete type in it read by
-    /// [`Self::associated_at`]. `None` when one can't be read.
-    fn normalize_at(&self, ty: &model::Type, depth: usize) -> Option<model::Type> {
-        let argument = |argument: &model::Argument| -> Option<model::Argument> {
-            Some(match argument {
-                model::Argument::Type(ty) => model::Argument::Type(self.normalize_at(ty, depth)?),
-                other => other.clone(),
-            })
-        };
-        Some(match ty {
-            model::Type::Projection {
-                trait_id,
-                associated,
-                arguments,
-            } => {
-                let [model::Argument::Type(this), ..] = &arguments[..] else {
-                    return None;
-                };
-                let this = self.normalize_at(this, depth)?;
-                let name = self.definition_name(associated)?;
-                return self.associated_at(trait_id, name, &this, depth);
-            }
-            model::Type::Definition { id, arguments } => model::Type::Definition {
-                id: id.clone(),
-                arguments: arguments.iter().map(argument).collect::<Option<_>>()?,
-            },
-            model::Type::Reference {
-                lifetime,
-                mutability,
-                ty,
-            } => model::Type::Reference {
-                lifetime: lifetime.clone(),
-                mutability: *mutability,
-                ty: Box::new(self.normalize_at(ty, depth)?),
-            },
-            model::Type::Tuple(members) => model::Type::Tuple(
-                members
-                    .iter()
-                    .map(|member| self.normalize_at(member, depth))
-                    .collect::<Option<_>>()?,
-            ),
-            model::Type::Slice(element) => {
-                model::Type::Slice(Box::new(self.normalize_at(element, depth)?))
-            }
-            model::Type::Array { element, length } => model::Type::Array {
-                element: Box::new(self.normalize_at(element, depth)?),
-                length: length.clone(),
-            },
-            ty => ty.clone(),
-        })
-    }
 
     /// The type parameters bounded by `core::future::Future`, marked as
     /// future parameters, each with a synthetic `F::Output` parameter
@@ -9239,44 +9147,8 @@ impl<P: api::Phase> Context<'_, P> {
     /// graph whose other root re-exports both backends, as `iced_test`
     /// does, leaves `iced::Renderer` the only name `iced` has.
     fn instance_aliases(&self) -> &[usize] {
-        self.instance_aliases.get_or_init(|| {
-            let exported = exported_by_root(self.graph);
-            self.graph
-                .definitions()
-                .enumerate()
-                .filter(|(_, definition)| {
-                    let identity = crate::surface::identity::Definition::of(definition.id());
-                    matches!(definition.visibility(), model::Visibility::Public)
-                        && matches!(
-                            definition.kind(),
-                            model::Kind::TypeAlias {
-                                ty: target @ model::Type::Definition { id, arguments },
-                                generics,
-                            } if generics.parameters().len() == 0
-                                && !matches!(id.unit().crate_name(), "core" | "alloc" | "std")
-                                && self
-                                    .graph
-                                    .definition_index(id)
-                                    .and_then(|index| self.graph.definitions().nth(index))
-                                    .is_some_and(|target| {
-                                        matches!(
-                                            target.kind(),
-                                            model::Kind::Struct { .. } | model::Kind::Enum { .. }
-                                        )
-                                    })
-                                && generics.predicates().len() == 0
-                                && arguments
-                                    .iter()
-                                    .any(|argument| matches!(argument, model::Argument::Type(_)))
-                                && exported.values().any(|exported| {
-                                    exported.contains(&identity)
-                                        && !reaches_only_exported(target, exported)
-                                })
-                        )
-                })
-                .map(|(index, _)| index)
-                .collect()
-        })
+        self.instance_aliases
+            .get_or_init(|| instance_aliases(self.graph))
     }
 
     /// The alias that is the only name of `ty` (`instance_aliases`).
@@ -10373,6 +10245,170 @@ fn sole_passing_aliases(
             }))
             .then_some((root, alias, target))
         })
+        .collect()
+}
+
+/// What the associated type `name` of `trait_id` is for the concrete
+/// type `this`, read from the one implementation whose self type
+/// `this` is an instance of, with the projections its value names read
+/// the same way: `<fallback::Renderer<wgpu::Renderer,
+/// tiny_skia::Renderer> as geometry::Renderer>::Geometry` is
+/// `fallback::Geometry<wgpu::Geometry, tiny_skia::Geometry>`. `None`
+/// when no implementation, or more than one, fits, or the trait takes
+/// arguments besides its self type.
+pub(crate) fn associated_at(
+    graph: &api::Graph<impl api::Phase>,
+    trait_id: &api::identity::Definition,
+    name: &str,
+    this: &model::Type,
+    depth: usize,
+) -> Option<model::Type> {
+    /// Projections inside a value are read this deep.
+    const DEPTH: usize = 4;
+    if depth > DEPTH || names_type_parameter(this) {
+        return None;
+    }
+    let mut found = None;
+    for implementation in graph.implementations_of(trait_id) {
+        let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
+            continue;
+        };
+        if id != trait_id
+            || implementation.polarity() != model::Polarity::Positive
+            || arguments
+                .iter()
+                .skip(1)
+                .any(|argument| !matches!(argument, model::Argument::Lifetime(_)))
+        {
+            continue;
+        }
+        let mut bindings = BTreeMap::new();
+        if !bind_instance(implementation.self_type(), this, &mut bindings) {
+            continue;
+        }
+        let value = implementation.associated().find_map(|associated| {
+            let definition = graph
+                .definition_index(associated)
+                .and_then(|index| graph.definitions().nth(index))?;
+            match definition.kind() {
+                model::Kind::AssociatedType {
+                    default: model::Default::Present(ty),
+                    ..
+                } if definition.display_path().last() == Some(name) => Some(ty),
+                _ => None,
+            }
+        })?;
+        if found.is_some() {
+            return None;
+        }
+        found = Some(normalize_at(graph, &substitute_bindings(value, &bindings), depth + 1)?);
+    }
+    found
+}
+
+/// `ty` with each projection on a concrete type in it read by
+/// [`Self::associated_at`]. `None` when one can't be read.
+fn normalize_at(
+    graph: &api::Graph<impl api::Phase>,
+    ty: &model::Type,
+    depth: usize,
+) -> Option<model::Type> {
+    let argument = |argument: &model::Argument| -> Option<model::Argument> {
+        Some(match argument {
+            model::Argument::Type(ty) => model::Argument::Type(normalize_at(graph, ty, depth)?),
+            other => other.clone(),
+        })
+    };
+    Some(match ty {
+        model::Type::Projection {
+            trait_id,
+            associated,
+            arguments,
+        } => {
+            let [model::Argument::Type(this), ..] = &arguments[..] else {
+                return None;
+            };
+            let this = normalize_at(graph, this, depth)?;
+            let name = definition_name(graph, associated)?;
+            return associated_at(graph, trait_id, name, &this, depth);
+        }
+        model::Type::Definition { id, arguments } => model::Type::Definition {
+            id: id.clone(),
+            arguments: arguments.iter().map(argument).collect::<Option<_>>()?,
+        },
+        model::Type::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => model::Type::Reference {
+            lifetime: lifetime.clone(),
+            mutability: *mutability,
+            ty: Box::new(normalize_at(graph, ty, depth)?),
+        },
+        model::Type::Tuple(members) => model::Type::Tuple(
+            members
+                .iter()
+                .map(|member| normalize_at(graph, member, depth))
+                .collect::<Option<_>>()?,
+        ),
+        model::Type::Slice(element) => {
+            model::Type::Slice(Box::new(normalize_at(graph, element, depth)?))
+        }
+        model::Type::Array { element, length } => model::Type::Array {
+            element: Box::new(normalize_at(graph, element, depth)?),
+            length: length.clone(),
+        },
+        ty => ty.clone(),
+    })
+}
+
+fn definition_name<'g>(
+    graph: &'g api::Graph<impl api::Phase>,
+    definition: &api::identity::Definition,
+) -> Option<&'g str> {
+    graph
+        .definition_index(definition)
+        .and_then(|index| graph.definitions().nth(index))
+        .and_then(|definition| definition.display_path().last())
+}
+
+/// The crate type aliases that are the only name of the type they name, by
+/// definition index (`Context::instance_aliases`).
+pub(crate) fn instance_aliases(graph: &api::Graph<impl api::Phase>) -> Box<[usize]> {
+    let exported = exported_by_root(graph);
+    graph
+        .definitions()
+        .enumerate()
+        .filter(|(_, definition)| {
+            let identity = crate::surface::identity::Definition::of(definition.id());
+            matches!(definition.visibility(), model::Visibility::Public)
+                && matches!(
+                    definition.kind(),
+                    model::Kind::TypeAlias {
+                        ty: target @ model::Type::Definition { id, arguments },
+                        generics,
+                    } if generics.parameters().len() == 0
+                        && !matches!(id.unit().crate_name(), "core" | "alloc" | "std")
+                        && graph
+                            .definition_index(id)
+                            .and_then(|index| graph.definitions().nth(index))
+                            .is_some_and(|target| {
+                                matches!(
+                                    target.kind(),
+                                    model::Kind::Struct { .. } | model::Kind::Enum { .. }
+                                )
+                            })
+                        && generics.predicates().len() == 0
+                        && arguments
+                            .iter()
+                            .any(|argument| matches!(argument, model::Argument::Type(_)))
+                        && exported.values().any(|exported| {
+                            exported.contains(&identity)
+                                && !reaches_only_exported(target, exported)
+                        })
+                )
+        })
+        .map(|(index, _)| index)
         .collect()
 }
 

@@ -170,8 +170,9 @@ pub(crate) struct TraitHeader {
 }
 
 /// One impl of a crate trait (D604): its own type parameters, the trait's
-/// identity and type arguments other than `Self`, the self type, and its
-/// where-clause bounds as (type, trait identity, trait arguments).
+/// identity and type arguments other than `Self`, the self type, its
+/// where-clause bounds as (type, trait identity, trait arguments), and
+/// those that fix an associated type.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ImplHeader {
     pub(crate) parameters: Box<[ImmutableString]>,
@@ -179,6 +180,18 @@ pub(crate) struct ImplHeader {
     pub(crate) arguments: Box<[host::type_ref::Type]>,
     pub(crate) self_type: host::type_ref::Type,
     pub(crate) bounds: Box<[ImplBound]>,
+    pub(crate) projections: Box<[ImplProjection]>,
+}
+
+/// A where-clause bound of an [`ImplHeader`] that fixes an associated type,
+/// as `Renderer: image::Renderer<Handle = Handle>`: `<ty as Trait>::Name`
+/// is `value`, and is each case's second type where `ty` is its first, as
+/// the crate's impls give it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ImplProjection {
+    pub(crate) ty: host::type_ref::Type,
+    pub(crate) value: host::type_ref::Type,
+    pub(crate) cases: Box<[(host::type_ref::Type, host::type_ref::Type)]>,
 }
 
 /// A where-clause bound of an [`ImplHeader`].
@@ -233,6 +246,21 @@ impl ImplHeader {
                         ty: bound.ty.try_clone()?,
                         trait_identity: bound.trait_identity,
                         arguments: clone_types(&bound.arguments)?,
+                    })
+                })
+                .collect::<Result<_, rawr_import::surface::Error>>()?,
+            projections: self
+                .projections
+                .iter()
+                .map(|projection| {
+                    Ok(ImplProjection {
+                        ty: projection.ty.try_clone()?,
+                        value: projection.value.try_clone()?,
+                        cases: projection
+                            .cases
+                            .iter()
+                            .map(|(this, value)| Ok((this.try_clone()?, value.try_clone()?)))
+                            .collect::<Result<_, rawr_import::surface::Error>>()?,
                     })
                 })
                 .collect::<Result<_, rawr_import::surface::Error>>()?,
@@ -1443,6 +1471,22 @@ impl Builder {
                     })
                 })
                 .collect::<Box<[_]>>();
+            let one = |ty: &host::type_ref::Type| resolve(std::slice::from_ref(ty))?.into_vec().pop();
+            let projections = header
+                .projections
+                .iter()
+                .filter_map(|projection| {
+                    Some(ImplProjection {
+                        ty: one(&projection.ty)?,
+                        value: one(&projection.value)?,
+                        cases: projection
+                            .cases
+                            .iter()
+                            .map(|(this, value)| Some((one(this)?, one(value)?)))
+                            .collect::<Option<_>>()?,
+                    })
+                })
+                .collect::<Box<[_]>>();
             let Some(self_type) = self_type.into_vec().pop() else {
                 continue;
             };
@@ -1452,6 +1496,7 @@ impl Builder {
                 arguments,
                 self_type,
                 bounds,
+                projections,
             };
             modules.push(header_proof_path(
                 &self.root,

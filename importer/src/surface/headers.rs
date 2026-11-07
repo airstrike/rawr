@@ -22,14 +22,27 @@ pub struct TraitHeader {
 
 /// One impl of a trait, as `impl<W, M, T, R> Widget<M, T, R> for Column<W>
 /// where W: Widget<M, T, R>`: its own type parameters, the trait's identity
-/// and type arguments other than `Self`, the self type, and the
-/// where-clause bounds that name a trait.
+/// and type arguments other than `Self`, the self type, the where-clause
+/// bounds that name a trait, and those that fix an associated type.
 pub struct ImplHeader {
     pub parameters: Box<[signature::Parameter]>,
     pub trait_identity: [u8; 32],
     pub arguments: Box<[convert::Type]>,
     pub self_type: convert::Type,
     pub bounds: Box<[ImplBound]>,
+    pub projections: Box<[ImplProjection]>,
+}
+
+/// A where-clause bound of an [`ImplHeader`] that fixes an associated type,
+/// as `Renderer: image::Renderer<Handle = Handle>` of iced's `impl Widget
+/// for Image<Handle>`: `<ty as Trait>::Name` is `value`. Each case is a
+/// type `ty` may be, with the associated type rustc's impls give it there,
+/// so the bound fixes `value` once `ty` is known, as rustc's projection
+/// does.
+pub struct ImplProjection {
+    pub ty: convert::Type,
+    pub value: convert::Type,
+    pub cases: Box<[(convert::Type, convert::Type)]>,
 }
 
 /// A where-clause bound of an [`ImplHeader`]: `ty: Trait<arguments>`.
@@ -67,7 +80,10 @@ pub fn headers<P: api::Phase>(
     (trait_headers, impls)
 }
 
-struct Headers<'g> {
+struct Headers<'g, P: api::Phase> {
+    graph: &'g api::Graph<P>,
+    /// The types only a crate's alias names (`classify::instance_aliases`).
+    instances: std::cell::OnceCell<Box<[usize]>>,
     models: BTreeMap<[u8; 32], &'g model::Definition>,
     declared: &'g BTreeSet<[u8; 32]>,
     /// The declared parameterless aliases' targets, each with the alias's
@@ -79,8 +95,8 @@ fn identity(id: &api::identity::Definition) -> [u8; 32] {
     *crate::surface::identity::Definition::of(id).as_bytes()
 }
 
-impl<'g> Headers<'g> {
-    fn new<P: api::Phase>(graph: &'g api::Graph<P>, declared: &'g BTreeSet<[u8; 32]>) -> Self {
+impl<'g, P: api::Phase> Headers<'g, P> {
+    fn new(graph: &'g api::Graph<P>, declared: &'g BTreeSet<[u8; 32]>) -> Self {
         let models = graph
             .definitions()
             .map(|model| (identity(model.id()), model))
@@ -96,6 +112,8 @@ impl<'g> Headers<'g> {
             })
             .collect();
         Self {
+            graph,
+            instances: std::cell::OnceCell::new(),
             models,
             declared,
             aliases,
@@ -356,6 +374,7 @@ impl<'g> Headers<'g> {
                     arguments,
                     self_type: self_type.clone(),
                     bounds: Box::default(),
+                    projections: Box::default(),
                 });
             }
         }
@@ -487,12 +506,82 @@ impl<'g> Headers<'g> {
                 })
             })
             .collect();
+        let projections = generics
+            .predicates()
+            .filter_map(|predicate| match predicate {
+                model::Predicate::ProjectionEquality { projection, ty } => {
+                    self.impl_projection(projection, ty)
+                }
+                _ => None,
+            })
+            .collect();
         Some(ImplHeader {
             parameters: Self::parameters(generics),
             trait_identity: identity(id),
             arguments,
             self_type,
             bounds,
+            projections,
+        })
+    }
+
+    /// The where-clause bound `<this as Trait>::Name == value`, with a case
+    /// for each type the facade names that `this` may be: each of the
+    /// trait's impls for a type it declares, and each type only a crate's
+    /// alias names, at the associated type rustc's impls give it there.
+    /// `None` for a trait that takes arguments besides `Self`, or a bound
+    /// whose types the facade can't write.
+    fn impl_projection(
+        &self,
+        projection: &model::Type,
+        value: &model::Type,
+    ) -> Option<ImplProjection> {
+        let model::Type::Projection {
+            trait_id,
+            associated,
+            arguments,
+        } = projection
+        else {
+            return None;
+        };
+        let [model::Argument::Type(this)] = arguments
+            .iter()
+            .filter(|argument| !matches!(argument, model::Argument::Lifetime(_)))
+            .collect::<Vec<_>>()[..]
+        else {
+            return None;
+        };
+        let name = self.models.get(&identity(associated))?.display_path().last()?;
+        let candidates = self
+            .graph
+            .implementations_of(trait_id)
+            .map(model::Implementation::self_type)
+            .chain(
+                self.instances
+                    .get_or_init(|| crate::classify::instance_aliases(self.graph))
+                    .iter()
+                    .filter_map(|index| match self.graph.definitions().nth(*index)?.kind() {
+                        model::Kind::TypeAlias { ty, .. } => Some(ty),
+                        _ => None,
+                    }),
+            );
+        let mut cases = Vec::new();
+        for candidate in candidates {
+            let Some(at) = crate::classify::associated_at(self.graph, trait_id, name, candidate, 0)
+            else {
+                continue;
+            };
+            let (Some(case), Some(at)) = (self.ty(candidate), self.ty(&at)) else {
+                continue;
+            };
+            if !cases.iter().any(|(known, _)| *known == case) {
+                cases.push((case, at));
+            }
+        }
+        Some(ImplProjection {
+            ty: self.ty(this)?,
+            value: self.ty(value)?,
+            cases: cases.into_boxed_slice(),
         })
     }
 }

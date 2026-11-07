@@ -372,6 +372,21 @@ fn a_generic_functions_parameter_a_later_use_fixes_runs() {
     );
 }
 
+/// iced's gallery and ferris (#1099, #1071): `picture(&handle)` and
+/// `picture("ferris")` take the handle the renderer's associated type
+/// fixes through the widget's impl, not the argument's own type. The
+/// output is `cargo run`'s.
+#[test]
+fn a_parameter_an_impls_associated_type_fixes_runs() {
+    let (rawr, cargo) = both_printed("pictured.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("picture Handle { name: \"sun\" }@1")
+            && rawr.contains("explain #ffffff picture Handle { name: \"ferris\" }@2"),
+        "{rawr}"
+    );
+}
+
 /// iced's checkbox: `application(State::default, ..)` gives an opaque
 /// `impl Program` that `fonts([..])` and `run()` take, `on_toggle_maybe`
 /// takes an `Option` of a variant's constructor, and `style` takes a crate

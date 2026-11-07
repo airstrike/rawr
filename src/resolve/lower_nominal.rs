@@ -13589,7 +13589,7 @@ impl<'a> Parser<'a> {
             _ => return Err(Selection::Many(ty.name(&self.models).to_string())),
         };
         let checkpoint = self.inference.checkpoint();
-        let Some(bounds) = self.apply_impl(&headers[chosen], &ty, arguments, owner) else {
+        let Some(mut bounds) = self.apply_impl(&headers[chosen], &ty, arguments, owner) else {
             self.inference.rollback(checkpoint);
             return Err(Selection::None(ty.name(&self.models).to_string()));
         };
@@ -13601,7 +13601,7 @@ impl<'a> Parser<'a> {
         // Widget<..>` for a `&str` content whose impl the facade can't
         // write, fixes nothing more and leaves the impl chosen.
         for _ in 0..2 {
-            for (bounded, trait_identity, bound_arguments) in &bounds {
+            for (bounded, trait_identity, bound_arguments) in &bounds.traits {
                 let checkpoint = self.inference.checkpoint();
                 match self.select_impl(bounded, *trait_identity, bound_arguments, owner, depth + 1)
                 {
@@ -13613,6 +13613,9 @@ impl<'a> Parser<'a> {
                     Err(_) => self.inference.rollback(checkpoint),
                 }
             }
+            // A bound the others fixed the type of fixes its associated
+            // type in turn.
+            let _ = self.project_impl(&mut bounds, owner);
         }
         Ok(())
     }
@@ -13774,7 +13777,7 @@ impl<'a> Parser<'a> {
                 return None;
             }
         }
-        header
+        let traits = header
             .bounds
             .iter()
             .map(|bound| {
@@ -13805,7 +13808,84 @@ impl<'a> Parser<'a> {
                     .collect::<Option<Vec<_>>>()?;
                 Some((bounded, bound.trait_identity, arguments))
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()?;
+        let mut projections = Vec::with_capacity(header.projections.len());
+        for projection in header.projections.iter() {
+            let mut at = |ty| {
+                self.instantiate_host_type(ty, &mut parameters, "impl", Span::NONE, owner, None)
+                    .ok()
+            };
+            let (Some(ty), Some(value)) = (at(&projection.ty), at(&projection.value)) else {
+                return None;
+            };
+            projections.push(ImplProjection {
+                ty,
+                value,
+                cases: projection.cases.clone(),
+            });
+        }
+        let mut bounds = ImplBounds {
+            traits,
+            projections,
+        };
+        self.project_impl(&mut bounds, owner).then_some(bounds)
+    }
+
+    /// Each of an impl's bounds `<ty as Trait>::Name == value` whose `ty`
+    /// is known fixes `value` to the associated type the crate's impls give
+    /// `ty`, as rustc's projection does, and leaves the bounds still open.
+    /// `false` when one contradicts: `ty` is a case whose associated type
+    /// `value` can't be, so the impl doesn't apply (rustc's E0271).
+    #[cfg(feature = "rust-import")]
+    fn project_impl(
+        &mut self,
+        bounds: &mut ImplBounds,
+        owner: Option<&crate::host::facade::Dependency>,
+    ) -> bool {
+        let mut open = Vec::new();
+        for projection in std::mem::take(&mut bounds.projections) {
+            let ty = self.inference.resolve(&projection.ty);
+            if contains_inference(&ty) {
+                open.push(projection);
+                continue;
+            }
+            for (this, value) in projection.cases.iter() {
+                let mut parameters = BTreeMap::new();
+                let (Ok(this), Ok(value)) = (
+                    self.instantiate_host_type(
+                        this,
+                        &mut parameters,
+                        "impl",
+                        Span::NONE,
+                        owner,
+                        None,
+                    ),
+                    self.instantiate_host_type(
+                        value,
+                        &mut parameters,
+                        "impl",
+                        Span::NONE,
+                        owner,
+                        None,
+                    ),
+                ) else {
+                    continue;
+                };
+                let checkpoint = self.inference.checkpoint();
+                if !self.unify_type(&this, &ty) {
+                    self.inference.rollback(checkpoint);
+                    continue;
+                }
+                if !self.unify_type(&value, &projection.value) {
+                    self.inference.rollback(checkpoint);
+                    return false;
+                }
+                self.inference.commit(checkpoint);
+                break;
+            }
+        }
+        bounds.projections = open;
+        true
     }
 
     /// The body's output, when `output` is opaque, as the type its body
@@ -20481,6 +20561,24 @@ impl<'a> Parser<'a> {
             };
             let actual = self.inference.resolve(&argument);
             let owner = owner.as_ref();
+            // `P: Into<T>` of the item's own `T`, which core's `impl<T>
+            // From<T> for T` ties to `P`: while `T` is open, the impls of
+            // `From<P>` for any type are as many candidates, and rustc
+            // fixes `T` from a later bound, as `image(&handle)`'s `Handle`
+            // is the renderer's. Only a `T` nothing else fixes by the
+            // body's end is `P`.
+            #[cfg(feature = "rust-import")]
+            if let [case] = relation.cases()
+                && matches!(case.this(), crate::host::signature::Pattern::Variable(_))
+                && let [crate::host::signature::Pattern::Parameter(target)] = relation.arguments()
+                && let Some(target) = parameters.get(target)
+                && matches!(self.inference.resolve(target), Ty::Infer(_))
+                && !matches!(actual, Ty::Int(_) | Ty::Float(_))
+            {
+                self.structural_defaults
+                    .push((target.clone(), actual.clone(), span));
+                continue;
+            }
             let mut matched = None;
             let mut ambiguous = false;
             for case in relation.cases() {
@@ -55041,9 +55139,23 @@ struct ClosureScope {
 }
 
 /// An impl's where-clause bounds at an instance (D604): each bounded
-/// type, the bound's trait identity and the trait's arguments.
+/// type, the bound's trait identity and the trait's arguments, then each
+/// bound that fixes an associated type (`ImplProjection`).
 #[cfg(feature = "rust-import")]
-type ImplBounds = Vec<(Ty, [u8; 32], Vec<Ty>)>;
+struct ImplBounds {
+    traits: Vec<(Ty, [u8; 32], Vec<Ty>)>,
+    projections: Vec<ImplProjection>,
+}
+
+/// A bound `<ty as Trait>::Name == value` of an impl at an instance, with
+/// the associated type each type `ty` may be gives (`facade::
+/// ImplProjection`).
+#[cfg(feature = "rust-import")]
+struct ImplProjection {
+    ty: Ty,
+    value: Ty,
+    cases: Box<[(crate::host::type_ref::Type, crate::host::type_ref::Type)]>,
+}
 
 /// Why no impl fixed an `impl Trait`'s hidden type (D604): none fits the
 /// type named, or more than one does.
