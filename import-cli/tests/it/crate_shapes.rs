@@ -8,6 +8,7 @@ use std::process::Command;
 use crate::support::Fixture;
 
 static SHAPES: Fixture = Fixture::new("crate-shapes");
+static OWN_LIBRARY: Fixture = Fixture::new("own-library");
 
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
@@ -17,10 +18,15 @@ fn text(bytes: &[u8]) -> String {
 /// by `cargo run` and by `rawr-import run`: both print `expected`.
 fn runs_as_cargo_does(main: &str, expected: &str) {
     let program = SHAPES.read(&format!("mains/{main}.rs"));
-    let root = SHAPES.lease(&[("src/main.rs", &program)]);
+    lane_runs_as_cargo_does(&SHAPES.lease(&[("src/main.rs", &program)]), expected);
+}
+
+/// The project at `root`, run by `cargo run` and by `rawr-import run`:
+/// both print `expected`.
+fn lane_runs_as_cargo_does(root: &std::path::Path, expected: &str) {
     let native = Command::new("cargo")
         .args(["run", "--quiet"])
-        .current_dir(&root)
+        .current_dir(root)
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .output()
@@ -31,7 +37,7 @@ fn runs_as_cargo_does(main: &str, expected: &str) {
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&*root)
+        .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -265,4 +271,14 @@ fn a_formats_borrow_lasts_as_long_as_its_output() {
     );
     assert!(!stdout.contains("start"), "{stdout}");
     assert!(stderr.contains("E0502"), "{stderr}");
+}
+
+/// A package's marked binary names the package's library by its crate
+/// name, as Cargo builds the binary with the library as a dependency
+/// (#1164): it calls the library's `run`, generic over the binary's own
+/// state and message types, with its own functions, and uses the
+/// library's type by a `use` and by its path.
+#[test]
+fn a_marked_binary_names_its_packages_library_by_the_crate_name() {
+    lane_runs_as_cargo_does(&OWN_LIBRARY.lease(&[]), "floor 2 after 4 trips\ntrue\n");
 }
