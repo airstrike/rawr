@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-06",
-  "version": "0.3.162",
+  "version": "0.3.163",
   "examples": {
     "running": 29,
     "total": 56,
@@ -66,7 +66,7 @@
         {"id":"macro-crate-roots","name":"Macro $crate roots","start":37,"size":2,"state":"done","note":"column! without demand","issues":[281,404],"milestone":"0.4"},
         {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"done","note":"Extract once per crate","issues":[],"milestone":"0.4"},
         {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Classification and facade reuse remain","issues":[271,367,369,370,372,1011,1012,1025,1026],"milestone":"0.4"},
-        {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"now","note":"Facade-plan invalidation remains","issues":[252,254,276],"milestone":"0.4"},
+        {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"now","note":"Facade-plan invalidation remains","issues":[252,254,276,1097],"milestone":"0.4"},
         {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"done","note":"Saves read whole crates with no nightly","issues":[398,402,281],"milestone":"0.4"},
         {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classification is about 1% of a warm check","issues":[],"milestone":"0.4"}
       ]
@@ -94,7 +94,7 @@
         {"id":"struct-literals-live-edits","name":"Struct literals and live edits","start":44,"size":2,"state":"next","note":"Not started","issues":[325,326],"milestone":"0.4"},
         {"id":"projections-function-values","name":"Projections and function values","start":44,"size":3,"state":"now","note":"#317 and #319 remain","issues":[317,318,319,327],"milestone":"0.4"},
         {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"now","note":"17 examples pass check but their runner doesn't build (#951 #955 #957)","issues":[335,336,337,339,340,338,951,955,957,1081,1082],"milestone":"0.4"},
-        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"now","note":"5 crash after a frame, 2 panic at start, 18 fail check (#952 #953 #954 #956 #958)","issues":[283,314,328,334,345,593,952,953,954,956,958,971,973,974,975,976,979,980,981,983,984,985,986,987,988,990,991,992,993,994,995,996,997,1003,1004,1005,1006,1007,1008,1009,1010,1014,1017,1018,1022,1023,1027,1030,1031,1032,1041,1043,1044,1050,1051,1055,1058,1059,1060,1061,1069,1070,1071,1072,1073,1074,1075,1083,1084,1085],"milestone":"0.4"},
+        {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"now","note":"5 crash after a frame, 2 panic at start, 18 fail check (#952 #953 #954 #956 #958)","issues":[283,314,328,334,345,593,952,953,954,956,958,971,973,974,975,976,979,980,981,983,984,985,986,987,988,990,991,992,993,994,995,996,997,1003,1004,1005,1006,1007,1008,1009,1010,1014,1017,1018,1022,1023,1027,1030,1031,1032,1041,1043,1044,1050,1051,1055,1058,1059,1060,1061,1069,1070,1071,1072,1073,1074,1075,1083,1084,1085,1098,1099,1100],"milestone":"0.4"},
         {"id":"opaque-values","name":"A crate's `impl Trait` values","start":47,"size":3,"state":"now","note":"Borrowing opaque outputs live in regions through wrapper fns (#936); layout starts its runner. Slots and members next (#965)","issues":[845,885,886,887,912,913,916,917,936,943,965,966,967]}
       ]
     },

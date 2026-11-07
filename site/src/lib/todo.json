@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.162",
+  "version": "0.3.163",
   "examples": {
     "running": 29,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.163",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"`rawr check` no longer overflows its stack on iced's gallery, markdown and screenshot: a trait method's type parameter whose bound sets an associated type to the method's `Self`, as image's `copy_from<O: GenericImageView<Pixel = Self::Pixel>>` does, reads that associated type once, as rustc does, and a crate member whose closure names a type parameter it doesn't declare, as rayon's `from_par_iter` gives one, is left out instead of panicking.","issues":[1069]}
+        ]
+      },
       {
         "version": "0.3.162",
         "date": "2026-11-06",
@@ -2608,7 +2615,7 @@
     {"issue":1066,"title":"The site deploy's snippet check fails on 'Durable Object reset because its code was updated'","state":"closed","category":"Health","release":"0.3.161"},
     {"issue":1067,"title":"An enum variant field &'a str of a crate type can't be built (serde's Unexpected::Str(&text))","state":"open","category":"Divergences from rustc"},
     {"issue":1068,"title":"The import path copies the engine's host registry once per compile","state":"open","category":"Health"},
-    {"issue":1069,"title":"rawr check overflows its stack on iced's gallery, markdown and screenshot","state":"open","category":"Health"},
+    {"issue":1069,"title":"rawr check overflows its stack on iced's gallery, markdown and screenshot","state":"closed","category":"Health","release":"0.3.163"},
     {"issue":1070,"title":"delineate: the runner fails with E0282 on a native handle taken from the arena","state":"open","category":"Divergences from rustc"},
     {"issue":1071,"title":"ferris: the runner fails with E0271 on Renderer::Handle == &str (an image handle from a str)","state":"open","category":"Divergences from rustc"},
     {"issue":1072,"title":"url_handler: the runner fails with E0283 at iced::application(..) with an undetermined renderer argument","state":"open","category":"Divergences from rustc"},
@@ -2635,7 +2642,13 @@
     {"issue":1093,"title":"Commands reference misses exit status 2 and some CLI forms; per-command --help prints the top-level help","state":"open","category":"Health"},
     {"issue":1094,"title":"Agents page leaves out some MCP tool arguments and defaults","state":"open","category":"Health"},
     {"issue":1095,"title":"rawr-macros comments claim previews render and #[widget] runs","state":"open","category":"Health"},
-    {"issue":1096,"title":"Docs index cards leave out Agents and ratatui","state":"open","category":"Health"}
+    {"issue":1096,"title":"Docs index cards leave out Agents and ratatui","state":"open","category":"Health"},
+    {"issue":1097,"title":"A shared extraction table holds definitions from crates outside its key; another project replays crates it never loaded","state":"open","category":"Health"},
+    {"issue":1098,"title":"markdown: code_block's opaque type gets 4 arguments where 5 are declared (panic in host/type_ref.rs:790)","state":"open","category":"Divergences from rustc"},
+    {"issue":1099,"title":"gallery: image(handle) fixes Handle from its argument, not from the renderer (54 x E0271)","state":"open","category":"Divergences from rustc"},
+    {"issue":1100,"title":"screenshot: &screenshot.rgba (a &Bytes) isn't deref-coerced to &[u8]","state":"open","category":"Divergences from rustc"},
+    {"issue":1101,"title":"In a program's impl of a crate trait method, a parameter's projection bound to the impl's Self isn't the impl's type","state":"open","category":"Divergences from rustc"},
+    {"issue":1102,"title":"A program impl's generic method that takes &O writes type Of<'x> = _ (E0121)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -2858,7 +2871,8 @@
           "issues": [
             {"number":252,"title":"A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"open"},
             {"number":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"closed"},
-            {"number":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"closed"}
+            {"number":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"closed"},
+            {"number":1097,"title":"A shared extraction table holds definitions from crates outside its key; another project replays crates it never loaded","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3168,7 +3182,7 @@
             {"number":1059,"title":"A crate's facts are the same whether Cargo rebuilt it or reused it, so caches keyed on them no…","state":"closed"},
             {"number":1060,"title":"game_of_life: Widget::map on an impl Widget a program function returns","state":"open"},
             {"number":1061,"title":"todos: std::env::current_dir isn't run","state":"open"},
-            {"number":1069,"title":"rawr check overflows its stack on iced's gallery, markdown and screenshot","state":"open"},
+            {"number":1069,"title":"rawr check overflows its stack on iced's gallery, markdown and screenshot","state":"closed"},
             {"number":1070,"title":"delineate: the runner fails with E0282 on a native handle taken from the arena","state":"open"},
             {"number":1071,"title":"ferris: the runner fails with E0271 on Renderer::Handle == &str (an image handle from a str)","state":"open"},
             {"number":1072,"title":"url_handler: the runner fails with E0283 at iced::application(..) with an undetermined renderer argument","state":"open"},
@@ -3177,7 +3191,10 @@
             {"number":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open"},
             {"number":1083,"title":"progress_bar's runner: transition(..) in a region closure gives 'lifetime may not live long enough'","state":"open"},
             {"number":1084,"title":"the_matrix's runner: WeightedIndex<_> where X is fixed only through I::Item: SampleBorrow<X>","state":"open"},
-            {"number":1085,"title":"A generic program impl of a crate trait isn't generated for a crate function's bound at a concrete argument","state":"open"}
+            {"number":1085,"title":"A generic program impl of a crate trait isn't generated for a crate function's bound at a concrete argument","state":"open"},
+            {"number":1098,"title":"markdown: code_block's opaque type gets 4 arguments where 5 are declared (panic in host/type_ref.rs:790)","state":"open"},
+            {"number":1099,"title":"gallery: image(handle) fixes Handle from its argument, not from the renderer (54 x E0271)","state":"open"},
+            {"number":1100,"title":"screenshot: &screenshot.rgba (a &Bytes) isn't deref-coerced to &[u8]","state":"open"}
           ],
           "milestone": "0.4"
         },

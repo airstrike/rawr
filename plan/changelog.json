@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.163",
+      "date": "2026-11-06",
+      "entries": [
+        {"text":"`rawr check` no longer overflows its stack on iced's gallery, markdown and screenshot: a trait method's type parameter whose bound sets an associated type to the method's `Self`, as image's `copy_from<O: GenericImageView<Pixel = Self::Pixel>>` does, reads that associated type once, as rustc does, and a crate member whose closure names a type parameter it doesn't declare, as rayon's `from_par_iter` gives one, is left out instead of panicking.","issues":[1069]}
+      ]
+    },
+    {
       "version": "0.3.162",
       "date": "2026-11-06",
       "entries": [
