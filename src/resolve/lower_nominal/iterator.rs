@@ -1063,31 +1063,37 @@ impl Parser<'_> {
                 let next = self.temporary("item");
                 let (open, item) = match member.as_str() {
                     "map" => (
-                        origin::Fragment::plain(format!("let {next} = {f}.call({x}); ")),
+                        origin::Fragment::plain(format!("let {next} = {f}.__rawr_call({x}); ")),
                         self.inference.resolve(&output),
                     ),
                     "filter" => (
-                        origin::Fragment::plain(format!("if !{f}.call({x}) {{ continue; }} ")),
+                        origin::Fragment::plain(format!(
+                            "if !{f}.__rawr_call({x}) {{ continue; }} "
+                        )),
                         item,
                     ),
                     "take_while" => (
-                        origin::Fragment::plain(format!("if !{f}.call({x}) {stop} ")),
+                        origin::Fragment::plain(format!("if !{f}.__rawr_call({x}) {stop} ")),
                         item,
                     ),
                     "skip_while" => {
                         let skipping = self.bind_state(&mut pipeline, "skipping", "true".into());
                         (
                             origin::Fragment::plain(format!(
-                                "if {skipping} {{ if {f}.call({x}) {{ continue; }} {skipping} = false; }} "
+                                "if {skipping} {{ if {f}.__rawr_call({x}) {{ continue; }} {skipping} = false; }} "
                             )),
                             item,
                         )
                     }
-                    "inspect" => (origin::Fragment::plain(format!("{f}.call({x}); ")), item),
+                    "inspect" => (
+                        origin::Fragment::plain(format!("{f}.__rawr_call({x}); ")),
+                        item,
+                    ),
                     _ => {
                         let option = self.temporary("option");
-                        let mut open =
-                            origin::Fragment::plain(format!("let {option} = {f}.call({x}); if !"));
+                        let mut open = origin::Fragment::plain(format!(
+                            "let {option} = {f}.__rawr_call({x}); if !"
+                        ));
                         let test = is_some(self, &option);
                         open.push(test);
                         open.push_text(format!(" {{ continue; }} let {next} = "));
@@ -1171,7 +1177,7 @@ impl Parser<'_> {
                 self.coerce_expr(&Ty::Int(Int::Usize), &mut arguments[0])?;
                 let step = self.bind(&mut pipeline, "step", arguments[0].rendered_source());
                 pipeline.setup.push_text(format!(
-                    "if {step} == 0 {{ throw \"assertion failed: step != 0\"; }} "
+                    "if {step} == 0 {{ __rawr_throw \"assertion failed: step != 0\"; }} "
                 ));
                 match pipeline.source.take() {
                     Some(Source::Values { values, .. }) => {
@@ -1365,7 +1371,7 @@ impl Parser<'_> {
                     None => self.inference.resolve(&item),
                 };
                 let inner = match f {
-                    Some((f, _)) => format!("{f}.call({x})"),
+                    Some((f, _)) => format!("{f}.__rawr_call({x})"),
                     None => x.clone(),
                 };
                 let next = self.temporary("item");
@@ -1664,7 +1670,8 @@ impl Parser<'_> {
                 self.coerce_expr(&expected, &mut arguments[1])?;
                 let acc = self.bind(&mut pipeline, "acc", arguments[0].rendered_source());
                 let f = self.bind(&mut pipeline, "function", arguments[1].rendered_source());
-                let sink = origin::Fragment::plain(format!("{acc} = {f}.call({acc}, {x}); "));
+                let sink =
+                    origin::Fragment::plain(format!("{acc} = {f}.__rawr_call({acc}, {x}); "));
                 (
                     self.consume(&pipeline, "", sink, &acc),
                     self.inference.resolve(&accumulator),
@@ -1674,7 +1681,7 @@ impl Parser<'_> {
                 arity(1, &arguments)?;
                 self.coerce_expr(&function(vec![item.clone()], Ty::Unit), &mut arguments[0])?;
                 let f = self.bind(&mut pipeline, "function", arguments[0].rendered_source());
-                let sink = origin::Fragment::plain(format!("{f}.call({x}); "));
+                let sink = origin::Fragment::plain(format!("{f}.__rawr_call({x}); "));
                 (self.consume(&pipeline, "", sink, "()"), Ty::Unit)
             }
             "any" | "all" => {
@@ -1688,7 +1695,7 @@ impl Parser<'_> {
                     ("true", "!", "false")
                 };
                 let sink = origin::Fragment::plain(format!(
-                    "if {test}{f}.call({x}) {{ {found} = {set}; {stop} }} "
+                    "if {test}{f}.__rawr_call({x}) {{ {found} = {set}; {stop} }} "
                 ));
                 let source =
                     self.consume(&pipeline, &format!("let {found} = {start};"), sink, &found);
@@ -1705,7 +1712,7 @@ impl Parser<'_> {
                         self.coerce_expr(&expected, &mut arguments[0])?;
                         let f =
                             self.bind(&mut pipeline, "function", arguments[0].rendered_source());
-                        sink.push_text(format!("if {f}.call({x}) {{ {found} = "));
+                        sink.push_text(format!("if {f}.__rawr_call({x}) {{ {found} = "));
                         let value = some(self, &x);
                         sink.push(value);
                         sink.push_text(format!("; {stop} }} "));
@@ -1720,7 +1727,7 @@ impl Parser<'_> {
                         let f =
                             self.bind(&mut pipeline, "function", arguments[0].rendered_source());
                         let at = self.bind(&mut pipeline, "at", "0".into());
-                        sink.push_text(format!("if {f}.call({x}) {{ {found} = "));
+                        sink.push_text(format!("if {f}.__rawr_call({x}) {{ {found} = "));
                         let value = some(self, &at);
                         sink.push(value);
                         sink.push_text(format!("; {stop} }} {at} += 1; "));
@@ -1736,7 +1743,7 @@ impl Parser<'_> {
                         let f =
                             self.bind(&mut pipeline, "function", arguments[0].rendered_source());
                         let option = self.temporary("option");
-                        sink.push_text(format!("let {option} = {f}.call({x}); if "));
+                        sink.push_text(format!("let {option} = {f}.__rawr_call({x}); if "));
                         let test = is_some(self, &option);
                         sink.push(test);
                         sink.push_text(format!(" {{ {found} = {option}; {stop} }} "));
@@ -1772,7 +1779,7 @@ impl Parser<'_> {
                                 let expected = function(vec![reference(&item)], Ty::Bool);
                                 self.coerce_expr(&expected, &mut arguments[0])?;
                                 let mut test = arguments[0].rendered_source().surrounded("(", ")");
-                                test.push_text(format!(".call({first})"));
+                                test.push_text(format!(".__rawr_call({first})"));
                                 (Some(test), Ty::Option(Box::new(item)))
                             }
                             _ => {
@@ -1935,7 +1942,7 @@ impl Parser<'_> {
                 let f = self.bind(&mut pipeline, "function", arguments[0].rendered_source());
                 let (yes, no) = (self.temporary("yes"), self.temporary("no"));
                 let sink = origin::Fragment::plain(format!(
-                    "if {f}.call({x}) {{ {yes}.push({x}); }} else {{ {no}.push({x}); }} "
+                    "if {f}.__rawr_call({x}) {{ {yes}.push({x}); }} else {{ {no}.push({x}); }} "
                 ));
                 let vec = Ty::sequence(sequence::Kind::Vec, item);
                 let source = self.consume(

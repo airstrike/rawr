@@ -381,28 +381,6 @@ impl Engine {
                         );
                     }
 
-                    // global::VARIABLE
-                    if ns.path.len() == 1 && ns.root() == crate::engine::KEYWORD_GLOBAL {
-                        if let Some(ref constants) = global.constants
-                            && let Some(value) = crate::func::locked_write(constants)
-                                .unwrap()
-                                .get_mut(var_name.as_str())
-                        {
-                            let mut target: Target = value.clone().into();
-                            // Module variables are constant
-                            target.as_mut().set_access_mode(AccessMode::ReadOnly);
-                            return Ok(target);
-                        }
-
-                        let sep = crate::engine::NAMESPACE_SEPARATOR;
-
-                        return Err(ERR::ErrorVariableNotFound(
-                            format!("{ns}{sep}{var_name}"),
-                            ns.position(),
-                        )
-                        .into());
-                    }
-
                     Err(ERR::ErrorModuleNotFound(ns.to_string(), ns.position()).into())
                 }
 

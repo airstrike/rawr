@@ -2056,7 +2056,15 @@ fn canonical_file(field: &'static str, path: &Path) -> Result<PathBuf> {
         path: path.to_path_buf(),
         source,
     })?;
-    if !canonical.is_file() || canonical != normalized {
+    // On a case-insensitive file system, as macOS's is by default, a path
+    // written in another case (`Semibold` for `SemiBold`) opens the same
+    // file, as it does for rustc: it differs from the canonical path but
+    // no component of it is a symlink.
+    let same_file = canonical == normalized
+        || (canonical.is_file()
+            && reject_symlinks(&normalized).is_ok()
+            && same_inode(&normalized, &canonical));
+    if !canonical.is_file() || !same_file {
         return Err(Error::Path {
             field,
             path: path.to_path_buf(),
@@ -2109,6 +2117,23 @@ fn normalized_absolute(path: &Path) -> Result<PathBuf> {
         }
     }
     Ok(normalized)
+}
+
+/// Whether two paths name one file: the same device and inode.
+fn same_inode(first: &Path, second: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (fs::metadata(first), fs::metadata(second)) {
+            (Ok(first), Ok(second)) => first.dev() == second.dev() && first.ino() == second.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (first, second);
+        false
+    }
 }
 
 fn reject_symlinks(path: &Path) -> Result<()> {
@@ -2632,5 +2657,36 @@ mod build_message_tests {
             replaced
         );
         fs::remove_file(&path).expect("the memo fixture is retired");
+    }
+}
+
+#[cfg(test)]
+mod canonical_file_tests {
+    use std::fs;
+
+    /// A path written in another case names the file on a case-insensitive
+    /// file system, as rustc's `include_bytes!` reads it; a symlink to the
+    /// file is still refused.
+    #[test]
+    fn a_path_in_another_case_is_the_file_and_a_symlink_is_not() {
+        let root = std::env::temp_dir().join(format!("rawr-case-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("assets")).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let file = root.join("assets/Font-SemiBold.ttf");
+        fs::write(&file, b"font").unwrap();
+        assert_eq!(super::canonical_file("include", &file).unwrap(), file);
+        let other_case = root.join("src/../assets/Font-Semibold.ttf");
+        if root.join("assets/Font-Semibold.ttf").is_file() {
+            fs::create_dir_all(root.join("src")).unwrap();
+            assert_eq!(super::canonical_file("include", &other_case).unwrap(), file);
+        }
+        #[cfg(unix)]
+        {
+            let link = root.join("assets/link.ttf");
+            std::os::unix::fs::symlink(&file, &link).unwrap();
+            assert!(super::canonical_file("include", &link).is_err());
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }

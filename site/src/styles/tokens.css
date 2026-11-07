@@ -1,0 +1,105 @@
+/* rawr's palette and type, in one place, for every page: the work plan
+   (/todo) imports this file alone, and global.css imports it for the rest.
+   Black on white with one red, as the work plan has always been drawn. The
+   dark values are airstrike.fyi's: its background, text and red.
+
+   The theme is the system's (prefers-color-scheme) until the visitor picks
+   one with the site bar's switch; the pick is <html data-theme="dark|light">,
+   which an inline script in <head> sets before the first paint (theme-init.ts). */
+
+:root,
+[data-theme="light"] {
+  /* The page, and the text and rules on it. */
+  --paper: #ffffff;
+  --ink: #000000;
+  --rule: #000000;
+  /* Hairlines between rows, and secondary text. */
+  --grid: #e8e8e8;
+  --quiet: #6b6b6b;
+  /* The one accent: work under way, the current tab, keywords, errors. */
+  --red: #e4002b;
+  --on-red: #ffffff;
+  /* Code blocks, inline code and editors; terminal strips under a file. */
+  --wash: #f4f4f4;
+  --term: #ebebeb;
+  /* A menu or a card that sits over the page. */
+  --raised: #ffffff;
+  --shadow: 0 2px 24px rgba(0, 0, 0, 0.1);
+  /* Literals in code and a program's output. */
+  --lit: #0062b1;
+  /* The landing page's rawr side, and its terminal strip. */
+  --rawr-pane: #fdf3f5;
+  --rawr-term: #f6e6ea;
+  /* A linked changelog entry. */
+  --hl: #fff5c2;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #1a1a1a;
+    --ink: #e8e8e8;
+    --rule: #e8e8e8;
+    --grid: #333333;
+    --quiet: #999999;
+    --red: #f87171;
+    --on-red: #1a1a1a;
+    --wash: #222222;
+    --term: #111111;
+    --raised: #222222;
+    --shadow: 0 2px 24px rgba(0, 0, 0, 0.4);
+    --lit: #00aaff;
+    --rawr-pane: #261d1f;
+    --rawr-term: #1d1517;
+    --hl: #4a4020;
+    color-scheme: dark;
+  }
+}
+
+[data-theme="dark"] {
+  --paper: #1a1a1a;
+  --ink: #e8e8e8;
+  --rule: #e8e8e8;
+  --grid: #333333;
+  --quiet: #999999;
+  --red: #f87171;
+  --on-red: #1a1a1a;
+  --wash: #222222;
+  --term: #111111;
+  --raised: #222222;
+  --shadow: 0 2px 24px rgba(0, 0, 0, 0.4);
+  --lit: #00aaff;
+  --rawr-pane: #261d1f;
+  --rawr-term: #1d1517;
+  --hl: #4a4020;
+  color-scheme: dark;
+}
+
+:root {
+  --sans: "Abitaro Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* The type scale: labels are uppercase and tracked; headings are heavy and tight. */
+  --fs-label: 12px;
+  --fs-small: 13px;
+  --fs-base: 14px;
+  --fs-read: 15px;
+  --fs-h2: 20px;
+  --fs-head: 28px;
+  --fs-title: clamp(36px, 5vw, 56px);
+  --fs-display: clamp(96px, 11vw, 128px);
+  --w-base: 450;
+  --w-strong: 700;
+  --w-heavy: 800;
+  --track-label: 0.08em;
+  --track-head: -0.03em;
+  --track-display: -0.05em;
+  /* Rules: a section's top, a heading's top, and a row's. */
+  --rule-thick: 4px;
+  --rule-mid: 2px;
+  /* The page's side margin. */
+  --pad: 40px;
+}
+
+@media (max-width: 640px) {
+  :root { --pad: 16px; }
+}

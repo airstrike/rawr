@@ -280,7 +280,7 @@ pub(super) fn write_glue(
     let parts = format!("{SENTINEL}{}", ops.len());
     ops.push(ExecutableOp::Prelude(PreludeOp::DropParts));
     let mut text = format!(
-        "private fn {GLUE}(__rawr_value, __rawr_shape) {{\nlet __rawr_type = \
+        "__rawr_private fn {GLUE}(__rawr_value, __rawr_shape) {{\nlet __rawr_type = \
          {type_index}(__rawr_value);\n"
     );
     for ((owner, _), definitions) in models
@@ -1120,7 +1120,7 @@ impl Parser<'_> {
                 Holder::Local(field.binding.to_string(), vec![field.slot])
             }
             Some(_) => Holder::Place,
-            None if subject.source.as_str() == "this" => Holder::Local("this".into(), Vec::new()),
+            None if subject.source.as_str() == "self" => Holder::Local("self".into(), Vec::new()),
             None => {
                 // A value made for the match: it drops when the match ends,
                 // what the pattern moved out aside.
@@ -1244,7 +1244,7 @@ impl Parser<'_> {
         whole: &str,
         dereferenced: bool,
     ) -> Result<(String, String, bool), Error> {
-        let made = value.lvalue.is_none() && value.source.as_str() != "this" && !dereferenced;
+        let made = value.lvalue.is_none() && value.source.as_str() != "self" && !dereferenced;
         let holder = if made {
             Holder::Local(whole.into(), Vec::new())
         } else {

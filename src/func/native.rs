@@ -516,19 +516,17 @@ impl<'a> NativeCallContext<'a> {
         let op_token = Token::lookup_symbol_from_syntax(fn_name);
         let args_len = args.len();
 
-        if native_only {
-            // A reserved name is native-only *because* it is reserved, and the
-            // ones rawr answers by name rather than by dispatch are all
-            // reserved — so this branch would otherwise route straight past
-            // their only implementation. `type_of` has none to find afterwards,
-            // and reported itself as an unknown function.
-            if let Some(result) =
-                self.engine()
-                    .exec_syntactic_fn_call(fn_name, args, self.call_position())
-            {
-                return result;
-            }
+        // The names rawr answers by name rather than by dispatch
+        // (`__rawr_type_of`) have no registered implementation: dispatch
+        // would report them unknown.
+        if let Some(result) =
+            self.engine()
+                .exec_syntactic_fn_call(fn_name, args, self.call_position())
+        {
+            return result;
+        }
 
+        if native_only {
             return self
                 .engine()
                 .exec_native_fn_call(

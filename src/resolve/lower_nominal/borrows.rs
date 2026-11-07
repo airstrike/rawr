@@ -691,7 +691,7 @@ impl Parser<'_> {
                 )
             });
         let parameters: Vec<_> = receiver
-            .map(|span| (ImmutableString::from("this"), span, own.receiver, true))
+            .map(|span| (ImmutableString::from("self"), span, own.receiver, true))
             .into_iter()
             .chain(named)
             .collect();

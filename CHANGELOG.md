@@ -8,6 +8,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A package with marked modules builds its native side with its `[features]`, as `cargo run` does: its default features are on, code under `#[cfg(feature = "…")]` builds as under Cargo, and an optional dependency a feature enables is there, inherited from a workspace or not. (#1144)
 - A build script that declares modules with `mod`, at `build.rs` or wherever `build` puts it, finds them beside it, nested modules included. (#1143)
 - A dependency whose build script isn't named `build.rs` no longer loses its dependency information in rawr's store. (#1147)
+- A call through a crate the program doesn't depend on, as `tokio::spawn(..)` without tokio, is rustc's E0433 naming that crate, and a panic in a native async call reaches you as cargo shows it. (#1149)
+- A crate whose method returns an `impl Trait`, such as polars-core's `downcast_iter_mut`, no longer crashes rawr-import's driver with a rustc internal error about a missing visibility. (#1151)
+- The whole site now has the work plan's look: Abitaro Sans, black on white with one red, heavy headings and thick rules. Every page, /todo included, has a dark mode that follows the system, with a switch in the site bar that remembers the choice. (#1155)
+- The playground's examples have a Rustlings group: 13 programs from the rustlings solutions (ownership, enums, Option, strings, HashMap, errors with ? and Box<dyn Error>, traits, lifetimes, iterators, Box, Rc and TryFrom), each crediting its source under rustlings' MIT licence. (#1161)
 
 ## 0.3.171 (2026-11-07)
 

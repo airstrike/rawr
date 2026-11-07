@@ -3,24 +3,24 @@
   html:has(body.play), body.play { height: 100%; }
   body.play { display: flex; flex-direction: column; overflow: hidden; }
 }
-body.play { font: 15px/1.5 var(--sans); }
-body.play a { color: var(--ink); }
-body.play .bar a { color: var(--dim); }
-body.play .bar a:hover, body.play .bar a[aria-current] { color: var(--text); }
+body.play { font-size: var(--fs-base); line-height: 1.5; }
 #playground { display: flex; flex: 1; min-height: 0; flex-direction: column; }
-.playcap, .playfoot { font: 11px/1.4 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
-.playfoot a { color: var(--ink); }
+.playcap, .playfoot { font-size: var(--fs-label); font-weight: var(--w-strong); letter-spacing: var(--track-label); text-transform: uppercase; color: var(--quiet); }
+.playcap { color: var(--ink); }
+.playcap #status { color: var(--quiet); font-weight: 600; }
+.playfoot a { color: var(--quiet); border-bottom-color: var(--grid); }
+.playfoot a:hover { color: var(--ink); border-bottom-color: currentColor; }
 
 .editor { display: flex; flex-direction: column; min-width: 0; }
 .editor > .cm-editor { flex: 1; min-height: 0; }
 
-.out { flex: 1; min-height: 200px; border: 1px solid var(--line); background: var(--inset); display: grid; place-items: center; overflow: auto; padding: 16px; }
+.out { flex: 1; min-height: 200px; border: 1px solid var(--grid); background: var(--wash); display: grid; place-items: center; overflow: auto; padding: 16px; }
 @media (min-width: 768px) { .out { min-height: 240px; } }
-.out pre { place-self: start stretch; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 var(--mono); color: var(--text); }
-.out pre.error { border-left: 2px solid var(--pink); padding-left: 12px; }
-.out .note { color: var(--dim); }
+.out pre { place-self: start stretch; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 var(--mono); color: var(--ink); }
+.out pre.error { border-left: 3px solid var(--red); padding-left: 12px; }
+.out .note { color: var(--quiet); }
 .out img { max-width: 100%; height: auto; }
 .out .drawn { place-self: start stretch; display: grid; gap: 12px; justify-items: center; }
 .out .drawn pre { justify-self: stretch; }
-.term .err { color: var(--err); }
-.term .exit, .term .none, .term .note { color: var(--dim); }
+.term .err { color: var(--red); }
+.term .exit, .term .none, .term .note { color: var(--quiet); }

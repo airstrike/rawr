@@ -15,15 +15,17 @@ use std::{collections::BTreeSet, fmt, num::NonZeroU8};
 
 pub type Precedence = NonZeroU8;
 
-pub const KEYWORD_PRINT: &str = "print";
-pub const KEYWORD_DEBUG: &str = "debug";
-pub const KEYWORD_TYPE_OF: &str = "type_of";
-pub const KEYWORD_EVAL: &str = "eval";
-pub const KEYWORD_FN_PTR: &str = "Fn";
-pub const KEYWORD_FN_PTR_CALL: &str = "call";
-pub const KEYWORD_FN_PTR_CURRY: &str = "curry";
-pub const KEYWORD_IS_SHARED: &str = "is_shared";
-pub const KEYWORD_IS_DEF_VAR: &str = "is_def_var";
+// The old engine's intrinsics, which the lowered script calls by names no
+// Rust name spells.
+pub const KEYWORD_PRINT: &str = "__rawr_print";
+pub const KEYWORD_DEBUG: &str = "__rawr_debug";
+pub const KEYWORD_TYPE_OF: &str = "__rawr_type_of";
+pub const KEYWORD_EVAL: &str = "__rawr_eval";
+pub const KEYWORD_FN_PTR: &str = "__rawr_fn_ptr";
+pub const KEYWORD_FN_PTR_CALL: &str = "__rawr_call";
+pub const KEYWORD_FN_PTR_CURRY: &str = "__rawr_curry";
+pub const KEYWORD_IS_SHARED: &str = "__rawr_is_shared";
+pub const KEYWORD_IS_DEF_VAR: &str = "__rawr_is_def_var";
 /// A move out of a local, which checked Rawr writes where Rust moves a
 /// value that is not `Copy`: the value, with `()` left in the local.
 pub const KEYWORD_MOVE: &str = "__rawr_move";
@@ -74,9 +76,9 @@ pub const KEYWORD_LEND: &str = "__rawr_lend";
 pub const KEYWORD_HELD: &str = "__rawr_in_held_";
 /// The suffix of the local holding a held place's path ([`KEYWORD_HELD`]).
 pub const HELD_STEPS: &str = "_at";
-pub const KEYWORD_IS_DEF_FN: &str = "is_def_fn";
-pub const KEYWORD_THIS: &str = "this";
-pub const KEYWORD_GLOBAL: &str = "global";
+pub const KEYWORD_IS_DEF_FN: &str = "__rawr_is_def_fn";
+/// The receiver of a method in the lowered script: Rust's `self`.
+pub const KEYWORD_THIS: &str = "self";
 pub const FN_GET: &str = "get$";
 pub const FN_SET: &str = "set$";
 pub const FN_IDX_GET: &str = "index$get$";

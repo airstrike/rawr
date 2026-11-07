@@ -66,10 +66,8 @@ self,       Token::SelfValue
 mut,        Token::Mut
 if,         Token::If
 else,       Token::Else
-switch,     Token::Switch
 do,         Token::Do
 while,      Token::While
-until,      Token::Until
 loop,       Token::Loop
 for,        Token::For
 in,         Token::In
@@ -88,9 +86,7 @@ in,         Token::In
 continue,   Token::Continue
 break,      Token::Break
 return,     Token::Return
-throw,      Token::Throw
 try,        Token::Try
-catch,      Token::Catch
 +=,         Token::PlusAssign
 -=,         Token::MinusAssign
 *=,         Token::MultiplyAssign
@@ -108,7 +104,4 @@ catch,      Token::Catch
 **,         Token::PowerOf
 **=,        Token::PowerOfAssign
 fn,         Token::Fn
-private,    Token::Private
-import,     Token::Import
-export,     Token::Export
 as,         Token::As
