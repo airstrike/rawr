@@ -202,6 +202,16 @@ fn a_value_that_stays_on_its_thread_needs_no_send() {
     runs_as_cargo_does("random", "[0, 2, 1, 2, 1, 2, 1, 2, 0, 0, 1, 2] 0\n");
 }
 
+/// An impl's parameter that only a bound on an iterator's items fixes, as
+/// rand's `WeightedIndex::new(weights)` has `I::Item: SampleBorrow<X>`:
+/// an array of integer literals is `[i32; 4]`, so `X` is `i32`, as rustc
+/// infers it, and the distribution's later `sample` names that type
+/// (#1084).
+#[test]
+fn a_bound_on_an_iterators_items_fixes_the_impls_parameter() {
+    runs_as_cargo_does("weighted", "i32 [0, 1, 0, 3, 0, 0]\n");
+}
+
 /// A script impl of a crate trait whose method takes a `&mut` of a type
 /// with a lifetime, as geometry's `update(.., shell: &mut Shell<'_,
 /// Message>)`: native code lends the shell for the call, and the script's
