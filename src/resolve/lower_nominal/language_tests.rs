@@ -7868,13 +7868,14 @@ fn language_an_inclusive_range_of_any_integer_kind_is_a_range_of_it() {
             }
             pub fn run() -> String {
                 let rows: RangeInclusive<usize> = 2..=4;
-                shown(rows)
+                let back: RangeInclusive<isize> = -1..=1;
+                format!("{} {:?}", shown(rows), back)
             }
             run()
         "#,
         )
         .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(value, "2..=4 2..=4");
+    assert_eq!(value, "2..=4 2..=4 -1..=1");
     // A range of one kind is not a range of another: rustc's E0308.
     let error = rejected(
         "use std::ops::RangeInclusive; \

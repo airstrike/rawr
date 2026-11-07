@@ -14859,6 +14859,12 @@ impl<'a> Parser<'a> {
             Ty::Script(id, _) if self.models.implements(trait_name, *id) => true,
             // Rawr's iterator type: a `Range`, a chain, `impl Iterator`.
             Ty::Iter(..) if is_iterator_trait(trait_name) => true,
+            // An integer range a crate holds by value, as itertools'
+            // `Product<I, RangeInclusive<isize>>` does: std's `Iterator`.
+            Ty::InclusiveRange(_) if is_iterator_trait(trait_name) => true,
+            Ty::Range(element) if is_iterator_trait(trait_name) && matches!(**element, Ty::Int(_)) => {
+                true
+            }
             // An imported type the crate implements `Iterator`,
             // `PartialOrd` or `Ord` for.
             Ty::Host { proof, .. }
@@ -44835,8 +44841,12 @@ impl<'a> Parser<'a> {
                 source
             }
             // `Range<usize>` a crate gives (#707): its `Range<i64>` value,
-            // which shows as Rust's `0..5` does.
+            // which shows as Rust's `0..5` does, and an integer `a..=b` of
+            // any kind, its `RangeInclusive<i64>`.
             Ty::Range(element) if matches!(**element, Ty::Int(_)) => {
+                self.prelude_op(PreludeOp::GenericDebug, [value])
+            }
+            Ty::InclusiveRange(_) => {
                 self.prelude_op(PreludeOp::GenericDebug, [value])
             }
             // A facade type providing `Debug`: Rust's text, as its facade
