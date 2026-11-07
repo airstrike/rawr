@@ -63,6 +63,11 @@ pub struct Plan {
     /// at a scope frame region's shorter lifetime.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     covariant: bool,
+    /// The positions, among its type parameters, of those a field's boxed
+    /// callable gives, as `view: Box<dyn Fn(&D) -> W>` of iced's `Lazy<'a,
+    /// W, D>` gives `W`: a script closure gives them at `'static`.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    given: Vec<u32>,
     /// The crate implements `Iterator` for the type: a `for` loop walks it
     /// by its `next` (D558 slice 2).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -160,6 +165,7 @@ impl Plan {
             hash,
             lifetimes: 0,
             covariant: false,
+            given: Vec::new(),
             iterator: false,
             partial_ord: false,
             ord: false,
@@ -292,6 +298,20 @@ impl Plan {
     #[must_use]
     pub const fn covariant(&self) -> bool {
         self.covariant
+    }
+
+    /// The plan, with the positions of the type parameters a field's boxed
+    /// callable gives.
+    pub(crate) fn with_given(mut self, given: Vec<u32>) -> Self {
+        self.given = given;
+        self
+    }
+
+    /// The positions, among its type parameters, of those a field's boxed
+    /// callable gives.
+    #[must_use]
+    pub fn given(&self) -> &[u32] {
+        &self.given
     }
 
     /// Whether the crate implements `Iterator` for the type.

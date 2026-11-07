@@ -98,10 +98,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // environment, as `Self::Scalar` in an impl that sets it. Schema 43 gives a
 // blanket implementation's application its associated types, normalized in
 // the context it applies through. Schema 48 gives the `impl Trait` a trait's
-// method gives from its default body as the trait's opaque type.
+// method gives from its default body as the trait's opaque type. Schema 55
+// marks a type parameter a struct's or an enum's boxed callable field gives.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 54;
+const PROTOCOL_SCHEMA: u32 = 55;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -274,6 +275,14 @@ struct AnonymousAssociatedSupport {
     parent: DefId,
     method: Symbol,
     disambiguator: u32,
+}
+
+/// Whether `ty` is an associated type of a type parameter, as `I::Item`
+/// of a parameter `I` is.
+fn parameter_projection(ty: Ty<'_>) -> bool {
+    matches!(ty.kind(), ty::Alias(_, alias)
+        if matches!(alias.kind, ty::AliasTyKind::Projection { .. })
+            && matches!(alias.self_ty().kind(), ty::Param(_)))
 }
 
 fn take_owned_candidate_bucket<K, V>(index: &mut HashMap<K, Vec<V>>, key: &K) -> Option<Vec<V>>
@@ -642,6 +651,10 @@ enum ParameterKind {
     Type {
         bounds: Vec<Bound>,
         default: Explicit<Type>,
+        /// Whether a field's boxed callable of a struct's or an enum's
+        /// gives it, as `view: Box<dyn Fn(&D) -> W>` gives `W`. False for
+        /// every other owner.
+        given: bool,
     },
     Const {
         ty: Type,
@@ -2068,6 +2081,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         self.budget.items(1)?;
         let class = match obligation.self_ty.kind() {
             ty::Param(_) => engine::Class::Parameter,
+            _ if parameter_projection(obligation.self_ty) => engine::Class::Parameter,
             ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Alias(..) => {
                 engine::Class::Inert
             }
@@ -2094,6 +2108,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             ty::Param(parameter) if selected => {
                 self.request_relation_implementations(obligation)?;
                 return self.process_scalar_predicate_obligation(obligation, *parameter);
+            }
+            // A bound on a parameter's projection that ties another
+            // parameter, as rand's `I::Item: SampleBorrow<X>`: the trait's
+            // implementations, as for a parameter's own bound (#1084).
+            _ if selected && parameter_projection(obligation.self_ty) => {
+                return self.request_relation_implementations(obligation);
             }
             ty::Param(_) | ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Alias(..) => {
                 return Ok(())
@@ -4331,6 +4351,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             DefKind::Struct | DefKind::Enum | DefKind::Union
         )
         .then(|| self.tcx.variances_of(def_id));
+        let given = self.given_parameters(def_id);
         let mut parameters = Vec::new();
         for parameter in &generics.own_params {
             let name = self.budget.owned(parameter.name.as_str())?;
@@ -4382,6 +4403,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     } else {
                         Explicit::Absent
                     },
+                    given: given.contains(&parameter.index),
                 },
                 ty::GenericParamDefKind::Const { has_default, .. } => {
                     if !bounds.is_empty() {
@@ -4433,6 +4455,46 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             parameters,
             predicates,
         })
+    }
+
+    /// The type parameters of the struct, enum or union `def_id` that one
+    /// of its fields' boxed callables gives, by index: `W` of iced's
+    /// `Lazy<'a, W, D>`, whose `view: Box<dyn Fn(&D) -> W + 'a>` makes its
+    /// content. Empty for any other item.
+    fn given_parameters(&self, def_id: DefId) -> BTreeSet<u32> {
+        let mut given = BTreeSet::new();
+        let (DefKind::Struct | DefKind::Enum | DefKind::Union) = self.tcx.def_kind(def_id) else {
+            return given;
+        };
+        let Some(output) = self.tcx.lang_items().fn_once_output() else {
+            return given;
+        };
+        for field in self.tcx.adt_def(def_id).all_fields() {
+            let ty = self
+                .tcx
+                .type_of(field.did)
+                .instantiate_identity()
+                .skip_norm_wip();
+            for argument in ty.walk() {
+                let ty::GenericArgKind::Type(ty) = argument.kind() else {
+                    continue;
+                };
+                let ty::Dynamic(predicates, _) = ty.kind() else {
+                    continue;
+                };
+                for predicate in predicates.iter() {
+                    if let ty::ExistentialPredicate::Projection(projection) =
+                        predicate.skip_binder()
+                        && projection.def_id == output
+                        && let Some(value) = projection.term.as_type()
+                        && let ty::Param(parameter) = value.kind()
+                    {
+                        given.insert(parameter.index);
+                    }
+                }
+            }
+        }
+        given
     }
 
     fn predicate(&mut self, owner: DefId, clause: ty::Clause<'tcx>) -> Result<Predicate, String> {

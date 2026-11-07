@@ -5322,6 +5322,7 @@ fn generics_of(
     allocation.reserve(&mut parameters, generics.parameters.len())?;
     for parameter in generics.parameters {
         let mut covariant = false;
+        let mut given = false;
         let kind = match parameter.parameter_kind {
             protocol::ParameterKind::Lifetime {
                 bounds: raw,
@@ -5335,10 +5336,14 @@ fn generics_of(
             protocol::ParameterKind::Type {
                 bounds: raw,
                 default,
-            } => model::ParameterKind::Type {
-                bounds: bounds(raw, catalog, limits, allocation)?,
-                default: default_type(default, catalog, limits, allocation)?,
-            },
+                given: declared,
+            } => {
+                given = declared;
+                model::ParameterKind::Type {
+                    bounds: bounds(raw, catalog, limits, allocation)?,
+                    default: default_type(default, catalog, limits, allocation)?,
+                }
+            }
             protocol::ParameterKind::Const { ty, default } => model::ParameterKind::Const {
                 ty: type_of(ty, catalog, limits, allocation)?,
                 default: default_const(default, catalog, limits, allocation)?,
@@ -5352,7 +5357,8 @@ fn generics_of(
                 boxed("generic parameter name", &parameter.name, allocation)?,
                 kind,
             )
-            .with_covariant(covariant),
+            .with_covariant(covariant)
+            .with_given(given),
         );
     }
     let mut predicates = Vec::new();

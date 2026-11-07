@@ -1711,6 +1711,22 @@ fn a_widget_whose_closure_gives_static_widgets_is_boxed_in_a_view() {
     );
 }
 
+/// iced's progress_bar: `transition(value, |at| ..)` keeps a closure that
+/// makes its content each time it shows, as `view: Box<dyn Fn(..) -> W>`,
+/// and the view's `column!` boxes it. A closure gives its widget from the
+/// arena, at `'static`, so the region holds the transition with `W` at
+/// `'static`, not at the view's lifetime (#1083). The output is `cargo
+/// run`'s.
+#[test]
+fn a_widget_whose_closure_reads_the_state_is_boxed_in_a_view() {
+    let (rawr, cargo) = both_printed("transition.rs", "Add,Add");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 transition 20@22 transition 2@16 [Add]"),
+        "{rawr}"
+    );
+}
+
 /// iced's pick_list: `column!` boxes a string literal through the crate's
 /// impl of its trait for `&str`, and a choice takes an `Option` of a script
 /// enum, a script `&[T]` constant as its `L: Borrow<[T]>`, and the enum's

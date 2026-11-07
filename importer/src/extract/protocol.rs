@@ -14,7 +14,7 @@ std::thread_local! {
 
 /// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 /// `cargo/toolchain.rs`'s `SUPPORTED_PROBE_PROTOCOL` are the same number.
-pub(crate) const SCHEMA: u32 = 54;
+pub(crate) const SCHEMA: u32 = 55;
 
 /// The compiler kind of an unsupported export that is a derive macro, as
 /// serde's `Serialize`: the driver's engine writes it (`engine::DERIVE_MACRO`).
@@ -485,6 +485,9 @@ pub(crate) enum ParameterKind {
     Type {
         bounds: Vec<Bound>,
         default: Default<Type>,
+        /// Whether a field's boxed callable of the struct or enum gives it.
+        #[serde(default)]
+        given: bool,
     },
     Const {
         ty: Type,
@@ -822,7 +825,9 @@ impl Population {
                         self.bound(bound);
                     }
                 }
-                ParameterKind::Type { bounds, default } => {
+                ParameterKind::Type {
+                    bounds, default, ..
+                } => {
                     for bound in bounds {
                         self.bound(bound);
                     }

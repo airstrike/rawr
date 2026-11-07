@@ -531,6 +531,11 @@ pub struct TypeDefinition {
     /// variance).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     covariant: bool,
+    /// The positions, among its type parameters, of those a field's boxed
+    /// callable gives, as `view: Box<dyn Fn(&D) -> W>` gives `W` of iced's
+    /// `Lazy<'a, W, D>`: a script closure gives them at `'static`.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    given: Box<[u32]>,
     /// Whether the crate implements `Iterator` for the native type.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
@@ -1433,6 +1438,7 @@ impl Plan {
                             ord: false,
                             lifetimes: 0,
                             covariant: false,
+                            given: Box::default(),
                             iterator: false,
                             opaque: true,
                             shape: Shape::Struct {
@@ -1910,6 +1916,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         ord: false,
         lifetimes: 0,
         covariant: false,
+        given: Box::default(),
         iterator: false,
         opaque: false,
         associated: Box::default(),
@@ -1990,6 +1997,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 ord: false,
                 lifetimes: 0,
                 covariant: false,
+                given: Box::default(),
                 iterator: false,
                 opaque: false,
                 associated: Box::default(),
@@ -2038,6 +2046,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         ord: false,
         lifetimes: 0,
         covariant: false,
+        given: Box::default(),
         iterator: false,
         opaque: false,
         associated: Box::default(),
@@ -2129,6 +2138,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
         ord: false,
         lifetimes: 0,
         covariant: false,
+        given: Box::default(),
         iterator: false,
         opaque: false,
         shape: Shape::Struct {
@@ -3203,6 +3213,11 @@ impl TypeDefinition {
     pub const fn covariant(&self) -> bool {
         self.covariant
     }
+    /// Return the positions, among its type parameters, of those a field's
+    /// boxed callable gives.
+    pub fn given(&self) -> &[u32] {
+        &self.given
+    }
     /// Return whether the crate implements `Iterator` for the native type.
     pub const fn iterator(&self) -> bool {
         self.iterator
@@ -3415,6 +3430,19 @@ fn written_type_definition(
         Representability::Enum(plan) => (plan.lifetimes(), plan.iterator(), plan.covariant()),
         _ => (0, false, false),
     };
+    let given = match outcome.representability() {
+        Representability::Struct(plan) => plan.given(),
+        Representability::Enum(plan) => plan.given(),
+        _ => &[],
+    };
+    let given = {
+        let mut copied = Vec::new();
+        copied
+            .try_reserve_exact(given.len())
+            .map_err(|_| super::Error::Allocation)?;
+        copied.extend_from_slice(given);
+        copied.into_boxed_slice()
+    };
     let (parameters, defaults, copyable, default, debug, clone, compare, shape) =
         match outcome.representability() {
             Representability::Struct(plan) => (
@@ -3500,6 +3528,7 @@ fn written_type_definition(
         ord: compare[4],
         lifetimes: borrowing.0,
         covariant: borrowing.2,
+        given,
         iterator: borrowing.1,
         opaque: false,
         associated: Box::default(),

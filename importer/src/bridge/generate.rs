@@ -17117,6 +17117,11 @@ thread_local! {
     /// The same, by identity.
     static TYPE_TRAITS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], Lifetimes>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The imported types with type parameters a field's boxed callable
+    /// gives, by identity: the positions of those parameters, as `W` of
+    /// iced's `Lazy<'a, W, D>` is at 0 (`at_static`).
+    static GIVEN_ARGUMENTS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], Box<[u32]>>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// Which of each named trait's type parameters other than `Self` have
     /// a default, by the trait's identity: a path through the trait leaves
     /// one the call doesn't fix to its default, as `impl Widget<Part>`
@@ -17923,8 +17928,14 @@ fn scoped_definition(definition: &crate::surface::identity::Definition) -> Optio
 }
 
 /// `ty` spelled at the scope lifetime `'x`: each imported type that
-/// carries lifetimes takes `'x` for each, as a scope family names it.
+/// carries lifetimes takes `'x` for each, as a scope family names it,
+/// but where a script closure gives it (`at_static`).
 fn scoped_type(ty: &convert::Type) -> Option<String> {
+    scoped_spelling(ty).map(|text| at_static(&text))
+}
+
+/// `ty` spelled with `'x` for each lifetime, for [`scoped_type`].
+fn scoped_spelling(ty: &convert::Type) -> Option<String> {
     match ty {
         // A boxed script closure (T417), whose inputs and output may name
         // scoped types.
@@ -17933,11 +17944,14 @@ fn scoped_type(ty: &convert::Type) -> Option<String> {
             arguments,
         } if *definition == crate::surface::identity::Definition::callable() => {
             let (output, inputs) = arguments.split_last()?;
-            let inputs = inputs.iter().map(scoped_type).collect::<Option<Vec<_>>>()?;
+            let inputs = inputs
+                .iter()
+                .map(scoped_spelling)
+                .collect::<Option<Vec<_>>>()?;
             Some(format!(
                 "Box<dyn Fn({}) -> {}>",
                 inputs.join(", "),
-                scoped_type(output)?
+                scoped_spelling(output)?
             ))
         }
         convert::Type::Nominal {
@@ -17949,7 +17963,7 @@ fn scoped_type(ty: &convert::Type) -> Option<String> {
                 TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())?;
             let mut parts = vec!["'x".to_owned(); lifetimes.count as usize];
             for argument in arguments.iter() {
-                parts.push(scoped_type(argument)?);
+                parts.push(scoped_spelling(argument)?);
             }
             text.push('<');
             text.push_str(&parts.join(", "));
@@ -17964,18 +17978,18 @@ fn scoped_type(ty: &convert::Type) -> Option<String> {
                 TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())?;
             let arguments = arguments
                 .iter()
-                .map(scoped_type)
+                .map(scoped_spelling)
                 .collect::<Option<Vec<_>>>()?;
             text.push('<');
             text.push_str(&arguments.join(", "));
             text.push('>');
             Some(text)
         }
-        convert::Type::Option(element) => Some(format!("Option<{}>", scoped_type(element)?)),
+        convert::Type::Option(element) => Some(format!("Option<{}>", scoped_spelling(element)?)),
         convert::Type::Result(ok, err) => Some(format!(
             "Result<{}, {}>",
-            scoped_type(ok)?,
-            scoped_type(err)?
+            scoped_spelling(ok)?,
+            scoped_spelling(err)?
         )),
         convert::Type::Borrowed { mutable: false, ty } if script_slice(ty).is_none() => {
             Some(format!("&'x {}", borrowed_target(ty)?))
@@ -18231,7 +18245,98 @@ fn container_family(path: &str, container: &str) -> Option<family::Family> {
         None if rest.is_empty() => format!("{path}<{marks}>"),
         None => return None,
     };
-    family(text, lifetimes)
+    family(at_static(&text), lifetimes)
+}
+
+/// `text`, a type spelled at the scope lifetime `'x`, with each type
+/// argument a field's boxed callable gives at `'static`: `Lazy<'x,
+/// Column<'static, ..>, u8>`, since a script closure gives its value from
+/// the arena, where values are at `'static`, and no region's value can
+/// fill it. A widget made in the view's region joins it as rustc infers
+/// one lifetime for the whole view; one a closure makes later can't.
+/// [`scoped_type`] and [`container_family`] both spell a family through
+/// it, so a type has one family however it is reached.
+fn at_static(text: &str) -> String {
+    // Each spelling of such a type: its own path, and each a method's
+    // container reaches it by (`container_family`).
+    let given = GIVEN_ARGUMENTS.with_borrow(|given| {
+        let named = TYPE_PATHS.with_borrow(|paths| {
+            given
+                .iter()
+                .filter_map(|(identity, positions)| {
+                    Some((paths.get(identity)?.clone(), positions.clone()))
+                })
+                .collect::<Vec<_>>()
+        });
+        let reached = PATH_IDENTITIES.with_borrow(|identities| {
+            identities
+                .iter()
+                .filter_map(|(path, identity)| Some((path.clone(), given.get(identity)?.clone())))
+                .collect::<Vec<_>>()
+        });
+        let mut spelled = named.into_iter().chain(reached).collect::<Vec<_>>();
+        spelled.sort();
+        spelled.dedup();
+        spelled
+            .into_iter()
+            .map(|(path, positions)| (format!("{path}<"), positions))
+            .collect::<Vec<_>>()
+    });
+    let mut text = text.to_owned();
+    for (open, positions) in given {
+        let mut at = 0;
+        while let Some(found) = text[at..].find(&open) {
+            let start = at + found;
+            let end = start + open.len();
+            at = end;
+            let boundary = text[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|before| matches!(before, '<' | ' ' | ',' | '&' | '('));
+            if !boundary {
+                continue;
+            }
+            // Each type argument, lifetimes aside, by its range in `text`.
+            let mut arguments = Vec::new();
+            let mut depth = 0usize;
+            let mut from = end;
+            let mut previous = '\0';
+            for (offset, character) in text[end..].char_indices() {
+                let here = end + offset;
+                match character {
+                    '<' | '(' | '[' => depth += 1,
+                    '>' if previous == '-' => {}
+                    ',' if depth == 0 => {
+                        arguments.push(from..here);
+                        from = here + 1;
+                    }
+                    '>' | ')' | ']' if depth == 0 => {
+                        arguments.push(from..here);
+                        break;
+                    }
+                    '>' | ')' | ']' => depth -= 1,
+                    _ => {}
+                }
+                previous = character;
+            }
+            let types = arguments
+                .into_iter()
+                .filter(|range| !text[range.clone()].trim_start().starts_with('\''))
+                .collect::<Vec<_>>();
+            // From the last, so the ranges before stay where they are.
+            for position in positions.iter().rev() {
+                let Some(range) = usize::try_from(*position)
+                    .ok()
+                    .and_then(|position| types.get(position))
+                else {
+                    continue;
+                };
+                let argument = text[range.clone()].replace("'x", "'static");
+                text.replace_range(range.clone(), &argument);
+            }
+        }
+    }
+    text
 }
 
 /// `rest`, a container's type arguments as Rust spells them, with each
@@ -19285,6 +19390,13 @@ impl TypePaths {
                             // that spelling too (`hidden_spelling`).
                             let path = format!("{}::{}", owner.root(), ty.path());
                             let spelled = hidden_spelling(&path);
+                            if !ty.given().is_empty() {
+                                GIVEN_ARGUMENTS.with_borrow_mut(|given| {
+                                    given
+                                        .entry(*ty.identity())
+                                        .or_insert_with(|| ty.given().into());
+                                });
+                            }
                             for path in [Some(path), spelled].into_iter().flatten() {
                                 paths.entry(path.clone()).or_insert(lifetimes);
                                 PATH_IDENTITIES.with_borrow_mut(|identities| {
@@ -19360,6 +19472,7 @@ impl Drop for TypePaths {
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
+        GIVEN_ARGUMENTS.with_borrow_mut(std::collections::BTreeMap::clear);
         PATH_IDENTITIES.with_borrow_mut(std::collections::BTreeMap::clear);
         ITEM_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
