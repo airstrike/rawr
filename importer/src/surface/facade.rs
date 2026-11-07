@@ -1518,6 +1518,19 @@ impl Plan {
                 .sort_by(|left, right| left.path.cmp(&right.path));
             let mut items = std::mem::take(&mut facade.items).into_vec();
             items.retain(|item| item.signature.declared(&resolved));
+            // A member of an opaque type is declared with its owner, which
+            // the function or method that gives it declares: one the
+            // facade leaves out, as ratatui's `Line::styled_graphemes`, has
+            // no `next` either.
+            items.retain(|item| {
+                item.path.rsplit_once("::").is_none_or(|(owner, _)| {
+                    !super::opaque::declared(owner)
+                        || facade
+                            .types
+                            .binary_search_by(|ty| (*ty.path).cmp(owner))
+                            .is_ok()
+                })
+            });
             items.sort_by(|left, right| left.path.cmp(&right.path));
             facade.items = items.into_boxed_slice();
             // So is a type alias of such a type.
