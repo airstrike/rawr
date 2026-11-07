@@ -28,5 +28,5 @@ fn main() {
     let total: usize = back.clone().sum();
     println!("{total} {back:?} {}", back.end());
     let half = events::paired::same(-3i8..0);
-    println!("{half:?} {}", half.start);
+    println!("{half:?} {}", half.clone().count());
 }

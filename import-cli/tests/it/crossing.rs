@@ -1572,7 +1572,7 @@ fn a_range_of_a_narrower_integer_crosses_as_a_range_of_its_type() {
     assert_eq!(
         rawr,
         "[(0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)]\n3 4\n[10, 11, 12] [-2, -1, 0]\n\
-         9 2..=4 4\n-3..0 -3"
+         9 2..=4 4\n-3..0 3"
     );
 }
 
