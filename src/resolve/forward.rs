@@ -43,11 +43,10 @@ pub(super) fn fold_reference_impls(items: &mut Vec<item::Shell>) -> Result<(), L
                 shell.source,
                 Error::UnsupportedNominalSyntax {
                     construct: format!(
-                        "an impl of `{trait_name}` for a reference {reason}: Rawr runs a \
-                         reference as its referent's value, so it reads an impl for \
-                         references only as `impl<T: {trait_name}> {trait_name} for &T` whose \
-                         every item forwards to `T`'s (`<T as {trait_name}>::f(*self)`, `type \
-                         A = <T as {trait_name}>::A;`)",
+                        "an impl of `{trait_name}` for a reference {reason} is not supported in \
+                         Rawr yet; an impl for references must be `impl<T: {trait_name}> \
+                         {trait_name} for &T` with every item forwarding to `T`'s (`<T as \
+                         {trait_name}>::f(*self)`, `type A = <T as {trait_name}>::A;`)",
                         trait_name = name.text,
                     )
                     .into(),

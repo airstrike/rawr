@@ -584,8 +584,8 @@ fn named_output(
     if let Some(trait_name) = written.opaque_trait() {
         return named_type(hidden, models, span).ok_or_else(|| Error::UnsupportedNominalSyntax {
             construct: format!(
-                "`impl {trait_name}` whose body returns `{}`, a type Rawr cannot name in a \
-                 signature yet",
+                "`impl {trait_name}` whose body returns `{}`, a type that can't be named in a \
+                 signature,",
                 hidden.name(models)
             )
             .into(),
@@ -1713,8 +1713,9 @@ fn native_impl(
                         shell.source,
                         Error::UnsupportedNominalSyntax {
                             construct: format!(
-                                "`{}` in an impl of `{path}`, whose functions native code calls: \
-                             the type has no Rust type for the impl to name",
+                                "`{}` in an impl of `{path}` whose functions native code calls \
+                             is not supported in Rawr yet; the type has no Rust type for the impl \
+                             to name",
                                 super::full_type_name(ty)
                             )
                             .into(),
@@ -14539,7 +14540,8 @@ impl<'a> Parser<'a> {
             if source.len() > placeholder.len() {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
-                        "`Default::default()` for `{}`; write `<{0}>::default()`",
+                        "`Default::default()` for `{}` is not supported in Rawr yet; write \
+                         `<{0}>::default()`",
                         ty.name(&self.models)
                     )
                     .into(),
@@ -15501,9 +15503,9 @@ impl<'a> Parser<'a> {
                 let Ty::Iter(item, _) = self.inference.resolve(ty) else {
                     return Err(Error::UnsupportedNominalSyntax {
                         construct: format!(
-                            "`{}` as an associated type bounded by `{bound}<Item = ..>`: Rawr \
-                             reads such a type as one of Rust's own iterators (a `Range`, an \
-                             iterator chain)",
+                            "`{}` as an associated type bounded by `{bound}<Item = ..>` is not \
+                             supported in Rawr yet; only Rust's own iterators (a `Range`, an \
+                             iterator chain) are",
                             ty.name(&self.models)
                         )
                         .into(),
@@ -21088,8 +21090,9 @@ impl<'a> Parser<'a> {
             )?)),
             // std's map or set in a crate's signature: rawr's (#777).
             Shape::Keyed(name, members) => Ty::Keyed(
-                Keyed::from_name(name)
-                    .ok_or_else(|| self.unsupported("a keyed collection rawr has no kind for"))?,
+                Keyed::from_name(name).ok_or_else(|| {
+                    self.unsupported("this map or set type in a crate's signature")
+                })?,
                 members
                     .iter()
                     .map(|member| {
@@ -23821,10 +23824,8 @@ impl<'a> Parser<'a> {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
                         "a call or assignment before a call whose value borrows what it \
-                         takes, in the statement at line {line}: Rawr opens the borrowing \
-                         call's scope frame ahead of the statement, so running what is \
-                         written before it first is not supported in Rawr yet; give the \
-                         earlier call its own statement"
+                         takes, in the statement at line {line}, is not supported in Rawr yet; \
+                         give the earlier call its own statement"
                     )
                     .into(),
                     source: point_span(earlier),
@@ -23892,9 +23893,8 @@ impl<'a> Parser<'a> {
         if inline {
             if frames.iter().any(|frame| !frame.after.is_empty()) {
                 return Err(self.unsupported(
-                    "a `let` that binds a value borrowing a `&mut` buffer its call fills: \
-                     Rawr gives the buffer back when the value's scope ends, which for a `let` \
-                     is the end of its block; match on the call in a statement of its own",
+                    "a `let` that binds a value borrowing a `&mut` buffer its call fills is \
+                     not supported in Rawr yet; match on the call in a statement of its own",
                 ));
             }
             for frame in frames {
@@ -24835,9 +24835,7 @@ impl<'a> Parser<'a> {
                 );
             };
             if !self.type_provides(&inner_ty, capability::Kind::Copy) {
-                return Err(self.unsupported(
-                    "assigning a field of a field that isn't `Copy`, which Rawr would have to move out",
-                ));
+                return Err(self.unsupported("assigning a field of a field that isn't `Copy`"));
             }
             let inner = proof.definition.clone();
             let below = self.temporary("field");
@@ -26124,7 +26122,9 @@ impl<'a> Parser<'a> {
                 .is_some()
             {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a refutable pattern in a binding; use `if let` or `match`".into(),
+                    construct: "a refutable pattern in a binding is not supported; use `if let` \
+                                or `match`"
+                        .into(),
                     source: resolved.span,
                 });
             }
@@ -31573,10 +31573,7 @@ impl<'a> Parser<'a> {
                 None if discards_only => {}
                 None => {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: format!(
-                            "a pattern on `{variant}`'s fields, which Rawr does not read yet"
-                        )
-                        .into(),
+                        construct: format!("a pattern on `{variant}`'s fields").into(),
                         source: at,
                     });
                 }
@@ -41996,7 +41993,7 @@ impl<'a> Parser<'a> {
                 && closure.span.end() <= value.span.end())
         {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a closure that captures, passed to the host from a variable; write it where the host takes it".into(),
+                construct: "a capturing closure passed to native code from a variable is not supported in Rawr yet; write it where the call takes it".into(),
                 source: value.span,
             });
         }
@@ -49529,10 +49526,10 @@ impl<'a> Parser<'a> {
             {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
-                        "`{full}` in a program without a tokio dependency, whose async code runs \
-                         on iced's UI thread; run futures at once with `tokio::join!`, run \
-                         blocking work with `tokio::task::spawn_blocking`, or return a `Task` \
-                         from `update`"
+                        "`{full}` in a program without a tokio dependency is not supported, as \
+                         its async code runs on iced's UI thread; run futures at once with \
+                         `tokio::join!`, run blocking work with `tokio::task::spawn_blocking`, or \
+                         return a `Task` from `update`"
                     )
                     .into(),
                     source: span(first_span.start(), path_end),
@@ -51345,9 +51342,9 @@ impl<'a> Parser<'a> {
                     "Send" | "Sync" | "Unpin" | "UnwindSafe" | "RefUnwindSafe"
                 ) {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a second non-auto trait in a trait object: only auto \
-                                    traits (`Send`, `Sync`, `Unpin`) can be added, as in Rust \
-                                    (E0225)"
+                        construct: "a second non-auto trait in a trait object is not supported; \
+                                    only auto traits (`Send`, `Sync`, `Unpin`) can be added, as \
+                                    in Rust (E0225)"
                             .into(),
                         source: extra_span,
                     });

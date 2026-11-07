@@ -207,7 +207,7 @@ pub fn install(directory: &FilePath) -> std::io::Result<()> {
     match TABLE.get().and_then(|table| table.directory.as_deref()) {
         Some(installed) if installed == directory => Ok(()),
         _ => Err(std::io::Error::other(format!(
-            "rawr is already checking against another std table than `{}`",
+            "cannot check against the std table `{}`: another std table is already loaded",
             directory.display()
         ))),
     }

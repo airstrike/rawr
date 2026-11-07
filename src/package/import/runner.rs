@@ -1250,7 +1250,7 @@ fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
         facade::Type::String => host::type_ref::Type::builtin(host::type_ref::Builtin::String),
         facade::Type::Primitive(name) => host::type_ref::Type::builtin(
             host::type_ref::Builtin::primitive(name)
-                .expect("a generated primitive type is one rawr knows"),
+                .expect("a generated primitive type is unknown"),
         ),
         facade::Type::Nominal {
             identity,
@@ -1378,7 +1378,7 @@ pub enum Error {
     /// Registering one generated item failed. The bindings are rawr's own,
     /// so this is a rawr bug.
     #[error(
-        "internal error: rawr cannot register its bindings for `{}`: {source}. This is a rawr bug",
+        "internal error: rawr cannot register the bindings of `{}`: {source}. This is a rawr bug",
         rust_item(.root, .path)
     )]
     Registration {

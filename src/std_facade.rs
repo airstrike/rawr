@@ -82,7 +82,7 @@ impl Bind for host::runtime::Builder {
         callback: impl Fn(&mut [&mut Dynamic]) -> Outcome + SendSync + 'static,
     ) {
         self.bind(format!("{ROOT}::{path}"), callback)
-            .unwrap_or_else(|_| panic!("the std table declares no `std::{path}` rawr runs"));
+            .unwrap_or_else(|_| panic!("the std table does not declare `std::{path}`"));
     }
 
     fn with_context(
@@ -91,7 +91,7 @@ impl Bind for host::runtime::Builder {
         callback: impl Fn(&Call<'_>, &mut [&mut Dynamic]) -> Outcome + SendSync + 'static,
     ) {
         self.bind_with_context(format!("{ROOT}::{path}"), callback)
-            .unwrap_or_else(|_| panic!("the std table declares no `std::{path}` rawr runs"));
+            .unwrap_or_else(|_| panic!("the std table does not declare `std::{path}`"));
     }
 }
 

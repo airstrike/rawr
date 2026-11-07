@@ -249,10 +249,9 @@ fn native_code_cannot_use_marked_code() {
 
     assert!(
         error.contains(&format!(
-            "native module `crate::pricing` uses `crate::Item`. \
-             `crate::Item` is in the marked module `crate` (`{}`). \
-             With a marked crate root, Rawr builds the native modules without the marked ones, \
-             so native code cannot use marked code. \
+            "native module `crate::pricing` cannot use `crate::Item`, which is in the marked \
+             module `crate` (`{}`): native modules cannot use marked code when the crate root \
+             is marked. \
              Move the item into a native module, mark `{}` with `// rawr`, \
              or leave the crate root unmarked so native code calls marked modules through rawr.",
             root.join("src/main.rs").display(),

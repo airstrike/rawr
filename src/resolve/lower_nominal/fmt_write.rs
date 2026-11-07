@@ -45,7 +45,8 @@ impl Parser<'_> {
         if !matches!(self.inference.resolve(text_ty), Ty::String) {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
-                    "`{name}!` into a `{}`; Rawr writes into a `String` or a `fmt` formatter",
+                    "`{name}!` into a `{}` is not supported in Rawr yet; write into a `String` \
+                     or a `fmt` formatter",
                     target.ty.name(&self.models)
                 )
                 .into(),
