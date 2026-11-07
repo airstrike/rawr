@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.3.159",
+      "date": "2026-11-06",
+      "entries": [
+        {"text":"An `a..=b` of any integer type is a `RangeInclusive` of that type, as rustc types it: a function can return `RangeInclusive<isize>`, and the caller can read `start()`, `end()` and `contains` or iterate it. iced's game_of_life gets further.","issues":[1055]},
+        {"text":"A crate method whose parameter's bound names the program's own types, such as iced's `Application::presets(impl IntoIterator<Item = Preset<P::State, P::Message>>)`, can be called, and a string literal fills an `impl Into<Cow<'static, str>>`. iced's todos gets further.","issues":[1050]}
+      ]
+    },
+    {
       "version": "0.3.158",
       "date": "2026-11-06",
       "entries": [

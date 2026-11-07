@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.159 (2026-11-06)
+
+- An `a..=b` of any integer type is a `RangeInclusive` of that type, as rustc types it: a function can return `RangeInclusive<isize>`, and the caller can read `start()`, `end()` and `contains` or iterate it. iced's game_of_life gets further. (#1055)
+- A crate method whose parameter's bound names the program's own types, such as iced's `Application::presets(impl IntoIterator<Item = Preset<P::State, P::Message>>)`, can be called, and a string literal fills an `impl Into<Cow<'static, str>>`. iced's todos gets further. (#1050)
+
 ## 0.3.158 (2026-11-06)
 
 - A method of a crate's trait that only iterators have, or that a blanket impl gives every `Iterator`, works on your iterators when the trait is in scope, as itertools' `rows.cartesian_product(columns)` does. Your iterator crosses as a Rust iterator that runs your chain to its next item on each `next()`, so your closures run as the crate pulls, in Rust's order, and only as far as it pulls. The `Product` it gives back is an iterator you drive with `for`, `next()` and the iterator methods, and one a crate takes as itself, so `a.cartesian_product(b).cartesian_product(c)` works. An array fills `J: IntoIterator`; where a crate takes `I: Iterator` it is rustc's E0277. (#1051, #1043)

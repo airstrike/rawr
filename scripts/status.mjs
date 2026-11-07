@@ -80,13 +80,19 @@ const health = await fetchText("https://rawr.airstrike.fyi/bot/health");
 const image = health ? JSON.parse(health).deployed : null;
 const bot = image ? `${releaseOf(image)} (image ${image}${JSON.parse(health).running ? ", running" : ", not running"})` : "unreachable";
 
-// rawr-web reaches the playground only through a release run's site stage.
+// rawr-web reaches the playground only through a release run's site stage,
+// whose deploy step deploys first and checks after: a run whose step took
+// this run's rawr-web and started deploying deployed it, even when the
+// checks after it failed or timed out.
 let playground = "unknown";
 const runs = run("gh", ["run", "list", "--workflow", "release.yml", "-L", "20", "--json", "databaseId,headSha"]);
 for (const entry of runs ? JSON.parse(runs) : []) {
-  const jobs = run("gh", ["run", "view", String(entry.databaseId), "--json", "jobs", "-q", '.jobs[]|select(.name=="site / site")|.conclusion']);
-  if (jobs === "success") {
-    playground = releaseOf(entry.headSha);
+  const steps = run("gh", ["run", "view", String(entry.databaseId), "--json", "jobs", "-q", '.jobs[]|select(.name=="site / site")|.steps[]|.name+"="+.conclusion']);
+  const step = (name) => steps?.split("\n").find((line) => line.startsWith(`${name}=`))?.split("=")[1];
+  const took = step("Use this run's rawr-web") === "success";
+  const deploy = step("Test, deploy and check the site");
+  if (took && deploy && deploy !== "skipped") {
+    playground = `${releaseOf(entry.headSha)}${deploy === "success" ? "" : ` (deployed; its checks ended ${deploy})`}`;
     break;
   }
 }
