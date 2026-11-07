@@ -14862,7 +14862,9 @@ impl<'a> Parser<'a> {
             // An integer range a crate holds by value, as itertools'
             // `Product<I, RangeInclusive<isize>>` does: std's `Iterator`.
             Ty::InclusiveRange(_) if is_iterator_trait(trait_name) => true,
-            Ty::Range(element) if is_iterator_trait(trait_name) && matches!(**element, Ty::Int(_)) => {
+            Ty::Range(element)
+                if is_iterator_trait(trait_name) && matches!(**element, Ty::Int(_)) =>
+            {
                 true
             }
             // An imported type the crate implements `Iterator`,
@@ -18936,8 +18938,10 @@ impl<'a> Parser<'a> {
                     Ty::InclusiveRange(kind) => Ty::Int(kind),
                     _ => Ty::Float(Float::F64),
                 };
-                matches!(capability, capability::Kind::Clone | capability::Kind::Debug)
-                    && self.type_provides(&element, capability)
+                matches!(
+                    capability,
+                    capability::Kind::Clone | capability::Kind::Debug
+                ) && self.type_provides(&element, capability)
             }
             Ty::Range(element)
                 if capability == capability::Kind::Iterator && matches!(*element, Ty::Int(_)) =>
@@ -44853,9 +44857,7 @@ impl<'a> Parser<'a> {
             Ty::Range(element) if matches!(**element, Ty::Int(_)) => {
                 self.prelude_op(PreludeOp::GenericDebug, [value])
             }
-            Ty::InclusiveRange(_) => {
-                self.prelude_op(PreludeOp::GenericDebug, [value])
-            }
+            Ty::InclusiveRange(_) => self.prelude_op(PreludeOp::GenericDebug, [value]),
             // A facade type providing `Debug`: Rust's text, as its facade
             // registered it (`host::debug`).
             Ty::Host { proof, .. }
