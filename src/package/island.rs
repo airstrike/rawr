@@ -9,12 +9,13 @@
 //! code can call, a trampoline with its signature whose body hands the
 //! arguments to the interpreter and takes the result back. Values cross by
 //! the small wire format of [`crate::island`], which both sides speak:
-//! numbers, `bool`, `char`, strings, `Vec`, `Option`, `Result` and the
-//! marked crate's own structs and enums made of them. A result can also be
-//! a `Result`, or an alias of one such as `iced::Result`, whose `Ok` or
-//! `Err` is a native type: the interpreter moves that native value itself.
-//! A function whose values can't cross gets a trampoline that panics with a
-//! message naming it.
+//! numbers, `bool`, `char`, strings, `Vec`, `Option`, `Result`, tuples and
+//! the marked crate's own structs and enums made of them. A value of a
+//! native type, as the app's own `Message` or the `iced::Error` of an
+//! `iced::Result`, moves itself: back from the interpreter, bare or as a
+//! part of any of those, and in by value, which the interpreter keeps. A
+//! borrow of one is lent for the call. A function whose values can't cross
+//! gets a trampoline that panics with a message naming it.
 //!
 //! The generated files are the island's shape: a save that changes them
 //! (a signature, a struct's fields, a constant native code reads) needs a
@@ -171,6 +172,9 @@ enum Pass {
     /// Frame<'_>`: lent to the interpreter for the call (D558.3), written
     /// with each named lifetime as `'_`.
     Lend { mutable: bool, referent: String },
+    /// A value of a type the marked crate doesn't declare, as an app's own
+    /// `Message`: moved to the interpreter, which keeps it (#1139).
+    Give,
 }
 
 /// The crate's own struct or enum that native code sees, by name.
@@ -320,7 +324,9 @@ impl<'a> Generator<'a> {
     fn crosses(&self, ty: &type_ref::Type, owner: Option<&str>) -> Result<(), String> {
         match ty {
             type_ref::Type::Unit(_) => Ok(()),
-            type_ref::Type::Tuple { .. } => Err("tuples can't cross yet".into()),
+            type_ref::Type::Tuple { members, .. } => members
+                .iter()
+                .try_for_each(|member| self.crosses(member, owner)),
             type_ref::Type::Reference { .. } => Err("a reference can only be a parameter".into()),
             type_ref::Type::Path(path) => {
                 let Some(last) = path.segments.last() else {
@@ -370,7 +376,16 @@ impl<'a> Generator<'a> {
             mutable, target, ..
         } = ty
         else {
-            return self.crosses(ty, owner).map(|()| Pass::Value);
+            return match self.crosses(ty, owner) {
+                Ok(()) => Ok(Pass::Value),
+                // The interpreter keeps it in its arena as long as it
+                // likes, so it can't borrow anything.
+                Err(_) if self.lendable(ty) && static_lifetimes(text) == text => Ok(Pass::Give),
+                Err(_) if self.lendable(ty) => {
+                    Err(format!("`{}` with a lifetime can't cross yet", text.trim()))
+                }
+                Err(reason) => Err(reason),
+            };
         };
         // `&str` and `&[T]` are borrowed views: copied in, never written back.
         let referent = text.trim_start_matches('&').trim_start();
@@ -402,37 +417,89 @@ impl<'a> Generator<'a> {
         }
     }
 
-    /// Whether a result of `ty`, which doesn't cross by the wire format,
-    /// comes back as an outcome: a `Result`, or an alias of one such as
-    /// `iced::Result`, each of whose written types crosses or is a type the
-    /// marked crate doesn't declare, which the interpreter moves as the
-    /// native value it is (#1118). `Err` says why not.
-    fn outcome(&self, ty: &type_ref::Type, owner: Option<&str>) -> Result<(), String> {
-        let type_ref::Type::Path(path) = ty else {
-            return self.crosses(ty, owner);
+    /// How a result of `ty` comes back, as an expression that reads it from
+    /// `input`: by the wire format where its type crosses by it, and else
+    /// part by part through `Vec`, `Option`, `Result` and tuples, each part
+    /// whose type the marked crate doesn't declare as the native value the
+    /// interpreter moves (#1118, #1203). An alias of a `Result`, as
+    /// `iced::Result`, comes back by its parts. Each lifetime the type names
+    /// is read as `'static`, as the interpreter's arena holds the value, and
+    /// becomes the signature's by the type's variance. `Err` says why it
+    /// can't come back.
+    fn back(
+        &self,
+        file: &Source<'_>,
+        ty: &type_ref::Type,
+        owner: Option<&str>,
+    ) -> Result<String, String> {
+        let island = format!("crate::{MODULE}");
+        let Err(reason) = self.crosses(ty, owner) else {
+            return Ok(format!("{island}::Take::take(input)"));
+        };
+        let path = match ty {
+            type_ref::Type::Tuple { members, .. } => {
+                let parts = members
+                    .iter()
+                    .map(|member| self.back(file, member, owner))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(format!(
+                    "{{ input.tuple({}); ({},) }}",
+                    parts.len(),
+                    parts.join(", ")
+                ));
+            }
+            type_ref::Type::Path(path) => path,
+            _ => return Err(reason),
         };
         let Some(last) = path.segments.last() else {
-            return Err("an empty path".into());
+            return Err(reason);
         };
-        if last.name.text.as_str() != "Result" || last.arguments.len() > 2 {
-            return self.crosses(ty, owner);
-        }
-        // Outside a generic impl, each part's way back is decided by its
-        // type alone.
-        if owner.is_some_and(|owner| self.types.get(owner).is_some_and(|owner| owner.generic)) {
-            return Err("a `Result` of a generic type can't cross yet".into());
-        }
-        for argument in &last.arguments {
-            let type_ref::Argument::Type(part) = argument else {
-                return Err("`Result` with a lifetime can't cross yet".into());
-            };
-            if let Err(reason) = self.crosses(part, owner)
-                && !self.lendable(part)
-            {
-                return Err(reason);
+        let name = last.name.text.as_str();
+        let types = last
+            .arguments
+            .iter()
+            .filter_map(|argument| match argument {
+                type_ref::Argument::Type(ty) => Some(ty),
+                type_ref::Argument::Lifetime(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let parts = || {
+            types
+                .iter()
+                .map(|part| self.back(file, part, owner))
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let generic =
+            owner.is_some_and(|owner| self.types.get(owner).is_some_and(|owner| owner.generic));
+        match (name, types.len()) {
+            ("Vec" | "Option", 1) => {
+                let inner = parts()?.concat();
+                Ok(format!("input.{}(|input| {inner})", name.to_lowercase()))
             }
+            ("Result", 2) => {
+                let [ok, err] = &parts()?[..] else {
+                    return Err(reason);
+                };
+                Ok(format!("input.result(|input| {ok}, |input| {err})"))
+            }
+            _ if name != "Result" && !self.lendable(ty) => Err(reason),
+            // Outside a generic impl, each native part's way back is decided
+            // by its type alone.
+            _ if generic => Err(format!("a `{name}` of a generic type can't cross yet")),
+            ("Result", _) => {
+                let written = static_lifetimes(slice(file.text, ty.span()));
+                let part = |part: &str| {
+                    format!(
+                        "|input| (&{island}::Back::<<{written} as {island}::Outcome>::{part}>::new()).take(input)"
+                    )
+                };
+                Ok(format!("input.result({}, {})", part("Ok"), part("Err")))
+            }
+            _ => Ok(format!(
+                "(&{island}::Back::<{}>::new()).take(input)",
+                static_lifetimes(slice(file.text, ty.span()))
+            )),
         }
-        Ok(())
     }
 
     /// Whether a borrow of `ty` is lent for a call: a path to a type the
@@ -748,13 +815,13 @@ impl<'a> Generator<'a> {
         signature.push_str(slice(file.text, Span::new(cursor, end)));
         let signature = without_rawr_attributes(signature.trim_end());
         // A result that doesn't cross by the wire format may still come
-        // back as an outcome, its native parts moved.
-        let mut outcome = false;
+        // back part by part, its native parts moved.
+        let mut back = None;
         if let Some(output) = &function.output
             && self.crosses(output, owner).is_err()
         {
-            match self.outcome(output, owner) {
-                Ok(()) => outcome = true,
+            match self.back(file, output, owner) {
+                Ok(read) => back = Some(read),
                 Err(reason) => reasons.push(format!("its result: {reason}")),
             }
         }
@@ -786,6 +853,7 @@ impl<'a> Generator<'a> {
             "    let mut __call = {island}::Call::new({path:?}, {owned});"
         );
         let mut mutable = Vec::new();
+        let mut lent = Vec::new();
         let mut argument = |name: &str, pass: Pass, text: &mut String| match pass {
             Pass::Value => {
                 let _ = writeln!(text, "    __call.argument(&{name});");
@@ -799,6 +867,12 @@ impl<'a> Generator<'a> {
             }
             Pass::Lend { mutable, referent } => {
                 lend(name, mutable, &referent, &island, text);
+                if mutable {
+                    lent.push((name.to_owned(), referent));
+                }
+            }
+            Pass::Give => {
+                let _ = writeln!(text, "    {island}::give!(__call, {name});");
             }
         };
         if let Some(pass) = receiver {
@@ -813,28 +887,35 @@ impl<'a> Generator<'a> {
             .output
             .as_ref()
             .map_or("()", |ty| slice(file.text, ty.span()));
-        if outcome {
-            // Each part of the outcome comes back by the wire format when its
-            // type crosses by it, and else as the native value the
-            // interpreter moves: `Back`'s two `take`s, the first found for
-            // its type.
-            let part = |name: &str| {
-                format!(
-                    "|input| (&{island}::Back::<<{output} as {island}::Outcome>::{name}>::new()).take(input)"
-                )
-            };
+        if let Some(read) = back {
+            // Each native part comes back as the value the interpreter moves:
+            // `Back`'s two `take`s, the first found for its type.
             let _ = writeln!(
                 text,
                 "    let __value: {output} = {{\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
-                 __reply.outcome::<{output}>(\n            {},\n            {},\n        )\n    }};",
-                part("Ok"),
-                part("Err"),
+                 __reply.read(|input| {read})\n    }};"
             );
         } else {
             let _ = writeln!(text, "    let __value: {output} = __reply.take();");
         }
         for name in mutable {
             let _ = writeln!(text, "    *{name} = __reply.take();");
+        }
+        // A lent `&mut` the function gave a whole new value, `*place =
+        // value`, takes it (#1139); one whose type names a lifetime can't.
+        for (name, referent) in lent {
+            if static_lifetimes(&referent) == referent {
+                let _ = writeln!(
+                    text,
+                    "    if let Some(__new) = __reply.read(|input| input.replaced::<{referent}>()) {{\n        \
+                     *{name} = __new;\n    }}"
+                );
+            } else {
+                let _ = writeln!(
+                    text,
+                    "    __reply.read(|input| input.unreplaced(\"{referent}\"));"
+                );
+            }
         }
         text.push_str("    __value\n}\n");
         Ok(text)
@@ -1040,6 +1121,17 @@ fn lend(name: &str, mutable: bool, referent: &str, island: &str, text: &mut Stri
 /// `text` with each named lifetime but `'static` written `'_`, so a type
 /// written in a signature names its `'static` form where it is inferred.
 fn unnamed_lifetimes(text: &str) -> String {
+    each_lifetime(text, "'_")
+}
+
+/// `text` with each lifetime written `'static`, as the interpreter's arena
+/// holds a value whose type has one.
+fn static_lifetimes(text: &str) -> String {
+    each_lifetime(text, "'static")
+}
+
+/// `text` with each lifetime but `'static` written `with`.
+fn each_lifetime(text: &str, with: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find('\'') {
@@ -1051,7 +1143,7 @@ fn unnamed_lifetimes(text: &str) -> String {
         if &after[..end] == "static" {
             out.push_str("'static");
         } else {
-            out.push_str("'_");
+            out.push_str(with);
         }
         rest = &after[end..];
     }
@@ -1089,9 +1181,10 @@ const SUPPORT: &str = r#"
 pub mod __rawr_island {
     // Defined by the `rawr` crate the runner links.
     unsafe extern "Rust" {
-        fn __rawr_island_call_v3(
+        fn __rawr_island_call_v4(
             path: &str,
             arguments: &[u8],
+            given: &mut [::std::option::Option<Given>],
             lent: &[(
                 ::std::any::TypeId,
                 &'static str,
@@ -1109,6 +1202,96 @@ pub mod __rawr_island {
         fn __rawr_scope_release_v1(nonce: u64, shared: bool);
         fn __rawr_island_start_v1(entry: fn() -> i32);
     }
+
+    type Any = dyn ::std::any::Any;
+
+    /// What a trampoline finds of a value's type, for the runner to keep it
+    /// as it keeps a value it made: its `Debug` and `Display` text, its
+    /// `Clone`, `PartialEq`, `Hash` and `PartialOrd`, each when the type has
+    /// it (`rawr::island::Traits`).
+    pub type Traits = (
+        ::std::option::Option<fn(&Any) -> ::std::option::Option<::std::string::String>>,
+        ::std::option::Option<fn(&Any) -> ::std::option::Option<::std::string::String>>,
+        ::std::option::Option<fn(&Any) -> ::std::option::Option<::std::boxed::Box<Any>>>,
+        ::std::option::Option<fn(&Any, &Any) -> ::std::option::Option<bool>>,
+        ::std::option::Option<fn(&Any) -> ::std::option::Option<u64>>,
+        ::std::option::Option<fn(&Any, &Any) -> ::std::option::Option<::std::cmp::Ordering>>,
+    );
+
+    /// A native value a call gives the interpreter by value, with its
+    /// type's name and [`Traits`] (`rawr::island::Given`).
+    pub type Given = (::std::boxed::Box<Any>, &'static str, Traits);
+
+    /// Finds one of a concrete `T`'s [`Traits`] when `T` has it, and
+    /// nothing otherwise, by method resolution.
+    pub struct Probe<T>(::std::marker::PhantomData<T>);
+    pub fn probe<T>(_: &T) -> Probe<T> {
+        Probe(::std::marker::PhantomData)
+    }
+    macro_rules! probes {
+        ($($has:ident $lacks:ident $method:ident [$($bound:tt)*] $signature:ty => $found:expr;)*) => {$(
+            pub trait $has {
+                fn $method(&self) -> ::std::option::Option<$signature>;
+            }
+            impl<T: $($bound)* + 'static> $has for Probe<T> {
+                fn $method(&self) -> ::std::option::Option<$signature> {
+                    ::std::option::Option::Some($found)
+                }
+            }
+            pub trait $lacks {
+                fn $method(&self) -> ::std::option::Option<$signature>;
+            }
+            impl<T> $lacks for &Probe<T> {
+                fn $method(&self) -> ::std::option::Option<$signature> {
+                    ::std::option::Option::None
+                }
+            }
+        )*};
+    }
+    probes! {
+        HasDebug LacksDebug debug_of [::std::fmt::Debug] fn(&Any) -> ::std::option::Option<::std::string::String>
+            => |value| value.downcast_ref::<T>().map(|value| ::std::format!("{value:?}"));
+        HasDisplay LacksDisplay display_of [::std::fmt::Display] fn(&Any) -> ::std::option::Option<::std::string::String>
+            => |value| value.downcast_ref::<T>().map(::std::string::ToString::to_string);
+        HasClone LacksClone clone_of [::std::clone::Clone] fn(&Any) -> ::std::option::Option<::std::boxed::Box<Any>>
+            => |value| value.downcast_ref::<T>().map(|value| ::std::boxed::Box::new(value.clone()) as ::std::boxed::Box<Any>);
+        HasEqual LacksEqual equal_of [::std::cmp::PartialEq] fn(&Any, &Any) -> ::std::option::Option<bool>
+            => |lhs, rhs| ::std::option::Option::Some(lhs.downcast_ref::<T>()? == rhs.downcast_ref::<T>()?);
+        HasHash LacksHash hash_of [::std::hash::Hash] fn(&Any) -> ::std::option::Option<u64>
+            => |value| {
+                use ::std::hash::{Hash as _, Hasher as _};
+                let mut hasher = ::std::hash::DefaultHasher::new();
+                value.downcast_ref::<T>()?.hash(&mut hasher);
+                ::std::option::Option::Some(hasher.finish())
+            };
+        HasOrder LacksOrder order_of [::std::cmp::PartialOrd] fn(&Any, &Any) -> ::std::option::Option<::std::cmp::Ordering>
+            => |lhs, rhs| lhs.downcast_ref::<T>()?.partial_cmp(rhs.downcast_ref::<T>()?);
+    }
+
+    /// Give `$value` to the call `$call` by value, with what its concrete
+    /// type has of [`Traits`].
+    macro_rules! give {
+        ($call:expr, $value:expr) => {{
+            #[allow(unused_imports)]
+            use crate::__rawr_island::{
+                HasClone as _, HasDebug as _, HasDisplay as _, HasEqual as _, HasHash as _,
+                HasOrder as _, LacksClone as _, LacksDebug as _, LacksDisplay as _,
+                LacksEqual as _, LacksHash as _, LacksOrder as _,
+            };
+            let value = $value;
+            let probe = &crate::__rawr_island::probe(&value);
+            let traits = (
+                probe.debug_of(),
+                probe.display_of(),
+                probe.clone_of(),
+                probe.equal_of(),
+                probe.hash_of(),
+                probe.order_of(),
+            );
+            $call.give(value, traits);
+        }};
+    }
+    pub(crate) use give;
 
     /// Start the program: the runner calls the native `main` once this
     /// returns, on a thread of its own.
@@ -1249,6 +1432,60 @@ pub mod __rawr_island {
         }
         pub fn unknown(&self, path: &str, variant: &str, count: usize) -> ! {
             self.fail(&::std::format!("`{path}` has no variant `{variant}` with {count} fields"))
+        }
+        /// A `Vec` whose items `item` reads.
+        pub fn vec<T>(&mut self, mut item: impl FnMut(&mut Self) -> T) -> ::std::vec::Vec<T> {
+            self.expect(ARRAY, "a `Vec`");
+            let count = self.count();
+            (0..count).map(|_| item(self)).collect()
+        }
+        /// An `Option` whose value `some` reads.
+        pub fn option<T>(&mut self, some: impl FnOnce(&mut Self) -> T) -> ::std::option::Option<T> {
+            match self.byte() {
+                NONE => None,
+                SOME => Some(some(self)),
+                _ => self.fail("expected an `Option`"),
+            }
+        }
+        /// A `Result`, or an alias of one, whose parts `ok` and `err` read.
+        pub fn result<R: Outcome>(
+            &mut self,
+            ok: impl FnOnce(&mut Self) -> R::Ok,
+            err: impl FnOnce(&mut Self) -> R::Err,
+        ) -> R {
+            match self.byte() {
+                OK => R::ok(ok(self)),
+                ERR => R::err(err(self)),
+                _ => self.fail("expected a `Result`"),
+            }
+        }
+        /// The start of a tuple of `members`, which follow.
+        pub fn tuple(&mut self, members: usize) {
+            self.expect(ARRAY, "a tuple");
+            let count = self.count();
+            if count != members {
+                self.fail(&::std::format!("expected a tuple of {members}, found {count}"));
+            }
+        }
+        /// The value a call gave a lent `&mut T` as a whole, `*place =
+        /// value`; `None` when the place is still the one lent.
+        pub fn replaced<T: 'static>(&mut self) -> ::std::option::Option<T> {
+            if self.bytes.first() == Some(&UNIT) {
+                self.byte();
+                return None;
+            }
+            Some(self.native())
+        }
+        /// That a lent `&mut` of `name`, whose type names a lifetime, was
+        /// not given a whole new value, which can't come back yet.
+        pub fn unreplaced(&mut self, name: &str) {
+            if self.byte() != UNIT {
+                ::std::panic!(
+                    "rawr: `{}` gave the `&mut {name}` native code lent it a new value, \
+                     which can't come back yet",
+                    self.path
+                );
+            }
         }
         /// A native value the interpreter moved, as the `iced::Error` of an
         /// `iced::Result`.
@@ -1511,6 +1748,28 @@ pub mod __rawr_island {
             }
         }
     }
+    macro_rules! tuples {
+        ($(($($name:ident),+))*) => {$(
+            impl<$($name: Put),+> Put for ($($name,)+) {
+                #[allow(non_snake_case)]
+                fn put(&self, out: &mut Out) {
+                    let ($($name,)+) = self;
+                    out.byte(ARRAY);
+                    out.count([$(::std::stringify!($name)),+].len());
+                    $($name.put(out);)+
+                }
+            }
+            impl<$($name: Take),+> Take for ($($name,)+) {
+                fn take(input: &mut In<'_>) -> Self {
+                    input.tuple([$(::std::stringify!($name)),+].len());
+                    ($($name::take(input),)+)
+                }
+            }
+        )*};
+    }
+    tuples! {
+        (A) (A, B) (A, B, C) (A, B, C, D) (A, B, C, D, E) (A, B, C, D, E, F)
+    }
     impl<T: Put + ?Sized> Put for &T {
         fn put(&self, out: &mut Out) {
             (**self).put(out);
@@ -1577,6 +1836,7 @@ pub mod __rawr_island {
             ::std::option::Option<Accessor>,
             Accessor,
         )>,
+        given: ::std::vec::Vec<::std::option::Option<Given>>,
         borrows: ::std::marker::PhantomData<&'c mut ()>,
     }
 
@@ -1591,6 +1851,7 @@ pub mod __rawr_island {
                 mutable: 0,
                 values: Out(::std::vec::Vec::new()),
                 lent: ::std::vec::Vec::new(),
+                given: ::std::vec::Vec::new(),
                 borrows: ::std::marker::PhantomData,
             }
         }
@@ -1621,6 +1882,19 @@ pub mod __rawr_island {
             self.lent.push((lend.key, name, place, lend.mutable, lend.shared));
             self.count += 1;
         }
+        /// An argument moved to the interpreter, which keeps it: a value of
+        /// a type the marked crate doesn't declare, with what its type has
+        /// of [`Traits`] ([`give!`]).
+        pub fn give<T: 'static>(&mut self, value: T, traits: Traits) {
+            self.values.byte(NATIVE);
+            self.values.count(self.given.len());
+            self.given.push(Some((
+                ::std::boxed::Box::new(value),
+                ::std::any::type_name::<T>(),
+                traits,
+            )));
+            self.count += 1;
+        }
         pub fn argument<T: Put + ?Sized>(&mut self, value: &T) {
             value.put(&mut self.values);
             self.count += 1;
@@ -1630,7 +1904,7 @@ pub mod __rawr_island {
             self.mutable |= 1 << self.count;
             self.argument(value);
         }
-        pub fn send(self) -> Reply {
+        pub fn send(mut self) -> Reply {
             let mut bytes = ::std::vec::Vec::with_capacity(13 + self.values.0.len());
             bytes.push(u8::from(self.owned));
             bytes.extend_from_slice(&self.count.to_le_bytes());
@@ -1641,7 +1915,9 @@ pub mod __rawr_island {
             // `'c`, which outlives this call, and is reached only while the
             // call runs.
             let mut natives = ::std::vec::Vec::new();
-            let reply = unsafe { __rawr_island_call_v3(self.path, &bytes, &self.lent, &mut natives) };
+            let reply = unsafe {
+                __rawr_island_call_v4(self.path, &bytes, &mut self.given, &self.lent, &mut natives)
+            };
             match reply.first() {
                 Some(0) => Reply {
                     bytes: reply,
@@ -1672,7 +1948,7 @@ pub mod __rawr_island {
             self.read(T::take)
         }
         /// The next value, as `read` reads it.
-        fn read<T>(&mut self, read: impl FnOnce(&mut In<'_>) -> T) -> T {
+        pub fn read<T>(&mut self, read: impl FnOnce(&mut In<'_>) -> T) -> T {
             let mut input = In {
                 bytes: &self.bytes[self.at..],
                 path: self.path,
@@ -1681,18 +1957,6 @@ pub mod __rawr_island {
             let value = read(&mut input);
             self.at = self.bytes.len() - input.bytes.len();
             value
-        }
-        /// An outcome whose parts `ok` and `err` read.
-        pub fn outcome<R: Outcome>(
-            &mut self,
-            ok: impl FnOnce(&mut In<'_>) -> R::Ok,
-            err: impl FnOnce(&mut In<'_>) -> R::Err,
-        ) -> R {
-            self.read(|input| match input.byte() {
-                OK => R::ok(ok(input)),
-                ERR => R::err(err(input)),
-                _ => input.fail("expected a `Result`"),
-            })
         }
     }
 }
@@ -1769,8 +2033,8 @@ mod tests {
         assert!(
             text.contains(
                 "    pub fn advance(&mut self, __a0: (f64, f64)) {\n        \
-                 ::core::panic!(\"rawr: native code can't call `physics::Ball::advance` yet: \
-                 parameter `__rawr_parameter_0`: tuples can't cross yet\")"
+                 let mut __call = crate::__rawr_island::Call::new(\"physics::Ball::advance\", true);\n        \
+                 __call.mutable(&*self);\n        __call.argument(&__a0);\n"
             ),
             "{text}"
         );
@@ -1784,7 +2048,11 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("::core::panic!(\"rawr: native code can't call `physics::scale` yet: parameter `s`: a `Scale` can't cross yet\")"),
+            text.contains(
+                "pub fn scale(__a0: Scale) -> f64 {\n    \
+                 let mut __call = crate::__rawr_island::Call::new(\"physics::scale\", false);\n    \
+                 crate::__rawr_island::give!(__call, __a0);\n"
+            ),
             "{text}"
         );
         let paths = shadow.shape.0.keys().cloned().collect::<Vec<_>>();
@@ -1893,25 +2161,127 @@ mod tests {
         );
         assert!(text.contains("    __call.argument(&__a0);\n"), "{text}");
         assert!(!text.contains("can't call `physics::give`"), "{text}");
-        for (output, function) in [
-            ("iced::Result", "run"),
-            ("std::io::Result<String>", "read"),
-            ("Result<Ball, iced::Error>", "ball"),
+        let island = "crate::__rawr_island";
+        let part = |output: &str, part: &str| {
+            format!(
+                "|input| (&{island}::Back::<<{output} as {island}::Outcome>::{part}>::new()).take(input)"
+            )
+        };
+        for (output, function, read) in [
+            (
+                "iced::Result",
+                "run",
+                format!(
+                    "input.result({}, {})",
+                    part("iced::Result", "Ok"),
+                    part("iced::Result", "Err")
+                ),
+            ),
+            (
+                "std::io::Result<String>",
+                "read",
+                format!(
+                    "input.result({}, {})",
+                    part("std::io::Result<String>", "Ok"),
+                    part("std::io::Result<String>", "Err")
+                ),
+            ),
+            (
+                "Result<Ball, iced::Error>",
+                "ball",
+                format!(
+                    "input.result(|input| {island}::Take::take(input), \
+                     |input| (&{island}::Back::<iced::Error>::new()).take(input))"
+                ),
+            ),
         ] {
-            let island = "crate::__rawr_island";
             let expected = format!(
                 "    let __value: {output} = {{\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
-                 __reply.outcome::<{output}>(\n            \
-                 |input| (&{island}::Back::<<{output} as {island}::Outcome>::Ok>::new()).take(input),\n            \
-                 |input| (&{island}::Back::<<{output} as {island}::Outcome>::Err>::new()).take(input),\n        \
-                 )\n    }};\n"
+                 __reply.read(|input| {read})\n    }};\n"
             );
             assert!(text.contains(&expected), "{function}: {expected}\n{text}");
         }
         assert!(
+            text.contains("    let __value: Result<(i64, i64), String> = __reply.take();\n"),
+            "{text}"
+        );
+    }
+
+    /// A result of a type the marked crate doesn't declare, as an app's own
+    /// `Message`, comes back as the native value the interpreter moves, bare
+    /// or inside an `Option`, a `Vec`, a tuple or a `Result`, each lifetime
+    /// it names read as `'static` (#1203). One taken by value is given to
+    /// the interpreter with what its type has of `Traits` (#1139), unless
+    /// its type names a lifetime.
+    #[test]
+    fn native_values_come_back_part_by_part_and_go_in_by_value() {
+        let shadow = generate(
+            "// rawr\nuse crate::{Item, Message};\npub struct Ball { pub x: f64 }\n\
+             pub fn message() -> Message { Message::Closed }\n\
+             pub fn maybe() -> Option<Item> { None }\n\
+             pub fn items() -> Vec<Item> { Vec::new() }\n\
+             pub fn pair() -> (Message, u32, Ball) { (Message::Closed, 1, Ball { x: 0.0 }) }\n\
+             pub fn found() -> Result<Vec<Item>, String> { Ok(Vec::new()) }\n\
+             pub fn view<'a>(count: u32) -> ui::Element<'a, Message> { ui::button(count) }\n\
+             pub fn grow(item: Item, by: u32) -> Item { item }\n\
+             pub fn keep(element: ui::Element<'static, Message>) {}\n\
+             pub fn lose<'a>(element: ui::Element<'a, Message>) {}\n\
+             pub fn raise(message: &mut Message) {}\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let text = &shadow.files[0].1;
+        let island = "crate::__rawr_island";
+        let back = |ty: &str| format!("(&{island}::Back::<{ty}>::new()).take(input)");
+        let take = format!("{island}::Take::take(input)");
+        for (output, read) in [
+            ("Message", back("Message")),
+            (
+                "Option<Item>",
+                format!("input.option(|input| {})", back("Item")),
+            ),
+            ("Vec<Item>", format!("input.vec(|input| {})", back("Item"))),
+            (
+                "(Message, u32, Ball)",
+                format!(
+                    "{{ input.tuple(3); ({}, {take}, {take},) }}",
+                    back("Message")
+                ),
+            ),
+            (
+                "Result<Vec<Item>, String>",
+                format!(
+                    "input.result(|input| input.vec(|input| {}), |input| {take})",
+                    back("Item")
+                ),
+            ),
+            (
+                "ui::Element<'a, Message>",
+                back("ui::Element<'static, Message>"),
+            ),
+        ] {
+            let expected = format!(
+                "    let __value: {output} = {{\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
+                 __reply.read(|input| {read})\n    }};\n"
+            );
+            assert!(text.contains(&expected), "{expected}\n{text}");
+        }
+        assert!(
+            text.contains(&format!(
+                "    {island}::give!(__call, __a0);\n    __call.argument(&__a1);\n"
+            )),
+            "{text}"
+        );
+        assert!(
             text.contains(
-                "::core::panic!(\"rawr: native code can't call `physics::pair` yet: \
-                 its result: tuples can't cross yet\")"
+                "can't call `physics::lose` yet: parameter `element`: \
+                 `ui::Element<'a, Message>` with a lifetime can't cross yet"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "    if let Some(__new) = __reply.read(|input| input.replaced::<Message>()) {\n        \
+                 *__a0 = __new;\n    }\n"
             ),
             "{text}"
         );

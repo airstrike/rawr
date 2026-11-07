@@ -225,6 +225,41 @@ fn a_native_main_calls_marked_modules_named_as_old_engine_keywords() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// Native code gets the native root's own values back from a marked leaf,
+/// as an iced app gets its `Message` (#1203): bare, inside an `Option`, a
+/// `Vec` and a tuple, and a `ui::Element<'a, Message>` of a local crate
+/// whose lifetime the signature names. It passes them in by value and by
+/// `&mut`, which writes back (#1139). `rawr run` prints what `cargo run`
+/// prints.
+#[test]
+fn a_native_main_takes_and_gives_its_own_values_to_a_marked_leaf() {
+    const NATIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-natives");
+    let root = crate::support::scratch().join("islands-natives");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(NATIVES), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert!(printed.ends_with("view [press 7] -> Some(Pressed(7))\n"), "{printed}");
+    let mut run = start(&root, &[]);
+    for expected in printed.lines() {
+        let line = run.until(Duration::from_secs(900), |_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 /// A marked leaf module of an existing app names the items of the native
 /// crate root it lives in, as rustc lets a descendant: the root's message
 /// enum and its variants, a type alias, a constant, a helper function and

@@ -5,7 +5,7 @@
 //! the marked functions (`package::island`). Functions defined here with
 //! fixed symbol names are what the shadow crate calls, so it never depends
 //! on this crate: [`__rawr_island_start_v1`] registers the native `main`,
-//! and [`__rawr_island_call_v3`] runs one call of a marked function in the
+//! and [`__rawr_island_call_v4`] runs one call of a marked function in the
 //! current generation and returns its result in the wire format of
 //! `program::model::island`.
 //!
@@ -51,6 +51,10 @@ thread_local! {
     static CURRENT: RefCell<Option<Rc<Current>>> = const { RefCell::new(None) };
 }
 
+/// How the runner keeps a native value native code gives a marked function,
+/// which [`lodges`] names.
+static LODGE: OnceLock<Lodge> = OnceLock::new();
+
 /// The native value a script value holds, moved out of the runner's arena
 /// as the value's last copy moves it; `None` when it holds none, and `Err`
 /// when it can't be reached from this thread.
@@ -68,6 +72,45 @@ pub(crate) fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     MOVE.get()?(value)
 }
 
+/// What a trampoline finds of a value's type, for the runner to keep it as
+/// it keeps a value it made: its `Debug` and `Display` text, its `Clone`,
+/// `PartialEq`, `Hash` and `PartialOrd`, each when the type has it.
+pub type Traits = (
+    Option<fn(&dyn Any) -> Option<String>>,
+    Option<fn(&dyn Any) -> Option<String>>,
+    Option<fn(&dyn Any) -> Option<Box<dyn Any>>>,
+    Option<fn(&dyn Any, &dyn Any) -> Option<bool>>,
+    Option<fn(&dyn Any) -> Option<u64>>,
+    Option<fn(&dyn Any, &dyn Any) -> Option<std::cmp::Ordering>>,
+);
+
+/// A native value native code gives a marked function by value (#1139):
+/// the value, its type's name and its [`Traits`].
+pub type Given = (Box<dyn Any>, &'static str, Traits);
+
+/// The script value that holds a [`Given`] value, kept in the runner's
+/// arena on this thread as a value of the type the witness proves; `Err`
+/// says why it can't be.
+pub type Lodge = fn(Given, Option<&crate::host::runtime::Witness>) -> Result<Dynamic, String>;
+
+/// Name how the runner keeps a native value native code gives a marked
+/// function. Set once.
+pub fn lodges(lodge: Lodge) {
+    let _ = LODGE.set(lodge);
+}
+
+/// The script value that holds `given`, kept by the runner as a value of
+/// the type `witness` proves.
+pub(crate) fn lodged(
+    given: Given,
+    witness: Option<&crate::host::runtime::Witness>,
+) -> Result<Dynamic, String> {
+    let lodge = LODGE
+        .get()
+        .ok_or("no runner keeps native values on this thread")?;
+    lodge(given, witness)
+}
+
 /// Register the native `main` to start: the shadow crate's island module
 /// calls this from the program's Rawr `main`.
 #[unsafe(no_mangle)]
@@ -78,7 +121,8 @@ pub fn __rawr_island_start_v1(entry: fn() -> i32) {
 }
 
 /// Run one call of a marked function on this thread: `path` names it from
-/// the crate root, `arguments` holds its header and values, and `lent` what
+/// the crate root, `arguments` holds its header and values, `given` the
+/// native values it takes by value, which the runner keeps, and `lent` what
 /// native code lends the call (D558.3), as ratatui's `&mut Frame<'_>`: each
 /// its key, its type's name, its place, and the accessors the generated
 /// runner reaches it by, a mutable one only when it is lent `&mut`. Only
@@ -92,9 +136,10 @@ pub fn __rawr_island_start_v1(entry: fn() -> i32) {
 /// [`__rawr_scope_claim_v1`] and [`__rawr_scope_release_v1`] are what the
 /// accessors claim a lend by.
 #[unsafe(no_mangle)]
-pub fn __rawr_island_call_v3(
+pub fn __rawr_island_call_v4(
     path: &str,
     arguments: &[u8],
+    given: &mut [Option<Given>],
     lent: &[(
         std::any::TypeId,
         &'static str,
@@ -110,7 +155,7 @@ pub fn __rawr_island_call_v3(
         // runs in it.
         let _entry = crate::future::trampoline();
         if let Some(current) = current() {
-            return current.answer(path, arguments, &lent, natives);
+            return current.answer(path, arguments, given, &lent, natives);
         }
     }
     #[cfg(feature = "sync")]
@@ -128,7 +173,7 @@ pub fn __rawr_island_call_v3(
             model: shared.authority.model(),
             invoke: &invoke,
         };
-        return calls.answer(&call, &lent, natives);
+        return calls.answer(&call, given, &lent, natives);
     }
     failure(&format!("rawr: no runner serves the call of `{path}`"))
 }
@@ -310,6 +355,8 @@ struct Current {
 struct Calls {
     items: HashMap<(bool, String), item::Value>,
     types: program::model::island::Types,
+    /// What each native value a function takes by value is attested as.
+    inputs: HashMap<(bool, String), Box<[Option<crate::host::runtime::Witness>]>>,
 }
 
 /// One call from native code: the function's path and the arguments its
@@ -761,7 +808,7 @@ impl crate::future::Remote for Shared {
 impl Current {
     fn new(bootstrap: Bootstrap) -> Self {
         let authority = bootstrap.catalog().authority();
-        let calls = Arc::new(Calls::new(authority));
+        let calls = Arc::new(Calls::new(authority, bootstrap.catalog().runtime()));
         #[cfg(feature = "sync")]
         let shared = {
             let (authority, runtime) = bootstrap.catalog().shared();
@@ -779,6 +826,7 @@ impl Current {
         &self,
         path: &str,
         arguments: &[u8],
+        given: &mut [Option<Given>],
         lent: &[Loan],
         natives: &mut Natives,
     ) -> Vec<u8> {
@@ -794,7 +842,7 @@ impl Current {
             model: catalog.authority().model(),
             invoke: &invoke,
         };
-        self.calls.answer(&call, lent, natives)
+        self.calls.answer(&call, given, lent, natives)
     }
 }
 
@@ -806,7 +854,10 @@ fn elsewhere() -> Option<(Arc<Calls>, Arc<Shared>)> {
 }
 
 impl Calls {
-    fn new(authority: &program::Authority) -> Self {
+    fn new(
+        authority: &program::Authority,
+        runtime: &crate::Shared<crate::host::runtime::Registry>,
+    ) -> Self {
         let join = |modules: &[ImmutableString], names: &[&str]| {
             modules
                 .iter()
@@ -833,15 +884,34 @@ impl Calls {
             };
             items.insert(entry, item.clone());
         }
+        let inputs = authority
+            .model()
+            .island_inputs()
+            .iter()
+            .map(|(key, types)| {
+                let witnesses = types
+                    .iter()
+                    .map(|ty| ty.as_ref().map(|ty| runtime.witness_for(ty)))
+                    .collect();
+                (key.clone(), witnesses)
+            })
+            .collect();
         Self {
             items,
             types: authority.model().island_types(),
+            inputs,
         }
     }
 
-    fn answer(&self, call: &Call<'_>, lent: &[Loan], natives: &mut Natives) -> Vec<u8> {
+    fn answer(
+        &self,
+        call: &Call<'_>,
+        given: &mut [Option<Given>],
+        lent: &[Loan],
+        natives: &mut Natives,
+    ) -> Vec<u8> {
         lend_all(lent, &mut Vec::with_capacity(lent.len()), &mut |lent| {
-            self.call(call, lent, natives)
+            self.call(call, given, lent, natives)
         })
         .unwrap_or_else(|message| failure(&message))
     }
@@ -849,6 +919,7 @@ impl Calls {
     fn call(
         &self,
         call: &Call<'_>,
+        given: &mut [Option<Given>],
         lent: &[crate::scope::Lent],
         natives: &mut Natives,
     ) -> Result<Vec<u8>, String> {
@@ -864,11 +935,13 @@ impl Calls {
             format!("rawr: the running program has no function `{path}`; restart `rawr run`")
         })?;
         let model = call.model;
+        let inputs = self.inputs.get(&(owned, path.to_owned()));
         let mut values = Vec::with_capacity(count);
-        for _ in 0..count {
+        for index in 0..count {
+            let witness = inputs.and_then(|inputs| inputs.get(index)?.as_ref());
             values.push(
                 model
-                    .island_read(&self.types, lent, &mut reader, 0)
+                    .island_read(&self.types, lent, given, witness, &mut reader, 0)
                     .map_err(malformed)?,
             );
         }
@@ -924,6 +997,22 @@ impl Calls {
             .map_err(unsent)?;
         for (index, value) in values.iter().enumerate() {
             if index < 64 && mutable & (1 << index) != 0 {
+                model
+                    .island_write(value, &mut reply, natives, 0)
+                    .map_err(unsent)?;
+            }
+        }
+        // Then each `&mut` native code lent: `()` when its place is still
+        // the lent one, and else the value `*place = value` gave it, which
+        // moves to native code (#1139).
+        for index in references
+            .iter()
+            .filter(|index| **index >= 64 || mutable & (1 << **index) == 0)
+        {
+            let value = &values[*index];
+            if value.read_lock::<crate::scope::Lent>().is_some() {
+                reply.push(program::model::island::UNIT);
+            } else {
                 model
                     .island_write(value, &mut reply, natives, 0)
                     .map_err(unsent)?;
