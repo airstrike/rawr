@@ -1707,20 +1707,21 @@ fn a_script_function_wraps_opaque_widgets_in_types_that_declare_a_lifetime() {
     );
 }
 
-/// iced's lazy (#328): `lazy(self.version, |_| ..)` is a widget only where
-/// what its closure gives is `'static`, as its impl's `W: Widget + 'static`
-/// says, and a container and `column!` take it. The widgets the closure
-/// makes own what they show, so rustc names them at `'static` and so does
-/// the runner. The output is `cargo run`'s.
+/// iced's lazy (#328, #1081): `lazy(self.version, |_| ..)` is a widget only
+/// where what its closure gives is `'static`, as its impl's `W: Widget +
+/// 'static` says, and a container and `column!` take it. The widgets the
+/// closure makes own what they show, so rustc names them at `'static` and
+/// so does the runner, and the literal of each row's `button("Delete")`,
+/// made while the widget lays out and outside the view's region, is a
+/// `&'static str`. The output is `cargo run`'s.
 #[test]
-#[ignore = "blocked: a region's family writes the type its closure fills, `W` of `Lazy<'x, W, u8>`, at the region's `'x`, where rustc names it `'static`, so `boxed` of a region's `Container<'x, Lazy<..>>` is E0521"]
 fn a_widget_whose_closure_gives_static_widgets_is_boxed_in_a_view() {
-    let (rawr, cargo) = both_printed("lazy.rs", "Add,Add,item2,Add");
+    let (rawr, cargo) = both_printed("lazy.rs", "Add,Add,Delete,Add");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("3 view pad 0 container 1 lazy pad 0 [item2] [item3] [Add]")
+        rawr.contains("3 view pad 0 container 1 lazy pad 0 row 0 item2@16 [Delete] row 0 item3@16 [Delete] [Add]")
             && rawr.contains("3 message Delete(\"item2\")")
-            && rawr.ends_with("last view pad 0 container 1 lazy pad 0 [item2] [item3] [Add]"),
+            && rawr.ends_with("last view pad 0 container 1 lazy pad 0 row 0 item2@16 [Delete] row 0 item3@16 [Delete] [Add]"),
         "{rawr}"
     );
 }
@@ -1737,6 +1738,37 @@ fn a_widget_whose_closure_reads_the_state_is_boxed_in_a_view() {
     assert_eq!(rawr, cargo);
     assert!(
         rawr.ends_with("last view pad 0 transition 20@22 transition 2@16 [Add]"),
+        "{rawr}"
+    );
+}
+
+/// iced's progress_bar with a view closure that captures nothing (#1130):
+/// native code lends the closure a crate value, `&Spring`, as
+/// `transition`'s view takes `&Animation<f32>`, and the closure gives a
+/// widget at the view's lifetime. The closure is a function native code
+/// calls with the value it lends. The output is `cargo run`'s.
+#[test]
+fn a_view_function_lent_a_crate_value_is_boxed_in_a_view() {
+    let (rawr, cargo) = both_printed("animated.rs", "Add,Add");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 animated 22@20 [Add]"),
+        "{rawr}"
+    );
+}
+
+/// iced's progress_bar (#1129): a transition made before an `if` moves
+/// into a `row!` in one branch and a `column!` in the other, and each
+/// branch's widget is spaced or padded, boxed and centered. Each region
+/// value keeps its own family whichever container it joins. The output is
+/// `cargo run`'s.
+#[test]
+fn a_region_value_moved_into_a_row_or_a_column_keeps_its_family() {
+    let (rawr, cargo) = both_printed("oriented.rs", "Add,Flip,Add,Flip");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("row 2 transition 20@21 [Flip]")
+            && rawr.ends_with("last view pad 0 pad 0 pad 3 transition 20@20 [Flip] [Add]"),
         "{rawr}"
     );
 }
