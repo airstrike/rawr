@@ -182,27 +182,31 @@ fn exact_package_and_native_out_dir_binding_precede_io_and_ownership() {
 }
 
 #[test]
-fn bound_execution_still_requires_existing_canonical_output_and_layout() {
+fn bound_execution_still_requires_existing_output_and_canonical_layout() {
     let fixture = Fixture::new();
     assert!(matches!(
         fixture.observe(&mut account(), &node::GraphBudget::new()),
         Err(stored::Error::Observation(observe::Error::Io { .. }))
     ));
+    // The saved output is read through a link, as Cargo reads it.
     let elsewhere = fixture.root.join("elsewhere");
     fs::write(&elsewhere, b"cargo:x=y\n").expect("other file");
     std::os::unix::fs::symlink(&elsewhere, &fixture.output).expect("output symlink");
-    assert!(matches!(
-        fixture.observe(&mut account(), &node::GraphBudget::new()),
-        Err(stored::Error::Observation(observe::Error::Policy(_)))
-    ));
+    let linked = fixture
+        .observe(&mut account(), &node::GraphBudget::new())
+        .expect("an output through a link is its target");
+    assert_eq!(linked.output, elsewhere);
     fs::remove_file(&fixture.output).expect("remove output symlink");
     fixture.write(b"");
+    // An OUT_DIR that resolves outside Cargo's build layout is not one.
     let original = fixture.out.with_file_name("old-out");
     fs::rename(&fixture.out, &original).expect("rename OUT_DIR");
     std::os::unix::fs::symlink(&original, &fixture.out).expect("OUT_DIR symlink");
     assert!(matches!(
         fixture.observe(&mut account(), &node::GraphBudget::new()),
-        Err(stored::Error::Observation(observe::Error::Policy(_)))
+        Err(stored::Error::Observation(observe::Error::Policy(
+            "saved-output-layout"
+        )))
     ));
 
     let wrong = fixture.root.join("wrong");

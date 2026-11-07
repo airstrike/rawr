@@ -104,8 +104,13 @@ pub(in crate::input) fn canonical(
     // The original heap account covers the libc allocation and copied native
     // output; the copy is owned once there, the probe above on paths.
     budget.admit(2, output - std::mem::size_of::<PathBuf>())?;
-    let canonical = if !directory && crate::input::canonical::regular_file(&normalized) {
-        normalized.clone()
+    // `..` after a symlink leaves the link's target, so only a path without
+    // it may be confirmed lexically.
+    let lexical = !path
+        .components()
+        .any(|component| component == Component::ParentDir);
+    let canonical = if !directory && lexical && crate::input::canonical::regular_file(&normalized) {
+        normalized
     } else {
         fs::canonicalize(&absolute).map_err(|source| io("canonicalize freshness path", source))?
     };
@@ -120,43 +125,15 @@ pub(in crate::input) fn canonical(
         Err(super::super::Error::Observation(Error::Io { .. })) => false,
         Err(error) => return Err(error),
     };
-    if !kind || canonical != normalized {
+    if !kind {
         return Err(Error::Policy(if directory {
-            "must be a canonical directory without symlink traversal"
+            "must be a directory"
         } else {
-            "must be a canonical regular file without symlink traversal"
+            "must be a regular file"
         })
         .into());
     }
     Ok(canonical)
-}
-
-pub(super) fn reject_symlinks(path: &Path, budget: &mut Budget<'_>) -> Result<()> {
-    budget.storage(1, path.as_os_str().len())?;
-    let mut current = PathBuf::new();
-    current
-        .try_reserve_exact(path.as_os_str().len())
-        .map_err(|error| budget.failure(super::super::Error::Allocation(error)))?;
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
-            Component::RootDir | Component::Normal(_) => current.push(component.as_os_str()),
-            Component::CurDir | Component::ParentDir => continue,
-        }
-        match metadata(&current, true, budget) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(Error::Policy("symlink-input").into())
-            }
-            Ok(_) => {}
-            Err(super::super::Error::Observation(Error::Io { source, .. }))
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                break
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn text(path: &Path, budget: &mut Budget<'_>) -> Result<Box<str>> {
