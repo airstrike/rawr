@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-06",
-  "version": "0.3.163",
+  "updated": "2026-11-07",
+  "version": "0.3.164",
   "examples": {
     "running": 29,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.164",
+        "date": "2026-11-07",
+        "entries": [
+          {"text":"Fixes a regression from #1055: an `a..=b` of `isize`, `u8` or any integer other than `i64` crosses into a crate as a `RangeInclusive` of its own type, so `rows.cartesian_product(columns)` of two `isize` ranges builds again; a range a crate's type parameter gives back is your range of that type, and an integer range is `Clone`, `Debug` and an `Iterator` where a crate's bounds ask.","issues":[1103],"refs":[1062]}
+        ]
+      },
       {
         "version": "0.3.163",
         "date": "2026-11-06",
@@ -2648,7 +2655,11 @@
     {"issue":1099,"title":"gallery: image(handle) fixes Handle from its argument, not from the renderer (54 x E0271)","state":"open","category":"Divergences from rustc"},
     {"issue":1100,"title":"screenshot: &screenshot.rgba (a &Bytes) isn't deref-coerced to &[u8]","state":"open","category":"Divergences from rustc"},
     {"issue":1101,"title":"In a program's impl of a crate trait method, a parameter's projection bound to the impl's Self isn't the impl's type","state":"open","category":"Divergences from rustc"},
-    {"issue":1102,"title":"A program impl's generic method that takes &O writes type Of<'x> = _ (E0121)","state":"open","category":"Divergences from rustc"}
+    {"issue":1102,"title":"A program impl's generic method that takes &O writes type Of<'x> = _ (E0121)","state":"open","category":"Divergences from rustc"},
+    {"issue":1103,"title":"Fixes a regression from #1055: an `a..=b` of `isize`, `u8` or any integer other than `i64`…","state":"closed","category":"Divergences from rustc","release":"0.3.164"},
+    {"issue":1104,"title":"collect() on a crate iterator is ambiguous after a lane's history: two identical aliases","state":"open","category":"Health"},
+    {"issue":1105,"title":"a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"open","category":"Divergences from rustc"},
+    {"issue":1106,"title":"range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

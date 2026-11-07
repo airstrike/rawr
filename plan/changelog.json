@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.164",
+      "date": "2026-11-07",
+      "entries": [
+        {"text":"Fixes a regression from #1055: an `a..=b` of `isize`, `u8` or any integer other than `i64` crosses into a crate as a `RangeInclusive` of its own type, so `rows.cartesian_product(columns)` of two `isize` ranges builds again; a range a crate's type parameter gives back is your range of that type, and an integer range is `Clone`, `Debug` and an `Iterator` where a crate's bounds ask.","issues":[1103],"refs":[1062]}
+      ]
+    },
+    {
       "version": "0.3.163",
       "date": "2026-11-06",
       "entries": [

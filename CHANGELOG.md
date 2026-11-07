@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.164 (2026-11-07)
+
+- Fixes a regression from #1055: an `a..=b` of `isize`, `u8` or any integer other than `i64` crosses into a crate as a `RangeInclusive` of its own type, so `rows.cartesian_product(columns)` of two `isize` ranges builds again; a range a crate's type parameter gives back is your range of that type, and an integer range is `Clone`, `Debug` and an `Iterator` where a crate's bounds ask. (#1103; part of #1062)
+
 ## 0.3.163 (2026-11-06)
 
 - `rawr check` no longer overflows its stack on iced's gallery, markdown and screenshot: a trait method's type parameter whose bound sets an associated type to the method's `Self`, as image's `copy_from<O: GenericImageView<Pixel = Self::Pixel>>` does, reads that associated type once, as rustc does, and a crate member whose closure names a type parameter it doesn't declare, as rayon's `from_par_iter` gives one, is left out instead of panicking. (#1069)
