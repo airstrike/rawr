@@ -701,7 +701,11 @@ pub mod animation {
 
     impl Float for bool {
         fn float_value(&self) -> f32 {
-            if *self { 1.0 } else { 0.0 }
+            if *self {
+                1.0
+            } else {
+                0.0
+            }
         }
     }
 
@@ -838,5 +842,101 @@ pub mod shell {
             widget.update(*cursor, &mut shell);
         }
         shell.redraws
+    }
+}
+
+pub mod weighted {
+    use crate::random::Source;
+
+    /// A number a weight may be, as rand's `SampleUniform`.
+    pub trait Uniform: Copy + PartialOrd + std::ops::AddAssign + Default {
+        fn below(self, draw: u32) -> Self;
+    }
+
+    impl Uniform for i32 {
+        fn below(self, draw: u32) -> Self {
+            (draw % 1000) as i32 % self
+        }
+    }
+
+    impl Uniform for u32 {
+        fn below(self, draw: u32) -> Self {
+            draw % self
+        }
+    }
+
+    impl Uniform for f64 {
+        fn below(self, draw: u32) -> Self {
+            f64::from(draw % 1000) / 1000.0 * self
+        }
+    }
+
+    /// A value that lends a `B`, as rand's `SampleBorrow`: the number
+    /// itself and a reference to it.
+    pub trait SampleBorrow<B> {
+        fn borrow(&self) -> &B;
+    }
+
+    impl<B: Uniform> SampleBorrow<B> for B {
+        fn borrow(&self) -> &B {
+            self
+        }
+    }
+
+    impl<B: Uniform> SampleBorrow<B> for &B {
+        fn borrow(&self) -> &B {
+            self
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Error;
+
+    /// What a distribution gives, as rand's `Distribution<T>`.
+    pub trait Distribution<T> {
+        fn sample<R: Source + ?Sized>(&self, rng: &mut R) -> T;
+    }
+
+    /// An index drawn by weight, as rand's `WeightedIndex<X>`.
+    #[derive(Clone, Debug)]
+    pub struct WeightedIndex<X: Uniform> {
+        cumulative: Vec<X>,
+        total: X,
+    }
+
+    impl<X: Uniform> WeightedIndex<X> {
+        /// `X` is fixed only by `I::Item: SampleBorrow<X>`, as rand's
+        /// `WeightedIndex::new` has it.
+        pub fn new<I>(weights: I) -> Result<WeightedIndex<X>, Error>
+        where
+            I: IntoIterator,
+            I::Item: SampleBorrow<X>,
+        {
+            let mut total = X::default();
+            let mut cumulative = Vec::new();
+            for weight in weights {
+                total += *weight.borrow();
+                cumulative.push(total);
+            }
+            if cumulative.is_empty() {
+                return Err(Error);
+            }
+            Ok(Self { cumulative, total })
+        }
+
+        /// The Rust name of the weights' type, which tells `i32` from `i64`.
+        pub fn kind(&self) -> &'static str {
+            std::any::type_name::<X>()
+        }
+    }
+
+    impl<X: Uniform> Distribution<usize> for WeightedIndex<X> {
+        fn sample<R: Source + ?Sized>(&self, rng: &mut R) -> usize {
+            let pick = self.total.below(rng.draw());
+            self.cumulative
+                .iter()
+                .position(|bound| pick < *bound)
+                .unwrap_or(self.cumulative.len() - 1)
+        }
     }
 }

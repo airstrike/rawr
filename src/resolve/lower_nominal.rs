@@ -20493,6 +20493,19 @@ impl<'a> Parser<'a> {
                     && let [declared] = relation.arguments()
                     && let Some(item) = match (name.as_str(), &actual) {
                         ("Item", Ty::Iter(item, _)) => Some((**item).clone()),
+                        // An array or a vector a crate takes by value gives
+                        // its elements, as rand's `WeightedIndex::new([10,
+                        // 4, 2, 1])` reads `I::Item` (#1084).
+                        (
+                            "Item",
+                            Ty::Array {
+                                element,
+                                kind:
+                                    sequence::Kind::Array(_)
+                                    | sequence::Kind::Vec
+                                    | sequence::Kind::Deque,
+                            },
+                        ) => Some((**element).clone()),
                         ("Item", Ty::InclusiveRange(kind)) => Some(Ty::Int(*kind)),
                         ("Item", Ty::Range(element)) if matches!(**element, Ty::Int(_)) => {
                             Some((**element).clone())

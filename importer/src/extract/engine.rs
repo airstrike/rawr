@@ -34,8 +34,9 @@ use model::{
 };
 
 /// The format of a recorded unit table. A table of another format is not
-/// read; it is extracted again.
-pub(crate) const TABLE_SCHEMA: u32 = 7;
+/// read; it is extracted again. A table of 7 could name implementations of
+/// crates outside its key (#1097).
+pub(crate) const TABLE_SCHEMA: u32 = 8;
 
 /// The compiler kind of a derive macro's public path, as serde's
 /// `Serialize`: its export is unsupported with this kind, and the facade

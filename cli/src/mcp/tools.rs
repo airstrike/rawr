@@ -13,7 +13,7 @@ use crate::layer;
 
 /// Core's tool names: an extension's tool by one of these names is not
 /// listed.
-pub const CORE: [&str; 13] = [
+pub const CORE: [&str; 19] = [
     "new",
     "check",
     "run",
@@ -22,12 +22,21 @@ pub const CORE: [&str; 13] = [
     "status",
     "stop",
     "screenshot",
+    "move",
+    "click",
+    "drag",
+    "scroll",
+    "key",
+    "type",
     "inspect",
     "break",
     "step",
     "continue",
     "clear",
 ];
+
+/// What every input tool's description ends with.
+const INPUT: &str = "Positions are logical points from the window's top-left corner, title bar included, as `screenshot` shows it. The input goes to the program alone: your own pointer, keyboard and focus stay as they are, and the window isn't brought forward. The window shows an agent cursor where the pointer last went, also in screenshots. Returns once the program has taken the input and drawn again, so a `screenshot` next shows what it did.";
 
 /// Crates whose programs draw a terminal UI, which `start` can't host yet.
 const TERMINAL_UI: [&str; 6] = [
@@ -56,6 +65,32 @@ fn milliseconds(description: &str, default: u64) -> Value {
         "default": default,
         "description": description,
     })
+}
+
+/// An input tool's schema: its own `properties`, which `required` names,
+/// and the `path`, `title` and `timeout_ms` every input tool takes.
+fn gesture(properties: Value, required: &[&str]) -> Value {
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "path": path_schema(),
+            "title": { "type": "string", "description": "The window's title, when the program has several; defaults to its front window" },
+            "timeout_ms": milliseconds("How long to wait for the program to take the input and draw", 5_000),
+        },
+        "required": required,
+    });
+    if let (Some(all), Some(own)) = (schema["properties"].as_object_mut(), properties.as_object()) {
+        all.extend(own.clone());
+    }
+    schema
+}
+
+fn coordinate(description: &str) -> Value {
+    json!({ "type": "number", "description": format!("{description}, in logical points from the window's top-left corner") })
+}
+
+fn button() -> Value {
+    json!({ "type": "string", "enum": ["left", "right", "middle"], "default": "left" })
 }
 
 /// Every tool: core's, then the installed extensions'.
@@ -181,6 +216,75 @@ pub fn list() -> Vec<Value> {
             },
         }),
         json!({
+            "name": "move",
+            "description": format!("Move the pointer in the started program's window to `x`, `y`, as for a hover. {INPUT}"),
+            "inputSchema": gesture(json!({ "x": coordinate("x"), "y": coordinate("y") }), &["x", "y"]),
+        }),
+        json!({
+            "name": "click",
+            "description": format!("Click in the started program's window at `x`, `y`: the pointer moves there, then `button` goes down and up `count` times, 2 for a double click. {INPUT}"),
+            "inputSchema": gesture(
+                json!({
+                    "x": coordinate("x"),
+                    "y": coordinate("y"),
+                    "button": button(),
+                    "count": { "type": "integer", "minimum": 1, "maximum": 3, "default": 1, "description": "How many clicks: 2 for a double click" },
+                }),
+                &["x", "y"],
+            ),
+        }),
+        json!({
+            "name": "drag",
+            "description": format!("Drag in the started program's window: `button` goes down at `x`, `y`, the pointer moves to `to_x`, `to_y` in short steps with it held, and it goes up there. {INPUT}"),
+            "inputSchema": gesture(
+                json!({
+                    "x": coordinate("x where the drag starts"),
+                    "y": coordinate("y where the drag starts"),
+                    "to_x": coordinate("x where it ends"),
+                    "to_y": coordinate("y where it ends"),
+                    "button": button(),
+                }),
+                &["x", "y", "to_x", "to_y"],
+            ),
+        }),
+        json!({
+            "name": "scroll",
+            "description": format!("Scroll what is under `x`, `y` in the started program's window: positive `dy` toward the end, as a wheel turned toward you; positive `dx` to the right. {INPUT}"),
+            "inputSchema": gesture(
+                json!({
+                    "x": coordinate("x"),
+                    "y": coordinate("y"),
+                    "dx": { "type": "number", "default": 0, "description": "How far to scroll right; negative scrolls left" },
+                    "dy": { "type": "number", "default": 0, "description": "How far to scroll down, toward the end; negative scrolls up" },
+                    "unit": { "type": "string", "enum": ["line", "pixel"], "default": "line", "description": "`line` as a mouse wheel's notches, `pixel` as a trackpad's logical points" },
+                }),
+                &["x", "y"],
+            ),
+        }),
+        json!({
+            "name": "key",
+            "description": format!("Press a key in the started program's window, with modifiers held: the modifiers go down, the key goes down and up, and the modifiers go up. The program's focused widget takes it. {INPUT}"),
+            "inputSchema": gesture(
+                json!({
+                    "key": { "type": "string", "description": "One character, as `a` or `?`, or a key's name: Enter, Tab, Space, Backspace, Delete, Escape, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1 to F12" },
+                    "modifiers": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["shift", "control", "alt", "command"] },
+                        "description": "The modifier keys held: `command` is macOS's ⌘",
+                    },
+                }),
+                &["key"],
+            ),
+        }),
+        json!({
+            "name": "type",
+            "description": format!("Type text in the started program's window, one key press for each character; a newline is Enter. The program's focused widget takes it: `click` a text input first. {INPUT}"),
+            "inputSchema": gesture(
+                json!({ "text": { "type": "string", "description": "The text to type" } }),
+                &["text"],
+            ),
+        }),
+        json!({
             "name": "inspect",
             "description": "Read the started program's values while it runs: the bindings in scope where it is, or one binding by `name`, each as Rust's `{:?}` prints it. The program answers at its next step in its own code; with `name` or `file`, at the next step where that binding is in scope or in that file. The answer lists the calls the program is in; `frame` reads a caller's bindings: 0 is the function it is in, 1 its caller, and on. A program waiting for input or an event answers once it runs again.",
             "inputSchema": {
@@ -264,7 +368,7 @@ pub fn instructions(root: &Path) -> String {
         .map_or_else(|| "rawr".to_owned(), |path| path.display().to_string());
     let mut text = format!(
         "rawr {} ({executable}) runs Rust programs for dev builds: a Cargo crate whose files start with `// rawr`, or one .rs file. It reloads them when you save.\n\
-         Loop: `new` makes a crate. Edit its files with your own tools. `check` it. `run` a command-line program to its end with args and stdin, or `start` a window or long-running program and `wait` after each save to see it reload or fail. `screenshot` shows its window. `inspect` reads its values while it runs. `break` pauses it at a line or a function, `step` and `continue` go on from there, and `clear` removes breakpoints. `stop` ends it.\n\
+         Loop: `new` makes a crate. Edit its files with your own tools. `check` it. `run` a command-line program to its end with args and stdin, or `start` a window or long-running program and `wait` after each save to see it reload or fail. `screenshot` shows its window, and `move`, `click`, `drag`, `scroll`, `key` and `type` send it input, at positions in the screenshot's points. `inspect` reads its values while it runs. `break` pauses it at a line or a function, `step` and `continue` go on from there, and `clear` removes breakpoints. `stop` ends it.\n\
          Relative paths start at {}.\n",
         rawr::VERSION,
         root.display()
@@ -460,6 +564,7 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
         ),
         "break" | "step" | "continue" | "clear" => debug(server, name, &arguments),
         "screenshot" => screenshot(server, text("path"), text("title"), cancel, &progress),
+        "move" | "click" | "drag" | "scroll" | "key" | "type" => input(server, name, &arguments),
         name => extension_call(server, name, &arguments, cancel, &progress),
     };
     outcome.unwrap_or_else(content::failure)
@@ -947,6 +1052,71 @@ fn debug(server: &Server, tool: &str, arguments: &Value) -> Result<Value, String
     Ok(content::success(structured, summary.trim_end(), Vec::new()))
 }
 
+/// `move`, `click`, `drag`, `scroll`, `key` and `type`: ask the started
+/// program over its socket to hand its window the input, and say what it
+/// reached.
+fn input(server: &Server, tool: &str, arguments: &Value) -> Result<Value, String> {
+    let session = session(server, arguments.get("path").and_then(Value::as_str))?;
+    let timeout = bounded(arguments, "timeout_ms", 5_000);
+    let mut request = arguments.clone();
+    if !request.is_object() {
+        request = json!({});
+    }
+    request["op"] = json!("input");
+    request["action"] = json!(tool);
+    request["timeout_ms"] = json!(timeout.as_millis() as u64);
+    let answer = ask(&session.socket, &request, timeout).map_err(|error| {
+        let phase = session.phase();
+        if phase.is_live() {
+            format!("cannot reach the running program: {error}")
+        } else {
+            format!(
+                "the program started for {} isn't running (state: {})",
+                session.root.display(),
+                phase.name()
+            )
+        }
+    })?;
+    match answer["error"].as_str() {
+        Some("paused") => {
+            let paused = &answer["paused"];
+            return Err(format!(
+                "the program is paused at {}:{}, which holds its window's event loop: it takes input once `continue` or `step` lets it go on",
+                paused["file"].as_str().unwrap_or_default(),
+                paused["line"]
+            ));
+        }
+        Some(error) => {
+            return Err(format!(
+                "{error} (the program started for {} is {})",
+                session.root.display(),
+                session.phase().name()
+            ));
+        }
+        None => {}
+    }
+    let window = &answer["window"];
+    let mut summary = match answer["cursor"].as_object() {
+        Some(cursor) => format!("{tool} at {}, {}", cursor["x"], cursor["y"]),
+        None => format!("{tool} sent"),
+    };
+    summary.push_str(&format!(
+        " in {} ({} × {} points)",
+        match window["title"].as_str() {
+            Some("") | None => "the untitled window".to_owned(),
+            Some(title) => format!("`{title}`"),
+        },
+        window["width"],
+        window["height"]
+    ));
+    if answer["cursor"].is_object() {
+        summary.push_str("; the agent cursor is there");
+    }
+    let mut structured = answer;
+    structured["root"] = json!(session.root);
+    Ok(content::success(structured, summary, Vec::new()))
+}
+
 /// One request and its answer over the program's socket.
 #[cfg(unix)]
 fn ask(socket: &Path, request: &Value, timeout: Duration) -> std::io::Result<Value> {
@@ -1051,19 +1221,32 @@ fn screenshot(
     };
     let file = place.directory().join("screenshot.png");
     let bytes = window::capture(chosen, &file)?;
+    let points = window::points(&bytes);
+    let mut summary = format!(
+        "window {} of pid {} ({}): {}",
+        chosen.number,
+        chosen.pid,
+        if chosen.title.is_empty() {
+            "untitled"
+        } else {
+            &chosen.title
+        },
+        file.display()
+    );
+    if let Some((width, height)) = points {
+        summary.push_str(&format!(
+            "\n{width} × {height} points: `click` and the other input tools take positions in these points, from the top-left corner"
+        ));
+    }
     Ok(content::success(
-        json!({ "file": file, "title": chosen.title, "pid": chosen.pid, "window": chosen.number }),
-        format!(
-            "window {} of pid {} ({}): {}",
-            chosen.number,
-            chosen.pid,
-            if chosen.title.is_empty() {
-                "untitled"
-            } else {
-                &chosen.title
-            },
-            file.display()
-        ),
+        json!({
+            "file": file,
+            "title": chosen.title,
+            "pid": chosen.pid,
+            "window": chosen.number,
+            "points": points.map(|(width, height)| json!({ "width": width, "height": height })),
+        }),
+        summary,
         vec![content::png(&bytes)],
     ))
 }
