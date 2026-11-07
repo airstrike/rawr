@@ -2358,8 +2358,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     ty::Ref(_, target, ty::Mutability::Not) => target.is_str(),
                     kind => matches!(kind, ty::Int(_) | ty::Uint(_) | ty::Float(_)),
                 };
-                if lends_or_numbers
-                    && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
+                if lends_or_numbers && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
                 {
                     implementations.push(impl_id);
                 }

@@ -2574,9 +2574,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 let cases = self
                     .graph
                     .implementations_of(trait_id)
-                    .filter(|implementation| {
-                        implementation.polarity() == model::Polarity::Positive
-                    })
+                    .filter(|implementation| implementation.polarity() == model::Polarity::Positive)
                     .filter_map(|implementation| match implementation.self_type() {
                         // The Rust number itself: `convert` gives the
                         // value Rawr holds, an `f64` for an `f32`.
