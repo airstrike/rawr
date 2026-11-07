@@ -402,3 +402,40 @@ fn the_first_error_is_the_first_body_the_program_writes() {
         Some("expected `Result<C, ()>`, found `()`")
     );
 }
+
+#[test]
+fn the_old_engines_statements_are_rustc_syntax_errors() {
+    assert_eq!(
+        refused("fn main() {\n    try { 1 } catch (e) { 2 };\n}\n"),
+        (
+            "".into(),
+            "keyword `catch` cannot follow a `try` block".into(),
+            None
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let mut x = 0;\n    do { x += 1; } while x < 3;\n}\n"),
+        (
+            "".into(),
+            "expected expression, found reserved keyword `do`".into(),
+            label("expected expression")
+        )
+    );
+    let eight = "expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator";
+    assert_eq!(
+        refused("fn main() {\n    import \"m\" as m;\n}\n"),
+        (
+            "".into(),
+            format!("{eight}, found `\"m\"`"),
+            label("expected one of 8 possible tokens")
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let x = 1;\n    export x;\n}\n"),
+        (
+            "".into(),
+            format!("{eight}, found `x`"),
+            label("expected one of 8 possible tokens")
+        )
+    );
+}

@@ -33024,7 +33024,10 @@ impl<'a> Parser<'a> {
             )
         };
         let found = crate::parser::item::found(&token);
-        let written = found.trim_start_matches("keyword ").trim_matches('`');
+        let written = found
+            .trim_start_matches("reserved ")
+            .trim_start_matches("keyword ")
+            .trim_matches('`');
         Some(Error::Syntax {
             message: format!("{expected}, found {found}").into(),
             label: label.into(),
@@ -39605,10 +39608,21 @@ impl<'a> Parser<'a> {
                 help: None,
                 at: Span::new(token_span.start(), text_end(token_span.start(), "Fn")),
             }),
+            // `try { .. } catch ..`: rustc reads a `try` block, which no
+            // `catch` may follow.
+            Token::Try if let Some(at) = self.catch_after_block() => Err(Error::Syntax {
+                message: "keyword `catch` cannot follow a `try` block".into(),
+                label: "".into(),
+                help: Some("try using `match` on the result of the `try` block instead".into()),
+                at: Span::new(at, text_end(at, "catch")),
+            }),
             // `throw`, `do`, `#{ .. }` and the like: rustc's syntax error.
             token => {
                 let found = crate::parser::item::found(&token);
-                let written = found.trim_start_matches("keyword ").trim_matches('`');
+                let written = found
+                    .trim_start_matches("reserved ")
+                    .trim_start_matches("keyword ")
+                    .trim_matches('`');
                 Err(Error::Syntax {
                     message: format!("expected expression, found {found}").into(),
                     label: "expected expression".into(),
@@ -42827,6 +42841,27 @@ impl<'a> Parser<'a> {
             });
         }
         Ok(Some(types))
+    }
+
+    /// Where a `catch` follows the block that starts at the next token.
+    fn catch_after_block(&self) -> Option<Position> {
+        let mut ahead = self.input.clone();
+        if !matches!(ahead.next(), Some((Token::LeftBrace, _))) {
+            return None;
+        }
+        let mut depth = 1_usize;
+        while depth > 0 {
+            match ahead.next()? {
+                (Token::LeftBrace | Token::MapStart, _) => depth += 1,
+                (Token::RightBrace, _) => depth -= 1,
+                (Token::EOF, _) => return None,
+                _ => {}
+            }
+        }
+        match ahead.next()? {
+            (Token::Identifier(word), at) if word.as_str() == "catch" => Some(at),
+            _ => None,
+        }
     }
 
     /// Whether, from inside a literal's opening bracket, a method call,
@@ -56277,10 +56312,7 @@ fn relocate_statement(statement: &mut Stmt, locate: &mut dyn FnMut(Position) -> 
         Stmt::FnCall(call, ..) => relocate_call(call, locate),
         Stmt::Expr(expr) => relocate_expr(expr, locate),
         Stmt::Block(block) => relocate_block(block, locate),
-        Stmt::If(flow, ..)
-        | Stmt::While(flow, ..)
-        | Stmt::Do(flow, ..)
-        | Stmt::TryCatch(flow, ..) => {
+        Stmt::If(flow, ..) | Stmt::While(flow, ..) => {
             relocate_expr(&mut flow.expr, locate);
             relocate_block(&mut flow.body, locate);
             relocate_block(&mut flow.branch, locate);
@@ -56301,7 +56333,6 @@ fn relocate_statement(statement: &mut Stmt, locate: &mut dyn FnMut(Position) -> 
                 relocate_expr(expr, locate);
             }
         }
-        Stmt::Import(value, ..) => relocate_expr(&mut value.0, locate),
         _ => {}
     }
 }
@@ -56399,10 +56430,7 @@ fn rewrite_statement(
         Stmt::FnCall(call, ..) => rewrite_call(call, rewrites, patterns, false),
         Stmt::Expr(expr) => rewrite_expr(expr, rewrites, patterns),
         Stmt::Block(block) => rewrite_statements(block.statements_mut(), rewrites, patterns),
-        Stmt::If(flow, ..)
-        | Stmt::While(flow, ..)
-        | Stmt::Do(flow, ..)
-        | Stmt::TryCatch(flow, ..) => rewrite_flow(flow, rewrites, patterns),
+        Stmt::If(flow, ..) | Stmt::While(flow, ..) => rewrite_flow(flow, rewrites, patterns),
         Stmt::For(value, ..) => {
             rewrite_expr(&mut value.2.expr, rewrites, patterns);
             rewrite_statements(value.2.body.statements_mut(), rewrites, patterns);
@@ -56455,8 +56483,6 @@ fn rewrite_statement(
             }
         }
         Stmt::Noop(..) => {}
-        Stmt::Import(value, ..) => rewrite_expr(&mut value.0, rewrites, patterns),
-        Stmt::Export(..) => {}
         Stmt::Share(..) => {}
     }
 }

@@ -246,10 +246,6 @@ pub struct Vm<'e> {
     /// escaping error drops whatever its loops were holding without the
     /// compiler emitting anything.
     iterators: Vec<Iteration>,
-    /// One entry per `try` region currently armed or catching. Frame-floored
-    /// the same way the iterators are, so an error in a called function can
-    /// never find its caller's handler and jump into another chunk.
-    handlers: Vec<Handler>,
     /// The running data-size total of each literal currently being built,
     /// innermost last.
     ///
@@ -314,23 +310,6 @@ fn unbind_this(receiver: &mut Dynamic, taken: Option<Dynamic>, write_back: bool)
     }
 }
 
-/// A `try` region.
-struct Handler {
-    target: usize,
-    catch_var: Option<u32>,
-    /// Where the three stacks were when the region was entered. An error can
-    /// be raised at any depth of all three, and the catch block has to begin
-    /// where the `try` did.
-    operands: usize,
-    scope_len: usize,
-    iters: usize,
-    /// Set once the catch block is running, holding the error it caught. That
-    /// is what a bare `throw;` in the catch block re-raises, and its presence
-    /// is what tells an escaping error it is leaving a catch rather than
-    /// entering one.
-    caught: Option<Box<EvalAltResult>>,
-}
-
 impl<'e> Vm<'e> {
     /// A VM that dispatches through `engine`.
     #[must_use]
@@ -341,7 +320,6 @@ impl<'e> Vm<'e> {
             caches: Caches::new(),
             stack: Vec::new(),
             iterators: Vec::new(),
-            handlers: Vec::new(),
             sizes: Vec::new(),
             unwind_floor: 0,
             this: None,
@@ -377,7 +355,6 @@ impl<'e> Vm<'e> {
             caches: Caches::new(),
             stack: Vec::new(),
             iterators: Vec::new(),
-            handlers: Vec::new(),
             sizes: Vec::new(),
             unwind_floor: 0,
             // A crossing carries no receiver: rawr binds one only where it
@@ -689,16 +666,8 @@ impl<'e> Vm<'e> {
         if let Some(wrappers) = wrappers {
             self.global.lib.push(wrappers);
         }
-        let orig_resolver = mem::replace(
-            &mut self.global.embedded_module_resolver,
-            program.resolver().cloned(),
-        );
-
         let result = f(self);
 
-        {
-            self.global.embedded_module_resolver = orig_resolver;
-        }
         self.global.lib.truncate(orig_lib_len);
         self.global.source = orig_source;
 
@@ -2312,40 +2281,14 @@ impl<'e> Vm<'e> {
         reached: &mut usize,
     ) -> VmResult {
         let iter_base = self.iterators.len();
-        let handler_base = self.handlers.len();
         let size_base = self.sizes.len();
         // Each frame's floor is its own. A checkpoint inside a function this
         // one calls must not become what this one unwinds to.
         let outer_floor = mem::replace(&mut self.unwind_floor, base);
 
-        // The dispatch loop uses `?` throughout, so an error leaves it rather
-        // than being examined inside it. Catching therefore happens out here:
-        // the loop stops, a handler this frame armed gets the error, and the
-        // loop restarts at the catch block. `run_frame` keeps `pc` in a
-        // register and the fault address arrives through `reached`, which is
-        // written every instruction anyway, so none of this costs the common
-        // path anything.
-        let mut start = chunk.entry() as usize;
-        let result = loop {
-            match self.run_frame(program, scope, base, reached, start) {
-                Ok(value) => break Ok(value),
-                Err(err) => match self.catch(program, err, handler_base, scope) {
-                    // Metered like a backward jump, and for the same reason:
-                    // a catch block that sits before the throw is a cycle the
-                    // dispatch loop never sees as one, because control got
-                    // there through the error path rather than through a jump.
-                    Ok(resume) => {
-                        self.engine
-                            .track_operation(&mut self.global, program.position(resume))?;
-                        start = resume;
-                    }
-                    Err(err) => break Err(err),
-                },
-            }
-        };
+        let result = self.run_frame(program, scope, base, reached, chunk.entry() as usize);
 
         self.iterators.truncate(iter_base);
-        self.handlers.truncate(handler_base);
         self.sizes.truncate(size_base);
 
         if result.is_err() {
@@ -2472,126 +2415,10 @@ impl<'e> Vm<'e> {
         }
     }
 
-    /// Hand an error to the innermost handler this frame armed, if any.
+    /// The dispatch loop, from `start`: the chunk's entry.
     ///
-    /// `Ok` is the address the catch block starts at. `Err` means nothing here
-    /// wanted it and it should keep going up.
-    ///
-    /// Kept out of line for the reason [`Vm::call_compiled`] is: it sits on
-    /// the dispatch loop's error edge, and letting it inline there costs every
-    /// instruction that never fails.
-    #[inline(never)]
-    fn catch(
-        &mut self,
-        program: &Program,
-        err: Box<EvalAltResult>,
-        handler_base: usize,
-        scope: &mut Scope,
-    ) -> Result<usize, Box<EvalAltResult>> {
-        // Only handlers this frame armed. A callee must never resume into its
-        // caller's catch block — that is a jump into another chunk, which the
-        // verifier forbids and nothing would catch at run time. The callee's
-        // error propagates normally instead, and `ErrorInFunctionCall` is
-        // catchable, so the caller's own frame still sees it.
-        // Walking outwards, because leaving one region can land the error in
-        // the next: `try { try { throw 1 } catch { throw; } } catch (e) { .. }`
-        // re-raises from the inner catch and the outer `try` still has to see
-        // it.
-        let mut err = err;
-        let handler = loop {
-            if self.handlers.len() <= handler_base {
-                return Err(err);
-            }
-            let handler = self.handlers.last_mut().expect("checked");
-
-            // Leaving a catch block rather than entering one. A bare `throw;`
-            // there — an `ErrorRuntime` carrying unit — means "re-raise what
-            // was caught, from here" (`eval/stmt.rs:866`).
-            let Some(original) = handler.caught.take() else {
-                break handler;
-            };
-            self.handlers.pop();
-            let rethrown =
-                matches!(&*err, EvalAltResult::ErrorRuntime(value, ..) if value.is_unit());
-            if rethrown {
-                let pos = err.position();
-                err = original;
-                err.set_position(pos);
-            }
-        };
-
-        // `return`, `break`, `continue`, `exit` and the system exceptions
-        // unwind as errors and are not exceptions a script may catch.
-        if !err.is_catchable() {
-            return Err(err);
-        }
-
-        let (target, catch_var) = (handler.target, handler.catch_var);
-        let (operands, scope_len, iters) = (handler.operands, handler.scope_len, handler.iters);
-
-        let mut err = err;
-        let value = self.catch_value(&mut err, catch_var.is_some());
-
-        // Back to where the `try` began, at all three depths.
-        self.stack.truncate(operands);
-        self.iterators.truncate(iters);
-        scope.rewind(scope_len);
-
-        if let Some(index) = catch_var {
-            let name = program
-                .name(index)
-                .ok_or_else(|| malformed(format!("no name {index}")))?;
-            if scope.len() >= self.engine.max_variables() {
-                return Err(Box::new(EvalAltResult::ErrorTooManyVariables(
-                    program.position(target),
-                )));
-            }
-            scope.push_dynamic(name, value);
-        }
-
-        self.handlers.last_mut().expect("checked").caught = Some(err);
-        Ok(target)
-    }
-
-    /// What the catch variable is bound to (`eval/stmt.rs:809-845`).
-    ///
-    /// Three shapes: nothing at all without a variable, the raw thrown value
-    /// for a `throw`, and a map of the error's parts for anything else. The
-    /// unwrapping matters — a `throw` inside a called function arrives wrapped
-    /// in `ErrorInFunctionCall`, and rawr still binds the bare value.
-    fn catch_value(&self, err: &mut Box<EvalAltResult>, wanted: bool) -> Dynamic {
-        if !wanted {
-            return Dynamic::UNIT;
-        }
-        if let EvalAltResult::ErrorRuntime(value, ..) = err.unwrap_inner() {
-            return value.clone();
-        }
-
-        let mut map = Map::new();
-        // Read *and cleared*, as rawr does, so the message below carries no
-        // trailing position and a re-raise starts from the catch site.
-        let pos = err.take_position();
-
-        map.insert("message".into(), err.to_string().into());
-        if let Some(source) = &self.global.source {
-            map.insert("source".into(), source.into());
-        }
-        if !pos.is_none() {
-            let line = pos.line().unwrap_or(0) as INT;
-            map.insert("line".into(), line.into());
-            let column = pos.position().unwrap_or(0) as INT;
-            map.insert("position".into(), column.into());
-        }
-        err.dump_fields(&mut map);
-        map.into()
-    }
-
-    /// The dispatch loop. `start` is the chunk's entry, or a catch block's
-    /// address when [`Vm::execute`] resumes one after an error.
-    ///
-    /// Inlined into its one caller: splitting the loop out so errors could be
-    /// caught outside it cost 1.55x to 1.40x on the tight-loop benchmark until
-    /// this was here.
+    /// Inlined into its one caller: a dispatch loop split out of
+    /// [`Vm::execute`] costs the tight-loop benchmark without it.
     #[inline(always)]
     fn run_frame(
         &mut self,
@@ -3325,27 +3152,6 @@ impl<'e> Vm<'e> {
 
                 code::tag::CHECKPOINT => self.unwind_floor = scope.len(),
 
-                code::tag::PUSH_HANDLER | code::tag::PUSH_HANDLER_VAR => {
-                    let target = wide(1)? as usize;
-                    let catch_var = if tag == code::tag::PUSH_HANDLER_VAR {
-                        Some(u32::from(small(5)?))
-                    } else {
-                        None
-                    };
-                    self.handlers.push(Handler {
-                        target,
-                        catch_var,
-                        operands: self.stack.len(),
-                        scope_len: scope.len(),
-                        iters: self.iterators.len(),
-                        caught: None,
-                    });
-                }
-
-                code::tag::POP_HANDLER => {
-                    self.handlers.pop();
-                }
-
                 code::tag::ITER_INIT => {
                     let iterable = self.pop()?;
                     self.iter_init(iterable, pos())?;
@@ -3521,7 +3327,6 @@ mod tests {
                 switches: Vec::new(),
                 lib: None,
                 has_compiler_support: false,
-                resolver: None,
                 source: None,
             },
         )

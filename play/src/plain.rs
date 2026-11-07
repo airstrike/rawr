@@ -418,8 +418,7 @@ fn sandbox(
                 .lock()
                 .unwrap()
                 .push(Stream::Stderr, &format!("{text}\n"))
-        })
-        .set_module_resolver(rawr::module_resolvers::DummyModuleResolver::new());
+        });
     for symbol in ["import", "eval"] {
         engine.disable_symbol(symbol);
     }

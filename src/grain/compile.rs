@@ -186,7 +186,6 @@ impl Compiler {
                 switches: lowering.switches,
                 lib,
                 has_compiler_support,
-                resolver: ast.resolver.clone(),
                 source: ast.source().map(Into::into),
             },
         );
@@ -214,15 +213,12 @@ struct Loop {
     /// one field cannot be both.
     continue_depth: u16,
     /// How many iterators are live *inside* this loop, so a jump out of it
-    /// can drop whatever was made since. A `break` inside a `try` inside a
-    /// `for` skips the straight-line path that would have cleaned up.
+    /// can drop whatever was made since. A `break` inside a `for` skips the
+    /// straight-line path that would have cleaned up.
     iters: usize,
     /// Whether the loop owns an iterator of its own. `break` drops it and
     /// `continue` must not, which is the other thing one field cannot be.
     owns_iterator: bool,
-    /// How many `try` regions were armed when the loop began, so a jump out
-    /// of the loop disarms the ones inside it.
-    handlers: usize,
     /// `Jump` sites awaiting the address after the loop.
     breaks: Vec<usize>,
 }
@@ -266,7 +262,6 @@ struct FunctionCheckpoint {
     switches: usize,
     max_stack: u16,
     iters: usize,
-    handlers: usize,
 }
 
 #[derive(Default)]
@@ -288,9 +283,6 @@ struct Lowering {
     /// How many iterators are live at this point in the lowering, so a jump
     /// out of a loop knows how many to drop.
     iters: usize,
-    /// The same for `try` regions: a `break` out of one has to disarm it, or
-    /// the next unrelated error is caught into a block already left.
-    handlers: usize,
     /// Names that are script functions rather than variables.
     script_fns: Vec<ImmutableString>,
     /// Set when something nested inside an expression defeated the slot model.
@@ -321,7 +313,6 @@ impl Lowering {
             switches: self.switches.len(),
             max_stack: self.max_stack,
             iters: self.iters,
-            handlers: self.handlers,
         }
     }
 
@@ -337,7 +328,6 @@ impl Lowering {
         self.switches.truncate(checkpoint.switches);
         self.max_stack = checkpoint.max_stack;
         self.iters = checkpoint.iters;
-        self.handlers = checkpoint.handlers;
     }
 
     /// Lower a statement list as a whole chunk. Returns false if something
@@ -755,7 +745,6 @@ impl Lowering {
         }
 
         self.iters = checkpoint.iters;
-        self.handlers = checkpoint.handlers;
 
         Some(LoweredFn {
             name: self.push_name(def.name.clone()),
@@ -785,9 +774,7 @@ impl Lowering {
     fn statement(&mut self, stmt: &Stmt) -> bool {
         match stmt {
             Stmt::Var(payload, flags, ..) => {
-                // `export let x = ...` also binds a module alias, which the
-                // slot model does not represent.
-                if flags.intersects(ASTFlags::EXPORTED) || self.slots.is_full() {
+                if self.slots.is_full() {
                     return false;
                 }
 
@@ -942,66 +929,6 @@ impl Lowering {
 
             Stmt::Block(block) => self.block(block.statements()),
 
-            // `try { .. } catch (e) { .. }`.
-            //
-            // The catch block's value is thrown away: rawr's whole statement
-            // is the try block's value on the way through and *unit* when
-            // something was caught (`.map(|_| Dynamic::UNIT)`,
-            // `eval/stmt.rs:863`). So `try { throw 7 } catch (e) { e * 2 }` is
-            // unit, not 14.
-            Stmt::TryCatch(payload, ..) => {
-                let FlowControl { expr, body, branch } = &**payload;
-
-                // An absent catch variable is `Expr::Unit`; a present one is
-                // an `Expr::Variable` whose position is what rawr reports
-                // `ErrorTooManyVariables` against.
-                let catch_var = match expr {
-                    Expr::Variable(v, ..) => Some(v.1.clone()),
-                    _ => None,
-                };
-
-                let catch_name = catch_var.clone().map(|name| self.push_name(name));
-                let site = self.code.len();
-                self.emit_at(
-                    Op::PushHandler {
-                        target: u32::MAX,
-                        catch_var: catch_name,
-                    },
-                    expr.position(),
-                );
-                self.handlers += 1;
-
-                if !self.block(body.statements()) {
-                    return false;
-                }
-                self.emit(Op::PopHandler);
-                self.handlers -= 1;
-                let past = self.emit_jump();
-
-                // The catch block, entered with the scope back where the `try`
-                // began and the variable already pushed on top of it. The
-                // handler is still armed here — that is what makes a bare
-                // `throw;` in this block a re-raise — so the depth goes back
-                // up, and the `PopHandler` below is what ends the region.
-                self.patch_to(site, self.here());
-                self.handlers += 1;
-                let depth = self.slots.depth();
-                if let Some(name) = catch_var {
-                    self.slots.declare(name);
-                }
-                if !self.block(branch.statements()) {
-                    return false;
-                }
-                self.emit(Op::Pop);
-                self.unwind_to(depth);
-                self.emit(Op::PopHandler);
-                self.handlers -= 1;
-                self.emit(Op::Unit);
-
-                self.patch_here(past);
-                true
-            }
-
             // `for x in seq` / `for (x, i) in seq`.
             //
             // The loop variable and counter are pushed once and written each
@@ -1140,39 +1067,6 @@ impl Lowering {
                 true
             }
 
-            Stmt::Do(payload, flags, ..) => {
-                let FlowControl { expr, body, .. } = &**payload;
-                let until = flags.intersects(ASTFlags::NEGATED);
-
-                let top = self.here();
-                self.emit_at(Op::Tick, body.position());
-
-                self.begin_loop(top);
-                if !self.block_discarding(body.statements()) {
-                    return false;
-                }
-                let breaks = self.end_loop();
-
-                self.expression(expr);
-                if until {
-                    // `do ... until c` loops while `c` is false, which is a
-                    // false-jump straight back to the top.
-                    self.emit_at(Op::JumpIfFalse { target: top }, expr.position());
-                } else {
-                    let exit = self.emit_jump_if_false(expr.position());
-                    self.emit(Op::Jump(top));
-                    self.patch_here(exit);
-                }
-
-                self.emit(Op::Unit);
-                let past = self.emit_jump();
-                for site in breaks {
-                    self.patch_here(site);
-                }
-                self.patch_here(past);
-                true
-            }
-
             Stmt::BreakLoop(value, flags, ..) => {
                 let Some(active) = self.loops.last() else {
                     // Outside any loop this is a parse error in rawr, so it
@@ -1182,16 +1076,15 @@ impl Lowering {
                 };
                 let continue_target = active.continue_target;
                 let loop_iters = active.iters;
-                let loop_handlers = active.handlers;
                 let owns_iterator = active.owns_iterator;
                 let (break_depth, continue_depth) = (active.break_depth, active.continue_depth);
                 let is_break = flags.intersects(ASTFlags::BREAK);
 
                 // A jump out of a loop skips whatever the straight-line path
                 // would have cleaned up. The nesting is lexical, so how many
-                // iterators are live is known here — a `break` inside a `try`
-                // inside a `for` has one to drop, and `continue` has none
-                // because it re-enters the loop that owns it.
+                // iterators are live is known here — a `break` inside a `for`
+                // has one to drop, and `continue` has none because it re-enters
+                // the loop that owns it.
                 if is_break {
                     match value {
                         Some(expr) => self.expression(expr),
@@ -1200,7 +1093,6 @@ impl Lowering {
                     // Out of the loop entirely, so its own iterator goes too —
                     // `loop_iters` counts from inside the loop and therefore
                     // already includes it.
-                    self.pop_handlers(loop_handlers);
                     self.drop_iterators(loop_iters - usize::from(owns_iterator));
                     self.emit(Op::UnwindTo(break_depth));
                     let site = self.emit_jump();
@@ -1208,7 +1100,6 @@ impl Lowering {
                 } else {
                     // Back into the same loop, so its iterator and its loop
                     // variable both have to survive.
-                    self.pop_handlers(loop_handlers);
                     self.drop_iterators(loop_iters);
                     self.emit(Op::UnwindTo(continue_depth));
                     self.emit(Op::Jump(continue_target));
@@ -1245,19 +1136,8 @@ impl Lowering {
                 true
             }
 
-            // The one statement the fragment fallback below cannot hold.
-            //
-            // `import` declares into the imports stack rather than the scope,
-            // and a fragment that rewinds truncates that stack on the way out
-            // (`eval/stmt.rs:55`) — so the alias would be gone before the next
-            // statement could name it, and a qualified call is its own
-            // fragment. Refusing the lowering hands the body to the walker
-            // whole, which is where the alias lives long enough to be used.
-            Stmt::Import(..) => false,
-
             // Not lowered yet, and listed rather than matched with `_` on
-            // purpose. A wildcard here silently turned `import` and `eval`
-            // into fragments that answered differently from the walker; naming
+            // purpose. A wildcard here silently turned `eval` into fragments that answered differently from the walker; naming
             // every kind means a new one added to rawr's AST stops the build
             // until someone has decided which of the three it is — lowered,
             // fragment, or too scope-shaped to be either.
@@ -1270,15 +1150,6 @@ impl Lowering {
             | Stmt::FnCall(..)
             | Stmt::Assignment(..)
             | Stmt::Return(..)) => {
-                let residual = self.push_residual(wrap_statements(vec![other.clone()]));
-                self.emit(Op::EvalAst {
-                    residual,
-                    rewind_scope: true,
-                });
-                true
-            }
-
-            other @ Stmt::Export(..) => {
                 let residual = self.push_residual(wrap_statements(vec![other.clone()]));
                 self.emit(Op::EvalAst {
                     residual,
@@ -1955,8 +1826,7 @@ impl Lowering {
             Op::Jump(slot)
             | Op::JumpIfFalse { target: slot, .. }
             | Op::JumpIfTrue { target: slot, .. }
-            | Op::IterNext { exit: slot, .. }
-            | Op::PushHandler { target: slot, .. } => *slot = target,
+            | Op::IterNext { exit: slot, .. } => *slot = target,
             other => unreachable!("patched a {other:?}, which is not a jump"),
         }
     }
@@ -1968,20 +1838,8 @@ impl Lowering {
         }
     }
 
-    /// Disarm every `try` region entered above `floor`.
-    ///
-    /// A `break` or `continue` jumps over the `PopHandler` the straight-line
-    /// path would have run. Left armed, the handler keeps a stale target and a
-    /// stale set of depths, and the next error anywhere in the frame is caught
-    /// into a `catch` block that has already been left.
-    fn pop_handlers(&mut self, floor: usize) {
-        for _ in floor..self.handlers {
-            self.emit(Op::PopHandler);
-        }
-    }
-
     /// Open a loop whose `break` and `continue` unwind to the same place —
-    /// `while`, `loop` and `do`, which declare nothing of their own.
+    /// `while` and `loop`, which declare nothing of their own.
     fn begin_loop(&mut self, continue_target: u32) {
         let depth = u16::try_from(self.slots.depth()).expect("slot count is bounded");
         self.loops.push(Loop {
@@ -1989,7 +1847,6 @@ impl Lowering {
             break_depth: depth,
             continue_depth: depth,
             iters: self.iters,
-            handlers: self.handlers,
             owns_iterator: false,
             breaks: Vec::new(),
         });
@@ -2004,7 +1861,6 @@ impl Lowering {
             break_depth,
             continue_depth: u16::try_from(self.slots.depth()).expect("slot count is bounded"),
             iters: self.iters,
-            handlers: self.handlers,
             owns_iterator: true,
             breaks: Vec::new(),
         });

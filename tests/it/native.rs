@@ -5,8 +5,8 @@ use std::any::TypeId;
 fn test_native_context() {
     let mut engine = Engine::new();
 
-    engine.set_max_modules(40);
-    engine.register_fn("test", |context: NativeCallContext, x: INT| context.engine().max_modules() as INT + x);
+    engine.set_max_variables(40);
+    engine.register_fn("test", |context: NativeCallContext, x: INT| context.engine().max_variables() as INT + x);
 
     assert_eq!(engine.eval::<INT>("test(2)").unwrap(), 42);
 }

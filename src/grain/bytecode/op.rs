@@ -523,34 +523,6 @@ pub enum Op {
         rewind_scope: bool,
     },
 
-    /// Arm a handler covering the instructions up to the matching
-    /// [`Op::PopHandler`], catching to `target`.
-    ///
-    /// Records where the operand stack, the scope and the iterator stack were
-    /// when it was armed, because an error can be raised at any depth of all
-    /// three and the catch block has to start where the `try` did.
-    ///
-    /// Only errors rawr considers catchable are caught: `return`, `break`,
-    /// `continue` and `exit` unwind as errors too and must pass straight
-    /// through (`eval/stmt.rs:806`).
-    ///
-    /// `catch_var` names the variable the error is bound to. Its table entry
-    /// is that variable's position, which is what rawr reports
-    /// `ErrorTooManyVariables` against.
-    PushHandler {
-        /// Where to jump to when an error is caught.
-        target: u32,
-        /// The name the error is bound to; absent for a bare `catch`.
-        catch_var: Option<u32>,
-    },
-
-    /// Disarm the innermost handler.
-    ///
-    /// Emitted twice per `try`: once where the body ends normally, and once
-    /// where the catch block does — the second ends the region in which a
-    /// bare `throw;` means "re-raise the original".
-    PopHandler,
-
     /// Pop an iterable and start iterating it.
     ///
     /// The iterator goes on a stack of the VM's own rather than the operand

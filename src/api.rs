@@ -71,26 +71,6 @@ impl Engine {
         })
     }
 
-    /// The module resolution service used by the [`Engine`].
-    #[inline(always)]
-    #[must_use]
-    pub fn module_resolver(&self) -> &dyn crate::ModuleResolver {
-        static DUMMY_RESOLVER: crate::module::resolvers::DummyModuleResolver =
-            crate::module::resolvers::DummyModuleResolver;
-
-        self.module_resolver.as_deref().unwrap_or(&DUMMY_RESOLVER)
-    }
-
-    /// Set the module resolution service used by the [`Engine`].
-    #[inline(always)]
-    pub fn set_module_resolver(
-        &mut self,
-        resolver: impl crate::ModuleResolver + 'static,
-    ) -> &mut Self {
-        self.module_resolver = Some(Box::new(resolver));
-        self
-    }
-
     /// Disable a particular keyword or operator in the language.
     ///
     /// # Examples

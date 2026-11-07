@@ -301,11 +301,6 @@ pub type Map = std::collections::BTreeMap<Identifier, Dynamic>;
 
 pub use api::json::format_map_as_json;
 
-pub use module::ModuleResolver;
-
-/// Module containing all built-in _module resolvers_ available to Rawr.
-pub use module::resolvers as module_resolvers;
-
 pub use optimizer::OptimizationLevel;
 
 // Expose internal data structures.

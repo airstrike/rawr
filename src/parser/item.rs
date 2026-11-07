@@ -5199,8 +5199,8 @@ fn expect_parameter_type(input: &mut TokenStream) -> ParseResult<Position> {
     }
 }
 
-/// rustc's name for a token it did not expect: `` `)` ``, `` keyword `fn` ``
-/// or `` `<eof>` ``.
+/// rustc's name for a token it did not expect: `` `)` ``, `` keyword `fn` ``,
+/// `` reserved keyword `do` `` or `` `<eof>` ``.
 pub(crate) fn found(token: &Token) -> String {
     /// Rust's keywords, which rustc names as keywords.
     const KEYWORDS: [&str; 38] = [
@@ -5208,6 +5208,12 @@ pub(crate) fn found(token: &Token) -> String {
         "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
         "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
         "true", "type", "unsafe", "use", "where", "while",
+    ];
+    /// The words Rust reserves for later, which rustc names as reserved
+    /// keywords.
+    const RESERVED: [&str; 14] = [
+        "abstract", "become", "box", "do", "final", "gen", "macro", "override", "priv", "try",
+        "typeof", "unsized", "virtual", "yield",
     ];
     match token {
         Token::EOF => "`<eof>`".into(),
@@ -5217,6 +5223,8 @@ pub(crate) fn found(token: &Token) -> String {
             let text = crate::tokenizer::raw_names(&text);
             if KEYWORDS.contains(&text.as_ref()) {
                 format!("keyword `{text}`")
+            } else if RESERVED.contains(&text.as_ref()) {
+                format!("reserved keyword `{text}`")
             } else {
                 format!("`{text}`")
             }

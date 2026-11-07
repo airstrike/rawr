@@ -597,7 +597,6 @@ impl Engine {
             this_ptr,
             statements,
             restore_orig_state,
-            orig_fn_resolution_caches_len,
         )
     }
 
@@ -607,7 +606,6 @@ impl Engine {
     /// run inside the frame, as the rest of the Rust scope the value is
     /// bound in. A statement whose value is dropped opens its frame with
     /// nothing after.
-    #[allow(clippy::too_many_arguments)]
     fn eval_stmts_from(
         &self,
         global: &mut GlobalRuntimeState,
@@ -616,12 +614,9 @@ impl Engine {
         mut this_ptr: Option<&mut Dynamic>,
         statements: &[Stmt],
         restore_orig_state: bool,
-        orig_fn_resolution_caches_len: usize,
     ) -> RawrResult {
         let mut result = Dynamic::UNIT;
         for (k, stmt) in statements.iter().enumerate() {
-            let orig_imports_len = global.num_imports();
-
             result = self.eval_stmt(
                 global,
                 caches,
@@ -653,37 +648,12 @@ impl Engine {
                             this_ptr.as_deref_mut(),
                             rest,
                             restore_orig_state,
-                            orig_fn_resolution_caches_len,
                         )
                     };
                     return opening.open(&mut continuation);
                 }
             } else if k + 1 < statements.len() {
                 result = crate::scope::settle(result)?;
-            }
-
-            if matches!(stmt, Stmt::Import(..)) {
-                // Get the extra modules - see if any functions are marked global.
-                // Without global functions, the extra modules never affect function resolution.
-                if global
-                    .scan_imports_raw()
-                    .skip(orig_imports_len)
-                    .any(|(.., m)| m.contains_indexed_global_functions())
-                {
-                    // Different scenarios where the cache must be cleared - notice that this is
-                    // expensive as all function resolutions must start again
-                    if caches.fn_resolution_caches_len() > orig_fn_resolution_caches_len {
-                        // When new module is imported with global functions and there is already
-                        // a new cache, just clear it
-                        caches.fn_resolution_cache_mut().clear();
-                    } else if restore_orig_state {
-                        // When new module is imported with global functions, push a new cache
-                        caches.push_fn_resolution_cache();
-                    } else {
-                        // When the block is to be evaluated in-place, just clear the current cache
-                        caches.fn_resolution_cache_mut().clear();
-                    }
-                }
             }
         }
         Ok(result)
@@ -985,7 +955,6 @@ impl Engine {
                 } else {
                     AccessMode::ReadWrite
                 };
-                let export = options.intersects(ASTFlags::EXPORTED);
 
                 // Check variable definition filter
                 if let Some(ref filter) = self.def_var_filter {
@@ -1031,27 +1000,18 @@ impl Engine {
                 };
                 let mut value = self.intern_string(value);
 
-                let _alias = if !rewind_scope {
-                    // Put global constants into global module
-                    if global.scope_level == 0
-                        && access == AccessMode::ReadOnly
-                        && global.lib.iter().any(|m| !m.is_empty())
-                    {
-                        crate::func::locked_write(global.constants.get_or_insert_with(|| {
-                            crate::Shared::new(
-                                crate::Locked::new(std::collections::BTreeMap::new()),
-                            )
-                        }))
-                        .unwrap()
-                        .insert(var_name.name.clone(), value.clone());
-                    }
-
-                    export.then_some(var_name)
-                } else if !export {
-                    None
-                } else {
-                    unreachable!("exported variable not on global level");
-                };
+                // Put global constants into global module
+                if !rewind_scope
+                    && global.scope_level == 0
+                    && access == AccessMode::ReadOnly
+                    && global.lib.iter().any(|m| !m.is_empty())
+                {
+                    crate::func::locked_write(global.constants.get_or_insert_with(|| {
+                        crate::Shared::new(crate::Locked::new(std::collections::BTreeMap::new()))
+                    }))
+                    .unwrap()
+                    .insert(var_name.name.clone(), value.clone());
+                }
 
                 match index {
                     Some(index) => {
@@ -1061,10 +1021,6 @@ impl Engine {
                     _ => {
                         scope.push_entry(var_name.name.clone(), access, value);
                     }
-                }
-
-                if let Some(alias) = _alias {
-                    scope.add_alias_by_index(scope.len() - 1, alias.as_str().into());
                 }
 
                 Ok(Dynamic::UNIT)
@@ -1434,40 +1390,6 @@ impl Engine {
                 }
             }
 
-            // Do loop
-            Stmt::Do(x, options, ..) => {
-                let FlowControl { expr, body, .. } = &**x;
-                let is_while = !options.intersects(ASTFlags::NEGATED);
-
-                loop {
-                    if !body.is_empty() {
-                        let this_ptr = this_ptr.as_deref_mut();
-                        let statements = body.statements();
-
-                        match self
-                            .eval_stmt_block(global, caches, scope, this_ptr, statements, true)
-                            .and_then(crate::scope::settle)
-                        {
-                            Ok(..) => (),
-                            Err(err) => match *err {
-                                ERR::LoopBreak(false, ..) => continue,
-                                ERR::LoopBreak(true, value, ..) => break Ok(value),
-                                _ => break Err(err),
-                            },
-                        }
-                    }
-
-                    let condition = self
-                        .eval_expr(global, caches, scope, this_ptr.as_deref_mut(), expr)?
-                        .as_bool()
-                        .map_err(|typ| self.make_type_mismatch_err::<bool>(typ, expr.position()))?;
-
-                    if condition ^ is_while {
-                        break Ok(Dynamic::UNIT);
-                    }
-                }
-            }
-
             // For loop
             Stmt::For(x, ..) => {
                 let (var_name, counter, FlowControl { expr, body, .. }) = &**x;
@@ -1585,86 +1507,6 @@ impl Engine {
                 Err(ERR::LoopBreak(is_break, value, *pos).into())
             }
 
-            // Try/Catch statement
-            Stmt::TryCatch(x, ..) => {
-                let FlowControl {
-                    body,
-                    expr: catch_var,
-                    branch,
-                } = &**x;
-
-                match self.eval_stmt_block(
-                    global,
-                    caches,
-                    scope,
-                    this_ptr.as_deref_mut(),
-                    body.statements(),
-                    true,
-                ) {
-                    r @ Ok(_) => r,
-                    Err(err) if err.is_pseudo_error() => Err(err),
-                    Err(err) if !err.is_catchable() => Err(err),
-                    Err(mut err) => {
-                        let err_value = match err.unwrap_inner() {
-                            // No error variable
-                            _ if catch_var.is_unit() => Dynamic::UNIT,
-
-                            ERR::ErrorRuntime(x, ..) => x.clone(),
-
-                            _ => {
-                                let mut err_map = crate::Map::new();
-                                let err_pos = err.take_position();
-
-                                err_map.insert("message".into(), err.to_string().into());
-
-                                if let Some(ref source) = global.source {
-                                    err_map.insert("source".into(), source.into());
-                                }
-
-                                if !err_pos.is_none() {
-                                    err_map.insert(
-                                        "line".into(),
-                                        (err_pos.line().unwrap() as INT).into(),
-                                    );
-                                    err_map.insert(
-                                        "position".into(),
-                                        (err_pos.position().unwrap_or(0) as INT).into(),
-                                    );
-                                }
-
-                                err.dump_fields(&mut err_map);
-                                err_map.into()
-                            }
-                        };
-
-                        // Restore scope at end of block
-                        defer! { scope if !catch_var.is_unit() => rewind; let orig_scope_len = scope.len(); }
-
-                        if let Expr::Variable(x, ..) = catch_var {
-                            // Guard against too many variables
-                            if scope.len() >= self.max_variables() {
-                                return Err(ERR::ErrorTooManyVariables(catch_var.position()).into());
-                            }
-                            scope.push(x.1.clone(), err_value);
-                        }
-
-                        let this_ptr = this_ptr.as_deref_mut();
-                        let statements = branch.statements();
-
-                        self.eval_stmt_block(global, caches, scope, this_ptr, statements, true)
-                            .map(|_| Dynamic::UNIT)
-                            .map_err(|result_err| match *result_err {
-                                // Re-throw exception
-                                ERR::ErrorRuntime(v, pos) if v.is_unit() => {
-                                    err.set_position(pos);
-                                    err
-                                }
-                                _ => result_err,
-                            })
-                    }
-                }
-            }
-
             // Throw value
             Stmt::Return(Some(expr), options, pos) if options.intersects(ASTFlags::BREAK) => self
                 .eval_expr(global, caches, scope, this_ptr, expr)
@@ -1682,86 +1524,6 @@ impl Engine {
 
             // Empty return
             Stmt::Return(None, .., pos) => Err(ERR::Return(Dynamic::UNIT, *pos).into()),
-
-            // Import statement
-            Stmt::Import(x, _pos) => {
-                use crate::ModuleResolver;
-
-                let (expr, export) = &**x;
-
-                // Guard against too many modules
-                if global.num_modules_loaded >= self.max_modules() {
-                    return Err(ERR::ErrorTooManyModules(*_pos).into());
-                }
-
-                let v = self.eval_expr(global, caches, scope, this_ptr, expr)?;
-
-                let path = v.try_cast_result::<crate::ImmutableString>().map_err(|v| {
-                    self.make_type_mismatch_err::<crate::ImmutableString>(
-                        v.type_name(),
-                        expr.position(),
-                    )
-                })?;
-
-                let path_pos = expr.start_position();
-
-                let resolver = global.embedded_module_resolver.clone();
-
-                let module = resolver
-                    .as_ref()
-                    .and_then(
-                        |r| match r.resolve_raw(self, global, scope, &path, path_pos) {
-                            Err(err) if matches!(*err, ERR::ErrorModuleNotFound(..)) => None,
-                            result => Some(result),
-                        },
-                    )
-                    .or_else(|| {
-                        match self
-                            .module_resolver()
-                            .resolve_raw(self, global, scope, &path, path_pos)
-                        {
-                            Err(err) if matches!(*err, ERR::ErrorModuleNotFound(..)) => None,
-                            result => Some(result),
-                        }
-                    })
-                    .unwrap_or_else(|| {
-                        Err(ERR::ErrorModuleNotFound(path.to_string(), path_pos).into())
-                    })?;
-
-                let (export, must_be_indexed) = if export.is_empty() {
-                    (self.const_empty_string(), false)
-                } else {
-                    (export.name.clone(), true)
-                };
-
-                if !must_be_indexed || module.is_indexed() {
-                    global.push_import(export, module);
-                } else {
-                    // Index the module (making a clone copy if necessary) if it is not indexed
-                    let mut m = crate::func::shared_take_or_clone(module);
-                    m.build_index();
-                    global.push_import(export, m);
-                }
-
-                global.num_modules_loaded += 1;
-
-                Ok(Dynamic::UNIT)
-            }
-
-            // Export statement
-            Stmt::Export(x, ..) => {
-                use crate::ast::Ident;
-                let (Ident { name, pos, .. }, Ident { name: alias, .. }) = &**x;
-                // Mark scope variables as public
-                scope.search(name).map_or_else(
-                    || Err(ERR::ErrorVariableNotFound(name.to_string(), *pos).into()),
-                    |index| {
-                        let alias = if alias.is_empty() { name } else { alias };
-                        scope.add_alias_by_index(index, alias.clone());
-                        Ok(Dynamic::UNIT)
-                    },
-                )
-            }
 
             // Share statement
             Stmt::Share(x) => {

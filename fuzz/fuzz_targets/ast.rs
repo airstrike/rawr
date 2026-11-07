@@ -20,7 +20,6 @@ fn fuzz(ctx: Ctx) -> Result<()> {
     engine.set_max_map_size(500);
     engine.set_max_variables(1000);
     engine.set_max_functions(100);
-    engine.set_max_modules(100);
     engine.set_max_call_levels(10);
     engine.set_max_expr_depths(50, 5);
     engine.set_optimization_level(ctx.optimization_level);

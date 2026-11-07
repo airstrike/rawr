@@ -358,8 +358,7 @@ fn sandbox(engine: &mut Engine, sink: &Arc<Mutex<Output>>) {
         // Untyped `fn f(x) { .. }` bodies reach the base language's
         // `print` and `debug`: their text goes with the rest.
         .on_print(move |text| print.lock().unwrap().push(false, &format!("{text}\n")))
-        .on_debug(move |text, _, _| debug.lock().unwrap().push(true, &format!("{text}\n")))
-        .set_module_resolver(rawr::module_resolvers::DummyModuleResolver::new());
+        .on_debug(move |text, _, _| debug.lock().unwrap().push(true, &format!("{text}\n")));
     for symbol in ["import", "eval"] {
         engine.disable_symbol(symbol);
     }

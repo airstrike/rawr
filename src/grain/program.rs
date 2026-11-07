@@ -1,5 +1,4 @@
 use crate::ast::{ASTFlags, ASTNode};
-use crate::module_resolvers::StaticModuleResolver;
 use crate::{ast::Expr, ast::Stmt, tokenizer::Token, Dynamic, ImmutableString, Module, Shared};
 
 use crate::grain::bytecode::{
@@ -147,10 +146,6 @@ pub struct Program<'a> {
     /// allocating for something nothing will look in.
     lib: Option<SharedModule>,
 
-    /// Reinstated on the runtime state at each run, mirroring
-    /// `Engine::eval_ast_with_scope_raw`, so `import` resolves as it would have.
-    resolver: Option<Shared<StaticModuleResolver>>,
-
     /// Names the script in error messages and `NativeCallContext::call_source`.
     source: Option<ImmutableString>,
 }
@@ -187,9 +182,6 @@ fn unsupported_kind(node: &ASTNode) -> Option<&'static str> {
         ASTNode::Stmt(stmt) => match stmt {
             Stmt::Switch(..) => "switch",
             Stmt::For(..) => "for",
-            Stmt::TryCatch(..) => "try/catch",
-            Stmt::Import(..) => "import",
-            Stmt::Export(..) => "export",
             Stmt::Share(..) => "a closure capture",
             Stmt::Return(_, flags, ..) if flags.intersects(ASTFlags::BREAK) => "throw",
             _ => return None,
@@ -280,7 +272,6 @@ pub(crate) struct Parts<'a> {
     pub switches: Vec<Switch>,
     pub lib: Option<SharedModule>,
     pub has_compiler_support: bool,
-    pub resolver: Option<Shared<StaticModuleResolver>>,
     pub source: Option<ImmutableString>,
 }
 
@@ -318,7 +309,6 @@ impl<'a> Program<'a> {
             chains: parts.chains,
             switches: parts.switches,
             lib: parts.lib,
-            resolver: parts.resolver,
             source: parts.source,
         };
         program.recompute_max_stack();
@@ -348,7 +338,6 @@ impl<'a> Program<'a> {
             chains: self.chains,
             switches: self.switches,
             lib: self.lib,
-            resolver: self.resolver,
             source: self.source,
         }
     }
@@ -696,10 +685,6 @@ impl<'a> Program<'a> {
         self.has_compiler_support
     }
 
-    pub(crate) fn resolver(&self) -> Option<&Shared<StaticModuleResolver>> {
-        self.resolver.as_ref()
-    }
-
     pub(crate) fn source(&self) -> Option<&ImmutableString> {
         self.source.as_ref()
     }
@@ -742,7 +727,6 @@ mod tests {
                 switches: Vec::new(),
                 lib: None,
                 has_compiler_support: false,
-                resolver: None,
                 source: None,
             },
         )

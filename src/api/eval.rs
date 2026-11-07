@@ -211,14 +211,7 @@ impl Engine {
         global.lib.push(ast.shared_lib().clone());
         global.lib.push(ast.shared_support().clone());
 
-        let orig_embedded_module_resolver =
-            mem::replace(&mut global.embedded_module_resolver, ast.resolver.clone());
-
         defer! { global => move |g| {
-            {
-                g.embedded_module_resolver = orig_embedded_module_resolver;
-            }
-
             g.lib.truncate(orig_lib_len);
 
             g.source = orig_source;

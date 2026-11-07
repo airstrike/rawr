@@ -2948,7 +2948,6 @@ impl Engine {
         state: &mut ParseState,
         mut settings: ParseSettings,
         access: AccessMode,
-        is_export: bool,
     ) -> ParseResult<Stmt> {
         // let/const... (specified in `var_type`)
         settings.pos = state.input.next().unwrap().1;
@@ -3001,12 +3000,6 @@ impl Engine {
             Expr::Unit(Position::NONE)
         };
 
-        let export = if is_export {
-            ASTFlags::EXPORTED
-        } else {
-            ASTFlags::empty()
-        };
-
         let (existing, hit_barrier) = state.find_var(&name);
 
         let existing = if !hit_barrier && existing > 0 {
@@ -3029,19 +3022,13 @@ impl Engine {
             None
         };
 
-        if is_export {
-            state
-                .stack
-                .add_alias_by_index(state.stack.len() - 1, name.clone());
-        }
-
         let var_def = (Ident { name, pos }, expr, idx).into();
 
         Ok(match access {
             // let name = expr
-            AccessMode::ReadWrite => Stmt::Var(var_def, export, settings.pos),
+            AccessMode::ReadWrite => Stmt::Var(var_def, ASTFlags::empty(), settings.pos),
             // const name = { expr:constant }
-            AccessMode::ReadOnly => Stmt::Var(var_def, ASTFlags::CONSTANT | export, settings.pos),
+            AccessMode::ReadOnly => Stmt::Var(var_def, ASTFlags::CONSTANT, settings.pos),
         })
     }
 
@@ -3419,8 +3406,8 @@ impl Engine {
                 }
             }
 
-            Token::Let => self.parse_let(state, settings.level_up()?, ReadWrite, false),
-            Token::Const => self.parse_let(state, settings.level_up()?, ReadOnly, false),
+            Token::Let => self.parse_let(state, settings.level_up()?, ReadWrite),
+            Token::Const => self.parse_let(state, settings.level_up()?, ReadOnly),
 
             _ => self.parse_expr_stmt(state, settings.level_up()?),
         }

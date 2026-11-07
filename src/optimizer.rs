@@ -242,8 +242,6 @@ fn optimize_stmt_block(
                 Stmt::Var(x, ..) if x.1.is_constant() => true,
                 Stmt::Expr(e) if !e.is_constant() => true,
 
-                Stmt::Import(x, ..) if !x.0.is_constant() => true,
-
                 _ => false,
             })
             .map_or(0, |n| statements.len() - n - 1);
@@ -824,12 +822,6 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
             *body.statements_mut() =
                 optimize_stmt_block(body.take_statements(), state, false, true, false);
         }
-        // do { block } while|until expr
-        Stmt::Do(x, ..) => {
-            optimize_expr(&mut x.expr, state, false);
-            *x.body.statements_mut() =
-                optimize_stmt_block(x.body.take_statements(), state, false, true, false);
-        }
         // for id in expr { block }
         Stmt::For(x, ..) => {
             optimize_expr(&mut x.2.expr, state, false);
@@ -849,8 +841,6 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
         Stmt::Var(x, options, ..) if !options.intersects(ASTFlags::CONSTANT) => {
             optimize_expr(&mut x.1, state, false);
         }
-        // import expr as var;
-        Stmt::Import(x, ..) => optimize_expr(&mut x.0, state, false),
         // { block }
         Stmt::Block(block) => {
             let mut stmts =
@@ -869,25 +859,6 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
                 _ => *block.statements_mut() = stmts,
             }
         }
-        // try { pure try_block } catch ( var ) { catch_block } -> try_block
-        Stmt::TryCatch(x, ..) if x.body.iter().all(Stmt::is_pure) => {
-            // If try block is pure, there will never be any exceptions
-            state.set_dirty();
-            let statements = x.body.take_statements();
-            let block = StmtBlock::new_with_span(
-                optimize_stmt_block(statements, state, false, true, false),
-                x.body.span(),
-            );
-            *stmt = Stmt::Block(block.into());
-        }
-        // try { try_block } catch ( var ) { catch_block }
-        Stmt::TryCatch(x, ..) => {
-            *x.body.statements_mut() =
-                optimize_stmt_block(x.body.take_statements(), state, false, true, false);
-            *x.branch.statements_mut() =
-                optimize_stmt_block(x.branch.take_statements(), state, false, true, false);
-        }
-
         // expr(stmt)
         Stmt::Expr(expr) if matches!(**expr, Expr::Stmt(..)) => {
             state.set_dirty();

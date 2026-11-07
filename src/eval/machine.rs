@@ -708,9 +708,7 @@ fn variable_at(name: &ImmutableString, position: Position) -> Expr {
 
 fn stmt_awaits(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::If(flow, _) | Stmt::While(flow, _) | Stmt::Do(flow, ..) | Stmt::TryCatch(flow, _) => {
-            flow_awaits(flow)
-        }
+        Stmt::If(flow, _) | Stmt::While(flow, _) => flow_awaits(flow),
         Stmt::For(for_loop, _) => flow_awaits(&for_loop.2),
         Stmt::Switch(switch, _) => {
             expr_awaits(&switch.0)
@@ -766,7 +764,7 @@ fn forget_indices(stmt: &mut Stmt) {
             forget_expr(&mut var.1);
         }
         Stmt::Share(shared) => shared.iter_mut().for_each(|(_, index)| *index = None),
-        Stmt::If(flow, _) | Stmt::While(flow, _) | Stmt::Do(flow, ..) | Stmt::TryCatch(flow, _) => {
+        Stmt::If(flow, _) | Stmt::While(flow, _) => {
             forget_flow(flow);
         }
         Stmt::For(for_loop, _) => forget_flow(&mut for_loop.2),

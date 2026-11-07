@@ -133,9 +133,6 @@ pub struct Engine {
     /// A collection of all sub-modules directly loaded into the Engine.
     pub(crate) global_sub_modules: std::collections::BTreeMap<Identifier, SharedModule>,
 
-    /// A module resolution service.
-    pub(crate) module_resolver: Option<Box<dyn crate::ModuleResolver>>,
-
     /// Strings interner.
     pub(crate) interned_strings: Option<Locked<StringsInterner>>,
 
@@ -319,8 +316,6 @@ impl Engine {
 
         global_sub_modules: std::collections::BTreeMap::new(),
 
-        module_resolver: None,
-
         interned_strings: None,
         disabled_symbols: BTreeSet::new(),
         registered_enums: std::collections::BTreeMap::new(),
@@ -385,12 +380,6 @@ impl Engine {
     pub fn new() -> Self {
         // Create the new scripting Engine
         let mut engine = Self::new_raw();
-
-        #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
-        {
-            engine.module_resolver =
-                Some(Box::new(crate::module::resolvers::FileModuleResolver::new()));
-        }
 
         // Turn on the strings interner
         engine.set_max_strings_interned(MAX_STRINGS_INTERNED);

@@ -606,13 +606,6 @@ fn main() {
         },
     );
 
-    // Set a file module resolver without caching
-    {
-        let mut resolver = rawr::module_resolvers::FileModuleResolver::new();
-        resolver.enable_cache(false);
-        engine.set_module_resolver(resolver);
-    }
-
     println!("Type 'help' for commands list.");
     println!();
 

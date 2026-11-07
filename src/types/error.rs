@@ -95,8 +95,6 @@ pub enum EvalAltResult {
     ErrorTooManyOperations(Position),
     /// Number of variables over maximum limit.
     ErrorTooManyVariables(Position),
-    /// [Modules][crate::Module] over maximum limit.
-    ErrorTooManyModules(Position),
     /// Call stack over maximum limit.
     ErrorStackOverflow(Position),
     /// Data value over maximum size limit. Wrapped value is the type name.
@@ -174,7 +172,6 @@ impl fmt::Debug for EvalAltResult {
             Self::ErrorArithmetic(a0, a1) => tuple!("ErrorArithmetic", a0, a1),
             Self::ErrorTooManyOperations(a0) => tuple!("ErrorTooManyOperations", a0),
             Self::ErrorTooManyVariables(a0) => tuple!("ErrorTooManyVariables", a0),
-            Self::ErrorTooManyModules(a0) => tuple!("ErrorTooManyModules", a0),
             Self::ErrorStackOverflow(a0) => tuple!("ErrorStackOverflow", a0),
             Self::ErrorDataTooLarge(a0, a1) => tuple!("ErrorDataTooLarge", a0, a1),
             Self::ErrorTerminated(a0, a1) => tuple!("ErrorTerminated", a0, a1),
@@ -238,7 +235,6 @@ impl EvalAltResult {
             Self::ErrorFor(..) => f.write_str("For loop expects iterable type")?,
             Self::ErrorTooManyOperations(..) => f.write_str("Too many operations")?,
             Self::ErrorTooManyVariables(..) => f.write_str("Too many variables defined")?,
-            Self::ErrorTooManyModules(..) => f.write_str("Too many modules imported")?,
             Self::ErrorStackOverflow(..) => f.write_str("Stack overflow")?,
             Self::ErrorTerminated(..) => f.write_str("Script terminated")?,
 
@@ -413,7 +409,6 @@ impl EvalAltResult {
 
             Self::ErrorTooManyOperations(..)
             | Self::ErrorTooManyVariables(..)
-            | Self::ErrorTooManyModules(..)
             | Self::ErrorStackOverflow(..)
             | Self::ErrorDataTooLarge(..)
             | Self::ErrorTerminated(..) => false,
@@ -433,87 +428,10 @@ impl EvalAltResult {
                 | Self::ErrorCustomSyntax(..)
                 | Self::ErrorTooManyOperations(..)
                 | Self::ErrorTooManyVariables(..)
-                | Self::ErrorTooManyModules(..)
                 | Self::ErrorStackOverflow(..)
                 | Self::ErrorDataTooLarge(..)
                 | Self::ErrorTerminated(..)
         )
-    }
-    /// Get the [position][Position] of this error.
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn dump_fields(&self, map: &mut crate::Map) {
-        map.insert(
-            "error".into(),
-            format!("{self:?}")
-                .split('(')
-                .next()
-                .expect("`ErrorXXX(...)`")
-                .into(),
-        );
-
-        match self {
-            Self::LoopBreak(..) | Self::Return(..) | Self::Exit(..) => (),
-
-            Self::ErrorSystem(..)
-            | Self::ErrorParsing(..)
-            | Self::ErrorUnboundThis(..)
-            | Self::ErrorFor(..)
-            | Self::ErrorArithmetic(..)
-            | Self::ErrorTooManyOperations(..)
-            | Self::ErrorTooManyVariables(..)
-            | Self::ErrorTooManyModules(..)
-            | Self::ErrorStackOverflow(..)
-            | Self::ErrorRuntime(..) => (),
-
-            Self::ErrorFunctionNotFound(f, ..) | Self::ErrorNonPureMethodCallOnConstant(f, ..) => {
-                map.insert("function".into(), f.into());
-            }
-            Self::ErrorInFunctionCall(f, s, ..) => {
-                map.insert("function".into(), f.into());
-                map.insert("source".into(), s.into());
-            }
-            Self::ErrorMismatchDataType(r, a, ..) | Self::ErrorMismatchOutputType(r, a, ..) => {
-                map.insert("requested".into(), r.into());
-                map.insert("actual".into(), a.into());
-            }
-            Self::ErrorArrayBounds(n, i, ..)
-            | Self::ErrorStringBounds(n, i, ..)
-            | Self::ErrorBitFieldBounds(n, i, ..) => {
-                map.insert("length".into(), (*n as INT).into());
-                map.insert("index".into(), (*i as INT).into());
-            }
-            Self::ErrorVariableExists(v, ..)
-            | Self::ErrorForbiddenVariable(v, ..)
-            | Self::ErrorVariableNotFound(v, ..)
-            | Self::ErrorPropertyNotFound(v, ..)
-            | Self::ErrorDataRace(v, ..)
-            | Self::ErrorAssignmentToConstant(v, ..) => {
-                map.insert("variable".into(), v.into());
-            }
-            Self::ErrorIndexNotFound(v, ..) => {
-                map.insert("index".into(), v.clone());
-            }
-            Self::ErrorInModule(m, ..) | Self::ErrorModuleNotFound(m, ..) => {
-                map.insert("module".into(), m.into());
-            }
-            Self::ErrorDotExpr(p, ..) => {
-                map.insert("property".into(), p.into());
-            }
-
-            Self::ErrorIndexingType(t, ..) | Self::ErrorDataTooLarge(t, ..) => {
-                map.insert("type".into(), t.into());
-            }
-            Self::ErrorTerminated(t, ..) => {
-                map.insert("token".into(), t.clone());
-            }
-            Self::ErrorCustomSyntax(_, tokens, _) => {
-                map.insert(
-                    "tokens".into(),
-                    Dynamic::from_array(tokens.iter().map(Into::into).collect()),
-                );
-            }
-        }
     }
     /// Unwrap this error and get the very base error.
     #[cold]
@@ -559,7 +477,6 @@ impl EvalAltResult {
             | Self::ErrorArithmetic(.., pos)
             | Self::ErrorTooManyOperations(pos)
             | Self::ErrorTooManyVariables(pos)
-            | Self::ErrorTooManyModules(pos)
             | Self::ErrorStackOverflow(pos)
             | Self::ErrorDataTooLarge(.., pos)
             | Self::ErrorTerminated(.., pos)
@@ -621,7 +538,6 @@ impl EvalAltResult {
             | Self::ErrorArithmetic(.., pos)
             | Self::ErrorTooManyOperations(pos)
             | Self::ErrorTooManyVariables(pos)
-            | Self::ErrorTooManyModules(pos)
             | Self::ErrorStackOverflow(pos)
             | Self::ErrorDataTooLarge(.., pos)
             | Self::ErrorTerminated(.., pos)

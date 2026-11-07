@@ -101,12 +101,6 @@ pub mod tag {
     pub const STORE_SHARED: u8 = 0x20;
     /// [`Op::IterNext`](super::Op::IterNext) that also pushes the count.
     pub const ITER_NEXT_INDEXED: u8 = 0x21;
-    /// [`Op::PopHandler`](super::Op::PopHandler).
-    pub const POP_HANDLER: u8 = 0x22;
-    /// [`Op::PushHandler`](super::Op::PushHandler) for a bare `catch`.
-    pub const PUSH_HANDLER: u8 = 0x23;
-    /// [`Op::PushHandler`](super::Op::PushHandler) binding a catch variable.
-    pub const PUSH_HANDLER_VAR: u8 = 0x24;
     /// [`Op::InterpolateStart`](super::Op::InterpolateStart).
     pub const INTERPOLATE_START: u8 = 0x25;
     /// [`Op::InterpolateAppend`](super::Op::InterpolateAppend).
@@ -193,7 +187,6 @@ static WIDTHS: [u8; 256] = {
 
     widths[tag::ITER_NEXT as usize] = 5;
     widths[tag::ITER_NEXT_INDEXED as usize] = 5;
-    widths[tag::POP_HANDLER as usize] = 1;
     widths[tag::INTERPOLATE_START as usize] = 1;
     widths[tag::INTERPOLATE_APPEND as usize] = 1;
     widths[tag::INTERPOLATE_END as usize] = 1;
@@ -224,8 +217,6 @@ static WIDTHS: [u8; 256] = {
     widths[tag::CALL_FN_PTR_ON_NAMED as usize] = 4;
     widths[tag::CALL_FN_PTR_ON_THIS as usize] = 2;
     widths[tag::MAKE_CLOSURE as usize] = 3;
-    widths[tag::PUSH_HANDLER as usize] = 5;
-    widths[tag::PUSH_HANDLER_VAR as usize] = 7;
 
     widths[tag::CONST as usize] = 3;
     widths[tag::LOAD_LOCAL as usize] = 3;
@@ -604,22 +595,6 @@ pub fn assemble(ops: &[Op]) -> Result<(Vec<u8>, Vec<u32>), AssembleError> {
             Op::Throw => code.push(tag::THROW),
             Op::IterInit => code.push(tag::ITER_INIT),
             Op::IterDrop => code.push(tag::ITER_DROP),
-            Op::PopHandler => code.push(tag::POP_HANDLER),
-
-            Op::PushHandler {
-                target: to,
-                catch_var,
-            } => {
-                code.push(match catch_var {
-                    Some(..) => tag::PUSH_HANDLER_VAR,
-                    None => tag::PUSH_HANDLER,
-                });
-                code.extend_from_slice(&target(*to)?.to_le_bytes());
-                if let Some(name) = catch_var {
-                    code.extend_from_slice(&small(*name as usize, "names")?.to_le_bytes());
-                }
-            }
-
             Op::IterNext { exit, indexed } => {
                 code.push(if *indexed {
                     tag::ITER_NEXT_INDEXED
@@ -701,7 +676,6 @@ fn encoded_width(op: &Op) -> usize {
         | Op::Throw
         | Op::IterInit
         | Op::IterDrop
-        | Op::PopHandler
         | Op::InterpolateStart
         | Op::InterpolateAppend
         | Op::InterpolateEnd
@@ -747,14 +721,7 @@ fn encoded_width(op: &Op) -> usize {
         | Op::Jump(..)
         | Op::JumpIfTrue { .. }
         | Op::JumpIfFalse { .. }
-        | Op::IterNext { .. }
-        | Op::PushHandler {
-            catch_var: None, ..
-        } => 5,
-        Op::PushHandler {
-            catch_var: Some(..),
-            ..
-        } => 7,
+        | Op::IterNext { .. } => 5,
         Op::Call { op: Some(..), .. }
         | Op::CallRef {
             receiver: Receiver::Local(..) | Receiver::Named(..),
@@ -921,15 +888,6 @@ pub fn decode(code: &[u8], at: usize) -> Option<Op> {
             indexed: true,
         },
         tag::STORE_SHARED => Op::StoreShared(small(1)?),
-        tag::POP_HANDLER => Op::PopHandler,
-        tag::PUSH_HANDLER => Op::PushHandler {
-            target: u32_at(code, at + 1)?,
-            catch_var: None,
-        },
-        tag::PUSH_HANDLER_VAR => Op::PushHandler {
-            target: u32_at(code, at + 1)?,
-            catch_var: Some(u32::from(small(5)?)),
-        },
         tag::RETURN => Op::Return,
 
         tag::EVAL_AST => Op::EvalAst {
