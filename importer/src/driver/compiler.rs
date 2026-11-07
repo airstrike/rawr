@@ -108,7 +108,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // for an implementation's bound that fixes a parameter's associated type.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 57;
+const PROTOCOL_SCHEMA: u32 = 58;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,

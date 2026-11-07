@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 127;
+const CLASSIFIER_VERSION: u32 = 128;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
