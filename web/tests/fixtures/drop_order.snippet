@@ -1,0 +1,18 @@
+struct Noisy(&'static str);
+
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+
+let _a = Noisy("a");
+{
+    let _b = Noisy("b");
+    println!("inner");
+}
+let c = Noisy("c");
+drop(c);
+let _ = Noisy("d");
+let v = vec![Noisy("e"), Noisy("f")];
+println!("end {}", v.len());

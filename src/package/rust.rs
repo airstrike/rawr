@@ -528,32 +528,15 @@ fn write_changed(files: Vec<(std::path::PathBuf, String)>) -> rawr_import::Resul
     Ok(())
 }
 
-/// A native crate root as the shadow crate's root: its `mod` declarations
-/// public, so the runner reaches every native module, `#[path]` and
+/// A native crate root as the shadow crate's root: its own items public
+/// (`polyglot::root_items_public`), so the runner reaches every native
+/// module and every root item a marked module may name, `#[path]` and
 /// `include_str!` paths absolute, and the island's runtime support at the
 /// end. A `forbid(unsafe_code)` becomes `deny`, which the support module's
 /// own `allow` can lift for its two calls into the runner.
 fn native_root(root: &super::graph::RustModule, package: &Path) -> String {
     let text = super::polyglot::widened(root.text(), false, root.path(), package);
-    let mut public = String::with_capacity(text.len() + 64);
-    let mut cursor = 0;
-    for declaration in super::polyglot::declarations(&text) {
-        if declaration.path.len() != 1 {
-            continue;
-        }
-        let before = text[..declaration.range.start].trim_end();
-        let Some(keyword) = before.strip_suffix("mod") else {
-            continue;
-        };
-        let visibility = keyword.trim_end();
-        if visibility.ends_with("pub") || visibility.ends_with(')') {
-            continue;
-        }
-        public.push_str(&text[cursor..keyword.len()]);
-        public.push_str("pub ");
-        cursor = keyword.len();
-    }
-    public.push_str(&text[cursor..]);
+    let public = super::polyglot::root_items_public(&text);
     let public = public.replace("#![forbid(unsafe_code)]", "#![deny(unsafe_code)]");
     let main = root
         .path()

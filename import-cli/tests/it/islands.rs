@@ -260,6 +260,58 @@ fn a_native_main_takes_and_gives_its_own_values_to_a_marked_leaf() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A marked leaf module of an existing app names the items of the native
+/// crate root it lives in, as rustc lets a descendant: the root's message
+/// enum and its variants, a type alias, a constant, a helper function and
+/// a `use` re-export, through `crate::` and `super::` (#1185). `rawr run`
+/// prints what `cargo run` prints, and the crate builds unchanged.
+#[test]
+fn a_marked_module_names_the_items_of_its_native_crate_root() {
+    const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-root");
+    const PRINTED: [&str; 5] = [
+        "Page(0, Open(0))",
+        "Noop",
+        "Page(2, Open(20))",
+        "narrow x10",
+        "wide x10",
+    ];
+    let root = crate::support::scratch().join("islands-root");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(ROOT), &root);
+    let cargo = |arguments: &[&str]| {
+        std::process::Command::new("cargo")
+            .args(arguments)
+            .current_dir(&root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap()
+    };
+    let native = cargo(&["run", "--quiet"]);
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        format!("{}\n", PRINTED.join("\n"))
+    );
+    let mut run = start(&root, &[]);
+    for line in PRINTED {
+        let seen = run.until(Duration::from_secs(900), |_| true);
+        assert_eq!(seen, line, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+    let release = cargo(&["build", "--release", "--quiet"]);
+    assert!(
+        release.status.success(),
+        "{}",
+        String::from_utf8_lossy(&release.stderr)
+    );
+}
+
 #[test]
 fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin() {
     use std::io::Write as _;
@@ -408,4 +460,77 @@ fn native_builds(target: &Path) -> Vec<(std::path::PathBuf, std::time::SystemTim
     }
     found.sort();
     found
+}
+
+/// A workspace whose root package is a plain bin with two marked leaf
+/// modules, a build script that generates its icons, and path dependencies
+/// on two members and on a crate outside the workspace. One member reads an
+/// asset at the workspace root; the other's build script prints no
+/// `rerun-if` line, so Cargo runs it again when any file of that member
+/// changes. `rawr run` prints what `cargo run` prints, a second run replays
+/// without building the API again, and an edit to a file only that build
+/// script reads reaches the next run as it reaches Cargo's.
+#[test]
+fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_replays() {
+    const WORKSPACE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-workspace"
+    );
+    let project = crate::support::scratch().join("islands-workspace");
+    let _ = fs::remove_dir_all(&project);
+    copy(Path::new(WORKSPACE), &project);
+    let root = project.join("app");
+    let cargo = || {
+        let native = std::process::Command::new("cargo")
+            .args(["run", "--quiet"])
+            .current_dir(&root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap();
+        assert!(
+            native.status.success(),
+            "{}",
+            String::from_utf8_lossy(&native.stderr)
+        );
+        String::from_utf8_lossy(&native.stdout).into_owned()
+    };
+    let rawr = || {
+        let run = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .arg("run")
+            .arg(&root)
+            .env("RAWR_HOME", crate::support::runtime_home())
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let printed = String::from_utf8_lossy(&run.stdout).into_owned();
+        let reported = String::from_utf8_lossy(&run.stderr).into_owned();
+        assert!(run.status.success(), "{printed}\n{reported}");
+        (printed, reported)
+    };
+    let printed = cargo();
+    assert_eq!(
+        printed,
+        "icons save,open\nlogo logo bytes\nsibling hello\n\
+         panel expr = term (10 logo bytes) / hello\nbadge 9\n"
+    );
+    assert_eq!(rawr().0, printed);
+    let (replayed, reported) = rawr();
+    assert_eq!(replayed, printed);
+    assert!(!reported.contains("building API"), "{reported}");
+
+    // A file only the member's build script reads, which Cargo watches as
+    // part of the member, and the root's declared input both reach the
+    // next run as they reach Cargo's.
+    edit(&root.join("model/grammar.txt"), "term", "factor");
+    edit(&root.join("icons.txt"), "open", "close");
+    let printed = cargo();
+    assert_eq!(
+        printed,
+        "icons save,close\nlogo logo bytes\nsibling hello\n\
+         panel expr = factor (10 logo bytes) / hello\nbadge 9\n"
+    );
+    assert_eq!(rawr().0, printed);
 }

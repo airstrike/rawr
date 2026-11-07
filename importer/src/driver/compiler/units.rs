@@ -1360,6 +1360,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             if !child.vis.is_public() {
                 continue;
             }
+            // An unstable item, as core's `prelude::rust_future`, is no path
+            // a crate without its feature can write, as rustc's E0658 says.
+            if let Res::Def(_, def_id) = child.res
+                && self
+                    .tcx
+                    .lookup_stability(def_id)
+                    .is_some_and(|stability| stability.is_unstable())
+            {
+                continue;
+            }
             self.edge(1)?;
             let landing = match child.res {
                 Res::Def(kind, def_id) => self.landing(kind, def_id),

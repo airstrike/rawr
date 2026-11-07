@@ -120,7 +120,6 @@ impl Request {
             [manifest, source, lock],
             layout.receipt(),
             None,
-            None,
             Some(layout),
         )
     }

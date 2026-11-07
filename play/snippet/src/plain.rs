@@ -72,11 +72,12 @@ fn wrapped(source: &str, show: bool) -> String {
 
 /// Whether a top-level item starts a statement, outside strings, chars and
 /// comments: statements end at `;`, and at a `}` closing a block that the
-/// next word does not continue (`else`).
+/// next word does not continue (`else`). An inner attribute (`#![..]`) is
+/// the crate's, so a snippet that opens with one is a file, run as written.
 pub fn has_item(source: &str) -> bool {
     const ITEMS: &[&str] = &[
         "fn", "pub", "struct", "enum", "impl", "trait", "use", "mod", "const", "static", "type",
-        "#[",
+        "#[", "#![",
     ];
     let bytes = source.as_bytes();
     let mut depth = 0usize;
@@ -92,7 +93,7 @@ pub fn has_item(source: &str) -> bool {
             let rest = &source[index..];
             let word = |rest: &str, word: &str| {
                 rest.starts_with(word)
-                    && (word == "#["
+                    && (word.starts_with('#')
                         || !rest[word.len()..]
                             .starts_with(|c: char| c.is_alphanumeric() || c == '_'))
             };
@@ -182,5 +183,9 @@ mod tests {
         let commented = "// About it.\n/* More. */ fn main() {}\n";
         assert_eq!(program(commented), commented);
         assert_eq!(super::quiet_program("1 + 2"), "fn main() { 1 + 2\n; }\n");
+        let attributed = "#![allow(dead_code)]\n#![cfg_attr(test, allow(unused))]\nfn main() {}\n";
+        assert_eq!(program(attributed), attributed);
+        let statements = "#![allow(unused)]\nlet x = 1;\n";
+        assert_eq!(program(statements), statements);
     }
 }

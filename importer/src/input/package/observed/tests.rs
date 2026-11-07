@@ -121,7 +121,9 @@ fn policy<T>(result: stored::Result<T>, expected: &str) {
 fn actual_registry_entry_matches_legacy_without_historical_account_authority() {
     let fixture = Fixture::new();
     let captured = fixture.capture();
-    let expected = captured.entry(false, &mut account()).expect("legacy entry");
+    let expected = captured
+        .entry(&mut account(), &crate::cargo::Limits::standard())
+        .expect("legacy entry");
     let Set::Registry(captured) = captured else {
         panic!("registry")
     };

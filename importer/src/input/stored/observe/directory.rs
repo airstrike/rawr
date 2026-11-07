@@ -129,6 +129,17 @@ fn follow(child: &Path, budget: &mut Budget<'_>) -> Result<Option<(PathBuf, look
     Ok(Some((target, lookup::Metadata::from_metadata(&metadata))))
 }
 
+/// Whether `directory` holds a `Cargo.toml`, as Cargo's `exists` sees it:
+/// any failure to inspect it reads as absent.
+fn nested(directory: &Path, budget: &mut Budget<'_>) -> Result<bool> {
+    let manifest = path::joined(directory, Path::new("Cargo.toml"), budget)?;
+    match path::metadata(&manifest, false, budget) {
+        Ok(_) => Ok(true),
+        Err(super::super::Error::Observation(Error::Io { .. })) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 pub(super) fn entry(
     role: Role,
     package_id: Option<&str>,
@@ -147,6 +158,7 @@ fn walk(
     budget: &mut Budget<'_>,
     mut collected: impl FnMut(&Path) -> Result<()>,
 ) -> Result<Entry> {
+    let tree = role == Role::DefaultPackageSource;
     let root = path::canonical(source, base, true, budget)?;
     let mut pending = slots::Slots::new();
     budget.storage(1, root.as_os_str().len())?;
@@ -189,6 +201,17 @@ fn walk(
             };
             if followed && metadata.is_dir() && ancestors.encloses(&directory, &child) {
                 continue;
+            }
+            if tree {
+                let omitted =
+                    walk::package_omits(native_name.as_os_str(), depth, metadata.is_dir(), || {
+                        nested(&child, budget)
+                    })?;
+                // Cargo's listing skips what is neither a file nor a
+                // directory, and so does a package's walk.
+                if omitted || !metadata.is_dir() && !metadata.is_file() {
+                    continue;
+                }
             }
             let spelled = path::joined(&prefix, native_name, budget)?;
             let relative = path::text(&spelled, budget)?;
