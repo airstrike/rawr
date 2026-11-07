@@ -61,6 +61,14 @@ fn impl_fn_parameters_of_a_generic_builder_take_script_closures() {
     runs_as_cargo_does("button", "pressed 2\nwidths 3 6\n");
 }
 
+/// A crate's `pub fn print`, `pub mod import` with a `fn switch`, a field
+/// `this` and a method `call` are reached by those names: words the old
+/// engine read as keywords are ordinary names, as in Rust.
+#[test]
+fn crate_items_named_as_old_engine_keywords_are_ordinary_names() {
+    runs_as_cargo_does("names", "printed once\ntrue\n6\n");
+}
+
 /// A method or field a crate's type lacks is its `Deref` target's, as
 /// rustc's probe finds it: another of the crate's types, a `String` and a
 /// `Vec`. A `&mut self` method is reached through the type's `DerefMut`,
@@ -157,7 +165,7 @@ fn an_uncallable_named_callable_parameter_leaves_the_crate_importable() {
 /// or a type, which isn't a module, and failed the import too.
 #[test]
 fn an_opaque_types_members_import() {
-    runs_as_cargo_does("opaque", "7\nvalue 8\n");
+    runs_as_cargo_does("opaque", "7\nvalue 8\n2\n");
 }
 
 /// A crate's trait impl on a type with a const parameter, as palette's

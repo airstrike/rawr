@@ -109,6 +109,7 @@ println!("{:?}", c.counts);</code></pre>
 <p>An associated type&rsquo;s bound can fix the bound&rsquo;s own associated type, as in <code>type Fore: Iterator&lt;Item = Self::For&gt;;</code>. Every impl must keep it, as in rustc. <code>&lt;Self as Trait&gt;::Name</code> works in an impl&rsquo;s signatures.</p>
 <p>A trait can be implemented for references with <code>impl&lt;T: Trait&gt; Trait for &amp;T</code> (or <code>&amp;mut T</code>) when every item forwards to <code>T</code>&rsquo;s impl, as in <code>fn f(&amp;self) { (**self).f() }</code>, <code>T::g(*self)</code> or <code>type A = &lt;T as Trait&gt;::A;</code>. A reference then has the trait wherever <code>T</code> does. rawr runs a reference as its referent&rsquo;s value, so it refuses an impl for references that does anything else.</p>
 <p>A raw identifier names an item, field or binding with a keyword&rsquo;s name, as in <code>fn r#for()</code> or <code>let r#type = 1;</code>.</p>
+<p>Any other word is an ordinary name, as in rustc. A module, its file, a function, a field or a binding can be named <code>switch</code>, <code>import</code>, <code>print</code> or <code>this</code>, and so can a crate&rsquo;s items.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="traits.rs" id="src-traits">trait Describe {
     fn name(&amp;self) -&gt; String;

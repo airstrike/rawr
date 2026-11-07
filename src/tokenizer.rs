@@ -184,14 +184,12 @@ pub enum Token {
     If,
     /// `else`
     Else,
-    /// `switch`
+    /// `__rawr_switch`: the lowered script's `match`.
     Switch,
     /// `do`
     Do,
     /// `while`
     While,
-    /// `until`
-    Until,
     /// `loop`
     Loop,
     /// `for`
@@ -232,12 +230,10 @@ pub enum Token {
     Break,
     /// `return`
     Return,
-    /// `throw`
+    /// `__rawr_throw`: the lowered script's panic.
     Throw,
     /// `try`
     Try,
-    /// `catch`
-    Catch,
     /// `+=`
     PlusAssign,
     /// `-=`
@@ -260,12 +256,9 @@ pub enum Token {
     ModuloAssign,
     /// `**=`
     PowerOfAssign,
-    /// `private`
+    /// `__rawr_private`: a function of the lowered script the host does
+    /// not call.
     Private,
-    /// `import`
-    Import,
-    /// `export`
-    Export,
     /// `as`
     As,
     /// A lexer error.
@@ -349,7 +342,7 @@ static KEYWORDS_LIST: [(&str, Token); 153] = [
     ("==", Token::EqualsTo),
     ("continue", Token::Continue),
     ("", Token::EOF),
-    ("catch", Token::Catch),
+    ("", Token::EOF),
     ("<", Token::LessThan),
     ("<=", Token::LessThanEqualsTo),
     ("for", Token::For),
@@ -369,7 +362,7 @@ static KEYWORDS_LIST: [(&str, Token); 153] = [
     ("+=", Token::PlusAssign),
     ("", Token::EOF),
     ("", Token::EOF),
-    ("throw", Token::Throw),
+    ("", Token::EOF),
     ("}", Token::RightBrace),
     (">>", Token::RightShift),
     (">>=", Token::RightShiftAssign),
@@ -399,9 +392,9 @@ static KEYWORDS_LIST: [(&str, Token); 153] = [
     ("..", Token::ExclusiveRange),
     ("..=", Token::InclusiveRange),
     ("", Token::EOF),
-    ("until", Token::Until),
-    ("switch", Token::Switch),
-    ("private", Token::Private),
+    ("", Token::EOF),
+    ("", Token::EOF),
+    ("", Token::EOF),
     ("try", Token::Try),
     ("true", Token::True),
     ("break", Token::Break),
@@ -410,12 +403,12 @@ static KEYWORDS_LIST: [(&str, Token); 153] = [
     ("", Token::EOF),
     ("", Token::EOF),
     ("", Token::EOF),
-    ("import", Token::Import),
+    ("", Token::EOF),
     ("?.", Token::Elvis),
     ("", Token::EOF),
     ("", Token::EOF),
     ("", Token::EOF),
-    ("export", Token::Export),
+    ("", Token::EOF),
     ("in", Token::In),
     ("", Token::EOF),
     ("", Token::EOF),
@@ -543,22 +536,22 @@ static RESERVED_LIST: [(&str, bool, bool, bool); 150] = [
     ("is", false, false, false),
     ("===", true, false, false),
     ("sync", false, false, false),
-    ("curry", true, true, true),
+    ("curry", false, false, false),
     ("static", true, false, false),
     // Rawr: `default` is an ordinary name, as in Rust.
     ("default", false, false, false),
     ("!==", true, false, false),
-    ("is_shared", true, true, true),
-    ("print", true, true, false),
+    ("is_shared", false, false, false),
+    ("print", false, false, false),
     ("", false, false, false),
     ("#!", true, false, false),
     ("", false, false, false),
-    ("this", true, false, false),
-    ("is_def_var", true, true, false),
+    ("this", false, false, false),
+    ("is_def_var", false, false, false),
     ("thread", false, false, false),
     ("?.", false, false, false),
     ("", false, false, false),
-    ("is_def_fn", true, true, false),
+    ("is_def_fn", false, false, false),
     ("yield", true, false, false),
     ("", false, false, false),
     ("fn", false, false, false),
@@ -566,20 +559,20 @@ static RESERVED_LIST: [(&str, bool, bool, bool); 150] = [
     // (the TEA boot function). Flipping the flag keeps the gperf hash
     // table layout intact; see `("exit", false, ...)` for the precedent.
     ("new", false, false, false),
-    ("call", true, true, true),
+    ("call", false, false, false),
     ("match", true, false, false),
     ("~", true, false, false),
     ("!.", true, false, false),
     ("", false, false, false),
-    ("eval", true, true, false),
+    ("eval", false, false, false),
     ("await", true, false, false),
     ("", false, false, false),
     (":=", true, false, false),
     ("...", true, false, false),
     ("null", false, false, false),
-    ("debug", true, true, false),
+    ("debug", false, false, false),
     ("@", true, false, false),
-    ("type_of", true, true, true),
+    ("type_of", false, false, false),
     ("", false, false, false),
     ("with", false, false, false),
     ("", false, false, false),
@@ -615,7 +608,7 @@ static RESERVED_LIST: [(&str, bool, bool, bool); 150] = [
     ("", false, false, false),
     ("", false, false, false),
     ("", false, false, false),
-    ("Fn", true, true, false),
+    ("Fn", false, false, false),
     ("::<", true, false, false),
     ("", false, false, false),
     ("", false, false, false),
@@ -675,9 +668,9 @@ static RESERVED_LIST: [(&str, bool, bool, bool); 150] = [
     ("", false, false, false),
     ("", false, false, false),
     ("", false, false, false),
-    ("go", true, false, false),
+    ("go", false, false, false),
     ("", false, false, false),
-    ("goto", true, false, false),
+    ("goto", false, false, false),
 ];
 
 impl Token {
@@ -762,10 +755,9 @@ impl Token {
             Mut => "mut",
             If => "if",
             Else => "else",
-            Switch => "switch",
+            Switch => "__rawr_switch",
             Do => "do",
             While => "while",
-            Until => "until",
             Loop => "loop",
             For => "for",
             In => "in",
@@ -784,9 +776,8 @@ impl Token {
             Continue => "continue",
             Break => "break",
             Return => "return",
-            Throw => "throw",
+            Throw => "__rawr_throw",
             Try => "try",
-            Catch => "catch",
             PlusAssign => "+=",
             MinusAssign => "-=",
             MultiplyAssign => "*=",
@@ -805,10 +796,8 @@ impl Token {
             PowerOfAssign => "**=",
 
             Fn => "fn",
-            Private => "private",
+            Private => "__rawr_private",
 
-            Import => "import",
-            Export => "export",
             As => "as",
 
             _ => panic!("token is not a literal symbol"),
@@ -1012,7 +1001,6 @@ impl Token {
             If               |
             //Do             |
             While            |
-            Until            |
             In               |
             NotIn            |
             And              |
@@ -1154,8 +1142,6 @@ impl Token {
         matches!(
             self,
             Fn | Private
-                | Import
-                | Export
                 | As
                 | True
                 | False
@@ -1172,7 +1158,6 @@ impl Token {
                 | Else
                 | Do
                 | While
-                | Until
                 | Loop
                 | For
                 | In
@@ -1181,7 +1166,6 @@ impl Token {
                 | Return
                 | Throw
                 | Try
-                | Catch
         )
     }
 
@@ -2577,11 +2561,10 @@ fn get_next_token_inner(
 /// Rust's raw identifier (`r#for`, `r#name`), after its `r`. `None` when the
 /// `r` starts something else, with the stream as it was.
 ///
-/// A name the lexer reads as a keyword is an identifier the lowered script
-/// never reads as one, and messages show the Rust name again
-/// (`demangle_names`): `r#switch` is `__rawr_switch`, as `switch` is
-/// (`rust_name`), and `r#for` is `__rawr_r_for`. Any other name is
-/// the identifier it spells: `r#name` is `name`, as in Rust. Rust refuses
+/// A keyword is an identifier the lowered script never reads as one, and
+/// messages show it as written (`raw_names`): `r#for` is `__rawr_r_for`.
+/// Any other name is the identifier it spells: `r#name` is `name`, as in
+/// Rust. Rust refuses
 /// `r#crate`, `r#self`, `r#super`, `r#Self` and `r#_`.
 fn parse_raw_identifier(
     stream: &mut (impl InputStream + ?Sized),
@@ -2621,9 +2604,7 @@ fn parse_raw_identifier(
         ));
     }
     Some(Token::Identifier(
-        if RUST_NAMES.contains(&word.as_str()) {
-            format!("__rawr_{word}").into()
-        } else if keyword {
+        if keyword {
             format!("{RAW_PREFIX}{word}").into()
         } else {
             word
@@ -2802,6 +2783,19 @@ fn parse_identifier_token(
         return (token, start_pos);
     }
 
+    // The lowered script's own keywords, which no Rust name spells.
+    if !state.tokenizer_control.borrow().rust {
+        let token = match identifier.as_str() {
+            "__rawr_switch" => Some(Token::Switch),
+            "__rawr_throw" => Some(Token::Throw),
+            "__rawr_private" => Some(Token::Private),
+            _ => None,
+        };
+        if let Some(token) = token {
+            return (token, start_pos);
+        }
+    }
+
     if is_reserved_keyword_or_symbol(&identifier).0 {
         return (Token::Reserved(Box::new(identifier)), start_pos);
     }
@@ -2825,85 +2819,40 @@ fn is_lifetime_marker(stream: &mut (impl InputStream + ?Sized)) -> bool {
     is_lifetime
 }
 
-/// The words the legacy lexer reads as keywords or reserves that are
-/// ordinary names in Rust. Checked Rawr, its items and bodies, reads each as
-/// the identifier `__rawr_<word>` (`rust_name`), so the lowered script never
-/// sees the keyword; messages and `Debug` text show the Rust name again
-/// (`demangle_names`). `Fn` stays the trait's name.
-pub(crate) const RUST_NAMES: [&str; 19] = [
-    "switch",
-    "catch",
-    "until",
-    "throw",
-    "private",
-    "import",
-    "export",
-    "print",
-    "debug",
-    "eval",
-    "call",
-    "this",
-    "curry",
-    "type_of",
-    "is_def_var",
-    "is_def_fn",
-    "is_shared",
-    "goto",
-    "go",
-];
-
-/// The checked-Rawr identifier of a token that is a Rust name the legacy
-/// lexer does not read as one (`RUST_NAMES`).
-pub(crate) fn rust_name(token: &Token) -> Option<String> {
-    let word = match token {
-        Token::Switch => "switch",
-        Token::Catch => "catch",
-        Token::Until => "until",
-        Token::Throw => "throw",
-        Token::Private => "private",
-        Token::Import => "import",
-        Token::Export => "export",
-        Token::Reserved(word) if RUST_NAMES.contains(&word.as_str()) => word.as_str(),
-        _ => return None,
-    };
-    Some(format!("__rawr_{word}"))
+/// The name the identifier `name` stands for: a raw identifier's keyword
+/// bare, as Rust names it (`__rawr_r_type` is `type`), and any other name
+/// itself.
+pub(crate) fn unraw(name: &str) -> &str {
+    name.strip_prefix(RAW_PREFIX).unwrap_or(name)
 }
 
-/// `text` with each `__rawr_<word>` of `RUST_NAMES` written as the Rust
-/// name it stands for.
-pub(crate) fn demangle_names(text: &str) -> std::borrow::Cow<'_, str> {
-    const PREFIX: &str = "__rawr_";
-    if !text.contains(PREFIX) {
+/// `text` with each raw identifier's keyword written as Rust writes it in
+/// messages: `__rawr_r_for` is `r#for`.
+pub(crate) fn raw_names(text: &str) -> std::borrow::Cow<'_, str> {
+    keywords_written(text, "r#")
+}
+
+/// `text` with each raw identifier's keyword bare, as Rust's `Debug`
+/// derive names a field: `__rawr_r_type` is `type`.
+pub(crate) fn bare_names(text: &str) -> std::borrow::Cow<'_, str> {
+    keywords_written(text, "")
+}
+
+fn keywords_written<'a>(text: &'a str, prefix: &str) -> std::borrow::Cow<'a, str> {
+    if !text.contains(RAW_PREFIX) {
         return std::borrow::Cow::Borrowed(text);
     }
     let mut output = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(at) = rest.find(PREFIX) {
+    while let Some(at) = rest.find(RAW_PREFIX) {
         output.push_str(&rest[..at]);
-        // A raw identifier's keyword: `__rawr_r_for` is `for`.
-        if let Some(raw) = rest[at..].strip_prefix(RAW_PREFIX)
-            && raw.starts_with(|c: char| is_id_first_alphabetic(c) || c == '_')
-        {
-            let end = raw.find(|c: char| !is_id_continue(c)).unwrap_or(raw.len());
-            output.push_str(&raw[..end]);
-            rest = &raw[end..];
-            continue;
+        let raw = &rest[at + RAW_PREFIX.len()..];
+        if raw.starts_with(|c: char| is_id_first_alphabetic(c) || c == '_') {
+            output.push_str(prefix);
+        } else {
+            output.push_str(RAW_PREFIX);
         }
-        let after = &rest[at + PREFIX.len()..];
-        let word = RUST_NAMES.iter().find(|word| {
-            after.starts_with(**word)
-                && !after[word.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
-        });
-        match word {
-            Some(word) => {
-                output.push_str(word);
-                rest = &after[word.len()..];
-            }
-            None => {
-                output.push_str(PREFIX);
-                rest = after;
-            }
-        }
+        rest = raw;
     }
     output.push_str(rest);
     std::borrow::Cow::Owned(output)
@@ -3184,10 +3133,6 @@ impl Iterator for TokenIterator<'_> {
                 ).into()),
                 // Reserved keyword/operator that is custom.
                 (.., true) => Token::Custom(s),
-                // A word of the old dialect that is an ordinary name in Rust:
-                // checked Rawr reads it as an identifier (`rust_name`), so a
-                // host's `disable_symbol` doesn't reach it.
-                (token, false) if self.state.tokenizer_control.borrow().rust && RUST_NAMES.contains(&token) => Token::Reserved(s),
                 // Reserved keyword that is not custom and disabled.
                 (token, false) if self.engine.is_symbol_disabled(token) => {
                     let msg = format!("reserved {} '{token}' is disabled", if is_valid_identifier(token) { "keyword"} else {"symbol"});

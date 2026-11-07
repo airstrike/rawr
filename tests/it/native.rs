@@ -33,18 +33,17 @@ fn test_native_context_fn_name() {
 /// A native asking rawr for a function it answers by name rather than by
 /// dispatch.
 ///
-/// `type_of` and `is_shared` have no registered implementation anywhere, and a
-/// call by name for one used to route past the code that implements them —
-/// they are reserved names, and being reserved is what makes such a call
-/// native-only. So a host could ask for `type_of` and be told there is no such
-/// function.
+/// The runtime's `type_of` (`__rawr_type_of`, a name no Rust name spells) and
+/// `is_shared` have no registered implementation anywhere, and a call by name
+/// for one used to route past the code that implements them. So a host could
+/// ask for `type_of` and be told there is no such function.
 #[test]
 fn test_native_call_fn_raw_reaches_syntactic_functions() {
     let mut engine = Engine::new();
 
     engine.register_raw_fn("ask_type", [TypeId::of::<Dynamic>()], |context, args| {
         let mut value = args[0].clone();
-        context.call_fn_raw("type_of", false, false, &mut [&mut value])
+        context.call_fn_raw("__rawr_type_of", false, false, &mut [&mut value])
     });
 
     // A string answers with its type name.

@@ -124,6 +124,19 @@ fn a_name_nothing_declares_is_e0425() {
         (code.as_str(), message.as_str()),
         ("E0425", "cannot find value `name` in this scope")
     );
+    // A name in a std path's arguments (rustlings' smart_pointers3).
+    assert_eq!(
+        refused(
+            "use std::thread;\nfn main() {\n    let h = thread::spawn(move || {\n        \
+             let n: u32 = numbers.iter().sum();\n        println!(\"{n}\");\n    });\n    \
+             h.join().unwrap();\n}\n"
+        ),
+        (
+            "E0425".into(),
+            "cannot find value `numbers` in this scope".into(),
+            label("not found in this scope")
+        )
+    );
 }
 
 #[test]
@@ -144,6 +157,21 @@ fn a_paths_unknown_first_segment_is_e0433() {
             label("use of unresolved module or unlinked crate `nothing`")
         )
     );
+    // A crate the program doesn't depend on is unresolved, whatever its
+    // name (#1149).
+    for call in [
+        "tokio::spawn(async {})",
+        "tokio::task::spawn_local(async {})",
+    ] {
+        assert_eq!(
+            refused(&format!("fn main() {{\n    {call};\n}}\nmain();\n")),
+            (
+                "E0433".into(),
+                "cannot find module or crate `tokio` in this scope".into(),
+                label("use of unresolved module or unlinked crate `tokio`")
+            )
+        );
+    }
 }
 
 #[test]
@@ -215,6 +243,29 @@ fn mutating_a_variable_not_declared_mut_is_rustcs_borrow_error() {
 }
 
 #[test]
+fn assigning_through_an_rc_or_arc_is_e0594() {
+    // rustlings' threads2: an `Arc` has no `DerefMut`.
+    let assigned = |pointer: &str, body: &str| {
+        let (code, message, _) = refused(&format!(
+            "use std::rc::Rc;\nuse std::sync::Arc;\nstruct S {{\n    n: u32,\n    \
+             inner: (u32, u32),\n}}\nfn main() {{\n    \
+             let p = {pointer}::new(S {{ n: 0, inner: (0, 0) }});\n    {body}\n}}\n"
+        ));
+        assert_eq!(code, "E0594", "{pointer}: {body}");
+        message
+    };
+    let arc = "cannot assign to data in an `Arc`";
+    assert_eq!(assigned("Arc", "p.n += 1;"), arc);
+    assert_eq!(assigned("Arc", "p.n = 2;"), arc);
+    assert_eq!(assigned("Arc", "p.inner.0 = 2;"), arc);
+    assert_eq!(assigned("Arc", "*p = S { n: 1, inner: (0, 0) };"), arc);
+    assert_eq!(
+        assigned("Rc", "p.n += 1;"),
+        "cannot assign to data in an `Rc`"
+    );
+}
+
+#[test]
 fn an_operator_no_impl_covers_is_e0277() {
     assert_eq!(
         refused("fn main() {\n    let n: i32 = \"5\".parse()?;\n}\nmain();\n"),
@@ -254,6 +305,34 @@ fn errors_rustc_gives_without_a_code_print_a_plain_error() {
         .starts_with("error: expected identifier, found `,`\n"));
     assert!(plain("const NUMBER = 3;\nfn main() {}\n")
         .starts_with("error: missing type for `const` item\n"));
+    // rustlings' tests1 and tests2 leave the condition for the learner.
+    let assert = plain("fn main() {\n    assert!();\n}\n");
+    assert!(
+        assert.starts_with("error: macro requires a boolean expression as an argument\n"),
+        "{assert}"
+    );
+    assert!(
+        assert.contains("^^^^^^^^^ boolean expression required"),
+        "{assert}"
+    );
+    assert!(plain("fn main() {\n    assert!( );\n}\n")
+        .starts_with("error: macro requires a boolean expression as an argument\n"));
+    assert!(plain("fn main() {\n    assert!(, \"m\");\n}\n")
+        .starts_with("error: expected expression, found `,`\n"));
+    // rustlings' tests2 leaves `assert_eq!()`'s operands.
+    let assert_eq = plain("fn main() {\n    assert_eq!();\n}\n");
+    assert!(
+        assert_eq.starts_with("error: unexpected end of macro invocation\n"),
+        "{assert_eq}"
+    );
+    assert!(
+        assert_eq.contains("^^^^^^^^^^^^ missing tokens in macro arguments"),
+        "{assert_eq}"
+    );
+    assert!(plain("fn main() {\n    assert_ne!(1,);\n}\n")
+        .starts_with("error: unexpected end of macro invocation\n"));
+    assert!(plain("fn main() {\n    assert_eq!(, 1);\n}\n")
+        .starts_with("error: no rules expected `,`\n"));
 }
 
 #[test]
@@ -351,6 +430,20 @@ fn a_type_nothing_settles_where_rustc_needs_it_is_e0282() {
     assert_eq!(
         (code.as_str(), message.as_str()),
         ("E0282", "type annotations needed")
+    );
+    // rustlings' threads1: a `Vec` nothing pushes to, whose elements are
+    // formatted.
+    assert_eq!(
+        refused(
+            "fn main() {\n    let mut results = Vec::new();\n    if results.len() != 10 {\n        \
+             panic!(\"no\");\n    }\n    for (i, result) in results.into_iter().enumerate() {\n        \
+             println!(\"{i} {result}\");\n    }\n}\n"
+        ),
+        (
+            "E0282".into(),
+            "type annotations needed for `Vec<_>`".into(),
+            None
+        )
     );
     // An `.into()` no use gives a target.
     let (code, message, _) = refused("fn main() {\n    let n: u8 = 1;\n    let x = n.into();\n}\n");

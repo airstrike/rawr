@@ -44,8 +44,10 @@ impl Drop for Fixture {
     }
 }
 
+/// A record typed as a symlink is followed by its path, so the no-follow
+/// lookup is never asked what it is.
 #[test]
-fn cached_symlink_rejects_even_when_replacement_metadata_would_be_regular() {
+fn a_cached_symlink_is_followed_without_a_no_follow_lookup() {
     let fixture = Fixture::new();
     let limits = cargo::Limits::standard();
     let mut allocation = Allocation::for_proof(
@@ -65,10 +67,7 @@ fn cached_symlink_rejects_even_when_replacement_metadata_would_be_regular() {
             Ok(fixture.file)
         },
     );
-    assert!(matches!(
-        result,
-        Err(stored::Error::Observation(Error::Policy("symlink-input")))
-    ));
+    assert!(result.expect("a symlink record").is_symlink());
     assert_eq!(calls, 0);
 }
 
@@ -126,7 +125,7 @@ fn every_known_nonlink_kind_uses_one_subsequent_nofollow_observation() {
     assert!(metadata.is_symlink());
     assert!(
         !metadata.is_file() && !metadata.is_dir(),
-        "the directory loop must select unsupported-input-shape, never read the target"
+        "the walk follows it by its path, never by the stale record's kind"
     );
 }
 
@@ -158,10 +157,7 @@ fn unknown_and_unrecognized_kinds_preserve_both_metadata_stages_and_errors() {
                 },
             );
             if first_link {
-                assert!(matches!(
-                    result,
-                    Err(stored::Error::Observation(Error::Policy("symlink-input")))
-                ));
+                assert!(result.expect("a symlink to follow").is_symlink());
                 assert_eq!(calls, 1);
             } else {
                 assert!(result.expect("second metadata is no-follow").is_symlink());

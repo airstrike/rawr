@@ -10,7 +10,13 @@
       "entries": [
         {"text":"A package with marked modules builds its native side with its `[features]`, as `cargo run` does: its default features are on, code under `#[cfg(feature = \"…\")]` builds as under Cargo, and an optional dependency a feature enables is there, inherited from a workspace or not.","issues":[1144]},
         {"text":"A build script that declares modules with `mod`, at `build.rs` or wherever `build` puts it, finds them beside it, nested modules included.","issues":[1143]},
-        {"text":"A dependency whose build script isn't named `build.rs` no longer loses its dependency information in rawr's store.","issues":[1147]}
+        {"text":"A dependency whose build script isn't named `build.rs` no longer loses its dependency information in rawr's store.","issues":[1147]},
+        {"text":"A call through a crate the program doesn't depend on, as `tokio::spawn(..)` without tokio, is rustc's E0433 naming that crate, and a panic in a native async call reaches you as cargo shows it.","issues":[1149]},
+        {"text":"A crate whose method returns an `impl Trait`, such as polars-core's `downcast_iter_mut`, no longer crashes rawr-import's driver with a rustc internal error about a missing visibility.","issues":[1151]},
+        {"text":"The whole site now has the work plan's look: Abitaro Sans, black on white with one red, heavy headings and thick rules. Every page, /todo included, has a dark mode that follows the system, with a switch in the site bar that remembers the choice.","issues":[1155]},
+        {"text":"The playground's examples have a Rustlings group: 13 programs from the rustlings solutions (ownership, enums, Option, strings, HashMap, errors with ? and Box<dyn Error>, traits, lifetimes, iterators, Box, Rc and TryFrom), each crediting its source under rustlings' MIT licence.","issues":[1161]},
+        {"text":"A module, its file, a function, a field or a binding can be named `switch`, `import`, `print`, `this` or any other word the old engine reserved, in marked code and in a crate's items, as in Rust: `mod switch;` opens `switch.rs`. rawr's grammar is Rust's, so the old engine's `switch`, `do`/`until`, `try`/`catch` and `import`/`export` syntax is gone.","issues":[1153]},
+        {"text":"The landing page's reload section now covers any library: tabs show the same idea in iced, ratatui and a plain std loop, and a new docs page, Apps and libraries, explains how libraries are compiled by Cargo, called from marked code and reloaded on save. Section rules, headings, links and inline code read more evenly.","issues":[1162]}
       ]
     },
     "releases": [
@@ -2767,7 +2773,25 @@
     {"issue":1146,"title":"A dependency whose only public item is a `pub const` &str can't be named from a marked main","state":"open","category":"Divergences from rustc"},
     {"issue":1147,"title":"A build script not named build.rs loses its dep-info when its run is copied into rawr's store","state":"closed","category":"Health"},
     {"issue":1148,"title":"rawr run and rawr check take no --features, --no-default-features or --all-features","state":"open","category":"Divergences from rustc"},
-    {"issue":1149,"title":"Remove the crate-name special cases left in the checker and generator","state":"open","category":"Health"}
+    {"issue":1149,"title":"Remove the crate-name special cases left in the checker and generator","state":"closed","category":"Health"},
+    {"issue":1150,"title":"A native module other than the crate root can't declare a marked module","state":"open","category":"Divergences from rustc"},
+    {"issue":1151,"title":"An opaque type in a crate's metadata has no visibility, and asking for one is a rustc ICE in the driver","state":"closed","category":"Health"},
+    {"issue":1152,"title":"Expand join!, try_join! and select! without matching tokio's or the futures crate's name","state":"open","category":"Health"},
+    {"issue":1153,"title":"Names the old engine reserved are ordinary names, as in Rust","state":"closed","category":"Divergences from rustc"},
+    {"issue":1154,"title":"The lowered script is still the old engine's dialect","state":"open","category":"Health"},
+    {"issue":1155,"title":"The site in the work plan's look, with dark mode","state":"open","category":"Health"},
+    {"issue":1156,"title":"Bot status and invite pages in the site's look and dark mode","state":"open","category":"Health"},
+    {"issue":1157,"title":"Link preview cards and favicons in the site's palette","state":"open","category":"Health"},
+    {"issue":1158,"title":"Embedding: a host's enums, Vec, usize and derives cross as they are, and an export root takes a glob import","state":"open","category":"Divergences from rustc"},
+    {"issue":1159,"title":"Embedding: a typed handle over the script's own type, checked at lookup and lent by &mut, and Script::replace","state":"open","category":"Divergences from rustc"},
+    {"issue":1160,"title":"std::thread::spawn fails in the browser playground","state":"open","category":"Platforms"},
+    {"issue":1161,"title":"A Rustlings group in the playground","state":"open","category":"Health"},
+    {"issue":1162,"title":"The landing page's reload section covers any library","state":"open","category":"Health"},
+    {"issue":1163,"title":"The generated runner's own items share a namespace with the program's types (a program `struct Program` fails to build)","state":"open","category":"Divergences from rustc"},
+    {"issue":1164,"title":"A marked src/main.rs can't name its own package's lib by the crate name","state":"open","category":"Divergences from rustc"},
+    {"issue":1165,"title":"An idle but live iced app is stopped after a few minutes with 'the runner did not finish a frame before its deadline'","state":"open","category":"Health"},
+    {"issue":1166,"title":"A program running under rawr run can tell it is, and can observe reload outcomes as events","state":"open","category":"Health"},
+    {"issue":1167,"title":"A crossing test's 120 s budget counts time spent waiting for Cargo's build-directory lock","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3561,7 +3585,14 @@
             {"number":1144,"title":"The generated crate for marked modules drops the package's [features]","state":"closed"},
             {"number":1145,"title":"A build script not named build.rs panics rawr-import with a lost build input","state":"closed"},
             {"number":1147,"title":"A build script not named build.rs loses its dep-info when its run is copied into rawr's store","state":"closed"},
-            {"number":1148,"title":"rawr run and rawr check take no --features, --no-default-features or --all-features","state":"open"}
+            {"number":1148,"title":"rawr run and rawr check take no --features, --no-default-features or --all-features","state":"open"},
+            {"number":1150,"title":"A native module other than the crate root can't declare a marked module","state":"open"},
+            {"number":1151,"title":"An opaque type in a crate's metadata has no visibility, and asking for one is a rustc ICE in the driver","state":"closed"},
+            {"number":1153,"title":"Names the old engine reserved are ordinary names, as in Rust","state":"closed"},
+            {"number":1163,"title":"The generated runner's own items share a namespace with the program's types (a program `struct Program` fails to build)","state":"open"},
+            {"number":1164,"title":"A marked src/main.rs can't name its own package's lib by the crate name","state":"open"},
+            {"number":1165,"title":"An idle but live iced app is stopped after a few minutes with 'the runner did not finish a frame before its deadline'","state":"open"},
+            {"number":1166,"title":"A program running under rawr run can tell it is, and can observe reload outcomes as events","state":"open"}
           ]
         }
       ]

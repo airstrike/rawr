@@ -113,7 +113,7 @@ export default function Playground() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="tools flex flex-wrap items-center gap-2 border-b border-line px-4 py-3 md:px-6">
+      <div className="tools flex flex-wrap items-center gap-2 border-b border-grid px-4 py-3 md:px-6">
         <Select value={state.mark || ""} onValueChange={(value) => session?.pick(value)}>
           <SelectTrigger className="flex-1 md:w-[240px] md:flex-none" aria-label="Examples">
             {current ? <span className="normal-case tracking-normal font-sans text-[13px]">{current.name}</span> : <span className="uppercase">Examples</span>}
@@ -158,14 +158,14 @@ export default function Playground() {
       </div>
       <main className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-2">
         <section className="pane flex min-h-0 flex-col px-4 pt-4 pb-6 md:px-6">
-          <p className="playcap mb-2"><span className="text-ink">//</span> Code</p>
+          <p className="playcap mb-2"><span className="text-red">//</span> Code</p>
           <div ref={host} className="editor min-h-[300px] flex-1 md:min-h-[360px]" />
           {/* Always present, so Turnstile finds its container whenever the session mounts it. */}
           <div id="ts" className="mt-3 empty:hidden" />
         </section>
-        <section className="pane flex min-h-0 flex-col border-t border-line px-4 pt-4 pb-6 md:border-t-0 md:border-l md:px-6">
+        <section className="pane flex min-h-0 flex-col border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:border-l md:px-6">
           <p className="playcap mb-2 flex justify-between gap-2">
-            <span><span className="text-ink">//</span> Output</span>
+            <span><span className="text-red">//</span> Output</span>
             <span id="status" className="truncate">{state.status}</span>
           </p>
           <div id="out" className="out" aria-live="polite">
@@ -173,7 +173,7 @@ export default function Playground() {
           </div>
         </section>
       </main>
-      <footer className="playfoot flex flex-wrap justify-between gap-4 border-t border-line px-4 py-3 md:px-6">
+      <footer className="playfoot flex flex-wrap justify-between gap-4 border-t border-rule px-4 py-3 md:px-6">
         <nav aria-label="Playground" className="flex flex-wrap gap-4">
           <a href="/docs/play">Help</a>
           <a href="/bot">Status</a>

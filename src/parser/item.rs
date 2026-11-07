@@ -308,7 +308,6 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
                 after_name = depth == 0
                     && token.is_some_and(|(token, _)| {
                         matches!(token, Token::Identifier(_) | Token::Reserved(_))
-                            || crate::tokenizer::rust_name(&token).is_some()
                     });
                 continue;
             }
@@ -4795,7 +4794,7 @@ fn parse_body_syntax(
             after_extern = matches!(token, Token::Identifier(name) if name.as_str() == "extern");
             let depth = scan.delimiter_depth;
             match token {
-                Token::If | Token::While | Token::Switch | Token::ThinArrow => {
+                Token::If | Token::While | Token::ThinArrow => {
                     heads.push((depth, false));
                 }
                 Token::For => heads.push((depth, true)),
@@ -4963,10 +4962,6 @@ fn body_token(token: Token, position: Position) -> crate::item::BodyToken {
         Token::As => (Kind::As, 2),
         Token::SelfValue => (Kind::SelfValue, 4),
         Token::Mut => (Kind::Mut, 3),
-        ref word if let Some(name) = crate::tokenizer::rust_name(word) => {
-            let width = name.len() - "__rawr_".len();
-            (Kind::Identifier(name.into()), width)
-        }
         Token::IntegerConstant(value) => (Kind::Integer(value), 0),
         _ => (Kind::Other, 0),
     };
@@ -5160,10 +5155,9 @@ fn parse_use_segment(input: &mut TokenStream, context: &str) -> ParseResult<crat
     parse_name(input, context)
 }
 
-/// Whether `token` is a name: an identifier, or a Rust name the legacy
-/// lexer reads as a keyword (`tokenizer::rust_name`).
+/// Whether `token` is a name.
 fn is_name(token: &Token) -> bool {
-    matches!(token, Token::Identifier(_)) || crate::tokenizer::rust_name(token).is_some()
+    matches!(token, Token::Identifier(_))
 }
 
 fn parse_name(input: &mut TokenStream, context: &str) -> ParseResult<crate::item::Name> {
@@ -5172,13 +5166,6 @@ fn parse_name(input: &mut TokenStream, context: &str) -> ParseResult<crate::item
             span: token_span(position, &name),
             text: (*name).into(),
         }),
-        // `switch`, `debug` and kin are legacy keywords but Rust names.
-        (ref word, position) if let Some(name) = crate::tokenizer::rust_name(word) => {
-            Ok(crate::item::Name {
-                span: token_span(position, &name["__rawr_".len()..]),
-                text: name.into(),
-            })
-        }
         (Token::LexError(error), position) => Err(error.into_err(position)),
         (_, position) => {
             Err(PERR::MissingToken("identifier".into(), context.into()).into_err(position))
@@ -5227,7 +5214,7 @@ pub(crate) fn found(token: &Token) -> String {
         Token::Unit => "`(`".into(),
         token => {
             let text = token.to_string();
-            let text = crate::tokenizer::demangle_names(&text);
+            let text = crate::tokenizer::raw_names(&text);
             if KEYWORDS.contains(&text.as_ref()) {
                 format!("keyword `{text}`")
             } else {

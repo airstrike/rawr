@@ -46,6 +46,15 @@ impl Metadata {
         }
     }
 
+    /// A member its directory record types as a symlink, before it is
+    /// followed.
+    pub(super) const fn symlink() -> Self {
+        Self {
+            mode: libc::S_IFLNK,
+            length: 0,
+        }
+    }
+
     pub(super) fn is_dir(self) -> bool {
         self.mode & libc::S_IFMT == libc::S_IFDIR
     }
@@ -59,7 +68,8 @@ impl Metadata {
         self.length
     }
 
-    #[cfg(test)]
+    /// The kind and length `std` metadata reports, as a followed link's
+    /// target is read.
     pub(super) fn from_metadata(value: &std::fs::Metadata) -> Self {
         use std::os::unix::fs::MetadataExt as _;
         Self {

@@ -1546,16 +1546,21 @@ pub fn future_parameter_functions() -> api::Graph<api::Extracted> {
     .expect("freshness proof publishes the future parameter fixture")
 }
 
-/// Two free functions that take a closure, as iced's `sipper` does:
+/// Free functions that take a closure, as iced's `sipper` does:
 /// `fixture::sip<F, R>(make: F) -> i64` with `F: FnOnce() -> R, R:
-/// Future`, whose closure returns a future, and `fixture::ready<F, R>(make:
-/// F) -> i64` with `F: FnOnce() -> R`, whose closure returns a value (#545).
+/// Future`, whose closure returns a future, `fixture::sip_core<F, R>(make:
+/// F) -> i64` with `R: Core` and `trait Core: Future`, whose closure returns
+/// one through a supertrait, as sipper's `Sipper` is one (#1149), and
+/// `fixture::ready<F, R>(make: F) -> i64` with `F: FnOnce() -> R`, whose
+/// closure returns a value (#545).
 pub fn future_closure_functions() -> api::Graph<api::Extracted> {
     let future = sysroot_definition("a0", identity::Namespace::Type, "core");
     let fn_once = sysroot_definition("a1", identity::Namespace::Type, "core");
     let output = sysroot_definition("a2", identity::Namespace::Type, "core");
     let sip = definition("a3", identity::Namespace::Value);
     let ready = definition("a4", identity::Namespace::Value);
+    let core = definition("a5", identity::Namespace::Type);
+    let sip_core = definition("a6", identity::Namespace::Value);
     let parameter = |owner: &identity::Definition, index: u32| model::Type::Parameter {
         owner: owner.clone(),
         index,
@@ -1572,7 +1577,7 @@ pub fn future_closure_functions() -> api::Graph<api::Extracted> {
             binders: Box::default(),
         },
     };
-    let generics = |owner: &identity::Definition, future_output: bool| {
+    let generics = |owner: &identity::Definition, output_bound: Option<&identity::Definition>| {
         let type_parameter = |index: u32, name: &str| {
             model::Parameter::new(
                 owner.clone(),
@@ -1600,15 +1605,18 @@ pub fn future_closure_functions() -> api::Graph<api::Extracted> {
                 ty: parameter(owner, 1),
             },
         ];
-        if future_output {
-            predicates.push(bound(owner, 1, &future, Box::default()));
+        if let Some(trait_id) = output_bound {
+            predicates.push(bound(owner, 1, trait_id, Box::default()));
         }
         model::Generics::new(
             Box::from([type_parameter(0, "F"), type_parameter(1, "R")]),
             predicates.into_boxed_slice(),
         )
     };
-    let function = |id: &identity::Definition, name: &str, future_output: bool, at: u32| {
+    let function = |id: &identity::Definition,
+                    name: &str,
+                    output_bound: Option<&identity::Definition>,
+                    at: u32| {
         model::Definition::new(
             id.clone(),
             path(&["fixture", name]),
@@ -1626,7 +1634,7 @@ pub fn future_closure_functions() -> api::Graph<api::Extracted> {
                     Box::from([parameter(id, 0)]),
                     model::Type::Primitive("i64".into()),
                 ),
-                generics: generics(id, future_output),
+                generics: generics(id, output_bound),
             },
             span(at, at + 10),
             model::Origin::Source,
@@ -1654,8 +1662,35 @@ pub fn future_closure_functions() -> api::Graph<api::Extracted> {
             "associated-type",
             722,
         ),
-        function(&sip, "sip", true, 733),
-        function(&ready, "ready", false, 744),
+        function(&sip, "sip", Some(&future), 733),
+        function(&ready, "ready", None, 744),
+        function(&sip_core, "sip_core", Some(&core), 760),
+        model::Definition::new(
+            core.clone(),
+            path(&["fixture", "Core"]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Trait {
+                unsafe_trait: false,
+                auto_trait: false,
+                supertraits: Box::from([bound(&core, 0, &future, Box::default())]),
+                associated: Box::default(),
+                generics: model::Generics::new(
+                    Box::from([model::Parameter::new(
+                        core.clone(),
+                        0,
+                        "Self".into(),
+                        model::ParameterKind::Type {
+                            bounds: Box::default(),
+                            default: model::Default::Absent,
+                        },
+                    )]),
+                    Box::default(),
+                ),
+            },
+            span(771, 781),
+            model::Origin::Source,
+        ),
     ];
     definitions.sort_by(|left, right| left.id().cmp(right.id()));
     let export = |name: &str, id: &identity::Definition, at: u32| {
@@ -1671,7 +1706,11 @@ pub fn future_closure_functions() -> api::Graph<api::Extracted> {
             span(at, at + 1),
         ))
     };
-    let exports = vec![export("sip", &sip, 755), export("ready", &ready, 757)];
+    let exports = vec![
+        export("sip", &sip, 755),
+        export("ready", &ready, 757),
+        export("sip_core", &sip_core, 759),
+    ];
     let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
     api::Graph::seal(
         &api::Context::fixture(),

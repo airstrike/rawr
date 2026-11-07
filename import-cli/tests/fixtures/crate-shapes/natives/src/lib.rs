@@ -323,6 +323,17 @@ pub mod form {
     pub fn form<T: Into<u32>>(value: T) -> impl Filter {
         Plain(value.into())
     }
+
+    /// A generic type's `&mut self` method that gives an opaque iterator
+    /// borrowing it, as polars' `ChunkedArray::downcast_iter_mut` does. Its
+    /// opaque type has no visibility in the crate's metadata.
+    pub struct Holder<T>(pub Vec<T>);
+
+    impl<T> Holder<T> {
+        pub fn items_mut(&mut self) -> impl Iterator<Item = &mut T> + '_ {
+            self.0.iter_mut()
+        }
+    }
 }
 
 /// Trait impls on a type with a const parameter, as palette's `impl<T>
@@ -487,6 +498,31 @@ pub mod deref {
                     height: 1,
                 },
             }
+        }
+    }
+}
+
+/// Items named as words the old engine read as keywords, which are names
+/// in Rust: a function `print`, a module `import`, a field `this` and a
+/// method `call`.
+pub mod names {
+    pub fn print(text: &str) -> String {
+        format!("printed {text}")
+    }
+
+    pub mod import {
+        pub fn switch(on: bool) -> bool {
+            !on
+        }
+    }
+
+    pub struct Handle {
+        pub this: u32,
+    }
+
+    impl Handle {
+        pub fn call(&self, step: u32) -> u32 {
+            self.this + step
         }
     }
 }

@@ -77,7 +77,7 @@ static,         true, false, false
 shared,         true, false, false
 with,           true, false, false
 is,             true, false, false
-goto,           true, false, false
+goto,           false, false, false
 exit,           false, false, false
 match,          true, false, false
 case,           true, false, false
@@ -87,7 +87,7 @@ null,           true, false, false
 nil,            true, false, false
 spawn,          true, false, false
 thread,         true, false, false
-go,             true, false, false
+go,             false, false, false
 sync,           true, false, false
 async,          true, false, false
 await,          true, false, false
@@ -95,14 +95,14 @@ yield,          true, false, false
 #   
 # keyword functions
 #   
-print,          true, true, false
-debug,          true, true, false
-type_of,        true, true, true
-eval,           true, true, false
-Fn,             true, true, false
-call,           true, true, true
-curry,          true, true, true
-this,           true, false, false
-is_def_var,     true, true, false
-is_def_fn,      true, true, false
-is_shared,      true, true, true
+print,          false, false, false
+debug,          false, false, false
+type_of,        false, false, false
+eval,           false, false, false
+Fn,             false, false, false
+call,           false, false, false
+curry,          false, false, false
+this,           false, false, false
+is_def_var,     false, false, false
+is_def_fn,      false, false, false
+is_shared,      false, false, false

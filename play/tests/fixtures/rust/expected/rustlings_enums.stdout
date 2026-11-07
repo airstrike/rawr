@@ -1,0 +1,5 @@
+Resize { width: 10, height: 30 }
+Move(Point { x: 10, y: 15 })
+Echo("hello world")
+ChangeColor(200, 255, 255)
+Quit

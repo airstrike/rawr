@@ -2713,7 +2713,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             Some(AssociatedPathKind::Named) | None => None,
         };
         self.budget.items(1)?;
-        let visibility = self.tcx.visibility(def_id);
+        // rustc encodes no visibility for an opaque type in a crate's
+        // metadata (asking for one is an ICE); it is as visible as the item
+        // that defines it, the function whose output it is or its alias.
+        let visibility = if matches!(self.tcx.def_kind(def_id), DefKind::OpaqueTy) {
+            self.tcx.visibility(self.tcx.parent(def_id))
+        } else {
+            self.tcx.visibility(def_id)
+        };
         // Intrinsic facts include owned private declarations as semantic support.
         // Their visibility remains exact; ordinary facade capture still requires
         // a nameable declaration and never gains a new public export here.

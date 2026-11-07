@@ -2928,8 +2928,13 @@ fn resolve_methods(
         .iter()
         .map(|definition| (definition.id(), definition))
         .collect();
-    let mut declarations =
-        BTreeMap::<(type_def::Id, ImmutableString), (program::source::Id, Span)>::new();
+    // Keyed by the owner's name too: a builtin impl owner is every Self
+    // type of one runtime type (`f32` and `f64`, `&str` and `String`), and
+    // each is its own Self type of a trait.
+    let mut declarations = BTreeMap::<
+        (type_def::Id, ImmutableString, ImmutableString),
+        (program::source::Id, Span),
+    >::new();
     let mut methods = Vec::new();
     let mut builtin_methods = Vec::new();
     // A supertrait's associated types are the owner's impl of it:
@@ -3115,9 +3120,10 @@ fn resolve_methods(
                     shell.source
                 };
                 let member: ImmutableString = format!("{instance}::{}", function.name.text).into();
-                if let Some((previous_source, previous_declaration)) =
-                    declarations.insert((owner_id, member.clone()), (shell.source, name.span))
-                {
+                if let Some((previous_source, previous_declaration)) = declarations.insert(
+                    (owner_id, owner_name.clone(), member.clone()),
+                    (shell.source, name.span),
+                ) {
                     return Err(LocatedError::related(
                         shell.source,
                         previous_source,
@@ -3213,7 +3219,7 @@ fn resolve_methods(
                     .map_err(|error| LocatedError::primary(shell.source, error))?;
                 let member: ImmutableString = format!("{instance}::{}", function.name.text).into();
                 if let Some((previous_source, previous_declaration)) = declarations.insert(
-                    (owner_id, member.clone()),
+                    (owner_id, owner_name.clone(), member.clone()),
                     (shell.source, function.name.span),
                 ) {
                     return Err(LocatedError::related(
@@ -3248,7 +3254,7 @@ fn resolve_methods(
             validate_method_signature(Some(owner.name()), function, true)
                 .map_err(|error| LocatedError::primary(shell.source, error))?;
             let name = function.name.text.clone();
-            let duplicate_key = (owner_id, name.clone());
+            let duplicate_key = (owner_id, owner_name.clone(), name.clone());
             if let Some((previous_source, previous_declaration)) =
                 declarations.insert(duplicate_key, (shell.source, function.name.span))
             {
@@ -3356,7 +3362,13 @@ pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString
     let type_ref::Type::Path(path) = ty else {
         return None;
     };
-    Some((code, path.name.clone()))
+    // `&str` is `String` marked borrowed, and its own Self type.
+    let name = if ty.is_str() {
+        "&str".into()
+    } else {
+        path.name.clone()
+    };
+    Some((code, name))
 }
 
 /// A generic trait's arguments with its defaults filled in, `Self` as
@@ -5490,6 +5502,8 @@ fn type_name_of(ty: &type_ref::Type, canonical: bool) -> String {
             "({})",
             members.iter().map(name).collect::<Vec<_>>().join(", ")
         ),
+        // `&str` is `String` marked borrowed, and a type apart from it.
+        type_ref::Type::Path(_) if ty.is_str() => "&str".into(),
         type_ref::Type::Path(path) => {
             let arguments = path
                 .arguments

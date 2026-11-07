@@ -287,6 +287,10 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// it gives does not take as arguments. `None` elsewhere, where an
     /// opaque type is refused.
     opaque_output: std::cell::RefCell<Option<Box<[u32]>>>,
+    /// The positions of the captures each opaque type a function gives
+    /// leaves out (`opaque_output`), by its definition, so the opaque type
+    /// has the same arguments wherever it is named.
+    opaque_excluded: std::cell::RefCell<BTreeMap<api::identity::Definition, Box<[u32]>>>,
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
     opaque_self: std::cell::RefCell<Option<model::Type>>,
@@ -625,6 +629,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             instance_aliases: std::cell::OnceCell::new(),
             sole_aliases: std::cell::OnceCell::new(),
             opaque_output: std::cell::RefCell::new(None),
+            opaque_excluded: std::cell::RefCell::new(BTreeMap::new()),
             opaque_self: std::cell::RefCell::new(None),
             opaque_projecting: std::cell::RefCell::new(Vec::new()),
             opaque_associated: std::cell::RefCell::new(Vec::new()),
@@ -6002,6 +6007,55 @@ impl<P: api::Phase> Context<'_, P> {
         }
     }
 
+    /// `container` without each type parameter the opaque type `opaque`
+    /// leaves out of its arguments (`opaque_excluded`), and the bounds on
+    /// it, or `None` when it leaves none out.
+    fn without_left_out(
+        &self,
+        opaque: &model::Type,
+        container: &model::Generics,
+    ) -> Option<model::Generics> {
+        let model::Type::ImplTrait { id, captures, .. } = opaque else {
+            return None;
+        };
+        let positions = self.opaque_excluded.borrow().get(id).cloned()?;
+        let left_out = captures
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| {
+                u32::try_from(*position).is_ok_and(|position| positions.contains(&position))
+            })
+            .filter_map(|(_, capture)| match capture {
+                model::Argument::Type(model::Type::Parameter { index, .. }) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if left_out.is_empty() {
+            return None;
+        }
+        let bounded = |ty: &model::Type| matches!(ty, model::Type::Parameter { index, .. } if left_out.contains(index));
+        let parameters = container
+            .parameters()
+            .filter(|parameter| !left_out.contains(&parameter.index()))
+            .cloned()
+            .collect();
+        let predicates = container
+            .predicates()
+            .filter(|predicate| match predicate {
+                model::Predicate::Bound { ty, .. } | model::Predicate::TypeOutlives { ty, .. } => {
+                    !bounded(ty)
+                }
+                model::Predicate::ProjectionEquality {
+                    projection: model::Type::Projection { arguments, .. },
+                    ..
+                } => !matches!(arguments.first(), Some(model::Argument::Type(ty)) if bounded(ty)),
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        Some(model::Generics::new(parameters, predicates))
+    }
+
     /// `method` of the trait `trait_id` as a member of the opaque type
     /// `opaque`, whose bound gives the trait `arguments`, within the
     /// function whose generics are `container`.
@@ -6035,6 +6089,11 @@ impl<P: api::Phase> Context<'_, P> {
             .map(|parameter| parameter.index().saturating_add(1))
             .max()
             .unwrap_or(0);
+        // A parameter the opaque type leaves out (`opaque_excluded`), as
+        // the callable `code_block`'s `impl Fn(Uri) -> Message` fills, is
+        // none of the member's: no argument of the type gives it.
+        let pruned = self.without_left_out(opaque, container);
+        let container = pruned.as_ref().unwrap_or(container);
         // The method's parameters join the function's, and a name both
         // use, as warp's `form<T>()` and `Filter::untuple_one<T>` do, would
         // be declared twice: the method's is renamed `T1`, `T2`, ...
@@ -9039,13 +9098,38 @@ impl<P: api::Phase> Context<'_, P> {
                 let Some(excluded) = excluded else {
                     return Err(representability::reject::Kind::OpaqueType.into());
                 };
+                // The captures a script callable or future fills, by their
+                // positions: where the function that gives the opaque type
+                // converts its output, those its excluded parameters are,
+                // and the same positions wherever else the type is named,
+                // as a member of it names it as its `Self`.
+                let known = self.opaque_excluded.borrow().get(id).cloned();
+                let left_out = match known {
+                    Some(positions) => positions,
+                    None => {
+                        let positions = captures
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, capture)| {
+                                matches!(capture, model::Argument::Type(model::Type::Parameter { index, .. })
+                                    if excluded.contains(index))
+                            })
+                            .filter_map(|(position, _)| u32::try_from(position).ok())
+                            .collect::<Box<[u32]>>();
+                        if !positions.is_empty() {
+                            self.opaque_excluded
+                                .borrow_mut()
+                                .insert(id.clone(), positions.clone());
+                        }
+                        positions
+                    }
+                };
                 let mut arguments = Vec::new();
-                for capture in captures.iter() {
+                for (position, capture) in captures.iter().enumerate() {
                     let model::Argument::Type(ty) = capture else {
                         continue;
                     };
-                    if matches!(ty, model::Type::Parameter { index, .. } if excluded.contains(index))
-                    {
+                    if u32::try_from(position).is_ok_and(|position| left_out.contains(&position)) {
                         continue;
                     }
                     arguments.push(self.convert(ty)?);
@@ -9804,24 +9888,75 @@ impl<P: api::Phase> Context<'_, P> {
     }
 
     /// Whether `ty` is a type parameter `generics` bounds by `Future`, or by
-    /// a trait of the `sipper` crate, as a closure's `Fut` is in `F:
-    /// FnOnce(Sender<P>) -> Fut, Fut: Future<Output = O>`.
+    /// a trait whose supertraits include it as rustc elaborates them, as a
+    /// closure's `Fut` is in `F: FnOnce(Sender<P>) -> Fut, Fut:
+    /// Future<Output = O>`, and sipper's `Sipper` is through `Core`.
     fn future_bounded(&self, generics: &model::Generics, ty: &model::Type) -> bool {
+        /// Supertraits are read this deep, as [`Self::elaborate`] reads them.
+        const DEPTH: usize = 8;
+        // The positive trait bound `predicate` puts on what `bounded`
+        // matches.
+        fn bound(
+            predicate: &model::Predicate,
+            bounded: impl Fn(&model::Type) -> bool,
+        ) -> Option<&api::identity::Definition> {
+            match predicate {
+                model::Predicate::Bound {
+                    ty,
+                    bound:
+                        model::Bound::Trait {
+                            trait_id,
+                            polarity: model::Polarity::Positive,
+                            ..
+                        },
+                } if bounded(ty) => Some(trait_id),
+                _ => None,
+            }
+        }
         let model::Type::Parameter { index, .. } = ty else {
             return false;
         };
-        generics.predicates().any(|predicate| {
-            matches!(predicate, model::Predicate::Bound {
-                ty: model::Type::Parameter { index: bounded, .. },
-                bound: model::Bound::Trait {
-                    trait_id,
-                    polarity: model::Polarity::Positive,
-                    ..
-                },
-            } if *bounded == *index
-                && (self.is_core_trait(trait_id, "Future")
-                    || trait_id.unit().crate_name() == "sipper"))
-        })
+        let mut pending = generics
+            .predicates()
+            .filter_map(|predicate| {
+                bound(predicate, |ty| {
+                    matches!(ty, model::Type::Parameter { index: bounded, .. } if bounded == index)
+                })
+            })
+            .map(|trait_id| (trait_id, 0))
+            .collect::<Vec<_>>();
+        let mut seen = Vec::new();
+        while let Some((trait_id, depth)) = pending.pop() {
+            if self.is_core_trait(trait_id, "Future") {
+                return true;
+            }
+            if depth >= DEPTH || seen.contains(&trait_id) {
+                continue;
+            }
+            seen.push(trait_id);
+            let Some(model::Kind::Trait { supertraits, .. }) = self
+                .graph
+                .definition_index(trait_id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .map(model::Definition::kind)
+            else {
+                continue;
+            };
+            pending.extend(
+                supertraits
+                    .iter()
+                    .filter_map(|predicate| {
+                        bound(predicate, |ty| {
+                            matches!(
+                                ty,
+                                model::Type::SelfType(_) | model::Type::Parameter { index: 0, .. }
+                            )
+                        })
+                    })
+                    .map(|trait_id| (trait_id, depth + 1)),
+            );
+        }
+        false
     }
 
     fn is_core_trait(&self, id: &api::identity::Definition, name: &str) -> bool {
@@ -13653,8 +13788,9 @@ mod tests {
     /// A closure that returns a future, as `sipper(|sender| async move {
     /// .. })` takes, has no Rust type the runner can write for the script's
     /// `async` block. The item is refused with that reason, which a script's
-    /// call of it reports, and never reaches the generator (#545). A closure
-    /// that returns a value is made.
+    /// call of it reports, and never reaches the generator (#545), as is one
+    /// whose output's bound has `Future` among its supertraits (#1149). A
+    /// closure that returns a value is made.
     #[test]
     fn a_closure_that_returns_a_future_is_refused_in_rust_terms() {
         use super::representability::reject;
@@ -13669,10 +13805,15 @@ mod tests {
                 .representability()
                 .clone()
         };
+        for name in ["sip", "sip_core"] {
+            let Representability::Rejected(reason) = outcome(name) else {
+                panic!("`{name}` is refused: {:?}", outcome(name));
+            };
+            assert_eq!(reason.kind(), reject::Kind::FutureClosure, "{name}");
+        }
         let Representability::Rejected(reason) = outcome("sip") else {
             panic!("`sip` is refused: {:?}", outcome("sip"));
         };
-        assert_eq!(reason.kind(), reject::Kind::FutureClosure);
         assert_eq!(
             reason.kind().describe(),
             "it takes a closure that returns a future"
