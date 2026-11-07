@@ -287,9 +287,9 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// it gives does not take as arguments. `None` elsewhere, where an
     /// opaque type is refused.
     opaque_output: std::cell::RefCell<Option<Box<[u32]>>>,
-    /// The type parameters each opaque type a function gives leaves out
-    /// (`opaque_output`), by its definition, so the opaque type is the
-    /// same where a member of it names it as its `Self`.
+    /// The positions of the captures each opaque type a function gives
+    /// leaves out (`opaque_output`), by its definition, so the opaque type
+    /// has the same arguments wherever it is named.
     opaque_excluded: std::cell::RefCell<BTreeMap<api::identity::Definition, Box<[u32]>>>,
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
@@ -9114,25 +9114,38 @@ impl<P: api::Phase> Context<'_, P> {
                 let Some(excluded) = excluded else {
                     return Err(representability::reject::Kind::OpaqueType.into());
                 };
-                let excluded = if excluded.is_empty() {
-                    self.opaque_excluded
-                        .borrow()
-                        .get(id)
-                        .cloned()
-                        .unwrap_or_default()
-                } else {
-                    self.opaque_excluded
-                        .borrow_mut()
-                        .insert(id.clone(), excluded.clone());
-                    excluded
+                // The captures a script callable or future fills, by their
+                // positions: where the function that gives the opaque type
+                // converts its output, those its excluded parameters are,
+                // and the same positions wherever else the type is named,
+                // as a member of it names it as its `Self`.
+                let known = self.opaque_excluded.borrow().get(id).cloned();
+                let left_out = match known {
+                    Some(positions) => positions,
+                    None => {
+                        let positions = captures
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, capture)| {
+                                matches!(capture, model::Argument::Type(model::Type::Parameter { index, .. })
+                                    if excluded.contains(index))
+                            })
+                            .filter_map(|(position, _)| u32::try_from(position).ok())
+                            .collect::<Box<[u32]>>();
+                        if !positions.is_empty() {
+                            self.opaque_excluded
+                                .borrow_mut()
+                                .insert(id.clone(), positions.clone());
+                        }
+                        positions
+                    }
                 };
                 let mut arguments = Vec::new();
-                for capture in captures.iter() {
+                for (position, capture) in captures.iter().enumerate() {
                     let model::Argument::Type(ty) = capture else {
                         continue;
                     };
-                    if matches!(ty, model::Type::Parameter { index, .. } if excluded.contains(index))
-                    {
+                    if u32::try_from(position).is_ok_and(|position| left_out.contains(&position)) {
                         continue;
                     }
                     arguments.push(self.convert(ty)?);
