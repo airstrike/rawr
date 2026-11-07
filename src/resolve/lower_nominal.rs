@@ -9493,7 +9493,7 @@ impl Ty {
             Self::InclusiveOf(_) => Some(TypeId::of::<std::ops::RangeInclusive<Dynamic>>()),
             Self::Ordering => Some(TypeId::of::<INT>()),
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
-            Self::Time(Time::Instant) => Some(TypeId::of::<std::time::Instant>()),
+            Self::Time(Time::Instant) => Some(TypeId::of::<crate::Instant>()),
             Self::ParseError(_) => Some(TypeId::of::<ImmutableString>()),
             Self::Reference { target, .. } | Self::Boxed(target) => target.native_type_id(models),
             Self::Counted(..) => Some(TypeId::of::<counted::Counted>()),
@@ -19439,7 +19439,7 @@ impl<'a> Parser<'a> {
                 intrinsic::Type::builtin("Duration", TypeId::of::<std::time::Duration>())
             }
             Ty::Time(Time::Instant) => {
-                intrinsic::Type::builtin("Instant", TypeId::of::<std::time::Instant>())
+                intrinsic::Type::builtin("Instant", TypeId::of::<crate::Instant>())
             }
             Ty::ParseError(_) => {
                 intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>())
@@ -45056,7 +45056,7 @@ impl<'a> Parser<'a> {
             // Rust's own `Debug` text of a `Duration` (`1.5s`) or `Instant`.
             Ty::Time(_) => {
                 crate::host::debug::register::<std::time::Duration>();
-                crate::host::debug::register::<std::time::Instant>();
+                crate::host::debug::register::<crate::Instant>();
                 self.prelude_op(PreludeOp::GenericDebug, [value])
             }
             Ty::Ordering => {
@@ -56439,8 +56439,8 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
         return Some(lhs.cmp(&rhs));
     }
     if let (Some(lhs), Some(rhs)) = (
-        lhs.read_lock::<std::time::Instant>(),
-        rhs.read_lock::<std::time::Instant>(),
+        lhs.read_lock::<crate::Instant>(),
+        rhs.read_lock::<crate::Instant>(),
     ) {
         return Some(lhs.cmp(&rhs));
     }
@@ -56560,8 +56560,8 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
         return *lhs == *rhs;
     }
     if let (Some(lhs), Some(rhs)) = (
-        lhs.read_lock::<std::time::Instant>(),
-        rhs.read_lock::<std::time::Instant>(),
+        lhs.read_lock::<crate::Instant>(),
+        rhs.read_lock::<crate::Instant>(),
     ) {
         return *lhs == *rhs;
     }
@@ -57657,7 +57657,8 @@ fn time_code(name: &str) -> usize {
 /// One of `TIME_METHODS` on `args[0]` with the operand `args[2]`, with
 /// Rust's panics.
 fn time_method(args: &mut FnCallArgs) -> RawrResult {
-    use std::time::{Duration, Instant};
+    use crate::Instant;
+    use std::time::Duration;
     let fail = |message: &str| -> RawrResult {
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
     };

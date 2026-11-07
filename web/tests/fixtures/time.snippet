@@ -9,3 +9,5 @@ println!("{:?}", start.checked_duration_since(later));
 println!("{:?}", later.saturating_duration_since(start));
 let spent = start.elapsed();
 println!("{} {}", spent < step, spent >= Duration::ZERO);
+let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+println!("{}", epoch.is_ok_and(|since| since.as_secs() > 1_700_000_000));
