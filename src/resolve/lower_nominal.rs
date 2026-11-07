@@ -25252,16 +25252,74 @@ impl<'a> Parser<'a> {
         };
         let helper =
             self.push_imported_op(&path, field.imported_identity(), Some(imported), operation)?;
+        // `item.name.push('!')`: a field Rawr holds as its own value, of a
+        // place, is a place a method changes, read out and stored back as
+        // `item.name = name` (#1139).
+        let lvalue = match &receiver.lvalue {
+            Some(lvalue)
+                if shared
+                    && !self.type_provides(&ty, capability::Kind::Copy)
+                    && self.method_follows() =>
+            {
+                let place = self.temporary("place");
+                let stored = self.temporary("stored");
+                let local =
+                    self.operator_expr(origin::Fragment::plain(place.clone()), receiver.ty.clone(), receiver.span);
+                let value =
+                    self.operator_expr(origin::Fragment::plain(stored.clone()), ty.clone(), member_span);
+                let store = self.store_imported_field(
+                    local,
+                    definition.clone(),
+                    &[(member.clone(), member_span)],
+                    true,
+                    value,
+                )?;
+                let step = PlaceStep::Accessor {
+                    place: place.clone(),
+                    stored,
+                    read: origin::Fragment::call(&helper, [origin::Fragment::plain(place)])
+                        .surrounded("{ ", " }"),
+                    store: store.rendered_source().surrounded("{ ", " }"),
+                };
+                match lvalue {
+                    Lvalue::Binding { binding, .. } => {
+                        Some(Lvalue::Nested(Box::new(NestedLvalue {
+                            binding: binding.clone(),
+                            base: origin::Fragment::plain(binding.to_string()),
+                            steps: vec![step],
+                            ty: ty.clone(),
+                        })))
+                    }
+                    Lvalue::Slice(_) => None,
+                    lvalue => Some(nested_step(lvalue, step, ty.clone())),
+                }
+            }
+            _ => None,
+        };
         Ok(ParsedExpr {
             prelude: receiver.prelude,
             source: origin::Fragment::call(&helper, [receiver.source]),
             ty,
             span: operation,
-            lvalue: None,
+            lvalue,
             outcome: crate::host::usage::Outcome::Conservative,
             evaluation: crate::host::usage::Evaluation::Required,
         }
         .retain_origin())
+    }
+
+    /// Whether a method call follows: `.name(`.
+    #[cfg(feature = "rust-import")]
+    fn method_follows(&self) -> bool {
+        let mut ahead = self.input.clone();
+        matches!(
+            (ahead.next(), ahead.next(), ahead.next()),
+            (
+                Some((Token::Period, _)),
+                Some((Token::Identifier(_), _)),
+                Some((Token::LeftParen | Token::Unit, _))
+            )
+        )
     }
 
     fn parse_binding(&mut self, let_keyword: bool) -> Result<(), Error> {
