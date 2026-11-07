@@ -541,7 +541,8 @@ main();
 }
 
 /// `AsRef` and `AsMut` bounds of std's types hold by std's impls, and
-/// `as_ref` through one runs (rustlings' as_ref_mut).
+/// `as_ref` and `as_mut` through them run: `as_mut` lends the receiver's
+/// own place (rustlings' as_ref_mut).
 #[test]
 fn language_std_as_ref_and_as_mut_bounds_hold_for_std_types() {
     let source = r#"
@@ -554,7 +555,16 @@ fn chars<T: AsRef<str>>(arg: T) -> usize {
 fn first<T: AsRef<[i32]>>(arg: T) -> i32 {
     arg.as_ref()[0]
 }
-fn square<T: AsMut<u32>>(_arg: &mut T) {}
+fn square<T: AsMut<u32>>(arg: &mut T) {
+    let arg = arg.as_mut();
+    *arg *= *arg;
+}
+fn push<T: std::borrow::BorrowMut<Vec<i32>>>(arg: &mut T) {
+    arg.borrow_mut().push(4);
+}
+fn zero<T: AsMut<[i32]>>(arg: &mut T) {
+    arg.as_mut()[0] = 0;
+}
 fn main() {
     let s = String::from("Café");
     println!("{} {}", bytes(s.clone()), chars(s));
@@ -563,10 +573,14 @@ fn main() {
     let mut n: Box<u32> = Box::new(3);
     square(&mut n);
     println!("{}", *n);
+    let mut v = vec![1, 2];
+    push(&mut v);
+    zero(&mut v);
+    println!("{v:?}");
 }
 main();
 "#;
-    assert_eq!(printed(source), "5 4\n5 4\n7\n3\n");
+    assert_eq!(printed(source), "5 4\n5 4\n7\n9\n[0, 2, 4]\n");
     // A bound std's impls don't cover is rustc's E0277, with the trait's
     // arguments.
     let report = refused(

@@ -3473,6 +3473,7 @@ fn write_trait_dispatchers(
                         format!("return {compared};")
                     }
                 }
+                _ if let Some(borrowed) = native_borrow(declared, function) => borrowed.to_string(),
                 _ => format!(
                     "throw \"`{trait_name}::{}` has no implementation for this value\";",
                     function.name.text
@@ -3481,6 +3482,27 @@ fn write_trait_dispatchers(
             let _ = write!(text, "{fallback}\n}}\n");
             output.declaration(*source, declared.name.span, &text);
         }
+    }
+}
+
+/// What a dispatcher gives for a std trait method that only borrows its
+/// receiver (`as_ref`, `as_mut`, `borrow`, `borrow_mut`, `deref_mut`) on a
+/// value of rawr's native types. std's impls on them borrow the value as it
+/// is at runtime: a `String` is its `str`, a `Box` its value, a `Vec` its
+/// slice. A shared borrow is the value, and a mutable one is the
+/// receiver's place itself, the empty path below it, as a `&mut` a
+/// program's method gives is a path below the place it was called on.
+fn native_borrow(declared: &item::Trait, function: &item::Function) -> Option<&'static str> {
+    if declared.name.span != Span::NONE || !function.parameters.is_empty() {
+        return None;
+    }
+    let Some(crate::resolve::type_ref::Type::Reference { mutable, .. }) = &function.output else {
+        return None;
+    };
+    match (&function.receiver, mutable) {
+        (Some(crate::item::Receiver::Shared(_)), false) => Some("return this;"),
+        (Some(crate::item::Receiver::Mutable(_)), true) => Some("return [];"),
+        _ => None,
     }
 }
 
@@ -3567,11 +3589,8 @@ fn write_instance_dispatchers(
                 binary => writeln!(text, "return this {binary} __rawr_parameter_0;"),
             };
         }
-        // std's `AsRef` impls on rawr's native types borrow the value as it
-        // is at runtime: a `String` is its `str`, a `Box` its value, a
-        // `Vec` its slice.
-        if declared.name.span == Span::NONE && trait_name.as_str() == "AsRef" {
-            let _ = writeln!(text, "return this;");
+        if let Some(borrowed) = native_borrow(declared, function) {
+            let _ = writeln!(text, "{borrowed}");
         }
         let _ = write!(
             text,
@@ -15080,16 +15099,12 @@ impl<'a> Parser<'a> {
                     argument => argument,
                 })
                 .collect::<Vec<_>>();
-            if std_impl::holds(
-                &mut std_impl::Probe(self),
-                definition,
-                &resolved,
-                &arguments,
-                true,
-                0,
-            )
-            .is_ok()
-            {
+            // Matched by unification, so `Vec<{integer}>: BorrowMut<Vec<i32>>`
+            // holds, and checked only: nothing it binds is kept.
+            let checkpoint = self.inference.checkpoint();
+            let holds = std_impl::holds(self, definition, &resolved, &arguments, true, 0).is_ok();
+            self.inference.rollback(checkpoint);
+            if holds {
                 return true;
             }
         }
