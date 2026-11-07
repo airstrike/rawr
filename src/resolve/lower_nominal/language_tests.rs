@@ -263,6 +263,26 @@ fn language_loops() {
 }
 
 #[test]
+fn language_an_array_of_functions_of_one_signature_holds_fn_pointers() {
+    // rustlings' quiz2: each function item has its own type, and the array
+    // coerces them to their `fn` pointer.
+    let value = run(r#"
+        fn double(n: i64) -> i64 { n * 2 }
+        fn square(n: i64) -> i64 { n * n }
+        pub fn run() -> i64 {
+            let mut total = 0;
+            for f in [double, square] {
+                total += f(5);
+            }
+            let fs = [square, double, square];
+            total + fs[2](3)
+        }
+        run()
+    "#);
+    assert_eq!(value, 10 + 25 + 9);
+}
+
+#[test]
 fn language_for_over_an_option_or_a_result_walks_the_value_it_holds() {
     // std's `IntoIterator` for `Option`, `Result` and references to them
     // (rustlings' clippy2).

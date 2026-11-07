@@ -296,7 +296,10 @@ fn errors_rustc_gives_without_a_code_print_a_plain_error() {
         assert.starts_with("error: macro requires a boolean expression as an argument\n"),
         "{assert}"
     );
-    assert!(assert.contains("^^^^^^^^^ boolean expression required"), "{assert}");
+    assert!(
+        assert.contains("^^^^^^^^^ boolean expression required"),
+        "{assert}"
+    );
     assert!(plain("fn main() {\n    assert!( );\n}\n")
         .starts_with("error: macro requires a boolean expression as an argument\n"));
     assert!(plain("fn main() {\n    assert!(, \"m\");\n}\n")

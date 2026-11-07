@@ -1645,8 +1645,10 @@ impl Parser<'_> {
             .is_some_and(|mode| mode != crate::receiver::Mode::Owned);
         // `r.unwrap()` of an `&Option<String>`: a method that takes the
         // value moves it out from behind the reference, rustc's E0507.
+        // std's `IntoIterator` for `&Option<T>` and `&Result<T, E>` takes
+        // the reference itself.
         if let Ty::Reference { mutable, target } = self.inference.resolve(&value.ty) {
-            if !by_reference && self.moves_by_value(&target) {
+            if !by_reference && member != "into_iter" && self.moves_by_value(&target) {
                 let behind = if mutable { "mutable" } else { "shared" };
                 return Err(Error::BorrowConflict {
                     code: "E0507",

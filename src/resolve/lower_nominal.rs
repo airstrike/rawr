@@ -3567,6 +3567,12 @@ fn write_instance_dispatchers(
                 binary => writeln!(text, "return this {binary} __rawr_parameter_0;"),
             };
         }
+        // std's `AsRef` impls on rawr's native types borrow the value as it
+        // is at runtime: a `String` is its `str`, a `Box` its value, a
+        // `Vec` its slice.
+        if declared.name.span == Span::NONE && trait_name.as_str() == "AsRef" {
+            let _ = writeln!(text, "return this;");
+        }
         let _ = write!(
             text,
             "throw \"`{trait_name}::{}` has no implementation for this value\";\n}}\n",
@@ -14308,9 +14314,23 @@ impl<'a> Parser<'a> {
                     .map_or(ty, |(inner, _)| inner),
                     _ => ty,
                 };
+                // rustc writes the trait with its arguments: `AsRef<str>`.
+                let capability = if arguments.is_empty() {
+                    trait_name
+                } else {
+                    let written = arguments
+                        .iter()
+                        .map(|argument| match self.inference.resolve(argument) {
+                            Ty::Str => "str".into(),
+                            argument => argument.name(&self.models),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{trait_name}<{written}>").into()
+                };
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
-                    capability: trait_name,
+                    capability,
                     operation: span,
                     derive: matches!(ty, Ty::Script(..)),
                     required_by: None,
@@ -15047,21 +15067,31 @@ impl<'a> Parser<'a> {
             };
         }
         // std's impls of a std trait for a type std declares: `String:
-        // AsRef<str>`, `Box<u32>: AsMut<u32>` (D711 step 3).
-        if self.models.std_traits.contains(trait_name)
+        // AsRef<str>`, `Box<u32>: AsMut<u32>` (D711 step 3). A bound's
+        // bare `str` reads as a `&str`, and is std's unsized `str`.
+        if self.std_trait(trait_name)
             && self.std_declared(&resolved)
             && let Some(definition) = crate::resolve::std_trait::anywhere(trait_name)
-            && std_impl::holds(
+        {
+            let arguments = arguments
+                .iter()
+                .map(|argument| match self.inference.resolve(argument) {
+                    Ty::Str => Ty::UnsizedStr,
+                    argument => argument,
+                })
+                .collect::<Vec<_>>();
+            if std_impl::holds(
                 &mut std_impl::Probe(self),
                 definition,
                 &resolved,
-                arguments,
+                &arguments,
                 true,
                 0,
             )
             .is_ok()
-        {
-            return true;
+            {
+                return true;
+            }
         }
         let candidates: Vec<Vec<Ty>> = match self.inference.resolve(ty) {
             Ty::Dyn(name, bindings) if name == trait_name => vec![dyn_arguments(&bindings)],
@@ -15095,6 +15125,14 @@ impl<'a> Parser<'a> {
             self.inference.resolve(source),
         );
         self.std_from(&target, &source) && std_impl::runs_from(&target, &source).is_some()
+    }
+
+    /// Whether `trait_name` is std's trait, not a crate trait of that name.
+    fn std_trait(&self, trait_name: &str) -> bool {
+        self.models
+            .traits
+            .get(trait_name)
+            .is_some_and(|(_, declared)| declared.name.span == Span::NONE)
     }
 
     /// Whether `trait_name` is the prelude's `From` or `Into`, not a crate
@@ -38471,6 +38509,12 @@ impl<'a> Parser<'a> {
                     &members[index],
                     borrows::PartOf::Member(index),
                 );
+                // A member of what can't be moved out of or assigned to, as
+                // an `Arc`'s value, can't be either.
+                if let Some(unmovable) = self.unmovable.get(&value.span).cloned() {
+                    self.unmovable
+                        .insert(span(value.span.start(), end), unmovable);
+                }
                 value = self.operator_expr(
                     source,
                     members[index].clone(),
@@ -43032,8 +43076,15 @@ impl<'a> Parser<'a> {
             }
         }
         let end = self.expect(close, "the end of an array")?;
+        // Elements naming different functions of one signature meet at a
+        // `fn` pointer, as `if` arms do.
+        let types = elements
+            .iter()
+            .map(|element| self.inference.resolve(&element.ty))
+            .collect::<Vec<_>>();
         let (element, skip) = match (hint, elements.first()) {
             (Some(hint), _) => (hint, 0),
+            (None, Some(_)) if let Some(pointer) = self.fn_choice(&types) => (pointer, 0),
             (None, Some(first)) => (self.inference.resolve(&first.ty), 1),
             (None, None) => (self.inference.fresh(), 0),
         };
