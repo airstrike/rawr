@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
-# Run every rustlings solution and exercise under `rawr run` and under rustc,
-# and compare them.
+# Run every rustlings solution and exercise under rawr and under cargo, the
+# way rustlings runs them, and compare them.
 #
 #   scripts/rustlings.sh [RUSTLINGS_DIR] [OUT_DIR]
 #
 # RUSTLINGS_DIR is a checkout of github.com/rust-lang/rustlings (default
-# target/rustlings). OUT_DIR (default target/rustlings-out) gets the scratch
-# copies, every output and `results.tsv`, one row per run:
+# target/rustlings). OUT_DIR (default target/rustlings-out) gets the
+# package, every output and `results.tsv`, one row per run:
 #
 #   kind  file  rustc  rawr  verdict  detail
+#
+# The package is the one `rustlings init` makes: rustlings' own Cargo.toml,
+# whose `[[bin]]`s are every exercise (`name`) and solution (`name_sol`),
+# with its dependencies (tokio), lints and profiles, and the exercises'
+# directories with their input files. Every `.rs` in it starts with
+# `// rawr`. As rustlings does, the cargo side builds a file with `cargo
+# build --bin`, runs the built binary in the file's `exercises/<dir>`, and
+# tests it with `cargo test --bin` from the package. The rawr side runs the
+# package's file with `rawr run` and `rawr test` from the same directories.
 #
 # - `solution` rows run `fn main` both ways. They match when stdout and the
 #   exit status are equal. A solution that spawns threads prints in the
@@ -16,20 +25,20 @@
 #   runs of one build: its stdout matches as sorted lines with each number
 #   followed by `ms` masked.
 # - `test` rows are one `#[test]` of a solution. Its tests run once each
-#   way, under `rustc --test` and under `rawr test`, and each test's result
-#   in libtest's report (`ok`, `FAILED` or `ignored`) is compared. A test
-#   whose build fails has the build's error code (`build:CODE`).
+#   way, and each test's result in libtest's report (`ok`, `FAILED` or
+#   `ignored`) is compared. A test whose build fails has the build's error
+#   code (`build:CODE`).
 # - `exercise` rows run an unsolved exercise both ways. Each side's outcome
 #   is its first error code, else the program's exit status, else the
 #   outcome of its tests (`tests-build:CODE` or `tests-fail`). They match
-#   when both fail to compile with the same code, or both run alike.
+#   when both fail to compile with the same first error's code (`error`
+#   for one with none), or both run alike.
 #
-# Every copy starts with `// rawr`. `rawr` is the one on PATH. RAWR_BIN names
-# a development build's directory (with `rawr-import` and
-# `rawr-import-driver`) to put first on PATH. RUSTC_TOOLCHAIN (default
-# stable) picks rustc's toolchain; RAWR_TIMEOUT (default 120) bounds each run
-# in seconds. RUSTLINGS_KINDS (default `solutions exercises`) picks
-# which to run.
+# `rawr` is the one on PATH. RAWR_BIN names a development build's directory
+# (with `rawr-import` and `rawr-import-driver`) to put first on PATH.
+# RUSTC_TOOLCHAIN (default stable) picks cargo's toolchain; RAWR_TIMEOUT
+# (default 120) bounds each run in seconds. RUSTLINGS_KINDS (default
+# `solutions exercises`) picks which to run.
 set -uo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -38,31 +47,56 @@ out=${2:-$root/target/rustlings-out}
 toolchain=${RUSTC_TOOLCHAIN:-stable}
 limit=${RAWR_TIMEOUT:-120}
 kinds=${RUSTLINGS_KINDS:-solutions exercises}
-rustc=(rustc "+$toolchain" --edition 2024 -A warnings)
 [ -n "${RAWR_BIN:-}" ] && PATH=$RAWR_BIN:$PATH
 
-[ -d "$rustlings/solutions" ] || {
+[ -f "$rustlings/dev-Cargo.toml" ] || {
     echo "no rustlings checkout at $rustlings" >&2
     exit 2
 }
+rustlings=$(cd "$rustlings" && pwd)
 rm -rf "$out"
 mkdir -p "$out"
+# Runs change directory, so every path is absolute.
+out=$(cd "$out" && pwd)
 results=$out/results.tsv
 printf 'kind\tfile\trustc\trawr\tverdict\tdetail\n' >"$results"
 
+# The package, as `rustlings init` writes it: dev-Cargo.toml without its
+# first line, its paths from the package's own directory. It sits in this
+# repository's tree, so it is a workspace of its own; the table goes last,
+# after the manifest's top-level `bin` array.
+package=$out/package
+manifest=$package/Cargo.toml
+mkdir -p "$package"
+cp -R "$rustlings/exercises" "$rustlings/solutions" "$package/"
+for source in "$package"/exercises/*/*.rs "$package"/solutions/*/*.rs; do
+    { echo '// rawr'; cat "$source"; } >"$source.marked"
+    mv "$source.marked" "$source"
+done
+{
+    sed -e '1d' -e 's;"\.\./;";' "$rustlings/dev-Cargo.toml"
+    echo
+    echo '[workspace]'
+} >"$manifest"
+export CARGO_TARGET_DIR=$package/target
+cargo=(cargo "+$toolchain")
+
 row() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >>"$results"; }
 
-# The first error code in a file (`E0308`, or rawr's own such as
-# `RAWR-RESOLVE-…`), else `error` when it has an error line, else nothing.
+# The code of the first error in a file (`E0308`, or rawr's own such as
+# `RAWR-RESOLVE-…`), else `error` when that error has none, else nothing.
+# rawr stops at its first error, so a later one of rustc's never counts.
 code() {
-    local found
-    found=$(grep -o -m1 'error\[[^]]*\]' "$1" | head -1)
-    if [ -n "$found" ]; then
-        found=${found#error[}
-        echo "${found%]}"
-    elif grep -q -m1 '^error' "$1"; then
-        echo error
-    fi
+    local first
+    first=$(grep -m1 '^error' "$1")
+    case $first in
+        "") ;;
+        error\[*)
+            first=${first#error[}
+            echo "${first%%]*}"
+            ;;
+        *) echo error ;;
+    esac
 }
 
 # The first error line (else the first stderr line), on one line.
@@ -70,11 +104,9 @@ first_error() {
     { grep -m1 '^error' "$1" || head -1 "$1"; } | cut -c1-200 | tr '\t' ' '
 }
 
-# Compile `$1` natively to `$2` (extra rustc arguments follow).
+# Build the bin `$1` of the package, cargo's output to `$2`.
 native_build() {
-    local source=$1 binary=$2
-    shift 2
-    "${rustc[@]}" "$@" -o "$binary" "$source" 2>"$binary.build"
+    "${cargo[@]}" build -q --manifest-path "$manifest" --bin "$1" 2>"$2"
 }
 
 # Run a command with the time limit; stdout to `$1.out`, stderr to
@@ -86,16 +118,24 @@ run() {
     echo $?
 }
 
-# A copy of `$1` at `$2` that starts with `// rawr`.
-marked() {
-    mkdir -p "$(dirname "$2")"
-    { echo '// rawr'; cat "$1"; } >"$2"
+# `cargo test --bin $2` from the package, as rustlings runs it, at `$1`,
+# with libtest's report of each test, which `-q` would leave out. Prints
+# the exit status.
+native_tests() {
+    (cd "$package" && run "$1" "${cargo[@]}" test -q --bin "$2" -- --test-threads=1 --format pretty)
 }
 
 # Whether the outputs `$1` and `$2` of the solution `$3` match: equal, or
-# for one that spawns threads, equal as sorted lines with timings masked.
+# for one that spawns threads, equal as sorted lines with timings masked,
+# or for one that prints the clock's time, equal with its numbers masked:
+# two runs of one build differ there.
 same_output() {
     cmp -s "$1" "$2" && return
+    if grep -q 'SystemTime::now' "$3"; then
+        local numbers='s/[0-9][0-9]*/<n>/g'
+        cmp -s <(sed "$numbers" "$1") <(sed "$numbers" "$2")
+        return
+    fi
     grep -q 'thread::spawn' "$3" || return
     local masked='s/[0-9][0-9]*ms/<n>ms/g'
     cmp -s <(sed "$masked" "$1" | sort) <(sed "$masked" "$2" | sort)
@@ -117,17 +157,19 @@ outcome() {
     sed -n "s/^test ${2#::}\( - should panic\)\{0,1\} \.\.\. \([a-zA-Z]*\).*/\2/p" "$1" | head -1
 }
 
+# `$1` is `solutions/<dir>/<name>.rs`, the bin `<name>_sol`, run in
+# `exercises/<dir>`.
 solution() {
-    local source=$1 name=$2 dir=$out/solutions/$2
+    local source=$package/$1 name=$2 dir=$out/solutions/$2
+    local bin=${name##*/}_sol cwd=$package/exercises/${name%%/*}
     mkdir -p "$dir"
-    marked "$source" "$dir/main.rs"
     local native rawr verdict detail=
-    if native_build "$source" "$dir/native"; then
-        native=$(run "$dir/native" "$dir/native")
+    if native_build "$bin" "$dir/native.build"; then
+        native=$(cd "$cwd" && run "$dir/native" "$CARGO_TARGET_DIR/debug/$bin")
     else
         native="build:$(code "$dir/native.build")"
     fi
-    rawr=$(run "$dir/rawr" rawr run "$dir/main.rs")
+    rawr=$(cd "$cwd" && run "$dir/rawr" rawr run "$source")
     if [ "$native" = "$rawr" ] && same_output "$dir/native.out" "$dir/rawr.out" "$source"; then
         verdict=pass
     else
@@ -142,12 +184,9 @@ solution() {
 
     grep -q '#\[test\]' "$source" || return
     local native_build_code= rawr_code
-    if native_build "$source" "$dir/tests" --test; then
-        run "$dir/tests" "$dir/tests" --test-threads=1 >/dev/null
-    else
-        native_build_code="build:$(code "$dir/tests.build")"
-    fi
-    run "$dir/rawr-tests" rawr test "$dir/main.rs" >/dev/null
+    native_tests "$dir/tests" "$bin" >/dev/null
+    grep -q '^test result:' "$dir/tests.out" || native_build_code="build:$(code "$dir/tests.err")"
+    (cd "$package" && run "$dir/rawr-tests" rawr test "$source") >/dev/null
     rawr_code=$(code "$dir/rawr-tests.err")
     local test
     for test in $(tests_of "$source"); do
@@ -167,7 +206,7 @@ solution() {
 # they pass, `tests-build:CODE` when they fail to build, else `tests-fail`.
 rawr_tests() {
     local status
-    status=$(run "$2" rawr test "$1")
+    status=$(cd "$package" && run "$2" rawr test "$1")
     [ "$status" = 0 ] && return
     local found
     found=$(code "$2.err")
@@ -178,30 +217,34 @@ rawr_tests() {
     fi
 }
 
+# `$1` is `exercises/<dir>/<name>.rs`, the bin `<name>`, run in its
+# directory.
 exercise() {
-    local source=$1 name=$2 dir=$out/exercises/$2
+    local source=$package/$1 name=$2 dir=$out/exercises/$2
+    local bin=${name##*/} cwd=$package/exercises/${name%%/*}
     mkdir -p "$dir"
-    marked "$source" "$dir/main.rs"
     local native rawr verdict detail=
-    if ! native_build "$source" "$dir/native"; then
+    if ! native_build "$bin" "$dir/native.build"; then
         native="build:$(code "$dir/native.build")"
     else
-        native=$(run "$dir/native" "$dir/native")
+        native=$(cd "$cwd" && run "$dir/native" "$CARGO_TARGET_DIR/debug/$bin")
         if [ "$native" = 0 ] && grep -q '#\[test\]' "$source"; then
-            if native_build "$source" "$dir/tests" --test; then
-                [ "$(run "$dir/tests" "$dir/tests")" = 0 ] || native=tests-fail
-            else
-                native="tests-build:$(code "$dir/tests.build")"
+            if [ "$(native_tests "$dir/tests" "$bin")" != 0 ]; then
+                if grep -q '^test result:' "$dir/tests.out"; then
+                    native=tests-fail
+                else
+                    native="tests-build:$(code "$dir/tests.err")"
+                fi
             fi
         fi
     fi
-    rawr=$(run "$dir/rawr" rawr run "$dir/main.rs")
+    rawr=$(cd "$cwd" && run "$dir/rawr" rawr run "$source")
     local rawr_code
     rawr_code=$(code "$dir/rawr.err")
     [ "$rawr" != 0 ] && [ -n "$rawr_code" ] && rawr="build:$rawr_code"
     if [ "$rawr" = 0 ] && grep -q '#\[test\]' "$source"; then
         local tests
-        tests=$(rawr_tests "$dir/main.rs" "$dir/rawr-tests")
+        tests=$(rawr_tests "$source" "$dir/rawr-tests")
         [ -n "$tests" ] && rawr=$tests
     fi
     case $native in
@@ -218,13 +261,14 @@ exercise() {
     row exercise "$name" "$native" "$rawr" "$verdict" "$detail"
 }
 
-for source in "$rustlings"/solutions/*/*.rs; do
+cd "$package" || exit 2
+for source in solutions/*/*.rs; do
     [[ " $kinds " == *" solutions "* ]] || break
     name=$(basename "$(dirname "$source")")/$(basename "$source" .rs)
     echo "solution $name" >&2
     solution "$source" "$name"
 done
-for source in "$rustlings"/exercises/*/*.rs; do
+for source in exercises/*/*.rs; do
     [[ " $kinds " == *" exercises "* ]] || break
     name=$(basename "$(dirname "$source")")/$(basename "$source" .rs)
     echo "exercise $name" >&2

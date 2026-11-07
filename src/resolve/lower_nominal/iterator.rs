@@ -369,6 +369,47 @@ impl Parser<'_> {
         self.iterator_expr(pipeline, item, span(values.span.start(), end))
     }
 
+    /// `o.iter()` and `o.into_iter()` of an `Option` or `Result`, std's
+    /// `IntoIterator` for them: a chain over the one value `held` gives
+    /// where `present` holds, else over none. `opened` binds the receiver
+    /// and stays open for the block this closes.
+    pub(super) fn held_iterator(
+        &mut self,
+        mut opened: origin::Fragment,
+        [present, held]: [origin::Fragment; 2],
+        item: Ty,
+        expression: Span,
+    ) -> ParsedExpr {
+        opened.push_text("if ");
+        opened.push(present);
+        opened.push_text(" { [");
+        opened.push(held);
+        opened.push_text("] } else { [] } }");
+        let array = Ty::Array {
+            element: Box::new(item.clone()),
+            kind: sequence::Kind::Vec,
+        };
+        let values = self.operator_expr(opened.surrounded("(", ")"), array, expression);
+        self.array_iterator(&values, item, expression.end())
+    }
+
+    /// The item `member` of an `Option<T>` or `Result<T, E>` `receiver`
+    /// iterates: `&T` of `iter`, and of `into_iter` through a reference
+    /// (`&mut T` through `&mut`), else `T`.
+    pub(super) fn held_item(&self, receiver: &Ty, member: &str, element: Ty) -> Ty {
+        match (member, self.inference.resolve(receiver)) {
+            ("into_iter", Ty::Reference { mutable, .. }) => Ty::Reference {
+                mutable,
+                target: Box::new(element),
+            },
+            ("into_iter", _) => element,
+            _ => Ty::Reference {
+                mutable: false,
+                target: Box::new(element),
+            },
+        }
+    }
+
     /// `s.chars()`: a chain over a string's chars.
     pub(super) fn chars_iterator(&mut self, value: &ParsedExpr, end: Position) -> ParsedExpr {
         let source = Source::Values {
