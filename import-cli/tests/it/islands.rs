@@ -186,8 +186,13 @@ fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin(
 /// package's files where Cargo's own build sees them (#1136): an asset
 /// through `CARGO_MANIFEST_DIR`, one through a path relative to a source
 /// file, one outside the package, and a build script's input and output.
-/// Each file is in one target, so Cargo prints no warning (#1135), and a
-/// body edit swaps in without building the native crate again.
+/// It builds with the package's features as Cargo does (#1144): a default
+/// feature gating a native function, and one that enables an optional
+/// dependency with a feature of its own. Its build script at
+/// `tools/build.rs` finds its modules beside it (#1143). It prints what
+/// `cargo run` prints. Each file is in one target, so Cargo prints no
+/// warning (#1135), and a body edit swaps in without building the native
+/// crate again.
 #[test]
 fn a_native_crate_reads_its_package_files_where_cargo_does() {
     const ASSETS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-assets");
@@ -195,15 +200,33 @@ fn a_native_crate_reads_its_package_files_where_cargo_does() {
     let _ = fs::remove_dir_all(project.join("app/src"));
     copy(Path::new(ASSETS), &project);
     let root = project.join("app");
-    let _ = fs::remove_file(root.join("stop"));
+    // With the stop file present, `cargo run` prints what the package read
+    // and what its features enabled, then stops before its first tick.
+    fs::write(root.join("stop"), "").unwrap();
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env("ISLANDS_STOP", root.join("stop"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(
+        printed,
+        "logo logo bytes\nicon icon text\nshared shared note\nicons save,open\n\
+         greet hello\nloud LOUD\nnever false\nmarked hello\n"
+    );
+    fs::remove_file(root.join("stop")).unwrap();
     let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
-    for expected in [
-        "logo logo bytes",
-        "icon icon text",
-        "shared shared note",
-        "icons save,open",
-    ] {
-        run.until(Duration::from_secs(900), |line| line == expected);
+    for expected in printed.lines() {
+        let line = run.until(Duration::from_secs(900), |_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
     }
     run.until(Duration::from_secs(30), |line| {
         parse(line).is_some_and(|(tick, _)| tick >= 3)

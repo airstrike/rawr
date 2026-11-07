@@ -3,6 +3,16 @@ name = "islands-assets"
 version = "0.1.0"
 edition = "2024"
 publish = false
+build = "tools/build.rs"
+
+[dependencies]
+extra = { path = "../extra", optional = true }
+
+[features]
+default = ["greet", "loud"]
+greet = []
+loud = ["dep:extra", "extra/loud"]
+never = []
 
 # Its own workspace: it is not a member of Rawr's.
 [workspace]
