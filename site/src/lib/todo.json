@@ -2724,7 +2724,8 @@
     {"issue":1131,"title":"Embedding: Engine::script refuses an inline module","state":"open","category":"Divergences from rustc"},
     {"issue":1132,"title":"Embedding: a script function's leading &mut parameter becomes `this`, but bind_this_ptr says typed scripts can't read it","state":"open","category":"Divergences from rustc"},
     {"issue":1133,"title":"Embedding: the call-stack depth limit is 8 in debug builds and 64 in release","state":"open","category":"Health"},
-    {"issue":1134,"title":"Embedding: the host boundary carries no enums, Vec or &mut","state":"open","category":"Divergences from rustc"}
+    {"issue":1134,"title":"Embedding: the host boundary carries no enums, Vec or &mut","state":"open","category":"Divergences from rustc"},
+    {"issue":1135,"title":"The generated target/rawr/crate manifest puts src/main.rs in both its lib and bin targets, so cargo warns","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3507,7 +3508,8 @@
             {"number":1123,"title":"A lock's qualified spelling of a git dependency was read with its commit, so it was not found","state":"closed"},
             {"number":1124,"title":"A direct proc-macro dependency fails rawr check as if Cargo.toml changed during the build","state":"closed"},
             {"number":1125,"title":"A marked module can't name a direct proc-macro dependency's macros","state":"open"},
-            {"number":1127,"title":"A native main announces a restart on a changed field but keeps running the old program","state":"open"}
+            {"number":1127,"title":"A native main announces a restart on a changed field but keeps running the old program","state":"open"},
+            {"number":1135,"title":"The generated target/rawr/crate manifest puts src/main.rs in both its lib and bin targets, so cargo warns","state":"open"}
           ]
         }
       ]
