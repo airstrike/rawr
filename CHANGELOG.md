@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.167 (2026-11-07)
+
 - A package with `src/main.rs` and `src/lib.rs` whose marked modules are all in the library's tree runs from its library. The binary stays native and reaches the marked modules through the library as `cargo build` builds it, and so do the library's native modules. `rawr run` and `rawr check` both work, and the crate still builds unchanged with `cargo build --release`. Marked modules in both trees, or a marked `src/lib.rs` beside a native binary, stop with an error that says what to mark. (#1107)
 - A Cargo.lock where a path package and a git package share a name and version, as a `[patch]` of a git dependency can leave it, no longer stops rawr-import with "dependency identity is ambiguous". (#1120)
 
