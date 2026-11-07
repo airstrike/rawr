@@ -1420,22 +1420,19 @@ fn an_opaque_output_that_outlives_what_it_borrows_does_not_live_long_enough() {
     );
 }
 
-/// iced's loupe (#885): the program's own `Zoomed<W>` implements the
+/// iced's loupe (#885, #913): the program's own `Zoomed<W>` implements the
 /// crate's `Widget` for any `W: Widget` through `W`'s methods, and holds
 /// what `explain` gives. The runner compiles the impl for each type it is
-/// used at, and Rust code can't name the opaque type, so the checker
-/// refuses the use, not the build.
+/// used at, and names the opaque type in `Zoomed<impl Widget>` by a name of
+/// its own, as the proxy holds only the script's value. The output is
+/// `cargo run`'s.
 #[test]
-fn a_program_impl_at_a_crates_opaque_type_is_refused_at_check() {
-    let stderr = checked("zoomed.rs");
-    let own = stderr.split("cargo check found").next().unwrap_or_default();
+fn a_program_impl_at_a_crates_opaque_type_runs() {
+    let (rawr, cargo) = both_printed("zoomed.rs", "");
+    assert_eq!(rawr, cargo);
     assert!(
-        own.contains("the program's impl of a crate's trait for `")
-            && own.contains("Zoomed<")
-            && own.contains("which holds the crate's `impl Trait` type")
-            && own.contains("__rawr_opaque_explain")
-            && own.contains("is not supported"),
-        "{stderr}"
+        rawr.contains("zoom 3 explain #000000 [Increment]"),
+        "{rawr}"
     );
 }
 
@@ -1692,11 +1689,14 @@ fn a_script_function_wraps_an_opaque_widget_in_types_that_declare_a_lifetime() {
     );
 }
 
-/// iced's modal (#955) itself: as `areas.rs`, but the content the opaque
-/// widget wraps borrows the view, so the opaque value is made in the view's
-/// region. The output is `cargo run`'s.
+/// iced's modal (#955, #1190) itself: as `areas.rs`, but the content the
+/// opaque widget wraps borrows the view, so `opaque(content)` is made in
+/// the view's region, and so are the container and mouse area that hold
+/// it. Rust code can't name their types, so the region holds each boxed,
+/// through a trait of the runner's implemented for the type's shape with a
+/// parameter at the opaque position, whose methods are the calls the
+/// program makes on it. The output is `cargo run`'s.
 #[test]
-#[ignore = "blocked: #965, an opaque value made from a value in a view's region has no family, so its region branch stores it in the arena at 'static (E0521-like `'1` must outlive `'static`)"]
 fn a_script_function_wraps_opaque_widgets_in_types_that_declare_a_lifetime() {
     let (rawr, cargo) = both_printed("modal.rs", "Show,Email,outside,Show,Submit");
     assert_eq!(rawr, cargo);
@@ -1704,6 +1704,23 @@ fn a_script_function_wraps_opaque_widgets_in_types_that_declare_a_lifetime() {
         rawr.contains("3 view pad 0 container 10 pad 0 [Show] <x Shown:0> opaque area container 2 opaque container 1 pad 0 |me1@rawr| [Submit]")
             && rawr.contains("5 message HideModal")
             && rawr.ends_with("last view container 10 pad 0 [Show] <Shown:0>"),
+        "{rawr}"
+    );
+}
+
+/// iced's pane_grid (#1190): `pane(opaque(column![..]))` holds an opaque
+/// widget made of the view's values, `Pane<'_, (), impl Widget>`, held
+/// boxed in the view's region as modal's are, and its `title_bar` takes
+/// another value of the region, a container of a field that borrows the
+/// state's title. The output is `cargo run`'s.
+#[test]
+fn a_boxed_region_value_takes_another_value_of_its_region() {
+    let (rawr, cargo) = both_printed("titled_pane.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with(
+            "last view pane container 1 |pane 3| opaque pad 0 [Increment] 2@50 [Decrement]"
+        ),
         "{rawr}"
     );
 }

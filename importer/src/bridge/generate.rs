@@ -7022,13 +7022,14 @@ fn render_source(
     let mut applications = Vec::new();
     render_applications(plans, &mut applications)?;
     sources.push((APPLICATIONS_PATH.into(), applications));
-    let mut families = Vec::new();
-    render_families(&mut families)?;
-    sources.push((FAMILIES_PATH.into(), families));
-    // The impls name the proxies of their owners, so they come first.
+    // The impls name the proxies of their owners, and the families and
+    // names the proxies take (`family::named`), so they come first.
     let mut impls = Vec::new();
     render_impls(plans, profile, facade.as_ref(), &mut impls)?;
     place::render(&mut impls);
+    let mut families = Vec::new();
+    render_families(&mut families)?;
+    sources.push((FAMILIES_PATH.into(), families));
     let mut proxies = Vec::new();
     render_proxies(&mut proxies)?;
     // In path order, as the sources are framed.
@@ -9008,7 +9009,10 @@ fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
             | convert::Type::Option(element) => element,
             ty => ty,
         };
-        if family_of(element).is_some() {
+        // One a region holds boxed is reached through its trait alone
+        // (`region_operand`), as the call can't take its type.
+        let boxed = scoped_type(element).is_some_and(|key| family::Ops::held(&key).is_some());
+        if family_of(element).is_some() && !boxed {
             region.push(index);
         }
     }
@@ -11006,11 +11010,13 @@ fn render_anchored_output(
         return Ok(());
     }
     // An opaque type's wrapper takes the inputs of a call in a region of
-    // values (`render_scoped_receiver`), not this call's.
-    let Some(family) = family_of(returned).filter(|family| family.named().is_some()) else {
+    // values (`render_scoped_receiver`), not this call's, and a region holds
+    // a value boxed only where it is made of the region's values
+    // (`declare_wrapper`).
+    let Some(family) = written_family(returned) else {
         return Ok(());
     };
-    let inserted = family.call(family::Reach::Insert, &held_value(returned, "made"));
+    let inserted = format!("insert::<{family}>(made)");
     // The crate values the output borrows are shared with the region's
     // pins, which live as long as the view's borrow (`views_natives`).
     let pins = if VIEWED_ARGUMENTS.get() {
@@ -11492,12 +11498,10 @@ fn first_operand(plan: &Plan) -> Result<Option<(String, Receiver)>, request::Err
                 let instance = substituted(instance, signature, substitutions)?;
                 return Ok(scoped_type(&instance).map(|key| (key, *receiver)));
             }
-            let path = rust_path(plan);
-            let Some((container, _)) = path.rsplit_once("::") else {
-                return Ok(None);
-            };
+            // A method's path is its container's.
+            let container = rust_path(plan);
             let Some(identity) =
-                PATH_IDENTITIES.with_borrow(|identities| identities.get(container).copied())
+                PATH_IDENTITIES.with_borrow(|identities| identities.get(&container).copied())
             else {
                 return Ok(None);
             };
@@ -11647,18 +11651,25 @@ fn declare_wrapper(plan: &Plan) -> Result<Option<convert::Type>, request::Error>
                 .as_ref()
                 .and_then(family::Family::named)
                 .and_then(family_type);
+            let receiving = named.is_some();
             if let Some(held) = named
                 && is_opaque(definition)
                 && let Some(bounds) = opaque_bounds(signature, substitutions)?
             {
                 return declare_given(plan, *receiver, held, key, bounds, returned);
             }
-            first_operand(plan)?.is_some_and(|(operand, _)| {
-                family::Ops::held(&operand).is_some() || family::of(&operand).is_some()
-            }) || !region_inputs(plan)?.is_empty()
+            receiving
+                || first_operand(plan)?.is_some_and(|(operand, _)| {
+                    family::Ops::held(&operand).is_some() || family::of(&operand).is_some()
+                })
+                || !region_inputs(plan)?.is_empty()
         }
         Operation::Method { .. } => false,
-        _ => !region_inputs(plan)?.is_empty(),
+        _ => {
+            first_operand(plan)?.is_some_and(|(operand, receiver)| {
+                matches!(receiver, Receiver::Owned) && family::Ops::held(&operand).is_some()
+            }) || !region_inputs(plan)?.is_empty()
+        }
     };
     if !regional {
         return Ok(None);
@@ -20053,9 +20064,16 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         // A script type's proxy, at the runner's crate root, which is named
         // as the script's crate is (D594).
         convert::Type::Script { path, arguments } => {
+            // An opaque type in an argument has a name of the runner's.
             let arguments = arguments
                 .iter()
-                .map(concrete_type)
+                .map(|argument| {
+                    if holds_opaque(argument) {
+                        Some(family::named(scoped_type(argument)?))
+                    } else {
+                        concrete_type(argument)
+                    }
+                })
                 .collect::<Option<Vec<_>>>()?;
             let (krate, path) = path.split_once("::")?;
             PROXIES.with_borrow_mut(|proxies| {
