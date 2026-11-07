@@ -177,6 +177,12 @@ fn the_server_lists_extension_tools_relays_progress_and_stays_responsive_while_a
             "status",
             "stop",
             "screenshot",
+            "move",
+            "click",
+            "drag",
+            "scroll",
+            "key",
+            "type",
             "inspect",
             "break",
             "step",
@@ -186,7 +192,7 @@ fn the_server_lists_extension_tools_relays_progress_and_stays_responsive_while_a
             "hang"
         ]
     );
-    let echo = &tools[13];
+    let echo = &tools[19];
     assert!(echo["description"].as_str().unwrap().contains("rawr-fake"));
     assert!(echo["inputSchema"]["properties"]["path"].is_object());
     assert!(echo["inputSchema"]["properties"]["word"].is_object());
