@@ -1892,10 +1892,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("    __call.argument(&__a0);\n"), "{text}");
-        assert!(
-            !text.contains("can't call `physics::give`"),
-            "{text}"
-        );
+        assert!(!text.contains("can't call `physics::give`"), "{text}");
         for (output, function) in [
             ("iced::Result", "run"),
             ("std::io::Result<String>", "read"),

@@ -319,8 +319,11 @@ struct Call<'a> {
     path: &'a str,
     arguments: &'a [u8],
     model: &'a program::model::Model,
-    invoke: &'a dyn Fn(&item::Value, &mut [Dynamic]) -> Result<Dynamic, String>,
+    invoke: &'a Invoke<'a>,
 }
+
+/// How a generation invokes one of its functions with its arguments.
+type Invoke<'a> = dyn Fn(&item::Value, &mut [Dynamic]) -> Result<Dynamic, String> + 'a;
 
 impl crate::future::Host for Current {
     fn invoke(
@@ -758,7 +761,7 @@ impl crate::future::Remote for Shared {
 impl Current {
     fn new(bootstrap: Bootstrap) -> Self {
         let authority = bootstrap.catalog().authority();
-        let calls = Arc::new(Calls::new(&authority));
+        let calls = Arc::new(Calls::new(authority));
         #[cfg(feature = "sync")]
         let shared = {
             let (authority, runtime) = bootstrap.catalog().shared();
@@ -772,7 +775,13 @@ impl Current {
         }
     }
 
-    fn answer(&self, path: &str, arguments: &[u8], lent: &[Loan], natives: &mut Natives) -> Vec<u8> {
+    fn answer(
+        &self,
+        path: &str,
+        arguments: &[u8],
+        lent: &[Loan],
+        natives: &mut Natives,
+    ) -> Vec<u8> {
         let catalog = self.bootstrap.catalog();
         let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
             catalog
@@ -978,7 +987,9 @@ mod tests {
 
         let mut out = Vec::new();
         let error = crate::result::err(Dynamic::from(crate::ImmutableString::from("no")));
-        model.island_write(&error, &mut out, &mut natives, 0).unwrap();
+        model
+            .island_write(&error, &mut out, &mut natives, 0)
+            .unwrap();
         let mut expected = vec![ERR, STR];
         expected.extend_from_slice(&2_u64.to_le_bytes());
         expected.extend_from_slice(b"no");
@@ -988,7 +999,9 @@ mod tests {
         let ok = crate::result::ok(Dynamic::UNIT);
         let failed = crate::result::err(Dynamic::from(Handle(7)));
         model.island_write(&ok, &mut out, &mut natives, 0).unwrap();
-        model.island_write(&failed, &mut out, &mut natives, 0).unwrap();
+        model
+            .island_write(&failed, &mut out, &mut natives, 0)
+            .unwrap();
         let mut expected = vec![OK, crate::program::model::island::UNIT, ERR, NATIVE];
         expected.extend_from_slice(&0_u64.to_le_bytes());
         assert_eq!(out, expected);
