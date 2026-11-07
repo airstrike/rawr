@@ -86,7 +86,7 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     );
 
     fs::write(root.join("stop"), "").unwrap();
-    let status = run.child.wait().unwrap();
+    let status = run.wait();
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
 
