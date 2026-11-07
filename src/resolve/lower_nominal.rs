@@ -25662,11 +25662,7 @@ impl<'a> Parser<'a> {
     }
 
     fn attribute_ahead(&mut self) -> bool {
-        match self.peek() {
-            Token::Hash => true,
-            Token::Custom(symbol) => symbol.as_str() == "#",
-            _ => false,
-        }
+        matches!(self.peek(), Token::Hash)
     }
 
     /// A `struct`, `enum`, `impl`, `trait` or `type` item inside a body,
@@ -56374,11 +56370,6 @@ fn relocate_expr(expr: &mut ast::Expr, locate: &mut dyn FnMut(Position) -> Posit
             relocate_expr(&mut binary.lhs, locate);
             relocate_expr(&mut binary.rhs, locate);
         }
-        ast::Expr::Custom(custom, ..) => {
-            for input in &mut custom.inputs {
-                relocate_expr(input, locate);
-            }
-        }
         ast::Expr::DynamicConstant(value, ..) => relocate_constant(value, locate),
         _ => {}
     }
@@ -56525,11 +56516,6 @@ fn rewrite_expr(
         ast::Expr::Stmt(block) => rewrite_statements(block.statements_mut(), rewrites, patterns),
         ast::Expr::Dot(binary, ..) | ast::Expr::Index(binary, ..) => {
             rewrite_binary(binary, rewrites, patterns);
-        }
-        ast::Expr::Custom(custom, ..) => {
-            for input in &mut custom.inputs {
-                rewrite_expr(input, rewrites, patterns);
-            }
         }
         ast::Expr::Variable(variable, ..) => {
             rewrite_variable(&mut variable.1, rewrites);

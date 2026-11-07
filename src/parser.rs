@@ -1663,15 +1663,6 @@ impl Engine {
             // Map literal
             Token::MapStart => self.parse_map_literal(state, settings.level_up()?)?,
 
-            // Custom syntax.
-            Token::Custom(key) | Token::Reserved(key) | Token::Identifier(key)
-                if self.custom_syntax.contains_key(&**key) =>
-            {
-                let (key, syntax) = self.custom_syntax.get_key_value(&**key).unwrap();
-                let _ = state.input.next().unwrap();
-                self.parse_custom_syntax(state, settings.level_up()?, key, syntax)?
-            }
-
             // Identifier
             Token::Identifier(..) => {
                 let ns = crate::ast::Namespace::default();
@@ -2322,11 +2313,6 @@ impl Engine {
             }
 
             let precedence = match current_op {
-                Token::Custom(c) => self
-                    .custom_keywords
-                    .get(&**c)
-                    .copied()
-                    .ok_or_else(|| PERR::Reserved(c.to_string()).into_err(*current_pos))?,
                 Token::Reserved(c) if !is_valid_identifier(c) => {
                     return Err(PERR::UnknownOperator(c.to_string()).into_err(*current_pos))
                 }
@@ -2378,11 +2364,6 @@ impl Engine {
 
             let (next_op, next_pos) = state.input.peek().unwrap();
             let next_precedence = match next_op {
-                Token::Custom(c) => self
-                    .custom_keywords
-                    .get(&**c)
-                    .copied()
-                    .ok_or_else(|| PERR::Reserved(c.to_string()).into_err(*next_pos))?,
                 Token::Reserved(c) if !is_valid_identifier(c) => {
                     return Err(PERR::UnknownOperator(c.to_string()).into_err(*next_pos))
                 }
@@ -2503,281 +2484,9 @@ impl Engine {
                 }
                 Token::ExclusiveRange | Token::InclusiveRange => op_base.into_fn_call_expr(pos),
 
-                Token::Custom(s) if self.custom_keywords.contains_key(&*s) => {
-                    op_base.hashes = if native_only {
-                        FnCallHashes::from_native_only(calc_fn_hash(None, &s, 2))
-                    } else {
-                        FnCallHashes::from_hash(calc_fn_hash(None, &s, 2))
-                    };
-                    op_base.into_fn_call_expr(pos)
-                }
-
                 _ => op_base.into_fn_call_expr(pos),
             };
         }
-    }
-
-    /// Parse a custom syntax.
-    fn parse_custom_syntax(
-        &self,
-        state: &mut ParseState,
-        settings: ParseSettings,
-        key: impl Into<ImmutableString>,
-        syntax: &crate::api::custom_syntax::CustomSyntax,
-    ) -> ParseResult<Expr> {
-        #[allow(clippy::wildcard_imports)]
-        use crate::api::custom_syntax::markers::*;
-
-        const KEYWORD_SEMICOLON: &str = Token::SemiColon.literal_syntax();
-        const KEYWORD_CLOSE_BRACE: &str = Token::RightBrace.literal_syntax();
-
-        let key_pos = settings.pos;
-
-        let mut inputs = FnArgsVec::new();
-        let mut segments = FnArgsVec::new();
-        let mut tokens = FnArgsVec::new();
-
-        // Adjust the variables stack
-        if syntax.scope_may_be_changed {
-            // Add a barrier variable to the stack so earlier variables will not be matched.
-            // Variable searches stop at the first barrier.
-            state.stack.push_constant_dynamic(
-                self.get_interned_string(SCOPE_SEARCH_BARRIER_MARKER),
-                Dynamic::UNIT,
-            );
-        }
-
-        let mut user_state = Dynamic::UNIT;
-        let parse_func = &*syntax.parse;
-        let mut required_token: ImmutableString = key.into();
-
-        tokens.push(required_token.clone());
-        segments.push(required_token.clone());
-
-        loop {
-            let (fwd_token, fwd_pos) = if syntax.use_look_ahead {
-                let (token, pos) = state.input.peek().unwrap();
-                (token.into(), *pos)
-            } else {
-                (SmartString::new_const(), settings.pos)
-            };
-
-            let settings = settings.level_up()?;
-
-            required_token = match parse_func(&segments, &fwd_token, &mut user_state) {
-                Ok(Some(seg))
-                    if seg.starts_with(CUSTOM_SYNTAX_MARKER_SYNTAX_VARIANT)
-                        && seg.len() > CUSTOM_SYNTAX_MARKER_SYNTAX_VARIANT.len() =>
-                {
-                    inputs.push(Expr::StringConstant(self.get_interned_string(seg), key_pos));
-                    break;
-                }
-                Ok(Some(seg)) if syntax.use_look_ahead && seg == CUSTOM_SYNTAX_MARKER_RAW => {
-                    // If using look-ahead, the next token is always a symbol
-                    self.get_interned_string(CUSTOM_SYNTAX_MARKER_TOKEN)
-                }
-                Ok(Some(seg)) => seg,
-                Ok(None) => break,
-                Err(err) => return Err(err.0.into_err(fwd_pos)),
-            };
-
-            match required_token.as_str() {
-                CUSTOM_SYNTAX_MARKER_RAW => {
-                    {
-                        state.tokenizer_control.borrow_mut().in_char_mode = true;
-                    }
-
-                    match state.input.next().unwrap() {
-                        (Token::EOF, _) => break,
-                        (Token::UnprocessedRawChar(ch), _) => {
-                            segments.push(ch.to_string().into());
-
-                            if tokens.last().unwrap() != CUSTOM_SYNTAX_MARKER_RAW {
-                                tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_RAW));
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                CUSTOM_SYNTAX_MARKER_IDENT => {
-                    let (name, pos) = parse_var_name(state.input)?;
-                    let name = self.get_interned_string(name);
-
-                    segments.push(name.clone());
-                    tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_IDENT));
-
-                    inputs.push(Expr::Variable(
-                        (None, name, crate::ast::Namespace::default(), 0).into(),
-                        None,
-                        pos,
-                    ));
-                }
-                CUSTOM_SYNTAX_MARKER_SYMBOL => {
-                    let (symbol, pos) = match state.input.next().unwrap() {
-                        // Standard symbol
-                        (token, pos) if token.is_standard_symbol() => {
-                            Ok((token.literal_syntax().into(), pos))
-                        }
-                        // Reserved symbol
-                        (Token::Reserved(s), pos) if !is_valid_identifier(s.as_str()) => {
-                            Ok((*s, pos))
-                        }
-                        // Bad symbol
-                        (Token::LexError(err), pos) => Err(err.into_err(pos)),
-                        // Not a symbol
-                        (.., pos) => Err(PERR::MissingSymbol(String::new()).into_err(pos)),
-                    }?;
-                    let symbol = self.get_interned_string(symbol);
-                    segments.push(symbol.clone());
-                    tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_SYMBOL));
-                    inputs.push(Expr::StringConstant(symbol, pos));
-                }
-                CUSTOM_SYNTAX_MARKER_TOKEN => {
-                    let (token, pos): (SmartString, _) = match state.input.next().unwrap() {
-                        // Bad token
-                        (Token::LexError(err), pos) => Err(err.into_err(pos)),
-                        // Change to text
-                        (token, pos) => Ok((token.into(), pos)),
-                    }?;
-                    let token = self.get_interned_string(token);
-                    segments.push(token.clone());
-                    tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_TOKEN));
-                    inputs.push(Expr::StringConstant(token, pos));
-                }
-                CUSTOM_SYNTAX_MARKER_EXPR => {
-                    inputs.push(self.parse_expr(state, settings)?);
-                    let keyword = self.get_interned_string(CUSTOM_SYNTAX_MARKER_EXPR);
-                    segments.push(keyword.clone());
-                    tokens.push(keyword);
-                }
-                CUSTOM_SYNTAX_MARKER_BLOCK => match self.parse_block(state, settings, false)? {
-                    block @ Stmt::Block(..) => {
-                        inputs.push(Expr::Stmt(Box::new(block.into())));
-                        let keyword = self.get_interned_string(CUSTOM_SYNTAX_MARKER_BLOCK);
-                        segments.push(keyword.clone());
-                        tokens.push(keyword);
-                    }
-                    stmt => unreachable!("Stmt::Block expected but gets {:?}", stmt),
-                },
-                CUSTOM_SYNTAX_MARKER_INNER => match self.parse_block(state, settings, true)? {
-                    block @ Stmt::Block(..) => {
-                        inputs.push(Expr::Stmt(Box::new(block.into())));
-                        let keyword = self.get_interned_string(CUSTOM_SYNTAX_MARKER_INNER);
-                        segments.push(keyword.clone());
-                        tokens.push(keyword);
-                    }
-                    stmt => unreachable!("Stmt::Block expected but gets {:?}", stmt),
-                },
-                CUSTOM_SYNTAX_MARKER_FUNC => {
-                    let skip = match state.input.peek().unwrap() {
-                        (Token::Or | Token::Pipe, _) => false,
-                        (Token::LeftBrace, _) => true,
-                        (_, pos) => {
-                            return Err(
-                                PERR::MissingSymbol("Expecting '{' or '|'".into()).into_err(*pos)
-                            )
-                        }
-                    };
-                    inputs.push(self.parse_anon_fn(state, settings, skip)?);
-                    let keyword = self.get_interned_string(CUSTOM_SYNTAX_MARKER_FUNC);
-                    segments.push(keyword.clone());
-                    tokens.push(keyword);
-                }
-                CUSTOM_SYNTAX_MARKER_BOOL => match state.input.next().unwrap() {
-                    (b @ (Token::True | Token::False), pos) => {
-                        inputs.push(Expr::BoolConstant(b == Token::True, pos));
-                        segments.push(self.get_interned_string(b.literal_syntax()));
-                        tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_BOOL));
-                    }
-                    (.., pos) => {
-                        return Err(
-                            PERR::MissingSymbol("Expecting 'true' or 'false'".into()).into_err(pos)
-                        )
-                    }
-                },
-                CUSTOM_SYNTAX_MARKER_INT => match state.input.next().unwrap() {
-                    (Token::IntegerConstant(i), pos) => {
-                        inputs.push(Expr::IntegerConstant(i, pos));
-                        segments.push(i.to_string().into());
-                        tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_INT));
-                    }
-                    (.., pos) => {
-                        return Err(
-                            PERR::MissingSymbol("Expecting an integer number".into()).into_err(pos)
-                        )
-                    }
-                },
-                CUSTOM_SYNTAX_MARKER_FLOAT => match state.input.next().unwrap() {
-                    (Token::FloatConstant(f), pos) => {
-                        inputs.push(Expr::FloatConstant(f.0, pos));
-                        segments.push(f.1.into());
-                        tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_FLOAT));
-                    }
-                    (.., pos) => {
-                        return Err(
-                            PERR::MissingSymbol("Expecting a floating-point number".into())
-                                .into_err(pos),
-                        )
-                    }
-                },
-                CUSTOM_SYNTAX_MARKER_STRING => match state.input.next().unwrap() {
-                    (Token::StringConstant(s), pos) => {
-                        let s = self.get_interned_string(*s);
-                        inputs.push(Expr::StringConstant(s.clone(), pos));
-                        segments.push(s);
-                        tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_STRING));
-                    }
-                    (.., pos) => {
-                        return Err(PERR::MissingSymbol("Expecting a string".into()).into_err(pos))
-                    }
-                },
-                s => match state.input.next().unwrap() {
-                    (Token::LexError(err), pos) => return Err(err.into_err(pos)),
-                    (Token::Identifier(t) | Token::Reserved(t) | Token::Custom(t), ..)
-                        if *t == s =>
-                    {
-                        segments.push(required_token.clone());
-                        tokens.push(required_token.clone());
-                    }
-                    (t, ..) if t.is_literal() && t.literal_syntax() == s => {
-                        segments.push(required_token.clone());
-                        tokens.push(required_token.clone());
-                    }
-                    (.., pos) => {
-                        return Err(PERR::MissingToken(
-                            s.into(),
-                            format!("for '{}' expression", segments[0]),
-                        )
-                        .into_err(pos))
-                    }
-                },
-            }
-        }
-
-        inputs.shrink_to_fit();
-        tokens.shrink_to_fit();
-
-        let self_terminated = matches!(
-            &*required_token,
-            // It is self-terminating if the last symbol is a block
-            CUSTOM_SYNTAX_MARKER_BLOCK |
-            // If the last symbol is `;` or `}`, it is self-terminating
-            KEYWORD_SEMICOLON | KEYWORD_CLOSE_BRACE
-        );
-        // It is self-terminating if the last symbol is a block
-        let self_terminated = required_token == CUSTOM_SYNTAX_MARKER_FUNC || self_terminated;
-
-        Ok(Expr::Custom(
-            crate::ast::CustomExpr {
-                inputs,
-                tokens,
-                state: user_state,
-                scope_may_be_changed: syntax.scope_may_be_changed,
-                self_terminated,
-            }
-            .into(),
-            key_pos,
-        ))
     }
 
     /// Parse an expression.
@@ -3460,7 +3169,6 @@ impl Engine {
         };
 
         let name = match token {
-            Token::Custom(s) if is_valid_function_name(&s) => *s,
             Token::Identifier(s) if is_valid_function_name(&s) => *s,
             Token::Reserved(s) => return Err(PERR::Reserved(s.to_string()).into_err(pos)),
             _ => return Err(PERR::FnMissingName.into_err(pos)),

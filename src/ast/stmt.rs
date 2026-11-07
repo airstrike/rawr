@@ -870,7 +870,7 @@ impl Stmt {
             // A No-op requires a semicolon in order to know it is an empty statement!
             Self::Noop(..) => false,
 
-            Self::Expr(e) => matches!(&**e, Expr::Custom(x, ..) if x.is_self_terminated()),
+            Self::Expr(..) => false,
 
             Self::Var(..)
             | Self::Assignment(..)

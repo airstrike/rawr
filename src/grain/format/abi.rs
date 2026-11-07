@@ -25,7 +25,8 @@
 /// is what the loader reports, so it has to match rawr's own spelling.
 ///
 /// The bits after `decimal` belonged to rawr's retired language-trimming
-/// features. They stay in the table, always off, so the wire order holds.
+/// features. They are always off, so no artifact's flags depend on where
+/// they sit.
 const FLAGS: &[(&str, bool)] = &[
     ("sync", cfg!(feature = "sync")),
     ("decimal", cfg!(feature = "decimal")),
@@ -35,7 +36,6 @@ const FLAGS: &[(&str, bool)] = &[
     ("no_function", false),
     ("no_module", false),
     ("no_position", false),
-    ("no_custom_syntax", false),
     ("no_time", false),
     ("unchecked", false),
 ];

@@ -231,7 +231,6 @@ use once_cell::sync::OnceCell;
 
 pub use access::Access;
 pub use api::build_type::{CustomType, TypeBuilder};
-pub use api::custom_syntax::Expression;
 pub use api::events::Output;
 #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 pub use api::files::{eval_file, run_file};
@@ -338,8 +337,6 @@ pub use ast::{
 };
 
 #[cfg(feature = "internals")]
-pub use ast::CustomExpr;
-
 #[cfg(feature = "internals")]
 pub use ast::Namespace;
 

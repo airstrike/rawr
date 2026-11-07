@@ -10034,9 +10034,8 @@ main();
     assert_eq!(printed(source), "3 2\n");
 }
 
-/// Words the old dialect reserved that Rust doesn't are ordinary names,
-/// even when a host disables them, as `?play` disables `eval`. rustc
-/// prints `42 49` for this program.
+/// Words the old dialect reserved that Rust doesn't are ordinary names.
+/// rustc prints `42 49` for this program.
 #[test]
 fn language_dialect_words_are_ordinary_names() {
     let source = r#"
@@ -10064,15 +10063,6 @@ fn main() {
 main();
 "#;
     assert_eq!(printed(source), "42 49\n");
-    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let mut engine = Engine::new();
-    for symbol in ["import", "eval", "print", "debug"] {
-        engine.disable_symbol(symbol);
-    }
-    let sink = lines.clone();
-    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
-    engine.run(source).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(*lines.lock().unwrap(), "42 49\n");
     // `throw` is a name, so a value after it is rustc's parse error.
     let error =
         rejected(r#"fn f(flag: bool) -> i64 { if flag { throw "branch" } else { 0 } } f(true)"#);

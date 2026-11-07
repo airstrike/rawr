@@ -170,54 +170,6 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
         self.global.debugger.as_deref_mut()
     }
 
-    /// Evaluate an [expression tree][crate::Expression] within this [evaluation context][`EvalContext`].
-    ///
-    /// # WARNING - Low Level API
-    ///
-    /// This function is very low level.  It evaluates an expression from an [`AST`][crate::AST].
-    #[inline(always)]
-    pub fn eval_expression_tree(&mut self, expr: &crate::Expression) -> crate::RawrResult {
-        #[allow(deprecated)]
-        self.eval_expression_tree_raw(expr, true)
-    }
-    /// Evaluate an [expression tree][crate::Expression] within this [evaluation context][`EvalContext`].
-    ///
-    /// The following option is available:
-    ///
-    /// * whether to rewind the [`Scope`] after evaluation if the expression is a [`StmtBlock`][crate::ast::StmtBlock]
-    ///
-    /// # WARNING - Unstable API
-    ///
-    /// This API is volatile and may change in the future.
-    ///
-    /// # WARNING - Low Level API
-    ///
-    /// This function is _extremely_ low level.  It evaluates an expression from an [`AST`][crate::AST].
-    #[deprecated = "This API is NOT deprecated, but it is considered volatile and may change in the future."]
-    #[inline]
-    pub fn eval_expression_tree_raw(
-        &mut self,
-        expr: &crate::Expression,
-        rewind_scope: bool,
-    ) -> crate::RawrResult {
-        let expr: &crate::ast::Expr = expr;
-        let this_ptr = self.this_ptr.as_deref_mut();
-
-        match expr {
-            crate::ast::Expr::Stmt(stmts) => self.engine.eval_stmt_block(
-                self.global,
-                self.caches,
-                self.scope,
-                this_ptr,
-                stmts.statements(),
-                rewind_scope,
-            ),
-            _ => self
-                .engine
-                .eval_expr(self.global, self.caches, self.scope, this_ptr, expr),
-        }
-    }
-
     /// Call a function inside the [evaluation context][`EvalContext`] with the provided arguments.
     pub fn call_fn<T: Variant + Clone>(
         &mut self,

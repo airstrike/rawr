@@ -2750,17 +2750,10 @@ impl<'e> Vm<'e> {
                         .ok_or_else(|| malformed(format!("no residual {index}")))?;
                     let rewind_scope = tag == code::tag::EVAL_AST;
 
-                    // Straight to the walker's own entry points rather than
-                    // through `EvalContext::eval_expression_tree_raw`, which
-                    // is the same two calls behind a shim that only exists
-                    // under `custom_syntax`. Total language coverage rests on
-                    // this, so it must not depend on a feature.
-                    //
                     // The frame's receiver goes with it, by reference. A body
-                    // that uses `this` can still hold a fragment — `this?.x`,
-                    // or a `this` body containing an `import` — and the walker
-                    // has to read and write the same receiver the surrounding
-                    // instructions do. The engine is copied out first so the
+                    // that uses `this` can still hold a fragment, and the
+                    // walker has to read and write the same receiver the
+                    // surrounding instructions do. The engine is copied out first so the
                     // four borrows below are of disjoint fields.
                     let engine = self.engine;
                     let value = match expr {

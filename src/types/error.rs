@@ -102,13 +102,6 @@ pub enum EvalAltResult {
     /// The script is prematurely terminated. Wrapped value is the termination token.
     ErrorTerminated(Dynamic, Position),
 
-    /// Error encountered for a custom syntax. Wrapped values are the error message and
-    /// custom syntax symbols stream.
-    ///
-    /// Normally this should never happen, unless an [`AST`][crate::AST] is compiled on one
-    /// [`Engine`][crate::Engine] but evaluated on another unrelated [`Engine`][crate::Engine].
-    ErrorCustomSyntax(String, Vec<String>, Position),
-
     /// Run-time error encountered. Wrapped value is the error token.
     ErrorRuntime(Dynamic, Position),
 
@@ -175,7 +168,6 @@ impl fmt::Debug for EvalAltResult {
             Self::ErrorStackOverflow(a0) => tuple!("ErrorStackOverflow", a0),
             Self::ErrorDataTooLarge(a0, a1) => tuple!("ErrorDataTooLarge", a0, a1),
             Self::ErrorTerminated(a0, a1) => tuple!("ErrorTerminated", a0, a1),
-            Self::ErrorCustomSyntax(a0, a1, a2) => tuple!("ErrorCustomSyntax", a0, a1, a2),
             Self::ErrorRuntime(a0, a1) => tuple!("ErrorRuntime", a0, a1),
             Self::LoopBreak(a0, a1, a2) => tuple!("LoopBreak", a0, a1, a2),
             Self::Return(a0, a1) => tuple!("Return", a0, a1),
@@ -316,8 +308,6 @@ impl EvalAltResult {
                 "Bit-field index {index} out of bounds: only {max} bits in bit-field",
             )?,
             Self::ErrorDataTooLarge(typ, ..) => write!(f, "{typ} too large")?,
-
-            Self::ErrorCustomSyntax(s, tokens, ..) => write!(f, "{s}: {}", tokens.join(" "))?,
         }
 
         if !call_src.is_empty() {
@@ -401,12 +391,6 @@ impl EvalAltResult {
             | Self::ErrorArithmetic(..)
             | Self::ErrorRuntime(..) => true,
 
-            // Custom syntax raises errors only when they are compiled by one
-            // [`Engine`][crate::Engine] and run by another, causing a mismatch.
-            //
-            // Therefore, this error should not be catchable.
-            Self::ErrorCustomSyntax(..) => false,
-
             Self::ErrorTooManyOperations(..)
             | Self::ErrorTooManyVariables(..)
             | Self::ErrorStackOverflow(..)
@@ -425,7 +409,6 @@ impl EvalAltResult {
             self,
             Self::ErrorSystem(..)
                 | Self::ErrorParsing(..)
-                | Self::ErrorCustomSyntax(..)
                 | Self::ErrorTooManyOperations(..)
                 | Self::ErrorTooManyVariables(..)
                 | Self::ErrorStackOverflow(..)
@@ -480,7 +463,6 @@ impl EvalAltResult {
             | Self::ErrorStackOverflow(pos)
             | Self::ErrorDataTooLarge(.., pos)
             | Self::ErrorTerminated(.., pos)
-            | Self::ErrorCustomSyntax(.., pos)
             | Self::ErrorRuntime(.., pos)
             | Self::LoopBreak(.., pos)
             | Self::Return(.., pos)
@@ -541,7 +523,6 @@ impl EvalAltResult {
             | Self::ErrorStackOverflow(pos)
             | Self::ErrorDataTooLarge(.., pos)
             | Self::ErrorTerminated(.., pos)
-            | Self::ErrorCustomSyntax(.., pos)
             | Self::ErrorRuntime(.., pos)
             | Self::LoopBreak(.., pos)
             | Self::Return(.., pos)

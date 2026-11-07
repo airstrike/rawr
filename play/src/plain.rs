@@ -419,9 +419,6 @@ fn sandbox(
                 .unwrap()
                 .push(Stream::Stderr, &format!("{text}\n"))
         });
-    for symbol in ["import", "eval"] {
-        engine.disable_symbol(symbol);
-    }
     let refuse = || Err::<(), Box<rawr::EvalAltResult>>("sleep is not available in ?play".into());
     engine
         .register_fn("sleep", move |_: rawr::INT| refuse())

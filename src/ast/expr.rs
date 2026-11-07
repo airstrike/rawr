@@ -29,34 +29,6 @@ pub struct BinaryExpr {
     pub rhs: Expr,
 }
 
-/// _(internals)_ A custom syntax expression.
-/// Exported under the `internals` feature only.
-#[derive(Debug, Clone, Hash)]
-pub struct CustomExpr {
-    /// List of keywords.
-    pub inputs: FnArgsVec<Expr>,
-    /// List of tokens actually parsed.
-    pub tokens: FnArgsVec<ImmutableString>,
-    /// State value.
-    pub state: Dynamic,
-    /// Is the current [`Scope`][crate::Scope] possibly modified by this custom statement
-    /// (e.g. introducing a new variable)?
-    pub scope_may_be_changed: bool,
-    /// Is this custom syntax self-terminated?
-    pub self_terminated: bool,
-}
-
-impl CustomExpr {
-    /// Is this custom syntax self-terminated (i.e. no need for a semicolon terminator)?
-    ///
-    /// A self-terminated custom syntax always ends in `$block$`, `}` or `;`
-    #[inline(always)]
-    #[must_use]
-    pub const fn is_self_terminated(&self) -> bool {
-        self.self_terminated
-    }
-}
-
 /// _(internals)_ A set of function call hashes. Exported under the `internals` feature only.
 ///
 /// Two separate hashes are pre-calculated because of the following patterns:
@@ -307,8 +279,6 @@ pub enum Expr {
     Or(Box<StaticVec<Self>>, Position),
     /// lhs `??` rhs
     Coalesce(Box<StaticVec<Self>>, Position),
-    /// Custom syntax
-    Custom(Box<CustomExpr>, Position),
 }
 
 impl Default for Expr {
@@ -422,7 +392,6 @@ impl fmt::Debug for Expr {
                 });
                 f.finish()
             }
-            Self::Custom(x, ..) => f.debug_tuple("Custom").field(x).finish(),
         }?;
 
         write!(f, " @ {display_pos:?}")
@@ -608,8 +577,6 @@ impl Expr {
             | Self::InterpolatedString(..)
             | Self::Property(..)
             | Self::Stmt(..) => ASTFlags::empty(),
-
-            Self::Custom(..) => ASTFlags::empty(),
         }
     }
     /// Get the [position][Position] of the expression.
@@ -638,8 +605,6 @@ impl Expr {
             | Self::Dot(.., pos)
             | Self::InterpolatedString(.., pos)
             | Self::Property(.., pos) => *pos,
-
-            Self::Custom(.., pos) => *pos,
 
             Self::Stmt(x) => x.position(),
         }
@@ -692,8 +657,6 @@ impl Expr {
             | Self::MethodCall(.., pos)
             | Self::InterpolatedString(.., pos)
             | Self::Property(.., pos) => *pos = new_pos,
-
-            Self::Custom(.., pos) => *pos = new_pos,
 
             Self::Stmt(x) => x.set_position(new_pos, Position::NONE),
         }
@@ -782,8 +745,6 @@ impl Expr {
             | Self::Array(..)
             | Self::Map(..) => false,
 
-            Self::Custom(..) => false,
-
             Self::Variable(..) => matches!(
                 token,
                 Token::LeftParen | Token::Unit | Token::Bang | Token::DoubleColon
@@ -851,13 +812,6 @@ impl Expr {
             }
             Self::FnCall(x, ..) | Self::MethodCall(x, ..) => {
                 for e in &*x.args {
-                    if !e.walk(path, on_node) {
-                        return false;
-                    }
-                }
-            }
-            Self::Custom(x, ..) => {
-                for e in &*x.inputs {
                     if !e.walk(path, on_node) {
                         return false;
                     }

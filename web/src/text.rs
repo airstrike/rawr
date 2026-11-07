@@ -359,9 +359,6 @@ fn sandbox(engine: &mut Engine, sink: &Arc<Mutex<Output>>) {
         // `print` and `debug`: their text goes with the rest.
         .on_print(move |text| print.lock().unwrap().push(false, &format!("{text}\n")))
         .on_debug(move |text, _, _| debug.lock().unwrap().push(true, &format!("{text}\n")));
-    for symbol in ["import", "eval"] {
-        engine.disable_symbol(symbol);
-    }
     let refuse = || Err::<(), Box<rawr::EvalAltResult>>("sleep is not available in ?play".into());
     engine
         .register_fn("sleep", move |_: rawr::INT| refuse())

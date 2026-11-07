@@ -750,7 +750,6 @@ fn expr_awaits(expr: &Expr) -> bool {
         Expr::And(operands, _) | Expr::Or(operands, _) | Expr::Coalesce(operands, _) => {
             operands.iter().any(expr_awaits)
         }
-        Expr::Custom(custom, _) => custom.inputs.iter().any(expr_awaits),
         _ => false,
     }
 }

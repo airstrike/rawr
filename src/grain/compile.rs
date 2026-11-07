@@ -1396,16 +1396,6 @@ impl Lowering {
                 }
             }
 
-            // Custom syntax runs host code against an `EvalContext`, which can
-            // declare into the caller's scope. What it declares is invisible
-            // here, so the slot model would be resolved against a scope shape
-            // that is not the one at runtime. Refusing the lowering keeps the
-            // walker's answer, as it does for `eval` above.
-            Expr::Custom(..) => {
-                self.residual_expr(expr);
-                self.defeated = true;
-            }
-
             // Listed rather than matched with `_`, for the reason
             // [`Lowering::statement`] gives: a wildcard is what let `eval`
             // become a fragment that answered differently from the walker.
@@ -2049,9 +2039,9 @@ fn flatten_chain(expr: &Expr) -> Option<(&Expr, Vec<ChainStep<'_>>)> {
 
 /// Wrap statements as a block expression.
 ///
-/// `Expr::Stmt` is the one shape `eval_expression_tree_raw` routes to
-/// `eval_stmt_block` rather than `eval_expr`, which is what lets statements go
-/// back through the walker at all.
+/// `Expr::Stmt` is the one shape the VM hands to `eval_stmt_block` rather than
+/// `eval_expr`, which is what lets statements go back through the walker at
+/// all.
 fn wrap_statements(statements: Vec<Stmt>) -> Expr {
     let span = statements.first().zip(statements.last()).map_or_else(
         || Span::new(Position::NONE, Position::NONE),

@@ -664,11 +664,7 @@ fn begins_statement_item(token: &Token) -> bool {
 }
 
 fn is_attribute_marker(token: &Token) -> bool {
-    match token {
-        Token::Hash => true,
-        Token::Custom(symbol) => symbol.as_str() == "#",
-        _ => false,
-    }
+    matches!(token, Token::Hash)
 }
 
 fn parse_item(

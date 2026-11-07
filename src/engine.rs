@@ -11,7 +11,7 @@ use crate::tokenizer::Token;
 use crate::types::enums::EnumRegistration;
 use crate::types::StringsInterner;
 use crate::{Dynamic, Identifier, ImmutableString, Locked, SharedModule};
-use std::{collections::BTreeSet, fmt, num::NonZeroU8};
+use std::{fmt, num::NonZeroU8};
 
 pub type Precedence = NonZeroU8;
 
@@ -136,8 +136,6 @@ pub struct Engine {
     /// Strings interner.
     pub(crate) interned_strings: Option<Locked<StringsInterner>>,
 
-    /// A set of symbols to disable.
-    pub(crate) disabled_symbols: BTreeSet<Identifier>,
     /// Registered Rust enum types available to `switch` patterns.
     pub(crate) registered_enums: std::collections::BTreeMap<Identifier, EnumRegistration>,
     /// Host type paths available while resolving Rawr item headers.
@@ -158,11 +156,6 @@ pub struct Engine {
     /// borrowing this compiler. It does not attest a live runner by itself.
     #[cfg(feature = "rust-import")]
     pub(crate) imported_native: Option<crate::package::import::runner::account::Native>,
-    /// A map containing custom keywords and precedence to recognize.
-    pub(crate) custom_keywords: std::collections::BTreeMap<Identifier, Option<Precedence>>,
-    /// Custom syntax.
-    pub(crate) custom_syntax:
-        std::collections::BTreeMap<Identifier, Box<crate::api::custom_syntax::CustomSyntax>>,
 
     /// Callback closure for filtering variable definition.
     pub(crate) def_var_filter: Option<Box<OnDefVarCallback>>,
@@ -235,8 +228,6 @@ impl fmt::Debug for Engine {
 
         f.field("global_sub_modules", &self.global_sub_modules);
 
-        f.field("disabled_symbols", &self.disabled_symbols);
-
         f.field(
             "registered_enums",
             &self.registered_enums.keys().collect::<Vec<_>>(),
@@ -244,15 +235,6 @@ impl fmt::Debug for Engine {
         .field("host_registry", &self.host_registry)
         .field("access", &self.access)
         .field("test", &self.test);
-
-        f.field("custom_keywords", &self.custom_keywords).field(
-            "custom_syntax",
-            &self
-                .custom_syntax
-                .keys()
-                .map(crate::SmartString::as_str)
-                .collect::<String>(),
-        );
 
         f.field("def_var_filter", &self.def_var_filter.is_some())
             .field("resolve_var", &self.resolve_var.is_some())
@@ -317,7 +299,6 @@ impl Engine {
         global_sub_modules: std::collections::BTreeMap::new(),
 
         interned_strings: None,
-        disabled_symbols: BTreeSet::new(),
         registered_enums: std::collections::BTreeMap::new(),
         host_registry: crate::host::Current::new(),
         access: crate::Access::none(),
@@ -326,8 +307,6 @@ impl Engine {
         exports_frozen: core::sync::atomic::AtomicBool::new(false),
         #[cfg(feature = "rust-import")]
         imported_native: None,
-        custom_keywords: std::collections::BTreeMap::new(),
-        custom_syntax: std::collections::BTreeMap::new(),
 
         def_var_filter: None,
         resolve_var: None,

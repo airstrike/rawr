@@ -1388,13 +1388,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             state.set_dirty();
         }
 
-        // Custom syntax
-        Expr::Custom(x, ..)
-            if x.scope_may_be_changed => {
-                state.propagate_constants = false;
-            }
-            // Do not optimize custom syntax expressions as you won't know how they would be called
-
         // All other expressions - skip
         _ => (),
     }

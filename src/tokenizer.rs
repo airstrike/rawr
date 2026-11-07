@@ -21,8 +21,6 @@ pub struct TokenizerControlBlock {
     ///
     /// This flag allows switching the tokenizer back to _text_ parsing after an interpolation stream.
     pub is_within_text: bool,
-    /// Return the next character in the input stream instead of the next token?
-    pub in_char_mode: bool,
     /// Global comments.
     #[cfg(feature = "metadata")]
     pub global_comments: String,
@@ -42,7 +40,6 @@ impl TokenizerControlBlock {
     pub const fn new() -> Self {
         Self {
             is_within_text: false,
-            in_char_mode: false,
             #[cfg(feature = "metadata")]
             global_comments: String::new(),
             compressed: None,
@@ -267,10 +264,6 @@ pub enum Token {
     Comment(Box<String>),
     /// A reserved symbol.
     Reserved(Box<Identifier>),
-    /// A custom keyword.
-    Custom(Box<Identifier>),
-    /// A single character from the input stream, unprocessed.
-    UnprocessedRawChar(char),
     /// End of the input stream.
     /// Used as a placeholder for the end of input.
     EOF,
@@ -294,8 +287,6 @@ impl fmt::Display for Token {
             CharConstant(c) => write!(f, "{c}"),
             Identifier(s) => f.write_str(s),
             Reserved(s) => f.write_str(s),
-            Custom(s) => f.write_str(s),
-            UnprocessedRawChar(c) => f.write_char(*c),
             LexError(err) => write!(f, "{err}"),
             Comment(s) => f.write_str(s),
 
@@ -692,7 +683,6 @@ impl Token {
             | CharConstant(..)
             | Identifier(..)
             | Reserved(..) => false,
-            Custom(..) => false,
             LexError(..) | Comment(..) => false,
 
             EOF => false,
@@ -1067,71 +1057,6 @@ impl Token {
         }
     }
 
-    /// Is this token a standard symbol used in the language?
-    #[must_use]
-    pub const fn is_standard_symbol(&self) -> bool {
-        #[allow(clippy::enum_glob_use)]
-        use Token::*;
-
-        matches!(
-            self,
-            LeftBrace
-                | RightBrace
-                | LeftParen
-                | RightParen
-                | LeftBracket
-                | RightBracket
-                | Plus
-                | UnaryPlus
-                | Minus
-                | UnaryMinus
-                | Multiply
-                | Divide
-                | Modulo
-                | PowerOf
-                | LeftShift
-                | RightShift
-                | SemiColon
-                | Colon
-                | DoubleColon
-                | ThinArrow
-                | Hash
-                | Apostrophe
-                | Comma
-                | Period
-                | DoubleQuestion
-                | ExclusiveRange
-                | InclusiveRange
-                | MapStart
-                | Equals
-                | LessThan
-                | GreaterThan
-                | LessThanEqualsTo
-                | GreaterThanEqualsTo
-                | EqualsTo
-                | NotEqualsTo
-                | Bang
-                | Pipe
-                | Or
-                | XOr
-                | Ampersand
-                | And
-                | PlusAssign
-                | MinusAssign
-                | MultiplyAssign
-                | DivideAssign
-                | LeftShiftAssign
-                | RightShiftAssign
-                | AndAssign
-                | OrAssign
-                | XOrAssign
-                | ModuloAssign
-                | PowerOfAssign
-                | Elvis
-                | QuestionBracket
-        )
-    }
-
     /// Is this token a standard keyword?
     #[inline]
     #[must_use]
@@ -1174,13 +1099,6 @@ impl Token {
     #[must_use]
     pub const fn is_reserved(&self) -> bool {
         matches!(self, Self::Reserved(..))
-    }
-
-    /// Is this token a custom keyword?
-    #[inline(always)]
-    #[must_use]
-    pub const fn is_custom(&self) -> bool {
-        matches!(self, Self::Custom(..))
     }
 }
 
@@ -3030,8 +2948,6 @@ impl InputStream for MultiInputsStream<'_> {
 /// _(internals)_ An iterator on a [`Token`] stream.
 /// Exported under the `internals` feature only.
 pub struct TokenIterator<'a> {
-    /// Reference to the scripting `Engine`.
-    pub engine: &'a Engine,
     /// Current state.
     pub state: TokenizeState,
     /// Current position.
@@ -3052,7 +2968,7 @@ impl Iterator for TokenIterator<'_> {
         if let Some(pending) = self.pending.take() {
             return Some(pending);
         }
-        let (within_interpolated, _char_mode, compress_script) = {
+        let (within_interpolated, compress_script) = {
             let control = &mut *self.state.tokenizer_control.borrow_mut();
 
             if control.is_within_text {
@@ -3062,39 +2978,11 @@ impl Iterator for TokenIterator<'_> {
                 control.is_within_text = false;
             }
 
-            // Check if in single-character mode
-            let in_char_mode = std::mem::take(&mut control.in_char_mode);
-
             (
                 self.state.is_within_text_terminated_by.is_some(),
-                in_char_mode,
                 control.compressed.is_some(),
             )
         };
-
-        if _char_mode && let Some(ch) = self.stream.get_next() {
-            let pos = self.pos;
-            match ch {
-                '\n' => self.pos.new_line(),
-                _ => self.pos.advance(),
-            }
-            // Compacting support for `$raw$` custom syntax: append the
-            // consumed raw character verbatim to the compressed buffer.
-            // Raw characters are not produced by `get_next_token` and
-            // carry no `last_token`, so the normal token-compression
-            // path at the tail of this function never sees them.
-            // Appending verbatim preserves the raw body exactly as the
-            // plugin authored it — which is correct, because raw
-            // content is opaque to Rawr (that is the whole point of
-            // `$raw$`).
-            if compress_script {
-                let control = &mut *self.state.tokenizer_control.borrow_mut();
-                if let Some(ref mut compressed) = control.compressed {
-                    compressed.push(ch);
-                }
-            }
-            return Some((Token::UnprocessedRawChar(ch), pos));
-        }
 
         let (token, pos) = match get_next_token(&mut self.stream, &mut self.state, &mut self.pos) {
             // {EOF}
@@ -3109,83 +2997,21 @@ impl Iterator for TokenIterator<'_> {
                 return Some((Token::LexError(LERR::UnterminatedString.into()), pos));
             }
             // Reserved keyword/symbol
-            (Token::Reserved(s), pos) => (match
-                (s.as_str(),
-                    self.engine.custom_keywords.contains_key(&*s),
-                )
-            {
-                ("===", false) => Token::LexError(LERR::ImproperSymbol(s.to_string(),
+            (Token::Reserved(s), pos) => (match s.as_str() {
+                "===" => Token::LexError(LERR::ImproperSymbol(s.to_string(),
                     "'===' is not a valid operator. This is not JavaScript! Should it be '=='?".to_string(),
                 ).into()),
-                ("!==", false) => Token::LexError(LERR::ImproperSymbol(s.to_string(),
+                "!==" => Token::LexError(LERR::ImproperSymbol(s.to_string(),
                     "'!==' is not a valid operator. This is not JavaScript! Should it be '!='?".to_string(),
                 ).into()),
-                ("->", false) => Token::LexError(LERR::ImproperSymbol(s.to_string(),
-                    "'->' is not a valid symbol. This is not C or C++!".to_string()).into()),
-                (":=", false) => Token::LexError(LERR::ImproperSymbol(s.to_string(),
+                ":=" => Token::LexError(LERR::ImproperSymbol(s.to_string(),
                     "':=' is not a valid assignment operator. This is not Go or Pascal! Should it be simply '='?".to_string(),
                 ).into()),
-                (":;", false) => Token::LexError(LERR::ImproperSymbol(s.to_string(),
+                ":;" => Token::LexError(LERR::ImproperSymbol(s.to_string(),
                     "':;' is not a valid symbol. Should it be '::'?".to_string(),
                 ).into()),
-                ("::<", false) => Token::LexError(LERR::ImproperSymbol(s.to_string(),
-                    "'::<>' is not a valid symbol. This is not Rust! Should it be '::'?".to_string(),
-                ).into()),
-                // Reserved keyword/operator that is custom.
-                (.., true) => Token::Custom(s),
-                // Reserved keyword that is not custom and disabled.
-                (token, false) if self.engine.is_symbol_disabled(token) => {
-                    let msg = format!("reserved {} '{token}' is disabled", if is_valid_identifier(token) { "keyword"} else {"symbol"});
-                    Token::LexError(LERR::ImproperSymbol(s.to_string(), msg).into())
-                },
-                // Reserved keyword/operator that is not custom.
-                (.., false) => Token::Reserved(s),
+                _ => Token::Reserved(s),
             }, pos),
-            // Custom keyword
-            (Token::Identifier(s), pos) if self.engine.custom_keywords.contains_key(&*s) => {
-                (Token::Custom(s), pos)
-            }
-            // Registered custom syntax owns literal tokens, including punctuation that Rawr also
-            // recognizes contextually in item headers.
-            (token, pos)
-                if token.is_literal()
-                    && self.engine.custom_syntax.contains_key(token.literal_syntax()) =>
-            {
-                (
-                    Token::Custom(Box::new(token.literal_syntax().into())),
-                    pos,
-                )
-            }
-            // Custom keyword/symbol - must be disabled
-            (token, pos) if token.is_literal() && self.engine.custom_keywords.contains_key(token.literal_syntax()) => {
-                // Active standard keyword should never be a custom keyword,
-                // except the item syntax a host may override
-                // (`Engine::register_custom_operator`).
-                debug_assert!(
-                    self.engine.is_symbol_disabled(token.literal_syntax())
-                        || matches!(
-                            token,
-                            Token::ThinArrow
-                                | Token::Hash
-                                | Token::Apostrophe
-                                | Token::Pub
-                                | Token::Struct
-                                | Token::Enum
-                                | Token::Impl
-                                | Token::Use
-                                | Token::SelfValue
-                                | Token::Mut
-                        ),
-                    "{:?} is an active keyword",
-                    token
-                );
-
-                (Token::Custom(Box::new(token.literal_syntax().into())), pos)
-            }
-            // Disabled symbol
-            (token, pos) if token.is_literal() && self.engine.is_symbol_disabled(token.literal_syntax()) => {
-                (Token::Reserved(Box::new(token.literal_syntax().into())), pos)
-            }
             // Normal symbol
             r => r,
         };
@@ -3334,7 +3160,6 @@ impl Engine {
 
         (
             TokenIterator {
-                engine: self,
                 state: TokenizeState {
                     max_string_len: std::num::NonZeroUsize::new(self.max_string_size()),
                     next_token_cannot_be_unary: false,
