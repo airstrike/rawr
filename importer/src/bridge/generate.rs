@@ -10838,6 +10838,26 @@ fn render_anchored_opening(
         .map_err(|error| Error::Lent(\"a slot's region\", error))?;
     }}"
     )
+    .map_err(encoding)?;
+    // Out of any region, as in a closure a widget calls while it lays out,
+    // a type parameter a `&str` fills is a `&'static str`, as rustc types
+    // the literal `button("Delete")` takes: the string is pinned for the
+    // runner's life and the value is an arena value at `'static`, which may
+    // leave the scope it was made in. An item whose own signature borrows
+    // its inputs, as `Parser::new(&text)`, keeps its scope frame.
+    if signature.scope().is_some() || !instance_opens(signature, substitutions) {
+        return Ok(());
+    }
+    let mut owned = String::new();
+    render_to_dynamic(&returned, "made", 0, &mut owned)?;
+    writeln!(
+        output,
+        "    {{
+{taken}        let pins = static_pins();{pinned}
+        let made = lend(arguments.arena, || {call});
+        return {owned};
+    }}"
+    )
     .map_err(encoding)
 }
 

@@ -1693,20 +1693,21 @@ fn a_script_function_wraps_opaque_widgets_in_types_that_declare_a_lifetime() {
     );
 }
 
-/// iced's lazy (#328): `lazy(self.version, |_| ..)` is a widget only where
-/// what its closure gives is `'static`, as its impl's `W: Widget + 'static`
-/// says, and a container and `column!` take it. The widgets the closure
-/// makes own what they show, so rustc names them at `'static` and so does
-/// the runner. The output is `cargo run`'s.
+/// iced's lazy (#328, #1081): `lazy(self.version, |_| ..)` is a widget only
+/// where what its closure gives is `'static`, as its impl's `W: Widget +
+/// 'static` says, and a container and `column!` take it. The widgets the
+/// closure makes own what they show, so rustc names them at `'static` and
+/// so does the runner, and the literal of each row's `button("Delete")`,
+/// made while the widget lays out and outside the view's region, is a
+/// `&'static str`. The output is `cargo run`'s.
 #[test]
-#[ignore = "blocked: a region's family writes the type its closure fills, `W` of `Lazy<'x, W, u8>`, at the region's `'x`, where rustc names it `'static`, so `boxed` of a region's `Container<'x, Lazy<..>>` is E0521"]
 fn a_widget_whose_closure_gives_static_widgets_is_boxed_in_a_view() {
-    let (rawr, cargo) = both_printed("lazy.rs", "Add,Add,item2,Add");
+    let (rawr, cargo) = both_printed("lazy.rs", "Add,Add,Delete,Add");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("3 view pad 0 container 1 lazy pad 0 [item2] [item3] [Add]")
+        rawr.contains("3 view pad 0 container 1 lazy pad 0 row 0 item2@16 [Delete] row 0 item3@16 [Delete] [Add]")
             && rawr.contains("3 message Delete(\"item2\")")
-            && rawr.ends_with("last view pad 0 container 1 lazy pad 0 [item2] [item3] [Add]"),
+            && rawr.ends_with("last view pad 0 container 1 lazy pad 0 row 0 item2@16 [Delete] row 0 item3@16 [Delete] [Add]"),
         "{rawr}"
     );
 }
