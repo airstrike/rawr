@@ -1106,6 +1106,7 @@
     {"t":"T1103","issue":1103,"title":"T1103: Fixes a regression from #1055: an `a..=b` of `isize`, `u8` or any integer other than `i64`…","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":"242af94f3","release":"0.3.164"},
     {"t":"T1104","issue":1104,"title":"T1104: collect() on a crate iterator is ambiguous after a lane's history: two identical aliases","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1105","issue":1105,"title":"T1105: a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1106","issue":1106,"title":"T1106: range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1106","issue":1106,"title":"T1106: range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1107","issue":1107,"title":"T1107: Marked modules under a package's lib target are invisible when the bin target runs","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

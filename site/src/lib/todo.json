@@ -2659,7 +2659,8 @@
     {"issue":1103,"title":"Fixes a regression from #1055: an `a..=b` of `isize`, `u8` or any integer other than `i64`…","state":"closed","category":"Divergences from rustc","release":"0.3.164"},
     {"issue":1104,"title":"collect() on a crate iterator is ambiguous after a lane's history: two identical aliases","state":"open","category":"Health"},
     {"issue":1105,"title":"a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"open","category":"Divergences from rustc"},
-    {"issue":1106,"title":"range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc"}
+    {"issue":1106,"title":"range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc"},
+    {"issue":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
