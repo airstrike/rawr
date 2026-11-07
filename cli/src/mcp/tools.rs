@@ -141,7 +141,7 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "check",
-            "description": "Check a program without running it: rawr's check and `cargo check`. Returns each error with its absolute file, line and column. A first check of a program with Rust dependencies builds them; when it says it is still checking, call it again.",
+            "description": "Check a program without running it: rawr's check and `cargo check`. Returns each error with its absolute file, line and column. A first check of a program with Rust dependencies builds them first.",
             "inputSchema": { "type": "object", "properties": { "path": path_schema() } },
         }),
         json!({
