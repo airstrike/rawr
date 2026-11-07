@@ -287,3 +287,37 @@ fn a_typed_handle_lends_a_mut_parameter_the_handle_s_value() {
     let settle = script.func::<(String, Transaction), String>("settle").unwrap();
     assert_eq!(settle.call("paid".into(), coffee()).unwrap(), "paid Blue Bottle");
 }
+
+/// The embedding guide's examples of modules and of `call_fn`.
+#[test]
+fn the_guide_s_module_and_call_fn_examples_print_what_it_says() {
+    let script = Engine::new()
+        .script(
+            "mod game {
+    pub mod rules {
+        pub fn score(hits: i64) -> i64 {
+            super::BONUS + hits * 10
+        }
+    }
+
+    const BONUS: i64 = 5;
+}
+
+use game::rules;
+
+fn score(hits: i64) -> i64 {
+    rules::score(hits)
+}",
+        )
+        .unwrap();
+    assert_eq!(script.func::<(i64,), i64>("score").unwrap().call(2).unwrap(), 25);
+
+    let engine = Engine::new();
+    let ast = engine.compile("fn update(score: &mut i64, hits: i64) -> i64 {\n    *score += hits * 10;\n    *score\n}").unwrap();
+    let mut scope = rawr::Scope::new();
+    assert_eq!(engine.call_fn::<i64>(&mut scope, &ast, "update", (5_i64, 2_i64)).unwrap(), 25);
+    let mut score = rawr::Dynamic::from(5_i64);
+    let options = rawr::CallFnOptions::new().bind_this_ptr(&mut score);
+    engine.call_fn_with_options::<i64>(options, &mut scope, &ast, "update", (2_i64,)).unwrap();
+    assert_eq!(score.as_int().unwrap(), 25);
+}
