@@ -226,6 +226,9 @@ impl<B> Candidate<super::Admitted, B> {
                 super::terminal_owner_loss(inner, error)
             });
         }
+        // A program blocked reading the terminal draws again with the
+        // generation it just got (D534.4), as after a prepared commit.
+        inner.child.wake();
         inner.key = prepared.next;
         inner.route = Some(prepared.route);
         inner.sequence = crate::profile::message::Sequence::first();
