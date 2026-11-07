@@ -6,17 +6,17 @@
 //! program's own `Debug` impls and derives and a crate type's `Debug`.
 //!
 //! The protocol is one JSON line each way:
-//! - the request: `{"name": "count", "file": "/abs/src/main.rs", "frame": 1,
-//!   "timeout_ms": 2000}`, each field optional. `frame` picks a call: 0
+//! - the request: `{"name": "count", "file": "/abs/src/main.rs", "frame": 1}`,
+//!   each field optional. `frame` picks a call: 0
 //!   (the default) for the function the program is in, 1 for its caller,
 //!   and on (#511); `name` and `file` apply to that call;
 //! - the answer: `{"reached": true, "frame": .., "file": .., "line": ..,
 //!   "function": .., "bindings": [{"name": .., "value": ..} or {"name": ..,
 //!   "error": ..}], "frames": [{"function": .., "file": .., "line": ..}]}`,
 //!   the frames innermost first, a caller's line the line of its call; or
-//!   `{"reached": false}` when the program ran none of its own code that
-//!   matched before the timeout (with `"paused"` and `"depth"` while
-//!   paused).
+//!   `{"reached": false, "paused": .., "depth": ..}` when the program is
+//!   paused where the request doesn't match. A request waits for its step
+//!   as long as that takes; the tool closing the socket gives it up.
 //!
 //! A `&mut` parameter or `self`, which the compiled function holds as its
 //! receiver, reads under the name the program gave it (#534). A caller's
@@ -30,20 +30,22 @@
 //! The same socket sets breakpoints and resumes a paused program (#489),
 //! with an `op`:
 //! - `{"op": "break", "file": .., "line": ..}` or `{"op": "break",
-//!   "function": "tick"}`, then a wait of up to `timeout_ms` for a pause:
-//!   `{"set": .., "lines": [{"file": .., "line": ..}], "compiled": ..,
-//!   "paused": {"file": .., "line": .., "function": .., "reason": ..} or null}`,
-//!   or `{"error": ..}`;
+//!   "function": "tick"}`: `{"set": .., "lines": [{"file": .., "line": ..}],
+//!   "compiled": .., "paused": {"file": .., "line": .., "function": ..,
+//!   "reason": ..} or null}`, the pause the program is in if any, or
+//!   `{"error": ..}`;
 //! - `{"op": "clear"}`, with `file`, `line` or `function` to take fewer:
 //!   `{"cleared": n, "left": [..], "paused": ..}`;
-//! - `{"op": "step", "kind": "over" | "into" | "out"}` and
-//!   `{"op": "continue"}` on a paused program, then a wait of up to
-//!   `timeout_ms` for the next pause: `{"paused": .. or null}`, or
-//!   `{"error": "not paused"}`.
+//! - `{"op": "step", "kind": "over" | "into" | "out"}` on a paused program,
+//!   answered where the step pauses: `{"paused": ..}`; `{"op": "continue"}`,
+//!   answered once it runs on: `{"paused": null}`; either `{"error": "not
+//!   paused"}` on a program that isn't.
 //!
 //! It also sends the program's window input (#989), with `{"op": "input",
 //! "action": ..}`: a pointer move, a click, a drag, a scroll, a key press or
-//! typed text; `{"error": "paused", "paused": ..}` while it is paused.
+//! typed text, answered once the window drew it; `{"error": "paused",
+//! "paused": ..}` while it is paused, with `"taken": true` when the input
+//! made it pause.
 //!
 //! Under `rawr mcp`, a pause and its end are also told as `paused` (with
 //! the file, line, function and reason) and `resumed` events in the file
@@ -71,8 +73,8 @@ use crate::debugger::{BreakPositions, DebuggerCommand, DebuggerEvent};
 use crate::types::dynamic::Union;
 use crate::{Dynamic, Engine, EvalAltResult, EvalContext, Position};
 
-/// How long a request waits by default.
-const TIMEOUT: Duration = Duration::from_secs(2);
+/// How often a waiting request looks whether its tool went away.
+const POLL: Duration = Duration::from_millis(50);
 
 /// The variable naming the file `rawr mcp` reads a supervised run's events
 /// from, one JSON object per line, where the program says where it paused
@@ -645,6 +647,24 @@ impl Inspector {
     }
 }
 
+/// Whether the tool on `stream` went away: it sends one request line and
+/// then only waits, so a read that sees the end is its leaving.
+#[cfg(unix)]
+fn gone(stream: &std::os::unix::net::UnixStream) -> bool {
+    use std::io::Read as _;
+
+    if stream.set_nonblocking(true).is_err() {
+        return true;
+    }
+    let mut byte = [0_u8; 1];
+    let gone = match (&*stream).read(&mut byte) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(error) => error.kind() != std::io::ErrorKind::WouldBlock,
+    };
+    stream.set_nonblocking(false).is_err() || gone
+}
+
 /// How deep in calls the program is where `context` is.
 fn depth(context: &EvalContext) -> usize {
     context
@@ -668,41 +688,41 @@ impl Shared {
             return;
         }
         let request: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
-        let timeout = request
-            .get("timeout_ms")
-            .and_then(Value::as_u64)
-            .map_or(TIMEOUT, Duration::from_millis);
+        let gone = || gone(&stream);
         let answer = match request.get("op").and_then(Value::as_str) {
-            Some("input") => self.input(&request, timeout),
-            Some("break") => self.set(&request, timeout),
+            Some("input") => self.input(&request, &gone),
+            Some("break") => self.set(&request),
             Some("clear") => self.clear(&request),
-            Some("continue") => self.resume(Resume::Continue, timeout),
+            Some("continue") => self.resume(Resume::Continue, &gone),
             Some("step") => self.resume(
                 Resume::Step(match request.get("kind").and_then(Value::as_str) {
                     Some("into") => Step::Into,
                     Some("out") => Step::Out,
                     _ => Step::Over,
                 }),
-                timeout,
+                &gone,
             ),
-            _ => self.inspect(&request, timeout),
+            _ => self.inspect(&request, &gone),
         };
         let mut stream = stream;
         let _ = writeln!(stream, "{answer}");
     }
 
     /// Send the program's window an input. A paused program holds its
-    /// event loop, so it takes none until it goes on.
-    fn input(&self, request: &Value, timeout: Duration) -> Value {
+    /// event loop, so it takes none until it goes on; an input that makes it
+    /// pause is answered with the pause.
+    fn input(&self, request: &Value, gone: &dyn Fn() -> bool) -> Value {
         if let Some(paused) = self.state().paused.clone() {
             return json!({ "error": "paused", "paused": paused });
         }
-        input::answer(request, timeout)
+        input::answer(request, &|| self.state().paused.is_some() || gone()).unwrap_or_else(
+            || json!({ "error": "paused", "paused": self.state().paused.clone(), "taken": true }),
+        )
     }
 
     /// Read values: answered at the program's next matching step, or where
-    /// it is paused.
-    fn inspect(&self, request: &Value, timeout: Duration) -> Value {
+    /// it is paused, unless the tool goes away first.
+    fn inspect(&self, request: &Value, gone: &dyn Fn() -> bool) -> Value {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let text = |key: &str| request.get(key).and_then(Value::as_str).map(str::to_owned);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -720,23 +740,30 @@ impl Shared {
         });
         self.wake.store(true, Ordering::Release);
         self.changed.notify_all();
-        answer.recv_timeout(timeout).unwrap_or_else(|_| {
+        loop {
+            match answer.recv_timeout(POLL) {
+                Ok(value) => return value,
+                Err(mpsc::RecvTimeoutError::Timeout) if !gone() => {}
+                Err(_) => break,
+            }
+        }
+        {
             let mut state = self.state();
             state.pending.retain(|request| request.id != id);
             if state.pending.is_empty() {
                 self.wake.store(false, Ordering::Release);
             }
             drop(state);
-            // An answer made while the request was being given up.
-            answer
-                .try_recv()
-                .unwrap_or_else(|_| json!({ "reached": false }))
-        })
+        }
+        // An answer made while the request was being given up.
+        answer
+            .try_recv()
+            .unwrap_or_else(|_| json!({ "reached": false }))
     }
 
-    /// Set a breakpoint, then wait for the program to pause, there or at
-    /// another one.
-    fn set(&self, request: &Value, timeout: Duration) -> Value {
+    /// Set a breakpoint. The program pauses when it reaches it; the answer
+    /// has the pause it is in already, if any.
+    fn set(&self, request: &Value) -> Value {
         let spec = match (
             request.get("function").and_then(Value::as_str),
             request.get("file").and_then(Value::as_str),
@@ -769,13 +796,7 @@ impl Shared {
         state.points.push(point);
         self.armed(&state);
         self.save(&state);
-        let seen = state.pauses;
-        let paused = if state.paused.is_some() {
-            state.paused.clone()
-        } else {
-            self.next_pause(state, seen, timeout)
-        };
-        json!({ "set": spec, "lines": lines, "compiled": compiled, "paused": paused })
+        json!({ "set": spec, "lines": lines, "compiled": compiled, "paused": state.paused })
     }
 
     /// Remove the breakpoints a request names: all of them when it names
@@ -802,40 +823,31 @@ impl Shared {
         })
     }
 
-    /// Resume a paused program, then wait for it to pause again.
-    fn resume(&self, resume: Resume, timeout: Duration) -> Value {
+    /// Resume a paused program. A step is answered where it pauses, unless
+    /// the tool goes away first; a continue once the program runs on.
+    fn resume(&self, resume: Resume, gone: &dyn Fn() -> bool) -> Value {
         let mut state = self.state();
         if state.paused.is_none() {
             return json!({ "error": "not paused" });
         }
         let seen = state.pauses;
+        let step = matches!(resume, Resume::Step(_));
         state.resume = Some(resume);
         self.changed.notify_all();
-        let paused = self.next_pause(state, seen, timeout);
-        json!({ "paused": paused })
-    }
-
-    /// Wait, up to `timeout`, for a pause after the `seen`th; where it
-    /// paused.
-    fn next_pause(
-        &self,
-        mut state: std::sync::MutexGuard<'_, State>,
-        seen: u64,
-        timeout: Duration,
-    ) -> Option<Value> {
-        let deadline = std::time::Instant::now() + timeout;
+        if !step {
+            return json!({ "paused": null });
+        }
         while state.pauses == seen {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
-                return None;
+            if gone() {
+                return json!({ "paused": null });
             }
             state = self
                 .changed
-                .wait_timeout(state, left)
+                .wait_timeout(state, POLL)
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
-        Some(state.last.clone())
+        json!({ "paused": state.last })
     }
 
     /// Break at every breakpoint's steps.

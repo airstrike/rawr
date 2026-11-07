@@ -10,7 +10,7 @@ use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -98,6 +98,8 @@ struct State {
     failure: Option<Value>,
     /// Where the program is paused: its file, line, function and reason.
     paused: Option<Value>,
+    /// Whether `rawr run` has exited.
+    exited: bool,
     output: VecDeque<(u64, Stream, String)>,
     output_bytes: usize,
     next_output: u64,
@@ -205,6 +207,7 @@ impl Sessions {
                 building: None,
                 failure: None,
                 paused: None,
+                exited: false,
                 output: VecDeque::new(),
                 output_bytes: 0,
                 next_output: 0,
@@ -369,6 +372,7 @@ impl Session {
                 if state.phase != Phase::Stopped {
                     state.phase = Phase::Exited(process::code(status));
                 }
+                state.exited = true;
                 drop(state);
                 self.changed.notify_all();
                 return;
@@ -423,16 +427,26 @@ impl Session {
         self.changed.notify_all();
     }
 
+    /// Wait for `rawr run` to exit, after [`Self::stop`] ended its group.
+    pub fn wait_exit(&self) {
+        let mut state = self.state();
+        while !state.exited {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
     /// Block until something past `event` happens that `wakes`, the session
-    /// is over, or `timeout` passes; `building` hears each build update.
+    /// is over, or `cancel` fires; `building` hears each build update.
     fn block(
         &self,
         event: u64,
-        timeout: Duration,
+        cancel: &process::Cancel,
         wakes: impl Fn(&State, u64) -> bool,
         mut building: impl FnMut(&str, u64),
     ) {
-        let deadline = Instant::now() + timeout;
         let mut heard = None;
         let mut state = self.state();
         loop {
@@ -442,33 +456,34 @@ impl Session {
                 building(&stage, percent);
                 heard = Some((stage, percent));
             }
-            if wakes(&state, event) || state.phase.is_over() {
-                return;
-            }
-            let now = Instant::now();
-            if now >= deadline {
+            if wakes(&state, event) || state.phase.is_over() || cancel.is_cancelled() {
                 return;
             }
             state = self
                 .changed
-                .wait_timeout(state, (deadline - now).min(Duration::from_millis(250)))
+                .wait_timeout(state, super::POLL)
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
     }
 
-    /// Wait until the program runs or fails, or `timeout` passes.
-    pub fn settle(&self, timeout: Duration, building: impl FnMut(&str, u64)) {
-        self.block(0, timeout, |state, _| !state.phase.is_pending(), building);
+    /// Wait until the program runs or fails, or `cancel` fires.
+    pub fn settle(&self, cancel: &process::Cancel, building: impl FnMut(&str, u64)) {
+        self.block(0, cancel, |state, _| !state.phase.is_pending(), building);
     }
 
     /// Wait for the next event past `cursor` other than build progress, or
-    /// `timeout`.
-    pub fn next(&self, cursor: Option<u64>, timeout: Duration, building: impl FnMut(&str, u64)) {
+    /// `cancel`.
+    pub fn next(
+        &self,
+        cursor: Option<u64>,
+        cancel: &process::Cancel,
+        building: impl FnMut(&str, u64),
+    ) {
         let after = cursor.unwrap_or_else(|| self.state().given_event);
         self.block(
             after,
-            timeout,
+            cancel,
             |state, after| {
                 state
                     .events
@@ -704,6 +719,7 @@ mod tests {
             building: None,
             failure: None,
             paused: None,
+            exited: false,
             output: VecDeque::new(),
             output_bytes: 0,
             next_output: 0,

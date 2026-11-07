@@ -6,7 +6,6 @@ use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::Instant;
 
 use serde_json::{json, Value};
 
@@ -85,13 +84,12 @@ pub fn listing(offered: &Offered) -> Value {
     })
 }
 
-/// Run one call of `tool` from `binary` until it answers, `deadline`
-/// passes or `cancel` fires. `progress` hears its progress records.
+/// Run one call of `tool` from `binary` until it answers, ends or `cancel`
+/// fires. `progress` hears its progress records.
 pub fn call(
     binary: &Path,
     tool: &str,
     call: &content::Call,
-    deadline: Instant,
     cancel: &Cancel,
     mut progress: impl FnMut(&Value),
 ) -> Value {
@@ -145,11 +143,7 @@ pub fn call(
         if cancel.is_cancelled() {
             break;
         }
-        let now = Instant::now();
-        if now >= deadline {
-            break;
-        }
-        match received.recv_timeout((deadline - now).min(std::time::Duration::from_millis(50))) {
+        match received.recv_timeout(super::POLL) {
             Ok(record) => {
                 if let Some(answer) = record.get("result") {
                     result = Some(answer.clone());
@@ -179,15 +173,8 @@ pub fn call(
         return result;
     }
     let (errors, _) = stderr.text();
-    if cancel.is_cancelled() {
-        return content::failure("cancelled");
-    }
     if !ended {
-        return content::failure(format!(
-            "`{tool}` did not answer within {} s and was stopped. A first render builds the program's Rust dependencies; call `check` until it passes, then call `{tool}` again.\n{}",
-            super::BOUND.as_secs(),
-            errors.trim_end()
-        ));
+        return content::failure("cancelled");
     }
     content::failure(format!(
         "{} ended without a result ({}):\n{}",

@@ -22,8 +22,9 @@ pub const CLAUDE_CONFIG: &str = ".mcp.json";
 /// Codex's project-scoped config, relative to the project root.
 pub const CODEX_CONFIG: &str = ".codex/config.toml";
 
-/// How long Codex may wait for one tool call, in seconds. Each of rawr's
-/// calls returns within about 45 s.
+/// How long Codex may wait for one tool call, in seconds: Codex's own bound,
+/// raised from its default. A call waits for its event as long as that
+/// takes; one Codex cancels leaves a build going for the next `wait`.
 pub const CODEX_TOOL_TIMEOUT: i64 = 120;
 /// How long Codex may wait for the server to start, in seconds.
 pub const CODEX_STARTUP_TIMEOUT: i64 = 30;

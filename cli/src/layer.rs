@@ -15,7 +15,7 @@ use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rawr::diagnostic;
 use rawr::layer::{Claims, Facts};
@@ -421,18 +421,10 @@ fn home() -> Option<PathBuf> {
 
 /// Run `binary` with [`FLAG`] and return what it printed if it exited
 /// successfully with a manifest of [`FORMAT`], else `Some(None)`. `None`
-/// when it could not be started, so nothing is kept about it.
+/// when it could not be started, so nothing is kept about it. Its answer
+/// takes as long as it takes: macOS assesses a new executable on its first
+/// run, which can take seconds.
 fn ask(binary: &Path) -> Option<Option<String>> {
-    // macOS assesses a new executable on its first run, which can take
-    // seconds, so a layer gets this long to answer.
-    ask_within(binary, Duration::from_secs(20))
-}
-
-/// [`ask`] with its deadline. A binary still running at the deadline does
-/// not know [`FLAG`], as `rawr-play-bot` which serves until it is stopped.
-/// It is kept as no layer, so it is not asked again until it changes and
-/// every later run is spared the wait.
-fn ask_within(binary: &Path, wait: Duration) -> Option<Option<String>> {
     let mut attempts = 0;
     let mut child = loop {
         match Command::new(binary)
@@ -454,25 +446,12 @@ fn ask_within(binary: &Path, wait: Duration) -> Option<Option<String>> {
             Err(_) => return None,
         }
     };
-    let deadline = Instant::now() + wait;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return Some(None),
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Some(None);
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-        }
-    }
     let mut text = String::new();
-    if child
+    let read = child
         .stdout
         .take()
-        .is_none_or(|mut stdout| stdout.read_to_string(&mut text).is_err())
-    {
+        .is_some_and(|mut stdout| stdout.read_to_string(&mut text).is_ok());
+    if !read || !child.wait().is_ok_and(|status| status.success()) {
         return Some(None);
     }
     Some(Manifest::parse(&text).map(|_| text))
@@ -583,28 +562,6 @@ mod tests {
         assert!(!binary.manifest.provides(&arguments(&["check", "x"])));
         assert!(!binary.manifest.provides(&arguments(&["stop"])));
         assert_eq!(Manifest::parse("format = 2\nname = \"x\"\n"), None);
-    }
-
-    /// A `rawr-*` binary that ignores the flag and keeps running, as
-    /// `rawr-play-bot` does, is kept as no layer, so the next run does not
-    /// wait for it again.
-    #[cfg(unix)]
-    #[test]
-    fn a_binary_that_does_not_answer_is_kept_as_no_layer() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../target/layer-test")
-            .join(std::process::id().to_string());
-        std::fs::create_dir_all(&directory).unwrap();
-        let binary = directory.join("rawr-serves");
-        std::fs::write(&binary, "#!/bin/sh\nexec sleep 30\n").unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let start = std::time::Instant::now();
-        let answer = super::ask_within(&binary, std::time::Duration::from_millis(200));
-        std::fs::remove_file(&binary).unwrap();
-        std::fs::remove_dir(&directory).unwrap();
-        assert_eq!(answer, Some(None));
-        assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]
