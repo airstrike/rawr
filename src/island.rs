@@ -1002,6 +1002,22 @@ impl Calls {
                     .map_err(unsent)?;
             }
         }
+        // Then each `&mut` native code lent: `()` when its place is still
+        // the lent one, and else the value `*place = value` gave it, which
+        // moves to native code (#1139).
+        for index in references
+            .iter()
+            .filter(|index| **index >= 64 || mutable & (1 << **index) == 0)
+        {
+            let value = &values[*index];
+            if value.read_lock::<crate::scope::Lent>().is_some() {
+                reply.push(program::model::island::UNIT);
+            } else {
+                model
+                    .island_write(value, &mut reply, natives, 0)
+                    .map_err(unsent)?;
+            }
+        }
         Ok(reply)
     }
 }

@@ -856,6 +856,7 @@ impl<'a> Generator<'a> {
             "    let mut __call = {island}::Call::new({path:?}, {owned});"
         );
         let mut mutable = Vec::new();
+        let mut lent = Vec::new();
         let mut argument = |name: &str, pass: Pass, text: &mut String| match pass {
             Pass::Value => {
                 let _ = writeln!(text, "    __call.argument(&{name});");
@@ -869,6 +870,9 @@ impl<'a> Generator<'a> {
             }
             Pass::Lend { mutable, referent } => {
                 lend(name, mutable, &referent, &island, text);
+                if mutable {
+                    lent.push((name.to_owned(), referent));
+                }
             }
             Pass::Give => {
                 let _ = writeln!(text, "    {island}::give!(__call, {name});");
@@ -899,6 +903,22 @@ impl<'a> Generator<'a> {
         }
         for name in mutable {
             let _ = writeln!(text, "    *{name} = __reply.take();");
+        }
+        // A lent `&mut` the function gave a whole new value, `*place =
+        // value`, takes it (#1139); one whose type names a lifetime can't.
+        for (name, referent) in lent {
+            if static_lifetimes(&referent) == referent {
+                let _ = writeln!(
+                    text,
+                    "    if let Some(__new) = __reply.read(|input| input.replaced::<{referent}>()) {{\n        \
+                     *{name} = __new;\n    }}"
+                );
+            } else {
+                let _ = writeln!(
+                    text,
+                    "    __reply.read(|input| input.unreplaced(\"{referent}\"));"
+                );
+            }
         }
         text.push_str("    __value\n}\n");
         Ok(text)
@@ -1448,6 +1468,26 @@ pub mod __rawr_island {
             let count = self.count();
             if count != members {
                 self.fail(&::std::format!("expected a tuple of {members}, found {count}"));
+            }
+        }
+        /// The value a call gave a lent `&mut T` as a whole, `*place =
+        /// value`; `None` when the place is still the one lent.
+        pub fn replaced<T: 'static>(&mut self) -> ::std::option::Option<T> {
+            if self.bytes.first() == Some(&UNIT) {
+                self.byte();
+                return None;
+            }
+            Some(self.native())
+        }
+        /// That a lent `&mut` of `name`, whose type names a lifetime, was
+        /// not given a whole new value, which can't come back yet.
+        pub fn unreplaced(&mut self, name: &str) {
+            if self.byte() != UNIT {
+                ::std::panic!(
+                    "rawr: `{}` gave the `&mut {name}` native code lent it a new value, \
+                     which can't come back yet",
+                    self.path
+                );
             }
         }
         /// A native value the interpreter moved, as the `iced::Error` of an
@@ -2188,7 +2228,8 @@ mod tests {
              pub fn view<'a>(count: u32) -> ui::Element<'a, Message> { ui::button(count) }\n\
              pub fn grow(item: Item, by: u32) -> Item { item }\n\
              pub fn keep(element: ui::Element<'static, Message>) {}\n\
-             pub fn lose<'a>(element: ui::Element<'a, Message>) {}\n",
+             pub fn lose<'a>(element: ui::Element<'a, Message>) {}\n\
+             pub fn raise(message: &mut Message) {}\n",
         );
         assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
         let text = &shadow.files[0].1;
@@ -2234,6 +2275,13 @@ mod tests {
             text.contains(
                 "can't call `physics::lose` yet: parameter `element`: \
                  `ui::Element<'a, Message>` with a lifetime can't cross yet"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "    if let Some(__new) = __reply.read(|input| input.replaced::<Message>()) {\n        \
+                 *__a0 = __new;\n    }\n"
             ),
             "{text}"
         );
