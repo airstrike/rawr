@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-07",
-  "version": "0.3.167",
+  "version": "0.3.168",
   "examples": {
     "running": 29,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`rawr mcp` sends input to the window of the program it started: `move`, `click` (left, right or middle, with a count for a double click), `drag`, `scroll`, `key` (with shift, control, alt or command held) and `type`, at positions in the window's points as `screenshot` shows it. The input goes to the program alone, so your own pointer, keyboard and focus stay as they are and the window isn't brought forward. An orange agent cursor shows where the pointer last went, in screenshots too. Each tool answers once the program has taken the input and drawn again. macOS only for now.","issues":[989]},
-        {"text":"A Cargo.lock that names a git dependency in its qualified form (`name version (git+…)`) no longer stops rawr-import with \"dependency identity is absent\".","issues":[1123]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.168",
+        "date": "2026-11-07",
+        "entries": [
+          {"text":"`rawr mcp` sends input to the window of the program it started: `move`, `click` (left, right or middle, with a count for a double click), `drag`, `scroll`, `key` (with shift, control, alt or command held) and `type`, at positions in the window's points as `screenshot` shows it. The input goes to the program alone, so your own pointer, keyboard and focus stay as they are and the window isn't brought forward. An orange agent cursor shows where the pointer last went, in screenshots too. Each tool answers once the program has taken the input and drawn again. macOS only for now.","issues":[989]},
+          {"text":"A Cargo.lock that names a git dependency in its qualified form (`name version (git+…)`) no longer stops rawr-import with \"dependency identity is absent\".","issues":[1123]}
+        ]
+      },
       {
         "version": "0.3.167",
         "date": "2026-11-07",
@@ -2570,7 +2572,7 @@
     {"issue":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open","category":"Health"},
     {"issue":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open","category":"Divergences from rustc"},
     {"issue":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"open","category":"Divergences from rustc"},
-    {"issue":989,"title":"rawr mcp: send input events to a started program","state":"closed","category":"Health"},
+    {"issue":989,"title":"rawr mcp: send input events to a started program","state":"closed","category":"Health","release":"0.3.168"},
     {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open","category":"Divergences from rustc"},
     {"issue":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open","category":"Divergences from rustc"},
     {"issue":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open","category":"Divergences from rustc"},
@@ -2704,7 +2706,7 @@
     {"issue":1120,"title":"A lock with a path package and a git package of one name and version is refused as ambiguous","state":"closed","category":"Health","release":"0.3.167"},
     {"issue":1121,"title":"An iced canvas::Program's State written through &mut in update isn't kept between events","state":"open","category":"Divergences from rustc"},
     {"issue":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open","category":"Health"},
-    {"issue":1123,"title":"A lock's qualified spelling of a git dependency was read with its commit, so it was not found","state":"closed","category":"Health"}
+    {"issue":1123,"title":"A lock's qualified spelling of a git dependency was read with its commit, so it was not found","state":"closed","category":"Health","release":"0.3.168"}
   ],
   "groups": [
     {

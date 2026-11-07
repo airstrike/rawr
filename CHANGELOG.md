@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.168 (2026-11-07)
+
 - `rawr mcp` sends input to the window of the program it started: `move`, `click` (left, right or middle, with a count for a double click), `drag`, `scroll`, `key` (with shift, control, alt or command held) and `type`, at positions in the window's points as `screenshot` shows it. The input goes to the program alone, so your own pointer, keyboard and focus stay as they are and the window isn't brought forward. An orange agent cursor shows where the pointer last went, in screenshots too. Each tool answers once the program has taken the input and drawn again. macOS only for now. (#989)
 - A Cargo.lock that names a git dependency in its qualified form (`name version (git+…)`) no longer stops rawr-import with "dependency identity is absent". (#1123)
 
