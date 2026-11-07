@@ -4415,15 +4415,16 @@ fn serve_hot(
     Ok(true)
 }
 
-/// A generation the owner thread admitted, for a `rawr mcp` that
-/// supervises the run: the owner said `queued` when it committed (D553.3).
+/// A generation the owner thread admitted: the owner said `queued` when it
+/// committed (D553.3), and says `swapped` to the program and to a `rawr
+/// mcp` that supervises the run once this writes it to the reload stream.
 fn admitted() {
     use std::io::Write as _;
-    let Some(path) = std::env::var_os("RAWR_MCP_EVENTS").filter(|path| !path.is_empty()) else {
+    let Some(path) = std::env::var_os("RAWR_RELOAD_EVENTS").filter(|path| !path.is_empty()) else {
         return;
     };
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = file.write_all(b"{\"event\":\"swapped\"}\n");
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) {
+        let _ = stream.write_all(b"{\"event\":\"swapped\"}\n");
     }
 }
 

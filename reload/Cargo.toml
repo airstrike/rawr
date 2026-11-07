@@ -1,0 +1,11 @@
+[package]
+name = "rawr-reload"
+version = "0.3.171"
+rust-version = "1.95.0"
+edition = "2024"
+publish = false
+description = "What a program running under `rawr run` hears about its reloads: queued, swapped, failed, restarting and restarted"
+repository = "https://github.com/airstrike/rawr"
+license = "MIT OR Apache-2.0"
+
+[dependencies]

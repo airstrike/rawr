@@ -19,7 +19,8 @@ import re
 import sys
 
 CRATES = [".", "codegen", "canonical", "cli", "importer", "directory",
-          "toml", "import-cli", "macros", "location", "play", "watch", "web"]
+          "toml", "import-cli", "macros", "location", "play", "reload", "watch",
+          "web"]
 
 def package_version(text):
     package = text[text.index("[package]"):]
