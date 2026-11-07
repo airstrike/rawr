@@ -1539,7 +1539,10 @@ impl<'a> Resolver<'a> {
     }
 
     /// `crate::…`, `super::…` or child-module paths that land in a `.rs`
-    /// module of the current package, spelled through the app's crate name.
+    /// module of the current package, or name one, spelled through the
+    /// app's crate name. A `use` that binds a `.rs` module (`use
+    /// crate::units;`) so binds the app crate's module, and paths through
+    /// the binding (`units::BONUS`) reach its items as rustc's do.
     fn rust_spelling(
         &self,
         context: &Context,
@@ -1565,7 +1568,7 @@ impl<'a> Resolver<'a> {
         } else {
             return None;
         }
-        package.is_native_path(&absolute).then(|| {
+        package.names_native(&absolute).then(|| {
             std::iter::once(ImmutableString::from(alias))
                 .chain(absolute)
                 .collect()

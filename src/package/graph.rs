@@ -212,6 +212,21 @@ impl Package {
             || (self.entry.is_some() && path.len() > 1 && path[0].as_ref() == super::entry::MODULE)
     }
 
+    /// Whether `path`, from the crate root, names native code: a native
+    /// module itself (`["units"]`, which `use crate::units;` binds) or a
+    /// path below one.
+    pub(crate) fn names_native<S: AsRef<str>>(&self, path: &[S]) -> bool {
+        self.is_native_path(path)
+            || self.rust_modules.iter().any(|module| {
+                module.modules.len() == path.len()
+                    && module
+                        .modules
+                        .iter()
+                        .zip(path)
+                        .all(|(module, segment)| module.as_str() == segment.as_ref())
+            })
+    }
+
     /// The root `Cargo.toml` path and exact text, when it declares a `[package]`.
     #[must_use]
     pub fn cargo_manifest(&self) -> Option<(&Path, &str)> {
