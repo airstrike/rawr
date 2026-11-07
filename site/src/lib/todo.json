@@ -5,7 +5,14 @@
   "examples": {"running":30,"total":56,"note":"0.3.160 sweep plus the_matrix (0.3.169): 30 run; progress_bar now builds its runner"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A package with marked modules builds its native side with its `[features]`, as `cargo run` does: its default features are on, code under `#[cfg(feature = \"…\")]` builds as under Cargo, and an optional dependency a feature enables is there, inherited from a workspace or not.","issues":[1144]},
+        {"text":"A build script that declares modules with `mod`, at `build.rs` or wherever `build` puts it, finds them beside it, nested modules included.","issues":[1143]},
+        {"text":"A dependency whose build script isn't named `build.rs` no longer loses its dependency information in rawr's store.","issues":[1147]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.171",
@@ -2754,10 +2761,13 @@
     {"issue":1140,"title":"Test a call into marked code from a native thread other than main","state":"open","category":"Health"},
     {"issue":1141,"title":"A top-level statement can't name an inline module's path","state":"open","category":"Divergences from rustc"},
     {"issue":1142,"title":"The grain VM's script calls don't grow the stack","state":"open","category":"Health"},
-    {"issue":1143,"title":"A build script outside the package root that declares modules resolves them beside rawr's copy","state":"open","category":"Divergences from rustc"},
-    {"issue":1144,"title":"The generated crate for marked modules drops the package's [features]","state":"open","category":"Divergences from rustc"},
+    {"issue":1143,"title":"A build script outside the package root that declares modules resolves them beside rawr's copy","state":"closed","category":"Divergences from rustc"},
+    {"issue":1144,"title":"The generated crate for marked modules drops the package's [features]","state":"closed","category":"Divergences from rustc"},
     {"issue":1145,"title":"A build script not named build.rs panics rawr-import with a lost build input","state":"closed","category":"Health","release":"0.3.171"},
-    {"issue":1146,"title":"A dependency whose only public item is a `pub const` &str can't be named from a marked main","state":"open","category":"Divergences from rustc"}
+    {"issue":1146,"title":"A dependency whose only public item is a `pub const` &str can't be named from a marked main","state":"open","category":"Divergences from rustc"},
+    {"issue":1147,"title":"A build script not named build.rs loses its dep-info when its run is copied into rawr's store","state":"closed","category":"Health"},
+    {"issue":1148,"title":"rawr run and rawr check take no --features, --no-default-features or --all-features","state":"open","category":"Divergences from rustc"},
+    {"issue":1149,"title":"Remove the crate-name special cases left in the checker and generator","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3547,9 +3557,11 @@
             {"number":1138,"title":"An alias of a Result under another name doesn't cross back from a marked function","state":"open"},
             {"number":1139,"title":"A native value can't cross into a marked function, or back inside an Option or a Vec","state":"open"},
             {"number":1140,"title":"Test a call into marked code from a native thread other than main","state":"open"},
-            {"number":1143,"title":"A build script outside the package root that declares modules resolves them beside rawr's copy","state":"open"},
-            {"number":1144,"title":"The generated crate for marked modules drops the package's [features]","state":"open"},
-            {"number":1145,"title":"A build script not named build.rs panics rawr-import with a lost build input","state":"closed"}
+            {"number":1143,"title":"A build script outside the package root that declares modules resolves them beside rawr's copy","state":"closed"},
+            {"number":1144,"title":"The generated crate for marked modules drops the package's [features]","state":"closed"},
+            {"number":1145,"title":"A build script not named build.rs panics rawr-import with a lost build input","state":"closed"},
+            {"number":1147,"title":"A build script not named build.rs loses its dep-info when its run is copied into rawr's store","state":"closed"},
+            {"number":1148,"title":"rawr run and rawr check take no --features, --no-default-features or --all-features","state":"open"}
           ]
         }
       ]
