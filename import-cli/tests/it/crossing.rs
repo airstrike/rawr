@@ -387,6 +387,20 @@ fn a_parameter_an_impls_associated_type_fixes_runs() {
     );
 }
 
+/// iced's gallery card (#1213): `tile(picture(handle)).boxed()` in a
+/// function written `-> impl Widget<Message> + 'a`, where only the
+/// output's defaulted renderer fixes the picture's handle. The output is
+/// `cargo run`'s.
+#[test]
+fn a_handle_only_an_opaque_outputs_renderer_fixes_runs() {
+    let (rawr, cargo) = both_printed("floated.rs", "Increment");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("<picture Handle { name: \"sun\" }@1>"),
+        "{rawr}"
+    );
+}
+
 /// iced's checkbox: `application(State::default, ..)` gives an opaque
 /// `impl Program` that `fonts([..])` and `run()` take, `on_toggle_maybe`
 /// takes an `Option` of a variant's constructor, and `style` takes a crate
