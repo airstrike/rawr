@@ -2660,7 +2660,9 @@
     {"issue":1104,"title":"collect() on a crate iterator is ambiguous after a lane's history: two identical aliases","state":"open","category":"Health"},
     {"issue":1105,"title":"a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"open","category":"Divergences from rustc"},
     {"issue":1106,"title":"range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc"},
-    {"issue":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"open","category":"Divergences from rustc"}
+    {"issue":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"open","category":"Divergences from rustc"},
+    {"issue":1108,"title":"A git dependency on a branch with a slash panics rawr-import while it reads Cargo metadata","state":"open","category":"Health"},
+    {"issue":1109,"title":"Error messages that don't read like a program's error messages","state":"open","category":"Health"}
   ],
   "groups": [
     {

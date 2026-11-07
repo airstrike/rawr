@@ -1107,6 +1107,8 @@
     {"t":"T1104","issue":1104,"title":"T1104: collect() on a crate iterator is ambiguous after a lane's history: two identical aliases","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1105","issue":1105,"title":"T1105: a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1106","issue":1106,"title":"T1106: range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1107","issue":1107,"title":"T1107: Marked modules under a package's lib target are invisible when the bin target runs","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1107","issue":1107,"title":"T1107: Marked modules under a package's lib target are invisible when the bin target runs","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1108","issue":1108,"title":"T1108: A git dependency on a branch with a slash panics rawr-import while it reads Cargo metadata","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1109","issue":1109,"title":"T1109: Error messages that don't read like a program's error messages","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
