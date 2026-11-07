@@ -16,7 +16,7 @@ import { ogTags, type Og, type Snippet } from "./play.ts";
 export interface Example {
   name: string;
   code: string;
-  /** The menu group: "Rust". */
+  /** The menu group: "Rust" or "Rustlings". */
   group?: string;
 }
 

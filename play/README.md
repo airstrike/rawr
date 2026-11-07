@@ -302,7 +302,9 @@ cargo run -p rawr-play -- encrypt-server <guild id>... # the token of a known se
 
 `https://rawr.airstrike.fyi/play` is a web playground: an editor
 (Tab indents, Ctrl/Cmd+Enter runs), plain Rust examples from
-`play/tests/fixtures/rust` (embedded when the Worker is built) and the
+`play/tests/fixtures/rust` (embedded when the Worker is built; the
+Rustlings group is rustlings' solutions, under its licence in
+`LICENSE-rustlings` there) and the
 output: a program's output as a terminal with its exit status, or the
 same error text the bot replies with. A run is in the browser by default (rawr-web, `web/`), and on the
 server on request. **Share** stores the code in the Durable Object under a
