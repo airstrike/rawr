@@ -1152,6 +1152,11 @@
     {"t":"T1149","issue":1149,"title":"T1149: Remove the crate-name special cases left in the checker and generator","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"a78c8ab21","release":null},
     {"t":"T1150","issue":1150,"title":"T1150: A native module other than the crate root can't declare a marked module","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
     {"t":"T1151","issue":1151,"title":"T1151: An opaque type in a crate's metadata has no visibility, and asking for one is a rustc ICE in the driver","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":"785934fc5","release":null},
-    {"t":"T1152","issue":1152,"title":"T1152: Expand join!, try_join! and select! without matching tokio's or the futures crate's name","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1152","issue":1152,"title":"T1152: Expand join!, try_join! and select! without matching tokio's or the futures crate's name","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1153","issue":1153,"title":"T1153: Names the old engine reserved are ordinary names, as in Rust","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
+    {"t":"T1154","issue":1154,"title":"T1154: The lowered script is still the old engine's dialect","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1155","issue":1155,"title":"T1155: The site in the work plan's look, with dark mode","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1156","issue":1156,"title":"T1156: Bot status and invite pages in the site's look and dark mode","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1157","issue":1157,"title":"T1157: Link preview cards and favicons in the site's palette","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

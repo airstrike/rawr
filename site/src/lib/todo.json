@@ -12,7 +12,8 @@
         {"text":"A build script that declares modules with `mod`, at `build.rs` or wherever `build` puts it, finds them beside it, nested modules included.","issues":[1143]},
         {"text":"A dependency whose build script isn't named `build.rs` no longer loses its dependency information in rawr's store.","issues":[1147]},
         {"text":"A call through a crate the program doesn't depend on, as `tokio::spawn(..)` without tokio, is rustc's E0433 naming that crate, and a panic in a native async call reaches you as cargo shows it.","issues":[1149]},
-        {"text":"A crate whose method returns an `impl Trait`, such as polars-core's `downcast_iter_mut`, no longer crashes rawr-import's driver with a rustc internal error about a missing visibility.","issues":[1151]}
+        {"text":"A crate whose method returns an `impl Trait`, such as polars-core's `downcast_iter_mut`, no longer crashes rawr-import's driver with a rustc internal error about a missing visibility.","issues":[1151]},
+        {"text":"The whole site now has the work plan's look: Abitaro Sans, black on white with one red, heavy headings and thick rules. Every page, /todo included, has a dark mode that follows the system, with a switch in the site bar that remembers the choice.","issues":[1155]}
       ]
     },
     "releases": [
@@ -2772,7 +2773,12 @@
     {"issue":1149,"title":"Remove the crate-name special cases left in the checker and generator","state":"closed","category":"Health"},
     {"issue":1150,"title":"A native module other than the crate root can't declare a marked module","state":"open","category":"Divergences from rustc"},
     {"issue":1151,"title":"An opaque type in a crate's metadata has no visibility, and asking for one is a rustc ICE in the driver","state":"closed","category":"Health"},
-    {"issue":1152,"title":"Expand join!, try_join! and select! without matching tokio's or the futures crate's name","state":"open","category":"Health"}
+    {"issue":1152,"title":"Expand join!, try_join! and select! without matching tokio's or the futures crate's name","state":"open","category":"Health"},
+    {"issue":1153,"title":"Names the old engine reserved are ordinary names, as in Rust","state":"open","category":"Divergences from rustc"},
+    {"issue":1154,"title":"The lowered script is still the old engine's dialect","state":"open","category":"Health"},
+    {"issue":1155,"title":"The site in the work plan's look, with dark mode","state":"open","category":"Health"},
+    {"issue":1156,"title":"Bot status and invite pages in the site's look and dark mode","state":"open","category":"Health"},
+    {"issue":1157,"title":"Link preview cards and favicons in the site's palette","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3568,7 +3574,8 @@
             {"number":1147,"title":"A build script not named build.rs loses its dep-info when its run is copied into rawr's store","state":"closed"},
             {"number":1148,"title":"rawr run and rawr check take no --features, --no-default-features or --all-features","state":"open"},
             {"number":1150,"title":"A native module other than the crate root can't declare a marked module","state":"open"},
-            {"number":1151,"title":"An opaque type in a crate's metadata has no visibility, and asking for one is a rustc ICE in the driver","state":"closed"}
+            {"number":1151,"title":"An opaque type in a crate's metadata has no visibility, and asking for one is a rustc ICE in the driver","state":"closed"},
+            {"number":1153,"title":"Names the old engine reserved are ordinary names, as in Rust","state":"open"}
           ]
         }
       ]
