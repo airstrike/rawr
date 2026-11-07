@@ -7858,6 +7858,23 @@ fn language_an_inclusive_range_of_any_integer_kind_is_a_range_of_it() {
         .unwrap_or_else(|error| panic!("{error}"));
     // The same program built by rustc prints this.
     assert_eq!(value, "-2 -2 1 true [1, 2, 3, 4] [-4, -2, 0, 2] 4");
+    // It is `Clone` and `Debug` where a bound asks, as `T` is.
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            use std::ops::RangeInclusive;
+            fn shown<T: Clone + std::fmt::Debug>(value: T) -> String {
+                format!("{:?} {:?}", value.clone(), value)
+            }
+            pub fn run() -> String {
+                let rows: RangeInclusive<usize> = 2..=4;
+                shown(rows)
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(value, "2..=4 2..=4");
     // A range of one kind is not a range of another: rustc's E0308.
     let error = rejected(
         "use std::ops::RangeInclusive; \

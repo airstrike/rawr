@@ -18922,7 +18922,15 @@ impl<'a> Parser<'a> {
                 capability == capability::Kind::Copy
                     || crate::capability::builtin_supports("String", capability)
             }
-            Ty::InclusiveRange(_) | Ty::FloatRange => false,
+            // `RangeInclusive<T>` is `Clone` and `Debug`, as `T` is.
+            range @ (Ty::InclusiveRange(_) | Ty::FloatRange) => {
+                let element = match range {
+                    Ty::InclusiveRange(kind) => Ty::Int(kind),
+                    _ => Ty::Float(Float::F64),
+                };
+                matches!(capability, capability::Kind::Clone | capability::Kind::Debug)
+                    && self.type_provides(&element, capability)
+            }
             // `Range<T>` and `RangeInclusive<T>` derive from `T`, but are
             // never `Copy`.
             Ty::Range(element) | Ty::InclusiveOf(element) => {
