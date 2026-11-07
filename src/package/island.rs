@@ -37,7 +37,7 @@ pub(crate) const BIN: &str = "__rawr_bin";
 
 /// The Rawr `main` that starts the native program: the crate root's own
 /// `main`, or with `bin`, the native binary's.
-pub(crate) fn start(bin: bool) -> String {
+fn start(bin: bool) -> String {
     let owner = if bin { BIN } else { "crate" };
     format!("\nfn main() {{\n    {owner}::{MODULE}::main();\n}}\n")
 }

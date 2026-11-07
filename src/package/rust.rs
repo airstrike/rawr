@@ -271,7 +271,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
         .to_path_buf();
     let directory = rawr_import::location::rawr_directory(entry.root(), environment).join("crate");
     let copies = directory.join("src");
-    let mut files = if entry.is_island() {
+    let mut files = if let Some(root) = entry.native_root() {
         let shadow = graph
             .island_shadow()
             .unwrap_or_else(|| super::island::Shadow {
@@ -284,28 +284,23 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
                 reason: shadow.refused.join("\n").into_boxed_str(),
             });
         }
-        let root = graph.entry_source().path();
         let relative = root
+            .path()
             .strip_prefix(&module_root)
-            .unwrap_or(root)
-            .to_path_buf();
-        let mut files = vec![(
-            directory.join("Cargo.toml"),
-            app_manifest(cargo, &Path::new("src").join(&relative)),
-        )];
-        if let Some(root) = entry.native_root() {
-            files.push((copies.join(&relative), native_root(root)));
-        }
-        files.extend(shadow.files.into_iter().map(|(path, text)| {
-            // A marked root's trampolines are the crate root: the
-            // island's runtime support goes at their end.
-            let text = if path == relative {
-                format!("{text}\n{}", super::island::support(false))
-            } else {
-                text
-            };
-            (copies.join(path), text)
-        }));
+            .unwrap_or(root.path());
+        let mut files = vec![
+            (
+                directory.join("Cargo.toml"),
+                app_manifest(cargo, &Path::new("src").join(relative)),
+            ),
+            (copies.join(relative), native_root(root)),
+        ];
+        files.extend(
+            shadow
+                .files
+                .into_iter()
+                .map(|(path, text)| (copies.join(path), text)),
+        );
         files
     } else {
         let mut library = app_library(entry, &copies);

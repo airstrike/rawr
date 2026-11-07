@@ -353,27 +353,26 @@ fn a_marked_module_of_the_library_runs_from_the_native_binary() {
         Some("native code can now see `score::Game`".to_owned())
     );
 
-    // A marked library root: its own items are the ones native code sees.
+    // A marked library root is not run from a native binary yet.
     let library = root.join("src/lib.rs");
-    fs::write(
-        &library,
-        "// rawr\npub mod report;\npub mod score;\nmod units;\n\
-         pub fn bonus() -> i64 { units::BONUS }\n",
-    )
-    .unwrap();
-    let graph = self::graph(&root, None).unwrap();
-    let package = graph.entry_package();
-    assert!(package.native_root().is_none());
-    assert!(package.bin().is_some());
-    assert_eq!(graph.entry_source().path(), library);
-    let shape = graph.island_shape().unwrap();
-    assert_eq!(
-        rawr::package::Shape::default().change(&shape),
-        Some("native code can now see `bonus`".to_owned())
+    let text = fs::read_to_string(&library).unwrap();
+    fs::write(&library, format!("// rawr\n{text}")).unwrap();
+    let error = self::graph(&root, None).unwrap_err();
+    assert!(
+        error.contains(&format!(
+            "`{}` starts with `// rawr`, and the package's binary `{}` is native. \
+             A native binary runs the marked modules of a native library root, \
+             not yet a marked library root. \
+             Remove `// rawr` from `{}` and mark the modules it declares.",
+            library.display(),
+            root.join("src/main.rs").display(),
+            library.display(),
+        )),
+        "{error}"
     );
 }
 
-/// The crate the library fixture is builds and runs unchanged under Cargo,
+/// The library fixture builds and runs unchanged under Cargo,
 /// with the marker only a comment.
 #[test]
 fn a_package_whose_library_is_marked_builds_under_cargo() {
@@ -430,7 +429,7 @@ fn marked_modules_in_both_trees_of_a_package_are_an_error() {
 }
 
 /// A workspace member with a library and a binary runs from its library
-/// when only the library is marked, with what it inherits.
+/// when only the library's tree is marked, with what it inherits.
 #[test]
 fn a_workspace_member_runs_from_its_marked_library() {
     let sandbox = Sandbox::new("marked-workspace-lib");
@@ -438,10 +437,15 @@ fn a_workspace_member_runs_from_its_marked_library() {
     let dice = root.join("dice");
     let library = dice.join("src/lib.rs");
     let text = fs::read_to_string(&library).unwrap();
-    fs::write(&library, format!("// rawr\n{text}")).unwrap();
+    fs::write(&library, format!("pub mod roll;\n{text}")).unwrap();
+    fs::write(
+        dice.join("src/roll.rs"),
+        "// rawr\npub fn twice(seed: i64) -> i64 {\n    (seed.rem_euclid(6) + 1) * 2\n}\n",
+    )
+    .unwrap();
     fs::write(
         dice.join("src/main.rs"),
-        "fn main() {\n    println!(\"{}\", dice::face(4));\n}\n",
+        "fn main() {\n    println!(\"{}\", dice::roll::twice(4));\n}\n",
     )
     .unwrap();
 

@@ -102,7 +102,7 @@ fn main() {
     println!("{}", arcade::report::line(&amp;game));
 }</code></pre></div>
 <p>Mark a module of the library, such as <code>src/score.rs</code>, and <code>rawr run</code> runs the package from its library. The binary stays native and its <code>main</code> is the program&rsquo;s. It reaches the marked module through the library, as <code>cargo build</code> builds it, so <code>arcade::score::Game::new()</code> calls the stub of the marked function. Native modules of the library call it through the same stubs. The binary&rsquo;s own modules stay native too.</p>
-<p>The library root may be native or marked. A marked <code>src/lib.rs</code> gets stubs for its own public functions, as a marked module does.</p>
+<p>The library root stays native, and the modules it declares are marked. A marked <code>src/lib.rs</code> beside a native <code>src/main.rs</code> stops <code>rawr run</code> with an error that says so.</p>
 <p>rawr keeps a copy of the binary under <code>target/rawr/bin</code>, beside the library&rsquo;s copy in <code>target/rawr/crate</code>. It runs <code>src/main.rs</code> from there. <code>cargo build --release</code> builds the package as it is, and the marker is only a comment.</p>
 <p>When both the binary&rsquo;s tree and the library&rsquo;s have marked modules, <code>rawr run</code> stops with an error that names both trees. Remove the marker from one of them.</p>
 <p>rawr looks for the binary at <code>src/main.rs</code> only. Binaries under <code>src/bin/</code> or named by <code>[[bin]]</code> aren&rsquo;t found yet.</p>
