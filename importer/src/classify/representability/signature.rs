@@ -437,10 +437,7 @@ impl Relation {
 }
 
 impl Case {
-    pub(crate) fn new(
-        this: super::convert::Type,
-        arguments: Box<[super::convert::Type]>,
-    ) -> Self {
+    pub(crate) fn new(this: super::convert::Type, arguments: Box<[super::convert::Type]>) -> Self {
         Self {
             this,
             arguments,

@@ -28,7 +28,10 @@ impl Tour {
 
     fn view(&self) -> impl Widget<Message> {
         let back = padded_button("Decrement").on_press(Message::BackPressed);
-        column![back, padded_button("Increment").on_press(Message::NextPressed)]
+        column![
+            back,
+            padded_button("Increment").on_press(Message::NextPressed)
+        ]
     }
 }
 

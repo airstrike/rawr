@@ -2334,7 +2334,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         (found, seen)
     }
 
-
     /// The type parameters bounded by `core::future::Future`, marked as
     /// future parameters, each with a synthetic `F::Output` parameter
     /// appended: `(index, owner)`.
@@ -10378,7 +10377,11 @@ pub(crate) fn associated_at(
         if found.is_some() {
             return None;
         }
-        found = Some(normalize_at(graph, &substitute_bindings(value, &bindings), depth + 1)?);
+        found = Some(normalize_at(
+            graph,
+            &substitute_bindings(value, &bindings),
+            depth + 1,
+        )?);
     }
     found
 }

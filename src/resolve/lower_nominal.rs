@@ -1227,13 +1227,9 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 parser.symbolic_only = true;
                 parser.collecting_instances = true;
                 let _ = parser.parse_method_body(definition);
-                found.extend(
-                    take_instance_calls(&mut parser)
-                        .into_iter()
-                        .map(|(template, types, call)| {
-                            (definition.key().clone(), template, types, call)
-                        }),
-                );
+                found.extend(take_instance_calls(&mut parser).into_iter().map(
+                    |(template, types, call)| (definition.key().clone(), template, types, call),
+                ));
                 impl_uses.extend(take_impl_uses(&mut parser));
             }
             if let Some(error) = allocation_failure {
@@ -13845,9 +13841,6 @@ impl<'a> Parser<'a> {
                 .collect();
             projections.push(ImplProjection { ty, value, cases });
         }
-        if std::env::var_os("RAWR_DEBUG_PROJ").is_some() {
-            eprintln!("DEBUGPROJ apply_impl self={:?} projections={:?} header_proj={}", self.inference.resolve(ty).name(&self.models).to_string(), projections.iter().map(|p| (self.inference.resolve(&p.ty).name(&self.models).to_string(), self.inference.resolve(&p.value).name(&self.models).to_string(), p.cases.len())).collect::<Vec<_>>(), header.projections.len());
-        }
         let projections = self.project_impl(projections)?;
         Some(ImplBounds {
             traits,
@@ -20590,9 +20583,6 @@ impl<'a> Parser<'a> {
                 && matches!(self.inference.resolve(target), Ty::Infer(_))
                 && !matches!(actual, Ty::Int(_) | Ty::Float(_))
             {
-                if std::env::var_os("RAWR_DEBUG_PROJ").is_some() {
-                    eprintln!("DEBUGPROJ deferred reflexive {} for {}", item.path(), actual.name(&self.models));
-                }
                 self.structural_defaults
                     .push((target.clone(), actual.clone(), span));
                 continue;
@@ -20720,12 +20710,22 @@ impl<'a> Parser<'a> {
                 let mut at = |this: &mut Self, pattern, bindings: &mut BTreeMap<u32, Ty>| {
                     this.pattern_type(pattern, bindings, parameters, (&item_path, span), owner)
                 };
-                let ty = at(self, &projection.ty, &mut bindings)?;
-                let value = at(self, &projection.value, &mut bindings)?;
+                let (Ok(ty), Ok(value)) = (
+                    at(self, &projection.ty, &mut bindings),
+                    at(self, &projection.value, &mut bindings),
+                ) else {
+                    continue;
+                };
+                // A case of a type this program doesn't reach, as a backend
+                // only an alias names, fits no type it has.
                 let mut cases = Vec::with_capacity(projection.cases.len());
                 for (this, given) in projection.cases.iter() {
                     let mut own = BTreeMap::new();
-                    cases.push((at(self, this, &mut own)?, at(self, given, &mut own)?));
+                    if let (Ok(this), Ok(given)) =
+                        (at(self, this, &mut own), at(self, given, &mut own))
+                    {
+                        cases.push((this, given));
+                    }
                 }
                 let open = self
                     .project_impl(vec![ImplProjection {
@@ -20859,7 +20859,9 @@ impl<'a> Parser<'a> {
         let Some(type_ref::Type::Path(opaque)) = written else {
             return;
         };
-        let Some(trait_name) = type_ref::Type::Path(opaque.clone()).opaque_trait().map(String::from)
+        let Some(trait_name) = type_ref::Type::Path(opaque.clone())
+            .opaque_trait()
+            .map(String::from)
         else {
             return;
         };

@@ -1471,7 +1471,8 @@ impl Builder {
                     })
                 })
                 .collect::<Box<[_]>>();
-            let one = |ty: &host::type_ref::Type| resolve(std::slice::from_ref(ty))?.into_vec().pop();
+            let one =
+                |ty: &host::type_ref::Type| resolve(std::slice::from_ref(ty))?.into_vec().pop();
             let projections = header
                 .projections
                 .iter()

@@ -1167,7 +1167,11 @@ fn signature(
                             (
                                 projection.ty(),
                                 projection.value(),
-                                projection.cases().iter().map(|(this, at)| (this, at)).collect(),
+                                projection
+                                    .cases()
+                                    .iter()
+                                    .map(|(this, at)| (this, at))
+                                    .collect(),
                             )
                         })
                         .collect(),
