@@ -279,9 +279,17 @@ pub(crate) fn references(text: &str) -> Vec<Reference> {
 /// other restrictions stay as written. The keyword is padded to its old width
 /// so lines and columns still match the original. The copy lives elsewhere,
 /// so relative `include!`/`include_str!`/`include_bytes!` and `#[path]`
-/// literals become absolute against the original `file`.
+/// literals become absolute against the original `file`, and
+/// `env!("CARGO_MANIFEST_DIR")` names the package's own directory,
+/// `package`, so a path through it reaches what Cargo's build reaches, even
+/// outside the package (#1136).
 #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
-pub(crate) fn widened(text: &str, declared_by_rawr: bool, file: &std::path::Path) -> String {
+pub(crate) fn widened(
+    text: &str,
+    declared_by_rawr: bool,
+    file: &std::path::Path,
+    package: &std::path::Path,
+) -> String {
     let bytes = text.as_bytes();
     let skip = |mut at: usize| {
         while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
@@ -368,6 +376,31 @@ pub(crate) fn widened(text: &str, declared_by_rawr: bool, file: &std::path::Path
                     edits.push(edit);
                 }
             }
+            Token::Ident(name @ ("env" | "option_env"), start) => {
+                let Some(from) = std_path_start(text, start) else {
+                    continue;
+                };
+                let bang = skip(start + name.len());
+                if bytes.get(bang) != Some(&b'!') || bytes.get(skip(bang + 1)) != Some(&b'(') {
+                    continue;
+                }
+                let Some(range) = literal(skip(skip(bang + 1) + 1)) else {
+                    continue;
+                };
+                let close = skip(range.end + 1);
+                if &text[range] != "CARGO_MANIFEST_DIR" || bytes.get(close) != Some(&b')') {
+                    continue;
+                }
+                let directory = format!("{:?}", package.display().to_string());
+                edits.push((
+                    from..close + 1,
+                    if name == "env" {
+                        directory
+                    } else {
+                        format!("::core::option::Option::Some({directory})")
+                    },
+                ));
+            }
             Token::Ident("path", start)
                 if index >= 2
                     && tokens[index - 1] == Token::Punct(b'[')
@@ -405,6 +438,53 @@ pub(crate) fn widened(text: &str, declared_by_rawr: bool, file: &std::path::Path
     }
     widened.push_str(&text[cursor..]);
     widened
+}
+
+/// `text`, a crate root, with its own `fn main` renamed `name`: `None` when
+/// it declares none.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+pub(crate) fn main_renamed(text: &str, name: &str) -> Option<String> {
+    let tokens = tokens(text);
+    let mut depth = 0_usize;
+    let mut previous = None;
+    for token in tokens {
+        match token {
+            Token::Punct(b'{') => depth += 1,
+            Token::Punct(b'}') => depth = depth.saturating_sub(1),
+            Token::Ident("main", start) if depth == 0 && previous == Some("fn") => {
+                return Some(format!(
+                    "{}{name}{}",
+                    &text[..start],
+                    &text[start + "main".len()..]
+                ));
+            }
+            _ => {}
+        }
+        previous = match token {
+            Token::Ident(word, _) => Some(word),
+            Token::Punct(_) => None,
+        };
+    }
+    None
+}
+
+/// Where the path of a standard macro named at `start` begins: `start`
+/// itself, or the start of a `std::`, `core::`, `::std::` or `::core::`
+/// before it. `None` when another path names it.
+fn std_path_start(text: &str, start: usize) -> Option<usize> {
+    let is_ident = |c: char| c == '_' || c.is_ascii_alphanumeric();
+    let Some(before) = text[..start].trim_end().strip_suffix("::") else {
+        return Some(start);
+    };
+    let before = before.trim_end();
+    let before = before
+        .strip_suffix("std")
+        .or_else(|| before.strip_suffix("core"))
+        .filter(|before| !before.ends_with(is_ident))?;
+    Some(match before.trim_end().strip_suffix("::") {
+        Some(root) if !root.trim_end().ends_with(is_ident) => root.len(),
+        _ => before.len(),
+    })
 }
 
 /// One `cfg` predicate starting at `cursor`, left just past it: `Some(false)`
@@ -621,12 +701,15 @@ pub(in crate::model) fn scoped() {}
 pub(self) fn mine() {}
 const S: &str = "pub(crate) fn no()";
 const T: &str = include_str!("data.txt");
+const U: &[u8] = include_bytes!(concat!(env!( "CARGO_MANIFEST_DIR" ), "/../x"));
+const V: Option<&str> = option_env!("CARGO_MANIFEST_DIR");
+const W: &str = std::env!("CARGO_MANIFEST_DIR");
 #[path = "other.rs"]
 mod other;
 mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
 "#;
         let file = Path::new("/app/src/model.rs");
-        let top = widened(text, true, file);
+        let top = widened(text, true, file, Path::new("/app"));
         let widths = |text: &str| text.lines().take(5).map(str::len).collect::<Vec<_>>();
         assert_eq!(widths(&top), widths(text), "{top}");
         assert!(top.starts_with("pub        struct Thing { pub        count: i64, secret: i64 }\npub        fn up()"), "{top}");
@@ -640,6 +723,15 @@ mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
             top.contains(r#"include_str!("/app/src/data.txt")"#),
             "{top}"
         );
+        assert!(
+            top.contains(r#"include_bytes!(concat!("/app", "/../x"))"#),
+            "{top}"
+        );
+        assert!(
+            top.contains(r#"= ::core::option::Option::Some("/app");"#),
+            "{top}"
+        );
+        assert!(top.contains(r#"const W: &str = "/app";"#), "{top}");
         assert!(top.contains(r#"#[path = "/app/src/other.rs"]"#), "{top}");
         assert!(top.contains("pub(super) fn kept()"), "{top}");
         assert!(
@@ -647,7 +739,20 @@ mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
             "{top}"
         );
         // A module a `.rs` module declares: its `super` is Rust, not Rawr.
-        assert!(widened(text, false, file).contains("pub(super) fn up()"));
+        assert!(widened(text, false, file, Path::new("/app")).contains("pub(super) fn up()"));
+    }
+
+    #[test]
+    fn a_crate_roots_own_main_is_renamed() {
+        let text =
+            "//! fn main\nmod inner { fn main() {} }\nfn main() -> Result<(), ()> { Ok(()) }\n";
+        assert_eq!(
+            super::main_renamed(text, "run").as_deref(),
+            Some(
+                "//! fn main\nmod inner { fn main() {} }\nfn run() -> Result<(), ()> { Ok(()) }\n"
+            )
+        );
+        assert_eq!(super::main_renamed("fn other() {}", "run"), None);
     }
 
     #[test]

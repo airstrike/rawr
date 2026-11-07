@@ -20,6 +20,8 @@ pub(crate) struct Inherited {
     pub(crate) edition: Option<String>,
     /// Normal dependencies by their `[dependencies]` key.
     pub(crate) dependencies: BTreeMap<String, Dependency>,
+    /// Build dependencies by their `[build-dependencies]` key.
+    pub(crate) build_dependencies: BTreeMap<String, Dependency>,
 }
 
 struct Entry {
@@ -111,10 +113,17 @@ fn metadata(manifest: &Path) -> Result<(PathBuf, Inherited), String> {
         version: string(&package["version"]),
         edition: string(&package["edition"]),
         dependencies: BTreeMap::new(),
+        build_dependencies: BTreeMap::new(),
     };
     for dependency in package["dependencies"].as_array().into_iter().flatten() {
-        // Normal dependencies for every target, as Rawr reads them.
-        if !dependency["kind"].is_null() || !dependency["target"].is_null() {
+        // Normal and build dependencies for every target, as Rawr reads
+        // them.
+        let entries = match dependency["kind"].as_str() {
+            None => &mut inherited.dependencies,
+            Some("build") => &mut inherited.build_dependencies,
+            Some(_) => continue,
+        };
+        if !dependency["target"].is_null() {
             continue;
         }
         if dependency["optional"].as_bool() == Some(true) {
@@ -151,7 +160,7 @@ fn metadata(manifest: &Path) -> Result<(PathBuf, Inherited), String> {
             .flatten()
             .filter_map(|feature| feature.as_str().map(str::to_owned))
             .collect();
-        inherited.dependencies.insert(
+        entries.insert(
             key.to_owned(),
             Dependency {
                 package: (alias != name).then(|| name.to_owned()),
