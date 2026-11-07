@@ -392,7 +392,6 @@ mod number_formatting {
             to_binary(value)
         }
 
-        #[cfg(not(target_family = "wasm"))]
         pub mod num_128 {
             /// Convert the `value` into a string in hex format.
             #[rawr_fn(name = "to_hex")]

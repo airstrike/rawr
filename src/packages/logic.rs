@@ -30,7 +30,6 @@ def_package! {
         {
             gen_cmp_functions!(lib => i8, u8, i16, u16, i32, u32, u64);
 
-            #[cfg(not(target_family = "wasm"))]
             gen_cmp_functions!(lib => i128, u128);
         }
 
