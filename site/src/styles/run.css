@@ -3,10 +3,10 @@
 /* its negative margins leave it a zero-size footprint. It is the strip's first */
 /* child. Sticky keeps it in view when the strip is wider than its scroller. */
 .run.has-run { padding-right: 44px; }
-.runbtn { float: right; position: sticky; right: 6px; width: 26px; height: 26px; margin: -4px -38px -26px -26px; display: grid; place-items: center; padding: 0; border: 1px solid var(--pink); background: var(--bg); color: var(--pink); cursor: pointer; }
+.runbtn { float: right; position: sticky; right: 6px; width: 26px; height: 26px; margin: -4px -38px -26px -26px; display: grid; place-items: center; padding: 0; border: 1px solid var(--red); background: var(--paper); color: var(--red); cursor: pointer; }
 .runbtn[hidden] { display: none; }
-.runbtn:hover { background: var(--pink); color: var(--on-pink); }
-.runbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.runbtn:hover { background: var(--red); color: var(--on-red); }
+.runbtn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .runbtn svg { display: block; width: 12px; height: 12px; }
 .runbtn .busy { display: none; }
 .runbtn[aria-disabled="true"] { cursor: progress; }
@@ -19,12 +19,12 @@
 .run .pending { visibility: hidden; }
 /* A live result: stdout, stderr and the exit status inline. */
 .run .live span, .run span span { display: inline; }
-.run span.err { color: var(--err); }
-.run span.exit { color: var(--dim); }
+.run span.err { color: var(--red); }
+.run span.exit { color: var(--quiet); }
 
 /* The code of a runnable snippet is editable (run.ts). */
-code[data-run][contenteditable] { display: block; outline: none; cursor: text; caret-color: var(--pink); }
-pre:has(> code[data-run][contenteditable]:focus) { box-shadow: inset 0 0 0 1px var(--dim); }
+code[data-run][contenteditable] { display: block; outline: none; cursor: text; caret-color: var(--red); }
+pre:has(> code[data-run][contenteditable]:focus) { box-shadow: inset 0 0 0 1px var(--quiet); }
 /* After a run the play icon becomes an ×, which clears only the output. */
 .runbtn .clear { display: none; }
 .runbtn[data-state="done"] .play { display: none; }
@@ -32,9 +32,9 @@ pre:has(> code[data-run][contenteditable]:focus) { box-shadow: inset 0 0 0 1px v
 /* Reset sits at the code block's top-right corner while the code differs from */
 /* the original. It floats with no footprint and stays in view when the code */
 /* scrolls sideways. */
-.resetbtn { float: right; position: sticky; right: 6px; width: 56px; height: 26px; margin: -6px -6px -26px -56px; padding: 0; border: 1px solid var(--line); background: var(--bg); color: var(--dim); font: 12px/1 var(--mono); cursor: pointer; }
+.resetbtn { float: right; position: sticky; right: 6px; width: 56px; height: 26px; margin: -6px -6px -26px -56px; padding: 0; border: 1px solid var(--grid); background: var(--paper); color: var(--quiet); font: 12px/1 var(--mono); cursor: pointer; }
 .resetbtn[hidden] { display: none; }
-.resetbtn:hover { color: var(--text); border-color: var(--dim); }
-.resetbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.resetbtn:hover { color: var(--ink); border-color: var(--quiet); }
+.resetbtn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 /* The playground's browser check, when Cloudflare asks for an interaction. */
 .runcheck:not(:empty) { margin: 8px 16px; }

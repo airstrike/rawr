@@ -10,16 +10,16 @@ import { EditorView, drawSelection, keymap } from "@codemirror/view";
 import { highlighter } from "../lib/highlight.ts";
 
 const look = EditorView.theme({
-  "&": { height: "100%", backgroundColor: "var(--inset)", color: "var(--code)", border: "1px solid var(--line)", fontSize: "13px" },
-  "&.cm-focused": { outline: "none", borderColor: "var(--dim)" },
+  "&": { height: "100%", backgroundColor: "var(--wash)", color: "var(--ink)", border: "1px solid var(--grid)", fontSize: "13px" },
+  "&.cm-focused": { outline: "none", borderColor: "var(--ink)" },
   ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.55", overflow: "auto" },
-  ".cm-content": { padding: "12px 0", caretColor: "var(--pink)" },
+  ".cm-content": { padding: "12px 0", caretColor: "var(--red)" },
   ".cm-line": { padding: "0 12px" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--pink)", borderLeftWidth: "2px" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--red)", borderLeftWidth: "2px" },
   "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-    backgroundColor: "color-mix(in srgb, var(--pink) 28%, transparent)",
+    backgroundColor: "color-mix(in srgb, var(--red) 28%, transparent)",
   },
-  ".cm-matchingBracket, &.cm-focused .cm-matchingBracket": { backgroundColor: "transparent", outline: "1px solid var(--dim)" },
+  ".cm-matchingBracket, &.cm-focused .cm-matchingBracket": { backgroundColor: "transparent", outline: "1px solid var(--quiet)" },
 });
 
 export interface EditorOptions {

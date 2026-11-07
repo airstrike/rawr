@@ -2,7 +2,7 @@
    sections, in the work plan's look on the tokens in tokens.css. */
 @property --pos { syntax: "<percentage>"; inherits: true; initial-value: 50%; }
 body { font-size: var(--fs-read); line-height: 1.5; overflow-x: hidden; }
-:is(p, li, td, th, figcaption) code { font-size: 0.88em; color: var(--ink); background: var(--wash); padding: 0 3px; }
+:is(p, li, td, th, figcaption) code { font-size: 0.88em; color: var(--ink); background: var(--wash); padding: 0 3px; overflow-wrap: anywhere; }
 
 .wrap { max-width: 1280px; margin: 0 auto; padding: 0 var(--pad); }
 

@@ -86,7 +86,7 @@
   --fs-h2: 20px;
   --fs-head: 28px;
   --fs-title: clamp(36px, 5vw, 56px);
-  --fs-display: clamp(64px, 11vw, 128px);
+  --fs-display: clamp(96px, 11vw, 128px);
   --w-base: 450;
   --w-strong: 700;
   --w-heavy: 800;
@@ -96,9 +96,8 @@
   /* Rules: a section's top, a heading's top, and a row's. */
   --rule-thick: 4px;
   --rule-mid: 2px;
-  /* The page's side margin, and the gap between columns. */
+  /* The page's side margin. */
   --pad: 40px;
-  --gap: 20px;
 }
 
 @media (max-width: 640px) {
