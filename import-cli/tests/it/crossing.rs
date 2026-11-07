@@ -1393,19 +1393,6 @@ fn a_member_of_an_opaque_type_that_leaves_out_a_callable_names_it_whole() {
     );
 }
 
-/// #916: a local holds what `opaque(caption(..))` gives, an opaque widget
-/// over a type that declares a lifetime, before `column!` boxes it. The
-/// output is `cargo run`'s.
-#[test]
-fn a_held_opaque_widget_over_a_borrowing_type_runs() {
-    let (rawr, cargo) = both_printed("held_caption.rs", "");
-    assert_eq!(rawr, cargo);
-    assert!(
-        rawr.ends_with("last view pad 0 1..=100@50/None opaque \"50\""),
-        "{rawr}"
-    );
-}
-
 /// `explain` on what `explain` gives on an `Element<'_, ..>` (#936): the
 /// outer opaque type takes the inner one, and the region holds it boxed
 /// through a trait of the runner's, as no wrapper over another compiles.

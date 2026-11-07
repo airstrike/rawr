@@ -18181,17 +18181,7 @@ fn container_family(path: &str, container: &str) -> Option<family::Family> {
         None if rest.is_empty() => format!("{path}<{marks}>"),
         None => return None,
     };
-    let key = at_static(&text);
-    // An opaque type's facade path is no Rust name: it has the family its
-    // value is held by, as `family_of` gives it, or none, and is held in the
-    // arena where rustc infers its type.
-    if crate::surface::opaque::declared(path) {
-        return match family::Ops::held(&key) {
-            Some(held) => family(held, BOXED_LIFETIMES),
-            None => family::of(&key),
-        };
-    }
-    family(key, lifetimes)
+    family(at_static(&text), lifetimes)
 }
 
 /// `text`, a type spelled at the scope lifetime `'x`, with each type
