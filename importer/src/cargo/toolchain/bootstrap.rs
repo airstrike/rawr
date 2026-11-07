@@ -142,12 +142,11 @@ impl Missing {
         match self {
             Self::Nothing => format!("Rust {channel} is installed"),
             Self::Toolchain => format!(
-                "Installing Rust {channel} with {}, which rawr reads crate APIs with (once per \
-                 machine)",
+                "Installing Rust {channel} with {} to read crate APIs (once per machine)",
                 REQUIRED_COMPONENTS.join(" and ")
             ),
             Self::Components(absent) => format!(
-                "Adding {} to Rust {channel}, which rawr reads crate APIs with (once per machine)",
+                "Adding {} to Rust {channel} to read crate APIs (once per machine)",
                 absent.join(" and ")
             ),
         }

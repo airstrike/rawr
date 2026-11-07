@@ -433,7 +433,7 @@ impl Proof {
     ) -> Result<Self, Error> {
         assert!(
             definition.identity() == demand.identity() && definition.version() == demand.version(),
-            "rawr generates a profile's source under the profile that demanded it"
+            "the profile generating the source is not the one that demanded it"
         );
         let mut output = demand::Generator::new(demand);
         definition.generate(demand, &mut output)?;
@@ -726,7 +726,7 @@ fn demand_direct<C: Checked, D: Definition<C>>(
 ) -> Result<Demand, Error> {
     assert!(
         definition.identity() == contract.identity() && definition.version() == contract.version(),
-        "rawr demands a profile's hooks under the profile that classified its contract"
+        "the profile demanding hooks is not the one that classified the contract"
     );
     let mut output = demand::Builder::new(
         contract,

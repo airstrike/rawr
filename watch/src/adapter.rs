@@ -367,7 +367,7 @@ impl Adapter {
                     self.wake.publish(Notice::Backend(source.add_path(path)));
                     return None;
                 }
-                error => eprintln!("Rawr input watcher warning: {error}"),
+                error => eprintln!("warning: file watcher: {error}"),
             }
         }
         Some(request)
@@ -974,25 +974,25 @@ fn write<T>(value: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Start(error) => write!(formatter, "cannot start Rawr source watcher: {error}"),
+            Self::Start(error) => write!(formatter, "cannot start the file watcher: {error}"),
             Self::Watch { path, source } => write!(
                 formatter,
-                "cannot watch resolved input directory `{}`: {source}",
+                "cannot watch directory `{}`: {source}",
                 path.display()
             ),
             Self::Unwatch { path, source } => write!(
                 formatter,
-                "cannot retire input directory watch `{}`: {source}",
+                "cannot stop watching directory `{}`: {source}",
                 path.display()
             ),
-            Self::FixedFilter => formatter.write_str(
-                "the existing publication-owned watcher filter cannot be replaced directly",
-            ),
+            Self::FixedFilter => {
+                formatter.write_str("cannot replace the file watcher's fixed filter")
+            }
             Self::StageExhausted => {
-                formatter.write_str("the imported-owner watcher stage sequence is exhausted")
+                formatter.write_str("the file watcher ran out of stage numbers")
             }
             Self::StaleStage => {
-                formatter.write_str("the imported-owner watcher input stage is no longer current")
+                formatter.write_str("the file watcher's input stage is out of date")
             }
         }
     }

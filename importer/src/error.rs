@@ -78,10 +78,10 @@ pub enum Error {
 
     /// A Rust future a task runs is not `Send`, so the runner cannot run it.
     #[error(
-        "the future `{function}` returns is not `Send` ({location}). Its runtime runs it \
-         on whichever thread polls it, so it takes only a `Send` future, as iced's \
-         `Task::future` and tokio's `spawn` do. Hold `Send` values across each `.await`, \
-         such as `Arc` in place of `Rc`."
+        "the future returned by `{function}` cannot be sent between threads safely \
+         ({location}); a task takes only a `Send` future, as iced's `Task::future` and \
+         tokio's `spawn` do, so hold only `Send` values, such as `Arc` in place of `Rc`, \
+         across each `.await`"
     )]
     NonSendFuture {
         /// The Rust function whose future is not `Send`.
@@ -93,11 +93,10 @@ pub enum Error {
     /// A generic Rust item bounds a type parameter that a script type fills
     /// by a trait `rawr::Value` lacks (D513.2).
     #[error(
-        "a generic Rust item needs `{bound}` of the script type it is called with \
-         ({location}). Rawr passes a script value to native generic code as \
-         `rawr::Value`, which carries it but can't give native code a trait that \
-         picks behaviour by type alone, such as `Default`, `Copy` or `Deserialize`. \
-         Call it with a Rust type there."
+        "the trait bound `rawr::Value: {bound}` is not satisfied ({location}); a script \
+         type reaches generic Rust code as `rawr::Value`, which can't implement a trait \
+         that works from the type alone, such as `Default`, `Copy` or `Deserialize`; \
+         call it with a Rust type there"
     )]
     ErasedBound {
         /// The bound `rawr::Value` doesn't meet, as rustc wrote it.
@@ -193,13 +192,13 @@ impl Error {
         match self {
             Self::Node { source, .. } => source.invariant(),
             Self::Schema { document, reason } => {
-                Some(format!("rawr reads {document} as it was written: {reason}"))
+                Some(format!("internal error: rawr misread {document}: {reason}"))
             }
             Self::Input { code, reason } if input_condition(code, reason).is_none() => Some(
-                format!("rawr keeps track of each build input (`{code}`): {reason}"),
+                format!("internal error: rawr lost track of a build input (`{code}`): {reason}"),
             ),
             Self::Extraction { code, reason } => Some(format!(
-                "rawr reads what its rustc driver writes (`{code}`): {reason}"
+                "internal error: rawr misread rustc's output (`{code}`): {reason}"
             )),
             _ => None,
         }
@@ -234,7 +233,7 @@ fn input_condition(code: &str, reason: &str) -> Option<String> {
         | "runner-harness-fixture-path"
         | "runner-harness-fixture-root" => format!("a path is not valid UTF-8: {reason}"),
         "symlink-input" => {
-            format!("`{reason}` is reached through a symlink, which rawr can't build from yet")
+            format!("cannot build from `{reason}`: paths reached through a symlink are not supported yet")
         }
         "cargo-commit-skew" => format!(
             "this Cargo (commit `{reason}`) is not the one rawr builds with; \
@@ -244,8 +243,8 @@ fn input_condition(code: &str, reason: &str) -> Option<String> {
             format!("`{reason}` has no checksum in Cargo.lock")
         }
         "registry-root-outside-cargo-home" => format!(
-            "`{reason}` is outside CARGO_HOME: a replaced or vendored registry source, \
-             which rawr can't build from yet"
+            "cannot build from `{reason}`: replaced or vendored registry sources outside \
+             CARGO_HOME are not supported yet"
         ),
         "registry-marker-malformed" | "registry-marker-schema" => format!(
             "Cargo's registry copy of a package is damaged ({reason}); \
@@ -255,7 +254,7 @@ fn input_condition(code: &str, reason: &str) -> Option<String> {
             format!("CARGO_HOME is unset and there is no home directory, so Cargo can't fetch `{reason}`")
         }
         "cargo-env-config-unproved" => "a build script's `cargo::rerun-if-env-changed` names a \
-             variable that `[env]` in .cargo/config.toml sets, which rawr can't build with yet"
+             variable that `[env]` in .cargo/config.toml sets; this is not supported yet"
             .into(),
         _ => return None,
     })

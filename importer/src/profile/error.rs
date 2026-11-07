@@ -42,7 +42,7 @@ impl Error {
     #[track_caller]
     pub(crate) fn fresh(self) -> Self {
         if matches!(self, Self::Stale) {
-            panic!("rawr's cached profile entries decode under the inputs that key them");
+            panic!("a cached profile entry went stale under a key that holds all its inputs");
         }
         self
     }

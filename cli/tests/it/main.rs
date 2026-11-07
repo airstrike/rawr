@@ -554,7 +554,7 @@ fn a_program_two_binaries_claim_is_a_diagnostic() {
     assert_eq!(output.status.code(), Some(1));
     let text = stderr(&output);
     assert!(
-        text.contains("this program uses `fakecrate` and `othercrate`"),
+        text.contains("a program that uses both `fakecrate` and `othercrate`"),
         "{text}"
     );
 }

@@ -60,8 +60,8 @@ impl core::fmt::Display for WriteError {
                 pos,
             } => write!(
                 f,
-                "{construct} at {pos} is not compiled yet, so this program still has \
-                 {count} fragment(s) that only rawr's walker can evaluate"
+                "cannot write the program: {construct} at {pos} is not compiled yet \
+                 ({count} uncompiled fragment(s))"
             ),
             Self::HasScriptFunctions => {
                 f.write_str("script functions are still ASTs and cannot be written")

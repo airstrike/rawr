@@ -253,9 +253,7 @@ impl<B> Lane<B> {
             Ok(()) | Err(rawr_import::node::Error::SourceChanged(_)) => {}
             Err(failure) => return self.rollback_watched(retired, Error::Node(failure)),
         }
-        let key = self.slot.key().ok_or(Error::State(
-            "started runner disappeared after pin promotion",
-        ))?;
+        let key = self.slot.key().ok_or(Error::State("after it started"))?;
         if let Some(retired) = retired {
             retired.retire(&mut self.refresh)?;
         }
@@ -267,9 +265,10 @@ impl<B> Lane<B> {
         retired: Option<rawr_import::process::Candidate<rawr_import::process::Admitted, B>>,
         failure: Error,
     ) -> Result<rawr_import::supervisor::GenerationKey, Error> {
-        let candidate = self.slot.take().ok_or(Error::State(
-            "failed watched runner disappeared before installation rollback",
-        ))?;
+        let candidate = self
+            .slot
+            .take()
+            .ok_or(Error::State("before its failed start was rolled back"))?;
         if let Some(previous) = retired {
             self.slot.install(previous);
         }
@@ -296,13 +295,15 @@ impl<B> Lane<B> {
     ) -> Result<rawr_import::supervisor::GenerationKey, Error> {
         match installation {
             rawr_import::supervisor::slot::Installation::Installed(retired) => {
-                let key = self.slot.key().ok_or(Error::State(
-                    "installed runner disappeared before pin promotion",
-                ))?;
+                let key = self
+                    .slot
+                    .key()
+                    .ok_or(Error::State("after it was installed"))?;
                 if let Err(failure) = self.slot.pin_current_live_last_good() {
-                    let candidate = self.slot.take().ok_or(Error::State(
-                        "failed runner disappeared before installation rollback",
-                    ))?;
+                    let candidate = self
+                        .slot
+                        .take()
+                        .ok_or(Error::State("before its failed install was rolled back"))?;
                     if let Some(previous) = retired {
                         self.slot.install(previous);
                     }
@@ -541,14 +542,14 @@ impl std::fmt::Display for Error {
             Self::Node(error) => error.fmt(formatter),
             Self::PinCleanup { failure, cleanup } => write!(
                 formatter,
-                "runner pin promotion failed: {failure}; candidate cleanup also failed: {cleanup}"
+                "cannot keep the new runner: {failure}; stopping it also failed: {cleanup}"
             ),
             Self::InstallCleanup { failure, cleanup } => write!(
                 formatter,
-                "watched runner admission failed: {failure}; candidate cleanup also failed: {cleanup}"
+                "cannot start the new runner: {failure}; stopping it also failed: {cleanup}"
             ),
-            Self::State(reason) => write!(formatter, "native runner slot state changed: {reason}"),
-            Self::Obsolete => formatter.write_str("native runner build became obsolete"),
+            Self::State(reason) => write!(formatter, "the runner went missing {reason}"),
+            Self::Obsolete => formatter.write_str("a newer save replaced this runner build"),
         }
     }
 }

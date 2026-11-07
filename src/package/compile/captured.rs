@@ -218,12 +218,12 @@ impl Unbound {
         };
         let report = diagnostic::Report::error(
             diagnostic::code::RESOLVE_HOST_OPERATION,
-            "this use of a crate isn't among the universe's bindings",
+            "this use of a crate is not available in this prebuilt runner",
         )
         .primary(
             source,
             span,
-            Some("the universe's program doesn't make it".into()),
+            Some("the runner was not built with this call".into()),
         )
         .map(diagnostic::Builder::finish);
         match report {

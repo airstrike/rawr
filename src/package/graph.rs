@@ -1032,10 +1032,8 @@ impl<'a> Builder<'a> {
         Err(Error::module(
             self.evidence.clone(),
             format!(
-                "native module `{}` uses `{used}`. \
-                 `{used}` is in the marked module `{}` (`{}`). \
-                 With a marked crate root, Rawr builds the native modules without the marked ones, \
-                 so native code cannot use marked code. \
+                "native module `{}` cannot use `{used}`, which is in the marked module `{}` (`{}`): \
+                 native modules cannot use marked code when the crate root is marked. \
                  Move the item into a native module, mark `{}` with `// rawr`, \
                  or leave the crate root unmarked so native code calls marked modules through rawr.",
                 spelled(&modules),
@@ -1165,9 +1163,7 @@ impl<'a> Builder<'a> {
                     return Err(Error::module(
                         self.evidence.clone(),
                         format!(
-                            "native module `crate::{}` declares `mod {};`, which is the marked file `{}`. \
-                             Rawr reaches marked modules from the crate root and from marked modules, \
-                             not yet from a native module. \
+                            "native module `crate::{}` cannot declare the marked module `mod {};` (`{}`) yet. \
                              Declare it from the crate root or a marked module, or remove `// rawr` from its first line.",
                             modules.join("::"),
                             child.path.last().map_or("", String::as_str),

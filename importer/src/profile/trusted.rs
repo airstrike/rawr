@@ -95,7 +95,7 @@ impl<T: Operations> Adapter<T> {
     ) -> Result<super::Demand, Error> {
         assert!(
             self.identity == contract.identity() && self.version == contract.version(),
-            "rawr demands a profile's hooks under the profile that classified its contract"
+            "the profile demanding hooks is not the one that classified the contract"
         );
         let mut output = demand::Builder::new(contract, fingerprint, payload)?;
         self.operations.demand(
@@ -109,7 +109,7 @@ impl<T: Operations> Adapter<T> {
     pub(crate) fn generate_owned(&self, demand: &super::Demand) -> Result<super::Proof, Error> {
         assert!(
             self.identity == demand.identity() && self.version == demand.version(),
-            "rawr generates a profile's source under the profile that demanded it"
+            "the profile generating the source is not the one that demanded it"
         );
         let mut output = demand::Generator::new(demand);
         self.operations

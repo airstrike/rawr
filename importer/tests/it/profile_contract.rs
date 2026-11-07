@@ -17,13 +17,13 @@ fn synthetic_profile_contract_retains_only_exact_graph_evidence() {
 /// rawr names and numbers its profiles itself, so an empty name or version
 /// 0 is a rawr bug that panics naming the invariant (#538, D664).
 #[test]
-#[should_panic(expected = "rawr names each profile")]
+#[should_panic(expected = "a profile's name is empty")]
 fn an_unnamed_profile_is_a_rawr_bug() {
     let _ = profile::Identity::new("");
 }
 
 #[test]
-#[should_panic(expected = "rawr numbers each profile's rules from 1")]
+#[should_panic(expected = "a profile's version is 0")]
 fn a_profile_version_zero_is_a_rawr_bug() {
     let _ = profile::Version::new(0);
 }

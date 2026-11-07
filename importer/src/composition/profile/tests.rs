@@ -781,7 +781,7 @@ fn pair_request_rejects_arbitrary_runner_before_callbacks() {
     .expect_err("an arbitrary runner panics before its callbacks");
     assert_eq!(
         rejected.downcast_ref::<String>().map(String::as_str),
-        Some("rawr's generated Rust agrees with the crates on owned runner bindings ancestry")
+        Some("the generated Rust disagrees with the crates on owned runner bindings ancestry")
     );
 }
 

@@ -1222,7 +1222,7 @@ impl Drop for CallArena {
             && !std::thread::panicking()
         {
             panic!(
-                "rawr: a script function native code called on a thread with no arena kept a native value it was given{kept} past the call, which Rawr can't hand to the owner's thread"
+                "rawr: a script function that native code called on another thread kept a native value{kept} past the call; a value can't move from that thread to the program's"
             );
         }
     }
@@ -3340,7 +3340,7 @@ fn attest_within(
 fn operand_witness(index: usize) -> __rawr_internal::host::runtime::Witness {
     OPERANDS
         .with_borrow(|operands| operands.get(index).cloned().flatten())
-        .expect("rawr: an imported call's operand has its type's witness")
+        .expect("rawr: an imported call's operand has no type witness")
 }
 
 /// The program's own `String` or `Vec<T>` a call took `&mut` and changed,
@@ -20404,10 +20404,8 @@ mod tests {
     /// rawr can't read back is a rawr bug: it panics naming the invariant,
     /// never an "internal error" message (#538, D664).
     #[test]
-    #[should_panic(
-        expected = "rawr reads the runner's Cargo.toml and Cargo.lock as they were written: \
-                    expected one final-form harness lock root, found 0"
-    )]
+    #[should_panic(expected = "cannot read back the runner's Cargo.toml or Cargo.lock: \
+                    expected one final-form harness lock root, found 0")]
     fn a_runner_lock_rawr_cannot_read_back_is_a_rawr_bug() {
         let _ = super::runner_lock(
             b"version = 4\n\n[[package]]\nname = \"other\"\nversion = \"0.1.0\"\n",
@@ -20418,7 +20416,7 @@ mod tests {
     /// Writing the runner's source in memory can't fail; if it did, that
     /// is a rawr bug, which panics (#538, D664).
     #[test]
-    #[should_panic(expected = "rawr writes the runner's generated source in memory")]
+    #[should_panic(expected = "cannot write the runner's generated source in memory")]
     fn a_runner_source_rawr_cannot_write_is_a_rawr_bug() {
         let _ = super::request::unwritable(std::fmt::Error);
     }
@@ -20561,7 +20559,7 @@ mod tests {
         .expect_err("a closure output Rust can't name panics");
         assert_eq!(
             unnamed.downcast_ref::<String>().map(String::as_str),
-            Some("rawr's generated Rust agrees with the crates on closure output type")
+            Some("the generated Rust disagrees with the crates on closure output type")
         );
     }
 
@@ -21174,7 +21172,7 @@ mod tests {
             .cloned()
         };
         let expected =
-            "rawr's generated Rust agrees with the crates on owned runner bindings ancestry";
+            "the generated Rust disagrees with the crates on owned runner bindings ancestry";
         assert_eq!(ancestry(&foreign_profile).as_deref(), Some(expected));
         let missing_facade = crate::profile::Proof::neutral_with_chain(
             contract.node_chain().expect("contract chain").clone(),
@@ -21307,7 +21305,7 @@ mod tests {
         .expect_err("a foreign mapper panics");
         assert_eq!(
             foreign.downcast_ref::<String>().map(String::as_str),
-            Some("rawr's generated Rust agrees with the crates on generated event projection Message")
+            Some("the generated Rust disagrees with the crates on generated event projection Message")
         );
     }
 
@@ -21372,7 +21370,7 @@ mod tests {
         assert_eq!(
             partition.downcast_ref::<String>().map(String::as_str),
             Some(
-                "rawr's generated Rust agrees with the crates on generated container parameter \
+                "the generated Rust disagrees with the crates on generated container parameter \
                  cardinality"
             )
         );

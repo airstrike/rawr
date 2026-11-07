@@ -205,9 +205,7 @@ pub(super) fn attempt(
                 .commit_inputs(staged)
                 .map_err(|error| super::framework(error, diagnostic.clone()))?
             {
-                rawr_import::process::say(format_args!(
-                    "Rawr imported-owner watcher warning: {warning}"
-                ));
+                rawr_import::process::say(format_args!("warning: file watcher: {warning}"));
             }
             Ok(Attempt::Swapped)
         }

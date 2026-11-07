@@ -5066,7 +5066,7 @@ fn cache_check_separates_entries_to_rebuild_from_failures() {
 /// What a stored entry may legitimately fail with is a rawr bug in a fresh
 /// build, which panics naming the invariant (#522, D664).
 #[test]
-#[should_panic(expected = "rawr reads Cargo unit graph as it was written: missing field `units`")]
+#[should_panic(expected = "internal error: rawr misread Cargo unit graph: missing field `units`")]
 fn fresh_build_panics_when_rawr_misreads_cargo() {
     let _ = Error::from(crate::Error::Schema {
         document: "Cargo unit graph",
@@ -5076,9 +5076,7 @@ fn fresh_build_panics_when_rawr_misreads_cargo() {
 }
 
 #[test]
-#[should_panic(
-    expected = "rawr keeps track of each build input (`protected-build-package-owner-missing`)"
-)]
+#[should_panic(expected = "lost track of a build input (`protected-build-package-owner-missing`)")]
 fn fresh_build_panics_when_rawr_loses_a_build_input() {
     let _ = Error::from(crate::Error::Input {
         code: "protected-build-package-owner-missing",

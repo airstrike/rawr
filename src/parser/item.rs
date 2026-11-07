@@ -562,13 +562,13 @@ fn check_inner_attribute(path: &type_ref::Path, position: Position) -> ParseResu
     }
     let reason = match name.as_str() {
         "no_std" | "no_core" | "no_implicit_prelude" => {
-            "Rawr runs every file with the standard library and its prelude"
+            "every file runs with the standard library and its prelude"
         }
-        "no_main" => "Rawr runs a file from its `fn main`, as rustc builds it",
-        "feature" => "Rawr runs stable Rust and enables no unstable features",
+        "no_main" => "a file runs from its `fn main`, as rustc builds it",
+        "feature" => "unstable features are not available",
         _ => {
-            "Rawr ignores the lint attributes, `doc` and build settings such as \
-             `windows_subsystem`, and supports no other crate attribute"
+            "only lint attributes, `doc` and build settings such as `windows_subsystem` are \
+             accepted as crate attributes"
         }
     };
     Err(inner_attribute_error(&format!(

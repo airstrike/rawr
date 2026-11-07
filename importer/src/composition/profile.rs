@@ -91,11 +91,11 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
 ) -> Result<O, Error> {
     assert!(
         adapter.identity() == contract.identity() && adapter.version() == contract.version(),
-        "rawr demands a profile's hooks under the profile that classified its contract"
+        "the profile demanding hooks is not the one that classified the contract"
     );
     let profile_parent = contract
         .node_chain()
-        .expect("rawr demands a profile's hooks under its contract's node");
+        .expect("the profile's contract has no node");
     initial
         .covers_parents(std::slice::from_ref(profile_parent.current_parent()))
         .map_err(node_error)?;
@@ -264,7 +264,7 @@ fn same_limits(output: usize, limits: &crate::cargo::Limits) {
     assert_eq!(
         output,
         limits.node_output_bytes(),
-        "rawr demands a profile under its checked program's own limits"
+        "the profile's output limit differs from the checked program's"
     );
 }
 

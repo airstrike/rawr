@@ -136,7 +136,10 @@ pub(crate) fn prepare(
         if digest == runner {
             crate::progress::note(
                 "runtime-local",
-                &format!("rawr: {}; rawr compiles in this project", reason.trim()),
+                &format!(
+                    "rawr: {}; building rawr's runtime in this project",
+                    reason.trim()
+                ),
             );
             return Ok(None);
         }
@@ -147,7 +150,7 @@ pub(crate) fn prepare(
     let Some(toolchain) = Toolchain::for_context(context)? else {
         crate::progress::note(
             "runtime-local",
-            "rawr: this context has no captured project compiler, so rawr compiles in this project",
+            "rawr: the project's compiler was not recorded; building rawr's runtime in this project",
         );
         return Ok(None);
     };
@@ -214,7 +217,7 @@ pub(crate) fn prepare(
 pub(crate) fn record_local(rawr: &Path, manifest: &[u8], lock: &[u8], reason: &str) {
     crate::progress::note(
         "runtime-local",
-        &format!("rawr: {reason}; rawr compiles in this project"),
+        &format!("rawr: {reason}; building rawr's runtime in this project"),
     );
     let _ = fs::create_dir_all(rawr);
     let _ = fs::write(

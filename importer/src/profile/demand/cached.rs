@@ -19,12 +19,12 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
         .node_chain()
         .or_else(|| contract.node_chain())
         .cloned()
-        .expect("rawr demands a cached profile under its contract's node");
+        .expect("the cached profile's contract has no node");
     assert!(
         parent.output_limit() == limits.node_output_bytes()
             && definition.identity() == contract.identity()
             && definition.version() == contract.version(),
-        "rawr demands a profile's hooks under the profile and limits that classified it"
+        "the profile or limits demanding hooks differ from the ones that classified the contract"
     );
     let checked_fingerprint = checked.profile_fingerprint();
     let payload = checked.profile_payload();
@@ -59,12 +59,12 @@ pub(crate) fn generate<C: crate::profile::Checked, D: crate::profile::Definition
     let parent = demand
         .node_chain()
         .cloned()
-        .expect("rawr generates a cached profile under its demand's node");
+        .expect("the cached profile's demand has no node");
     assert!(
         parent.output_limit() == limits.node_output_bytes()
             && definition.identity() == demand.identity()
             && definition.version() == demand.version(),
-        "rawr generates a profile's source under the profile and limits that demanded it"
+        "the profile or limits generating the source differ from the ones that demanded it"
     );
     let product_lifecycle = definition.owns_product_lifecycle();
     let authority = generated_authority(

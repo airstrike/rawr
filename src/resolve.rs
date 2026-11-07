@@ -5423,8 +5423,8 @@ fn validate_method_signature(
             owner: owner.into(),
             method: function.name.text.clone(),
             reason: if borrowed {
-                "a `&mut` output borrows a `&mut self` receiver or a free function's `&mut` \
-                 parameter in Rawr; other borrowed outputs are not supported in Rawr yet"
+                "a `&mut` output that borrows anything other than a `&mut self` receiver or a \
+                 free function's `&mut` parameter is not supported in Rawr yet"
                     .into()
             } else {
                 "outputs holding `&mut` other than `&mut T` and `Option<&mut T>` are not \

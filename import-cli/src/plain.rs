@@ -339,7 +339,7 @@ fn prove(
         })
     {
         return Err(Proof::Failed(Error::other(
-            "a proved imported call was not admitted by its compilation",
+            "the check rejected an imported call it was already given",
         )));
     }
     applications.push(application);
@@ -414,7 +414,7 @@ fn keep_expansions(
     let request = graph
         .rust_inventory_plain(environment, &[], limits)
         .map_err(Error::other)?
-        .ok_or_else(|| Error::other("a crate derive with no Rust dependency"))?;
+        .ok_or_else(|| Error::other("cannot expand a derive in a crate with no Rust dependency"))?;
     let native = request.pinned_native(limits).map_err(Error::other)?;
     let basis = match basis.or_else(|| expand::Basis::kept(&directory)) {
         Some(basis) => basis,
@@ -558,15 +558,15 @@ fn prepare(
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if error.rust_application().is_some() =>
                     {
-                        let call = error
-                            .rust_application()
-                            .ok_or_else(|| Error::other("imported call encoding"))?;
+                        let call = error.rust_application().ok_or_else(|| {
+                            Error::other("the failed check names no imported call")
+                        })?;
                         if inventory.is_none() {
                             inventory = Some(acquire(&graph, &limits, &input, &mut settlement)?);
                         }
                         let facts = inventory
                             .as_ref()
-                            .ok_or_else(|| Error::other("intrinsic facts"))?;
+                            .ok_or_else(|| Error::other("the crates' facts were not loaded"))?;
                         match prove(&graph, facts, &call, &mut applications) {
                             Ok(()) => {
                                 // The check now depends on proved facts:
@@ -639,7 +639,8 @@ fn prepare(
     } else if keyed.is_none() {
         mark(&applied);
     }
-    let adapter = current_adapter.ok_or_else(|| Error::other("the plain profile adapter"))?;
+    let adapter =
+        current_adapter.ok_or_else(|| Error::other("no adapter was prepared for the program"))?;
     let profile = rawr_import::composition::profile::prepare_retained(
         &adapter,
         &profile_contract,

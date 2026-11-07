@@ -208,7 +208,7 @@ fn spawn(context: Option<&NativeCallContext<'_>>, closure: Dynamic) -> RawrResul
 #[cfg(not(feature = "sync"))]
 fn spawn(_: Option<&NativeCallContext<'_>>, _: Dynamic) -> RawrResult {
     Err(invariant(
-        "rawr runs `std::thread::spawn` only when built with its `sync` feature",
+        "`std::thread::spawn` needs rawr built with its `sync` feature",
     ))
 }
 

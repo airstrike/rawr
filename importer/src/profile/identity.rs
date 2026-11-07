@@ -15,7 +15,7 @@ impl Identity {
     /// rawr names its profiles itself, so an empty name panics (D664).
     #[must_use]
     pub fn new(name: &str) -> Self {
-        assert!(!name.is_empty(), "rawr names each profile");
+        assert!(!name.is_empty(), "a profile's name is empty");
         let mut digest = Sha256::new();
         digest.update(b"rawr.import.profile.identity/v1");
         digest.update(u64::try_from(name.len()).unwrap_or(u64::MAX).to_le_bytes());
@@ -40,7 +40,7 @@ impl Version {
     /// rawr numbers its profiles itself, so version 0 panics (D664).
     #[must_use]
     pub const fn new(version: u32) -> Self {
-        assert!(version != 0, "rawr numbers each profile's rules from 1");
+        assert!(version != 0, "a profile's version is 0");
         Self(version)
     }
 
