@@ -1,6 +1,7 @@
 //! Canonical Cargo metadata and command-specific unit graphs.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
@@ -17,6 +18,8 @@ use super::{canonical_file, digest, Digest, Limits, Selection};
 use crate::{Error, Result};
 
 const HARNESS_PACKAGE: &str = "rawr-resolution-harness";
+/// The document a package record error names.
+const METADATA_OUTPUT: &str = "`cargo metadata` output";
 
 #[cfg(test)]
 std::thread_local! {
@@ -469,7 +472,15 @@ impl Metadata {
                 .get("checksum")
                 .and_then(toml_edit::Item::as_str)
                 .ok_or_else(|| schema("Cargo lock", "registry checksum is absent"))?;
-            let locked = decode_checksum(locked)?;
+            let locked = decode_checksum(locked).ok_or_else(|| {
+                schema(
+                    "Cargo lock",
+                    &format!(
+                        "package `{}` has checksum `{locked}`, which is not 64 hexadecimal digits",
+                        package.name
+                    ),
+                )
+            })?;
             if checksum.is_some_and(|metadata| metadata != locked) {
                 return Err(schema(
                     "Cargo metadata/lock",
@@ -2911,14 +2922,14 @@ fn parse_package_budgeted(
     package: &Value,
     allocation: &mut JsonAllocation,
 ) -> Result<(Arc<str>, Package)> {
-    let package_id = value_string(package, "id")
-        .ok_or_else(|| schema("Cargo metadata", "package ID is absent"))?;
     let package_name = value_string(package, "name")
-        .ok_or_else(|| schema("Cargo metadata", "package name is absent"))?;
-    let package_version = value_string(package, "version")
-        .ok_or_else(|| schema("Cargo metadata", "package version is absent"))?;
+        .ok_or_else(|| schema(METADATA_OUTPUT, "a package has no `name` string"))?;
+    let invalid = |reason: &str| package_schema(package_name, reason);
+    let package_id = value_string(package, "id").ok_or_else(|| invalid("has no `id` string"))?;
+    let package_version =
+        value_string(package, "version").ok_or_else(|| invalid("has no `version` string"))?;
     let manifest_value = value_string(package, "manifest_path")
-        .ok_or_else(|| schema("Cargo metadata", "package manifest path is absent"))?;
+        .ok_or_else(|| invalid("has no `manifest_path` string"))?;
     allocation.nodes("Cargo metadata package nodes", 1)?;
     for bytes in [
         package_id.len(),
@@ -2931,16 +2942,18 @@ fn parse_package_budgeted(
     let manifest = canonical_file("Cargo metadata package manifest", Path::new(manifest_value))?;
     let root = manifest
         .parent()
-        .ok_or_else(|| schema("Cargo metadata", "package manifest has no root"))?
+        .ok_or_else(|| {
+            invalid(&format!(
+                "has manifest path `{}` with no parent directory",
+                manifest.display()
+            ))
+        })?
         .to_path_buf();
     let checksum = package.get("checksum").unwrap_or(&Value::Null);
     let source = match package.get("source") {
         Some(Value::Null) => {
             if !checksum.is_null() {
-                return Err(schema(
-                    "Cargo metadata",
-                    "path package source/checksum does not match its PackageId",
-                ));
+                return Err(invalid("is a path package but has a `checksum`"));
             }
             let cargo_id = checked_path_package_id(
                 package_id,
@@ -2955,16 +2968,17 @@ fn parse_package_budgeted(
             }
         }
         Some(Value::String(source)) if source.starts_with("registry+") => {
-            checked_nonpath_package_id(package_id, source, package_name, package_version)?;
+            ExpectedId::registry(source, package_name, package_version).check(package_id)?;
             allocation.retained_string("Cargo metadata retained string bytes", source.len())?;
             let checksum = match checksum {
                 Value::Null => None,
-                Value::String(checksum) => Some(decode_checksum(checksum)?),
+                Value::String(checksum) => Some(decode_checksum(checksum).ok_or_else(|| {
+                    invalid(&format!(
+                        "has checksum `{checksum}`, which is not 64 hexadecimal digits"
+                    ))
+                })?),
                 Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
-                    return Err(schema(
-                        "Cargo metadata",
-                        "registry package checksum is malformed",
-                    ));
+                    return Err(invalid("has a `checksum` that is not a string"));
                 }
             };
             PackageSource::Registry {
@@ -2974,25 +2988,24 @@ fn parse_package_budgeted(
         }
         Some(Value::String(source)) if source.starts_with("git+") => {
             if !checksum.is_null() {
-                return Err(schema(
-                    "Cargo metadata",
-                    "Git source/checksum does not match its PackageId",
-                ));
+                return Err(invalid("is a Git package but has a `checksum`"));
             }
-            let (source_base, oid) = source
-                .rsplit_once('#')
-                .ok_or_else(|| schema("Cargo metadata", "Git source has no precise revision"))?;
+            let (source_base, oid) = source.rsplit_once('#').ok_or_else(|| {
+                invalid(&format!(
+                    "has Git source `{source}` with no commit after `#`"
+                ))
+            })?;
             if oid.len() != 40
                 || !oid
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
             {
-                return Err(schema(
-                    "Cargo metadata",
-                    "Git source revision is not an exact OID",
-                ));
+                return Err(invalid(&format!(
+                    "has Git source `{source}` whose commit `{oid}` is not a full \
+                     hexadecimal object ID"
+                )));
             }
-            checked_nonpath_package_id(package_id, source_base, package_name, package_version)?;
+            ExpectedId::git(source_base, package_name, package_version)?.check(package_id)?;
             allocation.retained_string(
                 "Cargo metadata retained string bytes",
                 source.len().saturating_add(oid.len()),
@@ -3002,9 +3015,13 @@ fn parse_package_budgeted(
                 oid: oid.into(),
             }
         }
-        Some(Value::String(_)) | Some(_) | None => {
-            return Err(schema("Cargo metadata", "unknown package source shape"));
+        Some(Value::String(source)) => {
+            return Err(invalid(&format!(
+                "has source `{source}`, which is neither a registry nor a Git source"
+            )));
         }
+        Some(_) => return Err(invalid("has a `source` that is neither null nor a string")),
+        None => return Err(invalid("has no `source`")),
     };
     let package_id: Arc<str> = package_id.into();
     Ok((
@@ -3021,42 +3038,125 @@ fn parse_package_budgeted(
     ))
 }
 
-fn checked_nonpath_package_id(
-    package_id: &str,
-    source_base: &str,
-    name: &str,
-    version: &str,
-) -> Result<()> {
-    let suffix = package_id
-        .strip_prefix(source_base)
-        .and_then(|suffix| suffix.strip_prefix('#'))
-        .ok_or_else(|| {
-            schema(
-                "Cargo metadata",
-                "source/name/version do not reconstruct the exact PackageId",
-            )
-        })?;
-    let named = suffix
-        .split_once('@')
-        .is_some_and(|(actual_name, actual_version)| {
-            actual_name == name && actual_version == version
-        });
-    let compact_git = suffix == version
-        && source_base.starts_with("git+")
-        && source_base
-            .strip_prefix("git+")
-            .and_then(|source| source.split('?').next())
-            .and_then(|source| source.trim_end_matches('/').rsplit('/').next())
-            .map(|repository| repository.trim_end_matches(".git"))
-            == Some(name);
-    let exact = named || compact_git;
-    if exact {
+/// The id Cargo writes for a registry or Git package, minted from the
+/// package's `source`, `name` and `version`.
+///
+/// Cargo writes `source` as `SourceIdAsUrl` does, with a Git reference as it
+/// was written, but writes `id` as `PackageIdSpec` displays it, which
+/// form-urlencodes the reference (`SourceKind::PrettyRef`): branch
+/// `feat/x` is `?branch=feat/x` in the source and `?branch=feat%2Fx` in the
+/// id. The name is left out when the URL's last path segment is the name
+/// (cargo-util-schemas `package_id_spec.rs` and `source_kind.rs`).
+#[derive(Clone, Copy, Debug)]
+struct ExpectedId<'a> {
+    /// The source up to its query: `git+<url>` or `registry+<url>`.
+    location: &'a str,
+    /// The Git reference's key and value, as the source writes them.
+    reference: Option<(&'a str, &'a str)>,
+    name: &'a str,
+    version: &'a str,
+}
+
+impl<'a> ExpectedId<'a> {
+    /// A registry package's id: Cargo's registry sources carry no query.
+    fn registry(source: &'a str, name: &'a str, version: &'a str) -> Self {
+        Self {
+            location: source,
+            reference: None,
+            name,
+            version,
+        }
+    }
+
+    /// A Git package's id, from its source without the `#<commit>` suffix.
+    /// Cargo writes at most one `branch`, `tag` or `rev` pair, whose value
+    /// runs to the end of the source, `&` and `=` included.
+    fn git(source_base: &'a str, name: &'a str, version: &'a str) -> Result<Self> {
+        let (location, reference) = match source_base.split_once('?') {
+            None => (source_base, None),
+            Some((location, query)) => {
+                let pair = query
+                    .split_once('=')
+                    .filter(|(key, _)| matches!(*key, "branch" | "tag" | "rev"))
+                    .ok_or_else(|| {
+                        package_schema(
+                            name,
+                            &format!(
+                                "has Git source `{source_base}`, whose query is not one \
+                                 `branch`, `tag` or `rev`"
+                            ),
+                        )
+                    })?;
+                (location, Some(pair))
+            }
+        };
+        Ok(Self {
+            location,
+            reference,
+            name,
+            version,
+        })
+    }
+
+    /// Whether `id` is exactly the id Cargo writes for this package.
+    fn check(self, id: &str) -> Result<()> {
+        let mut rest = Remaining(id);
+        if fmt::write(&mut rest, format_args!("{self}")).is_ok() && rest.0.is_empty() {
+            Ok(())
+        } else {
+            Err(package_schema(
+                self.name,
+                &format!("has id `{id}`, but Cargo writes `{self}` for its source"),
+            ))
+        }
+    }
+
+    /// The URL's last path segment, as the `url` crate splits it: empty
+    /// for a URL whose path is `/` or ends in `/`.
+    fn last_path_segment(&self) -> &'a str {
+        let after_scheme = self
+            .location
+            .split_once("://")
+            .map_or(self.location, |(_, rest)| rest);
+        after_scheme
+            .split_once('/')
+            .and_then(|(_, path)| path.rsplit('/').next())
+            .unwrap_or("")
+    }
+}
+
+impl fmt::Display for ExpectedId<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.location)?;
+        if let Some((key, value)) = self.reference {
+            write!(f, "?{key}=")?;
+            // `form_urlencoded::byte_serialize`.
+            for byte in value.bytes() {
+                match byte {
+                    b' ' => f.write_str("+")?,
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
+                        write!(f, "{}", char::from(byte))?;
+                    }
+                    _ => write!(f, "%{byte:02X}")?,
+                }
+            }
+        }
+        if self.last_path_segment() == self.name {
+            write!(f, "#{}", self.version)
+        } else {
+            write!(f, "#{}@{}", self.name, self.version)
+        }
+    }
+}
+
+/// A writer that accepts only the next bytes of a string, so a display
+/// can be compared with it without being allocated.
+struct Remaining<'a>(&'a str);
+
+impl fmt::Write for Remaining<'_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.0 = self.0.strip_prefix(text).ok_or(fmt::Error)?;
         Ok(())
-    } else {
-        Err(schema(
-            "Cargo metadata",
-            "source/name/version do not reconstruct the exact PackageId",
-        ))
     }
 }
 
@@ -3067,9 +3167,11 @@ fn checked_path_package_id<'package>(
     root: &Path,
     allocation: &mut JsonAllocation,
 ) -> Result<&'package str> {
+    let invalid =
+        |reason: &str| package_schema(name, &format!("has path id `{package_id}`{reason}"));
     let (source_base, suffix) = package_id
         .rsplit_once('#')
-        .ok_or_else(|| schema("Cargo metadata", "path PackageId suffix is absent"))?;
+        .ok_or_else(|| invalid(" with no `#`"))?;
     let named = suffix
         .split_once('@')
         .is_some_and(|(actual_name, actual_version)| {
@@ -3081,34 +3183,34 @@ fn checked_path_package_id<'package>(
             .and_then(std::ffi::OsStr::to_str)
             .is_some_and(|directory| directory == name);
     if !named && !compact {
-        return Err(schema(
-            "Cargo metadata",
-            "path PackageId has the wrong exact Cargo name/version suffix",
-        ));
+        return Err(invalid(&format!(
+            ", but Cargo writes `#{name}@{version}` after the path, or `#{version}` when \
+             the directory is named `{name}`"
+        )));
     }
     let encoded = source_base
         .strip_prefix("path+file://")
-        .ok_or_else(|| schema("Cargo metadata", "path PackageId is not a file URL"))?;
+        .ok_or_else(|| invalid(", which is not a `path+file://` URL"))?;
     if !encoded.starts_with('/') || encoded.contains(['?', '#']) {
-        return Err(schema(
-            "Cargo metadata",
-            "path PackageId file URL is not an absolute local path",
-        ));
+        return Err(invalid(", whose file URL is not an absolute local path"));
     }
-    let decoded = decode_file_url_path(encoded, allocation)?;
+    let decoded = decode_file_url_path(encoded, allocation)
+        .and_then(|decoded| decoded.ok_or_else(|| invalid(", whose file URL is malformed")))?;
     if decoded != root.as_os_str() {
-        return Err(schema(
-            "Cargo metadata",
-            "path PackageId file URL does not identify the canonical package root",
-        ));
+        return Err(invalid(&format!(
+            ", which does not name the package's directory `{}`",
+            root.display()
+        )));
     }
     Ok(source_base)
 }
 
+/// The path a `file://` URL names, or `None` when its escapes or bytes are
+/// malformed.
 fn decode_file_url_path(
     value: &str,
     allocation: &mut JsonAllocation,
-) -> Result<std::ffi::OsString> {
+) -> Result<Option<std::ffi::OsString>> {
     allocation.nodes("Cargo file-URL decoder bytes", value.len())?;
     let mut decoded = Vec::new();
     decoded
@@ -3121,21 +3223,18 @@ fn decode_file_url_path(
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' {
-            let pair = bytes
+            let Some(byte) = bytes
                 .get(index + 1..index + 3)
-                .ok_or_else(|| schema("Cargo metadata", "path PackageId has truncated escaping"))?;
-            let text = std::str::from_utf8(pair)
-                .map_err(|_| schema("Cargo metadata", "path PackageId escape is not ASCII"))?;
-            decoded.push(u8::from_str_radix(text, 16).map_err(|_| {
-                schema("Cargo metadata", "path PackageId escape is not hexadecimal")
-            })?);
+                .and_then(|pair| std::str::from_utf8(pair).ok())
+                .and_then(|text| u8::from_str_radix(text, 16).ok())
+            else {
+                return Ok(None);
+            };
+            decoded.push(byte);
             index += 3;
         } else {
             if bytes[index] == b'\\' || bytes[index] == 0 {
-                return Err(schema(
-                    "Cargo metadata",
-                    "path PackageId contains an invalid file-URL byte",
-                ));
+                return Ok(None);
             }
             decoded.push(bytes[index]);
             index += 1;
@@ -3143,31 +3242,28 @@ fn decode_file_url_path(
     }
     #[cfg(unix)]
     {
-        Ok(std::ffi::OsString::from_vec(decoded))
+        Ok(Some(std::ffi::OsString::from_vec(decoded)))
     }
     #[cfg(not(unix))]
     {
-        String::from_utf8(decoded)
-            .map(std::ffi::OsString::from)
-            .map_err(|_| schema("Cargo metadata", "path PackageId file URL is not UTF-8"))
+        Ok(String::from_utf8(decoded)
+            .ok()
+            .map(std::ffi::OsString::from))
     }
 }
 
-fn decode_checksum(value: &str) -> Result<[u8; 32]> {
+/// A registry checksum's 32 bytes, or `None` unless it is 64 hexadecimal
+/// digits.
+fn decode_checksum(value: &str) -> Option<[u8; 32]> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(schema(
-            "Cargo metadata",
-            "registry checksum is not 64 hexadecimal digits",
-        ));
+        return None;
     }
     let mut checksum = [0_u8; 32];
     for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
-        let text = std::str::from_utf8(pair)
-            .map_err(|_| schema("Cargo metadata", "registry checksum is not ASCII"))?;
-        checksum[index] = u8::from_str_radix(text, 16)
-            .map_err(|_| schema("Cargo metadata", "registry checksum is malformed"))?;
+        let text = std::str::from_utf8(pair).ok()?;
+        checksum[index] = u8::from_str_radix(text, 16).ok()?;
     }
-    Ok(checksum)
+    Some(checksum)
 }
 
 fn validate_declaration(
@@ -6915,6 +7011,11 @@ fn value_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
 }
 
+/// An error in the named package's record of `cargo metadata` output.
+fn package_schema(name: &str, reason: &str) -> Error {
+    schema(METADATA_OUTPUT, &format!("package `{name}` {reason}"))
+}
+
 fn schema(document: &'static str, reason: &str) -> Error {
     Error::Schema {
         document,
@@ -7267,7 +7368,7 @@ mod tests {
                 .bind_lock(lock.as_bytes(), &limits, &mut allocation)
                 .is_err());
         }
-        assert!(decode_checksum("not-a-checksum").is_err());
+        assert!(decode_checksum("not-a-checksum").is_none());
     }
 
     #[test]
@@ -7560,6 +7661,134 @@ mod tests {
         for invalid in negatives {
             assert!(parse_package(&invalid).is_err());
         }
+    }
+
+    fn git_package(fixture: &Fixture, name: &str, id: &str, source: &str) -> Value {
+        json!({
+            "id": id,
+            "name": name,
+            "version": if name == "reqwest-eventsource" { "0.6.0" } else { "0.1.0" },
+            "manifest_path": fixture.0.join("Cargo.toml"),
+            "source": source,
+            "checksum": null,
+        })
+    }
+
+    #[test]
+    fn git_branch_with_a_slash_matches_the_id_cargo_encodes() {
+        let fixture = Fixture::new("git-slash-branch");
+        let oid = "356e2f61827b193bd5ab389c38059bcc2eed90aa";
+        let location = "git+https://github.com/romnn/reqwest-eventsource";
+        let package = |id: &str| {
+            git_package(
+                &fixture,
+                "reqwest-eventsource",
+                id,
+                &format!("{location}?branch=feat/reqwest-0.13#{oid}"),
+            )
+        };
+        parse_package(&package(&format!(
+            "{location}?branch=feat%2Freqwest-0.13#0.6.0"
+        )))
+        .expect("Cargo's real id for a branch with a slash seals");
+        for invalid in [
+            format!("{location}?branch=feat/reqwest-0.13#0.6.0"),
+            format!("{location}?branch=feat%2freqwest-0.13#0.6.0"),
+            format!("{location}?branch=feat%2Freqwest-0.13#reqwest-eventsource@0.6.0"),
+            format!("{location}?tag=feat%2Freqwest-0.13#0.6.0"),
+            format!("{location}#0.6.0"),
+        ] {
+            assert!(parse_package(&package(&invalid)).is_err(), "{invalid}");
+        }
+    }
+
+    /// Records from `cargo metadata` (cargo 59800466c) for one repository
+    /// pinned three ways.
+    #[test]
+    fn git_references_match_the_ids_cargo_writes_for_them() {
+        let fixture = Fixture::new("git-references");
+        let oid = "5840933c0840b827dbf124b0cdc450a963515515";
+        for (source, id) in [
+            (
+                "git+file:///scratch/dep?branch=feat/x+y@z%1,é",
+                "git+file:///scratch/dep?branch=feat%2Fx%2By%40z%251%2C%C3%A9#0.1.0",
+            ),
+            (
+                "git+file:///scratch/dep.git?tag=v1/2&q=r",
+                "git+file:///scratch/dep.git?tag=v1%2F2%26q%3Dr#dep@0.1.0",
+            ),
+            (
+                "git+file:///scratch/dep/?rev=5840933c0840",
+                "git+file:///scratch/dep/?rev=5840933c0840#dep@0.1.0",
+            ),
+            (
+                "git+https://example.invalid/dep?branch=a b",
+                "git+https://example.invalid/dep?branch=a+b#0.1.0",
+            ),
+            (
+                "git+https://example.invalid/dep",
+                "git+https://example.invalid/dep#0.1.0",
+            ),
+        ] {
+            parse_package(&git_package(
+                &fixture,
+                "dep",
+                id,
+                &format!("{source}#{oid}"),
+            ))
+            .unwrap_or_else(|error| panic!("{id} seals: {error}"));
+        }
+        for (source, id) in [
+            (
+                "git+file:///scratch/dep.git?tag=v1/2",
+                "git+file:///scratch/dep.git?tag=v1%2F2#0.1.0",
+            ),
+            (
+                "git+file:///scratch/dep/?rev=5840933c0840",
+                "git+file:///scratch/dep/?rev=5840933c0840#0.1.0",
+            ),
+            (
+                "git+file:///scratch/dep?branch=x",
+                "git+file:///scratch/dep?branch=x#dep@0.1.0",
+            ),
+            (
+                "git+file:///scratch/dep?commit=x",
+                "git+file:///scratch/dep?commit=x#0.1.0",
+            ),
+        ] {
+            assert!(
+                parse_package(&git_package(
+                    &fixture,
+                    "dep",
+                    id,
+                    &format!("{source}#{oid}")
+                ))
+                .is_err(),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_package_id_that_does_not_match_names_the_package_and_cargo_metadata() {
+        let fixture = Fixture::new("git-id-error");
+        let source = "git+https://github.com/romnn/reqwest-eventsource?branch=feat/reqwest-0.13";
+        let package = git_package(
+            &fixture,
+            "reqwest-eventsource",
+            &format!("{source}#0.6.0"),
+            &format!("{source}#{}", "1".repeat(40)),
+        );
+        let error = parse_package(&package).expect_err("an unencoded id is not Cargo's");
+        assert_eq!(
+            error.to_string(),
+            "internal error: rawr misread `cargo metadata` output: package \
+             `reqwest-eventsource` has id \
+             `git+https://github.com/romnn/reqwest-eventsource?branch=feat/reqwest-0.13#0.6.0`, \
+             but Cargo writes \
+             `git+https://github.com/romnn/reqwest-eventsource?branch=feat%2Freqwest-0.13#0.6.0` \
+             for its source. This is a rawr bug"
+        );
     }
 
     #[test]
