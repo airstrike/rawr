@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.165 (2026-11-07)
+
 - A Git dependency on a branch, tag or rev with a character Cargo encodes in a package id, such as the slash in `feat/reqwest-0.13`, no longer panics rawr-import. A package record in `cargo metadata` output that can't be read names the package and what was wrong. (#1108)
 
 ## 0.3.164 (2026-11-07)

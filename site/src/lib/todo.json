@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-07",
-  "version": "0.3.164",
+  "version": "0.3.165",
   "examples": {
     "running": 29,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A Git dependency on a branch, tag or rev with a character Cargo encodes in a package id, such as the slash in `feat/reqwest-0.13`, no longer panics rawr-import. A package record in `cargo metadata` output that can't be read names the package and what was wrong.","issues":[1108]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.165",
+        "date": "2026-11-07",
+        "entries": [
+          {"text":"A Git dependency on a branch, tag or rev with a character Cargo encodes in a package id, such as the slash in `feat/reqwest-0.13`, no longer panics rawr-import. A package record in `cargo metadata` output that can't be read names the package and what was wrong.","issues":[1108]}
+        ]
+      },
       {
         "version": "0.3.164",
         "date": "2026-11-07",
@@ -2666,7 +2668,7 @@
     {"issue":1105,"title":"a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"open","category":"Divergences from rustc"},
     {"issue":1106,"title":"range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc"},
     {"issue":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"open","category":"Divergences from rustc"},
-    {"issue":1108,"title":"A git dependency on a branch with a slash panics rawr-import while it reads Cargo metadata","state":"closed","category":"Health"},
+    {"issue":1108,"title":"A git dependency on a branch with a slash panics rawr-import while it reads Cargo metadata","state":"closed","category":"Health","release":"0.3.165"},
     {"issue":1109,"title":"Error messages that don't read like a program's error messages","state":"open","category":"Health"},
     {"issue":1110,"title":"A Git dependency whose branch or tag has `&` or `#` is declared with the wrong reference","state":"open","category":"Health"},
     {"issue":1111,"title":"A package from an alternative sparse registry panics rawr-import instead of a plain unsupported-registry error","state":"open","category":"Health"}
