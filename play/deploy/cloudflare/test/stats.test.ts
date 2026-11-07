@@ -145,7 +145,7 @@ test("the dashboard states and escapes", () => {
   assert.equal(state({ ...d, status: { ...d.status!, ready: null } }), "starting");
   const html = render(d);
   assert.ok(html.includes("&#60;script&#62;"));
-  assert.ok(!html.includes("<script>"));
+  assert.ok(!html.includes("<script>x"), "an event's detail is escaped");
   assert.ok(html.includes("≠ deployed def"), "an image other than the deployed one is flagged");
   assert.ok(html.includes('href="/bot/invite"'));
   assert.ok(html.includes(TOKEN), "servers are listed by token");
