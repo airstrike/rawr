@@ -1294,19 +1294,6 @@ impl Lowering {
                 }
             }
 
-            // The optimizer folds an all-constant interpolation away before
-            // this sees it, so what arrives has at least two segments.
-            Expr::InterpolatedString(segments, ..) => {
-                self.emit(Op::InterpolateStart);
-                for segment in segments.iter() {
-                    self.expression(segment);
-                    // The append carries the segment's own position, because
-                    // that is what rawr blames when the size limit goes over.
-                    self.emit_at(Op::InterpolateAppend, segment.position());
-                }
-                self.emit(Op::InterpolateEnd);
-            }
-
             // `f.call(x)` is the method spelling of `call(f, x)`. It arrives
             // as a chain, so it has to be taken before the chain walker sees
             // it.
@@ -1380,8 +1367,7 @@ impl Lowering {
             // position, because that is what `ErrorUnboundThis` carries.
             Expr::ThisPtr(pos) => self.emit_at(Op::LoadThis, *pos),
 
-            Expr::Coalesce(..)
-            | Expr::MethodCall(..)
+            Expr::MethodCall(..)
             | Expr::Property(..)
             | Expr::DynamicConstant(..)
             | Expr::FnCall(..)
@@ -1925,8 +1911,7 @@ enum ChainStep<'a> {
 /// that says the first one's `b[0]` is an index expression rather than two
 /// steps (`eval/chaining.rs:698`).
 ///
-/// Returns `None` for `?.` and `?[]`, which short-circuit on unit rather than
-/// stepping, and for a dot onto anything but a property or a method.
+/// Returns `None` for a dot onto anything but a property or a method.
 fn flatten_chain(expr: &Expr) -> Option<(&Expr, Vec<ChainStep<'_>>)> {
     /// A chain node's parts: operand side, continuation side, and whether the
     /// step it introduces is a property rather than an index.
@@ -1946,10 +1931,6 @@ fn flatten_chain(expr: &Expr) -> Option<(&Expr, Vec<ChainStep<'_>>)> {
     let mut bracket = expr.position();
 
     loop {
-        if flags.intersects(ASTFlags::NEGATED) {
-            return None;
-        }
-
         // `rest` is the continuation only when it is a chain node *and* this
         // node is not marked as the last one. Otherwise it is this step's own
         // operand — the index expression, or the property being read.

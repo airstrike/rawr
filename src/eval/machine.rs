@@ -565,10 +565,6 @@ impl Builder {
                 self.sequence(items.iter_mut().collect())?;
                 Ok(Expr::Array(items, position))
             }
-            Expr::InterpolatedString(mut items, position) => {
-                self.sequence(items.iter_mut().collect())?;
-                Ok(Expr::InterpolatedString(items, position))
-            }
             Expr::Map(mut map, position) => {
                 self.sequence(map.0.iter_mut().map(|(_, value)| value).collect())?;
                 Ok(Expr::Map(map, position))
@@ -742,14 +738,12 @@ fn expr_awaits(expr: &Expr) -> bool {
             call.name == AWAIT || call.args.iter().any(expr_awaits)
         }
         Expr::Stmt(block) => block.iter().any(stmt_awaits),
-        Expr::InterpolatedString(items, _) | Expr::Array(items, _) => items.iter().any(expr_awaits),
+        Expr::Array(items, _) => items.iter().any(expr_awaits),
         Expr::Map(map, _) => map.0.iter().any(|(_, value)| expr_awaits(value)),
         Expr::Dot(binary, ..) | Expr::Index(binary, ..) => {
             expr_awaits(&binary.lhs) || expr_awaits(&binary.rhs)
         }
-        Expr::And(operands, _) | Expr::Or(operands, _) | Expr::Coalesce(operands, _) => {
-            operands.iter().any(expr_awaits)
-        }
+        Expr::And(operands, _) | Expr::Or(operands, _) => operands.iter().any(expr_awaits),
         _ => false,
     }
 }
@@ -804,7 +798,7 @@ fn forget_expr(expr: &mut Expr) {
             call.args.iter_mut().for_each(forget_expr)
         }
         Expr::Stmt(block) => block.statements_mut().iter_mut().for_each(forget_indices),
-        Expr::InterpolatedString(items, _) | Expr::Array(items, _) => {
+        Expr::Array(items, _) => {
             items.iter_mut().for_each(forget_expr);
         }
         Expr::Map(map, _) => map.0.iter_mut().for_each(|(_, value)| forget_expr(value)),
@@ -812,7 +806,7 @@ fn forget_expr(expr: &mut Expr) {
             forget_expr(&mut binary.lhs);
             forget_expr(&mut binary.rhs);
         }
-        Expr::And(operands, _) | Expr::Or(operands, _) | Expr::Coalesce(operands, _) => {
+        Expr::And(operands, _) | Expr::Or(operands, _) => {
             operands.iter_mut().for_each(forget_expr);
         }
         _ => {}

@@ -425,10 +425,6 @@ fn effect(op: &Op, pools: Pools) -> (usize, usize) {
         Op::Curry(argc) => (*argc as usize + 1, 1),
         Op::CallFnPtr { argc, .. } => (*argc as usize + 1, 1),
 
-        Op::InterpolateStart => (0, 1),
-        Op::InterpolateAppend => (1, 0),
-        Op::InterpolateEnd => (1, 1),
-
         // Pops the thrown value; nothing follows, so what it leaves is moot.
         Op::Throw | Op::StoreShared(..) => (1, 0),
 

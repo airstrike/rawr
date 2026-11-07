@@ -3,7 +3,6 @@ use core::mem;
 use crate::engine::{FN_IDX_GET, FN_IDX_SET};
 use crate::eval::calc_data_sizes;
 use crate::func::{get_builtin_binary_op_fn, get_builtin_op_assignment_fn};
-use crate::packages::string_basic::print_with_func;
 use crate::types::dynamic::DynamicWriteLock;
 use crate::types::fn_ptr::FnPtrType;
 // `Variant` is only re-exported from the crate root under `internals`, so it
@@ -14,9 +13,7 @@ use crate::{
     eval::Caches, eval::GlobalRuntimeState, CallFnOptions, Dynamic, Engine, EvalAltResult,
     EvalContext, Scope,
 };
-use crate::{
-    Array, FnPtr, ImmutableString, Map, NativeCallContext, Position, ThinVec, FUNC_TO_STRING, INT,
-};
+use crate::{Array, FnPtr, Map, NativeCallContext, Position, ThinVec, INT};
 
 mod callback;
 
@@ -1807,64 +1804,6 @@ impl<'e> Vm<'e> {
         Ok(())
     }
 
-    /// Concatenate the segments of an interpolated string, reproducing
-    /// `eval/expr.rs:280-304`.
-    ///
-    /// Every step of it is load-bearing. A **string** segment is written
-    /// straight out and never reaches dispatch, so a host's `to_string` for
-    /// strings is not consulted here even though `+` would consult it.
-    /// Anything else goes through rawr's own rendering, which calls **native**
-    /// functions only — a script `fn to_string` is invisible to it — and
-    /// substitutes the mapped type name when the call returns a non-string.
-    /// The size limit is checked after every segment against the running
-    /// total, not once at the end.
-    #[inline(never)]
-    fn append_segment(
-        &mut self,
-        segment: Dynamic,
-        pos: Position,
-    ) -> Result<(), Box<EvalAltResult>> {
-        use core::fmt::Write;
-
-        let mut item = segment.flatten();
-        let mut rendered = None;
-
-        // A string is written straight out and never reaches dispatch, so a
-        // host's `to_string` for strings is not consulted here even though `+`
-        // would consult it.
-        if !item.is_string() {
-            let context = native_context(self.engine, FUNC_TO_STRING, None, &self.global, pos);
-            rendered = Some(print_with_func(FUNC_TO_STRING, &context, &mut item));
-        }
-
-        let mut buffer = self
-            .stack
-            .last_mut()
-            .and_then(|value| value.write_lock::<ImmutableString>())
-            .ok_or_else(|| malformed("interpolation lost its buffer".into()))?;
-
-        // `make_mut` is in place while the buffer is uniquely held, which on
-        // the operand stack it is — so this is one growing allocation rather
-        // than one per segment.
-        match rendered {
-            Some(text) => write!(buffer.make_mut(), "{text}"),
-            None => write!(buffer.make_mut(), "{item}"),
-        }
-        .expect("writing to a string cannot fail");
-        let len = buffer.len();
-        drop(buffer);
-
-        // After every segment, against the running total — a script must not
-        // be able to build a string past `max_string_size` and hand it over
-        // whole.
-        self.engine.throw_on_size((0, 0, len)).map_err(|mut err| {
-            if err.position().is_none() {
-                err.set_position(pos);
-            }
-            err
-        })
-    }
-
     /// Start iterating a value, the way rawr's `for` does
     /// (`eval/stmt.rs:680-703`).
     ///
@@ -3076,27 +3015,6 @@ impl<'e> Vm<'e> {
                     let value =
                         self.call_fn_ptr(program, argc, method, receiver, scope, base, pos())?;
                     self.stack.push(value);
-                }
-
-                code::tag::INTERPOLATE_START => {
-                    self.stack.push(self.engine.const_empty_string().into());
-                }
-
-                code::tag::INTERPOLATE_APPEND => {
-                    let segment = self.pop()?;
-                    self.append_segment(segment, pos())?;
-                }
-
-                code::tag::INTERPOLATE_END => {
-                    let buffer = self.pop()?;
-                    let text = buffer
-                        .into_immutable_string()
-                        .map_err(|_| malformed("interpolation lost its buffer".into()))?;
-                    // Interned, as rawr does: the same rendered string in ten
-                    // places is one allocation, which is the whole reason the
-                    // engine keeps an interner.
-                    let value = self.engine.get_interned_string(text.as_str());
-                    self.stack.push(value.into());
                 }
 
                 code::tag::CHAIN => {

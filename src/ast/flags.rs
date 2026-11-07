@@ -45,8 +45,6 @@ bitflags! {
     pub struct ASTFlags: u8 {
         /// The [`AST`][crate::AST] node is read-only.
         const CONSTANT = 0b_0000_0001;
-        /// The [`AST`][crate::AST] node is negated (i.e. whatever information is the opposite).
-        const NEGATED = 0b_0000_0100;
         /// The [`AST`][crate::AST] node breaks out of normal control flow.
         const BREAK = 0b_0000_1000;
     }

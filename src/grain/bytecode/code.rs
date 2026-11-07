@@ -101,12 +101,6 @@ pub mod tag {
     pub const STORE_SHARED: u8 = 0x20;
     /// [`Op::IterNext`](super::Op::IterNext) that also pushes the count.
     pub const ITER_NEXT_INDEXED: u8 = 0x21;
-    /// [`Op::InterpolateStart`](super::Op::InterpolateStart).
-    pub const INTERPOLATE_START: u8 = 0x25;
-    /// [`Op::InterpolateAppend`](super::Op::InterpolateAppend).
-    pub const INTERPOLATE_APPEND: u8 = 0x26;
-    /// [`Op::InterpolateEnd`](super::Op::InterpolateEnd).
-    pub const INTERPOLATE_END: u8 = 0x27;
     /// [`Op::Curry`](super::Op::Curry).
     pub const CURRY: u8 = 0x29;
     /// [`Op::CallFnPtr`](super::Op::CallFnPtr) in call position.
@@ -183,9 +177,6 @@ static WIDTHS: [u8; 256] = {
 
     widths[tag::ITER_NEXT as usize] = 5;
     widths[tag::ITER_NEXT_INDEXED as usize] = 5;
-    widths[tag::INTERPOLATE_START as usize] = 1;
-    widths[tag::INTERPOLATE_APPEND as usize] = 1;
-    widths[tag::INTERPOLATE_END as usize] = 1;
 
     widths[tag::CURRY as usize] = 2;
     widths[tag::ROTATE as usize] = 2;
@@ -566,10 +557,6 @@ pub fn assemble(ops: &[Op]) -> Result<(Vec<u8>, Vec<u32>), AssembleError> {
                 }
             }
 
-            Op::InterpolateStart => code.push(tag::INTERPOLATE_START),
-            Op::InterpolateAppend => code.push(tag::INTERPOLATE_APPEND),
-            Op::InterpolateEnd => code.push(tag::INTERPOLATE_END),
-
             // The table's own targets are instruction indices too, but they
             // are not in the code — see `resolve_switch_targets`.
             Op::Switch(index) => {
@@ -668,9 +655,6 @@ fn encoded_width(op: &Op) -> usize {
         | Op::Throw
         | Op::IterInit
         | Op::IterDrop
-        | Op::InterpolateStart
-        | Op::InterpolateAppend
-        | Op::InterpolateEnd
         | Op::LoadThis
         | Op::LoadThisShared
         | Op::RequireThis
@@ -858,9 +842,6 @@ pub fn decode(code: &[u8], at: usize) -> Option<Op> {
             method: true,
             receiver: Some(Receiver::This),
         },
-        tag::INTERPOLATE_START => Op::InterpolateStart,
-        tag::INTERPOLATE_APPEND => Op::InterpolateAppend,
-        tag::INTERPOLATE_END => Op::InterpolateEnd,
         tag::UNWIND_TO => Op::UnwindTo(small(1)?),
         tag::TICK => Op::Tick,
         tag::CHECKPOINT => Op::Checkpoint,

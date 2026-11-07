@@ -187,7 +187,6 @@ fn unsupported_kind(node: &ASTNode) -> Option<&'static str> {
             _ => return None,
         },
         ASTNode::Expr(expr) => match expr {
-            Expr::InterpolatedString(..) => "string interpolation",
             Expr::Map(..) => "a non-constant map literal",
             _ => return None,
         },

@@ -375,32 +375,6 @@ pub enum Op {
         receiver: Option<Receiver>,
     },
 
-    /// Push an empty buffer for an interpolated string to be built in.
-    ///
-    /// Interpolation is three instructions rather than one because rawr checks
-    /// the size limit after **every** segment and blames the segment that went
-    /// over. One instruction has one position-table entry, so it could not say
-    /// which; a pool of per-segment positions would say it but would not be
-    /// strippable, and diagnostics staying separable is the point of the
-    /// table. An instruction per segment puts each position exactly where the
-    /// rest of them live.
-    ///
-    /// The buffer is an ordinary operand, so a nested interpolation needs
-    /// nothing special.
-    InterpolateStart,
-
-    /// Pop a segment and append it to the buffer beneath it.
-    ///
-    /// Not `+`, which is what it looks like: `+` is overridable and
-    /// interpolation is not, and the string-plus-anything operator skips this
-    /// size check. A string segment is written straight out and never reaches
-    /// dispatch; anything else goes through rawr's `to_string` rendering,
-    /// which consults native functions only.
-    InterpolateAppend,
-
-    /// Replace the buffer with the interned string it built.
-    InterpolateEnd,
-
     /// Pop `.0` values and push them as an array.
     ///
     /// Only for a literal whose elements are not all constant — one that is

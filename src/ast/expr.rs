@@ -5,13 +5,11 @@ use crate::eval::GlobalRuntimeState;
 use crate::tokenizer::Token;
 use crate::types::dynamic::Union;
 use crate::{
-    Dynamic, FnArgsVec, FnPtr, Identifier, ImmutableString, Position, SmartString, StaticVec,
-    ThinVec, INT,
+    Dynamic, FnArgsVec, FnPtr, Identifier, ImmutableString, Position, StaticVec, ThinVec, INT,
 };
 use std::{
     collections::BTreeMap,
     fmt,
-    fmt::Write,
     hash::Hash,
     mem,
     num::{NonZeroU8, NonZeroUsize},
@@ -219,8 +217,6 @@ pub enum Expr {
     CharConstant(char, Position),
     /// [String][ImmutableString] constant.
     StringConstant(ImmutableString, Position),
-    /// An interpolated [string][ImmutableString].
-    InterpolatedString(ThinVec<Self>, Position),
     /// [ expr, ... ]
     Array(ThinVec<Self>, Position),
     /// #{ name:expr, ... }
@@ -257,26 +253,22 @@ pub enum Expr {
     Stmt(Box<StmtBlock>),
     /// func `(` expr `,` ... `)`
     FnCall(Box<FnCallExpr>, Position),
-    /// lhs `.` rhs | lhs `?.` rhs
+    /// lhs `.` rhs
     ///
     /// ### Flags
     ///
-    /// * [`NEGATED`][ASTFlags::NEGATED] = `?.` (`.` if unset)
     /// * [`BREAK`][ASTFlags::BREAK] = terminate the chain (recurse into the chain if unset)
     Dot(Box<BinaryExpr>, ASTFlags, Position),
     /// lhs `[` rhs `]`
     ///
     /// ### Flags
     ///
-    /// * [`NEGATED`][ASTFlags::NEGATED] = `?[` ... `]` (`[` ... `]` if unset)
     /// * [`BREAK`][ASTFlags::BREAK] = terminate the chain (recurse into the chain if unset)
     Index(Box<BinaryExpr>, ASTFlags, Position),
     /// lhs `&&` rhs
     And(Box<StaticVec<Self>>, Position),
     /// lhs `||` rhs
     Or(Box<StaticVec<Self>>, Position),
-    /// lhs `??` rhs
-    Coalesce(Box<StaticVec<Self>>, Position),
 }
 
 impl Default for Expr {
@@ -301,10 +293,6 @@ impl fmt::Debug for Expr {
             Self::StringConstant(value, ..) => write!(f, "{value:?}"),
             Self::Unit(..) => f.write_str("()"),
 
-            Self::InterpolatedString(x, ..) => {
-                f.write_str("InterpolatedString")?;
-                return f.debug_list().entries(x.iter()).finish();
-            }
             Self::Array(x, ..) => {
                 f.write_str("Array")?;
                 f.debug_list().entries(x.iter()).finish()
@@ -372,12 +360,11 @@ impl fmt::Debug for Expr {
                 }
                 f.finish()
             }
-            Self::And(x, pos) | Self::Or(x, pos) | Self::Coalesce(x, pos) => {
+            Self::And(x, pos) | Self::Or(x, pos) => {
                 let op_name = match self {
                     Self::And(..) => "And",
                     Self::Or(..) => "Or",
-                    Self::Coalesce(..) => "Coalesce",
-                    expr => unreachable!("`And`, `Or` or `Coalesce` expected but gets {:?}", expr),
+                    expr => unreachable!("`And` or `Or` expected but gets {:?}", expr),
                 };
 
                 if !pos.is_none() {
@@ -438,16 +425,6 @@ impl Expr {
                 }
 
                 Dynamic::from_map(map)
-            }
-
-            // Interpolated string
-            Self::InterpolatedString(x, ..) if self.is_constant() => {
-                let mut s = SmartString::new_const();
-                for segment in x {
-                    let v = segment.get_literal_value(global).unwrap();
-                    write!(&mut s, "{v}").unwrap();
-                }
-                s.into()
             }
 
             // Qualified function call
@@ -542,10 +519,8 @@ impl Expr {
             | Self::ThisPtr(..)
             | Self::And(..)
             | Self::Or(..)
-            | Self::Coalesce(..)
             | Self::FnCall(..)
             | Self::MethodCall(..)
-            | Self::InterpolatedString(..)
             | Self::Property(..)
             | Self::Stmt(..) => ASTFlags::empty(),
         }
@@ -569,12 +544,10 @@ impl Expr {
             | Self::ThisPtr(pos)
             | Self::And(.., pos)
             | Self::Or(.., pos)
-            | Self::Coalesce(.., pos)
             | Self::FnCall(.., pos)
             | Self::MethodCall(.., pos)
             | Self::Index(.., pos)
             | Self::Dot(.., pos)
-            | Self::InterpolatedString(.., pos)
             | Self::Property(.., pos) => *pos,
 
             Self::Stmt(x) => x.position(),
@@ -594,7 +567,7 @@ impl Expr {
                 }
             }
 
-            Self::And(x, ..) | Self::Or(x, ..) | Self::Coalesce(x, ..) => x[0].start_position(),
+            Self::And(x, ..) | Self::Or(x, ..) => x[0].start_position(),
 
             Self::Index(x, ..) | Self::Dot(x, ..) => x.lhs.start_position(),
 
@@ -619,14 +592,12 @@ impl Expr {
             | Self::Map(.., pos)
             | Self::And(.., pos)
             | Self::Or(.., pos)
-            | Self::Coalesce(.., pos)
             | Self::Dot(.., pos)
             | Self::Index(.., pos)
             | Self::Variable(.., pos)
             | Self::ThisPtr(pos)
             | Self::FnCall(.., pos)
             | Self::MethodCall(.., pos)
-            | Self::InterpolatedString(.., pos)
             | Self::Property(.., pos) => *pos = new_pos,
 
             Self::Stmt(x) => x.set_position(new_pos, Position::NONE),
@@ -641,13 +612,11 @@ impl Expr {
     #[must_use]
     pub fn is_pure(&self) -> bool {
         match self {
-            Self::InterpolatedString(x, ..) | Self::Array(x, ..) => x.iter().all(Self::is_pure),
+            Self::Array(x, ..) => x.iter().all(Self::is_pure),
 
             Self::Map(x, ..) => x.0.iter().map(|(.., v)| v).all(Self::is_pure),
 
-            Self::And(x, ..) | Self::Or(x, ..) | Self::Coalesce(x, ..) => {
-                x.iter().all(Self::is_pure)
-            }
+            Self::And(x, ..) | Self::Or(x, ..) => x.iter().all(Self::is_pure),
 
             Self::Stmt(x) => x.iter().all(Stmt::is_pure),
 
@@ -676,7 +645,7 @@ impl Expr {
             | Self::StringConstant(..)
             | Self::Unit(..) => true,
 
-            Self::InterpolatedString(x, ..) | Self::Array(x, ..) => x.iter().all(Self::is_constant),
+            Self::Array(x, ..) => x.iter().all(Self::is_constant),
 
             Self::Map(x, ..) => x.0.iter().map(|(.., expr)| expr).all(Self::is_constant),
 
@@ -688,8 +657,7 @@ impl Expr {
     #[must_use]
     pub const fn is_valid_postfix(&self, token: &Token) -> bool {
         match token {
-            Token::Period | Token::Elvis => return true,
-            Token::LeftBracket | Token::QuestionBracket => return true,
+            Token::Period | Token::LeftBracket => return true,
             _ => (),
         }
 
@@ -701,12 +669,10 @@ impl Expr {
             | Self::CharConstant(..)
             | Self::And(..)
             | Self::Or(..)
-            | Self::Coalesce(..)
             | Self::Unit(..) => false,
 
             Self::IntegerConstant(..)
             | Self::StringConstant(..)
-            | Self::InterpolatedString(..)
             | Self::FnCall(..)
             | Self::ThisPtr(..)
             | Self::MethodCall(..)
@@ -752,7 +718,7 @@ impl Expr {
                     }
                 }
             }
-            Self::InterpolatedString(x, ..) | Self::Array(x, ..) => {
+            Self::Array(x, ..) => {
                 for e in &**x {
                     if !e.walk(path, on_node) {
                         return false;
@@ -774,7 +740,7 @@ impl Expr {
                     return false;
                 }
             }
-            Self::And(x, ..) | Self::Or(x, ..) | Self::Coalesce(x, ..) => {
+            Self::And(x, ..) | Self::Or(x, ..) => {
                 for expr in &***x {
                     if !expr.walk(path, on_node) {
                         return false;

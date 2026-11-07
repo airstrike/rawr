@@ -462,3 +462,55 @@ fn the_old_engines_intrinsics_are_unknown_functions() {
         );
     }
 }
+
+#[test]
+fn the_old_engines_symbols_are_rustc_syntax_errors() {
+    assert_eq!(
+        refused("fn main() {\n    let a = 1;\n    let b = a === 1;\n}\n"),
+        ("".into(), "invalid comparison operator `===`".into(), None)
+    );
+    assert_eq!(
+        refused("fn main() {\n    let a = 1;\n    let b = a !== 1;\n}\n"),
+        ("".into(), "invalid comparison operator `!==`".into(), None)
+    );
+    assert_eq!(
+        refused("fn main() {\n    let a := 1;\n}\n"),
+        (
+            "".into(),
+            "expected type, found `=`".into(),
+            label("expected type")
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let a:;\n}\n"),
+        (
+            "".into(),
+            "expected type, found `;`".into(),
+            label("expected type")
+        )
+    );
+    let after_let = "expected one of `.`, `;`, `?`, `else`, or an operator";
+    assert_eq!(
+        refused(
+            "fn f(a: Option<Option<i32>>) -> Option<i32> {\n    let b = a ?? 2;\n    b\n}\n\
+             fn main() {}\n"
+        ),
+        (
+            "".into(),
+            format!("{after_let}, found `2`"),
+            label(after_let)
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let v = vec![1];\n    let b = 1 !in v;\n}\n"),
+        (
+            "".into(),
+            format!("{after_let}, found `!`"),
+            label(after_let)
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let s = `hello`;\n}\n"),
+        ("".into(), "unknown start of token: `".into(), None)
+    );
+}

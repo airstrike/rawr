@@ -10034,6 +10034,23 @@ main();
     assert_eq!(printed(source), "3 2\n");
 }
 
+/// `?` before `.`, `[` or another `?` is Rust's `?` and then the next
+/// token, never one of the old engine's operators. rustc prints
+/// `Some(7) Some(3) Some(4)`.
+#[test]
+fn language_a_try_before_a_member_index_or_try_is_rusts() {
+    let source = r#"
+fn first(v: Option<Vec<i64>>) -> Option<i64> { Some(v?[0]) }
+fn len(s: Option<String>) -> Option<usize> { Some(s?.len()) }
+fn flat(o: Option<Option<i64>>) -> Option<i64> { Some(o??) }
+fn main() {
+    println!("{:?} {:?} {:?}", first(Some(vec![7])), len(Some("abc".to_string())), flat(Some(Some(4))));
+}
+main();
+"#;
+    assert_eq!(printed(source), "Some(7) Some(3) Some(4)\n");
+}
+
 /// Words the old dialect reserved that Rust doesn't are ordinary names.
 /// rustc prints `42 49` for this program.
 #[test]
