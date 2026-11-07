@@ -1256,6 +1256,21 @@ impl Plan {
                     items.push(item);
                     facade.items = items.into_boxed_slice();
                 }
+                // The members of the opaque type an inherent method gives,
+                // in its owner's module, as Rawr declares them.
+                let opaque = super::opaque::path(&format!("{owner}__{}", associated.name()), 0);
+                for member in associated
+                    .implementations()
+                    .flat_map(crate::classify::ImplementationOutcome::associated)
+                {
+                    let member_path = format!("{opaque}::{}", member.name());
+                    if let Some(item) = item(&member_path, member)? {
+                        let mut items = std::mem::take(&mut facade.items).into_vec();
+                        items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                        items.push(item);
+                        facade.items = items.into_boxed_slice();
+                    }
+                }
             }
         }
         // A dependency's `macro_rules!` macros: Rawr expands their source.
@@ -1400,8 +1415,19 @@ impl Plan {
                     let mut found = Vec::new();
                     item.signature.output.opaque(&opaque, &mut found);
                     let member = super::member::declared(&item.path);
+                    // A type's method gives one declared in the type's
+                    // module, as `form::__rawr_opaque_Holder__items_mut`
+                    // for `form::Holder::items_mut`: a type is no module.
+                    let owner = match item.path.rsplit_once("::") {
+                        Some((parent, name))
+                            if types.iter().any(|ty| !ty.opaque && *ty.path == *parent) =>
+                        {
+                            format!("{parent}__{name}")
+                        }
+                        _ => item.path.to_string(),
+                    };
                     for (index, (identity, parameters)) in found.into_iter().enumerate() {
-                        let path = super::opaque::path(&item.path, index);
+                        let path = super::opaque::path(&owner, index);
                         if types.iter().any(|ty| {
                             *ty.path == *path
                                 || (!member
@@ -1420,6 +1446,10 @@ impl Plan {
                             .unwrap_or_default()
                             .into_boxed_slice();
                         let parameters = super::opaque::parameters(parameters, &associated);
+                        let iterator = associated.iter().any(|(associated, _)| {
+                            associated.trait_identity()
+                                == *super::identity::Definition::iterator().as_bytes()
+                        });
                         types.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                         types.push(TypeDefinition {
                             path: path.into(),
@@ -1439,7 +1469,7 @@ impl Plan {
                             lifetimes: 0,
                             covariant: false,
                             given: Box::default(),
-                            iterator: false,
+                            iterator,
                             opaque: true,
                             shape: Shape::Struct {
                                 form: Form::Record,

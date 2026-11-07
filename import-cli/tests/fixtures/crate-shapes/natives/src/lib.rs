@@ -334,6 +334,20 @@ pub mod form {
             self.0.iter_mut()
         }
     }
+
+    /// A generic type's method that gives an opaque iterator of the values
+    /// it owns, as `Vec::into_iter` behind `impl Iterator<Item = T>` does.
+    impl<T> Holder<T> {
+        pub fn into_items(self) -> impl Iterator<Item = T> {
+            self.0.into_iter()
+        }
+    }
+
+    /// A function's opaque iterator, as `(0..n).rev()` behind `impl
+    /// Iterator<Item = u32>` gives.
+    pub fn countdown(from: u32) -> impl Iterator<Item = u32> {
+        (1..=from).rev()
+    }
 }
 
 /// Trait impls on a type with a const parameter, as palette's `impl<T>

@@ -692,6 +692,23 @@ impl Identity {
         ))
     }
 
+    /// A member of an opaque type, through the implementation of its trait
+    /// that the type has (`Implementation::opaque`): one trait's method is
+    /// a member of each opaque type that implements the trait, as `boxed`
+    /// is of what `explain` and `outlined` each give, and each is its own.
+    pub(crate) fn opaque_member(
+        export: &ledger::Export,
+        implementation: Implementation,
+        selector: Selector,
+    ) -> Self {
+        Self::seal(
+            Some(Definition::of(export.target())),
+            Export::imported(export),
+            Some(implementation),
+            selector,
+        )
+    }
+
     pub(crate) fn unavailable(export: &api::Export) -> Result<Self, crate::classify::Error> {
         Ok(Self::seal(
             None,

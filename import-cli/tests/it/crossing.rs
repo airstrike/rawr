@@ -1366,8 +1366,9 @@ fn an_opaque_output_that_borrows_an_element_is_held_in_its_region() {
 }
 
 /// `outlined` gives an opaque type of a type no public path names, on an
-/// `Element<'_, ..>`, held in its region as `explain`'s is (#936). The
-/// output is `cargo run`'s.
+/// `Element<'_, ..>`, held in its region as `explain`'s is (#936). It is a
+/// default method of the trait `explain` is one of, and each method's
+/// opaque type has members of its own (#943). The output is `cargo run`'s.
 #[test]
 fn an_opaque_output_of_a_private_type_that_borrows_an_element_is_held() {
     let (rawr, cargo) = both_printed("outlined_element.rs", "");

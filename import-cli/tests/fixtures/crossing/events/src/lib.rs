@@ -449,9 +449,9 @@ impl<T, E> Task<Result<T, E>> {
 /// A message no program sends: std's `Infallible`, as iced's `Never` is.
 pub use std::convert::Infallible as Never;
 
-/// `Framed` and `Outline` at the root too, as iced re-exports
+/// `Framed` at the root too, as iced re-exports
 /// `iced_widget::Widget` as `iced::Widget`.
-pub use widgets::{Framed, Outline};
+pub use widgets::Framed;
 
 /// iced's `advanced`: iced_graphics's modules, which another crate defines.
 pub mod advanced {
@@ -638,16 +638,10 @@ pub mod widgets {
                 color: color.into(),
             }
         }
-    }
 
-    /// One more method every widget has through a blanket impl: its own
-    /// trait, as one trait's two default methods that give opaque types
-    /// aren't held apart yet.
-    pub trait Outline<Message, Theme = crate::Theme, Renderer = crate::widgets::Renderer>:
-        Widget<Message, Theme, Renderer>
-    {
-        /// The widget, outlined: an opaque type the trait's own default
-        /// body gives, of a type no public path names.
+        /// The widget, outlined: a second opaque type of the trait's own
+        /// default bodies, of a type no public path names, whose members
+        /// are its own and not `explain`'s.
         fn outlined(self) -> impl Widget<Message, Theme, Renderer>
         where
             Self: Sized,
@@ -656,12 +650,7 @@ pub mod widgets {
         }
     }
 
-    impl<T, Message, Theme, Renderer> Outline<Message, Theme, Renderer> for T where
-        T: Widget<Message, Theme, Renderer>
-    {
-    }
-
-    /// The widget `Outline::outlined` gives, which no public path names.
+    /// The widget `Framed::outlined` gives, which no public path names.
     mod outline {
         pub struct Outlined<W>(pub(super) W);
 
