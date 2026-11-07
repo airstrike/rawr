@@ -364,7 +364,7 @@ impl ImportedFailure {
 pub(crate) fn lower_imported(
     engine: &crate::Engine,
     program: &mut Program,
-    host: &host::Registry,
+    host: &crate::Shared<host::Registry>,
     allocation: &mut rawr_import::contract::Allocation,
 ) -> Result<lower_nominal::ImportedOutput, ImportedFailure> {
     lower_nominal::reveal(engine, program, host, allocation)?;

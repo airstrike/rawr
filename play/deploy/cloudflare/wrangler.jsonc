@@ -21,6 +21,10 @@
   "durable_objects": {
     "bindings": [{ "name": "PLAY_BOT", "class_name": "PlayBot" }]
   },
+  // The Worker version the code runs as. /bot/health reports the Durable
+  // Object's: a deploy resets it, and deploy.sh waits until it runs the
+  // version just deployed before the site's snippets.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PlayBot"] }],
   // /todo's private tabs, rendered by plan/private.mjs from the local
   // .Codex/ documents (never in this repository). src/todo.ts serves them

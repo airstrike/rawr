@@ -182,6 +182,8 @@ impl crate::Engine {
             .map_err(super::Error::import)?;
         install(contract, &mut registry, &mut allocation).map_err(super::Error::import)?;
         admit_applications(&mut registry, applications).map_err(super::Error::import)?;
+        // Every lowering below shares this one copy.
+        let registry = crate::Shared::new(registry);
         let mut program = match crate::resolve::package::resolve(graph, &registry) {
             Ok(program) => program,
             Err(failure) => {

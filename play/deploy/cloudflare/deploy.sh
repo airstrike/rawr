@@ -83,16 +83,27 @@ until [ -n "$id" ] && npx wrangler containers info "$id" --json 2>/dev/null |
 done
 echo "Cloudflare runs image $want after $((i * 10)) s."
 
+# The Worker version the deploy made: the one Cloudflare serves to all
+# requests. Read from Cloudflare, so a deploy that answered 100146 after its
+# upload names it too.
+version="$(npx wrangler deployments status --json 2>/dev/null |
+  node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>console.log(JSON.parse(s).versions?.find((v)=>v.percentage===100)?.version_id??""))' || true)"
+[ -n "$version" ] || { echo "Cloudflare names no Worker version serving every request:" >&2; npx wrangler deployments status >&2 || true; exit 1; }
+
 # Then the bot itself must report that image: /bot/health starts it if needed
 # and answers with the image the bot reported since its container started.
+# A deploy resets the Durable Object a while after it lands (about five
+# minutes in the runs of 2026-11-06), and the reset fails the request it was
+# answering with a 503, so /bot/health must also come from the Durable
+# Object on the version just deployed before any snippet runs.
 i=0
 until curl -fsS "$site/bot/health" 2>/dev/null |
-  node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{const h=JSON.parse(s);process.exit(h.running&&h.image===process.argv[1]?0:1)})' "$want"; do
+  node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{const h=JSON.parse(s);process.exit(h.running&&h.image===process.argv[1]&&h.version===process.argv[2]?0:1)})' "$want" "$version"; do
   i=$((i + 1))
-  [ "$i" -le 60 ] || { echo "the bot did not report image $want within 5 minutes:" >&2; curl -sS "$site/bot/health" >&2 || true; exit 1; }
+  [ "$i" -le 120 ] || { echo "the bot did not report image $want on Worker version $version within 10 minutes:" >&2; curl -sS "$site/bot/health" >&2 || true; exit 1; }
   sleep 5
 done
-echo "The bot reports image $want after $((i * 5)) s."
+echo "The bot reports image $want on Worker version $version after $((i * 5)) s."
 
 # Smoke test: the runnable snippets on the landing page and in the docs must still run.
 # /play/run limits each IP, so the test sends x-play-admin to skip the limit:
@@ -142,6 +153,8 @@ node --input-type=module -e '
   for (const body of sources) {
     // A fresh image can reset a connection or run out of render time on its
     // first iced snippets while it starts, so those two get a few retries.
+    const start = Date.now();
+    const seconds = () => ((Date.now() - start) / 1000).toFixed(1);
     for (let cold = 0; ; ) {
       let response;
       try {
@@ -172,7 +185,13 @@ node --input-type=module -e '
         const first = JSON.parse(body).code.split("\n").find((line) => line.trim()) ?? "";
         throw new Error("run failed: " + response.status + " " + message + " on the snippet starting " + JSON.stringify(first));
       }
-      console.log("ran a site snippet:", response.headers.get("content-type"));
+      // A limit means the snippet did not run as its page shows.
+      const ran = await response.text();
+      if (/^\s*\{/.test(ran) && JSON.parse(ran).limit === true) {
+        const first = JSON.parse(body).code.split("\n").find((line) => line.trim()) ?? "";
+        throw new Error("run failed: a limit stopped it after " + seconds() + " s on the snippet starting " + JSON.stringify(first));
+      }
+      console.log("ran a site snippet in " + seconds() + " s (" + (response.headers.get("x-run") ?? "?") + "):", response.headers.get("content-type"));
       break;
     }
   }

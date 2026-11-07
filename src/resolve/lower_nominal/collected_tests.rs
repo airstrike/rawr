@@ -104,7 +104,7 @@ fn parity(engine: &Engine, source: &str) -> (crate::program::Executable, Importe
     let symbolic = super::imported(
         engine,
         &program,
-        &engine.host_registry,
+        &engine.host_registry.share(),
         &mut symbolic_allocation,
     )
     .unwrap_or_else(|failure| panic!("symbolic fixture: {}", failure.into_error()));
@@ -248,16 +248,20 @@ fn executable_use_collection_preserves_original_cumulative_allocation() {
     lower(&engine, program(&engine, CALLS), &mut measured)
         .unwrap_or_else(|failure| panic!("measured fixture: {}", failure.into_error()));
     let (items, bytes) = measured.usage();
-    let mut clone_only = host::TestImportAllocation::default();
-    engine
+    // The lowering shares the engine's registry, so what it charges is
+    // its program's, whatever else the engine registered (#1065).
+    let mut wider = Engine::new();
+    wider.register_host_facade(call_facade()).unwrap();
+    wider
         .host_registry
-        .clone_for_import(&mut clone_only)
+        .register_type::<std::time::Duration>("Unused")
         .unwrap();
-    assert!(items > clone_only.usage().0);
-    assert!(bytes > clone_only.usage().1);
+    let mut wider_measured = host::TestImportAllocation::default();
+    lower(&wider, program(&wider, CALLS), &mut wider_measured)
+        .unwrap_or_else(|failure| panic!("wider fixture: {}", failure.into_error()));
+    assert_eq!(wider_measured.usage(), (items, bytes));
     for mut allocation in [
         host::TestImportAllocation::new(0, usize::MAX),
-        host::TestImportAllocation::new(clone_only.usage().0, usize::MAX),
         host::TestImportAllocation::new(items - 1, usize::MAX),
         host::TestImportAllocation::new(usize::MAX, bytes - 1),
     ] {
@@ -513,7 +517,7 @@ fn collector_capacity_failures_remain_surface_allocation_errors() {
     for kind in 0..3 {
         let runtime =
             crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
-        let models = super::Models::new(&program, runtime, engine.host_registry.clone(), &engine);
+        let models = super::Models::new(&program, runtime, engine.host_registry.share(), &engine);
         let mut allocation = host::TestImportAllocation::default();
         let mut failure = None;
         let mut uses = Vec::new();
@@ -616,7 +620,7 @@ fn empty_models() -> super::Models {
     let program = program(&engine, "");
     let runtime =
         crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
-    super::Models::new(&program, runtime, engine.host_registry.clone(), &engine)
+    super::Models::new(&program, runtime, engine.host_registry.share(), &engine)
 }
 
 #[test]
