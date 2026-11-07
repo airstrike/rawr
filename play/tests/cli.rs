@@ -170,3 +170,32 @@ fn cli_runs_the_playgrounds_examples_as_rustc_does() {
         assert_eq!(place(&stderr), place(&rustc), "{name}: {stderr}");
     }
 }
+
+/// rawr-web's snippets (web/tests/fixtures, `.snippet` since most are
+/// statements rustfmt can't read) print what rustc's build of each prints. `node web/tests/run.ts` checks rawr-web against the same
+/// files, so the browser and the server agree.
+#[test]
+fn cli_runs_rawr_webs_fixtures_as_rustc_does() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../web/tests/fixtures");
+    let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(&fixtures)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "snippet")
+        })
+        .collect();
+    names.sort();
+    assert!(!names.is_empty());
+    for path in names {
+        let source = std::fs::read_to_string(&path).unwrap();
+        let wanted = std::fs::read_to_string(path.with_extension("stdout")).unwrap();
+        let output = text_result(&source, &[]);
+        assert_eq!(
+            (output.text().as_str(), output.status),
+            (wanted.as_str(), 0),
+            "{}",
+            path.display()
+        );
+    }
+}

@@ -14,6 +14,8 @@ use std::{
 
 pub use super::Variant;
 
+// std's `Instant::now` panics on wasm32-unknown-unknown, which has no
+// clock: web-time's reads the page's `performance.now()`.
 #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 pub use std::time::Instant;
 
@@ -457,7 +459,6 @@ impl Hash for Dynamic {
                     return value.to_ne_bytes().hash(state);
                 }
 
-                #[cfg(not(target_family = "wasm"))]
                 if let Some(value) = _value_any.downcast_ref::<u128>() {
                     return value.hash(state);
                 } else if let Some(value) = _value_any.downcast_ref::<i128>() {
@@ -524,7 +525,6 @@ impl fmt::Display for Dynamic {
                     return fmt::Display::fmt(value, f);
                 }
 
-                #[cfg(not(target_family = "wasm"))]
                 if let Some(value) = _value_any.downcast_ref::<u128>() {
                     return fmt::Display::fmt(value, f);
                 } else if let Some(value) = _value_any.downcast_ref::<i128>() {
@@ -676,7 +676,6 @@ impl fmt::Debug for Dynamic {
                     return fmt::Debug::fmt(value, f);
                 }
 
-                #[cfg(not(target_family = "wasm"))]
                 if let Some(value) = _value_any.downcast_ref::<u128>() {
                     return fmt::Debug::fmt(value, f);
                 } else if let Some(value) = _value_any.downcast_ref::<i128>() {
@@ -1121,7 +1120,6 @@ impl Dynamic {
                     return true;
                 }
 
-                #[cfg(not(target_family = "wasm"))]
                 if _type_id == TypeId::of::<u128>() || _type_id == TypeId::of::<i128>() {
                     return true;
                 }

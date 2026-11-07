@@ -1,8 +1,15 @@
 //! std's `time::SystemTime` and `time::SystemTimeError` for Rawr code.
 //! Each value is Rust's own; a time is read from the system clock.
 //! `Duration` and `Instant` are rawr's own (`Builtin::Duration`).
+//!
+//! std has no clock on wasm32-unknown-unknown (its `now` panics), so there
+//! the page's clock stands in, through web-time's types of the same API.
 
-use std::time::{Duration, SystemTime, SystemTimeError};
+use std::time::Duration;
+#[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
+use std::time::{SystemTime, SystemTimeError};
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+use web_time::{SystemTime, SystemTimeError};
 
 use super::held::{self, Held};
 use crate::{capability, Dynamic, EvalAltResult, ImmutableString, Position};
@@ -58,7 +65,7 @@ pub(crate) fn register_debug() {
     crate::host::display::register::<SystemTimeError>();
     // rawr's own `Duration` and `Instant`, which a derived `Debug` writes.
     crate::host::debug::register::<Duration>();
-    crate::host::debug::register::<std::time::Instant>();
+    crate::host::debug::register::<crate::Instant>();
 }
 
 fn read<T: Clone + 'static>(value: &Dynamic, expected: &str) -> Result<T, Box<EvalAltResult>> {

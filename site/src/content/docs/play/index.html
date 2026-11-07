@@ -7,7 +7,7 @@
 <p>The Examples menu lists plain Rust programs. Its Rustlings group holds solutions from <a href="https://github.com/rust-lang/rustlings">rustlings</a>, used under its MIT licence. Each one names the file it came from. A first visit opens the first example. The editor keeps your latest snippet, so <code>/play</code> opens where you left off.</p>
 <p>The playground has the same <a href="/docs/reference/play#limits">limits</a> as the bot.</p>
 <p><strong>Run in browser</strong> is the default. rawr loads into the page once the page is up, so it doesn&rsquo;t hold up the first paint. A program shows its output as the server would. An edit runs the program again after a short pause.</p>
-<p><strong>Run on server</strong> runs the snippet on rawr&rsquo;s server. A snippet goes to the server by itself when rawr doesn&rsquo;t load in the browser.</p>
+<p><strong>Run on server</strong> runs the snippet on rawr&rsquo;s server. A snippet goes to the server by itself when rawr doesn&rsquo;t load in the browser. It also goes there when rawr itself stops on it in the browser, and the next run loads a fresh copy of rawr.</p>
 
 <h3 id="address">The address</h3>
 <p>The page&rsquo;s address keeps what you picked. An example you load adds its name after a <code>#</code>, such as <code>/play#word-count</code>. Editing the code drops that name, because the code is no longer the example&rsquo;s. Picking <strong>Run on server</strong> adds <code>?run=server</code>. The browser is the default, so it adds nothing. Opening an address restores both. Picking an example or a mode replaces the address and doesn&rsquo;t add to the browser&rsquo;s history.</p>
@@ -18,7 +18,7 @@
 
 <h2 id="shapes">What runs</h2>
 <p>A plain program runs the way <code>rawr run</code> runs a file. The reply is its stdout and stderr in the order it wrote them.</p>
-<p>A snippet of statements alone runs as the body of <code>main</code>. If its last expression has no semicolon, its value is printed with <code>{:?}</code>.</p>
+<p>A snippet of statements alone runs as the body of <code>main</code>. If its last expression has no semicolon, its value is printed with <code>{:?}</code>. Its locals drop at its end, as <code>main</code>&rsquo;s do. A snippet that opens with an inner attribute, such as <code>#![allow(dead_code)]</code>, is a file and runs as written.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run id="src-sum">let xs = vec![3, 1, 2];
 xs.iter().sum::&lt;i64&gt;()</code></pre>

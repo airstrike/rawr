@@ -21,6 +21,9 @@ function readData(): PlayData {
   return { snippet: { code: "" }, examples: [], sitekey: null, pass: false, shared: null };
 }
 
+/** The copies of rawr-web loaded so far. */
+let copies = 0;
+
 function browserDeps() {
   return {
     fetch: window.fetch.bind(window),
@@ -34,7 +37,9 @@ function browserDeps() {
       }
     })(),
     loadWeb: async () => {
-      const m = await import(/* @vite-ignore */ WEB_MODULE);
+      // A module is imported once per address, so a copy after the first
+      // has its own query: its own instance, from the same cached files.
+      const m = await import(/* @vite-ignore */ WEB_MODULE + (copies++ ? "?" + copies : ""));
       await m.default();
       return m as Web;
     },

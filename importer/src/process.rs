@@ -76,8 +76,6 @@ pub(crate) enum CargoAction {
     UnitBuild(parallelism::Proof),
     AuthoritativeBuild(parallelism::Proof),
     RunnerBuild(parallelism::Proof),
-    PackagePath,
-    PackageGit,
     /// `cargo clean -p` of a package whose build-script run in the shared
     /// nightly directory is stale (D742).
     Clean,
@@ -521,9 +519,6 @@ impl CommandKind {
                 | CargoAction::AuthoritativeBuild(_)
                 | CargoAction::Clean => crate::metrics::ProcessKind::CargoResolution,
                 CargoAction::RunnerBuild(_) => crate::metrics::ProcessKind::CargoRunner,
-                CargoAction::PackagePath | CargoAction::PackageGit => {
-                    crate::metrics::ProcessKind::PackageList
-                }
             },
             Self::Preflight(preflight) => match preflight.0 {
                 PreflightKind::Which(_) => crate::metrics::ProcessKind::RustupWhich,
@@ -567,7 +562,6 @@ impl CargoAction {
             // built.
             Self::UnitBuild(_) | Self::AuthoritativeBuild(_) => "check",
             Self::RunnerBuild(_) => "build",
-            Self::PackagePath | Self::PackageGit => "package",
             Self::Clean => "clean",
         }
     }
@@ -577,7 +571,7 @@ impl CargoAction {
             Self::UnitBuild(proof) | Self::AuthoritativeBuild(proof) | Self::RunnerBuild(proof) => {
                 Some(proof)
             }
-            Self::Metadata | Self::PackagePath | Self::PackageGit | Self::Clean => None,
+            Self::Metadata | Self::Clean => None,
         }
     }
 }
@@ -1699,14 +1693,6 @@ error[E0277]: the trait bound `__rawr_internal::Value: Default` is not satisfied
         assert_eq!(
             CommandKind::Cargo(CargoAction::Metadata).process_kind(),
             ProcessKind::CargoResolution
-        );
-        assert_eq!(
-            CommandKind::Cargo(CargoAction::PackagePath).process_kind(),
-            ProcessKind::PackageList
-        );
-        assert_eq!(
-            CommandKind::Cargo(CargoAction::PackageGit).process_kind(),
-            ProcessKind::PackageList
         );
         #[cfg(feature = "rustc-driver")]
         {

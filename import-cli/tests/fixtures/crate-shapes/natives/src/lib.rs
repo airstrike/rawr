@@ -990,3 +990,10 @@ pub mod weighted {
         }
     }
 }
+
+/// `form` again under another module, as ratatui's `macros` re-exports
+/// `ratatui_core`: `Holder` and its methods have a second path, and so does
+/// the opaque iterator `into_items` gives, whose `next` is its member.
+pub mod again {
+    pub use crate::form;
+}

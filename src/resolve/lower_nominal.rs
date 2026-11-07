@@ -853,22 +853,23 @@ fn substitute_parameters(
 }
 
 /// The calls of generic functions compiled per instantiation that a body
-/// makes, with the types each gives, resolved once the body is read.
+/// makes, with the types each gives, resolved once the body is read, and
+/// each call's span.
 #[cfg(feature = "rust-import")]
-fn take_instance_calls(parser: &mut Parser<'_>) -> Vec<(crate::item::Key, Vec<Ty>)> {
+fn take_instance_calls(parser: &mut Parser<'_>) -> Vec<(crate::item::Key, Vec<Ty>, Span)> {
     std::mem::take(&mut parser.instance_calls)
         .into_iter()
-        .map(|(key, types)| {
+        .map(|(key, types, call)| {
             let types = types
                 .iter()
                 .map(|ty| parser.inference.resolve(ty))
                 .collect::<Vec<_>>();
-            (key, types)
+            (key, types, call)
         })
         // A literal still open is one of a body that stopped before its
         // end, which settles it: `50` may be the `u32` a bound's impl
         // picks, so its call waits for a reading that settles it.
-        .filter(|(_, types)| !types.iter().any(contains_open_literal))
+        .filter(|(_, types, _)| !types.iter().any(contains_open_literal))
         .collect()
 }
 
@@ -1139,7 +1140,8 @@ fn instance_round<A: crate::host::ImportAllocation>(
         let runtime =
             crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
         let models = Models::new(program, runtime, Shared::clone(host), engine);
-        let mut found = Vec::<(crate::item::Key, Vec<Ty>)>::new();
+        // Each call, by the body that makes it: the template and its types.
+        let mut found = Vec::<(crate::item::Key, crate::item::Key, Vec<Ty>, Span)>::new();
         let mut impl_uses = Vec::new();
         for shell in program.items.iter() {
             let item::Kind::Function(definition) = &shell.kind else {
@@ -1167,7 +1169,7 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 &body_source,
                 models.for_source(shell.source),
                 definition,
-                key,
+                key.clone(),
                 0,
                 0,
                 Some(ImportedContext {
@@ -1183,7 +1185,11 @@ fn instance_round<A: crate::host::ImportAllocation>(
             parser.collecting_instances = true;
             // A body that fails here fails again where it is lowered.
             let _ = parser.parse_function_body(definition);
-            found.extend(take_instance_calls(&mut parser));
+            found.extend(
+                take_instance_calls(&mut parser)
+                    .into_iter()
+                    .map(|(template, types, call)| (key.clone(), template, types, call)),
+            );
             impl_uses.extend(take_impl_uses(&mut parser));
             drop(parser);
             if let Some(error) = allocation_failure {
@@ -1223,7 +1229,9 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 parser.symbolic_only = true;
                 parser.collecting_instances = true;
                 let _ = parser.parse_method_body(definition);
-                found.extend(take_instance_calls(&mut parser));
+                found.extend(take_instance_calls(&mut parser).into_iter().map(
+                    |(template, types, call)| (definition.key().clone(), template, types, call),
+                ));
                 impl_uses.extend(take_impl_uses(&mut parser));
             }
             if let Some(error) = allocation_failure {
@@ -1231,10 +1239,21 @@ fn instance_round<A: crate::host::ImportAllocation>(
             }
         }
         let mut added = Vec::<(crate::item::Key, Vec<ImmutableString>, Vec<Ty>)>::new();
-        for (template, types) in found {
+        // Two calls a macro gives one span may take two instances: neither
+        // is known by its span.
+        let mut calls = BTreeMap::<(crate::item::Key, Span), Option<Box<[ImmutableString]>>>::new();
+        for (caller, template, types, call) in found {
             let Some(names) = instance_names(&types, &models) else {
                 continue;
             };
+            calls
+                .entry((caller, call))
+                .and_modify(|known| {
+                    if known.as_deref() != Some(names.as_slice()) {
+                        *known = None;
+                    }
+                })
+                .or_insert_with(|| Some(names.clone().into_boxed_slice()));
             let Some(instances) = program.instances.templates.get(&template) else {
                 continue;
             };
@@ -1248,6 +1267,10 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 added.push((template, names, types));
             }
         }
+        program.instances.calls = calls
+            .into_iter()
+            .filter_map(|(call, names)| Some((call, names?)))
+            .collect();
         // Each new use of a script impl of a crate's trait whose parameters
         // touch a crate's types is an instance of the impl, and of each of
         // its functions.
@@ -9493,7 +9516,7 @@ impl Ty {
             Self::InclusiveOf(_) => Some(TypeId::of::<std::ops::RangeInclusive<Dynamic>>()),
             Self::Ordering => Some(TypeId::of::<INT>()),
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
-            Self::Time(Time::Instant) => Some(TypeId::of::<std::time::Instant>()),
+            Self::Time(Time::Instant) => Some(TypeId::of::<crate::Instant>()),
             Self::ParseError(_) => Some(TypeId::of::<ImmutableString>()),
             Self::Reference { target, .. } | Self::Boxed(target) => target.native_type_id(models),
             Self::Counted(..) => Some(TypeId::of::<counted::Counted>()),
@@ -9939,6 +9962,11 @@ struct Inference {
     /// `T::Output = i64` of the bounds in scope (`T: Shape<Output = i64>`),
     /// by parameter, trait and name.
     equalities: BTreeMap<(ImmutableString, ImmutableString, ImmutableString), Ty>,
+    /// The crate impls' bounds `<ty as Trait>::Name == value` whose `ty`
+    /// wasn't known where their impl was chosen: each fixes its `value`
+    /// once a later use fixes `ty`. A rollback drops those it made.
+    #[cfg(feature = "rust-import")]
+    projections: Vec<ImplProjection>,
 }
 
 /// The associated types of `impl Trait for Owner` blocks.
@@ -9973,6 +10001,8 @@ struct Checkpoint {
     next: usize,
     journal: usize,
     depth: usize,
+    #[cfg(feature = "rust-import")]
+    projections: usize,
 }
 
 #[derive(Debug)]
@@ -10009,6 +10039,8 @@ impl Inference {
             next: self.next,
             journal: self.journal.len(),
             depth: self.depth,
+            #[cfg(feature = "rust-import")]
+            projections: self.projections.len(),
         };
         self.depth += 1;
         checkpoint
@@ -10031,6 +10063,8 @@ impl Inference {
         }
         self.next = checkpoint.next;
         self.depth = checkpoint.depth;
+        #[cfg(feature = "rust-import")]
+        self.projections.truncate(checkpoint.projections);
     }
 
     fn commit(&mut self, checkpoint: Checkpoint) {
@@ -12400,6 +12434,12 @@ struct Parser<'a> {
     /// The closures that stand for a path to a function (`Vec::len`,
     /// `Look::name`), which rustc's notes call functions.
     path_values: HashSet<crate::item::Key>,
+    /// The output each closure that stands for a path to a method of the
+    /// program's is written with, by the closure's key: an `impl Trait`
+    /// there is what rustc knows the closure's value by
+    /// (`take_opaque_arguments`).
+    #[cfg(feature = "rust-import")]
+    path_outputs: BTreeMap<crate::item::Key, type_ref::Type>,
     /// The crate trait each `Trait::method(receiver, ..)` call names, by
     /// the position of the method it was rewritten to (`path_method_call`):
     /// a text receiver takes the method the trait's impl for `&str` gives.
@@ -12465,7 +12505,7 @@ struct Parser<'a> {
     /// Each call of a generic function compiled per instantiation (D629):
     /// its key and the type each generic parameter takes.
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
-    instance_calls: Vec<(crate::item::Key, Vec<Ty>)>,
+    instance_calls: Vec<(crate::item::Key, Vec<Ty>, Span)>,
     /// Whether this body is read only for those calls (`monomorphize`).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     collecting_instances: bool,
@@ -12729,6 +12769,8 @@ impl<'a> Parser<'a> {
             pending_turbofish: None,
             trait_turbofish: None,
             path_values: HashSet::new(),
+            #[cfg(feature = "rust-import")]
+            path_outputs: BTreeMap::new(),
             spliced_traits: BTreeMap::new(),
             spliced_turbofish: BTreeMap::new(),
             std_probed: BTreeMap::new(),
@@ -13092,6 +13134,9 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("compiler-private nominal intrinsic"));
         }
 
+        // The script's statements are a body: its locals drop at its end,
+        // after its final value, as `fn main`'s do.
+        self.open_body_drops([])?;
         while !matches!(self.peek(), Token::EOF) {
             let result = match self.peek() {
                 Token::Let => self.parse_binding(true),
@@ -13103,6 +13148,13 @@ impl<'a> Parser<'a> {
 
             result?;
         }
+        if let Some((start, span)) = self.last_expression {
+            let mut value = self.take_tail(start, span);
+            self.move_out_value(&mut value)?;
+            let start = self.write_output(value.rendered_source(), span);
+            self.last_expression = Some((start, span));
+        }
+        self.close_body_drops()?;
 
         self.finish_uninitialized()?;
 
@@ -13524,7 +13576,6 @@ impl<'a> Parser<'a> {
                     ),
                 ));
             }
-            Err(Selection::Opaque(ty, opaque)) => return Err(opaque_impl_use(&ty, &opaque, span)),
         }
         if contains_inference(&self.inference.resolve(hidden)) {
             return Err(unfixed(
@@ -13553,14 +13604,10 @@ impl<'a> Parser<'a> {
         // A script type's own impl of the trait, which fixes what it can
         // and is compiled for the use (D629). Otherwise a crate's blanket
         // impl may lead to the script's own impl of another trait.
-        if matches!(ty, Ty::Script(..)) {
-            match self.select_script_impl(&ty, identity, arguments) {
-                Ok(Some(())) => return Ok(()),
-                Ok(None) => {}
-                Err(opaque) => {
-                    return Err(Selection::Opaque(ty.name(&self.models).to_string(), opaque));
-                }
-            }
+        if matches!(ty, Ty::Script(..))
+            && self.select_script_impl(&ty, identity, arguments).is_some()
+        {
+            return Ok(());
         }
         let open = contains_inference(&ty)
             || arguments
@@ -13606,7 +13653,7 @@ impl<'a> Parser<'a> {
             _ => return Err(Selection::Many(ty.name(&self.models).to_string())),
         };
         let checkpoint = self.inference.checkpoint();
-        let Some(bounds) = self.apply_impl(&headers[chosen], &ty, arguments, owner) else {
+        let Some(mut bounds) = self.apply_impl(&headers[chosen], &ty, arguments, owner) else {
             self.inference.rollback(checkpoint);
             return Err(Selection::None(ty.name(&self.models).to_string()));
         };
@@ -13618,19 +13665,22 @@ impl<'a> Parser<'a> {
         // Widget<..>` for a `&str` content whose impl the facade can't
         // write, fixes nothing more and leaves the impl chosen.
         for _ in 0..2 {
-            for (bounded, trait_identity, bound_arguments) in &bounds {
+            for (bounded, trait_identity, bound_arguments) in &bounds.traits {
                 let checkpoint = self.inference.checkpoint();
                 match self.select_impl(bounded, *trait_identity, bound_arguments, owner, depth + 1)
                 {
                     Ok(()) => self.inference.commit(checkpoint),
-                    Err(Selection::Opaque(ty, opaque)) => {
-                        self.inference.rollback(checkpoint);
-                        return Err(Selection::Opaque(ty, opaque));
-                    }
                     Err(_) => self.inference.rollback(checkpoint),
                 }
             }
+            // A bound the others fixed the type of fixes its associated
+            // type in turn.
+            bounds.projections = self
+                .project_impl(std::mem::take(&mut bounds.projections))
+                .unwrap_or_default();
         }
+        // One whose type a later use fixes waits for it.
+        self.inference.projections.extend(bounds.projections);
         Ok(())
     }
 
@@ -13638,19 +13688,13 @@ impl<'a> Parser<'a> {
     /// script type `ty` at `arguments`, applied: its parameters and what it
     /// fixes of `arguments` are bound, as rustc selects a program's own impl
     /// of a crate's trait. The use is recorded, so an impl whose parameters
-    /// touch a crate's types is compiled for it (D629). `None` when none
-    /// fits, or more than one. An impl used at a type that holds a crate's
-    /// opaque type, which the runner can't name to compile the impl for
-    /// it, is the opaque type's name as the error.
+    /// touch a crate's types is compiled for it (D629), as at a type that
+    /// holds a crate's opaque type, which the runner names by a name of its
+    /// own. `None` when none fits, or more than one.
     #[cfg(feature = "rust-import")]
-    fn select_script_impl(
-        &mut self,
-        ty: &Ty,
-        identity: [u8; 32],
-        arguments: &[Ty],
-    ) -> Result<Option<()>, String> {
+    fn select_script_impl(&mut self, ty: &Ty, identity: [u8; 32], arguments: &[Ty]) -> Option<()> {
         let Ty::Script(definition, _) = self.inference.resolve(ty) else {
-            return Ok(None);
+            return None;
         };
         let candidates = self
             .models
@@ -13676,22 +13720,16 @@ impl<'a> Parser<'a> {
             }
         }
         let [chosen] = fits.as_slice() else {
-            return Ok(None);
+            return None;
         };
         let checkpoint = self.inference.checkpoint();
         let Some((types, full)) = self.apply_script_impl(chosen, ty, identity, arguments) else {
             self.inference.rollback(checkpoint);
-            return Ok(None);
+            return None;
         };
         self.inference.commit(checkpoint);
-        if let Some(opaque) = types
-            .iter()
-            .find_map(|(_, ty)| held_opaque(&self.inference.resolve(ty)))
-        {
-            return Err(opaque);
-        }
         self.impl_uses.push((chosen.index, types, full));
-        Ok(Some(()))
+        Some(())
     }
 
     /// `script` at fresh variables, unified with `ty` and `arguments`, the
@@ -13791,7 +13829,7 @@ impl<'a> Parser<'a> {
                 return None;
             }
         }
-        header
+        let traits = header
             .bounds
             .iter()
             .map(|bound| {
@@ -13822,7 +13860,81 @@ impl<'a> Parser<'a> {
                     .collect::<Option<Vec<_>>>()?;
                 Some((bounded, bound.trait_identity, arguments))
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()?;
+        // A case names no parameter of the impl's.
+        let at_case = |this: &mut Self, ty| {
+            this.instantiate_host_type(ty, &mut BTreeMap::new(), "impl", Span::NONE, owner, None)
+                .ok()
+        };
+        let mut projections = Vec::with_capacity(header.projections.len());
+        for projection in header.projections.iter() {
+            let mut at = |ty| {
+                self.instantiate_host_type(ty, &mut parameters, "impl", Span::NONE, owner, None)
+                    .ok()
+            };
+            let (Some(ty), Some(value)) = (at(&projection.ty), at(&projection.value)) else {
+                return None;
+            };
+            let cases = projection
+                .cases
+                .iter()
+                .filter_map(|(this, at)| Some((at_case(self, this)?, at_case(self, at)?)))
+                .collect();
+            projections.push(ImplProjection { ty, value, cases });
+        }
+        let projections = self.project_impl(projections)?;
+        Some(ImplBounds {
+            traits,
+            projections,
+        })
+    }
+
+    /// Each of an impl's bounds `<ty as Trait>::Name == value` whose `ty`
+    /// is known fixes `value` to the associated type the crate's impls give
+    /// `ty`, as rustc's projection does: the bounds still open. `None` when
+    /// one contradicts: `ty` is a case whose associated type `value` can't
+    /// be, so the impl doesn't apply (rustc's E0271).
+    #[cfg(feature = "rust-import")]
+    fn project_impl(&mut self, projections: Vec<ImplProjection>) -> Option<Vec<ImplProjection>> {
+        let mut open = Vec::new();
+        for projection in projections {
+            let ty = self.inference.resolve(&projection.ty);
+            if contains_inference(&ty) {
+                open.push(projection);
+                continue;
+            }
+            for (this, value) in projection.cases.iter() {
+                let checkpoint = self.inference.checkpoint();
+                if !self.unify_type(this, &ty) {
+                    self.inference.rollback(checkpoint);
+                    continue;
+                }
+                if !self.unify_type(value, &projection.value) {
+                    self.inference.rollback(checkpoint);
+                    return None;
+                }
+                self.inference.commit(checkpoint);
+                break;
+            }
+        }
+        Some(open)
+    }
+
+    /// Each pending impl bound `<ty as Trait>::Name == value` (`Inference::
+    /// projections`) whose `ty` is known by now fixes its `value`, until
+    /// none does more.
+    #[cfg(feature = "rust-import")]
+    fn finish_projections(&mut self) {
+        loop {
+            let pending = std::mem::take(&mut self.inference.projections);
+            let count = pending.len();
+            let open = self.project_impl(pending).unwrap_or_default();
+            let settled = open.len() == count;
+            self.inference.projections.extend(open);
+            if settled {
+                break;
+            }
+        }
     }
 
     /// The body's output, when `output` is opaque, as the type its body
@@ -16291,9 +16403,24 @@ impl<'a> Parser<'a> {
                 self.inference.rollback(checkpoint);
             }
         }
+        #[cfg(feature = "rust-import")]
+        let written = match inputs.first().map(|input| self.inference.resolve(input)) {
+            Some(Ty::Script(owner, _)) => Some(owner),
+            Some(Ty::Reference { target, .. }) => match *target {
+                Ty::Script(owner, _) => Some(owner),
+                _ => None,
+            },
+            _ => None,
+        }
+        .and_then(|owner| self.models.method(owner, &member))
+        .and_then(|method| method.lifetimes().written_output.as_deref().cloned());
         self.splice_tokens(tokens);
         self.closure_hint = Some(inputs);
         let value = self.parse_closure(Token::Pipe, owner_span, false)?;
+        #[cfg(feature = "rust-import")]
+        if let (Some(written), Ty::FnItem { key, .. }) = (written, &value.ty) {
+            self.path_outputs.insert((**key).clone(), written);
+        }
         Ok(self.path_value(value))
     }
 
@@ -19429,7 +19556,7 @@ impl<'a> Parser<'a> {
                 intrinsic::Type::builtin("Duration", TypeId::of::<std::time::Duration>())
             }
             Ty::Time(Time::Instant) => {
-                intrinsic::Type::builtin("Instant", TypeId::of::<std::time::Instant>())
+                intrinsic::Type::builtin("Instant", TypeId::of::<crate::Instant>())
             }
             Ty::ParseError(_) => {
                 intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>())
@@ -20636,6 +20763,24 @@ impl<'a> Parser<'a> {
             };
             let actual = self.inference.resolve(&argument);
             let owner = owner.as_ref();
+            // `P: Into<T>` of the item's own `T`, which core's `impl<T>
+            // From<T> for T` ties to `P`: while `T` is open, the impls of
+            // `From<P>` for any type are as many candidates, and rustc
+            // fixes `T` from a later bound, as `image(&handle)`'s `Handle`
+            // is the renderer's. Only a `T` nothing else fixes by the
+            // body's end is `P`.
+            #[cfg(feature = "rust-import")]
+            if let [case] = relation.cases()
+                && matches!(case.this(), crate::host::signature::Pattern::Variable(_))
+                && let [crate::host::signature::Pattern::Parameter(target)] = relation.arguments()
+                && let Some(target) = parameters.get(target)
+                && matches!(self.inference.resolve(target), Ty::Infer(_))
+                && !matches!(actual, Ty::Int(_) | Ty::Float(_))
+            {
+                self.structural_defaults
+                    .push((target.clone(), actual.clone(), span));
+                continue;
+            }
             let mut matched = None;
             let mut ambiguous = false;
             for case in relation.cases() {
@@ -20751,6 +20896,40 @@ impl<'a> Parser<'a> {
                 // A mismatch is rustc's to report where it compiles the call.
                 let _ = self.unify_type(&declared, &implemented);
             }
+            // The case's bounds that fix an associated type, as iced's
+            // `From<Image<Handle>> for Element` fixes `Handle` once the
+            // element's renderer is known, now or by a later use.
+            #[cfg(feature = "rust-import")]
+            for projection in case.projections() {
+                let mut at = |this: &mut Self, pattern, bindings: &mut BTreeMap<u32, Ty>| {
+                    this.pattern_type(pattern, bindings, parameters, (&item_path, span), owner)
+                };
+                let (Ok(ty), Ok(value)) = (
+                    at(self, &projection.ty, &mut bindings),
+                    at(self, &projection.value, &mut bindings),
+                ) else {
+                    continue;
+                };
+                // A case of a type this program doesn't reach, as a backend
+                // only an alias names, fits no type it has.
+                let mut cases = Vec::with_capacity(projection.cases.len());
+                for (this, given) in projection.cases.iter() {
+                    let mut own = BTreeMap::new();
+                    if let (Ok(this), Ok(given)) =
+                        (at(self, this, &mut own), at(self, given, &mut own))
+                    {
+                        cases.push((this, given));
+                    }
+                }
+                let open = self
+                    .project_impl(vec![ImplProjection {
+                        ty,
+                        value,
+                        cases: cases.into_boxed_slice(),
+                    }])
+                    .unwrap_or_default();
+                self.inference.projections.extend(open);
+            }
         }
         Ok(())
     }
@@ -20768,6 +20947,7 @@ impl<'a> Parser<'a> {
         &mut self,
         item: &crate::host::item::Definition,
         requirements: &[(ImmutableString, Ty, capability::Set)],
+        operands: &[(Ty, Span, bool)],
         span: Span,
     ) -> Result<(), Error> {
         let signature = item.signature();
@@ -20810,6 +20990,7 @@ impl<'a> Parser<'a> {
                     owner.as_ref(),
                 )?);
             }
+            self.take_opaque_arguments(&bounded, identity, &arguments, operands);
             // A script type in the bound is followed even when nothing is
             // open, for the script impls it uses (D629).
             if !arguments
@@ -20823,13 +21004,128 @@ impl<'a> Parser<'a> {
             let checkpoint = self.inference.checkpoint();
             match self.select_impl(&bounded, identity, &arguments, owner.as_ref(), 0) {
                 Ok(()) => self.inference.commit(checkpoint),
-                Err(Selection::Opaque(ty, opaque)) => {
-                    return Err(opaque_impl_use(&ty, &opaque, span));
-                }
                 Err(_) => self.inference.rollback(checkpoint),
             }
         }
         Ok(())
+    }
+
+    /// A bound `bounded: Trait<arguments>` on what a script function of the
+    /// call gives, where its signature writes `impl Trait<..>`: rustc knows
+    /// the value by that bound alone, so its arguments, the trait's
+    /// defaults filled in, are the bound's. url_handler's `view(&self) ->
+    /// impl Widget<Message>` gives a `Container` that is a widget of every
+    /// renderer, and the `impl Widget<Message>` fixes iced's (#1072).
+    #[cfg(feature = "rust-import")]
+    fn take_opaque_arguments(
+        &mut self,
+        bounded: &Ty,
+        identity: [u8; 32],
+        arguments: &[Ty],
+        operands: &[(Ty, Span, bool)],
+    ) {
+        let written = operands.iter().find_map(|(ty, _, _)| {
+            let Ty::Callable {
+                output,
+                item: Some(value),
+                ..
+            } = self.inference.resolve(ty)
+            else {
+                return None;
+            };
+            if self.inference.resolve(&output) != *bounded {
+                return None;
+            }
+            let key = value.key();
+            if let Some(written) = self.path_outputs.get(key) {
+                return Some(written.clone());
+            }
+            let lifetimes = match self.models.functions_by_key.get(key) {
+                Some(function) => &function.definition.lifetimes,
+                None => self
+                    .models
+                    .methods
+                    .values()
+                    .find(|method| method.key() == key)?
+                    .lifetimes(),
+            };
+            lifetimes.written_output.as_deref().cloned()
+        });
+        let Some(type_ref::Type::Path(opaque)) = written else {
+            return;
+        };
+        let Some(trait_name) = type_ref::Type::Path(opaque.clone())
+            .opaque_trait()
+            .map(String::from)
+        else {
+            return;
+        };
+        let Ok(path) = crate::host::path::Path::parse(&trait_name) else {
+            return;
+        };
+        let Some(header) = self.models.host.trait_header(&path).cloned() else {
+            return;
+        };
+        // The bound's trait is the written one, or one the written one
+        // holds at the same arguments: a trait every type of the bound's
+        // implements through a blanket impl that passes its arguments on,
+        // as iced's `Widget` is for each `core::Widget`.
+        let passes_on = |headers: &[crate::host::facade::ImplHeader]| {
+            headers.iter().any(|implementation| {
+                matches!(
+                    implementation.self_type.shape(),
+                    crate::host::type_ref::Shape::Parameter(_)
+                ) && implementation.bounds.iter().any(|bound| {
+                    bound.trait_identity == identity
+                        && bound.ty == implementation.self_type
+                        && bound.arguments == implementation.arguments
+                })
+            })
+        };
+        if header.identity != identity
+            && !passes_on(
+                &self
+                    .models
+                    .host
+                    .impl_headers(header.identity)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        {
+            return;
+        }
+        let owner = self.models.host.type_owner(&trait_name).cloned();
+        let written = opaque
+            .arguments
+            .iter()
+            .filter_map(|argument| match argument {
+                type_ref::Argument::Type(ty) => Some(Ty::from_resolved(ty)),
+                type_ref::Argument::Lifetime(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let mut parameters = BTreeMap::new();
+        for (index, (name, argument)) in header.parameters.iter().zip(arguments).enumerate() {
+            let ty = match written.get(index) {
+                Some(ty) => ty.clone(),
+                None => match header.defaults.get(index).and_then(Option::as_ref) {
+                    Some(default) => match self.instantiate_host_type(
+                        default,
+                        &mut parameters,
+                        &trait_name,
+                        Span::NONE,
+                        owner.as_ref(),
+                        None,
+                    ) {
+                        Ok(ty) => ty,
+                        Err(_) => return,
+                    },
+                    None => return,
+                },
+            };
+            parameters.insert(name.clone(), ty.clone());
+            // A mismatch is rustc's to report where it compiles the call.
+            let _ = self.unify_type(argument, &ty);
+        }
     }
 
     /// Whether `ty` is a type of `pattern`, binding its variables. An
@@ -21484,7 +21780,7 @@ impl<'a> Parser<'a> {
             }
         });
         #[cfg(feature = "rust-import")]
-        self.fix_bounds_by_impls(&item, &requirements, call)?;
+        self.fix_bounds_by_impls(&item, &requirements, &operands, call)?;
         Ok(self.push_op(Op::Intrinsic {
             operation: Box::new(IntrinsicOperation {
                 facade,
@@ -45103,7 +45399,7 @@ impl<'a> Parser<'a> {
             // Rust's own `Debug` text of a `Duration` (`1.5s`) or `Instant`.
             Ty::Time(_) => {
                 crate::host::debug::register::<std::time::Duration>();
-                crate::host::debug::register::<std::time::Instant>();
+                crate::host::debug::register::<crate::Instant>();
                 self.prelude_op(PreludeOp::GenericDebug, [value])
             }
             Ty::Ordering => {
@@ -47526,7 +47822,7 @@ impl<'a> Parser<'a> {
             .map(|generic| substitution[&generic.name.text].clone())
             .collect::<Vec<_>>();
         self.instance_calls
-            .push((function.key.clone(), types.clone()));
+            .push((function.key.clone(), types.clone(), call));
         let Some(instances) = self.models.instances.templates.get(&function.key) else {
             return Ok(function);
         };
@@ -47537,13 +47833,15 @@ impl<'a> Parser<'a> {
         // A generic of this body's own reaching one compiled per
         // instantiation makes this body one too.
         self.reaches_host |= resolved.iter().any(reaches_param);
-        let instance = instance_names(&resolved, &self.models)
+        let instance = self
+            .called_instance(&resolved, call)
             .and_then(|names| {
                 instances
                     .iter()
-                    .find(|(written, _)| written.as_ref() == names.as_slice())
+                    .find(|(written, _)| *written == names)
                     .map(|(_, key)| key.clone())
             })
+            .inspect(|key| self.take_instance_types(key, &types))
             .and_then(|key| self.models.functions_by_key.get(&key).cloned());
         // While calls are collected, a call with no instance yet reads
         // on with its template's signature.
@@ -47565,6 +47863,30 @@ impl<'a> Parser<'a> {
                 call,
             }
         })
+    }
+
+    /// The names of the types a call of a template gives its parameters:
+    /// those its arguments fix, else those the end of this body resolves,
+    /// as rustc infers a parameter from a later use of the call's value.
+    #[cfg(feature = "rust-import")]
+    fn called_instance(&self, resolved: &[Ty], call: Span) -> Option<Box<[ImmutableString]>> {
+        if let Some(names) = instance_names(resolved, &self.models) {
+            return Some(names.into_boxed_slice());
+        }
+        let caller = self.callable.clone()?;
+        self.models.instances.calls.get(&(caller, call)).cloned()
+    }
+
+    /// The call's types, `types` in its template's parameter order, are
+    /// those of the instance `key` it binds to.
+    #[cfg(feature = "rust-import")]
+    fn take_instance_types(&mut self, key: &crate::item::Key, types: &[Ty]) {
+        let Some(named) = self.models.instances.types.get(key).cloned() else {
+            return;
+        };
+        for (ty, (_, named)) in types.iter().zip(named.iter()) {
+            let _ = self.unify_type(ty, &Ty::from_resolved(named));
+        }
     }
 
     /// `definition`'s instance for the types `substitution` gives its impl's
@@ -47596,7 +47918,7 @@ impl<'a> Parser<'a> {
             .map(|generic| substitution[&generic.name.text].clone())
             .collect::<Vec<_>>();
         self.instance_calls
-            .push((definition.key().clone(), types.clone()));
+            .push((definition.key().clone(), types.clone(), call));
         let Some(instances) = self.models.instances.templates.get(definition.key()) else {
             return Ok(definition);
         };
@@ -47605,13 +47927,15 @@ impl<'a> Parser<'a> {
             .map(|ty| self.inference.resolve(ty))
             .collect::<Vec<_>>();
         self.reaches_host |= resolved.iter().any(reaches_param);
-        let instance = instance_names(&resolved, &self.models)
+        let instance = self
+            .called_instance(&resolved, call)
             .and_then(|names| {
                 instances
                     .iter()
-                    .find(|(written, _)| written.as_ref() == names.as_slice())
+                    .find(|(written, _)| *written == names)
                     .map(|(_, key)| key.clone())
             })
+            .inspect(|key| self.take_instance_types(key, &types))
             .and_then(|key| self.models.method(definition.owner(), key.name()).cloned());
         // While calls are collected, a call with no instance yet reads on
         // with its template's signature.
@@ -53742,10 +54066,25 @@ impl<'a> Parser<'a> {
         let Some((start, span)) = self.last_expression else {
             return self.require_type(expected, &self.last_type.clone(), body);
         };
+        let mut value = self.take_tail(start, span);
+        if value.lvalue.is_some() {
+            self.move_local(&mut value)?;
+        }
+        value.lvalue = None;
+        let result = self.coerce_expr(expected, &mut value);
+        result?;
+        self.returned(value.span, &value.ty);
+        self.write_output(value.rendered_source(), value.span);
+        self.last_type = value.ty;
+        Ok(())
+    }
+
+    /// The tail written from `start`, taken out of the output. A local the
+    /// body ends with is its lvalue: it moves out to the caller, as in Rust,
+    /// rather than being copied as the body's locals end.
+    fn take_tail(&mut self, start: usize, span: Span) -> ParsedExpr {
         let mut source = self.output.split_off(start);
         source.trim_end();
-        // A local the body ends with moves out to the caller, as in Rust,
-        // rather than being copied as the body's locals end.
         let lvalue = variable_name(source.as_str())
             .filter(|name| {
                 self.bindings
@@ -53756,8 +54095,7 @@ impl<'a> Parser<'a> {
                 binding,
                 ty: self.last_type.clone(),
             });
-        let moves = lvalue.is_some();
-        let mut value = ParsedExpr {
+        ParsedExpr {
             prelude: origin::Fragment::default(),
             source,
             ty: self.last_type.clone(),
@@ -53765,17 +54103,7 @@ impl<'a> Parser<'a> {
             lvalue,
             outcome: crate::host::usage::Outcome::Conservative,
             evaluation: crate::host::usage::Evaluation::Required,
-        };
-        if moves {
-            self.move_local(&mut value)?;
         }
-        value.lvalue = None;
-        let result = self.coerce_expr(expected, &mut value);
-        result?;
-        self.returned(value.span, &value.ty);
-        self.write_output(value.rendered_source(), value.span);
-        self.last_type = value.ty;
-        Ok(())
     }
 
     /// A `fmt` body returns the text it wrote: its `fmt::Result` tail is
@@ -54567,6 +54895,7 @@ impl<'a> Parser<'a> {
 
     #[cfg(feature = "rust-import")]
     fn finish_structural_instances(&mut self) -> Result<(), Error> {
+        self.finish_projections();
         for (parameter, default, span) in std::mem::take(&mut self.structural_defaults) {
             if matches!(self.inference.resolve(&parameter), Ty::Infer(_)) {
                 self.require_type(&parameter, &default, span)?;
@@ -55349,9 +55678,24 @@ struct ClosureScope {
 }
 
 /// An impl's where-clause bounds at an instance (D604): each bounded
-/// type, the bound's trait identity and the trait's arguments.
+/// type, the bound's trait identity and the trait's arguments, then each
+/// bound that fixes an associated type (`ImplProjection`).
 #[cfg(feature = "rust-import")]
-type ImplBounds = Vec<(Ty, [u8; 32], Vec<Ty>)>;
+struct ImplBounds {
+    traits: Vec<(Ty, [u8; 32], Vec<Ty>)>,
+    projections: Vec<ImplProjection>,
+}
+
+/// A bound `<ty as Trait>::Name == value` of an impl at an instance, with
+/// the associated type each type `ty` may be gives (`facade::
+/// ImplProjection`).
+#[cfg(feature = "rust-import")]
+#[derive(Debug)]
+struct ImplProjection {
+    ty: Ty,
+    value: Ty,
+    cases: Box<[(Ty, Ty)]>,
+}
 
 /// Why no impl fixed an `impl Trait`'s hidden type (D604): none fits the
 /// type named, or more than one does.
@@ -55359,9 +55703,6 @@ type ImplBounds = Vec<(Ty, [u8; 32], Vec<Ty>)>;
 enum Selection {
     None(String),
     Many(String),
-    /// The program's impl fits, at a type that holds a crate's opaque type:
-    /// the type the impl is used at and the opaque type, by name.
-    Opaque(String, String),
 }
 
 /// Whether a type still has an inference variable in it.
@@ -55387,44 +55728,6 @@ fn reaches_param(ty: &Ty) -> bool {
 
 /// Whether `ty` is a script type, or holds one as a crate type's argument
 /// or behind a borrow.
-#[cfg(feature = "rust-import")]
-/// The name of a crate's opaque `impl Trait` type `ty` holds, as iced's
-/// `Widget::explain` gives (`surface::opaque`): Rust code can't name it.
-#[cfg(feature = "rust-import")]
-fn held_opaque(ty: &Ty) -> Option<String> {
-    match ty {
-        Ty::Host { proof, arguments } => {
-            let path = proof.definition.path_ref().to_string();
-            if rawr_import::surface::opaque::declared(&path) {
-                return Some(path);
-            }
-            arguments.iter().find_map(held_opaque)
-        }
-        Ty::Script(_, members) | Ty::Tuple(members) => members.iter().find_map(held_opaque),
-        Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Option(target) => {
-            held_opaque(target)
-        }
-        Ty::Array { element, .. } => held_opaque(element),
-        Ty::Result(ok, err) => held_opaque(ok).or_else(|| held_opaque(err)),
-        _ => None,
-    }
-}
-
-/// The program's impl of a crate's trait used at `ty`, which holds the
-/// crate's opaque type `opaque`: the runner compiles the impl for each type
-/// it is used at, and can't name that one.
-#[cfg(feature = "rust-import")]
-fn opaque_impl_use(ty: &str, opaque: &str, span: Span) -> Error {
-    Error::UnsupportedNominalSyntax {
-        construct: format!(
-            "the program's impl of a crate's trait for `{ty}`, which holds the crate's \
-             `impl Trait` type `{opaque}`,"
-        )
-        .into(),
-        source: span,
-    }
-}
-
 #[cfg(feature = "rust-import")]
 fn mentions_script(ty: &Ty) -> bool {
     match ty {
@@ -56493,8 +56796,8 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
         return Some(lhs.cmp(&rhs));
     }
     if let (Some(lhs), Some(rhs)) = (
-        lhs.read_lock::<std::time::Instant>(),
-        rhs.read_lock::<std::time::Instant>(),
+        lhs.read_lock::<crate::Instant>(),
+        rhs.read_lock::<crate::Instant>(),
     ) {
         return Some(lhs.cmp(&rhs));
     }
@@ -56614,8 +56917,8 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
         return *lhs == *rhs;
     }
     if let (Some(lhs), Some(rhs)) = (
-        lhs.read_lock::<std::time::Instant>(),
-        rhs.read_lock::<std::time::Instant>(),
+        lhs.read_lock::<crate::Instant>(),
+        rhs.read_lock::<crate::Instant>(),
     ) {
         return *lhs == *rhs;
     }
@@ -57688,7 +57991,8 @@ fn time_code(name: &str) -> usize {
 /// One of `TIME_METHODS` on `args[0]` with the operand `args[2]`, with
 /// Rust's panics.
 fn time_method(args: &mut FnCallArgs) -> RawrResult {
-    use std::time::{Duration, Instant};
+    use crate::Instant;
+    use std::time::Duration;
     let fail = |message: &str| -> RawrResult {
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
     };

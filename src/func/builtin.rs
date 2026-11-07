@@ -58,7 +58,6 @@ fn is_numeric(typ: TypeId) -> bool {
         return true;
     }
 
-    #[cfg(not(target_family = "wasm"))]
     if typ == TypeId::of::<u128>() || typ == TypeId::of::<i128>() {
         return true;
     }

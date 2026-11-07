@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 44;
+const SCHEMA: u32 = 46;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -215,8 +215,9 @@ impl TraitHeader {
 
 /// One impl of a trait (D604), as `impl<W, M, T, R> Widget<M, T, R> for
 /// Column<W> where W: Widget<M, T, R>`: its own type parameters, the trait
-/// and its type arguments other than `Self`, the self type, and the bounds
-/// of its where-clauses that name a trait.
+/// and its type arguments other than `Self`, the self type, the bounds of
+/// its where-clauses that name a trait, and those that fix an associated
+/// type.
 #[derive(Deserialize, Serialize)]
 pub struct ImplHeader {
     parameters: Box<[Box<str>]>,
@@ -224,6 +225,36 @@ pub struct ImplHeader {
     arguments: Box<[Type]>,
     self_type: Type,
     bounds: Box<[ImplBound]>,
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    projections: Box<[ImplProjection]>,
+}
+
+/// A where-clause bound of an [`ImplHeader`] that fixes an associated type:
+/// `<ty as Trait>::Name` is `value`, and is each case's second type where
+/// `ty` is its first (`headers::ImplProjection`).
+#[derive(Deserialize, Serialize)]
+pub struct ImplProjection {
+    ty: Type,
+    value: Type,
+    cases: Box<[(Type, Type)]>,
+}
+
+impl ImplProjection {
+    /// The type whose associated type the bound names.
+    #[must_use]
+    pub const fn ty(&self) -> &Type {
+        &self.ty
+    }
+    /// The type the associated type is.
+    #[must_use]
+    pub const fn value(&self) -> &Type {
+        &self.value
+    }
+    /// Each type `ty` may be, with its associated type there.
+    #[must_use]
+    pub fn cases(&self) -> &[(Type, Type)] {
+        &self.cases
+    }
 }
 
 /// A where-clause bound of an [`ImplHeader`]: `ty: Trait<arguments>`.
@@ -258,6 +289,11 @@ impl ImplHeader {
     #[must_use]
     pub fn bounds(&self) -> &[ImplBound] {
         &self.bounds
+    }
+    /// Its where-clause bounds that fix an associated type.
+    #[must_use]
+    pub fn projections(&self) -> &[ImplProjection] {
+        &self.projections
     }
 }
 
@@ -729,6 +765,10 @@ pub struct Relation {
 pub struct Case {
     this: Type,
     arguments: Box<[Type]>,
+    /// The implementation's bounds that fix an associated type
+    /// (`signature::Projection`): each the type, the value, and the cases.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    projections: Box<[ImplProjection]>,
 }
 
 impl Relation {
@@ -765,6 +805,10 @@ impl Case {
     /// The implementation's trait arguments.
     pub const fn arguments(&self) -> &[Type] {
         &self.arguments
+    }
+    /// The implementation's bounds that fix an associated type.
+    pub const fn projections(&self) -> &[ImplProjection] {
+        &self.projections
     }
 }
 
@@ -1518,6 +1562,19 @@ impl Plan {
                 .sort_by(|left, right| left.path.cmp(&right.path));
             let mut items = std::mem::take(&mut facade.items).into_vec();
             items.retain(|item| item.signature.declared(&resolved));
+            // A member of an opaque type is declared with its owner, which
+            // the function or method that gives it declares: one the
+            // facade leaves out, as ratatui's `Line::styled_graphemes`, has
+            // no `next` either.
+            items.retain(|item| {
+                item.path.rsplit_once("::").is_none_or(|(owner, _)| {
+                    !super::opaque::declared(owner)
+                        || facade
+                            .types
+                            .binary_search_by(|ty| (*ty.path).cmp(owner))
+                            .is_ok()
+                })
+            });
             items.sort_by(|left, right| left.path.cmp(&right.path));
             facade.items = items.into_boxed_slice();
             // So is a type alias of such a type.
@@ -1604,12 +1661,33 @@ impl Plan {
                         })
                     })
                     .collect();
+                let projections = header
+                    .projections
+                    .iter()
+                    .filter_map(|projection| {
+                        Some(ImplProjection {
+                            ty: ty(&projection.ty, &header.parameters).ok()?,
+                            value: ty(&projection.value, &header.parameters).ok()?,
+                            cases: projection
+                                .cases
+                                .iter()
+                                .map(|(this, value)| {
+                                    Some((
+                                        ty(this, &header.parameters).ok()?,
+                                        ty(value, &header.parameters).ok()?,
+                                    ))
+                                })
+                                .collect::<Option<_>>()?,
+                        })
+                    })
+                    .collect();
                 converted.push(ImplHeader {
                     parameters: parameters(&header.parameters)?,
                     trait_identity: header.trait_identity,
                     arguments,
                     self_type,
                     bounds,
+                    projections,
                 });
             }
             facade.impls = converted.into_boxed_slice();
@@ -3844,9 +3922,30 @@ fn relations(
             else {
                 continue;
             };
+            let projections = case
+                .projections()
+                .iter()
+                .filter_map(|projection| {
+                    Some(ImplProjection {
+                        ty: pattern(projection.ty(), parameters).ok()?,
+                        value: pattern(projection.value(), parameters).ok()?,
+                        cases: projection
+                            .cases()
+                            .iter()
+                            .map(|(this, at)| {
+                                Some((
+                                    pattern(this, parameters).ok()?,
+                                    pattern(at, parameters).ok()?,
+                                ))
+                            })
+                            .collect::<Option<_>>()?,
+                    })
+                })
+                .collect();
             cases.push(Case {
                 this,
                 arguments: implemented,
+                projections,
             });
         }
         if cases.is_empty()

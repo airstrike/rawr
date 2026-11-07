@@ -232,7 +232,7 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                 "i128" => value.is_int() || value.is::<i128>() || value.is::<u128>(),
                 // `std::time`'s types are Rust's at runtime.
                 "Duration" => value.is::<std::time::Duration>(),
-                "Instant" => value.is::<std::time::Instant>(),
+                "Instant" => value.is::<crate::Instant>(),
                 "String" => value.is_string(),
                 // `ParseIntError` and its kin are their messages at runtime.
                 "ParseIntError" | "ParseFloatError" | "ParseBoolError" | "ParseCharError"

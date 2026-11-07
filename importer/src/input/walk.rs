@@ -4,7 +4,11 @@
 //! a link back to a directory the walk is already inside (walkdir's loop
 //! check). A walk without links is one segment from its root; each followed
 //! directory link starts a segment at the link's canonical target.
+//!
+//! A walk of a package's source tree also leaves out what Cargo's file
+//! listing never selects.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -53,6 +57,33 @@ impl Ancestors {
             }
         }
     }
+}
+
+/// Whether a walk of a package's source tree leaves out the entry `name`
+/// of a directory at `depth`. In either its Git or its walking mode,
+/// Cargo's file listing selects nothing under a `.git` or a nested package,
+/// and under the package's own `target` directory only what Git tracks
+/// there; everything else it might select is kept, whatever its ignore and
+/// include rules say, so the walk sees every file whose change makes Cargo
+/// rerun a build script that declares no `rerun-if` input. `target` is left
+/// out whole: every build writes there. `nested` probes for a directory's
+/// `Cargo.toml` and runs only for a directory.
+pub(in crate::input) fn package_omits<E>(
+    name: &OsStr,
+    depth: usize,
+    directory: bool,
+    nested: impl FnOnce() -> Result<bool, E>,
+) -> Result<bool, E> {
+    if name == ".git" {
+        return Ok(true);
+    }
+    if !directory {
+        return Ok(false);
+    }
+    if depth == 0 && name == "target" {
+        return Ok(true);
+    }
+    nested()
 }
 
 /// Whether resolving a link failed because it names nothing: its target is

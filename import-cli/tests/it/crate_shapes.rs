@@ -174,12 +174,6 @@ fn an_opaque_types_members_import() {
     runs_as_cargo_does("opaque", "7\nvalue 8\n2\n");
 }
 
-/// A crate's trait impl on a type with a const parameter, as palette's
-/// `impl<T> Lookup<u8, T> for ArrayTable<256>` is, leaves the crate
-/// importable: no facade type writes a const argument, so the impl's header
-/// is left out. An impl on `Hsl`, which rustc reads as `Hsl<Srgb>`, keeps
-/// its header with the default filled in. The const one used to give
-/// `Table` no arguments and stop the import.
 /// A crate's opaque `impl Iterator<Item = u32>`, as a function gives it
 /// and as a generic type's method gives one: `next`, a `for` loop and the
 /// iterator's adaptors (`count`, `map`, `filter`) pull from it as rustc's
@@ -189,6 +183,23 @@ fn a_crates_opaque_iterator_is_iterated() {
     runs_as_cargo_does("iterated", "Some(3)\nstep 2\nstep 1\n4\n[6, 4, 2]\n6 2\n");
 }
 
+/// A type whose method gives an opaque iterator, reached through a module
+/// that re-exports the type's module, as ratatui's
+/// `macros::ratatui_core::text::Line` is, by a program that never calls the
+/// method: the iterator's `next` is declared at each path its owner is. It
+/// used to be declared at the second path without its owner, which failed
+/// the import.
+#[test]
+fn an_opaque_iterator_of_a_re_exported_type_imports() {
+    runs_as_cargo_does("iterated_again", "3\n");
+}
+
+/// A crate's trait impl on a type with a const parameter, as palette's
+/// `impl<T> Lookup<u8, T> for ArrayTable<256>` is, leaves the crate
+/// importable: no facade type writes a const argument, so the impl's header
+/// is left out. An impl on `Hsl`, which rustc reads as `Hsl<Srgb>`, keeps
+/// its header with the default filled in. The const one used to give
+/// `Table` no arguments and stop the import.
 #[test]
 fn a_trait_impl_on_a_const_argument_leaves_the_crate_importable() {
     runs_as_cargo_does("table", "3\n");
