@@ -365,7 +365,7 @@ pub trait Cells {
 /// GenericImageView<Pixel = Self::Pixel>>` does: the parameter's `Cell` is
 /// the impl's own, which the parameter's opaque type doesn't have (#1069).
 pub trait Fill: Cells {
-    fn fill_from<O: Cells<Cell = Self::Cell>>(&mut self, other: &O) -> bool;
+    fn fill_from<O: Cells<Cell = Self::Cell>>(&mut self, other: O) -> bool;
 }
 
 /// A sheet of one cell.
@@ -379,7 +379,7 @@ impl Cells for Sheet {
 }
 
 impl Fill for Sheet {
-    fn fill_from<O: Cells<Cell = u8>>(&mut self, other: &O) -> bool {
+    fn fill_from<O: Cells<Cell = u8>>(&mut self, other: O) -> bool {
         self.0 = other.cell();
         true
     }
@@ -388,8 +388,15 @@ impl Fill for Sheet {
 /// The cell a sheet holds after it fills from another.
 pub fn filled(cell: u8) -> u8 {
     let mut sheet = Sheet(0);
-    sheet.fill_from(&Sheet(cell));
+    sheet.fill_from(Sheet(cell));
     sheet.cell()
+}
+
+/// The cell `value` holds after it fills from a sheet of 4: a program's
+/// impl of `Fill` runs with the sheet as its opaque `O`.
+pub fn refilled<T: Fill<Cell = u8>>(mut value: T) -> u8 {
+    value.fill_from(Sheet(4));
+    value.cell()
 }
 
 /// What runs over items, as rayon's `ParallelIterator` does: `any` takes a

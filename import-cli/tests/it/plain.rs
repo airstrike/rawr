@@ -1638,7 +1638,8 @@ fn a_rename_in_a_derived_type_swaps_into_the_running_program() {
 /// through the opaque type (#1031). So is a free function of such a value.
 /// A parameter's projection its bounds set to the method's `Self`, as
 /// image's `copy_from<O: GenericImageView<Pixel = Self::Pixel>>` sets
-/// `O::Pixel`, is an opaque type of its own, not read without end; a member
+/// `O::Pixel`, is an opaque type of its own, not read without end, and the
+/// program's impl of such a method runs; a member
 /// whose closure names the trait's own parameter, as rayon's
 /// `FromParallelIterator<T>::from_par_iter` gives `I::Iter` an `any` of `T`,
 /// isn't written, nor are the members of a type no function gives (#1069).
@@ -1662,7 +1663,7 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
          expected a str\nexpected 2 numbers\nexpected what I wanted\n6 3\n\
          Counts { odd: 2, even: 1 }\nodd even\n6\ntrue\n2 1\n\
          Small(2) invalid value: integer `7`, expected a number below 3\n\
-         invalid value: boolean `false`, expected a number\ninteger `4`\n9 3\n"
+         invalid value: boolean `false`, expected a number\ninteger `4`\n9 4 3\n"
     );
 }
 
