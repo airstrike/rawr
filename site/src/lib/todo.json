@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"Error, panic and status messages say what failed, on what, and what to do, in rustc's and Cargo's plain style. A future that isn't `Send` now reads \"the future returned by `f` cannot be sent between threads safely\", and an unsupported construct followed by a hint no longer has \"is not supported\" tacked onto the end of the hint.","issues":[1109]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.165",
@@ -2669,9 +2674,11 @@
     {"issue":1106,"title":"range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc"},
     {"issue":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"open","category":"Divergences from rustc"},
     {"issue":1108,"title":"A git dependency on a branch with a slash panics rawr-import while it reads Cargo metadata","state":"closed","category":"Health","release":"0.3.165"},
-    {"issue":1109,"title":"Error messages that don't read like a program's error messages","state":"open","category":"Health"},
+    {"issue":1109,"title":"Error messages that don't read like a program's error messages","state":"closed","category":"Health"},
     {"issue":1110,"title":"A Git dependency whose branch or tag has `&` or `#` is declared with the wrong reference","state":"open","category":"Health"},
-    {"issue":1111,"title":"A package from an alternative sparse registry panics rawr-import instead of a plain unsupported-registry error","state":"open","category":"Health"}
+    {"issue":1111,"title":"A package from an alternative sparse registry panics rawr-import instead of a plain unsupported-registry error","state":"open","category":"Health"},
+    {"issue":1112,"title":"Unsupported-construct messages depend on a \"not supported\" substring","state":"open","category":"Health"},
+    {"issue":1113,"title":"Flaky rawr-cli test a_template_is_written_by_the_binary_offering_it","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3506,11 +3513,11 @@
           "name": "Error messages and metadata edge cases",
           "start": 84,
           "size": 1,
-          "state": "now",
-          "note": "#1108 shipped in 0.3.165; #1109 audits every message",
+          "state": "done",
+          "note": "#1108 in 0.3.165; #1109 reworded about 150 messages in 0.3.166",
           "issues": [
             {"number":1108,"title":"A git dependency on a branch with a slash panics rawr-import while it reads Cargo metadata","state":"closed"},
-            {"number":1109,"title":"Error messages that don't read like a program's error messages","state":"open"}
+            {"number":1109,"title":"Error messages that don't read like a program's error messages","state":"closed"}
           ]
         },
         {
