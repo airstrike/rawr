@@ -319,8 +319,7 @@ fn uncached_scope_owns_installation_and_exact_execution_and_releases_after_failu
         )
         .expect("the other project context seals"),
     );
-    let other_scope =
-        execution::Scope::bind(&other_context, execution::Operation::Package, [19; 32]);
+    let other_scope = execution::Scope::bind(&other_context, execution::Operation::Probe, [19; 32]);
     let (sent, received) = mpsc::channel();
     std::thread::scope(|threads| {
         let before_release = store

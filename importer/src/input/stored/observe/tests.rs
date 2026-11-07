@@ -75,8 +75,8 @@ fn reference(recipe: proof::Recipe) -> proof::Entry {
         },
         &limits,
     );
-    let proof = proof::evaluate(&[recipe], false, &limits, &mut allocation)
-        .expect("legacy entry semantics");
+    let proof =
+        proof::evaluate(&[recipe], &limits, &mut allocation).expect("legacy entry semantics");
     let (_, entries, _) = proof.into_stored_parts();
     entries[0].clone()
 }

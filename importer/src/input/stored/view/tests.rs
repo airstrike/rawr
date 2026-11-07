@@ -292,7 +292,9 @@ fn every_recipe_borrows_the_same_payloads_after_consuming_capture() {
             panic!("stored package view")
         };
         assert!(std::ptr::eq(owner, borrowed));
-        let stored::Package::Registry(registry) = borrowed;
+        let stored::Package::Registry(registry) = borrowed else {
+            panic!("stored registry fixture")
+        };
         assert_eq!(registry.package_id.as_ref(), "registry+fixture#pkg@1.2.3");
         assert_eq!(registry.source.as_ref(), "registry+fixture");
         assert_eq!(registry.checksum, [7; 32]);
@@ -357,22 +359,22 @@ fn views_have_no_owned_drop_or_account_effect_even_after_refusal() {
 }
 
 #[test]
-fn live_package_views_keep_path_and_git_execution_out_of_stored_data() {
-    for git in [false, true] {
-        let recipe = proof::Recipe::Package(package::Set::fixture_stored_listed(git));
-        let proof::Recipe::Package(owner) = &recipe else {
-            panic!("live package")
-        };
-        let View::Package(borrowed) = recipe.view() else {
-            panic!("package view")
-        };
-        assert!(std::ptr::eq(owner, borrowed));
-        assert!(matches!(borrowed, package::Set::Git(_)) == git);
-        assert!(matches!(
-            stored::Recipe::capture(recipe),
-            Err(stored::Error::IncompleteWitness)
-        ));
-    }
+fn a_live_package_tree_is_stored_as_its_package_and_root() {
+    let recipe = proof::Recipe::Package(package::Set::fixture_stored_tree());
+    let proof::Recipe::Package(owner) = &recipe else {
+        panic!("live package")
+    };
+    let View::Package(borrowed) = recipe.view() else {
+        panic!("package view")
+    };
+    assert!(std::ptr::eq(owner, borrowed));
+    let Ok(stored::Recipe::Package(stored::Package::Tree { package_id, root })) =
+        stored::Recipe::capture(recipe)
+    else {
+        panic!("a stored package tree")
+    };
+    assert_eq!(&*package_id, "path+file:///unobserved/package#pkg@1.2.3");
+    assert_eq!(root, Path::new("/unobserved/package"));
 }
 
 fn scalar_entries() -> Box<[proof::Entry]> {
@@ -423,7 +425,7 @@ fn live_evaluation_preserves_entries_fingerprint_and_exact_prior_accounting() {
     let mut allocation = Allocation::for_proof(prior, &limits);
     allocation.item_limit = prior.items + 19;
     allocation.byte_limit = prior.bytes + 82;
-    let actual = proof::evaluate(&baseline.recipes[6..11], false, &limits, &mut allocation)
+    let actual = proof::evaluate(&baseline.recipes[6..11], &limits, &mut allocation)
         .expect("exact remaining scalar proof allowance");
     assert_eq!(
         allocation.usage(),
@@ -448,7 +450,7 @@ fn live_evaluation_charges_in_full_and_keeps_refusal_terminal() {
         bytes: 31,
     };
     let mut allocation = Allocation::for_proof(prior, &limits);
-    proof::evaluate(&baseline.recipes[6..11], false, &limits, &mut allocation)
+    proof::evaluate(&baseline.recipes[6..11], &limits, &mut allocation)
         .expect("live evaluation is owned, not gated");
     let spent = allocation.usage();
     assert_eq!(
@@ -461,7 +463,7 @@ fn live_evaluation_charges_in_full_and_keeps_refusal_terminal() {
     assert!(allocation.bytes(0).is_ok(), "a charge never latches");
     allocation.refuse();
     assert!(matches!(
-        proof::evaluate(&baseline.recipes[6..7], false, &limits, &mut allocation),
+        proof::evaluate(&baseline.recipes[6..7], &limits, &mut allocation),
         Err(crate::Error::InputAccountRefused)
     ));
     assert_eq!(allocation.usage(), spent);

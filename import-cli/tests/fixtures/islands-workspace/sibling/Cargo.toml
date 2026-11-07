@@ -1,0 +1,8 @@
+[package]
+name = "sibling"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A repository beside the app's, in a workspace of its own.
+[workspace]

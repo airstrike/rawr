@@ -13,9 +13,7 @@ pub(crate) enum Operation {
     Harness,
     Build,
     Probe,
-    Package,
     Publication,
-    PackageReplay,
 }
 
 /// Exact execution partition bound to the caller's captured installation.

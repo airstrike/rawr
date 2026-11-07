@@ -73,8 +73,6 @@ pub(crate) enum Error {
     Allocation(#[from] std::collections::TryReserveError),
     #[error("invalid stored baseline: {0}")]
     Encoding(&'static str),
-    #[error("complete package membership witness is unavailable")]
-    IncompleteWitness,
     #[error("stored baseline size calculation overflowed")]
     Overflow,
     #[error("stored baseline account has already refused work")]
@@ -84,7 +82,7 @@ pub(crate) enum Error {
 pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 impl Stored {
-    /// Move the original cold data, refusing packages without a complete witness.
+    /// Move the original cold data.
     pub(crate) fn capture(
         baseline: Baseline,
         limits: &cargo::Limits,
@@ -96,12 +94,9 @@ impl Stored {
             recipe_allocation,
             mut allocation,
             universe_build,
-            package_replay,
             #[cfg(feature = "rustc-driver")]
                 partitions: _,
         } = baseline;
-        // Execution ownership is not serializable source evidence.
-        drop(package_replay);
         let mut budget = Budget::borrow(limits, &mut allocation, graph);
         let result = Self::retain(
             proof,
@@ -128,14 +123,6 @@ impl Stored {
         budget: &mut Budget<'_>,
     ) -> Result<Self> {
         budget.check()?;
-        for recipe in &recipes {
-            if matches!(
-                recipe,
-                proof::Recipe::Package(super::package::Set::Path(_) | super::package::Set::Git(_))
-            ) {
-                return Err(Error::IncompleteWitness);
-            }
-        }
         let mut retained = budget.items::<Recipe>(recipes.len())?;
         for recipe in recipes {
             retained.push(Recipe::capture(recipe)?);

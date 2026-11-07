@@ -58,7 +58,6 @@ pub(crate) struct Baseline {
     recipe_allocation: Usage,
     allocation: Allocation,
     universe_build: Option<cargo::universe::BuildProjection>,
-    package_replay: Option<cargo::execution::Scope>,
     #[cfg(feature = "rustc-driver")]
     partitions: Option<native::partitions::Partitions>,
 }
@@ -1198,7 +1197,6 @@ impl Baseline {
     #[cfg(test)]
     pub(crate) fn fixture_universe(build: &[u8]) -> Self {
         Self {
-            package_replay: None,
             #[cfg(feature = "rustc-driver")]
             partitions: None,
             proof: proof::Proof::fixture(),
@@ -1481,7 +1479,7 @@ impl Baseline {
                 ));
             }
             let recipe_allocation = allocation.usage();
-            let mut proof = proof::evaluate(&recipes, false, limits, &mut allocation)?;
+            let mut proof = proof::evaluate(&recipes, limits, &mut allocation)?;
             if !proof.contains_workspace(&workspace_expected) {
                 return Err(Error::ResolutionDrift {
                     command: "input publication",
@@ -1510,21 +1508,6 @@ impl Baseline {
                 )
                 .map_err(native::capture_error)?;
             proof.bind_native(native);
-            let package_replay = recipes
-                .iter()
-                .any(|recipe| {
-                    matches!(
-                        recipe,
-                        Recipe::Package(package::Set::Path(_) | package::Set::Git(_))
-                    )
-                })
-                .then(|| {
-                    cargo::execution::Scope::bind(
-                        context,
-                        cargo::execution::Operation::PackageReplay,
-                        *proof.fingerprint().as_bytes(),
-                    )
-                });
             let universe_build = universe
                 .map(|protected| {
                     proof::protected_digest_accounted(
@@ -1541,16 +1524,14 @@ impl Baseline {
                 recipes,
                 recipe_allocation,
                 universe_build,
-                package_replay,
                 #[cfg(feature = "rustc-driver")]
                 partitions,
             ))
         });
         #[cfg(feature = "rustc-driver")]
-        let (proof, recipes, recipe_allocation, universe_build, package_replay, partitions) =
-            result?;
+        let (proof, recipes, recipe_allocation, universe_build, partitions) = result?;
         #[cfg(not(feature = "rustc-driver"))]
-        let (proof, recipes, recipe_allocation, universe_build, package_replay) = result?;
+        let (proof, recipes, recipe_allocation, universe_build) = result?;
         Ok((
             Self {
                 proof,
@@ -1558,7 +1539,6 @@ impl Baseline {
                 recipe_allocation,
                 allocation,
                 universe_build,
-                package_replay,
                 #[cfg(feature = "rustc-driver")]
                 partitions,
             },
@@ -1595,11 +1575,7 @@ impl Baseline {
 
     pub(crate) fn prove(self, limits: &cargo::Limits) -> Result<proof::Proof> {
         let mut allocation = Allocation::for_proof(self.recipe_allocation, limits);
-        let mut evaluate = || proof::evaluate(&self.recipes, true, limits, &mut allocation);
-        let mut current = match self.package_replay {
-            Some(scope) => scope.run(evaluate)?,
-            None => evaluate()?,
-        };
+        let mut current = proof::evaluate(&self.recipes, limits, &mut allocation)?;
         if current.fingerprint() != self.proof.fingerprint() {
             return Err(Error::Input {
                 code: "input-changed",
@@ -2301,7 +2277,7 @@ mod build_message_tests {
                     &mut allocation,
                 )?);
             }
-            proof::evaluate(&retained, false, &limits, &mut allocation)?;
+            proof::evaluate(&retained, &limits, &mut allocation)?;
             Ok::<_, crate::Error>(allocation)
         };
 
@@ -2323,7 +2299,7 @@ mod build_message_tests {
                 "01234567890123456789012345678901",
                 &mut allocation,
             )?];
-            proof::evaluate(&retained, false, &limits, &mut allocation)?;
+            proof::evaluate(&retained, &limits, &mut allocation)?;
             Ok::<_, crate::Error>(allocation)
         };
 
