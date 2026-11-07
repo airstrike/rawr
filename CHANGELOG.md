@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A build script that declares `cargo::rerun-if-env-changed` for a variable that `[env]` in `.cargo/config.toml` sets now runs as under `cargo run`: rawr gives it the value Cargo gives the script, and a change to `[env]` runs the script again. Before, every crate whose build script uses `cc` failed on a machine whose Cargo config picks a C compiler in `[env]`. (#1137)
+- A dependency whose build script isn't named `build.rs`, such as aws-lc-sys's `builder/main.rs`, no longer panics rawr-import with a lost build input. (#1145)
 
 ## 0.3.170 (2026-11-07)
 

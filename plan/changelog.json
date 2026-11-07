@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A build script that declares `cargo::rerun-if-env-changed` for a variable that `[env]` in `.cargo/config.toml` sets now runs as under `cargo run`: rawr gives it the value Cargo gives the script, and a change to `[env]` runs the script again. Before, every crate whose build script uses `cc` failed on a machine whose Cargo config picks a C compiler in `[env]`.","issues":[1137]},
+      {"text":"A dependency whose build script isn't named `build.rs`, such as aws-lc-sys's `builder/main.rs`, no longer panics rawr-import with a lost build input.","issues":[1145]}
+    ]
   },
   "releases": [
     {
