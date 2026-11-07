@@ -5061,11 +5061,9 @@ impl<P: api::Phase> Context<'_, P> {
                 };
                 let implementations = match &substitutions {
                     Some(_) => Box::default(),
-                    None => self.inherent_opaque_implementations(
-                        export,
-                        implementation,
-                        definition,
-                    )?,
+                    None => {
+                        self.inherent_opaque_implementations(export, implementation, definition)?
+                    }
                 };
                 associated.push(OutcomeRecord {
                     export: export.key().clone(),
@@ -6103,9 +6101,7 @@ impl<P: api::Phase> Context<'_, P> {
         if left_out.is_empty() {
             return None;
         }
-        let bounded = |ty: &model::Type| {
-            matches!(ty, model::Type::Parameter { index, .. } if left_out.contains(index))
-        };
+        let bounded = |ty: &model::Type| matches!(ty, model::Type::Parameter { index, .. } if left_out.contains(index));
         let parameters = container
             .parameters()
             .filter(|parameter| !left_out.contains(&parameter.index()))
@@ -15049,4 +15045,3 @@ mod tests {
         );
     }
 }
-

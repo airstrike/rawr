@@ -14,6 +14,9 @@ fn main() {
     for item in Holder(vec![1_u32, 2, 3]).into_items() {
         total += item;
     }
-    let big = Holder(vec![1_u32, 2, 3]).into_items().filter(|item| *item > 1).count();
+    let big = Holder(vec![1_u32, 2, 3])
+        .into_items()
+        .filter(|item| *item > 1)
+        .count();
     println!("{total} {big}");
 }

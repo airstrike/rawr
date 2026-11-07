@@ -1327,10 +1327,8 @@ fn imported_paths<'contract>(
             }
             // The members of the opaque type an inherent method gives,
             // declared in its owner's module (`opaque_types`).
-            let opaque = rawr_import::surface::opaque::path(
-                &format!("{owner}__{}", associated.name()),
-                0,
-            );
+            let opaque =
+                rawr_import::surface::opaque::path(&format!("{owner}__{}", associated.name()), 0);
             for member in associated
                 .implementations()
                 .flat_map(rawr_import::classify::ImplementationOutcome::associated)
