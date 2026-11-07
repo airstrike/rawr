@@ -6,6 +6,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.162 (2026-11-06)
+
+- A crate method whose value's type has a lifetime keeps what it borrows shared for as long as the value lives, as rustc reads its signature, for any crate rather than only iced's widgets, and the runner names each crate type's lifetimes as rustc does, so a script function that wraps an `impl Widget` in a container and a mouse area builds. (#598; part of #955)
+- A crate's `&mut` value with lifetimes that it lends your trait impl, as iced lends a widget's `update` its `&mut Shell<'_, Message>`, is lent for the call, not cloned, so iced's geometry runs, and a crate value a call borrows, as rand's `ThreadRng`, no longer needs `Send`. (#957)
+- A float or integer literal whose only constraint is a crate trait bound takes the one number type that implements it, as rustc infers: iced's `Animation::new(0.)` is an `Animation<f32>`. (#1028)
+- The site serves /llms.txt, a short summary of rawr's docs for coding agents: every command and flag, the environment variables, the MCP tools and their arguments, previews, imports and their limits, hot reload, embedding and ?play. Each section links to its full page, and the docs index links to it. (#1089)
+
 ## 0.3.161 (2026-11-06)
 
 - ?play snippets no longer copy the universe's bindings for each run: every compile shares the engine's registry, so a snippet pays only for its own compile and run (locally, the site's snippets went from about 0.7 s each to 26 ms, and the live bot took about 2 minutes each). (#1065)
