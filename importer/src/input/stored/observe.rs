@@ -102,9 +102,6 @@ pub(in crate::input) fn optional_file(
 ) -> Result<Entry> {
     budget.check()?;
     let normalized = path::normalized(source, base, budget)?;
-    if !follows(role) {
-        path::reject_symlinks(&normalized, budget)?;
-    }
     match path::metadata(&normalized, false, budget) {
         Ok(metadata) if metadata.is_file() => file(role, package_id, &normalized, base, budget),
         Ok(_) => Err(Error::Policy("config-input-shape").into()),
@@ -129,9 +126,6 @@ fn optional(
     budget: &mut Budget<'_>,
 ) -> Result<Entry> {
     let normalized = path::normalized(source, base, budget)?;
-    if !follows(role) {
-        path::reject_symlinks(&normalized, budget)?;
-    }
     match path::metadata(&normalized, false, budget) {
         Ok(metadata) if metadata.is_file() => file(role, package_id, &normalized, base, budget),
         Ok(metadata) if metadata.is_dir() => {
@@ -151,7 +145,8 @@ fn optional(
     }
 }
 
-/// Cargo follows symlinks to its config files; every other input is canonical.
+/// A config file keeps the path Cargo reads it at; every other input is
+/// recorded at the canonical path its symlinks resolve to.
 fn follows(role: Role) -> bool {
     matches!(role, Role::Config)
 }

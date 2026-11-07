@@ -681,7 +681,13 @@ impl<'a> Builder<'a> {
             self.load_rust_children(package, Tree::Bin, &root, &module_root, &[], &path, &text)?;
         }
         if let Some(cargo) = cargo {
-            self.attach_cargo(package, cargo);
+            // A binary reaches its package's library by the library's crate
+            // name, as a dependency Cargo builds before it (#1164).
+            let own_library = (!library && !script)
+                .then_some(cargo.0.library.as_deref())
+                .flatten()
+                .is_some_and(|path| self.is_file(path));
+            self.attach_cargo(package, cargo, own_library);
         }
         if self.packages[package.0].native_root.is_none() {
             self.check_native_direction(package)?;
@@ -1480,6 +1486,7 @@ impl<'a> Builder<'a> {
         &mut self,
         package: Id,
         (cargo, source): (manifest::cargo::Cargo, diagnostic::Source),
+        own_library: bool,
     ) {
         self.push_evidence(source);
         {
@@ -1487,8 +1494,14 @@ impl<'a> Builder<'a> {
             // A marked crate with any Cargo dependency imports Rust: its
             // runner builds each dependency as its own `cargo build` builds
             // it, never one built into an installed binary. Its
-            // dependencies are those its default features build.
-            let dependencies = cargo.enabled_dependencies();
+            // dependencies are those its default features build, and a
+            // binary's include its package's library (`own_library`).
+            let mut dependencies = cargo.enabled_dependencies().into_vec();
+            if own_library && let Some(root) = cargo.path.parent() {
+                dependencies.push(manifest::rust::Dependency::library(&cargo, root));
+                dependencies.sort_unstable_by(|left, right| left.alias.cmp(&right.alias));
+            }
+            let dependencies = dependencies.into_boxed_slice();
             let imports = !package.rust_modules.is_empty()
                 || package.native_root.is_some()
                 || !dependencies.is_empty();

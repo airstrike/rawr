@@ -637,19 +637,19 @@ struct Relations { equal: Option<EqualValues>, hash: Option<HashValue>, order: O
 macro_rules! insert_native {
     ($arena:expr, $value:expr) => {{
         #[allow(unused_imports)]
-        use $crate::{
+        use $crate::__rawr_runner::{
             ViaClone as _, ViaDebug as _, ViaDisplay as _, ViaEqual as _, ViaHash as _,
             ViaOrder as _, WithoutClone as _, WithoutDebug as _, WithoutDisplay as _,
             WithoutEqual as _, WithoutHash as _, WithoutOrder as _,
         };
         let value = $value;
-        let debug = (&$crate::debug_probe(&value)).native_debug();
-        let display = (&$crate::debug_probe(&value)).native_display();
-        let clone = (&$crate::debug_probe(&value)).native_clone();
-        let relations = $crate::Relations {
-            equal: (&$crate::debug_probe(&value)).native_equal(),
-            hash: (&$crate::debug_probe(&value)).native_hash(),
-            order: (&$crate::debug_probe(&value)).native_order(),
+        let debug = (&$crate::__rawr_runner::debug_probe(&value)).native_debug();
+        let display = (&$crate::__rawr_runner::debug_probe(&value)).native_display();
+        let clone = (&$crate::__rawr_runner::debug_probe(&value)).native_clone();
+        let relations = $crate::__rawr_runner::Relations {
+            equal: (&$crate::__rawr_runner::debug_probe(&value)).native_equal(),
+            hash: (&$crate::__rawr_runner::debug_probe(&value)).native_hash(),
+            order: (&$crate::__rawr_runner::debug_probe(&value)).native_order(),
         };
         let handle = $arena.insert_debug(value, debug, clone);
         if let Ok(handle) = &handle {
@@ -677,9 +677,9 @@ macro_rules! std_copy {
 macro_rules! guard_copy {
     ($target:expr) => {{
         #[allow(unused_imports)]
-        use $crate::{ViaClone as _, WithoutClone as _};
+        use $crate::__rawr_runner::{ViaClone as _, WithoutClone as _};
         let target = $target;
-        $crate::copied(target, (&$crate::debug_probe(target)).native_clone())
+        $crate::__rawr_runner::copied(target, (&$crate::__rawr_runner::debug_probe(target)).native_clone())
     }};
 }
 
@@ -1097,21 +1097,21 @@ fn give_pointed<P: Pointer>(
 macro_rules! give_pointer {
     ($arena:expr, $pointer:expr) => {{
         #[allow(unused_imports)]
-        use $crate::{
+        use $crate::__rawr_runner::{
             ViaClone as _, ViaDebug as _, ViaDisplay as _, ViaEqual as _, ViaHash as _,
             ViaOrder as _, WithoutClone as _, WithoutDebug as _, WithoutDisplay as _,
             WithoutEqual as _, WithoutHash as _, WithoutOrder as _,
         };
         let pointer = $pointer;
-        let debug = (&$crate::debug_probe(&*pointer)).native_debug();
-        let display = (&$crate::debug_probe(&*pointer)).native_display();
-        let clone = (&$crate::debug_probe(&*pointer)).native_clone();
-        let relations = $crate::Relations {
-            equal: (&$crate::debug_probe(&*pointer)).native_equal(),
-            hash: (&$crate::debug_probe(&*pointer)).native_hash(),
-            order: (&$crate::debug_probe(&*pointer)).native_order(),
+        let debug = (&$crate::__rawr_runner::debug_probe(&*pointer)).native_debug();
+        let display = (&$crate::__rawr_runner::debug_probe(&*pointer)).native_display();
+        let clone = (&$crate::__rawr_runner::debug_probe(&*pointer)).native_clone();
+        let relations = $crate::__rawr_runner::Relations {
+            equal: (&$crate::__rawr_runner::debug_probe(&*pointer)).native_equal(),
+            hash: (&$crate::__rawr_runner::debug_probe(&*pointer)).native_hash(),
+            order: (&$crate::__rawr_runner::debug_probe(&*pointer)).native_order(),
         };
-        $crate::give_pointed($arena, pointer, debug, display, clone, relations)
+        $crate::__rawr_runner::give_pointed($arena, pointer, debug, display, clone, relations)
     }};
 }
 
@@ -4910,7 +4910,7 @@ fn run_snippet(mut program: Program) -> ! {
 /// The protocol and the interpreter run on the process's main thread, where
 /// the program's `main` then runs, a marked one or a native one (D533,
 /// #1119): winit's event loop must run there.
-fn main() {
+pub(super) fn main() {
     register_native_sequences();
     for adapter in adapters() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
@@ -5180,7 +5180,7 @@ fn run_protocol() -> std::io::Result<()> {
     }
 }
 
-fn main() {
+pub(super) fn main() {
     register_native_sequences();
     for adapter in adapters() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
@@ -5869,7 +5869,7 @@ fn run_protocol() -> std::io::Result<()> {
     }
 }
 
-fn main() {
+pub(super) fn main() {
     register_native_sequences();
     for adapter in adapters() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
@@ -6615,8 +6615,7 @@ fn render_source(
         .transpose()?;
     output
         .write_all(
-            b"#![forbid(unsafe_code)]\n\
-              static GENERATED_MANIFEST: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rawr-generated-manifest.bin\"));\n",
+            b"static GENERATED_MANIFEST: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rawr-generated-manifest.bin\"));\n",
         )
         .map_err(request::unwritable)?;
     // The per-generation stamps change with every demand change; their own
@@ -6728,7 +6727,7 @@ fn render_source(
     }
     output
         .write_all(
-            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT, PROFILE_FINGERPRINT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\nmod rawr_families;\n#[allow(unused_imports)]\nuse rawr_families::*;\ninclude!(\"rawr_proxies.rs\");\n",
+            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT, PROFILE_FINGERPRINT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\nmod rawr_families;\n#[allow(unused_imports)]\nuse rawr_families::*;\n",
         )
         .map_err(request::unwritable)?;
     // The facade plan is megabytes of data: rustc reads it with
@@ -6903,7 +6902,7 @@ fn render_source(
     output
         .write_all(b"include!(\"rawr_impls.rs\");\n")
         .map_err(request::unwritable)?;
-    sources.push((SOURCE_PATH.into(), main));
+    sources.push((SOURCE_PATH.into(), ROOT_SOURCE.to_vec()));
     let primitive = plans.iter().position(|plan| {
         matches!(
             plan.operation(),
@@ -7031,6 +7030,7 @@ fn render_source(
     // In path order, as the sources are framed.
     sources.push((IMPLS_PATH.into(), impls));
     sources.push((PROXIES_PATH.into(), proxies));
+    sources.push((RUNNER_PATH.into(), main));
     sources.push((SURFACE_PATH.into(), stamps));
     // Each crate a type is named through (`hidden_spelling`), which the
     // runner depends on as it does a macro's `$crate`.
@@ -7146,6 +7146,19 @@ const FAMILIES_PATH: &str = "src/rawr_families.rs";
 /// The runner's proxies of script types (D594), included at the crate root
 /// so each is named as the script names it.
 const PROXIES_PATH: &str = "src/rawr_proxies.rs";
+/// The runner itself, the crate root's module `__rawr_runner`, which holds
+/// every item of the runner's own and the modules it declares: a program
+/// names its types and modules as it likes, and none meets a runner item
+/// at the crate root, where the proxies are (#1163).
+const RUNNER_PATH: &str = "src/rawr_runner.rs";
+/// The runner's crate root: the proxies and the runner's module, whose
+/// name no program spells.
+const ROOT_SOURCE: &[u8] = b"#![forbid(unsafe_code)]\n\
+include!(\"rawr_proxies.rs\");\n\
+#[path = \"rawr_runner.rs\"]\n\
+mod __rawr_runner;\n\
+\n\
+fn main() {\n    __rawr_runner::main()\n}\n";
 /// The script's impls for the proxies (D594), included after the runtime
 /// they call, whose macros come first.
 const IMPLS_PATH: &str = "src/rawr_impls.rs";
@@ -8293,7 +8306,7 @@ fn render_projection(
     }}
     fn text_{index}(parent: &Dynamic, display: bool) -> Option<String> {{
         #[allow(unused_imports)]
-        use crate::{{ViaDebug as _, ViaDisplay as _, WithoutDebug as _, WithoutDisplay as _}};
+        use crate::__rawr_runner::{{ViaDebug as _, ViaDisplay as _, WithoutDebug as _, WithoutDisplay as _}};
         let mut text = None;
         reach_lender::<{ty}>(&Lender::of(parent).ok()?, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
@@ -18349,8 +18362,8 @@ fn render_proxies(output: &mut Vec<u8>) -> Result<(), request::Error> {
                 let list = parameters.join(", ");
                 (
                     format!("<{list}>"),
-                    format!(", std::marker::PhantomData<fn() -> ({list},)>"),
-                    "Self(proxy, std::marker::PhantomData)".to_owned(),
+                    format!(", ::core::marker::PhantomData<fn() -> ({list},)>"),
+                    "Self(proxy, ::core::marker::PhantomData)".to_owned(),
                 )
             };
             let bounds = if parameters.is_empty() {
@@ -18370,32 +18383,32 @@ impl{bounds} {name}{generics} {{
     }}
 }}
 
-impl{bounds} Clone for {name}{generics} {{
+impl{bounds} ::core::clone::Clone for {name}{generics} {{
     fn clone(&self) -> Self {{
         Self::from_proxy(self.0.clone())
     }}
 }}
 
-impl{bounds} std::fmt::Debug for {name}{generics} {{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
-        std::fmt::Debug::fmt(&self.0, f)
+impl{bounds} ::core::fmt::Debug for {name}{generics} {{
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {{
+        ::core::fmt::Debug::fmt(&self.0, f)
     }}
 }}
 
-impl{bounds} Default for {name}{generics} {{
+impl{bounds} ::core::default::Default for {name}{generics} {{
     fn default() -> Self {{
         Self::from_proxy(__rawr_internal::crossing::Proxy::default_of({path:?}))
     }}
 }}
 
-impl{bounds} PartialEq for {name}{generics} {{
-    fn eq(&self, other: &Self) -> bool {{
+impl{bounds} ::core::cmp::PartialEq for {name}{generics} {{
+    fn eq(&self, other: &Self) -> ::core::primitive::bool {{
         self.0 == other.0
     }}
 }}
 
-impl{bounds} std::fmt::Display for {name}{generics} {{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
+impl{bounds} ::core::fmt::Display for {name}{generics} {{
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {{
         self.0.display(f)
     }}
 }}

@@ -4,7 +4,7 @@
 <p class="lede">rawr has no framework of its own. An app keeps the libraries it already uses, Cargo compiles them, and the files you mark call them. A save reaches the running app.</p>
 
 <h2 id="libraries">Libraries are compiled by Cargo</h2>
-<p>Every crate in <code>[dependencies]</code> is native Rust. <code>rawr run</code> builds it with Cargo, as <code>cargo run</code> does. The app&rsquo;s unmarked modules are native too.</p>
+<p>Every crate in <code>[dependencies]</code> is native Rust. <code>rawr run</code> builds it with Cargo, as <code>cargo run</code> does. The app&rsquo;s unmarked modules are native too. So is the package&rsquo;s own library: a marked <code>src/main.rs</code> names <code>src/lib.rs</code> by the crate name, as a Cargo binary does.</p>
 <p>rawr-import reads each library&rsquo;s API and generates the bindings your marked files call. Nothing in rawr is written by hand for a particular library. Your marked code calls the library&rsquo;s own functions, types and traits, under their own names.</p>
 <p>An app with dependencies needs rawr-import. <a href="/docs/imports">Imports</a> says how to install it, and lists the parts of Rust that don&rsquo;t cross yet. A library item rawr can&rsquo;t reach yet stops <code>rawr run</code> with an error at that item.</p>
 <p><code>cargo build --release</code> compiles every file natively, the marked ones included. The marker is a comment, and no interpreter ships.</p>

@@ -1,10 +1,12 @@
 use std::ffi::{CStr, OsStr};
 use std::os::unix::ffi::OsStrExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use super::super::{Budget, Result};
 use super::{io, package, path, read, slots, Error};
 use crate::input::proof::{Entry, Role, TreeDirectory, TreeFile};
+use crate::input::walk::{self, Ancestors};
 
 mod lookup;
 
@@ -92,9 +94,10 @@ fn inspect(
     budget.check()?;
     // Pinned std/sys/fs/unix.rs:1140–1151 uses these seven cached d_type
     // encodings and metadata fallback for every other value. Its subsequent
-    // DirEntry::metadata uses AT_SYMLINK_NOFOLLOW (1074–1102).
+    // DirEntry::metadata uses AT_SYMLINK_NOFOLLOW (1074–1102). A symlink is
+    // followed by its path, never by this no-follow lookup.
     match kind {
-        libc::DT_LNK => return Err(Error::Policy("symlink-input").into()),
+        libc::DT_LNK => return Ok(lookup::Metadata::symlink()),
         libc::DT_CHR
         | libc::DT_FIFO
         | libc::DT_REG
@@ -103,11 +106,27 @@ fn inspect(
         | libc::DT_BLK => {}
         _ => {
             if metadata(budget)?.is_symlink() {
-                return Err(Error::Policy("symlink-input").into());
+                return Ok(lookup::Metadata::symlink());
             }
         }
     }
     metadata(budget)
+}
+
+/// The canonical target of the link at `child` and what it is, or `None`
+/// when it names nothing.
+fn follow(child: &Path, budget: &mut Budget<'_>) -> Result<Option<(PathBuf, lookup::Metadata)>> {
+    budget.check()?;
+    path::input(child, budget)?;
+    let output = crate::store::path::canonical_allocation();
+    budget.admit(2, output - std::mem::size_of::<PathBuf>())?;
+    let target = match std::fs::canonicalize(child) {
+        Ok(target) => target,
+        Err(error) if walk::dangling(&error) => return Ok(None),
+        Err(source) => return Err(io("resolve freshness directory link", source)),
+    };
+    let metadata = path::metadata(&target, false, budget)?;
+    Ok(Some((target, lookup::Metadata::from_metadata(&metadata))))
 }
 
 pub(super) fn entry(
@@ -130,16 +149,19 @@ fn walk(
 ) -> Result<Entry> {
     let root = path::canonical(source, base, true, budget)?;
     let mut pending = slots::Slots::new();
+    budget.storage(1, root.as_os_str().len())?;
     pending.push(
         (
             budget.owned_path(root.as_os_str().as_encoded_bytes())?,
+            PathBuf::new(),
             0_usize,
+            Ancestors::root(root.clone()),
         ),
         budget,
     )?;
     let mut directories = slots::Slots::new();
     let mut files = slots::Slots::new();
-    while let Some((directory, depth)) = pending.pop() {
+    while let Some((directory, prefix, depth, ancestors)) = pending.pop() {
         budget.physical("input directory depth", budget.limits.depth, depth)?;
         let native = path::terminated(&directory, budget)?;
         let native = CStr::from_bytes_with_nul(&native)
@@ -153,14 +175,38 @@ fn walk(
             let native_name = Path::new(OsStr::from_bytes(name.bytes()));
             let child = path::joined(&directory, native_name, budget)?;
             let metadata = metadata(&lookup, native_name, name.kind(), budget)?;
-            let relative = child
-                .strip_prefix(&root)
-                .map_err(|_| Error::Policy("directory-escape"))?;
-            let relative = path::text(relative, budget)?;
+            // Cargo follows a link in the tree and reads what it resolves
+            // to; one that resolves to nothing, or back to a directory the
+            // walk is inside, has nothing to read.
+            let followed = metadata.is_symlink();
+            let (child, metadata) = if followed {
+                match follow(&child, budget)? {
+                    Some(target) => target,
+                    None => continue,
+                }
+            } else {
+                (child, metadata)
+            };
+            if followed && metadata.is_dir() && ancestors.encloses(&directory, &child) {
+                continue;
+            }
+            let spelled = path::joined(&prefix, native_name, budget)?;
+            let relative = path::text(&spelled, budget)?;
             if metadata.is_dir() {
                 let depth = depth.checked_add(1).ok_or_else(|| budget.overflow())?;
                 budget.physical("input directory depth", budget.limits.depth, depth)?;
-                pending.push((child, depth), budget)?;
+                let ancestors = if followed {
+                    let bytes = directory
+                        .as_os_str()
+                        .len()
+                        .checked_add(child.as_os_str().len())
+                        .ok_or_else(|| budget.overflow())?;
+                    budget.storage(1, bytes)?;
+                    ancestors.follow(&directory, child.clone())
+                } else {
+                    Rc::clone(&ancestors)
+                };
+                pending.push((child, spelled, depth, ancestors), budget)?;
                 directories.push(TreeDirectory { path: relative }, budget)?;
             } else if metadata.is_file() {
                 let bytes = read::length(metadata.len(), budget)?;

@@ -262,7 +262,7 @@ fn opened_growth_and_shortening_use_the_json_limit_not_initial_length() {
 }
 
 #[test]
-fn dep_info_symlinks_keep_legacy_read_semantics_but_source_symlinks_reject() {
+fn dep_info_and_source_symlinks_are_read_through() {
     let fixture = Fixture::open();
     let actual = fixture.root.join("actual.d");
     fs::write(&actual, "target: a.rs\n").expect("actual dep-info");
@@ -273,10 +273,10 @@ fn dep_info_symlinks_keep_legacy_read_semantics_but_source_symlinks_reject() {
     std::os::unix::fs::symlink(fixture.root.join("a.rs"), fixture.root.join("alias.rs"))
         .expect("source link");
     fixture.write("target: alias.rs\n");
-    assert!(matches!(
-        fixture.observe(&mut account(), &node::GraphBudget::new()),
-        Err(stored::Error::Observation(observe::Error::Policy(_)))
-    ));
+    let current = fixture
+        .observe(&mut account(), &node::GraphBudget::new())
+        .expect("a source through a symlink is the file it resolves to");
+    assert_eq!(current.sources.as_ref(), [fixture.root.join("a.rs")]);
 }
 
 #[test]

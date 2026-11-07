@@ -263,6 +263,51 @@ fn language_loops() {
 }
 
 #[test]
+fn language_an_array_of_functions_of_one_signature_holds_fn_pointers() {
+    // rustlings' quiz2: each function item has its own type, and the array
+    // coerces them to their `fn` pointer.
+    let value = run(r#"
+        fn double(n: i64) -> i64 { n * 2 }
+        fn square(n: i64) -> i64 { n * n }
+        pub fn run() -> i64 {
+            let mut total = 0;
+            for f in [double, square] {
+                total += f(5);
+            }
+            let fs = [square, double, square];
+            total + fs[2](3)
+        }
+        run()
+    "#);
+    assert_eq!(value, 10 + 25 + 9);
+}
+
+#[test]
+fn language_for_over_an_option_or_a_result_walks_the_value_it_holds() {
+    // std's `IntoIterator` for `Option`, `Result` and references to them
+    // (rustlings' clippy2).
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let some: Option<i64> = Some(12);
+            let none: Option<i64> = None;
+            let mut total = 0;
+            for x in some { total += x; }
+            for x in none { total += x * 1000; }
+            for x in &some { total += *x * 10; }
+            for x in some.iter() { total += *x * 100; }
+            let ok: Result<i64, String> = Ok(3);
+            let err: Result<i64, String> = Err(String::from("no"));
+            for x in &ok { total += *x; }
+            for x in err.iter() { total += *x * 1000; }
+            for x in ok { total += x; }
+            total + some.into_iter().map(|x| x * 2).sum::<i64>()
+        }
+        run()
+    "#);
+    assert_eq!(value, 12 + 120 + 1200 + 3 + 3 + 24);
+}
+
+#[test]
 fn language_integer_match() {
     let value = run(r#"
         pub fn classify(n: i64) -> i64 {
@@ -3362,11 +3407,15 @@ fn language_generic_traits() {
     let traits = "trait Convert<T> { fn convert(&self) -> T; } struct C { n: i64 } \
                   impl Convert<i64> for C { fn convert(&self) -> i64 { 1 } } \
                   impl Convert<String> for C { fn convert(&self) -> String { \"a\".to_string() } }";
-    // Two impls and nothing to choose between them (E0283).
+    // Two impls and nothing to choose between them: rustc's E0283, whose
+    // code `trait_instance_tests` checks.
     let ambiguous = rejected(&format!(
         "{traits} pub fn run() -> i64 {{ let c = C {{ n: 1 }}; let x = c.convert(); 0 }} run()"
     ));
-    assert!(ambiguous.contains("E0283"), "{ambiguous}");
+    assert!(
+        ambiguous.contains("multiple `impl`s satisfying `C: Convert<_>` found"),
+        "{ambiguous}"
+    );
     // No `impl Convert<bool> for C`.
     let missing = rejected(&format!(
         "{traits} fn f<U: Convert<bool>>(u: &U) -> bool {{ u.convert() }} \

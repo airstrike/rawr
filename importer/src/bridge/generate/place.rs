@@ -265,21 +265,21 @@ impl __rawr_internal::place::Policy for {name} {{
     fn into_dynamic(value: {rust}, witness: &__rawr_internal::host::runtime::Witness) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{ {encoded} }}
     fn cloning() -> Option<&'static __rawr_internal::place::sequence::Cloning<{rust}>> {{
         static CLONING: std::sync::LazyLock<Option<__rawr_internal::place::sequence::Cloning<{rust}>>> = std::sync::LazyLock::new(|| {{
-            use crate::{{ViaSequenceClone as _, WithoutSequenceClone as _}};
+            use crate::__rawr_runner::{{ViaSequenceClone as _, WithoutSequenceClone as _}};
             (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_cloning()
         }});
         CLONING.as_ref()
     }}
     fn copying() -> Option<&'static __rawr_internal::place::sequence::Copying<{rust}>> {{
         static COPYING: std::sync::LazyLock<Option<__rawr_internal::place::sequence::Copying<{rust}>>> = std::sync::LazyLock::new(|| {{
-            use crate::{{ViaSequenceCopy as _, WithoutSequenceCopy as _}};
+            use crate::__rawr_runner::{{ViaSequenceCopy as _, WithoutSequenceCopy as _}};
             (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_copying()
         }});
         COPYING.as_ref()
     }}
     fn comparing() -> Option<&'static __rawr_internal::place::sequence::Comparing<{rust}>> {{
         static COMPARING: std::sync::LazyLock<Option<__rawr_internal::place::sequence::Comparing<{rust}>>> = std::sync::LazyLock::new(|| {{
-            use crate::{{ViaSequenceEqual as _, WithoutSequenceEqual as _}};
+            use crate::__rawr_runner::{{ViaSequenceEqual as _, WithoutSequenceEqual as _}};
             (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_comparing()
         }});
         COMPARING.as_ref()

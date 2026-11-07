@@ -1600,6 +1600,106 @@ fn a_declared_variable_set_by_cargo_env_config_runs_as_under_cargo() {
     let _ = fs::remove_dir_all(&base);
 }
 
+/// A dependency whose build script and `include_str!` read through a
+/// symlinked directory and a symlinked file, as an SDK path from
+/// `xcrun --show-sdk-path` is read, builds as under Cargo. Repointing both
+/// links runs the script and builds the crate again, and so does editing a
+/// target, as `cargo run` does.
+#[cfg(unix)]
+#[test]
+fn inputs_read_through_symlinks_build_and_a_repointed_link_rebuilds() {
+    use std::os::unix::fs::symlink;
+
+    let base = crate::support::scratch().join("plain-symlink-inputs");
+    let root = base.join("app");
+    project(
+        &base,
+        &[
+            (
+                "app/Cargo.toml",
+                "[workspace]\n[package]\nname='symlink-inputs-app'\nversion='0.1.0'\nedition='2021'\n[dependencies]\nsymlink-inputs-fixture={path='../fixture'}\n",
+            ),
+            (
+                "app/src/main.rs",
+                "// rawr\nfn main() {\n    println!(\"{}\", symlink_inputs_fixture::describe());\n}\n",
+            ),
+            (
+                "fixture/Cargo.toml",
+                "[workspace]\n[package]\nname='symlink-inputs-fixture'\nversion='0.1.0'\nedition='2021'\n",
+            ),
+            (
+                "fixture/src/lib.rs",
+                "pub fn describe() -> String {\n    format!(\n        \"script {} include {} {}\",\n        env!(\"SYMLINK_SCRIPT_READ\"),\n        include_str!(\"../note.txt\").trim(),\n        include_str!(\"../linked/assets/logo.txt\").trim(),\n    )\n}\n",
+            ),
+            (
+                "fixture/build.rs",
+                r#"fn main() {
+    println!("cargo:rerun-if-changed=linked");
+    println!("cargo:rerun-if-changed=note.txt");
+    println!("cargo:rerun-if-changed=linked/assets/logo.txt");
+    let note = std::fs::read_to_string("note.txt").unwrap();
+    let logo = std::fs::read_to_string("linked/assets/logo.txt").unwrap();
+    println!("cargo:rustc-env=SYMLINK_SCRIPT_READ={} {}", note.trim(), logo.trim());
+}
+"#,
+            ),
+            ("fixture/data-a/note.txt", "alpha\n"),
+            ("fixture/data-a/assets/logo.txt", "red\n"),
+        ],
+    );
+    let fixture = base.join("fixture");
+    let point = |data: &str| {
+        let _ = fs::remove_file(fixture.join("linked"));
+        let _ = fs::remove_file(fixture.join("note.txt"));
+        symlink(data, fixture.join("linked")).unwrap();
+        symlink(format!("{data}/note.txt"), fixture.join("note.txt")).unwrap();
+    };
+    let cargo = || {
+        Command::new("cargo")
+            .args(["run", "-q"])
+            .current_dir(&root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap()
+    };
+    let rawr = || {
+        Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .arg("run")
+            .arg(&root)
+            .env("RAWR_HOME", base.join("rawr-home"))
+            .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap()
+    };
+    let matches = |expected: &str, again: bool| {
+        let native = cargo();
+        assert!(native.status.success(), "{}", text(&native.stderr));
+        assert_eq!(text(&native.stdout), expected);
+        for _ in 0..if again { 2 } else { 1 } {
+            let ran = rawr();
+            assert!(ran.status.success(), "{}", text(&ran.stderr));
+            assert_eq!(text(&ran.stdout), expected, "{}", text(&ran.stderr));
+        }
+    };
+    point("data-a");
+    // The second run replays the stored inputs through the links.
+    matches("script alpha red include alpha red\n", true);
+    // Both links now point at another directory, written after the build.
+    fs::create_dir_all(fixture.join("data-b/assets")).unwrap();
+    fs::write(fixture.join("data-b/note.txt"), "beta\n").unwrap();
+    fs::write(fixture.join("data-b/assets/logo.txt"), "blue\n").unwrap();
+    point("data-b");
+    matches("script beta blue include beta blue\n", false);
+    // An edit to a link's target.
+    fs::write(fixture.join("data-b/assets/logo.txt"), "green\n").unwrap();
+    matches("script beta green include beta green\n", false);
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// A marked `main` gets the arguments after `--` and stdin, as under
 /// `cargo run`, and a save while it waits on stdin restarts it on the same
 /// stdin (D500.1).
