@@ -1690,7 +1690,8 @@ fn a_crates_derive_runs_from_its_expansion() {
 /// native module expands its macro through Cargo's build, a marked module
 /// beside it runs, and a marked module that names the macro expands it as
 /// rustc does. Each used to fail as if the manifest changed during the
-/// build.
+/// build, and so did a direct `cdylib` or `dylib` dependency (the
+/// proc-macro issue).
 #[test]
 fn a_direct_proc_macro_dependency_expands_in_native_and_marked_code() {
     const PROC_MACRO: &str = concat!(
@@ -1731,6 +1732,52 @@ fn a_direct_proc_macro_dependency_expands_in_native_and_marked_code() {
         text(&run.stderr)
     );
     assert_eq!(text(&run.stdout), "42 value 48\n");
+
+    // A `cdylib` dependency gets no `--extern` from Cargo, so nothing
+    // names it and the check passes. A `dylib` one is an ordinary error
+    // that says rawr doesn't build against it, never drift.
+    fs::create_dir_all(root.join("foreign/src")).unwrap();
+    fs::write(
+        root.join("foreign/src/lib.rs"),
+        "pub fn one() -> i64 {\n    1\n}\n",
+    )
+    .unwrap();
+    let foreign = |kind: &str| {
+        fs::write(
+            root.join("foreign/Cargo.toml"),
+            format!(
+                "[package]\nname = \"foreign\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+                 publish = false\n\n[lib]\ncrate-type = [\"{kind}\"]\n"
+            ),
+        )
+        .unwrap();
+    };
+    foreign("cdylib");
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        manifest.replace(
+            "[dependencies]\n",
+            "[dependencies]\nforeign = { path = \"foreign\" }\n",
+        ),
+    )
+    .unwrap();
+    let checked = rawr_import(&root, &["check"]);
+    assert!(
+        checked.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&checked.stdout),
+        text(&checked.stderr)
+    );
+    foreign("dylib");
+    let checked = rawr_import(&root, &["check"]);
+    let stderr = text(&checked.stderr);
+    assert!(!checked.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("the dependency `foreign` is a `dylib` library"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("changed during the build"), "{stderr}");
 }
 
 /// An edit that changes only a derive's expansion's bodies, as a new
