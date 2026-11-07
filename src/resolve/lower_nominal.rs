@@ -13092,6 +13092,9 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("compiler-private nominal intrinsic"));
         }
 
+        // The script's statements are a body: its locals drop at its end,
+        // after its final value, as `fn main`'s do.
+        self.open_body_drops([])?;
         while !matches!(self.peek(), Token::EOF) {
             let result = match self.peek() {
                 Token::Let => self.parse_binding(true),
@@ -13103,6 +13106,13 @@ impl<'a> Parser<'a> {
 
             result?;
         }
+        if let Some((start, span)) = self.last_expression {
+            let mut value = self.take_tail(start, span);
+            self.move_out_value(&mut value)?;
+            let start = self.write_output(value.rendered_source(), span);
+            self.last_expression = Some((start, span));
+        }
+        self.close_body_drops()?;
 
         self.finish_uninitialized()?;
 
@@ -53674,10 +53684,25 @@ impl<'a> Parser<'a> {
         let Some((start, span)) = self.last_expression else {
             return self.require_type(expected, &self.last_type.clone(), body);
         };
+        let mut value = self.take_tail(start, span);
+        if value.lvalue.is_some() {
+            self.move_local(&mut value)?;
+        }
+        value.lvalue = None;
+        let result = self.coerce_expr(expected, &mut value);
+        result?;
+        self.returned(value.span, &value.ty);
+        self.write_output(value.rendered_source(), value.span);
+        self.last_type = value.ty;
+        Ok(())
+    }
+
+    /// The tail written from `start`, taken out of the output. A local the
+    /// body ends with is its lvalue: it moves out to the caller, as in Rust,
+    /// rather than being copied as the body's locals end.
+    fn take_tail(&mut self, start: usize, span: Span) -> ParsedExpr {
         let mut source = self.output.split_off(start);
         source.trim_end();
-        // A local the body ends with moves out to the caller, as in Rust,
-        // rather than being copied as the body's locals end.
         let lvalue = variable_name(source.as_str())
             .filter(|name| {
                 self.bindings
@@ -53688,8 +53713,7 @@ impl<'a> Parser<'a> {
                 binding,
                 ty: self.last_type.clone(),
             });
-        let moves = lvalue.is_some();
-        let mut value = ParsedExpr {
+        ParsedExpr {
             prelude: origin::Fragment::default(),
             source,
             ty: self.last_type.clone(),
@@ -53697,17 +53721,7 @@ impl<'a> Parser<'a> {
             lvalue,
             outcome: crate::host::usage::Outcome::Conservative,
             evaluation: crate::host::usage::Evaluation::Required,
-        };
-        if moves {
-            self.move_local(&mut value)?;
         }
-        value.lvalue = None;
-        let result = self.coerce_expr(expected, &mut value);
-        result?;
-        self.returned(value.span, &value.ty);
-        self.write_output(value.rendered_source(), value.span);
-        self.last_type = value.ty;
-        Ok(())
     }
 
     /// A `fmt` body returns the text it wrote: its `fmt::Result` tail is

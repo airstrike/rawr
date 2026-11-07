@@ -11621,6 +11621,36 @@ fn main() {
 }
 
 #[test]
+fn language_drop_ends_top_level_statements_as_a_body() {
+    // A snippet of statements is a body: its locals drop at its end, after
+    // its final value.
+    let printed = printed(&format!(
+        r#"{NOISY}
+let _a = Noisy("a");
+{{
+    let _b = Noisy("b");
+    println!("inner");
+}}
+let c = Noisy("c");
+drop(c);
+let _ = Noisy("d");
+let v = vec![Noisy("e"), Noisy("f")];
+println!("end {{}}", v.len());
+"#
+    ));
+    assert_eq!(
+        printed,
+        "inner\ndrop b\ndrop c\ndrop d\nend 2\ndrop e\ndrop f\ndrop a\n"
+    );
+    let value = Engine::new()
+        .eval::<i64>(&format!(
+            "{NOISY}\nlet _a = Noisy(\"a\");\nlet n = 2;\nn + 1"
+        ))
+        .unwrap();
+    assert_eq!(value, 3);
+}
+
+#[test]
 fn language_drop_temporaries_and_assignments() {
     let printed = dropped(
         r#"
