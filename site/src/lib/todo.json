@@ -2788,7 +2788,8 @@
     {"issue":1161,"title":"A Rustlings group in the playground","state":"open","category":"Health"},
     {"issue":1162,"title":"The landing page's reload section covers any library","state":"open","category":"Health"},
     {"issue":1163,"title":"The generated runner's own items share a namespace with the program's types (a program `struct Program` fails to build)","state":"open","category":"Divergences from rustc"},
-    {"issue":1164,"title":"A marked src/main.rs can't name its own package's lib by the crate name","state":"open","category":"Divergences from rustc"}
+    {"issue":1164,"title":"A marked src/main.rs can't name its own package's lib by the crate name","state":"open","category":"Divergences from rustc"},
+    {"issue":1165,"title":"An idle but live iced app is stopped after a few minutes with 'the runner did not finish a frame before its deadline'","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3587,7 +3588,8 @@
             {"number":1151,"title":"An opaque type in a crate's metadata has no visibility, and asking for one is a rustc ICE in the driver","state":"closed"},
             {"number":1153,"title":"Names the old engine reserved are ordinary names, as in Rust","state":"closed"},
             {"number":1163,"title":"The generated runner's own items share a namespace with the program's types (a program `struct Program` fails to build)","state":"open"},
-            {"number":1164,"title":"A marked src/main.rs can't name its own package's lib by the crate name","state":"open"}
+            {"number":1164,"title":"A marked src/main.rs can't name its own package's lib by the crate name","state":"open"},
+            {"number":1165,"title":"An idle but live iced app is stopped after a few minutes with 'the runner did not finish a frame before its deadline'","state":"open"}
           ]
         }
       ]
