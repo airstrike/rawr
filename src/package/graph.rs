@@ -1486,8 +1486,8 @@ impl<'a> Builder<'a> {
             let package = &mut self.packages[package.0];
             // A marked crate with any Cargo dependency imports Rust: its
             // runner builds each dependency as its own `cargo build` builds
-            // it, never one built into an installed binary.
-            // Its dependencies are those its default features build.
+            // it, never one built into an installed binary. Its
+            // dependencies are those its default features build.
             let dependencies = cargo.enabled_dependencies();
             let imports = !package.rust_modules.is_empty()
                 || package.native_root.is_some()
