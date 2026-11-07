@@ -209,6 +209,8 @@ fn a_native_crate_reads_its_package_files_where_cargo_does() {
         parse(line).is_some_and(|(tick, _)| tick >= 3)
     });
     let built = run.seen.len();
+    let native = native_builds(&root.join("target"));
+    assert!(!native.is_empty(), "{}", run.seen.join("\n"));
 
     edit(
         &root.join("src/physics.rs"),
@@ -218,6 +220,7 @@ fn a_native_crate_reads_its_package_files_where_cargo_does() {
     run.until(Duration::from_secs(120), |line| {
         parse(line).is_some_and(|(tick, value)| tick > 3 && value == tick * 100)
     });
+    assert_eq!(native_builds(&root.join("target")), native);
     fs::write(root.join("stop"), "").unwrap();
     let status = run.child.wait().unwrap();
     let seen = run.seen.join("\n");
@@ -229,4 +232,26 @@ fn a_native_crate_reads_its_package_files_where_cargo_does() {
             .any(|line| line.contains("restarting") || line.contains("Compiling")),
         "{seen}"
     );
+}
+
+/// Each library Cargo built for `islands-assets` under `target`, and each
+/// output of its build script, with when it was written.
+fn native_builds(target: &Path) -> Vec<(std::path::PathBuf, std::time::SystemTime)> {
+    let mut found = Vec::new();
+    let mut pending = vec![target.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).unwrap().map(Result::unwrap) {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type().unwrap().is_dir() {
+                pending.push(path);
+            } else if name.starts_with("libislands_assets-") && name.ends_with(".rlib")
+                || name == "output" && path.to_string_lossy().contains("/islands-assets-")
+            {
+                found.push((path, entry.metadata().unwrap().modified().unwrap()));
+            }
+        }
+    }
+    found.sort();
+    found
 }
