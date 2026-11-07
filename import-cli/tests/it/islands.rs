@@ -304,8 +304,9 @@ fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin(
     run.until(|line| line == "line beta!");
     drop(stdin);
     run.until(|line| line == "done");
-    let status = run.child.wait().unwrap();
-    assert!(status.success(), "{}", run.seen.join("\n"));
+    // Supervised, the run outlives its program, which a save would run again.
+    let told = run.told(&events, |text| text.contains("\"ended\""));
+    assert!(told.contains(r#""status":0"#), "{told}");
     assert!(
         !run.seen.iter().any(|line| line.contains("restarting")),
         "{}",
