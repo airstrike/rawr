@@ -6077,6 +6077,57 @@ impl<P: api::Phase> Context<'_, P> {
         }
     }
 
+    /// `container` without each type parameter the opaque type `opaque`
+    /// leaves out of its arguments (`opaque_excluded`), and the bounds on
+    /// it, or `None` when it leaves none out.
+    fn without_left_out(
+        &self,
+        opaque: &model::Type,
+        container: &model::Generics,
+    ) -> Option<model::Generics> {
+        let model::Type::ImplTrait { id, captures, .. } = opaque else {
+            return None;
+        };
+        let positions = self.opaque_excluded.borrow().get(id).cloned()?;
+        let left_out = captures
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| {
+                u32::try_from(*position).is_ok_and(|position| positions.contains(&position))
+            })
+            .filter_map(|(_, capture)| match capture {
+                model::Argument::Type(model::Type::Parameter { index, .. }) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if left_out.is_empty() {
+            return None;
+        }
+        let bounded = |ty: &model::Type| {
+            matches!(ty, model::Type::Parameter { index, .. } if left_out.contains(index))
+        };
+        let parameters = container
+            .parameters()
+            .filter(|parameter| !left_out.contains(&parameter.index()))
+            .cloned()
+            .collect();
+        let predicates = container
+            .predicates()
+            .filter(|predicate| match predicate {
+                model::Predicate::Bound { ty, .. } | model::Predicate::TypeOutlives { ty, .. } => {
+                    !bounded(ty)
+                }
+                model::Predicate::ProjectionEquality {
+                    projection: model::Type::Projection { arguments, .. },
+                    ..
+                } => !matches!(arguments.first(), Some(model::Argument::Type(ty)) if bounded(ty)),
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        Some(model::Generics::new(parameters, predicates))
+    }
+
     /// `method` of the trait `trait_id` as a member of the opaque type
     /// `opaque`, whose bound gives the trait `arguments`, within the
     /// function whose generics are `container`.
@@ -6110,6 +6161,11 @@ impl<P: api::Phase> Context<'_, P> {
             .map(|parameter| parameter.index().saturating_add(1))
             .max()
             .unwrap_or(0);
+        // A parameter the opaque type leaves out (`opaque_excluded`), as
+        // the callable `code_block`'s `impl Fn(Uri) -> Message` fills, is
+        // none of the member's: no argument of the type gives it.
+        let pruned = self.without_left_out(opaque, container);
+        let container = pruned.as_ref().unwrap_or(container);
         // The method's parameters join the function's, and a name both
         // use, as warp's `form<T>()` and `Filter::untuple_one<T>` do, would
         // be declared twice: the method's is renamed `T1`, `T2`, ...
