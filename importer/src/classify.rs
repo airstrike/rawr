@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 123;
+const CLASSIFIER_VERSION: u32 = 124;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -287,6 +287,10 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// it gives does not take as arguments. `None` elsewhere, where an
     /// opaque type is refused.
     opaque_output: std::cell::RefCell<Option<Box<[u32]>>>,
+    /// The positions of the captures each opaque type a function gives
+    /// leaves out (`opaque_output`), by its definition, so the opaque type
+    /// has the same arguments wherever it is named.
+    opaque_excluded: std::cell::RefCell<BTreeMap<api::identity::Definition, Box<[u32]>>>,
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
     opaque_self: std::cell::RefCell<Option<model::Type>>,
@@ -625,6 +629,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             instance_aliases: std::cell::OnceCell::new(),
             sole_aliases: std::cell::OnceCell::new(),
             opaque_output: std::cell::RefCell::new(None),
+            opaque_excluded: std::cell::RefCell::new(BTreeMap::new()),
             opaque_self: std::cell::RefCell::new(None),
             opaque_projecting: std::cell::RefCell::new(Vec::new()),
             opaque_associated: std::cell::RefCell::new(Vec::new()),
@@ -6026,6 +6031,57 @@ impl<P: api::Phase> Context<'_, P> {
         }
     }
 
+    /// `container` without each type parameter the opaque type `opaque`
+    /// leaves out of its arguments (`opaque_excluded`), and the bounds on
+    /// it, or `None` when it leaves none out.
+    fn without_left_out(
+        &self,
+        opaque: &model::Type,
+        container: &model::Generics,
+    ) -> Option<model::Generics> {
+        let model::Type::ImplTrait { id, captures, .. } = opaque else {
+            return None;
+        };
+        let positions = self.opaque_excluded.borrow().get(id).cloned()?;
+        let left_out = captures
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| {
+                u32::try_from(*position).is_ok_and(|position| positions.contains(&position))
+            })
+            .filter_map(|(_, capture)| match capture {
+                model::Argument::Type(model::Type::Parameter { index, .. }) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if left_out.is_empty() {
+            return None;
+        }
+        let bounded = |ty: &model::Type| {
+            matches!(ty, model::Type::Parameter { index, .. } if left_out.contains(index))
+        };
+        let parameters = container
+            .parameters()
+            .filter(|parameter| !left_out.contains(&parameter.index()))
+            .cloned()
+            .collect();
+        let predicates = container
+            .predicates()
+            .filter(|predicate| match predicate {
+                model::Predicate::Bound { ty, .. } | model::Predicate::TypeOutlives { ty, .. } => {
+                    !bounded(ty)
+                }
+                model::Predicate::ProjectionEquality {
+                    projection: model::Type::Projection { arguments, .. },
+                    ..
+                } => !matches!(arguments.first(), Some(model::Argument::Type(ty)) if bounded(ty)),
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        Some(model::Generics::new(parameters, predicates))
+    }
+
     /// `method` of the trait `trait_id` as a member of the opaque type
     /// `opaque`, whose bound gives the trait `arguments`, within the
     /// function whose generics are `container`.
@@ -6059,6 +6115,11 @@ impl<P: api::Phase> Context<'_, P> {
             .map(|parameter| parameter.index().saturating_add(1))
             .max()
             .unwrap_or(0);
+        // A parameter the opaque type leaves out (`opaque_excluded`), as
+        // the callable `code_block`'s `impl Fn(Uri) -> Message` fills, is
+        // none of the member's: no argument of the type gives it.
+        let pruned = self.without_left_out(opaque, container);
+        let container = pruned.as_ref().unwrap_or(container);
         // The method's parameters join the function's, and a name both
         // use, as warp's `form<T>()` and `Filter::untuple_one<T>` do, would
         // be declared twice: the method's is renamed `T1`, `T2`, ...
@@ -9063,13 +9124,38 @@ impl<P: api::Phase> Context<'_, P> {
                 let Some(excluded) = excluded else {
                     return Err(representability::reject::Kind::OpaqueType.into());
                 };
+                // The captures a script callable or future fills, by their
+                // positions: where the function that gives the opaque type
+                // converts its output, those its excluded parameters are,
+                // and the same positions wherever else the type is named,
+                // as a member of it names it as its `Self`.
+                let known = self.opaque_excluded.borrow().get(id).cloned();
+                let left_out = match known {
+                    Some(positions) => positions,
+                    None => {
+                        let positions = captures
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, capture)| {
+                                matches!(capture, model::Argument::Type(model::Type::Parameter { index, .. })
+                                    if excluded.contains(index))
+                            })
+                            .filter_map(|(position, _)| u32::try_from(position).ok())
+                            .collect::<Box<[u32]>>();
+                        if !positions.is_empty() {
+                            self.opaque_excluded
+                                .borrow_mut()
+                                .insert(id.clone(), positions.clone());
+                        }
+                        positions
+                    }
+                };
                 let mut arguments = Vec::new();
-                for capture in captures.iter() {
+                for (position, capture) in captures.iter().enumerate() {
                     let model::Argument::Type(ty) = capture else {
                         continue;
                     };
-                    if matches!(ty, model::Type::Parameter { index, .. } if excluded.contains(index))
-                    {
+                    if u32::try_from(position).is_ok_and(|position| left_out.contains(&position)) {
                         continue;
                     }
                     arguments.push(self.convert(ty)?);
