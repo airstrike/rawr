@@ -27,6 +27,7 @@ fn main() {
     let back = events::paired::same(2usize..=4);
     let total: usize = back.clone().sum();
     println!("{total} {back:?} {}", back.end());
-    let half = events::paired::same(-3i8..0);
+    let half: std::ops::Range<i8> = -3..0;
+    let half = events::paired::same(half);
     println!("{half:?} {}", half.clone().count());
 }
