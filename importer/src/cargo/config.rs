@@ -1,7 +1,6 @@
 //! Canonical Cargo dependency and configuration provenance.
 
 use std::collections::BTreeMap;
-use std::env;
 use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, File};
@@ -16,6 +15,7 @@ use super::{digest, normalized_absolute, Digest, Limits};
 use crate::process::ToolPaths;
 use crate::{Error, Result};
 
+pub(crate) mod env;
 pub(crate) mod projection;
 
 const MAX_ENVIRONMENT_ENTRIES: usize = 4_096;
@@ -203,6 +203,8 @@ pub(crate) struct Provenance {
     explicit: Box<[PathBuf]>,
     environment: Environment,
     projection: projection::Projection,
+    /// The merged `[env]` of every file Cargo reads for the project.
+    env: env::Table,
     no_build_std: NoBuildStd,
     digest: Digest,
     /// Project/hierarchical `build.rustc`, resolved during the existing parse.
@@ -438,7 +440,7 @@ impl Environment {
     pub fn capture() -> Result<Self> {
         let mut values = BTreeMap::new();
         let mut total = 0_usize;
-        for (key, value) in env::vars_os() {
+        for (key, value) in std::env::vars_os() {
             let key = key.into_string().map_err(|key| Error::Request {
                 reason: format!("the environment variable {key:?} has a name that is not Unicode")
                     .into_boxed_str(),
@@ -885,6 +887,11 @@ impl Provenance {
         &self.projection
     }
 
+    /// Borrow the `[env]` table Cargo gives the processes it runs.
+    pub(crate) fn env(&self) -> &env::Table {
+        &self.env
+    }
+
     /// Borrow config candidates in their original discovery order.
     pub(crate) fn input_candidates(
         &self,
@@ -970,13 +977,28 @@ impl Provenance {
 
         let mut compiler = None::<(usize, PathBuf)>;
         let cargo_home = environment.cargo_home()?;
+        let mut env_sources = Vec::new();
         for candidate in &candidates {
             if matches!(candidate.state, State::Present(_)) {
                 let bytes = read_config(&candidate.path, crate::process::TAIL_BYTES)?;
                 // A byte is a conservative upper bound for every retained TOML
                 // node and byte.  Prove the complete owned DOM before parsing.
-                let document = parse_config(&candidate.path, &bytes)?;
+                let mut document = parse_config(&candidate.path, &bytes)?;
                 validate_config_authority(&document, &candidate.path)?;
+                if let Some(item) = document.remove("env")
+                    && let Some(rank) = env_rank(
+                        &candidate.path,
+                        project_root,
+                        &explicit,
+                        cargo_home.as_deref(),
+                    )
+                {
+                    env_sources.push(env::Source {
+                        rank,
+                        path: &candidate.path,
+                        item,
+                    });
+                }
                 if let Some(value) = document
                     .get("build")
                     .and_then(toml_edit::Item::as_table_like)
@@ -1016,6 +1038,9 @@ impl Provenance {
             }
         }
 
+        let env = env::Table::merge(&mut env_sources)?;
+        drop(env_sources);
+
         let digest_bytes = candidates.iter().fold(0_usize, |total, candidate| {
             total
                 .saturating_add(8)
@@ -1052,6 +1077,7 @@ impl Provenance {
             explicit: explicit.into_boxed_slice(),
             environment,
             projection,
+            env,
             no_build_std: NoBuildStd { private: () },
             digest: digest(&digest_input),
             compiler: compiler.map(|(_, path)| path),
@@ -1128,15 +1154,6 @@ impl Provenance {
 
     /// The baseline configuration a normal build retains.
     pub(crate) fn input_config(&self) -> Result<crate::input::config::Config> {
-        let mut cargo_env_overrides = false;
-        for candidate in &self.candidates {
-            if matches!(&candidate.state, State::Present(_)) {
-                let bytes = read_config(&candidate.path, crate::process::TAIL_BYTES)?;
-                let document = parse_config(&candidate.path, &bytes)?;
-                validate_config_authority(&document, &candidate.path)?;
-                cargo_env_overrides |= document.get("env").is_some();
-            }
-        }
         let mut candidates = Vec::new();
         candidates
             .try_reserve_exact(self.candidates.len())
@@ -1156,10 +1173,34 @@ impl Provenance {
         let projection = self.projection.try_clone()?;
         Ok(crate::input::config::Config {
             candidates: candidates.into_boxed_slice(),
-            cargo_env_overrides,
+            env: self.env.clone(),
             provenance: *self.digest.as_bytes(),
             projection,
         })
+    }
+}
+
+/// Where Cargo merges `path`'s `[env]`, or `None` when Cargo doesn't read the
+/// file for the project. A `--config` file outranks every discovered file.
+fn env_rank(
+    path: &Path,
+    project_root: &Path,
+    explicit: &[PathBuf],
+    cargo_home: Option<&Path>,
+) -> Option<env::Rank> {
+    if let Some(index) = explicit.iter().position(|explicit| explicit == path) {
+        return Some(env::Rank::Cli(index));
+    }
+    let directory = path.parent()?;
+    let base = directory.parent()?;
+    if directory.file_name() == Some(std::ffi::OsStr::new(".cargo"))
+        && project_root.starts_with(base)
+    {
+        Some(env::Rank::Hierarchy(base.components().count()))
+    } else if cargo_home == Some(directory) {
+        Some(env::Rank::Home)
+    } else {
+        None
     }
 }
 
@@ -1447,6 +1488,7 @@ mod tests {
             explicit: Box::default(),
             environment,
             projection,
+            env: super::env::Table::fixture(&[("CONFIG_VALUE", "present", false)]),
             no_build_std: NoBuildStd { private: () },
             digest: digest(b"input config fixture"),
             compiler: None,
@@ -1483,18 +1525,14 @@ mod tests {
     }
 
     #[test]
-    fn input_config_copies_candidates_and_reads_env_overrides() {
-        let path = std::env::temp_dir().join(format!(
-            "rawr-input-config-account-{}-{:?}.toml",
-            std::process::id(),
-            std::thread::current().id(),
-        ));
-        let source = b"[env]\nCONFIG_VALUE = 'present'\n";
-        fs::write(&path, source).expect("present config publishes");
-        let provenance = input_config_provenance(&path, State::Present(digest(source)));
+    fn input_config_copies_candidates_and_the_env_table() {
+        let provenance = input_config_provenance(
+            Path::new("/config/.cargo/config.toml"),
+            State::Present(digest(b"present")),
+        );
         let actual = provenance.input_config().expect("config is retained");
         assert_eq!(actual.provenance, *provenance.digest.as_bytes());
-        assert!(actual.cargo_env_overrides);
+        assert_eq!(actual.env, provenance.env);
         assert_ne!(
             actual.candidates[0]
                 .0
@@ -1507,28 +1545,6 @@ mod tests {
                 .as_encoded_bytes()
                 .as_ptr()
         );
-        fs::remove_file(path).expect("present config retires");
-    }
-
-    #[test]
-    fn input_config_refuses_unparsable_config_before_copying_candidates() {
-        let path = std::env::temp_dir().join(format!(
-            "rawr-input-config-failure-{}-{:?}.toml",
-            std::process::id(),
-            std::thread::current().id(),
-        ));
-        for source in [b"\xff".as_slice(), b"key = ".as_slice()] {
-            fs::write(&path, source).expect("invalid config publishes");
-            let provenance = input_config_provenance(&path, State::Present(digest(source)));
-            OWNED_INPUT_CONFIG_CANDIDATES.with(|owned| owned.set(0));
-            assert!(matches!(
-                provenance.input_config(),
-                Err(Error::Request { reason })
-                    if reason.starts_with("could not parse TOML configuration in")
-            ));
-            assert_eq!(OWNED_INPUT_CONFIG_CANDIDATES.with(Cell::get), 0);
-        }
-        fs::remove_file(path).expect("invalid config retires");
     }
 
     #[test]
@@ -1551,6 +1567,7 @@ mod tests {
                 &Limits::standard(),
             )
             .expect("test projection derives"),
+            env: super::env::Table::default(),
             no_build_std: NoBuildStd { private: () },
             digest: digest(b"test"),
             compiler: None,
@@ -1702,6 +1719,46 @@ mod tests {
         assert_eq!(
             provenance.compiler(&project).configured(),
             Some(project.join("bin/toml").as_path())
+        );
+    }
+
+    /// Discovery merges `[env]` in Cargo's order: the nearest project file
+    /// wins, Cargo home is last, and a relative value joins the directory
+    /// above the `.cargo` that defines it.
+    #[test]
+    fn discovery_merges_env_tables_in_cargo_order() {
+        let root = Root::new("env");
+        let workspace = root.0.join("workspace");
+        let project = workspace.join("project");
+        let cargo_home = root.0.join("cargo-home");
+        fs::create_dir_all(project.join(".cargo")).expect("project config directory");
+        fs::create_dir_all(workspace.join(".cargo")).expect("workspace config directory");
+        fs::create_dir_all(&cargo_home).expect("Cargo home");
+        fs::write(
+            project.join(".cargo/config.toml"),
+            "[env]\nNEAR = 'project'\nTOOL = { value = 'bin/cc', relative = true }\n",
+        )
+        .expect("project config writes");
+        fs::write(
+            workspace.join(".cargo/config.toml"),
+            "[env]\nNEAR = 'workspace'\nFAR = 'workspace'\n",
+        )
+        .expect("workspace config writes");
+        fs::write(
+            cargo_home.join("config.toml"),
+            "[env]\nFAR = 'home'\nHOME_ONLY = 'home'\n",
+        )
+        .expect("home config writes");
+        let provenance = discover_in(&project, &cargo_home).expect("[env] merges");
+        let env = provenance.env();
+        let tool = project.join("bin/cc");
+        assert_eq!(env.value("NEAR", &[]), Some("project"));
+        assert_eq!(env.value("FAR", &[]), Some("workspace"));
+        assert_eq!(env.value("HOME_ONLY", &[]), Some("home"));
+        assert_eq!(env.value("TOOL", &[]), tool.to_str());
+        assert_eq!(
+            provenance.input_config().expect("config is retained").env,
+            *env
         );
     }
 

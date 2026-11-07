@@ -2,10 +2,11 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
+use crate::cargo::config::env;
 use crate::cargo::Limits;
 use crate::input::stored::{self, Budget};
 use crate::input::{build, declaration, proof, script, Allocation, Usage};
-use crate::{node, Error, Result};
+use crate::{node, Result};
 
 const PRIOR: Usage = Usage {
     items: 7,
@@ -53,7 +54,7 @@ impl Fixture {
             &self.script,
             &self.package,
             &self.declarations,
-            false,
+            &env::Table::default(),
             &self.environment,
             allocation,
             |value, allocation| {
@@ -111,7 +112,7 @@ impl Fixture {
                 package_id,
                 execution,
                 key,
-                crate::input::environment_value(&self.environment, key),
+                env::Table::default().value(key, &self.environment),
                 allocation
             )?);
         }
@@ -211,7 +212,7 @@ fn current_paths_use_exact_original_storage_without_graph_decode_or_filesystem_w
         &fixture.script,
         &fixture.package,
         &fixture.declarations,
-        false,
+        &env::Table::default(),
         &fixture.environment,
         &mut Budget::borrow(&Limits::standard(), &mut allocation, &graph),
         |value, _| {
@@ -245,7 +246,7 @@ fn current_paths_use_exact_original_storage_without_graph_decode_or_filesystem_w
             &fixture.script,
             &fixture.package,
             &fixture.declarations,
-            false,
+            &env::Table::default(),
             &fixture.environment,
             &mut Budget::borrow(
                 &Limits::standard(),
@@ -260,61 +261,60 @@ fn current_paths_use_exact_original_storage_without_graph_decode_or_filesystem_w
 }
 
 #[test]
-fn execution_charge_and_encoding_precede_override_rejection() {
+fn a_declared_variable_has_the_value_cargo_env_config_gives_the_script() {
     let mut fixture = Fixture::new();
-    let mut allocation = account();
-    assert!(matches!(
-        script::declarations(
-            &fixture.script,
-            &fixture.package,
-            &fixture.declarations,
-            true,
-            &fixture.environment,
-            &mut allocation,
-            |_, _| panic!("overrides reject before first callback")
-        ),
-        Err(Error::Input {
-            code: "cargo-env-config-unproved",
-            ..
-        })
-    ));
+    fixture.declarations.paths = Box::default();
+    let table = env::Table::fixture(&[
+        ("UNSET", "from-config", false),
+        ("SET", "ignored", false),
+        ("EMPTY", "forced", true),
+    ]);
+    let mut environment = Vec::new();
+    script::declarations(
+        &fixture.script,
+        &fixture.package,
+        &fixture.declarations,
+        &table,
+        &fixture.environment,
+        &mut account(),
+        |value, _| {
+            if let script::Value::Environment { key, value, .. } = value {
+                environment.push((key.to_string(), value.map(str::to_string)));
+            }
+            Ok(())
+        },
+    )
+    .expect("[env] values are accounted");
     assert_eq!(
-        allocation.usage(),
-        Usage {
-            items: PRIOR.items + 1,
-            bytes: PRIOR.bytes + fixture.script.out_dir.as_os_str().len()
-        }
+        environment,
+        [
+            ("SET".into(), Some("from-build".into())),
+            ("EMPTY".into(), Some("forced".into())),
+            ("UNSET".into(), Some("from-config".into())),
+            ("SET".into(), Some("from-build".into())),
+        ]
     );
-    let mut current = account();
-    assert!(matches!(
-        script::declarations(
-            &fixture.script,
-            &fixture.package,
-            &fixture.declarations,
-            true,
-            &fixture.environment,
-            &mut Budget::borrow(&Limits::standard(), &mut current, &node::GraphBudget::new()),
-            |_, _| panic!("overrides reject before first callback")
+    let mut current = Vec::new();
+    script::declarations(
+        &fixture.script,
+        &fixture.package,
+        &fixture.declarations,
+        &table,
+        &fixture.environment,
+        &mut Budget::borrow(
+            &Limits::standard(),
+            &mut account(),
+            &node::GraphBudget::new(),
         ),
-        Err(stored::Error::Encoding("cargo-env-config-unproved"))
-    ));
-    assert_eq!(current.usage(), PRIOR);
-    current.items(0).expect("override failure is semantic");
-    fixture.script.out_dir = PathBuf::from(OsString::from_vec(b"/out/\xff".to_vec()));
-    let mut allocation = account();
-    assert!(matches!(
-        script::declarations(
-            &fixture.script,
-            &fixture.package,
-            &fixture.declarations,
-            true,
-            &fixture.environment,
-            &mut allocation,
-            |_, _| panic!("encoding rejects first")
-        ),
-        Err(Error::Path { .. })
-    ));
-    assert_eq!(allocation.usage().items, PRIOR.items + 1);
+        |value, _| {
+            if let script::Value::Environment { key, value, .. } = value {
+                current.push((key.to_string(), value.map(str::to_string)));
+            }
+            Ok(())
+        },
+    )
+    .expect("stored comparison reads [env] the same way");
+    assert_eq!(current, environment);
 }
 
 #[test]
@@ -329,7 +329,7 @@ fn callback_failure_prevents_later_path_normalization() {
         &fixture.script,
         &fixture.package,
         &fixture.declarations,
-        false,
+        &env::Table::default(),
         &fixture.environment,
         &mut Budget::borrow(&Limits::standard(), &mut allocation, &graph),
         |value, _| {
@@ -361,7 +361,7 @@ fn environment_lookup_reuses_retained_build_values_and_preserves_duplicate_decla
         &fixture.script,
         &fixture.package,
         &fixture.declarations,
-        false,
+        &env::Table::default(),
         &fixture.environment,
         &mut Budget::borrow(
             &Limits::standard(),

@@ -17,7 +17,6 @@ pub(crate) enum Failure {
     Render,
     ProvenanceAllocation(TryReserveError),
     ProvenanceRender(fmt::Error),
-    CargoEnvironmentOverrides,
 }
 
 /// The two original account paths; neither implementation owns another ledger.
@@ -101,10 +100,6 @@ impl Account for Allocation {
             Failure::ProvenanceRender(error) => Error::Input {
                 code: "config-provenance-encoding",
                 reason: error.to_string().into_boxed_str(),
-            },
-            Failure::CargoEnvironmentOverrides => Error::Input {
-                code: "cargo-env-config-unproved",
-                reason: "rerun-if-env-changed with Cargo [env] configuration".into(),
             },
         }
     }

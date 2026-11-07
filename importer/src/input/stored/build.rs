@@ -5,6 +5,7 @@ use std::slice;
 
 use super::observe::slots::Slots;
 use super::{Budget, Error, Package, Recipe, Result};
+use crate::cargo::config::env;
 use crate::cargo::unit;
 use crate::input::proof::Entry;
 use crate::input::{artifact, build, declaration, dependency, package, replay, script};
@@ -26,7 +27,7 @@ pub(in crate::input) fn require(
     recipes: &mut slice::Iter<'_, Recipe>,
     entries: &mut Slots<Entry>,
     retained: &build::Retained,
-    cargo_env_overrides: bool,
+    env: &env::Table,
     metadata: &unit::Metadata,
     cargo_home: Option<&Path>,
     base: &Path,
@@ -93,7 +94,7 @@ pub(in crate::input) fn require(
             script,
             package,
             &declarations,
-            cargo_env_overrides,
+            env,
             &build.evidence.environment,
             budget,
             |value, budget| {

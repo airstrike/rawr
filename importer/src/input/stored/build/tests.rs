@@ -1,6 +1,7 @@
 use std::fs;
 
 use super::require;
+use crate::cargo::config::env;
 use crate::cargo::{unit, Limits};
 use crate::input::proof::{Entry, Role};
 use crate::input::stored::observe::slots::Slots;
@@ -20,7 +21,7 @@ const PRIOR: Usage = Usage {
 fn acquire(
     fixture: &Fixture,
     recipes: &[Recipe],
-    overrides: bool,
+    env: &env::Table,
     allocation: &mut Allocation,
     graph: &node::GraphBudget,
 ) -> Result<Slots<Entry>> {
@@ -29,7 +30,7 @@ fn acquire(
         &mut recipes.iter(),
         &mut entries,
         &fixture.build,
-        overrides,
+        env,
         &fixture.metadata,
         Some(&fixture.home),
         &fixture.base,
@@ -43,7 +44,7 @@ fn observe(fixture: &Fixture, recipes: &[Recipe]) -> Result<Slots<Entry>> {
     acquire(
         fixture,
         recipes,
-        false,
+        &fixture.env,
         &mut Allocation::for_proof(PRIOR, &Limits::standard()),
         &node::GraphBudget::new(),
     )
@@ -146,7 +147,7 @@ fn caller_prefix_cursor_and_buffer_are_preserved_without_searching_or_owning_cop
         &mut cursor,
         &mut entries,
         &fixture.build,
-        false,
+        &fixture.env,
         &fixture.metadata,
         Some(&fixture.home),
         &fixture.base,
@@ -251,7 +252,7 @@ fn exact_header_owner_paths_and_ordered_out_directories_precede_native_work() {
         let mut allocation = Allocation::for_proof(PRIOR, &Limits::standard());
         assert!(
             matches!(
-                acquire(&fixture, &recipes, false, &mut allocation, &graph),
+                acquire(&fixture, &recipes, &fixture.env, &mut allocation, &graph),
                 Err(Error::Encoding(_))
             ),
             "header association {mode}"
@@ -382,36 +383,34 @@ fn fallback_metadata_must_match_build_and_path_git_remain_incomplete() {
 }
 
 #[test]
-fn environment_override_rejects_before_saved_output_recipe_consumption() {
-    let fixture = Fixture::open(false, false);
-    let (recipes, _) = fixture.cold();
-    let mut cursor = recipes.iter();
-    let mut entries = Slots::new();
-    let limits = Limits::standard();
-    let mut allocation = Allocation::for_proof(PRIOR, &limits);
-    let graph = node::GraphBudget::new();
-    assert!(matches!(
-        require(
-            &mut cursor,
-            &mut entries,
-            &fixture.build,
-            true,
-            &fixture.metadata,
-            Some(&fixture.home),
-            &fixture.base,
-            |_, _, _| Ok(()),
-            &mut Budget::borrow(&limits, &mut allocation, &graph)
-        ),
-        Err(Error::Encoding("cargo-env-config-unproved"))
-    ));
-    assert!(matches!(
-        cursor.as_slice().first(),
-        Some(Recipe::SavedOutput { .. })
-    ));
-    assert!(entries
+fn a_declared_variable_set_by_cargo_env_config_is_keyed_on_its_resolved_value() {
+    let mut fixture = Fixture::open(false, false);
+    fixture.env =
+        env::Table::fixture(&[("MISSING", "configured", false), ("SET", "ignored", false)]);
+    let (recipes, expected) = fixture.cold();
+    let current = observe(&fixture, &recipes).expect("the same [env] replays");
+    assert_eq!(canonical(current.as_slice()), canonical(&expected));
+    let values = current
         .as_slice()
         .iter()
-        .all(|entry| !matches!(entry, Entry::BuildMessage { .. } | Entry::Directive { .. })));
+        .filter_map(|entry| match entry {
+            Entry::Environment { key, value, .. } => Some((key.as_ref(), value.as_deref())),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(values.contains(&("MISSING", Some("configured"))));
+    assert!(values.contains(&("SET", Some("sealed"))));
+    let changed = env::Table::fixture(&[("MISSING", "changed", false)]);
+    assert!(matches!(
+        acquire(
+            &fixture,
+            &recipes,
+            &changed,
+            &mut Allocation::for_proof(PRIOR, &Limits::standard()),
+            &node::GraphBudget::new(),
+        ),
+        Err(Error::Encoding(_))
+    ));
 }
 
 #[test]
@@ -449,7 +448,7 @@ fn original_nonzero_accounts_charge_storage_and_refusal_persists() {
     acquire(
         &fixture,
         &recipes,
-        false,
+        &fixture.env,
         &mut allocation,
         &node::GraphBudget::new(),
     )
@@ -462,7 +461,7 @@ fn original_nonzero_accounts_charge_storage_and_refusal_persists() {
         acquire(
             &fixture,
             &recipes,
-            false,
+            &fixture.env,
             &mut allocation,
             &node::GraphBudget::new()
         ),
@@ -484,7 +483,7 @@ fn cargo_home_is_required_only_for_registry_fallback() {
             &mut recipes.iter(),
             &mut entries,
             &fixture.build,
-            false,
+            &fixture.env,
             &fixture.metadata,
             None,
             &fixture.base,

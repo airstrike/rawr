@@ -253,9 +253,6 @@ fn input_condition(code: &str, reason: &str) -> Option<String> {
         "missing-cargo-home-authority" => {
             format!("CARGO_HOME is unset and there is no home directory, so Cargo can't fetch `{reason}`")
         }
-        "cargo-env-config-unproved" => "a build script's `cargo::rerun-if-env-changed` names a \
-             variable that `[env]` in .cargo/config.toml sets; this is not supported yet"
-            .into(),
         _ => return None,
     })
 }

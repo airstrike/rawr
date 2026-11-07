@@ -53,11 +53,16 @@ impl Current {
                 .entries()
                 .map(|(key, value)| (key.to_owned(), value.map(ToOwned::to_owned)))
                 .collect(),
-            environment: config
-                .environment()
-                .entries()
-                .map(|(key, value)| (key.to_owned(), value.to_owned()))
-                .collect(),
+            environment: {
+                // A build script sees `[env]` over the process, as Cargo gives it.
+                let mut environment = config
+                    .environment()
+                    .entries()
+                    .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                    .collect();
+                config.env().apply(&mut environment);
+                environment
+            },
             limits: *limits,
         })
     }
