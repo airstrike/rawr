@@ -1065,6 +1065,138 @@ pub mod widgets {
         }
     }
 
+    /// A widget that sends a message when pressed outside its content, as
+    /// iced's `MouseArea<'a, Message, W>`, whose lifetime only its default
+    /// content names.
+    pub struct MouseArea<'a, Message, W = element::Element<'a, Message, crate::Theme, Renderer>> {
+        content: W,
+        on_press: Option<Message>,
+        area: std::marker::PhantomData<&'a ()>,
+    }
+
+    /// An area around `widget`, as iced's `mouse_area(widget)`.
+    pub fn mouse_area<'a, Message, W>(widget: W) -> MouseArea<'a, Message, W> {
+        MouseArea {
+            content: widget,
+            on_press: None,
+            area: std::marker::PhantomData,
+        }
+    }
+
+    impl<Message, W> MouseArea<'_, Message, W> {
+        /// The message a press on the area sends.
+        pub fn on_press(mut self, message: Message) -> Self {
+            self.on_press = Some(message);
+            self
+        }
+    }
+
+    impl<Message: Clone, W, Theme, Renderer> Widget<Message, Theme, Renderer>
+        for MouseArea<'_, Message, W>
+    where
+        W: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push("area".to_owned());
+            self.content.labels(labels);
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.content.press(label).or_else(|| {
+                (label == "outside")
+                    .then(|| self.on_press.clone())
+                    .flatten()
+            })
+        }
+    }
+
+    /// A text field, as iced's `TextInput<'a, Message>`, which borrows its
+    /// placeholder and value for `'a`.
+    pub struct Field<'a, Message> {
+        placeholder: &'a str,
+        value: &'a str,
+        on_submit: Option<Message>,
+    }
+
+    /// An empty field with `placeholder`, as iced's `text_input`.
+    pub fn field<'a, Message>(placeholder: &'static str) -> Field<'a, Message> {
+        Field {
+            placeholder,
+            value: "",
+            on_submit: None,
+        }
+    }
+
+    impl<'a, Message> Field<'a, Message> {
+        /// The field showing `value`, which it borrows for `'a`: a method
+        /// that takes its receiver by value and borrows at its type's own
+        /// lifetime, so its output keeps `value` borrowed.
+        pub fn value(mut self, value: &'a str) -> Self {
+            self.value = value;
+            self
+        }
+
+        /// The message a press on the field sends.
+        pub fn on_submit(mut self, message: Message) -> Self {
+            self.on_submit = Some(message);
+            self
+        }
+    }
+
+    impl<Message: Clone, Theme, Renderer> Widget<Message, Theme, Renderer> for Field<'_, Message> {
+        fn labels(&self, labels: &mut Vec<String>) {
+            let shown = if self.value.is_empty() {
+                self.placeholder
+            } else {
+                self.value
+            };
+            labels.push(format!("|{shown}|"));
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            (label == self.placeholder)
+                .then(|| self.on_submit.clone())
+                .flatten()
+        }
+    }
+
+    /// A widget its closure makes again only when its dependency changes,
+    /// as iced's `Lazy<'a, W, Dependency>`: a widget only where what the
+    /// closure gives is `'static`.
+    pub struct Lazy<'a, W, Dependency> {
+        dependency: Dependency,
+        view: Box<dyn Fn(&Dependency) -> W + 'a>,
+    }
+
+    /// A lazy widget of `view` at `dependency`, as iced's `lazy`.
+    pub fn lazy<'a, W, Dependency>(
+        dependency: Dependency,
+        view: impl Fn(&Dependency) -> W + 'a,
+    ) -> Lazy<'a, W, Dependency>
+    where
+        Dependency: std::hash::Hash + 'a,
+    {
+        Lazy {
+            dependency,
+            view: Box::new(view),
+        }
+    }
+
+    impl<W, Message, Theme, Renderer, Dependency> Widget<Message, Theme, Renderer>
+        for Lazy<'_, W, Dependency>
+    where
+        W: Widget<Message, Theme, Renderer> + 'static,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push("lazy".to_owned());
+            (self.view)(&self.dependency).labels(labels);
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            (self.view)(&self.dependency).press(label)
+        }
+    }
+
     /// A column of one widget, as iced's `center` is a container of one.
     pub fn center<W>(content: W) -> Column<W> {
         Column {
