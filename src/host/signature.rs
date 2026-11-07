@@ -182,6 +182,7 @@ impl Case {
         &self.arguments
     }
 
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) fn projections(&self) -> &[Projection] {
         &self.projections
     }

@@ -582,14 +582,9 @@ pub mod widgets {
     /// The only name of the renderer the crate draws with.
     pub type Renderer = fallback::Renderer<backend::Gpu, backend::Soft>;
 
-    /// Renderers that draw images, as iced's `image::Renderer`: each names
-    /// the handle it draws from.
-    pub mod imaging {
-        pub trait Renderer {
-            /// What the renderer draws an image from.
-            type Handle;
-        }
-    }
+    /// Renderers that draw images, as iced_core's `image::Renderer`, which
+    /// iced doesn't re-export.
+    use parts::imaging;
 
     impl imaging::Renderer for backend::Gpu {
         type Handle = crate::image::Handle;

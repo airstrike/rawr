@@ -104,7 +104,8 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // method gives from its default body as the trait's opaque type. Schema 55
 // marks a type parameter a struct's or an enum's boxed callable field gives.
 // Schema 56 keeps an alias's own type's implementation of a trait whose
-// associated type it passes on from the type's arguments.
+// associated type it passes on from the type's arguments, and reads them
+// for an implementation's bound that fixes a parameter's associated type.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
 const PROTOCOL_SCHEMA: u32 = 56;
@@ -2119,6 +2120,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // parameter, as rand's `I::Item: SampleBorrow<X>`: the trait's
             // implementations, as for a parameter's own bound (#1084).
             _ if selected && parameter_projection(obligation.self_ty) => {
+                return self.request_relation_implementations(obligation);
+            }
+            // An implementation's bound that fixes a parameter's associated
+            // type, as iced's `impl Widget for Image<Handle>` has `Renderer:
+            // image::Renderer<Handle = Handle>`: the trait's implementations
+            // at each type only an alias names, so the classifier can read
+            // what the bound fixes there.
+            ty::Param(_) if obligation.associated.is_some() => {
                 return self.request_relation_implementations(obligation);
             }
             ty::Param(_) | ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Alias(..) => {

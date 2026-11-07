@@ -20795,6 +20795,7 @@ impl<'a> Parser<'a> {
                     owner.as_ref(),
                 )?);
             }
+            self.take_opaque_arguments(&bounded, identity, &arguments, requirements);
             // A script type in the bound is followed even when nothing is
             // open, for the script impls it uses (D629).
             if !arguments
@@ -20815,6 +20816,94 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(())
+    }
+
+    /// A bound `bounded: Trait<arguments>` on what a script function of the
+    /// call gives, where its signature writes `impl Trait<..>`: rustc knows
+    /// the value by that bound alone, so its arguments, the trait's
+    /// defaults filled in, are the bound's. url_handler's `view(&self) ->
+    /// impl Widget<Message>` gives a `Container` that is a widget of every
+    /// renderer, and the `impl Widget<Message>` fixes iced's (#1072).
+    #[cfg(feature = "rust-import")]
+    fn take_opaque_arguments(
+        &mut self,
+        bounded: &Ty,
+        identity: [u8; 32],
+        arguments: &[Ty],
+        requirements: &[(ImmutableString, Ty, capability::Set)],
+    ) {
+        let written = requirements.iter().find_map(|(_, ty, _)| {
+            let Ty::Callable {
+                output,
+                item: Some(value),
+                ..
+            } = self.inference.resolve(ty)
+            else {
+                return None;
+            };
+            if self.inference.resolve(&output) != *bounded {
+                return None;
+            }
+            let key = value.key();
+            let lifetimes = match self.models.functions_by_key.get(key) {
+                Some(function) => &function.definition.lifetimes,
+                None => self
+                    .models
+                    .methods
+                    .values()
+                    .find(|method| method.key() == key)?
+                    .lifetimes(),
+            };
+            lifetimes.written_output.as_deref().cloned()
+        });
+        let Some(type_ref::Type::Path(opaque)) = written else {
+            return;
+        };
+        let Some(trait_name) = type_ref::Type::Path(opaque.clone()).opaque_trait().map(String::from)
+        else {
+            return;
+        };
+        let Ok(path) = crate::host::path::Path::parse(&trait_name) else {
+            return;
+        };
+        let Some(header) = self.models.host.trait_header(&path).cloned() else {
+            return;
+        };
+        if header.identity != identity {
+            return;
+        }
+        let owner = self.models.host.type_owner(&trait_name).cloned();
+        let written = opaque
+            .arguments
+            .iter()
+            .filter_map(|argument| match argument {
+                type_ref::Argument::Type(ty) => Some(Ty::from_resolved(ty)),
+                type_ref::Argument::Lifetime(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let mut parameters = BTreeMap::new();
+        for (index, (name, argument)) in header.parameters.iter().zip(arguments).enumerate() {
+            let ty = match written.get(index) {
+                Some(ty) => ty.clone(),
+                None => match header.defaults.get(index).and_then(Option::as_ref) {
+                    Some(default) => match self.instantiate_host_type(
+                        default,
+                        &mut parameters,
+                        &trait_name,
+                        Span::NONE,
+                        owner.as_ref(),
+                        None,
+                    ) {
+                        Ok(ty) => ty,
+                        Err(_) => return,
+                    },
+                    None => return,
+                },
+            };
+            parameters.insert(name.clone(), ty.clone());
+            // A mismatch is rustc's to report where it compiles the call.
+            let _ = self.unify_type(argument, &ty);
+        }
     }
 
     /// Whether `ty` is a type of `pattern`, binding its variables. An
