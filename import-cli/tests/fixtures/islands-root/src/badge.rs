@@ -5,7 +5,11 @@
 use crate::page;
 use crate::Message;
 
-pub fn message(pi: usize) -> Message {
+pub fn message(pi: usize) -> String {
+    format!("{:?}", build(pi))
+}
+
+fn build(pi: usize) -> Message {
     if pi == 1 {
         return crate::Message::Noop;
     }
@@ -14,10 +18,19 @@ pub fn message(pi: usize) -> Message {
         .unwrap_or(crate::Message::Page(pi, page::Message::Noop))
 }
 
-pub fn describe(kind: crate::Kind) -> String {
-    let name: crate::Label<'_> = match kind {
+pub fn describe(wide: bool) -> String {
+    let kind = if wide {
+        crate::Kind::Wide
+    } else {
+        crate::Kind::Narrow
+    };
+    let event: crate::Event = page::Message::Open(super::SCALE);
+    let name = match kind {
         crate::Kind::Narrow => "narrow",
         crate::Kind::Wide => "wide",
     };
-    format!("{name} x{}", super::SCALE)
+    match event {
+        page::Message::Open(scale) => format!("{name} x{scale}"),
+        page::Message::Noop => name.to_string(),
+    }
 }

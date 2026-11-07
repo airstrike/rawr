@@ -12,7 +12,7 @@ enum Message {
     Noop,
 }
 
-type Label<'a> = &'a str;
+type Event = page::Message;
 
 const SCALE: usize = 10;
 
@@ -22,9 +22,9 @@ fn helper(index: usize) -> usize {
 
 fn main() {
     for index in 0..3 {
-        println!("{:?}", badge::message(index));
+        println!("{}", badge::message(index));
     }
     for kind in [Kind::Narrow, Kind::Wide] {
-        println!("{}", badge::describe(kind));
+        println!("{}", badge::describe(kind == Kind::Wide));
     }
 }
