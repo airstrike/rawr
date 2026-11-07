@@ -13,10 +13,10 @@ pub(crate) const OLDEST: &str = "2026-07-10";
 /// nightly-window workflow (`.github/workflows/nightly-window.yml`) opens a
 /// pull request moving it, and `RANGE`, when a newer nightly builds the
 /// driver and reads std with it.
-pub(crate) const NEWEST: &str = "2026-11-01";
+pub(crate) const NEWEST: &str = "2026-11-06";
 
 /// The nightlies those dates are, for messages.
-pub(crate) const RANGE: &str = "nightly-2026-07-11 through nightly-2026-11-02";
+pub(crate) const RANGE: &str = "nightly-2026-07-11 through nightly-2026-11-07";
 
 /// Each compiler API change inside the window: its cfg and the `commit-date`
 /// of the merge that made it. A nightly whose commit is from that day but

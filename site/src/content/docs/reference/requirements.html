@@ -1,4 +1,4 @@
-<meta name="description" content="What each part of rawr needs: Rust 1.95 for the crate and to build the command, 64-bit macOS or Linux and a nightly from nightly-2026-07-11 through nightly-2026-11-02 for rawr-import. Which platforms work, and what is planned.">
+<meta name="description" content="What each part of rawr needs: Rust 1.95 for the crate and to build the command, 64-bit macOS or Linux and a nightly from nightly-2026-07-11 through nightly-2026-11-07 for rawr-import. Which platforms work, and what is planned.">
 <article>
 <h1>Requirements</h1>
 <p class="lede">What each part of rawr needs, which platforms work and what is planned.</p>
@@ -11,7 +11,7 @@
   <tr><th>Part</th><th>Needs</th><th>Tested on</th></tr>
   <tr><td>The <code>rawr</code> crate</td><td>Rust 1.95 or newer.</td><td>macOS and Linux.</td></tr>
   <tr><td>The <code>rawr</code> command</td><td>Nothing for the prebuilt binary. Rust 1.95 or newer to build it from source.</td><td>macOS. Linux on x86_64 in CI. Windows is best effort.</td></tr>
-  <tr><td>rawr-import</td><td>64-bit macOS or 64-bit Linux, rustup, and a nightly from <code>nightly-2026-07-11</code> through <code>nightly-2026-11-02</code> with the <code>rustc-dev</code> and <code>rust-src</code> components, which rawr-import installs through rustup the first time it needs them. It uses the nightly the project names, as rustup picks it (<code>cargo +nightly</code>, <code>RUSTUP_TOOLCHAIN</code>, an override or <code>rust-toolchain.toml</code>), or <code>nightly-2026-07-11</code> when the project names none or names a stable or beta release. A project it runs builds with the project&rsquo;s own toolchain, Rust 1.95 or newer.</td><td>Apple Silicon Macs. Linux on x86_64 in CI.</td></tr>
+  <tr><td>rawr-import</td><td>64-bit macOS or 64-bit Linux, rustup, and a nightly from <code>nightly-2026-07-11</code> through <code>nightly-2026-11-07</code> with the <code>rustc-dev</code> and <code>rust-src</code> components, which rawr-import installs through rustup the first time it needs them. It uses the nightly the project names, as rustup picks it (<code>cargo +nightly</code>, <code>RUSTUP_TOOLCHAIN</code>, an override or <code>rust-toolchain.toml</code>), or <code>nightly-2026-07-11</code> when the project names none or names a stable or beta release. A project it runs builds with the project&rsquo;s own toolchain, Rust 1.95 or newer.</td><td>Apple Silicon Macs. Linux on x86_64 in CI.</td></tr>
   <tr><td><code>rawr-macros</code></td><td>Rust 1.95 or newer. It installs from git and isn&rsquo;t on crates.io yet.</td><td>macOS.</td></tr>
 </table>
 <p>One command installs prebuilt <code>rawr</code> and rawr-import:</p>
