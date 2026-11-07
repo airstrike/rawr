@@ -992,7 +992,7 @@ pub mod widgets {
     /// Widget<..>`: two `impl Trait` inputs, one a callable, behind an
     /// opaque widget.
     pub fn titled<'a, Message, Theme, Renderer>(
-        title: &impl ToString,
+        title: impl ToString,
         on_press: impl Fn(u16) -> Message + Clone + 'a,
     ) -> impl Widget<Message, Theme, Renderer> + 'a
     where

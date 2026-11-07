@@ -1379,7 +1379,7 @@ fn an_opaque_output_of_a_private_type_that_borrows_an_element_is_held() {
     );
 }
 
-/// iced's markdown (#1098): `titled(&title, on_press)` takes two `impl
+/// iced's markdown (#1098): `titled(title, on_press)` takes two `impl
 /// Trait` inputs, one a callable, as `code_block` does, and `explain` on
 /// what it gives names that opaque type as its `Self` with the arguments
 /// the function's output has. The output is `cargo run`'s.

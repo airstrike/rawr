@@ -1,5 +1,5 @@
 // rawr
-// iced's markdown (#1098): `titled(&title, on_press)`, as `code_block`,
+// iced's markdown (#1098): `titled(title, on_press)`, as `code_block`,
 // takes two `impl Trait` inputs, one a callable a script closure fills, and
 // gives an opaque widget. `explain`, a method the blanket impl over
 // `Widget` gives that opaque type, names it as its `Self` with the same
@@ -30,7 +30,7 @@ impl Counter {
         column![
             button("Increment").on_press(Message::Increment),
             text(self.value).size(50),
-            titled(&"code", Message::Titled).explain(0x00ff00_u32),
+            titled("code", Message::Titled).explain(0x00ff00_u32),
         ]
     }
 }
