@@ -230,18 +230,33 @@ try {
   check(await evaluate(`[...document.querySelector(".tools").querySelectorAll("button, input")].every((e) => e.getBoundingClientRect().right <= innerWidth - 15)`), "every control fits inside the gutter");
   await on("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
 
-  // The docs' snippet: its Run button posts the code and shows the output.
+  // The docs' snippet: its Run button runs the code in the browser and shows the output.
   await on("Page.navigate", { url: `http://127.0.0.1:${port}/docs/play#shapes` });
   await until("the docs' Run button", `!!document.querySelector('.runbtn[data-source="src-sum"]:not([hidden])')`, 10000);
   check(await evaluate(`document.querySelectorAll("#src-sum .k").length > 0`), "the docs' runnable code shows highlighted");
+  const runsBefore = siteRuns.length;
   await evaluate(`document.querySelector('.runbtn[data-source="src-sum"]').click()`);
-  for (const start = Date.now(); siteRuns.length === 0 && Date.now() - start < 10000; ) await sleep(100);
-  await until("the docs' output", `(document.getElementById("out-sum") || {}).textContent?.includes("6")`, 10000);
+  await until("the docs' output", `!!document.querySelector("#out-sum .live")`, 30000);
   await shot("docs-sum.png");
-  const sent = siteRuns.at(-1) as { code: string };
-  check(sent?.code.includes("xs.iter().sum") === true, "the docs' snippet posts its code");
-  check(typeof parseSnippet(sent) !== "string", "and the Worker reads it");
+  check(await evaluate(`document.getElementById("out-sum").textContent === "6"`), "the docs' snippet prints what rawr-web prints");
+  check(siteRuns.length === runsBefore, "and runs in the browser, with no request to the server");
   check(await evaluate(`document.documentElement.dataset.theme === "dark"`), "the docs open in the theme chosen on the playground");
+
+  // A block marked data-where="server" posts its code to /play/run.
+  await on("Page.navigate", { url: `http://127.0.0.1:${port}/docs/reference/types#integers` });
+  await until("the server block's Run button", `!!document.querySelector('.runbtn[data-source="src-wide"]:not([hidden])')`, 10000);
+  await evaluate(`document.querySelector('.runbtn[data-source="src-wide"]').click()`);
+  for (const start = Date.now(); siteRuns.length === runsBefore && Date.now() - start < 10000; ) await sleep(100);
+  const sent = siteRuns.at(-1) as { code: string };
+  check(sent?.code.includes("u128") === true, "a server block posts its code");
+  check(typeof parseSnippet(sent) !== "string", "and the Worker reads it");
+
+  // The landing page: the hello program runs in the browser.
+  await on("Page.navigate", { url: `http://127.0.0.1:${port}/` });
+  await until("the landing page's hello Run button", `!!document.querySelector('.runbtn[data-source="src-hello"]:not([hidden])')`, 10000);
+  await evaluate(`document.querySelector('.runbtn[data-source="src-hello"]').click()`);
+  await until("the hello output", `!!document.querySelector("#out-hello .live")`, 30000);
+  check(await evaluate(`document.getElementById("out-hello").textContent === "1. Hello, rawr!\\n2. Hello, rawr!\\n3. Hello, rawr!"`), "the landing page's hello prints its three lines");
 } catch (error) {
   check(false, String(error));
 } finally {
