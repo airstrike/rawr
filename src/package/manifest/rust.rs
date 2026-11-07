@@ -24,11 +24,15 @@ pub(crate) struct Config {
     reason = "the resolution slice will consume this parsed proof bundle"
 )]
 pub(crate) struct Dependency {
+    /// The key the manifest declares it by, which its `[features]` name.
+    pub(crate) key: String,
     pub(crate) alias: ImmutableString,
     pub(crate) package: Option<String>,
     pub(crate) source: Source,
     pub(crate) features: Box<[String]>,
     pub(crate) default_features: bool,
+    /// `optional = true`: built only when a feature enables it.
+    pub(crate) optional: bool,
     pub(crate) span: Span,
 }
 
@@ -141,12 +145,13 @@ impl<'a> Specification<'a> {
 }
 
 /// The package of the `rawr` attribute crate (`#[rawr::preview]`).
-const ATTRIBUTE_CRATE: &str = "rawr-macros";
+pub(super) const ATTRIBUTE_CRATE: &str = "rawr-macros";
 
 /// A Cargo `[dependencies]` table in Rawr's Rust dependency form. A
 /// version string is `{ version = "..." }`; a `-` in a key becomes `_` in the
 /// alias with the key kept as the package; a path wins over a version as it
-/// does locally; optional dependencies are off by default and skipped.
+/// does locally; an optional dependency is kept as optional, for the
+/// package's features to enable.
 pub(super) fn cargo_dependencies(
     text: &str,
     root: &Path,
@@ -187,9 +192,7 @@ pub(super) fn cargo_dependencies(
                 });
             }
         };
-        if inline.get("optional").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
+        let optional = inline.get("optional").and_then(Value::as_bool) == Some(true);
         // The `rawr` attribute crate is for rustc. Rawr reads its
         // attributes itself, so it imports nothing from it.
         let package = inline.get("package").and_then(Value::as_str).unwrap_or(key);
@@ -201,11 +204,13 @@ pub(super) fn cargo_dependencies(
             // Cargo resolved the inherited entry, member features included.
             let Some(inherited) = inherited else {
                 dependencies.push(Dependency {
+                    key: key.to_owned(),
                     alias: alias.as_str().into(),
                     package: None,
                     source: Source::Workspace,
                     features: Box::default(),
                     default_features: true,
+                    optional,
                     span: item_span(text, item),
                 });
                 continue;
@@ -218,6 +223,8 @@ pub(super) fn cargo_dependencies(
                 span: item_span(text, item),
             })?;
             let mut dependency = dependency.clone();
+            dependency.key = key.to_owned();
+            dependency.optional = optional;
             dependency.span = item_span(text, item);
             dependencies.push(dependency);
             continue;
@@ -230,6 +237,8 @@ pub(super) fn cargo_dependencies(
         }
         let normalized = Item::Value(Value::InlineTable(inline));
         let mut dependency = parse_dependency(text, root, &alias, &normalized)?;
+        dependency.key = key.to_owned();
+        dependency.optional = optional;
         dependency.span = item_span(text, item);
         dependencies.push(dependency);
     }
@@ -274,11 +283,13 @@ fn parse_dependency(
     let default_features = parse_default_features(text, alias, table)?;
 
     Ok(Dependency {
+        key: alias.to_owned(),
         alias: alias.into(),
         package,
         source,
         features,
         default_features,
+        optional: false,
         span: item_span(text, item),
     })
 }

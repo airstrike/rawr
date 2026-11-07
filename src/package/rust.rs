@@ -366,28 +366,51 @@ fn bin_crate(
     Dependency::path(super::island::BIN, &directory)?.package(&bin_package(cargo))
 }
 
-/// The package's build script as `build.rs` in `directory`, the generated
-/// package standing in for it (#1136). Its paths through the source file
-/// and `CARGO_MANIFEST_DIR` are absolute (`polyglot::widened`), and its
-/// `main` runs as [`BUILD_SCRIPT`] has it: in the package's own directory,
-/// with `CARGO_MANIFEST_DIR` naming it, so what it reads at run time is
-/// the package's, and with its relative `rerun-if-changed` paths made
+/// Where in a generated package the copy of the build script `script`
+/// lives: [`BUILD_DIRECTORY`] holds it and its modules.
+fn build_copy(script: &Path) -> Option<std::path::PathBuf> {
+    script
+        .file_name()
+        .map(|name| Path::new(BUILD_DIRECTORY).join(name))
+}
+
+/// The directory of a generated package that holds the build script's copy
+/// and the copies of its modules, laid out as they are beside the script.
+const BUILD_DIRECTORY: &str = "build-script";
+
+/// The package's build script copied into `directory`, the generated
+/// package standing in for it (#1136), at [`build_copy`], with the modules
+/// it declares copied beside it as they are beside the script, so a `mod`
+/// resolves as it does for Cargo (#1143). A module's file is found by
+/// Rust's rules (`name.rs` or `name/mod.rs` under its parent's directory);
+/// one under `#[path]` is read from where that path names. Paths through
+/// a source file and `CARGO_MANIFEST_DIR` are absolute
+/// (`polyglot::widened`), and the script's `main` runs as
+/// [`BUILD_SCRIPT`] has it: in the package's own directory, with
+/// `CARGO_MANIFEST_DIR` naming it, so what it reads at run time is the
+/// package's, and with its relative `rerun-if-changed` paths made
 /// absolute, so Cargo watches the package's files and runs it again
 /// exactly when Cargo's build of the package would.
 fn build_script(
     cargo: &super::manifest::cargo::Cargo,
     directory: &Path,
-) -> rawr_import::Result<Option<(std::path::PathBuf, String)>> {
-    let Some(script) = &cargo.build else {
-        return Ok(None);
+) -> rawr_import::Result<Vec<(std::path::PathBuf, String)>> {
+    let (Some(script), Some(copy)) = (
+        cargo.build.as_deref(),
+        cargo.build.as_deref().and_then(build_copy),
+    ) else {
+        return Ok(Vec::new());
     };
     let package = cargo.path.parent().unwrap_or(directory);
-    let text = std::fs::read_to_string(script).map_err(|source| rawr_import::Error::Io {
-        operation: "read build script",
-        path: script.clone(),
-        source,
-    })?;
-    let text = super::polyglot::widened(&text, false, script, package);
+    let read = |path: &Path| {
+        std::fs::read_to_string(path).map_err(|source| rawr_import::Error::Io {
+            operation: "read build script",
+            path: path.to_path_buf(),
+            source,
+        })
+    };
+    let original = read(script)?;
+    let text = super::polyglot::widened(&original, false, script, package);
     let text = match super::polyglot::main_renamed(&text, "__rawr_package_main") {
         Some(renamed) => format!(
             "{renamed}\n{}",
@@ -398,7 +421,38 @@ fn build_script(
         ),
         None => text,
     };
-    Ok(Some((directory.join("build.rs"), text)))
+    let mut files = vec![(directory.join(&copy), text)];
+    let here = script.parent().unwrap_or(package);
+    let there = directory.join(BUILD_DIRECTORY);
+    let mut pending = vec![(Vec::<String>::new(), original)];
+    while let Some((modules, text)) = pending.pop() {
+        for declaration in super::polyglot::declarations(&text) {
+            if declaration.explicit_path || declaration.disabled {
+                continue;
+            }
+            let mut relative = modules.iter().collect::<std::path::PathBuf>();
+            relative.extend(&declaration.path);
+            let found = [relative.with_extension("rs"), relative.join("mod.rs")]
+                .into_iter()
+                .filter(|relative| here.join(relative).is_file())
+                .collect::<Vec<_>>();
+            // With neither file or both, rustc reports the copy's
+            // declaration as it would the script's.
+            let [file] = found.as_slice() else {
+                continue;
+            };
+            let path = here.join(file);
+            let text = read(&path)?;
+            files.push((
+                there.join(file),
+                super::polyglot::widened(&text, false, &path, package),
+            ));
+            let mut child = modules.clone();
+            child.extend(declaration.path);
+            pending.push((child, text));
+        }
+    }
+    Ok(files)
 }
 
 /// The `main` of a build script's copy: it runs the package's own `main`
@@ -563,12 +617,12 @@ fn manifest_head(
         let _ = writeln!(text, "edition = {edition:?}");
     }
     // The build script's copy ([`build_script`]), if the package has one.
-    let build = if cargo.build.is_some() {
-        "\"build.rs\""
-    } else {
-        "false"
-    };
-    let _ = writeln!(text, "build = {build}");
+    match cargo.build.as_deref().and_then(build_copy) {
+        Some(copy) => {
+            let _ = writeln!(text, "build = {:?}", copy.display().to_string());
+        }
+        None => text.push_str("build = false\n"),
+    }
     // Two packages may not link one native library, so only the package's
     // own library says it does.
     if package == cargo.package
@@ -585,19 +639,28 @@ fn manifest_head(
 }
 
 /// `cargo`'s dependencies as `[dependencies]` lines, its
-/// `[build-dependencies]`, then the empty `[workspace]` that keeps a
-/// generated package out of any other.
+/// `[build-dependencies]`, its `[features]` (#1144), then the empty
+/// `[workspace]` that keeps a generated package out of any other. A
+/// generated package is a path dependency with its default features on,
+/// so it builds with the features `cargo build` gives the package.
 fn dependency_table(cargo: &super::manifest::cargo::Cargo) -> String {
     let mut text = dependency_lines(&cargo.dependencies);
     if !cargo.build_dependencies.is_empty() {
         text.push_str("\n[build-dependencies]\n");
         text.push_str(&dependency_lines(&cargo.build_dependencies));
     }
+    let declared = cargo
+        .dependencies
+        .iter()
+        .chain(&cargo.build_dependencies)
+        .collect::<Vec<_>>();
+    text.push_str(&cargo.features.manifest(&declared));
     text.push_str("\n[workspace]\n");
     text
 }
 
-/// One `alias = { .. }` line per dependency.
+/// One `key = { .. }` line per dependency, by the key the package's
+/// manifest declares it by, which its features name.
 fn dependency_lines(dependencies: &[super::manifest::rust::Dependency]) -> String {
     use std::fmt::Write as _;
     let mut text = String::new();
@@ -631,7 +694,10 @@ fn dependency_lines(dependencies: &[super::manifest::rust::Dependency]) -> Strin
         if !dependency.default_features {
             fields.push("default-features = false".to_owned());
         }
-        let _ = writeln!(text, "{} = {{ {} }}", dependency.alias, fields.join(", "));
+        if dependency.optional {
+            fields.push("optional = true".to_owned());
+        }
+        let _ = writeln!(text, "{} = {{ {} }}", dependency.key, fields.join(", "));
     }
     text
 }
@@ -1182,4 +1248,117 @@ fn request(
         builder = builder.demand(path.split("::"));
     }
     builder.policy(Policy::manifest().seal()).build()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use crate::package::manifest::cargo::Cargo;
+
+    fn cargo(path: &Path, text: &str) -> Cargo {
+        Cargo::parse(
+            path.to_path_buf(),
+            text.to_owned(),
+            path.parent().unwrap(),
+            false,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    /// A generated manifest declares each dependency by the package's own
+    /// key, an optional one optional, and the package's `[features]` as
+    /// written, less a value naming the attribute crate it leaves out
+    /// (#1144). A binary's has them too.
+    #[test]
+    fn a_generated_manifest_has_the_package_s_features_and_optional_dependencies() {
+        let cargo = cargo(
+            Path::new("/app/Cargo.toml"),
+            r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+tracing-subscriber = { version = "0.3", optional = true }
+rawr-macros = { version = "0.3", optional = true }
+
+[features]
+default = ["logs"]
+logs = ["dep:tracing-subscriber", "tracing-subscriber/fmt"]
+preview = ["dep:rawr-macros"]
+"#,
+        );
+        let expected = "tracing-subscriber = { package = \"tracing-subscriber\", \
+            version = \"0.3\", optional = true }\n\n[features]\n\
+            \"default\" = [\"logs\"]\n\
+            \"logs\" = [\"dep:tracing-subscriber\", \"tracing-subscriber/fmt\"]\n\
+            \"preview\" = []\n\n[workspace]\n";
+        let library = super::app_manifest(&cargo, Path::new("lib.rs"));
+        assert!(library.ends_with(expected), "{library}");
+        let bin = super::bin_manifest(&cargo, Path::new("/app/target/rawr/crate"));
+        assert!(bin.ends_with(expected), "{bin}");
+        assert!(library.contains("build = false\n"), "{library}");
+    }
+
+    /// A build script's `mod` declarations resolve beside the script, as
+    /// for Cargo: its copy has each module's copy beside it, and a
+    /// module's own modules under its directory (#1143).
+    #[test]
+    fn a_build_script_s_modules_are_copied_beside_its_copy() {
+        let root = std::env::temp_dir().join(format!("rawr-build-modules-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let package = root.join("app");
+        let write = |path: &str, text: &str| {
+            let path = package.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            "tools/build.rs",
+            "mod icons;\n#[cfg(test)]\nmod tests;\nfn main() {}\n",
+        );
+        write("tools/icons.rs", "mod names;\nmod list { mod inner; }\n");
+        write(
+            "tools/icons/names.rs",
+            "pub const N: &str = include_str!(\"n.txt\");\n",
+        );
+        write("tools/icons/list/inner.rs", "\n");
+        let cargo = cargo(
+            &package.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nbuild = \"tools/build.rs\"\n",
+        );
+        let directory = root.join("generated");
+        let mut files = super::build_script(&cargo, &directory).unwrap();
+        files.sort();
+        let copies = files
+            .iter()
+            .map(|(path, _)| path.strip_prefix(&directory).unwrap().to_path_buf())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            copies,
+            [
+                "build-script/build.rs",
+                "build-script/icons/list/inner.rs",
+                "build-script/icons/names.rs",
+                "build-script/icons.rs",
+            ]
+            .map(PathBuf::from)
+        );
+        assert!(
+            files[2].1.contains(&format!(
+                "include_str!(\"{}\")",
+                package.join("tools/icons/n.txt").display()
+            )),
+            "{}",
+            files[2].1
+        );
+        let generated = super::app_manifest(&cargo, Path::new("lib.rs"));
+        assert!(
+            generated.contains("build = \"build-script/build.rs\"\n"),
+            "{generated}"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

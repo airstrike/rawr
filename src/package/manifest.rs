@@ -7,6 +7,7 @@ use toml_edit::Item;
 use crate::{ImmutableString, Position, Span};
 
 pub(crate) mod cargo;
+pub(crate) mod features;
 pub(crate) mod rust;
 pub(crate) mod script;
 pub(crate) mod workspace;

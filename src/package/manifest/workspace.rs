@@ -116,23 +116,22 @@ fn metadata(manifest: &Path) -> Result<(PathBuf, Inherited), String> {
         build_dependencies: BTreeMap::new(),
     };
     for dependency in package["dependencies"].as_array().into_iter().flatten() {
-        // Normal and build dependencies for every target, as Rawr reads
-        // them.
+        // Normal and build dependencies, optional ones included, as Rawr
+        // reads them. A key declared for every target and under a
+        // `[target.'cfg(..)']` table is the former's.
         let entries = match dependency["kind"].as_str() {
             None => &mut inherited.dependencies,
             Some("build") => &mut inherited.build_dependencies,
             Some(_) => continue,
         };
-        if !dependency["target"].is_null() {
-            continue;
-        }
-        if dependency["optional"].as_bool() == Some(true) {
-            continue;
-        }
+        let targeted = !dependency["target"].is_null();
         let Some(name) = dependency["name"].as_str() else {
             continue;
         };
         let key = dependency["rename"].as_str().unwrap_or(name);
+        if targeted && entries.contains_key(key) {
+            continue;
+        }
         let source = if let Some(path) = dependency["path"].as_str() {
             Source::Path(PathBuf::from(path))
         } else if let Some((url, reference)) = dependency["source"]
@@ -163,11 +162,13 @@ fn metadata(manifest: &Path) -> Result<(PathBuf, Inherited), String> {
         entries.insert(
             key.to_owned(),
             Dependency {
+                key: key.to_owned(),
                 package: (alias != name).then(|| name.to_owned()),
                 alias: alias.into(),
                 source,
                 features,
                 default_features: dependency["uses_default_features"].as_bool() != Some(false),
+                optional: dependency["optional"].as_bool() == Some(true),
                 span: Span::new(Position::START, Position::START),
             },
         );

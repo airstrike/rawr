@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{Document, Item};
 
+use super::features::Features;
 use super::{byte_span, item_span, rust, Error};
 use crate::{Position, Span};
 
@@ -23,10 +24,13 @@ pub(crate) struct Cargo {
     pub(crate) crate_name: String,
     pub(crate) version: Option<String>,
     pub(crate) edition: Option<String>,
-    /// `[dependencies]`, normalized to Rawr's Rust dependency form.
+    /// `[dependencies]`, normalized to Rawr's Rust dependency form,
+    /// optional ones included.
     pub(crate) dependencies: Box<[rust::Dependency]>,
     /// `[build-dependencies]`, in the same form.
     pub(crate) build_dependencies: Box<[rust::Dependency]>,
+    /// `[features]`.
+    pub(crate) features: Features,
     /// The package's build script, absolute, as Cargo finds it: `build`'s
     /// path, else `build.rs` beside the manifest, unless `build = false`.
     pub(crate) build: Option<PathBuf>,
@@ -76,15 +80,26 @@ impl Cargo {
                 .and_then(Item::as_bool)
                 == Some(true)
         };
-        let inheriting = ["version", "edition"]
-            .iter()
-            .any(|key| package.get(key).is_some_and(inherits))
-            || ["dependencies", "build-dependencies"].iter().any(|kind| {
-                table
-                    .get(kind)
-                    .and_then(Item::as_table_like)
-                    .is_some_and(|dependencies| dependencies.iter().any(|(_, item)| inherits(item)))
-            });
+        let inheriting =
+            ["version", "edition"]
+                .iter()
+                .any(|key| package.get(key).is_some_and(inherits))
+                || std::iter::once(table as &dyn toml_edit::TableLike)
+                    .chain(
+                        table
+                            .get("target")
+                            .and_then(Item::as_table_like)
+                            .into_iter()
+                            .flat_map(|targets| targets.iter())
+                            .filter_map(|(_, target)| target.as_table_like()),
+                    )
+                    .any(|table| {
+                        ["dependencies", "build-dependencies"].iter().any(|kind| {
+                            table.get(kind).and_then(Item::as_table_like).is_some_and(
+                                |dependencies| dependencies.iter().any(|(_, item)| inherits(item)),
+                            )
+                        })
+                    });
         let inherited = if inheriting && ask_cargo {
             Some(
                 super::workspace::inherited(&path, &text).map_err(|message| Error {
@@ -128,6 +143,7 @@ impl Cargo {
                 .as_ref()
                 .map(|inherited| &inherited.build_dependencies),
         )?;
+        let features = Features::parse(&text, table)?;
         let directory = path.parent().unwrap_or(root);
         let build = match package.get("build").and_then(Item::as_value) {
             Some(toml_edit::Value::String(script)) => Some(directory.join(script.value())),
@@ -146,10 +162,17 @@ impl Cargo {
             edition,
             dependencies,
             build_dependencies,
+            features,
             build,
             links,
             text,
         }))
+    }
+
+    /// The dependencies Cargo builds the package with, its default
+    /// features on: [`Features::enabled`].
+    pub(crate) fn enabled_dependencies(&self) -> Box<[rust::Dependency]> {
+        self.features.enabled(&self.dependencies)
     }
 }
 
