@@ -2146,6 +2146,8 @@ fn build(
 
     // An opaque `impl Trait` type a function gives is a type of its own,
     // declared beside the function, at the type arguments its caller fixes.
+    // Its paths are the owners its members are declared under.
+    let mut opaque_paths = std::collections::BTreeSet::new();
     for (path, definition, parameters, associated) in opaque_types(contract, &facade) {
         let shape = crate::Shared::new(host::type_def::Shape::Opaque);
         // An iterator, as `impl Iterator<Item = T>` is, whatever bound
@@ -2168,6 +2170,7 @@ fn build(
             Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
             Err(error) => return Err(error.into()),
         }
+        opaque_paths.insert(path);
     }
     for entry in &facade.entries {
         let (parameters, defaults, implemented) = match entry.outcome.representability() {
@@ -2405,15 +2408,16 @@ fn build(
                 }
             }
             // The members of the opaque type the method gives, declared in
-            // its owner's module (`opaque_types`).
+            // its owner's module (`opaque_types`), each with its owner.
             let opaque = rawr_import::surface::opaque::path(
                 &format!("{}__{}", entry.relative, associated.name()),
                 0,
             );
-            for member in associated
+            let members = associated
                 .implementations()
                 .flat_map(rawr_import::classify::ImplementationOutcome::associated)
-            {
+                .filter(|_| opaque_paths.contains(&opaque));
+            for member in members {
                 let path = format!("{opaque}::{}", member.name());
                 if let Some(item) = imported_item(&types, &path, member, allocation)?
                     .filter(|_| names_declared(member, resolved))
@@ -3035,80 +3039,85 @@ fn opaque_types(
         return Vec::new();
     }
     let mut types: Vec<OpaqueType> = Vec::new();
-    // `member` marks a member's output, which only names a type: one already
-    // declared beside a function isn't declared again.
-    let mut visit = |path: &str, outcome: rawr_import::classify::Outcome<'_>, member: bool| {
-        let signature = match outcome.representability() {
-            Representability::Function(plan) => plan.signature(),
-            Representability::FunctionItem(plan) => plan.signature(),
-            Representability::Invocation(plan) => plan.signature(),
-            Representability::Method(plan) => plan.signature(),
-            _ => return,
-        };
-        let mut found = Vec::new();
-        walk(signature.output(), &opaque, &mut found);
-        // Declared beside each path to the function, which its members
-        // are reached through.
-        for (index, (definition, arguments)) in found.into_iter().enumerate() {
-            let path = rawr_import::surface::opaque::path(path, index);
-            if types
-                .iter()
-                .any(|(known, declared, ..)| *known == path || (member && *declared == definition))
-            {
-                continue;
+    // `served` says whether the type declared at a path already serves this
+    // one: a member's output only names a type, so one declared anywhere
+    // does; a type's method's output has members reached through each path
+    // to the type, so only one declared beside the method over a trait's
+    // `Self` does, as the runner's facade declares them.
+    let mut visit =
+        |path: &str, outcome: rawr_import::classify::Outcome<'_>, served: fn(&str) -> bool| {
+            let signature = match outcome.representability() {
+                Representability::Function(plan) => plan.signature(),
+                Representability::FunctionItem(plan) => plan.signature(),
+                Representability::Invocation(plan) => plan.signature(),
+                Representability::Method(plan) => plan.signature(),
+                _ => return,
+            };
+            let mut found = Vec::new();
+            walk(signature.output(), &opaque, &mut found);
+            // Declared beside each path to the function, which its members
+            // are reached through.
+            for (index, (definition, arguments)) in found.into_iter().enumerate() {
+                let path = rawr_import::surface::opaque::path(path, index);
+                if types.iter().any(|(known, declared, ..)| {
+                    *known == path || (*declared == definition && served(known))
+                }) {
+                    continue;
+                }
+                let names = arguments
+                    .iter()
+                    .enumerate()
+                    .map(|(position, argument)| match argument {
+                        representability::convert::Type::Parameter(index) => signature
+                            .parameters()
+                            .iter()
+                            .find(|parameter| parameter.index() == *index)
+                            .map_or_else(
+                                || format!("T{position}").into_boxed_str(),
+                                |parameter| parameter.name().into(),
+                            ),
+                        _ => format!("T{position}").into_boxed_str(),
+                    })
+                    .collect();
+                // The associated types it binds, each one of its arguments.
+                let bound = signature
+                    .opaques()
+                    .iter()
+                    .find(|opaque| opaque.definition() == definition.as_bytes())
+                    .map_or(&[][..], |opaque| opaque.associated());
+                let names = rawr_import::surface::opaque::parameters(names, bound)
+                    .iter()
+                    .map(|name| ImmutableString::from(&**name))
+                    .collect();
+                let associated = bound
+                    .iter()
+                    .map(|(associated, position)| {
+                        (
+                            associated.trait_identity(),
+                            ImmutableString::from(associated.name()),
+                            *position as usize,
+                        )
+                    })
+                    .collect();
+                types.push((path, definition, names, associated));
             }
-            let names = arguments
-                .iter()
-                .enumerate()
-                .map(|(position, argument)| match argument {
-                    representability::convert::Type::Parameter(index) => signature
-                        .parameters()
-                        .iter()
-                        .find(|parameter| parameter.index() == *index)
-                        .map_or_else(
-                            || format!("T{position}").into_boxed_str(),
-                            |parameter| parameter.name().into(),
-                        ),
-                    _ => format!("T{position}").into_boxed_str(),
-                })
-                .collect();
-            // The associated types it binds, each one of its arguments.
-            let bound = signature
-                .opaques()
-                .iter()
-                .find(|opaque| opaque.definition() == definition.as_bytes())
-                .map_or(&[][..], |opaque| opaque.associated());
-            let names = rawr_import::surface::opaque::parameters(names, bound)
-                .iter()
-                .map(|name| ImmutableString::from(&**name))
-                .collect();
-            let associated = bound
-                .iter()
-                .map(|(associated, position)| {
-                    (
-                        associated.trait_identity(),
-                        ImmutableString::from(associated.name()),
-                        *position as usize,
-                    )
-                })
-                .collect();
-            types.push((path, definition, names, associated));
-        }
-    };
+        };
     for entry in &facade.entries {
-        visit(&entry.relative, entry.outcome, false);
+        visit(&entry.relative, entry.outcome, |_| false);
     }
     // A trait's method over its `Self` is a function of its own
     // (`surface::member`), as the runner's facade declares it.
     for (path, associated) in &facade.self_members {
-        visit(path, *associated, false);
+        visit(path, *associated, |_| false);
     }
     for (path, member) in &facade.opaque_members {
-        visit(path, *member, true);
+        visit(path, *member, |_| true);
     }
     // A member's opaque output is declared in its owner's module, as
     // `image::io::__rawr_opaque_Reader__into_decoder` for `Reader`'s
     // `into_decoder`: a type or a function is no module to declare it in.
+    // Each path to the type declares it, as `next` of the iterator a type's
+    // method gives is reached through each.
     for entry in &facade.entries {
         for associated in entry
             .outcome
@@ -3118,7 +3127,7 @@ fn opaque_types(
             visit(
                 &format!("{}__{}", entry.relative, associated.name()),
                 associated,
-                true,
+                rawr_import::surface::member::declared,
             );
         }
     }

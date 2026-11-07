@@ -105,7 +105,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // marks a type parameter a struct's or an enum's boxed callable field gives.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 56;
+const PROTOCOL_SCHEMA: u32 = 57;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,

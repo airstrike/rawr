@@ -14,7 +14,7 @@ std::thread_local! {
 
 /// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 /// `cargo/toolchain.rs`'s `SUPPORTED_PROBE_PROTOCOL` are the same number.
-pub(crate) const SCHEMA: u32 = 56;
+pub(crate) const SCHEMA: u32 = 57;
 
 /// The compiler kind of an unsupported export that is a derive macro, as
 /// serde's `Serialize`: the driver's engine writes it (`engine::DERIVE_MACRO`).
