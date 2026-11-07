@@ -440,6 +440,34 @@ pub(crate) fn widened(
     widened
 }
 
+/// `text`, a crate root, with its own `fn main` renamed `name`: `None` when
+/// it declares none.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+pub(crate) fn main_renamed(text: &str, name: &str) -> Option<String> {
+    let tokens = tokens(text);
+    let mut depth = 0_usize;
+    let mut previous = None;
+    for token in tokens {
+        match token {
+            Token::Punct(b'{') => depth += 1,
+            Token::Punct(b'}') => depth = depth.saturating_sub(1),
+            Token::Ident("main", start) if depth == 0 && previous == Some("fn") => {
+                return Some(format!(
+                    "{}{name}{}",
+                    &text[..start],
+                    &text[start + "main".len()..]
+                ));
+            }
+            _ => {}
+        }
+        previous = match token {
+            Token::Ident(word, _) => Some(word),
+            Token::Punct(_) => None,
+        };
+    }
+    None
+}
+
 /// Where the path of a standard macro named at `start` begins: `start`
 /// itself, or the start of a `std::`, `core::`, `::std::` or `::core::`
 /// before it. `None` when another path names it.
@@ -712,6 +740,19 @@ mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
         );
         // A module a `.rs` module declares: its `super` is Rust, not Rawr.
         assert!(widened(text, false, file, Path::new("/app")).contains("pub(super) fn up()"));
+    }
+
+    #[test]
+    fn a_crate_roots_own_main_is_renamed() {
+        let text =
+            "//! fn main\nmod inner { fn main() {} }\nfn main() -> Result<(), ()> { Ok(()) }\n";
+        assert_eq!(
+            super::main_renamed(text, "run").as_deref(),
+            Some(
+                "//! fn main\nmod inner { fn main() {} }\nfn run() -> Result<(), ()> { Ok(()) }\n"
+            )
+        );
+        assert_eq!(super::main_renamed("fn other() {}", "run"), None);
     }
 
     #[test]

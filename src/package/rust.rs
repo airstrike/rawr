@@ -326,10 +326,10 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
             super::polyglot::widened(module.text(), declared_by_rawr, module.path(), package),
         ));
     }
-    write_changed(files)?;
     if !entry.is_script() {
-        mirror(package, &directory, &module_root)?;
+        files.extend(build_script(cargo, &directory)?);
     }
+    write_changed(files)?;
     let mut crates = vec![Dependency::path(alias, &directory)?.package(&cargo.package)?];
     if let Some(bin) = entry.bin() {
         crates.push(bin_crate(bin, cargo, &directory, &module_root)?);
@@ -361,96 +361,91 @@ fn bin_crate(
             super::polyglot::widened(module.text(), false, module.path(), package),
         ));
     }
+    files.extend(build_script(cargo, &directory)?);
     write_changed(files)?;
-    mirror(package, &directory, module_root)?;
     Dependency::path(super::island::BIN, &directory)?.package(&bin_package(cargo))
 }
 
-/// Link each top-level entry of `package` into `directory`, the generated
-/// package that stands in for it, so its build script, its
-/// `rerun-if-changed` paths and a path through `CARGO_MANIFEST_DIR` reach
-/// the package's own files where Cargo's build of the package reaches them
-/// (#1136). Not linked: what the generated package holds itself
-/// (`Cargo.toml`, `src/`, `lib.rs`), `target/`, `.git/`, and the entries
-/// holding `module_root` and `directory`, so a save to a marked module
-/// changes no file of the generated package. A link in place is kept; one
-/// for an entry that is gone is removed.
-fn mirror(package: &Path, directory: &Path, module_root: &Path) -> rawr_import::Result<()> {
-    use std::ffi::OsStr;
-    let io = |operation, path: &Path| {
-        let path = path.to_path_buf();
-        move |source| rawr_import::Error::Io {
-            operation,
-            path,
-            source,
-        }
+/// The package's build script as `build.rs` in `directory`, the generated
+/// package standing in for it (#1136). Its paths through the source file
+/// and `CARGO_MANIFEST_DIR` are absolute (`polyglot::widened`), and its
+/// `main` runs as [`BUILD_SCRIPT`] has it: in the package's own directory,
+/// with `CARGO_MANIFEST_DIR` naming it, so what it reads at run time is
+/// the package's, and with its relative `rerun-if-changed` paths made
+/// absolute, so Cargo watches the package's files and runs it again
+/// exactly when Cargo's build of the package would.
+fn build_script(
+    cargo: &super::manifest::cargo::Cargo,
+    directory: &Path,
+) -> rawr_import::Result<Option<(std::path::PathBuf, String)>> {
+    let Some(script) = &cargo.build else {
+        return Ok(None);
     };
-    let top = |path: &Path| {
-        path.strip_prefix(package)
-            .ok()
-            .and_then(|relative| relative.components().next())
-            .map(|component| component.as_os_str().to_owned())
+    let package = cargo.path.parent().unwrap_or(directory);
+    let text = std::fs::read_to_string(script).map_err(|source| rawr_import::Error::Io {
+        operation: "read build script",
+        path: script.clone(),
+        source,
+    })?;
+    let text = super::polyglot::widened(&text, false, script, package);
+    let text = match super::polyglot::main_renamed(&text, "__rawr_package_main") {
+        Some(renamed) => format!(
+            "{renamed}\n{}",
+            BUILD_SCRIPT.replace(
+                "\"{package}\"",
+                &format!("{:?}", package.display().to_string())
+            )
+        ),
+        None => text,
     };
-    let own = ["Cargo.toml", "src", "lib.rs"].map(OsStr::new);
-    let skipped = [top(module_root), top(directory)];
-    let linked = |name: &OsStr| {
-        !own.contains(&name)
-            && name != "target"
-            && name != ".git"
-            && !skipped.iter().flatten().any(|skip| skip == name)
-    };
-    let entries = std::fs::read_dir(package).map_err(io("read directory", package))?;
-    let mut wanted = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(io("read directory", package))?;
-        let name = entry.file_name();
-        if linked(&name) {
-            wanted.push(name);
-        }
-    }
-    for name in &wanted {
-        let target = package.join(name);
-        let link = directory.join(name);
-        match std::fs::symlink_metadata(&link) {
-            Ok(metadata) if metadata.is_symlink() => {
-                if std::fs::read_link(&link).is_ok_and(|to| to == target) {
-                    continue;
-                }
-                std::fs::remove_file(&link).map_err(io("remove", &link))?;
-            }
-            Ok(metadata) if metadata.is_dir() => {
-                std::fs::remove_dir_all(&link).map_err(io("remove", &link))?;
-            }
-            Ok(_) => std::fs::remove_file(&link).map_err(io("remove", &link))?,
-            Err(_) => {}
-        }
-        symlink(&target, &link).map_err(io("link", &link))?;
-    }
-    let generated = std::fs::read_dir(directory).map_err(io("read directory", directory))?;
-    for entry in generated {
-        let entry = entry.map_err(io("read directory", directory))?;
-        let name = entry.file_name();
-        let link = entry.path();
-        let stale = !wanted.contains(&name)
-            && std::fs::symlink_metadata(&link).is_ok_and(|metadata| metadata.is_symlink());
-        if stale {
-            std::fs::remove_file(&link).map_err(io("remove", &link))?;
-        }
-    }
-    Ok(())
+    Ok(Some((directory.join("build.rs"), text)))
 }
 
-/// A symbolic link at `link` to `target`.
-fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    return std::os::unix::fs::symlink(target, link);
-    #[cfg(windows)]
-    return if target.is_dir() {
-        std::os::windows::fs::symlink_dir(target, link)
-    } else {
-        std::os::windows::fs::symlink_file(target, link)
-    };
+/// The `main` of a build script's copy: it runs the package's own `main`
+/// (renamed `__rawr_package_main`) again as a child, in the package's
+/// directory `"{package}"`, and passes on what it prints with each relative
+/// `rerun-if-changed` path made absolute against that directory.
+const BUILD_SCRIPT: &str = r#"
+// Generated by Rawr: the package's build script runs in its own directory.
+fn main() -> ::std::process::ExitCode {
+    use ::std::io::{BufRead as _, Write as _};
+    const PACKAGE: &str = "{package}";
+    const CHILD: &str = "__RAWR_PACKAGE_BUILD_SCRIPT";
+    if ::std::env::var_os(CHILD).is_some() {
+        return ::std::process::Termination::report(__rawr_package_main());
+    }
+    let mut child = ::std::process::Command::new(::std::env::current_exe().unwrap())
+        .current_dir(PACKAGE)
+        .env("CARGO_MANIFEST_DIR", PACKAGE)
+        .env(CHILD, "1")
+        .stdout(::std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let output = ::std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut stdout = ::std::io::stdout().lock();
+    for line in output.split(b'\n') {
+        let line = line.unwrap();
+        let text = ::std::str::from_utf8(&line).ok();
+        let watched = text.and_then(|text| {
+            ["cargo::rerun-if-changed=", "cargo:rerun-if-changed="]
+                .into_iter()
+                .find_map(|key| Some((key, text.strip_prefix(key)?)))
+        });
+        match watched {
+            Some((key, path)) if ::std::path::Path::new(path).is_relative() => {
+                let path = ::std::path::Path::new(PACKAGE).join(path);
+                writeln!(stdout, "{key}{}", path.display()).unwrap();
+            }
+            _ => {
+                stdout.write_all(&line).unwrap();
+                stdout.write_all(b"\n").unwrap();
+            }
+        }
+    }
+    let status = child.wait().unwrap();
+    ::std::process::ExitCode::from(status.code().map_or(1, |code| code as u8))
 }
+"#;
 
 /// The package name of a binary's generated package.
 fn bin_package(cargo: &super::manifest::cargo::Cargo) -> String {
@@ -548,8 +543,8 @@ fn bin_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path) -> String
 
 /// A generated manifest up to its `[dependencies]` header: `package`, a
 /// library named `library` at `path`, and `cargo`'s version, edition and
-/// build script. The library is the package's one target: Cargo discovers
-/// no other among the package files the generated package links (#1135).
+/// build script. The library is the package's one target, so a library
+/// at `src/main.rs` is not Cargo's binary too (#1135).
 fn manifest_head(
     cargo: &super::manifest::cargo::Cargo,
     what: &str,
@@ -567,9 +562,13 @@ fn manifest_head(
     if let Some(edition) = &cargo.edition {
         let _ = writeln!(text, "edition = {edition:?}");
     }
-    if let Some(build) = &cargo.build {
-        let _ = writeln!(text, "build = {build}");
-    }
+    // The build script's copy ([`build_script`]), if the package has one.
+    let build = if cargo.build.is_some() {
+        "\"build.rs\""
+    } else {
+        "false"
+    };
+    let _ = writeln!(text, "build = {build}");
     // Two packages may not link one native library, so only the package's
     // own library says it does.
     if package == cargo.package
@@ -579,8 +578,7 @@ fn manifest_head(
     }
     let _ = write!(
         text,
-        "autobins = false\nautoexamples = false\nautotests = false\nautobenches = false\n\
-         publish = false\n\n[lib]\nname = {library:?}\npath = {:?}\n\n[dependencies]\n",
+        "autobins = false\npublish = false\n\n[lib]\nname = {library:?}\npath = {:?}\n\n[dependencies]\n",
         path.display().to_string(),
     );
     text

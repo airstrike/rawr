@@ -27,9 +27,11 @@ pub(crate) struct Cargo {
     pub(crate) dependencies: Box<[rust::Dependency]>,
     /// `[build-dependencies]`, in the same form.
     pub(crate) build_dependencies: Box<[rust::Dependency]>,
-    /// `[package]`'s `build` and `links` values as TOML text, which a
-    /// generated package standing in for this one repeats.
-    pub(crate) build: Option<String>,
+    /// The package's build script, absolute, as Cargo finds it: `build`'s
+    /// path, else `build.rs` beside the manifest, unless `build = false`.
+    pub(crate) build: Option<PathBuf>,
+    /// `[package] links` as TOML text, which a generated package standing
+    /// in for this one repeats.
     pub(crate) links: Option<String>,
 }
 
@@ -126,12 +128,16 @@ impl Cargo {
                 .as_ref()
                 .map(|inherited| &inherited.build_dependencies),
         )?;
-        let toml = |key: &str| {
-            package
-                .get(key)
-                .and_then(Item::as_value)
-                .map(|value| value.clone().decorated("", "").to_string())
+        let directory = path.parent().unwrap_or(root);
+        let build = match package.get("build").and_then(Item::as_value) {
+            Some(toml_edit::Value::String(script)) => Some(directory.join(script.value())),
+            Some(toml_edit::Value::Boolean(build)) if !*build.value() => None,
+            _ => Some(directory.join("build.rs")).filter(|script| script.is_file()),
         };
+        let links = package
+            .get("links")
+            .and_then(Item::as_value)
+            .map(|links| links.clone().decorated("", "").to_string());
         Ok(Some(Self {
             path,
             package: name,
@@ -140,8 +146,8 @@ impl Cargo {
             edition,
             dependencies,
             build_dependencies,
-            build: toml("build"),
-            links: toml("links"),
+            build,
+            links,
             text,
         }))
     }
