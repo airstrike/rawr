@@ -1,12 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.159",
+  "version": "0.3.160",
   "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.160",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"A crate function that takes a crate value whose type has a lifetime the call picks, as serde's `de::Error::invalid_value(Unexpected::Unsigned(n), ..)` in a derived visitor, is called through the opaque error type as rustc calls it.","issues":[1031]},
+          {"text":"A method whose value borrows a format it takes, as jiff's `dt.strftime(\"%B %d\")`, runs: a literal, a `&String` or a `&[u8]` fills its `&F`, the value prints through its `Display`, and changing the format while it lives is rustc's E0502.","issues":[1014]}
+        ]
+      },
       {
         "version": "0.3.159",
         "date": "2026-11-06",
@@ -2523,7 +2531,7 @@
     {"issue":1011,"title":"D742: a detected build-script output mismatch reruns that package in the shared directory and re-extracts","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.152"},
     {"issue":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1013,"title":"Intrinsic entries inline each identity's whole Unit; objc2_app_kit's entry is 1.88 GB","state":"open","category":"Health"},
-    {"issue":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"open","category":"iced examples"},
+    {"issue":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"closed","category":"iced examples","release":"0.3.160"},
     {"issue":1015,"title":"The legacy extraction plan hashes every selected artifact in full on each check","state":"open","category":"Health"},
     {"issue":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"closed","category":"Health"},
     {"issue":1017,"title":"serde attributes and types todos needs: default = path, skip, uuid, unit enums, Vec fields, to_string_pretty","state":"open","category":"iced examples"},
@@ -2540,7 +2548,7 @@
     {"issue":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"open","category":"Divergences from rustc"},
     {"issue":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open","category":"Divergences from rustc"},
     {"issue":1030,"title":"A member missed on a std type such as `String` no longer makes the next request fail","state":"closed","category":"Divergences from rustc","release":"0.3.154"},
-    {"issue":1031,"title":"serde's enum Deserialize: a crate value whose type has a lifetime (de::Unexpected<'a>)","state":"open","category":"Divergences from rustc"},
+    {"issue":1031,"title":"serde's enum Deserialize: a crate value whose type has a lifetime (de::Unexpected<'a>)","state":"closed","category":"Divergences from rustc","release":"0.3.160"},
     {"issue":1032,"title":"todos: node transform child failed: symbolic surface identity belongs to a different contract","state":"closed","category":"Divergences from rustc","release":"0.3.155"},
     {"issue":1033,"title":"A trait function called by its trait's path infers Self from the expected type","state":"open","category":"Divergences from rustc"},
     {"issue":1034,"title":"? converts &str to String through From","state":"open","category":"Divergences from rustc"},
@@ -2575,7 +2583,8 @@
     {"issue":1063,"title":"An a..=b of i128 or u128 is an iterator chain, not a RangeInclusive<i128>","state":"open","category":"Divergences from rustc"},
     {"issue":1064,"title":"A borrowed string fills a crate parameter bounded by 'static, where rustc gives E0597","state":"open","category":"Divergences from rustc"},
     {"issue":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"open","category":"Health"},
-    {"issue":1066,"title":"The site deploy's snippet check fails on 'Durable Object reset because its code was updated'","state":"open","category":"Health"}
+    {"issue":1066,"title":"The site deploy's snippet check fails on 'Durable Object reset because its code was updated'","state":"open","category":"Health"},
+    {"issue":1067,"title":"An enum variant field &'a str of a crate type can't be built (serde's Unexpected::Str(&text))","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3087,14 +3096,14 @@
             {"number":1008,"title":"A program value lent `&mut` to a crate's `&mut T` or `&mut dyn Trait` loses native changes","state":"closed"},
             {"number":1009,"title":"A frame method's turbofish type argument (`next_key::<__Field>`) gives an Option the checker can't type","state":"closed"},
             {"number":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open"},
-            {"number":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"open"},
+            {"number":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"closed"},
             {"number":1017,"title":"serde attributes and types todos needs: default = path, skip, uuid, unit enums, Vec fields, to_string_pretty","state":"open"},
             {"number":1018,"title":"pokedex: nested Deserialize structs decoded by reqwest's .json().await on tokio's threads","state":"open"},
             {"number":1022,"title":"A generic impl's frame entry takes a projection value from the arena, needing 'static (E0310)","state":"open"},
             {"number":1023,"title":"A crate unit struct used as a value is refused","state":"open"},
             {"number":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed"},
             {"number":1030,"title":"A member missed on a std type such as `String` no longer makes the next request fail","state":"closed"},
-            {"number":1031,"title":"serde's enum Deserialize: a crate value whose type has a lifetime (de::Unexpected<'a>)","state":"open"},
+            {"number":1031,"title":"serde's enum Deserialize: a crate value whose type has a lifetime (de::Unexpected<'a>)","state":"closed"},
             {"number":1032,"title":"todos: node transform child failed: symbolic surface identity belongs to a different contract","state":"closed"},
             {"number":1041,"title":"Members of a trait method's parameter type that name the trait's own parameters (tracing's Layer<S>::and_then)","state":"open"},
             {"number":1043,"title":"iced's game_of_life: itertools' cartesian_product on an impl Iterator (E0599)","state":"closed"},

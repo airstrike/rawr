@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.160 (2026-11-06)
+
+- A crate function that takes a crate value whose type has a lifetime the call picks, as serde's `de::Error::invalid_value(Unexpected::Unsigned(n), ..)` in a derived visitor, is called through the opaque error type as rustc calls it. (#1031)
+- A method whose value borrows a format it takes, as jiff's `dt.strftime("%B %d")`, runs: a literal, a `&String` or a `&[u8]` fills its `&F`, the value prints through its `Display`, and changing the format while it lives is rustc's E0502. (#1014)
+
 ## 0.3.159 (2026-11-06)
 
 - An `a..=b` of any integer type is a `RangeInclusive` of that type, as rustc types it: a function can return `RangeInclusive<isize>`, and the caller can read `start()`, `end()` and `contains` or iterate it. iced's game_of_life gets further. (#1055)

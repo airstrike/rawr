@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.3.160",
+      "date": "2026-11-06",
+      "entries": [
+        {"text":"A crate function that takes a crate value whose type has a lifetime the call picks, as serde's `de::Error::invalid_value(Unexpected::Unsigned(n), ..)` in a derived visitor, is called through the opaque error type as rustc calls it.","issues":[1031]},
+        {"text":"A method whose value borrows a format it takes, as jiff's `dt.strftime(\"%B %d\")`, runs: a literal, a `&String` or a `&[u8]` fills its `&F`, the value prints through its `Display`, and changing the format while it lives is rustc's E0502.","issues":[1014]}
+      ]
+    },
+    {
       "version": "0.3.159",
       "date": "2026-11-06",
       "entries": [
