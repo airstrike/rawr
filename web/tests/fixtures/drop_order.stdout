@@ -1,0 +1,8 @@
+inner
+drop b
+drop c
+drop d
+end 2
+drop e
+drop f
+drop a

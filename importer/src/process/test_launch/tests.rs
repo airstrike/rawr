@@ -193,7 +193,7 @@ fn every_sealed_field_is_compared_before_response_and_failure_stays_latched() {
         match case {
             0 => executable.push("wrong"),
             1 => actual.program = process::Program::Rustc,
-            2 => actual.kind = process::CommandKind::Cargo(process::CargoAction::PackageGit),
+            2 => actual.kind = process::CommandKind::Cargo(process::CargoAction::Clean),
             3 => actual.arguments = vec!["metadata".into()].into_boxed_slice(),
             4 => actual.current_dir.push("wrong"),
             5 => actual.environment[0].1 = "changed".into(),

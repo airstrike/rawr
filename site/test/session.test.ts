@@ -95,6 +95,25 @@ test("Run in browser falls back to the server when the module does not load", as
   assert.deepEqual(failed.addresses, [], "the fallback does not write ?run=server");
 });
 
+test("a trap in rawr-web runs that program on the server and the next on a fresh module", async () => {
+  let traps = 1;
+  const web: Partial<Web> = {
+    run_text: () => {
+      if (traps-- > 0) throw new Error("RuntimeError: unreachable");
+      return JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "in the browser\n" }] });
+    },
+  };
+  const page = standIn({ code: "1 + 2", web });
+  await page.session.go();
+  assert.deepEqual(page.fetched.map((f) => f.url), ["/play/render"]);
+  assert.match(page.session.state.status, /on the server: rawr-web stopped$/);
+  assert.equal(page.session.state.where, "browser", "the next run is in the browser again");
+  await page.session.go();
+  assert.equal(page.loads.length, 2, "the next run loads a fresh module");
+  assert.equal(page.fetched.length, 1);
+  assert.match(page.session.state.status, /in the browser$/);
+});
+
 test("the server answers with text or a refusal", async () => {
   const page = standIn({ code: "x" });
   page.session.choose("server");

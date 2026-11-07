@@ -1,0 +1,15 @@
+[package]
+name = "islands-workspace"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+common = { path = "common" }
+model = { path = "model" }
+sibling = { path = "../sibling" }
+
+# The root package is a plain bin in its own workspace, with two members
+# beside it; `sibling` is a path dependency outside the workspace.
+[workspace]
+members = ["common", "model"]

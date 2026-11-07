@@ -1,13 +1,13 @@
-//! Exact, replayable pinned-Cargo package membership.
+//! The files Cargo watches for a build script that declares no `rerun-if`
+//! input: the whole package.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest as _, Sha256};
 
-use super::proof::{Entry, Role, TreeFile};
+use super::proof::{Entry, Role};
 use super::{Allocation, Usage};
 use crate::cargo::{self, toolchain};
-use crate::process::{self, Program};
 use crate::{Error, Result};
 
 pub(in crate::input) mod observed;
@@ -15,32 +15,28 @@ pub(in crate::input) mod observed;
 #[cfg(test)]
 mod selection;
 
-const VIRTUAL_VCS: &str = ".cargo_vcs_info.json";
-const VIRTUAL_LOCK: &str = "Cargo.lock";
-const VIRTUAL_ORIGINAL_MANIFEST: &str = "Cargo.toml.orig";
-
 #[cfg(test)]
 thread_local! {
-    static OWNED_PACKAGE_FILE_PATHS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static OWNED_PATH_SETS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static OWNED_GIT_SETS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static OWNED_REGISTRY_SETS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// A package whose build script Cargo reruns when any of its files changes.
 pub(crate) enum Set {
-    Path(Listed),
+    /// A path or Git package, read as its whole source tree.
+    Tree(Tree),
+    /// A registry package, which Cargo never changes once extracted.
     Registry(Registry),
-    Git(Git),
 }
 
-pub(crate) struct Listed {
+/// A path or Git package's source tree. Its entry walks the tree as Cargo's
+/// listing does, keeping every file Cargo could select: a change to
+/// any of them, or a file added or removed, changes the entry, so no
+/// `cargo package --list` is needed to replay it.
+pub(crate) struct Tree {
     base_usage: Usage,
     usage: Usage,
     package_id: Box<str>,
     root: PathBuf,
-    cargo: process::Cargo,
-    command: process::Command,
-    files: Box<[PathBuf]>,
 }
 
 pub(crate) struct Registry {
@@ -64,12 +60,6 @@ pub(crate) struct Stored {
     pub(crate) root: PathBuf,
     pub(crate) marker: PathBuf,
     pub(crate) marker_digest: [u8; 32],
-}
-
-pub(crate) struct Git {
-    listed: Listed,
-    source: Box<str>,
-    oid: Box<str>,
 }
 
 pub(super) const REGISTRY_MARKER_SCHEMA: u32 = 1;
@@ -103,53 +93,24 @@ impl Set {
     }
 
     #[cfg(test)]
-    pub(super) fn fixture_stored_listed(git: bool) -> Self {
-        let command = process::Command::cargo(
-            Vec::new(),
-            if git {
-                process::CargoAction::PackageGit
-            } else {
-                process::CargoAction::PackagePath
-            },
-            Vec::new(),
-            PathBuf::from("/unobserved/package"),
-            Box::default(),
-        )
-        .expect("fixture package command is sealed without running it");
-        let listed = Listed {
+    pub(super) fn fixture_stored_tree() -> Self {
+        Self::Tree(Tree {
             base_usage: Usage { items: 2, bytes: 3 },
             usage: Usage {
                 items: 11,
                 bytes: 127,
             },
-            package_id: "fixture#pkg@1.2.3".into(),
+            package_id: "path+file:///unobserved/package#pkg@1.2.3".into(),
             root: PathBuf::from("/unobserved/package"),
-            cargo: process::Cargo::fixture(),
-            command,
-            files: vec![PathBuf::from("/unobserved/package/Cargo.toml")].into_boxed_slice(),
-        };
-        if git {
-            Self::Git(Git {
-                listed,
-                source: "git+fixture".into(),
-                oid: "abc".into(),
-            })
-        } else {
-            Self::Path(listed)
-        }
+        })
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "path capture atomically binds exact Cargo replay, package identity, and the transferred allocation proof"
-    )]
-    pub(crate) fn capture_path(
+    /// A path or Git package whose manifest is `manifest`; a registry
+    /// package is captured by [`Self::capture_registry`].
+    pub(crate) fn capture_tree(
         cargo_commit: &str,
-        package_id: &str,
+        package: &cargo::unit::Package,
         manifest: &Path,
-        cargo: process::Cargo,
-        command: process::Command,
-        bytes: &[u8],
         base_usage: Usage,
         limits: &cargo::Limits,
     ) -> Result<Self> {
@@ -157,70 +118,18 @@ impl Set {
             return Err(super::input("cargo-commit-skew", cargo_commit));
         }
         let mut allocation = Allocation::from_usage(base_usage, limits);
-        allocation.items(1)?;
-        allocation.bytes(bytes.len())?;
         allocation.path(manifest)?;
         let manifest = super::canonical_file("fallback package manifest", manifest)?;
         let root = manifest
             .parent()
             .ok_or_else(|| super::input("package-root", manifest.display()))?;
-        allocation.string(package_id)?;
+        allocation.string(package.id())?;
         allocation.path(root)?;
-        let files = parse(cargo_commit, package_id, root, bytes, &mut allocation)?;
-        #[cfg(test)]
-        OWNED_PATH_SETS.with(|owned| owned.set(owned.get().saturating_add(1)));
-        Ok(Self::Path(Listed {
+        Ok(Self::Tree(Tree {
             base_usage,
             usage: allocation.usage(),
-            package_id: package_id.into(),
+            package_id: package.id().into(),
             root: root.to_path_buf(),
-            cargo,
-            command,
-            files,
-        }))
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Git capture adds exact source identity to the same atomic path-capture proof bundle"
-    )]
-    pub(crate) fn capture_git(
-        cargo_commit: &str,
-        package: &cargo::unit::Package,
-        manifest: &Path,
-        cargo: process::Cargo,
-        command: process::Command,
-        bytes: &[u8],
-        base_usage: Usage,
-        limits: &cargo::Limits,
-    ) -> Result<Self> {
-        let cargo::unit::PackageSource::Git { cargo_id, oid } = package.source() else {
-            return Err(super::input("package-source-shape", package.id()));
-        };
-        let Self::Path(listed) = Self::capture_path(
-            cargo_commit,
-            package.id(),
-            manifest,
-            cargo,
-            command,
-            bytes,
-            base_usage,
-            limits,
-        )?
-        else {
-            return Err(super::input("package-source-shape", package.id()));
-        };
-        let mut allocation = Allocation::from_usage(listed.usage, limits);
-        allocation.string(cargo_id)?;
-        allocation.string(oid)?;
-        let mut listed = listed;
-        listed.usage = allocation.usage();
-        #[cfg(test)]
-        OWNED_GIT_SETS.with(|owned| owned.set(owned.get().saturating_add(1)));
-        Ok(Self::Git(Git {
-            listed,
-            source: cargo_id.as_ref().into(),
-            oid: oid.as_ref().into(),
         }))
     }
 
@@ -302,28 +211,46 @@ impl Set {
         }))
     }
 
-    pub(super) fn entry(&self, replay: bool, allocation: &mut Allocation) -> Result<Entry> {
+    pub(super) fn entry(
+        &self,
+        allocation: &mut Allocation,
+        limits: &cargo::Limits,
+    ) -> Result<Entry> {
         match self {
-            Self::Path(listed) => listed.entry(replay, allocation),
+            Self::Tree(tree) => tree.entry(allocation, limits),
             Self::Registry(registry) => registry.entry(allocation),
-            Self::Git(git) => git.entry(replay, allocation),
         }
     }
 
     pub(crate) const fn base_usage(&self) -> Usage {
         match self {
-            Self::Path(listed) => listed.base_usage,
+            Self::Tree(tree) => tree.base_usage,
             Self::Registry(registry) => registry.base_usage,
-            Self::Git(git) => git.listed.base_usage,
         }
     }
 
     pub(crate) const fn usage(&self) -> Usage {
         match self {
-            Self::Path(listed) => listed.usage,
+            Self::Tree(tree) => tree.usage,
             Self::Registry(registry) => registry.usage,
-            Self::Git(git) => git.listed.usage,
         }
+    }
+}
+
+impl Tree {
+    /// The package and root a stored record walks again.
+    pub(super) fn into_stored(self) -> (Box<str>, PathBuf) {
+        (self.package_id, self.root)
+    }
+
+    fn entry(&self, allocation: &mut Allocation, limits: &cargo::Limits) -> Result<Entry> {
+        super::proof::directory_entry(
+            Role::DefaultPackageSource,
+            Some(&self.package_id),
+            &self.root,
+            allocation,
+            limits,
+        )
     }
 }
 
@@ -341,78 +268,6 @@ fn registry_relative_shape(relative: &Path, name: &str, version: &str) -> bool {
                 == Some(version)
         })
         && components.next().is_none()
-}
-
-impl Listed {
-    fn entry(&self, replay: bool, allocation: &mut Allocation) -> Result<Entry> {
-        let replayed;
-        let files = if replay {
-            let bytes = self
-                .cargo
-                // The child capture is physical (`CAPTURE_BYTES` stdout,
-                // `TAIL_BYTES` stderr).
-                .run(&self.command, process::Limits::capture())?
-                .checked(Program::Cargo)?;
-            allocation.items(1)?;
-            allocation.bytes(bytes.len())?;
-            let current = parse(
-                toolchain::supported_cargo_commit(),
-                &self.package_id,
-                &self.root,
-                &bytes,
-                allocation,
-            )?;
-            if current != self.files {
-                return Err(Error::Input {
-                    code: "package-file-set-changed",
-                    reason: self.package_id.clone(),
-                });
-            }
-            replayed = current;
-            replayed.as_ref()
-        } else {
-            self.files.as_ref()
-        };
-
-        let mut entries = Vec::new();
-        for path in files {
-            allocation.items(1)?;
-            entries.try_reserve(1).map_err(|error| Error::Input {
-                code: "package-file-set-allocation",
-                reason: error.to_string().into_boxed_str(),
-            })?;
-            // A package file is an artifact-class read bound to the physical
-            // capture bound; its size against the JSON target only records.
-            let contents = super::read_file_budgeted(
-                "fallback package file",
-                path,
-                crate::process::CAPTURE_BYTES,
-                allocation,
-            )?;
-            let bytes = contents.len();
-            let relative = path
-                .strip_prefix(&self.root)
-                .map_err(|_| super::input("package-file-set-escape", path.display()))?;
-            allocation.items(1)?;
-            allocation.bytes(relative.as_os_str().len())?;
-            let relative = super::path_text("fallback package file", relative)?;
-            entries.push(TreeFile {
-                path: relative.into(),
-                bytes,
-                digest: Sha256::digest(contents).into(),
-            });
-        }
-        allocation.path(&self.root)?;
-        allocation.string(&self.package_id)?;
-        let root = super::path_text("fallback package root", &self.root)?;
-        Ok(Entry::Directory {
-            role: Role::DefaultPackageSource,
-            package_id: Some(self.package_id.clone()),
-            path: root.into(),
-            directories: Box::default(),
-            files: entries.into_boxed_slice(),
-        })
-    }
 }
 
 impl Registry {
@@ -463,32 +318,6 @@ impl Registry {
     }
 }
 
-impl Git {
-    fn entry(&self, replay: bool, allocation: &mut Allocation) -> Result<Entry> {
-        let entry = self.listed.entry(replay, allocation)?;
-        let Entry::Directory {
-            path: root, files, ..
-        } = entry
-        else {
-            return Err(super::input(
-                "git-package-entry-shape",
-                self.listed.package_id.as_ref(),
-            ));
-        };
-        allocation.string(&self.listed.package_id)?;
-        allocation.string(&self.source)?;
-        allocation.string(&self.oid)?;
-        Ok(Entry::Git {
-            role: Role::DefaultPackageSource,
-            package_id: self.listed.package_id.clone(),
-            source: self.source.clone(),
-            oid: self.oid.clone(),
-            root,
-            files,
-        })
-    }
-}
-
 fn validate_registry_marker(path: &Path, allocation: &mut Allocation) -> Result<[u8; 32]> {
     let bytes = super::read_file_budgeted(
         "Cargo completed registry extraction marker",
@@ -508,90 +337,18 @@ fn validate_registry_marker(path: &Path, allocation: &mut Allocation) -> Result<
     Ok(Sha256::digest(bytes).into())
 }
 
-fn parse(
-    cargo_commit: &str,
-    package_id: &str,
-    root: &Path,
-    bytes: &[u8],
-    allocation: &mut Allocation,
-) -> Result<Box<[PathBuf]>> {
-    if cargo_commit != toolchain::supported_cargo_commit() {
-        return Err(super::input("cargo-commit-skew", cargo_commit));
-    }
-    if !bytes.is_empty() && !bytes.ends_with(b"\n") {
-        return Err(super::input(
-            "truncated-package-file-set",
-            "Cargo package --list output does not end at a line boundary",
-        ));
-    }
-    let text = std::str::from_utf8(bytes).map_err(|error| Error::Input {
-        code: "package-file-set-utf8",
-        reason: error.to_string().into_boxed_str(),
-    })?;
-    let mut files = Vec::new();
-    for line in text.split_terminator('\n') {
-        let relative = Path::new(line);
-        if line.is_empty()
-            || relative.is_absolute()
-            || relative
-                .components()
-                .any(|component| !matches!(component, Component::Normal(_)))
-        {
-            return Err(super::input("invalid-package-file-set-path", line));
-        }
-        if virtual_entry(cargo_commit, relative)? {
-            continue;
-        }
-        allocation.items(2)?;
-        allocation.bytes(
-            root.as_os_str()
-                .len()
-                .saturating_add(1)
-                .saturating_add(relative.as_os_str().len()),
-        )?;
-        files.try_reserve(1).map_err(|error| Error::Input {
-            code: "package-file-set-allocation",
-            reason: error.to_string().into_boxed_str(),
-        })?;
-        let candidate = root.join(relative);
-        let path = super::canonical_file("Cargo package file-set entry", &candidate)?;
-        #[cfg(test)]
-        OWNED_PACKAGE_FILE_PATHS.with(|owned| owned.set(owned.get().saturating_add(1)));
-        files.push(path);
-    }
-    files.sort_unstable();
-    if files.is_empty() || files.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(super::input("invalid-package-file-set", package_id));
-    }
-    Ok(files.into_boxed_slice())
-}
-
-fn virtual_entry(cargo_commit: &str, relative: &Path) -> Result<bool> {
-    if cargo_commit != toolchain::supported_cargo_commit() {
-        return Err(super::input("cargo-commit-skew", cargo_commit));
-    }
-    Ok(relative == Path::new(VIRTUAL_VCS)
-        || relative == Path::new(VIRTUAL_LOCK)
-        || relative == Path::new(VIRTUAL_ORIGINAL_MANIFEST))
-}
-
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{
-        registry_relative_shape, Set, OWNED_GIT_SETS, OWNED_PACKAGE_FILE_PATHS, OWNED_PATH_SETS,
-        OWNED_REGISTRY_SETS, REGISTRY_MARKER_SCHEMA,
-    };
+    use super::{registry_relative_shape, Set, OWNED_REGISTRY_SETS, REGISTRY_MARKER_SCHEMA};
     use crate::cargo::toolchain;
     use crate::cargo::unit::{Package, PackageSource};
     use crate::cargo::Limits;
     use crate::input::proof::Entry;
     use crate::input::{Allocation, Usage};
-    use crate::process::{self, CargoAction};
     use crate::Error;
 
     static FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
@@ -665,36 +422,7 @@ mod tests {
         limits
     }
 
-    fn package_command(root: &Path, action: CargoAction) -> process::Command {
-        process::Command::cargo(
-            Vec::new(),
-            action,
-            vec![OsString::from("--list")],
-            root.to_path_buf(),
-            Vec::new().into_boxed_slice(),
-        )
-        .expect("fixture package command seals")
-    }
-
-    fn long_file_list(fixture: &Fixture, count: usize) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        for index in 0..count {
-            let name = format!("member-{index:03}.rs");
-            fs::write(
-                fixture.package_root.join(&name),
-                b"pub const VALUE: u8 = 1;\n",
-            )
-            .expect("package-list member can be written");
-            bytes.extend_from_slice(name.as_bytes());
-            bytes.push(b'\n');
-        }
-        bytes
-    }
-
     fn reset_ownership_counters() {
-        OWNED_PACKAGE_FILE_PATHS.with(|owned| owned.set(0));
-        OWNED_PATH_SETS.with(|owned| owned.set(0));
-        OWNED_GIT_SETS.with(|owned| owned.set(0));
         OWNED_REGISTRY_SETS.with(|owned| owned.set(0));
     }
 
@@ -730,7 +458,7 @@ mod tests {
         assert!(matches!(set, Set::Registry(_)));
         let mut allocation = Allocation::with_limits(100, 4096, 1024);
         let entry = set
-            .entry(false, &mut allocation)
+            .entry(&mut allocation, &Limits::standard())
             .expect("registry proof emits a freshness entry without a tree scan");
         let Entry::Registry {
             checksum,
@@ -816,98 +544,12 @@ mod tests {
             .expect("valid marker can drift");
         let mut allocation = Allocation::with_limits(100, 4096, 1024);
         assert!(matches!(
-            set.entry(true, &mut allocation),
+            set.entry(&mut allocation, &Limits::standard()),
             Err(Error::Input {
                 code: "registry-marker-changed",
                 ..
             })
         ));
-    }
-
-    #[test]
-    fn path_virtual_archive_entries_remain_excluded_by_pinned_package_list_parser() {
-        let root = Fixture::new("path-list");
-        fs::write(
-            root.package_root.join("src.rs"),
-            b"pub const VALUE: u8 = 1;\n",
-        )
-        .expect("path member can be written");
-        for path in ["Cargo.toml.orig", ".cargo_vcs_info.json", "Cargo.lock"] {
-            fs::write(root.package_root.join(path), b"virtual\n")
-                .expect("virtual archive member can be written");
-        }
-        let bytes =
-            b".cargo-ok\n.cargo_vcs_info.json\nCargo.lock\nCargo.toml\nCargo.toml.orig\nsrc.rs\n";
-        let limits = Limits::standard();
-        let mut allocation = Allocation::new(&limits);
-        let files = super::parse(
-            toolchain::supported_cargo_commit(),
-            "path+file:///fixture#crunchy@0.2.4",
-            Path::new(&root.package_root),
-            bytes,
-            &mut allocation,
-        )
-        .expect("pinned package list excludes only Cargo virtual archive entries");
-        assert!(files.iter().any(|path| path.ends_with(".cargo-ok")));
-        assert!(files.iter().any(|path| path.ends_with("Cargo.toml")));
-        assert!(files.iter().any(|path| path.ends_with("src.rs")));
-        assert_eq!(files.len(), 3);
-    }
-
-    /// A replayed `cargo package --list` child is captured within the
-    /// physical bounds (`CAPTURE_BYTES` stdout, `TAIL_BYTES` stderr), never
-    /// within a capture sized from the Cargo JSON limit.
-    #[test]
-    fn replayed_package_list_capture_is_physical_and_independent_of_the_json_target() {
-        use crate::process::test_launch::{Expected, FileLimits, Reply, Script, Step};
-
-        let fixture = Fixture::new("replay-capture");
-        let bytes = long_file_list(&fixture, 8);
-        let path_id = "path+file:///fixture#crunchy@0.2.4";
-        let mut limits = Limits::standard();
-        // A JSON target far below the physical bound: a capture sized from it
-        // would mismatch the scripted child's expected stream limits.
-        limits.json_bytes = 4096;
-        assert_ne!(limits.json_bytes, process::CAPTURE_BYTES);
-        let set = Set::capture_path(
-            toolchain::supported_cargo_commit(),
-            path_id,
-            &fixture.package_root.join("Cargo.toml"),
-            process::Cargo::fixture(),
-            package_command(&fixture.package_root, CargoAction::PackagePath),
-            &bytes,
-            Usage { items: 0, bytes: 0 },
-            &limits,
-        )
-        .expect("the path list is captured");
-        let launch_root = fixture.root.join("launch");
-        fs::create_dir(&launch_root).expect("launch root can be created");
-        let launch_root = fs::canonicalize(launch_root).expect("launch root canonicalizes");
-        let expected = package_command(&fixture.package_root, CargoAction::PackagePath);
-        let reply = bytes.clone();
-        let step = Step::new(
-            move |_| {
-                Expected::new(
-                    "/fixture/cargo".into(),
-                    expected,
-                    process::Limits::capture(),
-                )
-            },
-            move |_| Reply::stdout(reply),
-        );
-        let mut allocation = Allocation::new(&limits);
-        let entry = Script::new(
-            launch_root,
-            FileLimits {
-                count: 1,
-                bytes: 16,
-            },
-            vec![step],
-        )
-        .expect("launch script seals")
-        .run(|| set.entry(true, &mut allocation))
-        .expect("the replayed child is launched within the physical capture bounds");
-        entry.expect("the replayed list matches the captured set");
     }
 
     #[test]
@@ -944,5 +586,76 @@ mod tests {
         assert_eq!(set.usage(), registry_usage);
         assert_eq!(set.usage().items, below.items + 1);
         assert_eq!(OWNED_REGISTRY_SETS.with(std::cell::Cell::get), 1);
+    }
+
+    /// A path package's tree keeps every file Cargo's listing could select,
+    /// ignored and hidden ones included, and leaves out its `.git`, its own
+    /// `target` and a nested package. A file added anywhere else changes it.
+    #[test]
+    fn a_package_tree_keeps_what_cargo_could_list_and_leaves_out_the_rest() {
+        let fixture = Fixture::new("tree");
+        let root = fixture.root.join("package");
+        for (path, contents) in [
+            ("Cargo.toml", "[package]\nname = \"tree\"\n"),
+            ("src/lib.rs", "pub fn f() {}\n"),
+            (".gitignore", "*.log\n"),
+            ("build.log", "ignored\n"),
+            (".hidden", "hidden\n"),
+            (".git/HEAD", "ref: refs/heads/main\n"),
+            ("target/debug/out", "built\n"),
+            ("nested/Cargo.toml", "[package]\nname = \"nested\"\n"),
+            ("nested/src/lib.rs", "pub fn g() {}\n"),
+            ("assets/target/kept", "kept\n"),
+        ] {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
+        let package = Package::fixture(
+            "path+file:///fixture/package#tree@0.1.0",
+            "tree",
+            "0.1.0",
+            root.clone(),
+            PackageSource::Path {
+                cargo_id: "path+file:///fixture/package".into(),
+            },
+        );
+        let limits = Limits::standard();
+        let set = Set::capture_tree(
+            toolchain::supported_cargo_commit(),
+            &package,
+            &root.join("Cargo.toml"),
+            Usage { items: 0, bytes: 0 },
+            &limits,
+        )
+        .unwrap();
+        let entry = |set: &Set| set.entry(&mut Allocation::new(&limits), &limits).unwrap();
+        let Entry::Directory {
+            directories, files, ..
+        } = entry(&set)
+        else {
+            panic!("a package tree is a directory entry");
+        };
+        let directories: Vec<&str> = directories.iter().map(|value| &*value.path).collect();
+        let files: Vec<&str> = files.iter().map(|value| &*value.path).collect();
+        assert_eq!(directories, ["assets", "assets/target", "src"]);
+        assert_eq!(
+            files,
+            [
+                ".gitignore",
+                ".hidden",
+                "Cargo.toml",
+                "assets/target/kept",
+                "build.log",
+                "src/lib.rs"
+            ]
+        );
+        let before = entry(&set);
+        fs::write(root.join("target/debug/more"), "built\n").unwrap();
+        fs::write(root.join("nested/src/more.rs"), "\n").unwrap();
+        fs::write(root.join(".git/index"), "index\n").unwrap();
+        assert!(entry(&set) == before);
+        fs::write(root.join("src/new.rs"), "\n").unwrap();
+        assert!(entry(&set) != before);
     }
 }

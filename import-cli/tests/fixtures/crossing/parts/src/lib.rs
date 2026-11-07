@@ -292,6 +292,15 @@ pub mod graphics {
 }
 
 /// What draws, as iced_core's `renderer`.
+/// Renderers that draw images, as iced_core's `image::Renderer`: each names
+/// the handle it draws from.
+pub mod imaging {
+    pub trait Renderer {
+        /// What the renderer draws an image from.
+        type Handle;
+    }
+}
+
 pub mod renderer {
     use crate::graphics::mesh::{self, Mesh};
 

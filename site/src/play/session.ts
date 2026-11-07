@@ -101,7 +101,7 @@ export interface Deps {
   location: { pathname: string; search: string; hash: string; origin: string };
   replaceState(url: string): void;
   storage: { getItem(key: string): string | null; setItem(key: string, value: string): void } | null;
-  /** Imports WEB_MODULE and initializes it. */
+  /** Imports WEB_MODULE and initializes it: a fresh copy on each call. */
   loadWeb(): Promise<Web>;
   now(): number;
   clipboard(text: string): Promise<void>;
@@ -392,7 +392,18 @@ export class Session {
     }
     if (mine !== this.runs) return;
     const start = this.deps.now();
-    const result: TextResult = JSON.parse(m.run_text(this.state.code));
+    let text: string;
+    try {
+      text = m.run_text(this.state.code);
+    } catch {
+      // A panic in rawr-web itself traps the module, whose state it may
+      // have left half-written: the server runs this program, and the next
+      // run loads a fresh copy of the module.
+      this.web = null;
+      this.loaded = false;
+      return this.server("rawr-web stopped");
+    }
+    const result: TextResult = JSON.parse(text);
     this.result(result, Math.round(this.deps.now() - start) + " ms in the browser");
   }
 
