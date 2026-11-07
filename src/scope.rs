@@ -278,6 +278,20 @@ struct Frame {
 
 thread_local! {
     static FRAMES: RefCell<Vec<Frame>> = const { RefCell::new(Vec::new()) };
+    /// The regions kept past the call that opened them ([`Region::keep`]),
+    /// each lent by its nonce until its keeper lets it go. A nonce is on
+    /// one list or the other, never both.
+    static KEPT: RefCell<Vec<Frame>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The frame `nonce` names, on the stack or kept, for `visit`.
+fn frame_of<R>(nonce: Nonce, visit: impl FnOnce(Option<&mut Frame>) -> R) -> R {
+    FRAMES.with_borrow_mut(|frames| {
+        if let Some(frame) = frames.iter_mut().rev().find(|frame| frame.nonce == nonce) {
+            return visit(Some(frame));
+        }
+        KEPT.with_borrow_mut(|kept| visit(kept.iter_mut().find(|frame| frame.nonce == nonce)))
+    })
 }
 
 /// Pops a frame, and every frame above it, when its lend ends, however it
@@ -297,13 +311,8 @@ impl Drop for Pop {
 
 /// Ends one access of a frame.
 fn release(nonce: Nonce, shared: bool) {
-    FRAMES.with(|frames| {
-        if let Some(frame) = frames
-            .borrow_mut()
-            .iter_mut()
-            .rev()
-            .find(|frame| frame.nonce == nonce)
-        {
+    frame_of(nonce, |frame| {
+        if let Some(frame) = frame {
             if shared {
                 frame.shared = frame.shared.saturating_sub(1);
             } else {
@@ -426,13 +435,8 @@ impl Drop for Claim {
 /// Claim the lend `nonce` names, under `key`, for one access: shared, or
 /// mutable when not `shared`.
 pub fn claim(nonce: Nonce, key: TypeId, shared: bool) -> Result<Claim, Error> {
-    FRAMES.with(|frames| {
-        let mut frames = frames.borrow_mut();
-        let frame = frames
-            .iter_mut()
-            .rev()
-            .find(|frame| frame.nonce == nonce)
-            .ok_or(Error::Expired)?;
+    frame_of(nonce, |frame| {
+        let frame = frame.ok_or(Error::Expired)?;
         if frame.key != key {
             return Err(Error::Mismatch);
         }
@@ -654,6 +658,45 @@ impl<'r> Region<'r> {
         self.nonce
     }
 
+    /// Keep the region past the call that opened it, as a slot keeps the
+    /// region of `view(&state)` once its output is taken out (#1217): a
+    /// script value native code took of the call, as loupe's `Loupe {
+    /// content }` inside the view's element, may hold one of its values,
+    /// and native code reaches it after the view returns. A region
+    /// [`Region::anchored`] on pins lives as long as they do: they are let
+    /// go when the owner is next reached `&mut`, when rustc would have
+    /// ended every borrow of the view. A region anchored on pins that are
+    /// never let go ([`Pins::constant`], [`Pins::lasting`]) lives until the
+    /// call at `site` opens the next one. A region of no pins, or that
+    /// holds nothing, ends here.
+    pub fn keep(self, site: &'static Site) {
+        let Some(pins) = self.pins else {
+            return;
+        };
+        if self.slots.iter().all(Option::is_none) {
+            return;
+        }
+        let kept = KeptRegion::new(self, site);
+        let mut regions = pins
+            .regions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // What the site kept before ends once the lock is let go, so its
+        // values' drops can keep regions of their own.
+        let ended = if pins.lasting {
+            let (ended, held) = std::mem::take(&mut *regions)
+                .into_iter()
+                .partition::<Vec<_>, _>(|held| std::ptr::eq(held.site, site));
+            *regions = held;
+            ended
+        } else {
+            Vec::new()
+        };
+        regions.push(kept);
+        drop(regions);
+        drop(ended);
+    }
+
     /// Store `value` and give the handle script code holds for it.
     pub fn insert<F: Regional>(&mut self, value: F::Of<'r>) -> Scoped {
         self.slots.push(Some(Box::new(Slot::<'r, F>(value))));
@@ -867,6 +910,96 @@ impl Drop for Unanchor {
     }
 }
 
+/// The call that keeps a region ([`Region::keep`]), as a slot's `static`
+/// names it: a region kept in pins that are never let go lives until the
+/// same call keeps the next one.
+pub struct Site {
+    /// A byte, so each site's `static` has an address of its own.
+    _distinct: u8,
+}
+
+impl Site {
+    /// A call's site.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { _distinct: 0 }
+    }
+}
+
+impl Default for Site {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A region [`Region::keep`] kept, lent by its nonce on the thread that
+/// kept it until it drops.
+struct KeptRegion {
+    thread: std::thread::ThreadId,
+    nonce: Nonce,
+    site: &'static Site,
+    /// The region, as `Box::leak` made it.
+    region: std::ptr::NonNull<Region<'static>>,
+}
+
+impl KeptRegion {
+    fn new(region: Region<'_>, site: &'static Site) -> Self {
+        let nonce = region.nonce;
+        // SAFETY: only the lifetime changes, which has no layout. The
+        // region is anchored on pins its values borrow at `'r`, and it is
+        // kept in those pins, which drop it before anything else they hold
+        // and before they can be let go (`Pins::clear`, the field order of
+        // `Pins`). Its values are never reached at `'static`: `with` and
+        // `with_ref` of `RegionF` lend them at every `'x` alone.
+        let region = unsafe { std::mem::transmute::<Region<'_>, Region<'static>>(region) };
+        let region = std::ptr::NonNull::from(Box::leak(Box::new(region)));
+        let place = region.as_ptr().cast();
+        KEPT.with_borrow_mut(|kept| {
+            kept.push(Frame {
+                nonce,
+                key: TypeId::of::<RegionF>(),
+                place,
+                writable: true,
+                exclusive: false,
+                shared: 0,
+            });
+        });
+        Self {
+            thread: std::thread::current().id(),
+            nonce,
+            site,
+            region,
+        }
+    }
+}
+
+// SAFETY: a `KeptRegion`'s region is reached and dropped only on `thread`:
+// `KEPT` is that thread's, and `Drop` leaks the region on any other.
+unsafe impl Send for KeptRegion {}
+// SAFETY: as for `Send`; `&KeptRegion` reaches nothing of the region.
+unsafe impl Sync for KeptRegion {}
+
+impl Drop for KeptRegion {
+    fn drop(&mut self) {
+        if std::thread::current().id() != self.thread {
+            return;
+        }
+        // Its handles expire now. A claim still running on it, which no
+        // borrow rustc allows leaves, keeps the region it reaches: it leaks.
+        let claimed = KEPT.with_borrow_mut(|kept| {
+            let at = kept.iter().position(|frame| frame.nonce == self.nonce)?;
+            let frame = kept.swap_remove(at);
+            Some(frame.exclusive || frame.shared > 0)
+        });
+        if claimed == Some(false) {
+            // SAFETY: `Box::leak` made the pointer, and it is turned
+            // back once, here, on its thread, with no claim on it and its
+            // frame gone, so nothing reaches it again.
+            drop(unsafe { Box::from_raw(self.region.as_ptr()) });
+        }
+    }
+}
+
 /// [`open`] of a region [`Region::anchored`] made: while `body` runs, a
 /// call whose output borrows a script string it takes makes the output in
 /// this region, which the slot that opened it gives native code at its
@@ -901,12 +1034,17 @@ pub fn anchor() -> Option<Nonce> {
 /// that keeps a literal, pins nothing new.
 #[derive(Default)]
 pub struct Pins {
+    /// The regions of the calls lent these pins, kept past each call
+    /// ([`Region::keep`]). First, so they drop before what they borrow.
+    regions: std::sync::Mutex<Vec<KeptRegion>>,
     strings: std::sync::Mutex<Vec<crate::ImmutableString>>,
     values: std::sync::Mutex<Vec<Kept>>,
     /// Slices of pinned strings ([`Pins::pin_strs`]).
     slices: std::sync::Mutex<Vec<&'static [&'static str]>>,
     /// Whether a string equal to one held is that one ([`Pins::constant`]).
     by_text: bool,
+    /// Whether they are never let go ([`Pins::lasting`]).
+    lasting: bool,
 }
 
 /// A native value [`Pins::hold`] keeps, with the thread whose `Rc` it is.
@@ -935,12 +1073,15 @@ impl Pins {
     /// Nothing pinned.
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            strings: std::sync::Mutex::new(Vec::new()),
-            values: std::sync::Mutex::new(Vec::new()),
-            slices: std::sync::Mutex::new(Vec::new()),
-            by_text: false,
-        }
+        Self::made(false, false)
+    }
+
+    /// Pins kept for as long as the runner lives, as a call that takes a
+    /// `&'static str` pins its text in: never let go, so a region kept in
+    /// them lives until its call keeps the next one ([`Region::keep`]).
+    #[must_use]
+    pub const fn lasting() -> Self {
+        Self::made(false, true)
     }
 
     /// Pins a slot keeps for as long as the runner lives, for a view lent
@@ -948,11 +1089,17 @@ impl Pins {
     /// view borrows is the program's literals and constants.
     #[must_use]
     pub const fn constant() -> Self {
+        Self::made(true, true)
+    }
+
+    const fn made(by_text: bool, lasting: bool) -> Self {
         Self {
+            regions: std::sync::Mutex::new(Vec::new()),
             strings: std::sync::Mutex::new(Vec::new()),
             values: std::sync::Mutex::new(Vec::new()),
             slices: std::sync::Mutex::new(Vec::new()),
-            by_text: true,
+            by_text,
+            lasting,
         }
     }
 
@@ -1048,6 +1195,11 @@ impl Pins {
 
     /// Let everything pinned go.
     pub fn clear(&mut self) {
+        // The regions first: their values borrow what else is pinned.
+        self.regions
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         self.slices
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1086,7 +1238,7 @@ impl Pins {
 /// Run `body` with `region` lent, by its own nonce, to [`with`] and
 /// [`with_ref`] of [`RegionF`] on this thread: the rest of a scope whose
 /// values it holds. Every [`Scoped`] handle into it expires when `body`
-/// returns or unwinds.
+/// returns or unwinds, unless the region is then kept ([`Region::keep`]).
 pub fn open<R>(region: &mut Region<'_>, body: impl FnOnce() -> R) -> R {
     let nonce = region.nonce;
     push_as(

@@ -2845,7 +2845,7 @@ fn reach_lender_mut<T: 'static>(
 fn with_lent_arguments(
     arguments: &mut Arguments<'_, '_, '_>,
     lendable: &[(usize, bool, Reach)],
-    body: fn(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
+    body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, Error> {
     let found: Vec<_> = lendable
         .iter()
@@ -2865,7 +2865,7 @@ fn nest_lent(
     arguments: &mut Arguments<'_, '_, '_>,
     found: &[(usize, bool, Dynamic, Reach)],
     reached: &mut Vec<(usize, Option<Reached<'_>>)>,
-    body: fn(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
+    body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, Error> {
     let Some(((index, mutable, value, reach), rest)) = found.split_first() else {
         return body(arguments, reached);
@@ -3048,7 +3048,7 @@ fn frame_dispatch(arguments: &mut Arguments<'_, '_, '_>, position: usize, slot: 
 #[allow(dead_code)]
 fn static_pins() -> &'static __rawr_internal::scope::Pins {
     static PINS: std::sync::OnceLock<__rawr_internal::scope::Pins> = std::sync::OnceLock::new();
-    PINS.get_or_init(__rawr_internal::scope::Pins::default)
+    PINS.get_or_init(__rawr_internal::scope::Pins::lasting)
 }
 
 /// Bytes a call takes as `&'static [u8]`, as a font's are, kept for as long
@@ -8921,7 +8921,7 @@ fn render_adapter(
         writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
-    with_lent_arguments(arguments, &[{reach}], {name}_lent)
+    with_lent_arguments(arguments, &[{reach}], &mut {name}_lent)
 }}
 
 fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>) -> Result<Dynamic, Error> {{
@@ -9426,7 +9426,15 @@ fn opaque_table_source(
         } else {
             None
         };
+        let lent = if method_message(consumer, cohort, profile, facade)?.is_none()
+            && replay(consumer, profile)?.is_none()
+        {
+            lent_inputs(consumer)?
+        } else {
+            Vec::new()
+        };
         let body = {
+            let _lent = LentArguments::enter(!lent.is_empty());
             let _producing = OpaqueProducing::enter(inner);
             let _consuming = OpaqueConsuming::enter(!other);
             let _witnessed = OpaqueWitnessed::enter(Some(returned.clone()));
@@ -9464,6 +9472,26 @@ fn opaque_table_source(
             }
             render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
             String::from_utf8(body).map_err(request::unwritable)?
+        };
+        // Each argument native code lent, as the `&mut Vec<String>` a
+        // program's impl of `labels` delegates to the value it holds, is
+        // reached where it is for the call, as an adapter reaches it
+        // (`lent_inputs`), never moved out of its borrowed place (#913).
+        let body = match &lent {
+            lent if lent.is_empty() => body,
+            lent => {
+                let reach = lent
+                    .iter()
+                    .map(|(index, mutable, rust)| format!("({index}, {mutable}, {rust} as Reach)"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "    with_lent_arguments(arguments, &[{reach}], &mut |arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>| -> Result<Dynamic, Error> {{
+    let _ = &mut *lent;
+{body}
+    }})"
+                )
+            }
         };
         // A call that takes the value itself, where it doesn't implement
         // its trait through its proxy, can't take it from beside what it
@@ -14017,7 +14045,10 @@ fn render_slot(
     // A view lent no program value, as `view(_: &())` of iced's `run((),
     // view)`, borrows only literals and constants, which outlive every
     // call, as rustc allows: the slot's own pins hold them for as long as
-    // the runner lives, one per text (`Pins::constant`).
+    // the runner lives, one per text (`Pins::constant`). The region the
+    // call opens is kept once its output is taken out, as a script value
+    // native code took of the view may hold one of its values
+    // (`Region::keep`, #1217).
     let mut constant_pins = String::new();
     let (generics, rust, body) = match &family {
         Some(family) => {
@@ -14037,9 +14068,12 @@ fn render_slot(
             .read_lock::<__rawr_internal::scope::Scoped>()
             .map(|scoped| *scoped)
             .unwrap_or_else(|| panic!(\"rawr: a script function gave native code a value that doesn't borrow what it was lent\"));
-        region
+        let output = region
             .take::<{family}>(scoped)
-            .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"))"
+            .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"));
+        static SITE: __rawr_internal::scope::Site = __rawr_internal::scope::Site::new();
+        region.keep(&SITE);
+        output"
                 ),
             );
             (
@@ -19342,9 +19376,12 @@ fn render_impl_function(
             .read_lock::<__rawr_internal::scope::Scoped>()
             .map(|scoped| *scoped)
             .unwrap_or_else(|| panic!(\"rawr: a script function gave native code a value that doesn't borrow what it was lent\"));
-        region
+        let output = region
             .take::<{family}>(scoped)
-            .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"))"
+            .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"));
+        static SITE: __rawr_internal::scope::Site = __rawr_internal::scope::Site::new();
+        region.keep(&SITE);
+        output"
                 ),
             )
         }
