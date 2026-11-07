@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"`rawr mcp` sends input to the window of the program it started: `move`, `click` (left, right or middle, with a count for a double click), `drag`, `scroll`, `key` (with shift, control, alt or command held) and `type`, at positions in the window's points as `screenshot` shows it. The input goes to the program alone, so your own pointer, keyboard and focus stay as they are and the window isn't brought forward. An orange agent cursor shows where the pointer last went, in screenshots too. Each tool answers once the program has taken the input and drawn again. macOS only for now.","issues":[989]},
+        {"text":"A Cargo.lock that names a git dependency in its qualified form (`name version (git+…)`) no longer stops rawr-import with \"dependency identity is absent\".","issues":[1123]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.167",
@@ -2564,7 +2570,7 @@
     {"issue":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open","category":"Health"},
     {"issue":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open","category":"Divergences from rustc"},
     {"issue":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"open","category":"Divergences from rustc"},
-    {"issue":989,"title":"rawr mcp: send input events to a started program","state":"open","category":"Health"},
+    {"issue":989,"title":"rawr mcp: send input events to a started program","state":"closed","category":"Health"},
     {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open","category":"Divergences from rustc"},
     {"issue":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open","category":"Divergences from rustc"},
     {"issue":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open","category":"Divergences from rustc"},
@@ -2695,7 +2701,10 @@
     {"issue":1117,"title":"`use crate::native_mod;` then `native_mod::ITEM` fails in marked code","state":"open","category":"Divergences from rustc"},
     {"issue":1118,"title":"Native code can't get a Result, such as iced::Result, back from a marked function","state":"open","category":"Divergences from rustc"},
     {"issue":1119,"title":"A marked function that native main calls runs off the main thread, so winit panics on macOS","state":"open","category":"Divergences from rustc"},
-    {"issue":1120,"title":"A lock with a path package and a git package of one name and version is refused as ambiguous","state":"closed","category":"Health","release":"0.3.167"}
+    {"issue":1120,"title":"A lock with a path package and a git package of one name and version is refused as ambiguous","state":"closed","category":"Health","release":"0.3.167"},
+    {"issue":1121,"title":"An iced canvas::Program's State written through &mut in update isn't kept between events","state":"open","category":"Divergences from rustc"},
+    {"issue":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open","category":"Health"},
+    {"issue":1123,"title":"A lock's qualified spelling of a git dependency was read with its commit, so it was not found","state":"closed","category":"Health"}
   ],
   "groups": [
     {
@@ -3471,7 +3480,8 @@
             {"number":1117,"title":"`use crate::native_mod;` then `native_mod::ITEM` fails in marked code","state":"open"},
             {"number":1118,"title":"Native code can't get a Result, such as iced::Result, back from a marked function","state":"open"},
             {"number":1119,"title":"A marked function that native main calls runs off the main thread, so winit panics on macOS","state":"open"},
-            {"number":1120,"title":"A lock with a path package and a git package of one name and version is refused as ambiguous","state":"closed"}
+            {"number":1120,"title":"A lock with a path package and a git package of one name and version is refused as ambiguous","state":"closed"},
+            {"number":1123,"title":"A lock's qualified spelling of a git dependency was read with its commit, so it was not found","state":"closed"}
           ]
         }
       ]
@@ -3535,12 +3545,14 @@
             {"number":964,"title":"rawr-cli's extension tests fail under load when stand-in binaries miss the manifest deadline","state":"open"},
             {"number":972,"title":"A relative CARGO_TARGET_DIR is taken relative to the project, while Cargo takes it relative to the working directory","state":"open"},
             {"number":982,"title":"Crossing tests fail with 'runner did not connect before the protocol deadline' under load","state":"open"},
-            {"number":989,"title":"rawr mcp: send input events to a started program","state":"open"},
+            {"number":989,"title":"rawr mcp: send input events to a started program","state":"closed"},
             {"number":998,"title":"A check of one iced project makes 4-5 resolution executions of 360-424 MB each","state":"open"},
             {"number":999,"title":"Every check leaves empty execution-key directories in the store","state":"open"},
             {"number":1013,"title":"Intrinsic entries inline each identity's whole Unit; objc2_app_kit's entry is 1.88 GB","state":"open"},
             {"number":1015,"title":"The legacy extraction plan hashes every selected artifact in full on each check","state":"open"},
-            {"number":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"closed"}
+            {"number":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"closed"},
+            {"number":1121,"title":"An iced canvas::Program's State written through &mut in update isn't kept between events","state":"open"},
+            {"number":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open"}
           ]
         },
         {
