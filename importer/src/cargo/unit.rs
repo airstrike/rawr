@@ -7663,6 +7663,134 @@ mod tests {
         }
     }
 
+    fn git_package(fixture: &Fixture, name: &str, id: &str, source: &str) -> Value {
+        json!({
+            "id": id,
+            "name": name,
+            "version": if name == "reqwest-eventsource" { "0.6.0" } else { "0.1.0" },
+            "manifest_path": fixture.0.join("Cargo.toml"),
+            "source": source,
+            "checksum": null,
+        })
+    }
+
+    #[test]
+    fn git_branch_with_a_slash_matches_the_id_cargo_encodes() {
+        let fixture = Fixture::new("git-slash-branch");
+        let oid = "356e2f61827b193bd5ab389c38059bcc2eed90aa";
+        let location = "git+https://github.com/romnn/reqwest-eventsource";
+        let package = |id: &str| {
+            git_package(
+                &fixture,
+                "reqwest-eventsource",
+                id,
+                &format!("{location}?branch=feat/reqwest-0.13#{oid}"),
+            )
+        };
+        parse_package(&package(&format!(
+            "{location}?branch=feat%2Freqwest-0.13#0.6.0"
+        )))
+        .expect("Cargo's real id for a branch with a slash seals");
+        for invalid in [
+            format!("{location}?branch=feat/reqwest-0.13#0.6.0"),
+            format!("{location}?branch=feat%2freqwest-0.13#0.6.0"),
+            format!("{location}?branch=feat%2Freqwest-0.13#reqwest-eventsource@0.6.0"),
+            format!("{location}?tag=feat%2Freqwest-0.13#0.6.0"),
+            format!("{location}#0.6.0"),
+        ] {
+            assert!(parse_package(&package(&invalid)).is_err(), "{invalid}");
+        }
+    }
+
+    /// Records from `cargo metadata` (cargo 59800466c) for one repository
+    /// pinned three ways.
+    #[test]
+    fn git_references_match_the_ids_cargo_writes_for_them() {
+        let fixture = Fixture::new("git-references");
+        let oid = "5840933c0840b827dbf124b0cdc450a963515515";
+        for (source, id) in [
+            (
+                "git+file:///scratch/dep?branch=feat/x+y@z%1,é",
+                "git+file:///scratch/dep?branch=feat%2Fx%2By%40z%251%2C%C3%A9#0.1.0",
+            ),
+            (
+                "git+file:///scratch/dep.git?tag=v1/2&q=r",
+                "git+file:///scratch/dep.git?tag=v1%2F2%26q%3Dr#dep@0.1.0",
+            ),
+            (
+                "git+file:///scratch/dep/?rev=5840933c0840",
+                "git+file:///scratch/dep/?rev=5840933c0840#dep@0.1.0",
+            ),
+            (
+                "git+https://example.invalid/dep?branch=a b",
+                "git+https://example.invalid/dep?branch=a+b#0.1.0",
+            ),
+            (
+                "git+https://example.invalid/dep",
+                "git+https://example.invalid/dep#0.1.0",
+            ),
+        ] {
+            parse_package(&git_package(
+                &fixture,
+                "dep",
+                id,
+                &format!("{source}#{oid}"),
+            ))
+            .unwrap_or_else(|error| panic!("{id} seals: {error}"));
+        }
+        for (source, id) in [
+            (
+                "git+file:///scratch/dep.git?tag=v1/2",
+                "git+file:///scratch/dep.git?tag=v1%2F2#0.1.0",
+            ),
+            (
+                "git+file:///scratch/dep/?rev=5840933c0840",
+                "git+file:///scratch/dep/?rev=5840933c0840#0.1.0",
+            ),
+            (
+                "git+file:///scratch/dep?branch=x",
+                "git+file:///scratch/dep?branch=x#dep@0.1.0",
+            ),
+            (
+                "git+file:///scratch/dep?commit=x",
+                "git+file:///scratch/dep?commit=x#0.1.0",
+            ),
+        ] {
+            assert!(
+                parse_package(&git_package(
+                    &fixture,
+                    "dep",
+                    id,
+                    &format!("{source}#{oid}")
+                ))
+                .is_err(),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_package_id_that_does_not_match_names_the_package_and_cargo_metadata() {
+        let fixture = Fixture::new("git-id-error");
+        let source = "git+https://github.com/romnn/reqwest-eventsource?branch=feat/reqwest-0.13";
+        let package = git_package(
+            &fixture,
+            "reqwest-eventsource",
+            &format!("{source}#0.6.0"),
+            &format!("{source}#{}", "1".repeat(40)),
+        );
+        let error = parse_package(&package).expect_err("an unencoded id is not Cargo's");
+        assert_eq!(
+            error.to_string(),
+            "internal error: rawr misread `cargo metadata` output: package \
+             `reqwest-eventsource` has id \
+             `git+https://github.com/romnn/reqwest-eventsource?branch=feat/reqwest-0.13#0.6.0`, \
+             but Cargo writes \
+             `git+https://github.com/romnn/reqwest-eventsource?branch=feat%2Freqwest-0.13#0.6.0` \
+             for its source. This is a rawr bug"
+        );
+    }
+
     #[test]
     fn metadata_directories_bind_distinct_layout_outputs_without_weakening_legacy() {
         let target = Path::new("/fixture/target/final");
