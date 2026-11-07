@@ -24917,8 +24917,12 @@ impl<'a> Parser<'a> {
         value.prelude = origin::Fragment::default();
         value.source = origin::Fragment::plain(temporary);
         if let Some(operator) = operator {
-            let current =
-                self.read_imported_field(receiver.clone(), definition.clone(), member, member_span)?;
+            let current = self.read_imported_field(
+                receiver.clone(),
+                definition.clone(),
+                member,
+                member_span,
+            )?;
             value = self.compound_assignment(operator, current, value)?;
         }
         let mut stored = self.store_imported_field(receiver, definition, &fields, false, value)?;
@@ -25263,10 +25267,16 @@ impl<'a> Parser<'a> {
             {
                 let place = self.temporary("place");
                 let stored = self.temporary("stored");
-                let local =
-                    self.operator_expr(origin::Fragment::plain(place.clone()), receiver.ty.clone(), receiver.span);
-                let value =
-                    self.operator_expr(origin::Fragment::plain(stored.clone()), ty.clone(), member_span);
+                let local = self.operator_expr(
+                    origin::Fragment::plain(place.clone()),
+                    receiver.ty.clone(),
+                    receiver.span,
+                );
+                let value = self.operator_expr(
+                    origin::Fragment::plain(stored.clone()),
+                    ty.clone(),
+                    member_span,
+                );
                 let store = self.store_imported_field(
                     local,
                     definition.clone(),

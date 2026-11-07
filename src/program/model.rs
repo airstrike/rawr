@@ -1564,10 +1564,21 @@ fn inputs(
         let receiver = method.receiver().map(|_| None);
         let types = receiver
             .into_iter()
-            .chain(method.parameters().iter().map(|parameter| native(&parameter.ty)))
+            .chain(
+                method
+                    .parameters()
+                    .iter()
+                    .map(|parameter| native(&parameter.ty)),
+            )
             .collect();
         keep(
-            (true, join(owner.modules(), &format!("{}::{}", owner.name(), method.key().name()))),
+            (
+                true,
+                join(
+                    owner.modules(),
+                    &format!("{}::{}", owner.name(), method.key().name()),
+                ),
+            ),
             types,
         );
     }

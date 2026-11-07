@@ -469,11 +469,8 @@ impl<'a> Generator<'a> {
                 .map(|part| self.back(file, part, owner))
                 .collect::<Result<Vec<_>, _>>()
         };
-        let generic = owner.is_some_and(|owner| {
-            self.types
-                .get(owner)
-                .is_some_and(|owner| owner.generic)
-        });
+        let generic =
+            owner.is_some_and(|owner| self.types.get(owner).is_some_and(|owner| owner.generic));
         match (name, types.len()) {
             ("Vec" | "Option", 1) => {
                 let inner = parts()?.concat();
@@ -2238,7 +2235,10 @@ mod tests {
         let take = format!("{island}::Take::take(input)");
         for (output, read) in [
             ("Message", back("Message")),
-            ("Option<Item>", format!("input.option(|input| {})", back("Item"))),
+            (
+                "Option<Item>",
+                format!("input.option(|input| {})", back("Item")),
+            ),
             ("Vec<Item>", format!("input.vec(|input| {})", back("Item"))),
             (
                 "(Message, u32, Ball)",
