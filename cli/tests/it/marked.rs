@@ -291,7 +291,7 @@ fn native_code_cannot_use_marked_code() {
     .unwrap();
     let error = graph(&root, None).unwrap_err();
     assert!(
-        error.contains("native module `crate::pricing` uses `crate::money::twice`.")
+        error.contains("native module `crate::pricing` cannot use `crate::money::twice`")
             && error.contains("is in the marked module `crate::money`"),
         "{error}"
     );
