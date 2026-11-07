@@ -22,10 +22,10 @@ pub(crate) fn executable(
     executable_with_evidence(engine, target, session, false).map(|(executable, ..)| executable)
 }
 
-/// One in-memory file, `text` named `identity`, compiled as the root of a crate, when its `mod`
-/// items are all inline (`mod geometry { .. }`): each module is read from
-/// the file's own text, as `rawr run` reads it, without a file or a
-/// project. `None` when the file declares no module, or a file module
+/// One in-memory file, `text` named `identity`, compiled as the root of a
+/// crate, when its `mod` items are all inline (`mod geometry { .. }`): each
+/// module is read from the file's own text, as `rawr run` reads it, without
+/// a file or a project. `None` when the file declares no module, or a file module
 /// (`mod util;`), which the single-file compiler refuses.
 ///
 /// The program is the single-file compiler's
