@@ -183,3 +183,41 @@ fn a_number_on_the_left_selects_the_crates_impl_for_it() {
         "Turn(1.4) Turn(14.0) Turn(48.999996)\nTurn(0.8)\n9.300000011920929 Turn(1.5)\nTurn(1.05)\n",
     );
 }
+
+/// A method whose own early-bound lifetime its output borrows a `&F` at,
+/// as jiff's `strftime<'f, F: 'f + ?Sized + AsRef<[u8]>>(&self, format:
+/// &'f F) -> Display<'f>` is (#1014): a literal fills `F` with `str`, and a
+/// `&String` and a `&[u8]` fill it too. The call borrows its receiver for
+/// the call alone and opens a scope frame that holds what the format
+/// borrows, and the frame's value prints through its `Display`.
+#[test]
+fn an_output_borrows_a_formats_early_bound_lifetime() {
+    runs_as_cargo_does("strftime", "09:05\nat 09 h\n05 past\n0905\n");
+}
+
+/// The format stays borrowed while what `strftime` gives lives, as rustc
+/// reads its signature: rawr's own check refuses a change to it with
+/// rustc's E0502 before anything runs.
+#[test]
+fn a_formats_borrow_lasts_as_long_as_its_output() {
+    let program = "// rawr\nuse natives::lifetimes::Clock;\n\nfn main() {\n    let clock = Clock::new(9, 5);\n    let mut format = String::from(\"%H\");\n    println!(\"start\");\n    let shown = clock.strftime(&format);\n    format.push_str(\"x\");\n    println!(\"{shown}\");\n}\n";
+    let root = SHAPES.lease(&[("src/main.rs", program)]);
+    let directory = crate::support::scratch();
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = text(&run.stdout);
+    let stderr = text(&run.stderr);
+    assert!(
+        !run.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(!stdout.contains("start"), "{stdout}");
+    assert!(stderr.contains("E0502"), "{stderr}");
+}

@@ -1,6 +1,7 @@
 // rawr
 use visits::{
-    Expected, FromKeys, Keys, Layer, Paint, Painter, Problem, Read, Reader, Tally, Visit, Visitor,
+    Expected, FromKeys, Keys, Layer, Paint, Painter, Problem, Read, Reader, Tally, Unexpected,
+    Visit, Visitor,
 };
 
 struct Seven;
@@ -80,6 +81,26 @@ impl visits::Bytes for Length {
     }
 }
 
+/// A number below 3, as a derive's variant index is.
+#[derive(Debug)]
+struct Small(u64);
+
+impl<'a> Read<'a> for Small {
+    fn read<R: Reader<'a>>(mut reader: R) -> Result<Self, R::Error> {
+        match reader.number() {
+            Some(number) if (0..3).contains(&number) => Ok(Small(number as u64)),
+            Some(number) => Err(visits::Problem::invalid_value(
+                Unexpected::Unsigned(number as u64),
+                &"a number below 3",
+            )),
+            None => Err(R::Error::invalid_value(
+                Unexpected::Bool(false),
+                &"a number",
+            )),
+        }
+    }
+}
+
 /// Numbers counted, not added.
 struct Counter {
     count: i64,
@@ -147,4 +168,11 @@ fn main() {
     println!("{}", visits::measure(&Length));
     println!("{}", visits::painted(Seven));
     println!("{} {}", visits::stacked(), visits::Plain::new().depth());
+    println!(
+        "{} {}",
+        visits::read::<Small>(&[2]),
+        visits::read::<Small>(&[7])
+    );
+    println!("{}", visits::read::<Small>(&[]));
+    println!("{}", visits::unexpected(Unexpected::Unsigned(4)));
 }

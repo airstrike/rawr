@@ -69,6 +69,37 @@ pub trait Problem: Sized {
     fn short(count: usize, expected: &dyn Expected) -> Self {
         Self::custom(&format!("{count} read, expected {expected}"))
     }
+
+    /// A value read that isn't one `expected` takes, as serde's
+    /// `de::Error::invalid_value` takes an `Unexpected` at a lifetime the
+    /// call picks.
+    fn invalid_value(unexpected: Unexpected, expected: &dyn Expected) -> Self {
+        Self::custom(&format!("invalid value: {unexpected}, expected {expected}"))
+    }
+}
+
+/// What a reader read instead, as serde's `de::Unexpected<'a>`, which may
+/// borrow what was read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Unexpected<'a> {
+    Unsigned(u64),
+    Bool(bool),
+    Str(&'a str),
+}
+
+impl fmt::Display for Unexpected<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Unexpected::Unsigned(value) => write!(formatter, "integer `{value}`"),
+            Unexpected::Bool(value) => write!(formatter, "boolean `{value}`"),
+            Unexpected::Str(value) => write!(formatter, "string {value:?}"),
+        }
+    }
+}
+
+/// An `Unexpected`'s text, which the call borrows it for.
+pub fn unexpected(unexpected: Unexpected<'_>) -> String {
+    unexpected.to_string()
 }
 
 /// What a reader expected, as serde's `de::Expected` is.

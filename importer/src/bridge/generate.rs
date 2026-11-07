@@ -323,6 +323,34 @@ impl<T> WithoutDisplay for &DebugProbe<T> {
     }
 }
 
+/// The `Display` text of a scope frame's value, which carries a lifetime,
+/// for a type that implements it, by method resolution on a concrete `T`,
+/// as `debug_probe` chooses, as jiff's `strftime` gives `Display<'f>`.
+#[allow(dead_code)]
+struct ShownProbe<'v, T>(&'v T);
+
+#[allow(dead_code)]
+trait ViaShown {
+    fn shown_text(&self) -> Option<String>;
+}
+
+impl<T: std::fmt::Display> ViaShown for ShownProbe<'_, T> {
+    fn shown_text(&self) -> Option<String> {
+        Some(self.0.to_string())
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutShown {
+    fn shown_text(&self) -> Option<String>;
+}
+
+impl<T> WithoutShown for &ShownProbe<'_, T> {
+    fn shown_text(&self) -> Option<String> {
+        None
+    }
+}
+
 /// A copy of a stored value, for a type that implements `Clone`.
 type CloneValue = fn(&dyn Any) -> Option<Box<dyn Any>>;
 
@@ -10391,8 +10419,28 @@ fn lends_str(
             fills_with_str(input, signature, substitutions)
                 && !static_str(input, signature, substitutions)
         }
+        // `&F` the call fills with `str` (`instantiated`).
+        convert::Type::Borrowed { mutable: false, .. } => matches!(
+            instantiated(input, signature, substitutions),
+            Some(convert::Type::Builtin(convert::Builtin::Str))
+        ),
         _ => false,
     }
+}
+
+/// Whether `input` is a `&T` the bridge makes its `T` for from Rawr's
+/// value for the call (`is_made_for_call`), as a `&String` fills jiff's
+/// `strftime(&self, format: &'f F)`.
+fn lends_made(
+    input: &convert::Type,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> bool {
+    matches!(input, convert::Type::Borrowed { mutable: false, .. })
+        && matches!(
+            instantiated(input, signature, substitutions),
+            Some(convert::Type::Borrowed { mutable: false, ty }) if is_made_for_call(&ty)
+        )
 }
 
 /// Whether the instance fills the type parameter `input` with `&str`.
@@ -10939,6 +10987,10 @@ fn frame_copies(
             rebound.push_str(&format!(
                 "\n        let argument_{position} = argument_{position}_owned.as_str();"
             ));
+        } else if lends_made(input, signature, substitutions) {
+            rebound.push_str(&format!(
+                "\n        let argument_{position} = &argument_{position}_made;"
+            ));
         }
     }
     for (position, _) in &copies {
@@ -11047,7 +11099,7 @@ fn render_method_opening(
         before,
         back,
         with,
-    } = frame_copies(signature, &[])?;
+    } = frame_copies(signature, substitutions)?;
     let name = format!("{}::{}", rust_path(plan), plan.name());
     // The frame itself, once the call has made its output.
     let frame = format!(
@@ -14378,6 +14430,20 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // `&F` the call fills with `str`: the `&str` input it is (`instantiated`).
+    if let convert::Type::Borrowed { .. } = ty
+        && lent == convert::Type::Builtin(convert::Builtin::Str)
+    {
+        return render_take_input(
+            local,
+            index,
+            &lent,
+            signature,
+            substitutions,
+            profile,
+            output,
+        );
+    }
     if let convert::Type::Borrowed { .. } = ty {
         return render_lease(
             local,
@@ -16566,6 +16632,17 @@ fn instantiated(
             arguments: all(arguments)?,
         },
         convert::Type::Option(element) => convert::Type::Option(one(element)?),
+        // `&F` where the call fills `F` with `str` is the `&str` input it
+        // takes, as a literal fills jiff's `strftime(&self, format: &'f F)`.
+        convert::Type::Borrowed { mutable: false, ty }
+            if matches!(**ty, convert::Type::Parameter(_))
+                && matches!(
+                    substitution(ty, signature, substitutions),
+                    Some(convert::Type::Builtin(convert::Builtin::Str))
+                ) =>
+        {
+            convert::Type::Builtin(convert::Builtin::Str)
+        }
         convert::Type::Borrowed { mutable, ty } => convert::Type::Borrowed {
             mutable: *mutable,
             ty: one(ty)?,
@@ -18801,6 +18878,8 @@ use super::*;
         } else {
             ""
         };
+        // Its `Display` text, where its type has one.
+        let display = "\n    fn display(value: &Self::Of<'_>) -> Option<String> {\n        (&ShownProbe(value)).shown_text()\n    }";
         let clone = if lifetimes.clone {
             "\n    fn duplicate<'x>(value: &Self::Of<'x>) -> Option<Self::Of<'x>> {\n        Some(Clone::clone(value))\n    }"
         } else {
@@ -18821,7 +18900,7 @@ use super::*;
             .replace("'x", "'_");
         writeln!(
             output,
-            "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{clone}{equal}\n}}\n"
+            "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{display}{clone}{equal}\n}}\n"
         )
         .map_err(request::unwritable)?;
     }
@@ -19646,6 +19725,9 @@ fn render_generic_arguments(
                         // call's bounds, as it does for `1..=6`.
                         convert::Type::Builtin(convert::Builtin::InclusiveRange) => b"_",
                         convert::Type::Builtin(convert::Builtin::String) => b"String",
+                        // `str` itself, as `F` of jiff's `strftime(&self,
+                        // format: &'f F)` is where a `&str` fills `&F`.
+                        convert::Type::Builtin(convert::Builtin::Str) => b"str",
                         convert::Type::Builtin(builtin) => {
                             builtin.rust_name().unwrap_or_default().as_bytes()
                         }

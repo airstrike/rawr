@@ -1630,7 +1630,12 @@ fn a_rename_in_a_derived_type_swaps_into_the_running_program() {
 /// once, not without end. A member of such a parameter's opaque type whose
 /// signature names the trait's own parameter, as tracing-subscriber's
 /// `Layer<S>::and_then` gives `Layered<L, Self, S>`, isn't written into the
-/// crate's facade, and the rest of the crate runs (#1032).
+/// crate's facade, and the rest of the crate runs (#1032). A trait's
+/// provided function that takes a crate value whose type has a lifetime the
+/// call picks, as serde's `de::Error::invalid_value(Unexpected<'_>, &dyn
+/// Expected)` does, is the opaque `R::Error`'s, called through the trait's
+/// path where the output fixes `Self`, as serde's derives call it, and
+/// through the opaque type (#1031). So is a free function of such a value.
 #[test]
 fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     const VISITS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-visits");
@@ -1649,7 +1654,9 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
         text(&run.stdout),
         "Some(5) a pair\n14 <7> Some(10) None\n<7>\nPair(3, 4)\n1 read, expected two numbers\n\
          expected a str\nexpected 2 numbers\nexpected what I wanted\n6 3\n\
-         Counts { odd: 2, even: 1 }\nodd even\n6\ntrue\n2 1\n"
+         Counts { odd: 2, even: 1 }\nodd even\n6\ntrue\n2 1\n\
+         Small(2) invalid value: integer `7`, expected a number below 3\n\
+         invalid value: boolean `false`, expected a number\ninteger `4`\n"
     );
 }
 
