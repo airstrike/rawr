@@ -7815,6 +7815,61 @@ fn language_range_bounds_take_the_element_kind() {
     assert_eq!(value, 300.0);
 }
 
+/// iced's game_of_life (#1055): `a..=b` of any integer kind is a
+/// `RangeInclusive` of that kind, a value that is also an iterator of it.
+#[test]
+fn language_an_inclusive_range_of_any_integer_kind_is_a_range_of_it() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            use std::ops::RangeInclusive;
+            struct Region { first: isize, rows: isize }
+            impl Region {
+                fn rows(&self) -> RangeInclusive<isize> {
+                    self.first..=self.first + self.rows
+                }
+            }
+            pub fn run() -> String {
+                let region = Region { first: -2, rows: 3 };
+                let rows = region.rows();
+                let total: isize = rows.clone().sum();
+                let start: isize = *rows.start();
+                let small: RangeInclusive<u8> = 1..=4;
+                let bytes: Vec<u8> = small.clone().collect();
+                let mut doubled = Vec::new();
+                for row in region.rows() {
+                    let row: isize = row * 2;
+                    doubled.push(row);
+                }
+                format!(
+                    "{} {} {} {} {:?} {:?} {}",
+                    total,
+                    start,
+                    rows.end(),
+                    rows.contains(&0),
+                    bytes,
+                    doubled,
+                    small.count()
+                )
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    // The same program built by rustc prints this.
+    assert_eq!(value, "-2 -2 1 true [1, 2, 3, 4] [-4, -2, 0, 2] 4");
+    // A range of one kind is not a range of another: rustc's E0308.
+    let error = rejected(
+        "use std::ops::RangeInclusive; \
+         fn f(n: isize) -> RangeInclusive<isize> { 0..=n } \
+         pub fn run() -> i64 { let r: RangeInclusive<u8> = f(3); 0 } run()",
+    );
+    assert!(
+        error.contains("expected `RangeInclusive<u8>`, found `RangeInclusive<isize>`"),
+        "{error}"
+    );
+}
+
 #[test]
 fn language_mut_methods_through_field_and_element_places() {
     let value = run(r#"

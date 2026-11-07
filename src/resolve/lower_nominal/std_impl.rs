@@ -98,7 +98,7 @@ pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
         ),
         Ty::Range(inner) => ("core::ops::range::Range", one(inner)),
         Ty::InclusiveOf(inner) => ("core::ops::range::RangeInclusive", one(inner)),
-        Ty::InclusiveRange => ("core::ops::range::RangeInclusive", vec![Ty::Int(Int::I64)]),
+        Ty::InclusiveRange(kind) => ("core::ops::range::RangeInclusive", vec![Ty::Int(*kind)]),
         Ty::FloatRange => (
             "core::ops::range::RangeInclusive",
             vec![Ty::Float(Float::F64)],

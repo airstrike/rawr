@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 116;
+const CLASSIFIER_VERSION: u32 = 117;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -472,6 +472,33 @@ fn type_late_input(
         model::Type::FunctionPointer(_)
         | model::Type::TraitObject { .. }
         | model::Type::ImplTrait { .. } => Err(representability::reject::Kind::CallableProtocol),
+    }
+}
+
+/// Whether `argument` is `'static` or a type that names it, as
+/// `Cow<'static, str>` does.
+fn argument_names_static(argument: &model::Argument) -> bool {
+    match argument {
+        model::Argument::Lifetime(lifetime) => *lifetime == model::Lifetime::Static,
+        model::Argument::Type(ty) => type_names_static(ty),
+        model::Argument::Const(_) => false,
+    }
+}
+
+/// Whether `ty` names `'static`, in a reference or in a type's arguments.
+fn type_names_static(ty: &model::Type) -> bool {
+    match ty {
+        model::Type::Reference { lifetime, ty, .. } => {
+            *lifetime == model::Lifetime::Static || type_names_static(ty)
+        }
+        model::Type::Definition { arguments, .. } | model::Type::Projection { arguments, .. } => {
+            arguments.iter().any(argument_names_static)
+        }
+        model::Type::Tuple(members) => members.iter().any(type_names_static),
+        model::Type::Slice(element) | model::Type::Array { element, .. } => {
+            type_names_static(element)
+        }
+        _ => false,
     }
 }
 
@@ -1720,8 +1747,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// other than a future's `Output`, as `render_stateful_widget`'s `&mut
     /// W::State`, or a callable parameter's bound names in its inputs or
     /// output, as iced's `Application<P>::subscription(f: impl Fn(&P::State)
-    /// -> Subscription<P::Message>)`: each with the synthetic type parameter
-    /// that stands for it, numbered per parameter.
+    /// -> Subscription<P::Message>)`, or what a parameter's bound binds, as
+    /// `presets(impl IntoIterator<Item = Preset<P::State, P::Message>>)`:
+    /// each with the synthetic type parameter that stands for it, numbered
+    /// per parameter.
     fn projections(
         &self,
         generics: &model::Generics,
@@ -1846,10 +1875,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         }
                     }
                 }
+                // What a parameter's bound binds, as iced's
+                // `Application<P>::presets(impl IntoIterator<Item =
+                // Preset<P::State, P::Message>>)` binds `Item` (#1050).
                 model::Predicate::ProjectionEquality {
-                    projection: model::Type::Projection { trait_id, .. },
+                    projection:
+                        model::Type::Projection {
+                            trait_id,
+                            arguments,
+                            ..
+                        },
                     ty,
-                } if self.definition_name(trait_id) == Some("FnOnce") => {
+                } if self.definition_name(trait_id) == Some("FnOnce")
+                    || matches!(
+                        arguments.first(),
+                        Some(model::Argument::Type(model::Type::Parameter { .. }))
+                    ) =>
+                {
                     find(ty, true, &mut found);
                 }
                 _ => {}
@@ -9369,10 +9411,13 @@ impl<P: api::Phase> Context<'_, P> {
 
     /// The derivable std traits the bounds on type parameter `index` name.
     /// Whether a `&str` fills the type parameter at `index` only at
-    /// `'static`: its bounds say `T: 'static`, or one of its traits is
-    /// implemented for `&'static str`, as iced's `Title<State>` is. A
-    /// trait has at most one impl for a string reference, since two would
-    /// overlap, so that impl is the one a `&str` argument selects.
+    /// `'static`: its bounds say `T: 'static`, one of its traits is
+    /// implemented for `&'static str`, as iced's `Title<State>` is, or one
+    /// names `'static` in its arguments, as iced's `Preset::new(name: impl
+    /// Into<Cow<'static, str>>)` does, whose `From<&'a str> for Cow<'a,
+    /// str>` asks the string for `'static` (#1050). A trait has at most one
+    /// impl for a string reference, since two would overlap, so that impl
+    /// is the one a `&str` argument selects.
     fn static_str_parameter(&self, generics: &model::Generics, index: u32) -> bool {
         let declared = generics
             .parameters()
@@ -9398,25 +9443,28 @@ impl<P: api::Phase> Context<'_, P> {
         declared.chain(predicated).any(|bound| {
             let model::Bound::Trait {
                 trait_id,
+                arguments,
                 polarity: model::Polarity::Positive,
                 ..
             } = bound
             else {
                 return false;
             };
-            self.graph
-                .implementations_of(trait_id)
-                .any(|implementation| {
-                    implementation.polarity() == model::Polarity::Positive
-                        && matches!(
-                            implementation.self_type(),
-                            model::Type::Reference {
-                                lifetime: model::Lifetime::Static,
-                                ..
-                            }
-                        )
-                        && is_str_reference(implementation.self_type())
-                })
+            arguments.iter().any(argument_names_static)
+                || self
+                    .graph
+                    .implementations_of(trait_id)
+                    .any(|implementation| {
+                        implementation.polarity() == model::Polarity::Positive
+                            && matches!(
+                                implementation.self_type(),
+                                model::Type::Reference {
+                                    lifetime: model::Lifetime::Static,
+                                    ..
+                                }
+                            )
+                            && is_str_reference(implementation.self_type())
+                    })
         })
     }
 

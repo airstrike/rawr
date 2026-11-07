@@ -801,6 +801,36 @@ impl<State, Message> IntoBoot<State, Message> for (State, crate::Task<Message>) 
 pub struct Application<P: Program> {
     program: P,
     fonts: Vec<Cow<'static, [u8]>>,
+    presets: Vec<Preset<P::State, P::Message>>,
+}
+
+/// A named way to boot a program's state, as iced's `Preset`.
+pub struct Preset<State, Message> {
+    name: Cow<'static, str>,
+    boot: Box<dyn Fn() -> (State, crate::Task<Message>)>,
+}
+
+impl<State, Message> Preset<State, Message> {
+    /// The preset `name` that boots by `boot`.
+    pub fn new(
+        name: impl Into<Cow<'static, str>>,
+        boot: impl Fn() -> (State, crate::Task<Message>) + 'static,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            boot: Box::new(boot),
+        }
+    }
+
+    /// Its name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The state it boots, and the work it asks for.
+    pub fn boot(&self) -> (State, crate::Task<Message>) {
+        (self.boot)()
+    }
 }
 
 /// The application of `boot`, `update`, `subscription` and `view` whose
@@ -884,6 +914,7 @@ where
             types: std::marker::PhantomData,
         },
         fonts: Vec::new(),
+        presets: Vec::new(),
     }
 }
 
@@ -941,6 +972,7 @@ where
             types: std::marker::PhantomData,
         },
         fonts: Vec::new(),
+        presets: Vec::new(),
     }
 }
 
@@ -958,6 +990,7 @@ impl<P: Program> Application<P> {
                 subscription: f,
             },
             fonts: self.fonts,
+            presets: self.presets,
         }
     }
 
@@ -973,6 +1006,7 @@ impl<P: Program> Application<P> {
                 theme: f,
             },
             fonts: self.fonts,
+            presets: self.presets,
         }
     }
 
@@ -988,6 +1022,7 @@ impl<P: Program> Application<P> {
                 scale_factor: f,
             },
             fonts: self.fonts,
+            presets: self.presets,
         }
     }
 
@@ -1004,6 +1039,7 @@ impl<P: Program> Application<P> {
                 title,
             },
             fonts: self.fonts,
+            presets: self.presets,
         }
     }
 
@@ -1011,6 +1047,16 @@ impl<P: Program> Application<P> {
     pub fn fonts(mut self, fonts: impl IntoIterator<Item = impl Into<Cow<'static, [u8]>>>) -> Self {
         self.fonts.extend(fonts.into_iter().map(Into::into));
         self
+    }
+
+    /// The application with the boot `presets`, as iced's
+    /// `Application::presets`: the item names the program's own state and
+    /// message.
+    pub fn presets(self, presets: impl IntoIterator<Item = Preset<P::State, P::Message>>) -> Self {
+        Self {
+            presets: presets.into_iter().collect(),
+            ..self
+        }
     }
 
     /// Show the view and press each label of `EVENTS_PRESS` (comma
@@ -1021,6 +1067,13 @@ impl<P: Program> Application<P> {
             "fonts {}",
             self.fonts.iter().map(|font| font.len()).sum::<usize>()
         );
+        // Each preset's booted state, as its view shows it.
+        for preset in &self.presets {
+            let (state, _) = preset.boot();
+            let mut labels = Vec::new();
+            let _ = self.program.view(&state, "", &mut labels);
+            println!("preset {} view {}", preset.name(), labels.join(" "));
+        }
         let presses = std::env::var("EVENTS_PRESS").unwrap_or_default();
         let (mut state, boot) = self.program.boot();
         // Each message the booted state listens for, before any press.
