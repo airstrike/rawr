@@ -3774,6 +3774,7 @@ impl Engine {
             comments: comments.into_iter().collect(),
             machine: None,
             this_name: None,
+            this_parameter: None,
         })
     }
 
@@ -3973,6 +3974,7 @@ impl Engine {
             comments: <_>::default(),
             machine: None,
             this_name: None,
+            this_parameter: None,
         });
 
         // Define the function pointer

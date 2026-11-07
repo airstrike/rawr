@@ -44,9 +44,14 @@ impl<'a> CallFnOptions<'a> {
             in_all_namespaces: false,
         }
     }
-    /// Bind to the `this` pointer.
+    /// Lend `value` to the function as its `&mut` parameter, the receiver
+    /// its body takes as `this`, which the call's arguments then leave out:
+    /// a call to `fn update(model: &mut Model, by: i64)` passes `(by,)`.
+    /// The function changes `value` in place, so the host reads the change
+    /// after the call.
     ///
-    /// Typed scripts can't read the `this` pointer yet.
+    /// Without it the call passes that parameter where the function is
+    /// written with it, `(model, by)`, as any other argument.
     #[inline(always)]
     #[must_use]
     pub fn bind_this_ptr(mut self, value: &'a mut Dynamic) -> Self {
@@ -116,6 +121,28 @@ impl Engine {
     ///
     /// let result = engine.call_fn::<i64>(&mut scope, &ast, "bar", () )?;
     /// assert_eq!(result, 21);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// A function's arguments are the parameters it is written with, a
+    /// `&mut` one included: the call lends the value it is given there.
+    /// To read the change the function makes, lend the value with
+    /// [`CallFnOptions::bind_this_ptr`] instead.
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
+    /// use rawr::{Engine, Scope};
+    ///
+    /// let engine = Engine::new();
+    /// let ast = engine.compile("
+    ///     fn add(total: &mut i64, by: i64) -> i64 {
+    ///         *total += by;
+    ///         *total
+    ///     }
+    /// ")?;
+    /// let total = engine.call_fn::<i64>(&mut Scope::new(), &ast, "add", (40_i64, 2_i64))?;
+    /// assert_eq!(total, 42);
     /// # Ok(())
     /// # }
     /// ```
@@ -212,10 +239,14 @@ impl Engine {
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
     ) -> RawrResult {
-        let function = ast
-            .shared_lib()
-            .get_script_fn(name, arg_values.len())
-            .map(|function| &**function);
+        let lib = ast.shared_lib();
+        // The arguments are the parameters the function is written with,
+        // its receiver among them unless the call lends that apart.
+        let function = match options.this_ptr {
+            Some(_) => lib.get_script_fn(name, arg_values.len()),
+            None => lib.get_written_script_fn(name, arg_values.len()),
+        }
+        .map(|function| &**function);
         self.call_fn_in(
             options, scope, ast, name, function, arg_values, global, caches,
         )
@@ -227,6 +258,10 @@ impl Engine {
     ///
     /// A typed handle passes the function it resolved at lookup and turns
     /// off `options.eval_ast`, so the call skips the top-level statements.
+    ///
+    /// When `arg_values` holds `function`'s receiver where the function is
+    /// written with it, and `options` lends none, that value is the
+    /// receiver, changed in place.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn call_fn_in(
         &self,
@@ -250,7 +285,24 @@ impl Engine {
 
         let orig_tag = options.tag.map(|v| mem::replace(&mut global.tag, v));
 
-        let mut this_ptr = options.this_ptr;
+        let written = function.and_then(|function| {
+            function.this_parameter.filter(|_| {
+                options.this_ptr.is_none() && arg_values.len() == function.params.len() + 1
+            })
+        });
+        if let Some(index) = written {
+            arg_values[..=index].rotate_right(1);
+        }
+        let all_values = arg_values;
+        let (mut this_ptr, arg_values) = match written {
+            Some(_) => {
+                let (receiver, rest) = all_values
+                    .split_first_mut()
+                    .expect("a written receiver is within the arguments");
+                (Some(receiver), rest)
+            }
+            None => (options.this_ptr, &mut *all_values),
+        };
 
         let orig_embedded_module_resolver =
             std::mem::replace(&mut global.embedded_module_resolver, ast.resolver.clone());
@@ -319,6 +371,10 @@ impl Engine {
             global.debugger_mut().status = crate::eval::DebuggerStatus::Terminate;
             let node = &crate::ast::Stmt::Noop(Position::NONE);
             self.dbg(global, caches, scope, this_ptr, node)?;
+        }
+
+        if let Some(index) = written {
+            all_values[..=index].rotate_left(1);
         }
 
         result.map_err(|err| match *err {

@@ -39,6 +39,10 @@ pub struct ScriptFuncDef {
     /// parameter, or `self`. Kept only while a debugger is registered, so
     /// it reads the receiver by that name (#534).
     pub(crate) this_name: Option<ImmutableString>,
+    /// A free function's `&mut` parameter its body takes as `this`, by its
+    /// position among the parameters the function is written with: a host
+    /// call that passes the value there lends it as the receiver.
+    pub(crate) this_parameter: Option<usize>,
 }
 
 impl ScriptFuncDef {
@@ -57,6 +61,7 @@ impl ScriptFuncDef {
             comments: <_>::default(),
             machine: None,
             this_name: self.this_name.clone(),
+            this_parameter: self.this_parameter,
         }
     }
 }

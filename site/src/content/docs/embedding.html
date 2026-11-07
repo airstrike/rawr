@@ -168,6 +168,71 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
 </div>
 <p>A handle takes up to eight parameters. Clone it to share it. <code>load</code> and <code>script</code> take the engine, so a second script needs its own <code>Engine</code> with the exports installed again.</p>
 
+<h2 id="modules">Modules</h2>
+<p>A script may hold inline modules, <code>mod game { .. }</code>, with their bodies in the script. Paths, <code>pub</code>, <code>use</code> and <code>super</code> resolve as rustc resolves them, and a private item used from outside its module is rustc&rsquo;s E0603. A handle looks up a function of the script&rsquo;s root, which may call into its modules.</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b><span>your app</span></div>
+  <pre><code data-lang="rust">use rawr::Engine;
+
+const SCRIPT: &amp;str = "
+mod game {
+    pub mod rules {
+        pub fn score(hits: i64) -&gt; i64 {
+            super::BONUS + hits * 10
+        }
+    }
+
+    const BONUS: i64 = 5;
+}
+
+use game::rules;
+
+fn score(hits: i64) -&gt; i64 {
+    rules::score(hits)
+}
+";
+
+fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
+    let script = Engine::new().script(SCRIPT)?;
+    let score = script.func::&lt;(i64,), i64&gt;("score")?;
+    println!("{}", score.call(2)?);
+    Ok(())
+}</code></pre>
+  <div class="run"><small>on your machine</small><b>cargo run</b><span>25</span></div>
+</div>
+<p>A file module, <code>mod game;</code>, needs a package to find <code>game.rs</code> in. A script given as text, or loaded as one file, has none, so its compile fails with <code>file modules require project/package compilation</code>. <code>Engine::compile</code>, <code>eval</code> and <code>run</code> take inline modules the same way. A top-level statement reaches a module&rsquo;s item through a <code>use</code> or a root function.</p>
+
+<h2 id="call-fn">Calling by name</h2>
+<p><code>Engine::call_fn</code> calls a script function by name from a compiled <code>AST</code>, without a typed handle. Its arguments are a tuple of the parameters the function is written with. A <code>&amp;mut</code> parameter is one of them: the call lends the function the value it is given there.</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b><span>your app</span></div>
+  <pre><code data-lang="rust">use rawr::{CallFnOptions, Dynamic, Engine, Scope};
+
+const SCRIPT: &amp;str = "
+fn update(score: &amp;mut i64, hits: i64) -&gt; i64 {
+    *score += hits * 10;
+    *score
+}
+";
+
+fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
+    let engine = Engine::new();
+    let ast = engine.compile(SCRIPT)?;
+    let mut scope = Scope::new();
+    println!("{}", engine.call_fn::&lt;i64&gt;(&amp;mut scope, &amp;ast, "update", (5_i64, 2_i64))?);
+
+    // Lend the value apart to keep the change.
+    let mut score = Dynamic::from(5_i64);
+    let options = CallFnOptions::new().bind_this_ptr(&amp;mut score);
+    engine.call_fn_with_options::&lt;i64&gt;(options, &amp;mut scope, &amp;ast, "update", (2_i64,))?;
+    println!("{}", score.as_int().unwrap());
+    Ok(())
+}</code></pre>
+  <div class="run"><small>on your machine</small><b>cargo run</b><span>25
+25</span></div>
+</div>
+<p><code>call_fn</code> takes its arguments by value, so the change the function makes to a <code>&amp;mut</code> parameter goes with the call, as a temporary&rsquo;s would in Rust. To keep it, return it, or lend the value with <code>CallFnOptions::bind_this_ptr</code>. The function then changes your <code>Dynamic</code> in place, and the call&rsquo;s tuple leaves that parameter out. A typed handle takes a <code>&amp;mut</code> parameter as it takes a <code>&amp;</code> one, from the handle&rsquo;s owned value.</p>
+
 <h2 id="reload">Reloading</h2>
 <p><code>script.reload()</code> rereads the script&rsquo;s file. If the text is unchanged, it does nothing and returns <code>false</code>. Otherwise it compiles the new text and checks every live handle against it. Then it publishes the new program, and every handle runs the new code at its next call. Your app decides when to reload, such as between two reports or when its file watcher fires.</p>
 <p>A reload publishes all of the new program or none of it. If the new text doesn&rsquo;t compile, or a handle no longer matches its function, <code>reload</code> returns the error and the old program keeps running. Reloading the same text again returns the same error without compiling it again. A dropped handle isn&rsquo;t checked.</p>
@@ -199,7 +264,7 @@ streaming    -15.49</span></div>
 <p>The first release exports one impl block per struct. It doesn&rsquo;t export generic items, <code>&amp;mut</code> parameters or functions that return a reference.</p>
 
 <h2 id="boundary">What crosses the boundary</h2>
-<p>A handle&rsquo;s parameters and return type, and the exported items&rsquo; own, are <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>String</code>, <code>()</code>, <code>Option</code> of these and exported structs. An exported struct crosses as itself. A script gets the Rust value, and Rust gets back the value the script returns. A script parameter may borrow, as <code>&amp;str</code> or <code>&amp;Transaction</code> does, and takes the handle&rsquo;s owned value. Integers are <code>i64</code> and floats are <code>f64</code>, so a script function that takes an <code>i32</code> doesn&rsquo;t match an <code>i64</code> handle.</p>
+<p>A handle&rsquo;s parameters and return type, and the exported items&rsquo; own, are <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>String</code>, <code>()</code>, <code>Option</code> of these and exported structs. An exported struct crosses as itself. A script gets the Rust value, and Rust gets back the value the script returns. A script parameter may borrow, as <code>&amp;str</code>, <code>&amp;Transaction</code> or <code>&amp;mut Transaction</code> does, and takes the handle&rsquo;s owned value. Integers are <code>i64</code> and floats are <code>f64</code>, so a script function that takes an <code>i32</code> doesn&rsquo;t match an <code>i64</code> handle.</p>
 <p>The check knows the items exported to the engine that loads the script. A call to any other name is rustc&rsquo;s error at the name.</p>
 
 <h2 id="statements">Statements and expressions</h2>
@@ -318,7 +383,7 @@ engine.set_access(
 <p>An <code>Engine</code> can bound what a script may do. Set the limits on the engine before loading a script.</p>
 <ul>
   <li><code>set_max_operations</code> stops a script after a number of steps. An endless loop then fails with <code>Too many operations</code>.</li>
-  <li><code>set_max_call_levels</code> bounds recursion depth.</li>
+  <li><code>set_max_call_levels</code> bounds recursion depth. It is 64 by default, in a debug build as in a release one, so a script behaves the same under both. A script call that finds the host thread&rsquo;s stack nearly full goes on with more stack, so the limit, not the thread, stops the recursion.</li>
   <li><code>set_max_string_size</code>, <code>set_max_array_size</code> and <code>set_max_map_size</code> bound the size of values.</li>
   <li><code>on_progress</code> runs a callback as the script runs. Returning <code>Some(value)</code> from it stops the script. A host can use it for a wall-clock deadline.</li>
 </ul>

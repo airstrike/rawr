@@ -416,25 +416,37 @@ impl Executable {
         (self.into_hosted_ast(), positions)
     }
 
-    /// This program's [`AST`] and the [`Positions`] of every source, for a
-    /// program of one file whose inline modules are sources that keep the
-    /// file's positions.
-    pub(crate) fn into_ast_with_every_position(self) -> (AST, Positions) {
-        let positions = Positions {
-            callables: self
-                .callables
-                .values()
-                .filter_map(|callable| callable.locations.as_ref())
-                .flat_map(|locations| locations.entries.iter().copied())
-                .collect(),
-            helpers: self
-                .helper_locations
-                .values()
-                .flat_map(|locations| locations.iter().copied())
-                .collect(),
-            others: Box::default(),
-        };
-        (self.into_hosted_ast(), positions)
+    /// This program, compiled from one file whose inline modules are its
+    /// other sources, as the single-file compiler gives it: each source's
+    /// evidence is the entry's, since an inline module keeps the file's
+    /// positions, and each of the root's free functions is callable by its
+    /// own name.
+    pub(crate) fn into_one_file(mut self) -> Self {
+        let entry = self.sources.key(self.source.index());
+        for locations in self
+            .callables
+            .values_mut()
+            .filter_map(|callable| callable.locations.as_mut())
+        {
+            locations.source = entry;
+        }
+        let helpers = std::mem::take(&mut self.helper_locations)
+            .into_values()
+            .flat_map(Vec::from)
+            .collect::<Box<[_]>>();
+        if !helpers.is_empty() {
+            self.helper_locations.insert(entry, helpers);
+        }
+        for (key, callable) in &self.callables {
+            if callable.source == self.source
+                && key.modules().is_empty()
+                && let Dispatch::Function(name) = &callable.dispatch
+                && callable.signature.is_some()
+            {
+                self.ast.alias_script_function(name, key.name());
+            }
+        }
+        self
     }
 
     /// This program's entry source and the [`Positions`] of every source,

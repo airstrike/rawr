@@ -303,8 +303,8 @@ impl Script {
     /// parameters `A`, a tuple, and returns `R`.
     ///
     /// The handle is checked here, once, against the function's signature
-    /// in the script. A parameter the script borrows (`&str`, `&T`) takes
-    /// the handle's owned `String` or `T`.
+    /// in the script. A parameter the script borrows (`&str`, `&T`,
+    /// `&mut T`) takes the handle's owned `String` or `T`.
     ///
     /// # Errors
     ///
@@ -528,7 +528,7 @@ fn check(
     program
         .ast
         .shared_lib()
-        .get_script_fn(signature.name(), signature.arity())
+        .get_written_script_fn(signature.name(), signature.arity())
         .cloned()
         .ok_or_else(|| ERR::ErrorFunctionNotFound(want.name.to_string(), Position::NONE).into())
 }
