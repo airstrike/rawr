@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A Git dependency on a branch, tag or rev with a character Cargo encodes in a package id, such as the slash in `feat/reqwest-0.13`, no longer panics rawr-import. A package record in `cargo metadata` output that can't be read names the package and what was wrong.","issues":[1108]}
+    ]
   },
   "releases": [
     {

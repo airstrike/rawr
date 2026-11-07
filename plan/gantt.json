@@ -132,6 +132,7 @@
         {"id":"staged-release","name":"Staged, cached release","start":72,"size":2,"state":"done","note":"Playground, bot and site each gated; the image rebuilds only when its inputs change","issues":[881],"milestone":"0.3"},
         {"id":"fast-suites","name":"Fast test suites","start":74,"size":2,"state":"done","note":"Suites share builds and run in parallel; every merge check runs rawr-cli's suite too (#930)","issues":[891,892,893,930],"milestone":"0.3"},
         {"id":"example-sweeps","name":"Example sweeps fit on the machine","start":84,"size":2,"state":"now","note":"A shared store keeps only the projects in use (#960); runtimes no installed rawr links are collected (#963)","issues":[959,960,963,964,972,982,989,998,999,1013,1015,1016]},
+        {"id":"error-messages","name":"Error messages and metadata edge cases","start":84,"size":1,"state":"now","note":"#1108 shipped in 0.3.165; #1109 audits every message","issues":[1108,1109]},
         {"id":"std-once","name":"std bindings built once","start":82,"size":2,"state":"done","note":"0.02 s release startup (#931); once per machine is 0.4 work","issues":[931,939,940,941]}
       ]
     },
