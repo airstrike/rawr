@@ -2,50 +2,70 @@
 //! and calls into marked modules.
 //!
 //! The runner links the program's shadow crate, whose trampolines stand for
-//! the marked functions (`package::island`). Two functions defined here
-//! with fixed symbol names are what the shadow crate calls, so it never
-//! depends on this crate: [`__rawr_island_start_v1`] registers the native
-//! `main`, and [`__rawr_island_call_v1`] runs one call of a marked function
-//! in the current generation and returns its result in the wire format of
+//! the marked functions (`package::island`). Functions defined here with
+//! fixed symbol names are what the shadow crate calls, so it never depends
+//! on this crate: [`__rawr_island_start_v1`] registers the native `main`,
+//! and [`__rawr_island_call_v3`] runs one call of a marked function in the
+//! current generation and returns its result in the wire format of
 //! `program::model::island`.
 //!
-//! The interpreter lives on the runner's protocol thread. The runner
-//! [`publish`]es each generation there, calls the program's Rawr `main`
-//! (which registers the native one) and [`start`]s the native `main`. It
-//! runs on the process's main thread when the runner kept that thread for
-//! it ([`keep_main_thread`]), as winit and other windowing crates need, and
-//! on a thread of its own otherwise. A call from that thread is handed to
-//! the protocol thread as a [`Call`], which answers it between the runner's
-//! own messages: a generation swapped in by a save is the one the next call
-//! runs in.
+//! The thread that owns the program is the process's main thread, as under
+//! `cargo run`: the runner [`publish`]es the first generation there, calls
+//! the program's Rawr `main` (which registers the native one) and runs the
+//! native `main` there, from [`take_entry`]. A call it makes runs the marked
+//! code on that same thread, so a marked function can start winit's event
+//! loop, which must run on the main thread (#1119). The runner's protocol
+//! goes on beside it and offers each saved generation to that thread, which
+//! admits it at its next call from native code (D553.3). A call from any
+//! other thread runs there too, with an evaluation of its own (D490), in
+//! the generation published last.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::program::model::island::Reader;
+use crate::program::model::island::{Natives, Reader};
 use crate::reload::installation::Bootstrap;
 use crate::{item, program, type_def, Dynamic, ImmutableString};
 
 pub mod lend;
 pub mod place;
 
-/// The native `main` the program registered, until the runner starts it.
+/// The native `main` the program registered, for the runner to start.
 static START: Mutex<Option<fn() -> i32>> = Mutex::new(None);
-/// Whether the native `main` runs.
-static RUNNING: AtomicBool = AtomicBool::new(false);
-/// Hands the native `main` to the process's main thread, when the runner
-/// kept that thread for it.
-static MAIN_THREAD: OnceLock<mpsc::SyncSender<fn() -> i32>> = OnceLock::new();
-/// Hands a call from a native thread to the thread that serves it.
-#[allow(clippy::type_complexity)]
-static SERVER: OnceLock<Box<dyn Fn(Call) + Send + Sync>> = OnceLock::new();
+/// How the runner moves a native value out of the script value that holds
+/// it, which [`moves`] names.
+static MOVE: OnceLock<Move> = OnceLock::new();
+
+/// The generation that calls from threads that don't own the program run
+/// in, with what they look up in it.
+#[cfg(feature = "sync")]
+static ELSEWHERE: std::sync::RwLock<Option<(Arc<Calls>, Arc<Shared>)>> =
+    std::sync::RwLock::new(None);
 
 thread_local! {
-    /// The generation native calls run in, on the thread that serves them.
+    /// The generation native calls run in, on the thread that owns the
+    /// program.
     static CURRENT: RefCell<Option<Rc<Current>>> = const { RefCell::new(None) };
+}
+
+/// The native value a script value holds, moved out of the runner's arena
+/// as the value's last copy moves it; `None` when it holds none, and `Err`
+/// when it can't be reached from this thread.
+pub type Move = fn(&Dynamic) -> Option<Result<Box<dyn Any>, String>>;
+
+/// Name how the runner moves a native value out of the script value that
+/// holds it, so a marked function can give native code a value of a native
+/// type, as the `iced::Error` of an `iced::Result` (#1118). Set once.
+pub fn moves(moved: Move) {
+    let _ = MOVE.set(moved);
+}
+
+/// The native value `value` holds, moved out for native code.
+pub(crate) fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
+    MOVE.get()?(value)
 }
 
 /// Register the native `main` to start: the shadow crate's island module
@@ -57,26 +77,22 @@ pub fn __rawr_island_start_v1(entry: fn() -> i32) {
     }
 }
 
-/// Run one call of a marked function: `path` names it from the crate root
-/// and `arguments` holds its header and values. The reply starts with `0`
-/// and holds the result and each argument the call could change, or starts
-/// with `1` and holds a message to panic with.
-#[unsafe(no_mangle)]
-pub fn __rawr_island_call_v1(path: &str, arguments: &[u8]) -> Vec<u8> {
-    __rawr_island_call_v2(path, arguments, &[])
-}
-
-/// [`__rawr_island_call_v1`] with the arguments native code lends for the
-/// call (D558.3), as ratatui's `&mut Frame<'_>`: each its key, its type's
-/// name, its place, and the accessors the generated runner reaches it by,
-/// a mutable one only when it is lent `&mut`. Only those accessors claim
-/// the key. The trampoline's thread waits for the reply, and each place
-/// stays borrowed until then.
+/// Run one call of a marked function on this thread: `path` names it from
+/// the crate root, `arguments` holds its header and values, and `lent` what
+/// native code lends the call (D558.3), as ratatui's `&mut Frame<'_>`: each
+/// its key, its type's name, its place, and the accessors the generated
+/// runner reaches it by, a mutable one only when it is lent `&mut`. Only
+/// those accessors claim the key, and each place stays borrowed while the
+/// call runs.
+///
+/// The reply starts with `0` and holds the result and each argument the
+/// call could change, each native value among them moved to `natives`, or
+/// starts with `1` and holds a message to panic with.
 ///
 /// [`__rawr_scope_claim_v1`] and [`__rawr_scope_release_v1`] are what the
 /// accessors claim a lend by.
 #[unsafe(no_mangle)]
-pub fn __rawr_island_call_v2(
+pub fn __rawr_island_call_v3(
     path: &str,
     arguments: &[u8],
     lent: &[(
@@ -86,43 +102,31 @@ pub fn __rawr_island_call_v2(
         Option<crate::scope::Accessor>,
         crate::scope::Accessor,
     )],
+    natives: &mut Natives,
 ) -> Vec<u8> {
     let lent = lent.iter().map(|&lent| Loan(lent)).collect::<Vec<_>>();
-    // On the thread that serves calls (native code called from marked code),
-    // the call runs here and now.
     if let Some(current) = current() {
-        let _entry = crate::future::entry();
-        return current.answer(path, arguments, &lent);
+        let _entry = crate::future::trampoline();
+        return current.answer(path, arguments, &lent, natives);
     }
-    let Some(forward) = SERVER.get() else {
-        return failure(&format!("rawr: no runner serves the call of `{path}`"));
-    };
-    let (reply, answer) = mpsc::sync_channel(1);
-    forward(Call(Work::Native {
-        path: path.into(),
-        arguments: arguments.to_vec(),
-        lent,
-        reply,
-    }));
-    answer.recv().unwrap_or_else(|_| {
-        failure(&format!(
-            "rawr: the runner stopped before `{path}` returned"
-        ))
-    })
-}
-
-/// Work from another thread waiting for the thread that serves it: a call
-/// from native code, or a step of an async body (`future::Job`).
-pub struct Call(Work);
-
-enum Work {
-    Native {
-        path: Box<str>,
-        arguments: Vec<u8>,
-        lent: Vec<Loan>,
-        reply: mpsc::SyncSender<Vec<u8>>,
-    },
-    Step(crate::future::Job),
+    #[cfg(feature = "sync")]
+    if let Some((calls, shared)) = elsewhere() {
+        let _entry = crate::future::entry();
+        let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
+            shared
+                .authority
+                .invoke_bound(function, arguments, shared.runtime.clone())
+                .map_err(|error| error.to_string())
+        };
+        let call = Call {
+            path,
+            arguments,
+            model: shared.authority.model(),
+            invoke: &invoke,
+        };
+        return calls.answer(&call, &lent, natives);
+    }
+    failure(&format!("rawr: no runner serves the call of `{path}`"))
 }
 
 /// One argument a trampoline lends: its key, name, place and accessors.
@@ -157,41 +161,20 @@ pub fn __rawr_scope_release_v1(nonce: u64, shared: bool) {
     crate::scope::end_claim(crate::scope::nonce(nonce), shared);
 }
 
-// SAFETY: a trampoline lends only a `Send` value mutably and a `Sync` value
-// shared (`Call::lend` in the shadow crate's support), and its thread waits
-// for the reply, so the place is reached by one thread at a time.
-unsafe impl Send for Loan {}
-
-impl Call {
-    /// Run this call in the generation published on this thread and send
-    /// its reply.
-    pub fn answer(self) {
-        match self.0 {
-            Work::Native {
-                path,
-                arguments,
-                lent,
-                reply,
-            } => {
-                let _entry = crate::future::entry();
-                let answer = match current() {
-                    Some(current) => current.answer(&path, &arguments, &lent),
-                    None => failure(&format!("rawr: no generation is published for `{path}`")),
-                };
-                let _ = reply.send(answer);
-            }
-            Work::Step(job) => job.run(),
-        }
-    }
-}
-
 /// Make `bootstrap` the generation native calls run in, on this thread,
-/// which serves them from now on. Async steps run in it too (D513.3).
+/// which owns the program from now on, and on every other thread. Async
+/// steps run in it too (D513.3).
 pub fn publish(bootstrap: Bootstrap) {
     let current = Rc::new(Current::new(bootstrap));
     crate::future::serve(current.clone());
     #[cfg(feature = "sync")]
-    crate::future::publish(current.shared.clone());
+    {
+        crate::future::publish(current.shared.clone());
+        *ELSEWHERE
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((current.calls.clone(), current.shared.clone()));
+    }
     CURRENT.with(|slot| *slot.borrow_mut() = Some(current));
 }
 
@@ -201,7 +184,8 @@ pub fn publish(bootstrap: Bootstrap) {
 static MAIN: Mutex<Option<crate::future::Future>> = Mutex::new(None);
 
 /// Hold `future`, the Rawr `main`'s, for the native entry its runtime's
-/// attribute carries (D513.4). The runner then [`start`]s that entry.
+/// attribute carries (D513.4). The runner then runs that entry, from
+/// [`take_entry`].
 #[cfg(feature = "sync")]
 pub fn await_main(future: crate::future::Future) {
     if let Ok(mut main) = MAIN.lock() {
@@ -263,91 +247,11 @@ pub fn validate(witness: &crate::host::runtime::Witness, value: &Dynamic) -> Res
         .map_err(|error| error.to_string())
 }
 
-/// Whether the program's native `main` runs, so each new generation must
-/// be published for its calls.
-#[must_use]
-pub fn running() -> bool {
-    RUNNING.load(Ordering::Acquire)
-}
-
-/// The runtime entry an async `main` registered (D513.4), for the thread
-/// that owns the program to run: its `block_on` drives the program (D527).
+/// The entry the program registered for the thread that owns it to run:
+/// its native `main` (D501), or the runtime entry an async `main` gave
+/// (D513.4), whose `block_on` drives the program (D527).
 pub fn take_entry() -> Option<fn() -> i32> {
     START.lock().ok().and_then(|mut start| start.take())
-}
-
-/// The process's main thread, kept for the program's native `main`.
-///
-/// A runner calls [`keep_main_thread`] on the main thread first, runs its
-/// protocol on another thread, and then [`MainThread::serve`]s here.
-pub struct MainThread(mpsc::Receiver<fn() -> i32>);
-
-/// Keep the calling thread, which must be the process's main thread, for
-/// the program's native `main`: [`start`] then hands it here instead of
-/// spawning a thread. winit's event loop, and other windowing crates', must
-/// run on the main thread.
-#[must_use]
-pub fn keep_main_thread() -> MainThread {
-    let (send, receive) = mpsc::sync_channel(1);
-    let _ = MAIN_THREAD.set(send);
-    MainThread(receive)
-}
-
-impl MainThread {
-    /// Wait for the native `main` and run it here. The process exits with
-    /// its status when it returns. Another thread ends the process when no
-    /// native `main` comes.
-    pub fn serve(self) -> ! {
-        match self.0.recv() {
-            Ok(entry) => run(entry),
-            Err(_) => loop {
-                std::thread::park();
-            },
-        }
-    }
-}
-
-/// Run the native `main` and exit with its status (101 when it panics).
-fn run(entry: fn() -> i32) -> ! {
-    let status = std::panic::catch_unwind(entry).unwrap_or(101);
-    use std::io::Write as _;
-    let _ = std::io::stdout().flush();
-    let _ = std::io::stderr().flush();
-    std::process::exit(status)
-}
-
-/// Start the native `main` the program registered, if it did: `false`
-/// when it registered none. It runs on the process's main thread when the
-/// runner kept it ([`keep_main_thread`]), and on a thread of its own
-/// otherwise. The process exits with its status when it returns (101 when
-/// it panics). Each call it makes into marked code goes to `forward`,
-/// which hands it to this thread to [`Call::answer`].
-pub fn start(forward: impl Fn(Call) + Send + Sync + 'static) -> bool {
-    let Some(entry) = START.lock().ok().and_then(|mut start| start.take()) else {
-        return false;
-    };
-    let forward = std::sync::Arc::new(forward);
-    let steps = forward.clone();
-    crate::future::forward(move |job| steps(Call(Work::Step(job))));
-    if SERVER.set(Box::new(move |call| forward(call))).is_err() {
-        return false;
-    }
-    RUNNING.store(true, Ordering::Release);
-    if let Some(main_thread) = MAIN_THREAD.get()
-        && main_thread.send(entry).is_ok()
-    {
-        return true;
-    }
-    let spawned = std::thread::Builder::new()
-        .name("main".into())
-        // The stack a process's own main thread usually has.
-        .stack_size(8 << 20)
-        .spawn(move || run(entry));
-    if let Err(error) = spawned {
-        eprintln!("rawr: cannot start the program's main thread: {error}");
-        std::process::exit(101);
-    }
-    true
 }
 
 /// Run `body` with each of `lent` lent, outermost first, and the script
@@ -360,12 +264,10 @@ fn lend_all<R>(
     let Some((Loan((key, name, place, mutable, shared)), rest)) = lent.split_first() else {
         return body(values);
     };
-    // SAFETY: the trampoline that sent this call made `place` from its
-    // argument's borrow for the call (`Call::lend`): a `&mut` of a `Send`
-    // value when it has a mutable accessor, and a `&` of a `Sync` one
-    // otherwise. Its thread waits for the reply, which is made inside this
-    // lend, and only its accessors claim `key`, reading the place as the
-    // type it is.
+    // SAFETY: the trampoline that made this call made `place` from its
+    // argument's borrow for the call (`Call::lend`), on this thread, which
+    // runs the call. The reply is made inside this lend, and only its
+    // accessors claim `key`, reading the place as the type it is.
     unsafe {
         crate::scope::lend_raw(*key, *place, mutable.is_some(), |nonce| {
             values.push(crate::scope::Lent::new(
@@ -390,14 +292,30 @@ fn failure(message: &str) -> Vec<u8> {
     reply
 }
 
-/// One published generation with what its calls look up, found once.
+/// One published generation, on the thread that owns the program.
 struct Current {
     bootstrap: Bootstrap,
     #[cfg(feature = "sync")]
-    shared: crate::future::Program,
-    /// Each function by whether it belongs to a type, and its path.
+    shared: Arc<Shared>,
+    calls: Arc<Calls>,
+}
+
+/// What a generation's calls from native code look up, found once: each
+/// function by whether it belongs to a type, and its path, and the crate's
+/// script types.
+struct Calls {
     items: HashMap<(bool, String), item::Value>,
     types: program::model::island::Types,
+}
+
+/// One call from native code: the function's path and the arguments its
+/// trampoline wrote, with the generation's model and how it invokes a
+/// function.
+struct Call<'a> {
+    path: &'a str,
+    arguments: &'a [u8],
+    model: &'a program::model::Model,
+    invoke: &'a dyn Fn(&item::Value, &mut [Dynamic]) -> Result<Dynamic, String>,
 }
 
 impl crate::future::Host for Current {
@@ -414,7 +332,7 @@ impl crate::future::Host for Current {
 
     #[cfg(feature = "sync")]
     fn share(&self) -> Option<crate::future::Program> {
-        Some(self.shared.clone())
+        Some(self.shared.clone() as crate::future::Program)
     }
 }
 
@@ -424,7 +342,7 @@ impl crate::future::Host for Current {
 pub(crate) fn shared(
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
-) -> crate::future::Program {
+) -> Arc<Shared> {
     let methods = |name: &str| {
         authority
             .items()
@@ -477,7 +395,7 @@ pub(crate) fn shared(
         })
         .collect();
     let layouts = layouts(authority.items());
-    std::sync::Arc::new(Shared {
+    Arc::new(Shared {
         authority,
         runtime,
         clones,
@@ -709,7 +627,7 @@ pub fn refusal(
 /// evaluation of their own, checks of values native code gives, and each
 /// script type's own `Clone`.
 #[cfg(feature = "sync")]
-struct Shared {
+pub(crate) struct Shared {
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
     clones: HashMap<type_def::Identity, item::Value>,
@@ -826,6 +744,46 @@ impl crate::future::Remote for Shared {
 impl Current {
     fn new(bootstrap: Bootstrap) -> Self {
         let authority = bootstrap.catalog().authority();
+        let calls = Arc::new(Calls::new(&authority));
+        #[cfg(feature = "sync")]
+        let shared = {
+            let (authority, runtime) = bootstrap.catalog().shared();
+            shared(authority, runtime)
+        };
+        Self {
+            bootstrap,
+            #[cfg(feature = "sync")]
+            shared,
+            calls,
+        }
+    }
+
+    fn answer(&self, path: &str, arguments: &[u8], lent: &[Loan], natives: &mut Natives) -> Vec<u8> {
+        let catalog = self.bootstrap.catalog();
+        let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
+            catalog
+                .invoke_item(function, arguments)
+                .map_err(|error| error.to_string())
+        };
+        let call = Call {
+            path,
+            arguments,
+            model: catalog.authority().model(),
+            invoke: &invoke,
+        };
+        self.calls.answer(&call, lent, natives)
+    }
+}
+
+/// The calls from threads that don't own the program, in the generation
+/// published last.
+#[cfg(feature = "sync")]
+fn elsewhere() -> Option<(Arc<Calls>, Arc<Shared>)> {
+    ELSEWHERE.read().ok()?.clone()
+}
+
+impl Calls {
+    fn new(authority: &program::Authority) -> Self {
         let join = |modules: &[ImmutableString], names: &[&str]| {
             modules
                 .iter()
@@ -852,44 +810,37 @@ impl Current {
             };
             items.insert(entry, item.clone());
         }
-        let types = authority.model().island_types();
-        #[cfg(feature = "sync")]
-        let shared = {
-            let (authority, runtime) = bootstrap.catalog().shared();
-            shared(authority, runtime)
-        };
         Self {
-            bootstrap,
-            #[cfg(feature = "sync")]
-            shared,
             items,
-            types,
+            types: authority.model().island_types(),
         }
     }
 
-    fn answer(&self, path: &str, arguments: &[u8], lent: &[Loan]) -> Vec<u8> {
+    fn answer(&self, call: &Call<'_>, lent: &[Loan], natives: &mut Natives) -> Vec<u8> {
         lend_all(lent, &mut Vec::with_capacity(lent.len()), &mut |lent| {
-            self.call(path, arguments, lent)
+            self.call(call, lent, natives)
         })
         .unwrap_or_else(|message| failure(&message))
     }
 
     fn call(
         &self,
-        path: &str,
-        arguments: &[u8],
+        call: &Call<'_>,
         lent: &[crate::scope::Lent],
+        natives: &mut Natives,
     ) -> Result<Vec<u8>, String> {
+        let path = call.path;
         let malformed = |error: String| format!("rawr: the call of `{path}` is malformed: {error}");
-        let mut reader = Reader { bytes: arguments };
+        let mut reader = Reader {
+            bytes: call.arguments,
+        };
         let owned = reader.byte().map_err(malformed)? != 0;
         let count = u32::from_le_bytes(reader.array().map_err(malformed)?) as usize;
         let mutable = u64::from_le_bytes(reader.array().map_err(malformed)?);
         let item = self.items.get(&(owned, path.to_owned())).ok_or_else(|| {
             format!("rawr: the running program has no function `{path}`; restart `rawr run`")
         })?;
-        let catalog = self.bootstrap.catalog();
-        let model = catalog.authority().model();
+        let model = call.model;
         let mut values = Vec::with_capacity(count);
         for _ in 0..count {
             values.push(
@@ -917,8 +868,7 @@ impl Current {
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
-        let mut result = catalog
-            .invoke_item(item, &mut values)
+        let mut result = (call.invoke)(item, &mut values)
             .map_err(|error| format!("rawr: `{path}` failed: {error}"))?;
         let copied = match item.kind() {
             item::Kind::Function => references.get(1..).unwrap_or_default(),
@@ -946,10 +896,14 @@ impl Current {
         let unsent = |error: String| {
             format!("rawr: `{path}` gave back a value native code can't take: {error}")
         };
-        model.island_write(&result, &mut reply, 0).map_err(unsent)?;
+        model
+            .island_write(&result, &mut reply, natives, 0)
+            .map_err(unsent)?;
         for (index, value) in values.iter().enumerate() {
             if index < 64 && mutable & (1 << index) != 0 {
-                model.island_write(value, &mut reply, 0).map_err(unsent)?;
+                model
+                    .island_write(value, &mut reply, natives, 0)
+                    .map_err(unsent)?;
             }
         }
         Ok(reply)
@@ -976,7 +930,7 @@ mod tests {
         ] {
             let error = authority
                 .model()
-                .island_write(&value, &mut Vec::new(), 0)
+                .island_write(&value, &mut Vec::new(), &mut Vec::new(), 0)
                 .unwrap_err();
             assert!(
                 error.contains("keeps the `ratatui::Frame` native code lent it")

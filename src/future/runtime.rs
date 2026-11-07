@@ -735,27 +735,53 @@ pub fn offer(admit: impl FnOnce() + Send + 'static) {
 #[must_use]
 pub fn entry() -> Entry {
     let depth = DEPTH.with(|depth| depth.replace(depth.get() + 1));
-    if depth == 0 && !ENTERED_ONCE.load(std::sync::atomic::Ordering::Relaxed) {
-        ENTERED_ONCE.store(true, std::sync::atomic::Ordering::Release);
-    }
-    if depth == 0 && WAITING.load(std::sync::atomic::Ordering::Acquire) && owns() {
-        let admit = {
-            let mut offered = lock(&OFFERED);
-            WAITING.store(false, std::sync::atomic::Ordering::Release);
-            offered.take()
-        };
-        // In a memoizing framework, such as Freya, nothing calls the new
-        // generation until something marks a scope dirty: an edit shows at
-        // the next event or state change, not at once. Showing it at once
-        // needs a framework API that marks every scope dirty and keeps its
-        // hooks, which Freya doesn't have (`Runner::reload` resets hooks).
-        // D553.7 logs this for a later revisit, such as an upstream
-        // proposal.
-        if let Some(admit) = admit {
-            admit();
-        }
+    if depth == 0 {
+        admit_offered();
     }
     Entry(())
+}
+
+/// A call native code makes through a marked function's trampoline (D501)
+/// on the thread that owns the program. Outside every call from native code
+/// into script code, it runs as a marked `main`'s own frame does (#1119):
+/// it first admits the generation [`offer`]ed last, and the callables it
+/// gives native code are held (D553.5), so native code's calls of them are
+/// the outermost entries that admit newer ones. A native `main` whose
+/// marked `run()` starts iced's event loop takes each save at iced's next
+/// call of `update` or `view`. Inside one, it is an [`entry`].
+#[must_use]
+pub fn trampoline() -> Option<Entry> {
+    if !outermost() {
+        return Some(entry());
+    }
+    admit_offered();
+    None
+}
+
+/// What the outermost entry from native code does first: note that native
+/// code called script code, and on the thread that owns the program, admit
+/// the generation offered last.
+fn admit_offered() {
+    if !ENTERED_ONCE.load(std::sync::atomic::Ordering::Relaxed) {
+        ENTERED_ONCE.store(true, std::sync::atomic::Ordering::Release);
+    }
+    if !(WAITING.load(std::sync::atomic::Ordering::Acquire) && owns()) {
+        return;
+    }
+    let admit = {
+        let mut offered = lock(&OFFERED);
+        WAITING.store(false, std::sync::atomic::Ordering::Release);
+        offered.take()
+    };
+    // In a memoizing framework, such as Freya, nothing calls the new
+    // generation until something marks a scope dirty: an edit shows at the
+    // next event or state change, not at once. Showing it at once needs a
+    // framework API that marks every scope dirty and keeps its hooks, which
+    // Freya doesn't have (`Runner::reload` resets hooks). D553.7 logs this
+    // for a later revisit, such as an upstream proposal.
+    if let Some(admit) = admit {
+        admit();
+    }
 }
 
 /// The guard [`entry`] gives.
