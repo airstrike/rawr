@@ -949,6 +949,132 @@ fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the
     assert_eq!(shared("semver").len(), 1);
 }
 
+/// A shared crate's table holds only what its key covers: the crates its
+/// own closure reaches. `feet` implements `From<Feet>` for `meters`'s
+/// `Meters`, which `meters::total(impl Into<Meters>)` names, but `meters`
+/// does not reach `feet`. Each project builds `feet` with other features,
+/// so another `feet`, and both share `meters`'s key. Whichever project
+/// checks second replays `meters`'s table from the home, and it must not
+/// name the other project's `feet` (#1097).
+#[test]
+fn a_shared_table_names_no_crate_outside_its_closure() {
+    let root = crate::support::scratch().join("shared-closure");
+    let _ = fs::remove_dir_all(&root);
+    let repository = root.join("repository");
+    for (name, manifest, source) in [
+        (
+            "meters",
+            "[package]\nname='meters'\nversion='0.1.0'\nedition='2021'\n",
+            "pub struct Meters(pub f32);\n\npub fn total(length: impl Into<Meters>) -> f32 {\n    length.into().0\n}\n",
+        ),
+        (
+            "feet",
+            "[package]\nname='feet'\nversion='0.1.0'\nedition='2021'\n[features]\nloud=[]\n[dependencies]\nmeters={path='../meters'}\n",
+            "pub struct Feet(pub f32);\n\nimpl From<Feet> for meters::Meters {\n    fn from(feet: Feet) -> Self {\n        meters::Meters(feet.0 * 0.3048)\n    }\n}\n",
+        ),
+    ] {
+        let package = repository.join(name);
+        fs::create_dir_all(package.join("src")).unwrap();
+        fs::write(package.join("Cargo.toml"), manifest).unwrap();
+        fs::write(package.join("src/lib.rs"), source).unwrap();
+    }
+    fs::write(
+        repository.join("Cargo.toml"),
+        "[workspace]\nmembers=['meters','feet']\nresolver='2'\n",
+    )
+    .unwrap();
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "shared closure fixture",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&repository)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let revision = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&repository)
+        .output()
+        .unwrap();
+    assert!(revision.status.success());
+    let revision = text(&revision.stdout);
+    let source = format!(
+        "git='file://{}',rev='{}'",
+        repository.display(),
+        revision.trim()
+    );
+    let project = |name: &str, features: &str| {
+        let project = root.join(name);
+        fs::create_dir_all(project.join("src")).unwrap();
+        fs::write(
+            project.join("Cargo.toml"),
+            format!("[package]\nname='shared-closure-{name}'\nversion='0.1.0'\nedition='2021'\n[dependencies]\nmeters={{{source}}}\nfeet={{{source},features=[{features}]}}\n[workspace]\n"),
+        )
+        .unwrap();
+        fs::write(
+            project.join("src/main.rs"),
+            "// rawr\nuse feet::Feet;\nuse meters::{total, Meters};\n\nfn main() {\n    let feet = Feet(10.0);\n    println!(\"{} {}\", total(Meters(2.0)), feet.0);\n}\n",
+        )
+        .unwrap();
+        project
+    };
+    let loud = project("loud", "'loud'");
+    let quiet = project("quiet", "");
+    // The `meters` tables in the home's bindings.
+    let shared = |home: &Path| {
+        fs::read_dir(home.join("bindings"))
+            .unwrap()
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                let meta = fs::read_to_string(path.join("meta.json")).ok()?;
+                meta.contains("\"crate_name\":\"meters\"")
+                    .then(|| fs::read_to_string(path.join("table.json")).unwrap())
+            })
+            .collect::<Vec<_>>()
+    };
+    // Either project may check first.
+    for (order, [first, second]) in [
+        ("loud-first", [&loud, &quiet]),
+        ("quiet-first", [&quiet, &loud]),
+    ] {
+        let home = root.join(format!("home-{order}"));
+        for project in [first, second] {
+            let _ = fs::remove_dir_all(project.join("target"));
+            let checked = rawr_import_with_home(project, &["check"], &home);
+            assert!(
+                checked.status.success(),
+                "{order}, {}:\nstdout:\n{}\nstderr:\n{}",
+                project.display(),
+                text(&checked.stdout),
+                text(&checked.stderr)
+            );
+        }
+        let tables = shared(&home);
+        assert_eq!(
+            tables.len(),
+            1,
+            "{order}: both projects share meters's table"
+        );
+        assert!(
+            !tables[0].contains("\"feet\""),
+            "{order}: meters's table names feet, which meters does not reach"
+        );
+    }
+}
+
 /// The declared inputs of a shared immutable crate are checked before both
 /// `check` and a remembered warm run consume its API. The unchanged path still
 /// shares across projects without a nightly build.
