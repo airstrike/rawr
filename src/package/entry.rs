@@ -9,8 +9,8 @@
 //!
 //! Rawr's `main` registers the entry when it is called
 //! (`crate::__rawr_entry::start()`, which the compiler writes before the
-//! body), and the runner starts it on a thread of its own, as it starts a
-//! native root's `main` (`island::start`).
+//! body), and the runner runs it on the thread that owns the program, as it
+//! runs a native root's `main` (`island::take_entry`).
 
 /// The module the entry lives in, in the shadow crate.
 pub(crate) const MODULE: &str = "__rawr_entry";

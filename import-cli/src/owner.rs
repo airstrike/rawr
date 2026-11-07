@@ -249,7 +249,11 @@ fn session(
     // new generation beside it and admits it at its next call from native
     // code into script code (D553). An async `main` still restarts.
     let marked = program.is_some() && !manifests.has_islands() && !manifests.restarts_on_save();
-    // Whether a save swapped into the running marked `main`.
+    // A native `main` (D501) runs on the thread that owns the program too
+    // (#1119): its runner admits a save at its next call into marked code,
+    // and refuses one it can't take, as a marked `main`'s does.
+    let admits = marked || (program.is_some() && manifests.has_islands());
+    // Whether a save swapped into the running `main`.
     let mut swapped_marked = false;
     let mut refresh_at = Instant::now();
     let mut refresh_required = false;
@@ -379,10 +383,10 @@ fn session(
                 &source,
             ) {
                 Ok(resident::Attempt::Settled) => continue,
-                // A marked `main`'s runner admits the generation at its
+                // The runner admits the generation at its
                 // next call from native code, and says `swapped` then
                 // (D553.3).
-                Ok(resident::Attempt::Swapped) if marked => {
+                Ok(resident::Attempt::Swapped) if admits => {
                     swapped_marked = true;
                     rawr_cli::events::queued();
                     continue;
@@ -434,11 +438,11 @@ fn session(
             let preparation =
                 match lane.prepare_started_compile(started, request, snapshot, &observation) {
                     Ok(preparation) => preparation,
-                    // The runner refused a generation the running marked
+                    // The runner refused a generation the running
                     // `main` can't take, and said why (D553.6).
                     Err(crate::native::Error::Process(
                         rawr_import::process::RunnerError::ProfileRejected(reason),
-                    )) if marked => {
+                    )) if admits => {
                         rawr_import::process::say(format_args!(
                             "rawr: {reason}; restarting the program"
                         ));
@@ -551,10 +555,10 @@ fn session(
             };
             match admitted {
                 Ok(crate::native::Watched::Installed) => {
-                    // A marked `main`'s runner admits the generation at
+                    // The runner admits the generation at
                     // its next call from native code, and says `swapped`
                     // then (D553.3).
-                    if swapped && marked {
+                    if swapped && admits {
                         swapped_marked = true;
                         rawr_cli::events::queued();
                     } else if swapped {

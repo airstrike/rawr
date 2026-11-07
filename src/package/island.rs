@@ -9,9 +9,12 @@
 //! code can call, a trampoline with its signature whose body hands the
 //! arguments to the interpreter and takes the result back. Values cross by
 //! the small wire format of [`crate::island`], which both sides speak:
-//! numbers, `bool`, `char`, strings, `Vec`, `Option` and the marked
-//! crate's own structs and enums made of them. A function whose values
-//! can't cross gets a trampoline that panics with a message naming it.
+//! numbers, `bool`, `char`, strings, `Vec`, `Option`, `Result` and the
+//! marked crate's own structs and enums made of them. A result can also be
+//! a `Result`, or an alias of one such as `iced::Result`, whose `Ok` or
+//! `Err` is a native type: the interpreter moves that native value itself.
+//! A function whose values can't cross gets a trampoline that panics with a
+//! message naming it.
 //!
 //! The generated files are the island's shape: a save that changes them
 //! (a signature, a struct's fields, a constant native code reads) needs a
@@ -343,6 +346,10 @@ impl<'a> Generator<'a> {
                     ("Vec" | "Option" | crate::item::type_ref::SLICE_TYPE, [inner]) => {
                         self.crosses(inner, owner)
                     }
+                    ("Result", [ok, err]) => {
+                        self.crosses(ok, owner)?;
+                        self.crosses(err, owner)
+                    }
                     ("Self", []) => match owner {
                         Some(owner) if self.crossing.contains(owner) => Ok(()),
                         _ => Err("`Self` can't cross here".into()),
@@ -393,6 +400,39 @@ impl<'a> Generator<'a> {
             }),
             Err(reason) => Err(reason),
         }
+    }
+
+    /// Whether a result of `ty`, which doesn't cross by the wire format,
+    /// comes back as an outcome: a `Result`, or an alias of one such as
+    /// `iced::Result`, each of whose written types crosses or is a type the
+    /// marked crate doesn't declare, which the interpreter moves as the
+    /// native value it is (#1118). `Err` says why not.
+    fn outcome(&self, ty: &type_ref::Type, owner: Option<&str>) -> Result<(), String> {
+        let type_ref::Type::Path(path) = ty else {
+            return self.crosses(ty, owner);
+        };
+        let Some(last) = path.segments.last() else {
+            return Err("an empty path".into());
+        };
+        if last.name.text.as_str() != "Result" || last.arguments.len() > 2 {
+            return self.crosses(ty, owner);
+        }
+        // Outside a generic impl, each part's way back is decided by its
+        // type alone.
+        if owner.is_some_and(|owner| self.types.get(owner).is_some_and(|owner| owner.generic)) {
+            return Err("a `Result` of a generic type can't cross yet".into());
+        }
+        for argument in &last.arguments {
+            let type_ref::Argument::Type(part) = argument else {
+                return Err("`Result` with a lifetime can't cross yet".into());
+            };
+            if let Err(reason) = self.crosses(part, owner)
+                && !self.lendable(part)
+            {
+                return Err(reason);
+            }
+        }
+        Ok(())
     }
 
     /// Whether a borrow of `ty` is lent for a call: a path to a type the
@@ -707,10 +747,16 @@ impl<'a> Generator<'a> {
         }
         signature.push_str(slice(file.text, Span::new(cursor, end)));
         let signature = without_rawr_attributes(signature.trim_end());
+        // A result that doesn't cross by the wire format may still come
+        // back as an outcome, its native parts moved.
+        let mut outcome = false;
         if let Some(output) = &function.output
-            && let Err(reason) = self.crosses(output, owner)
+            && self.crosses(output, owner).is_err()
         {
-            reasons.push(format!("its result: {reason}"));
+            match self.outcome(output, owner) {
+                Ok(()) => outcome = true,
+                Err(reason) => reasons.push(format!("its result: {reason}")),
+            }
         }
         let receiver = match &function.receiver {
             None => None,
@@ -767,7 +813,26 @@ impl<'a> Generator<'a> {
             .output
             .as_ref()
             .map_or("()", |ty| slice(file.text, ty.span()));
-        let _ = writeln!(text, "    let __value: {output} = __reply.take();");
+        if outcome {
+            // Each part of the outcome comes back by the wire format when its
+            // type crosses by it, and else as the native value the
+            // interpreter moves: `Back`'s two `take`s, the first found for
+            // its type.
+            let part = |name: &str| {
+                format!(
+                    "|input| (&{island}::Back::<<{output} as {island}::Outcome>::{name}>::new()).take(input)"
+                )
+            };
+            let _ = writeln!(
+                text,
+                "    let __value: {output} = {{\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
+                 __reply.outcome::<{output}>(\n            {},\n            {},\n        )\n    }};",
+                part("Ok"),
+                part("Err"),
+            );
+        } else {
+            let _ = writeln!(text, "    let __value: {output} = __reply.take();");
+        }
         for name in mutable {
             let _ = writeln!(text, "    *{name} = __reply.take();");
         }
@@ -1024,7 +1089,7 @@ const SUPPORT: &str = r#"
 pub mod __rawr_island {
     // Defined by the `rawr` crate the runner links.
     unsafe extern "Rust" {
-        fn __rawr_island_call_v2(
+        fn __rawr_island_call_v3(
             path: &str,
             arguments: &[u8],
             lent: &[(
@@ -1034,6 +1099,7 @@ pub mod __rawr_island {
                 ::std::option::Option<&'static (dyn ::std::any::Any + Sync)>,
                 &'static (dyn ::std::any::Any + Sync),
             )],
+            natives: &mut ::std::vec::Vec<::std::boxed::Box<dyn ::std::any::Any>>,
         ) -> ::std::vec::Vec<u8>;
         fn __rawr_scope_claim_v1(
             nonce: u64,
@@ -1086,9 +1152,12 @@ pub mod __rawr_island {
     const ARRAY: u8 = 7;
     const NONE: u8 = 10;
     const SOME: u8 = 11;
+    const OK: u8 = 12;
+    const ERR: u8 = 13;
     const STRUCT: u8 = 15;
     const ENUM: u8 = 16;
     const LENT: u8 = 20;
+    const NATIVE: u8 = 21;
 
     /// A value on its way to the interpreter.
     pub struct Out(::std::vec::Vec<u8>);
@@ -1117,10 +1186,12 @@ pub mod __rawr_island {
         }
     }
 
-    /// A value on its way back from the interpreter.
+    /// A value on its way back from the interpreter, and the native values
+    /// the interpreter moved for the reply, each taken once.
     pub struct In<'a> {
         bytes: &'a [u8],
         path: &'a str,
+        natives: &'a mut [::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>>],
     }
 
     impl<'a> In<'a> {
@@ -1178,6 +1249,62 @@ pub mod __rawr_island {
         }
         pub fn unknown(&self, path: &str, variant: &str, count: usize) -> ! {
             self.fail(&::std::format!("`{path}` has no variant `{variant}` with {count} fields"))
+        }
+        /// A native value the interpreter moved, as the `iced::Error` of an
+        /// `iced::Result`.
+        pub fn native<T: 'static>(&mut self) -> T {
+            let name = ::std::any::type_name::<T>();
+            self.expect(NATIVE, &::std::format!("a `{name}`"));
+            let index = self.count();
+            let moved = self.natives.get_mut(index).and_then(::std::option::Option::take);
+            match moved.map(|value| value.downcast::<T>()) {
+                Some(Ok(value)) => *value,
+                _ => self.fail(&::std::format!("expected a `{name}`")),
+            }
+        }
+    }
+
+    /// A `Result`, or an alias of one such as `iced::Result`, by its parts.
+    pub trait Outcome {
+        type Ok;
+        type Err;
+        fn ok(value: Self::Ok) -> Self;
+        fn err(error: Self::Err) -> Self;
+    }
+    impl<T, E> Outcome for ::std::result::Result<T, E> {
+        type Ok = T;
+        type Err = E;
+        fn ok(value: T) -> Self {
+            Ok(value)
+        }
+        fn err(error: E) -> Self {
+            Err(error)
+        }
+    }
+
+    /// How a value of `T` comes back: by the wire format when `T` crosses
+    /// by it ([`ByWire`], found first), and else as the native value the
+    /// interpreter moved ([`ByMove`]).
+    pub struct Back<T>(::std::marker::PhantomData<T>);
+    impl<T> Back<T> {
+        pub fn new() -> Self {
+            Self(::std::marker::PhantomData)
+        }
+    }
+    pub trait ByWire<T> {
+        fn take(&self, input: &mut In<'_>) -> T;
+    }
+    impl<T: Take> ByWire<T> for Back<T> {
+        fn take(&self, input: &mut In<'_>) -> T {
+            T::take(input)
+        }
+    }
+    pub trait ByMove<T> {
+        fn take(&self, input: &mut In<'_>) -> T;
+    }
+    impl<T: 'static> ByMove<T> for &Back<T> {
+        fn take(&self, input: &mut In<'_>) -> T {
+            input.native()
         }
     }
 
@@ -1361,6 +1488,29 @@ pub mod __rawr_island {
             }
         }
     }
+    impl<T: Put, E: Put> Put for ::std::result::Result<T, E> {
+        fn put(&self, out: &mut Out) {
+            match self {
+                Ok(value) => {
+                    out.byte(OK);
+                    value.put(out);
+                }
+                Err(error) => {
+                    out.byte(ERR);
+                    error.put(out);
+                }
+            }
+        }
+    }
+    impl<T: Take, E: Take> Take for ::std::result::Result<T, E> {
+        fn take(input: &mut In<'_>) -> Self {
+            match input.byte() {
+                OK => Ok(T::take(input)),
+                ERR => Err(E::take(input)),
+                _ => input.fail("expected a `Result`"),
+            }
+        }
+    }
     impl<T: Put + ?Sized> Put for &T {
         fn put(&self, out: &mut Out) {
             (**self).put(out);
@@ -1490,9 +1640,15 @@ pub mod __rawr_island {
             // with this exact signature. Each lent place is borrowed for
             // `'c`, which outlives this call, and is reached only while the
             // call runs.
-            let reply = unsafe { __rawr_island_call_v2(self.path, &bytes, &self.lent) };
+            let mut natives = ::std::vec::Vec::new();
+            let reply = unsafe { __rawr_island_call_v3(self.path, &bytes, &self.lent, &mut natives) };
             match reply.first() {
-                Some(0) => Reply { bytes: reply, at: 1, path: self.path },
+                Some(0) => Reply {
+                    bytes: reply,
+                    at: 1,
+                    path: self.path,
+                    natives: natives.into_iter().map(Some).collect(),
+                },
                 Some(_) => {
                     let message = ::std::string::String::from_utf8_lossy(&reply[1..]).into_owned();
                     ::std::panic!("{message}")
@@ -1502,19 +1658,41 @@ pub mod __rawr_island {
         }
     }
 
-    /// What a call returned, then each argument it could change.
+    /// What a call returned, then each argument it could change, and the
+    /// native values the interpreter moved for them.
     pub struct Reply {
         bytes: ::std::vec::Vec<u8>,
         at: usize,
         path: &'static str,
+        natives: ::std::vec::Vec<::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>>>,
     }
 
     impl Reply {
         pub fn take<T: Take>(&mut self) -> T {
-            let mut input = In { bytes: &self.bytes[self.at..], path: self.path };
-            let value = T::take(&mut input);
+            self.read(T::take)
+        }
+        /// The next value, as `read` reads it.
+        fn read<T>(&mut self, read: impl FnOnce(&mut In<'_>) -> T) -> T {
+            let mut input = In {
+                bytes: &self.bytes[self.at..],
+                path: self.path,
+                natives: &mut self.natives,
+            };
+            let value = read(&mut input);
             self.at = self.bytes.len() - input.bytes.len();
             value
+        }
+        /// An outcome whose parts `ok` and `err` read.
+        pub fn outcome<R: Outcome>(
+            &mut self,
+            ok: impl FnOnce(&mut In<'_>) -> R::Ok,
+            err: impl FnOnce(&mut In<'_>) -> R::Err,
+        ) -> R {
+            self.read(|input| match input.byte() {
+                OK => R::ok(ok(input)),
+                ERR => R::err(err(input)),
+                _ => input.fail("expected a `Result`"),
+            })
         }
     }
 }
@@ -1688,6 +1866,54 @@ mod tests {
         assert_eq!(
             before.shape.change(&signature.shape).as_deref(),
             Some("`physics::fall` changed its signature")
+        );
+    }
+
+    /// A `Result` of types that cross crosses as one (#1118). A result that
+    /// is a `Result` with a native part, or an alias of one such as
+    /// `iced::Result`, comes back as an outcome: each part by the wire
+    /// format when its type crosses by it, and else as the native value the
+    /// interpreter moves.
+    #[test]
+    fn a_result_crosses_and_an_alias_of_one_moves_its_native_parts() {
+        let shadow = generate(
+            "// rawr\npub struct Ball { pub x: f64 }\n\
+             pub fn checked(n: i64) -> Result<i64, String> { Ok(n) }\n\
+             pub fn run() -> iced::Result { iced::run(update, view) }\n\
+             pub fn read(path: &str) -> std::io::Result<String> { std::fs::read_to_string(path) }\n\
+             pub fn ball(x: f64) -> Result<Ball, iced::Error> { Ok(Ball { x }) }\n\
+             pub fn give(result: Result<i64, String>) -> i64 { 0 }\n\
+             pub fn pair() -> Result<(i64, i64), String> { Ok((1, 2)) }\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let text = &shadow.files[0].1;
+        assert!(
+            text.contains("    let __value: Result<i64, String> = __reply.take();\n"),
+            "{text}"
+        );
+        assert!(text.contains("    __call.argument(&__a0);\n"), "{text}");
+        assert!(!text.contains("can't call `physics::give`"), "{text}");
+        for (output, function) in [
+            ("iced::Result", "run"),
+            ("std::io::Result<String>", "read"),
+            ("Result<Ball, iced::Error>", "ball"),
+        ] {
+            let island = "crate::__rawr_island";
+            let expected = format!(
+                "    let __value: {output} = {{\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
+                 __reply.outcome::<{output}>(\n            \
+                 |input| (&{island}::Back::<<{output} as {island}::Outcome>::Ok>::new()).take(input),\n            \
+                 |input| (&{island}::Back::<<{output} as {island}::Outcome>::Err>::new()).take(input),\n        \
+                 )\n    }};\n"
+            );
+            assert!(text.contains(&expected), "{function}: {expected}\n{text}");
+        }
+        assert!(
+            text.contains(
+                "::core::panic!(\"rawr: native code can't call `physics::pair` yet: \
+                 its result: tuples can't cross yet\")"
+            ),
+            "{text}"
         );
     }
 

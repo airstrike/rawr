@@ -8,6 +8,9 @@
 //! UTF-8 bytes; an array, a struct and an enum variant give their count of
 //! members (`u64`) before them. A struct names its type by its path from
 //! the crate root (`physics::Ball`) and an enum also its variant's name.
+//! A native value, such as the `iced::Error` in an `iced::Result`, moves
+//! itself to native code: its tag names its place among the reply's
+//! [`Natives`].
 
 use super::{Model, Shape};
 use crate::types::dynamic::Union;
@@ -25,11 +28,16 @@ pub(crate) const STR: u8 = 6;
 pub(crate) const ARRAY: u8 = 7;
 pub(crate) const NONE: u8 = 10;
 pub(crate) const SOME: u8 = 11;
+pub(crate) const OK: u8 = 12;
+pub(crate) const ERR: u8 = 13;
 pub(crate) const STRUCT: u8 = 15;
 pub(crate) const ENUM: u8 = 16;
 /// A value native code lends for the call (D558.3): its index among the
 /// call's lent values.
 pub(crate) const LENT: u8 = 20;
+/// A native value the reply moves to native code: its index among the
+/// reply's [`Natives`].
+pub(crate) const NATIVE: u8 = 21;
 
 /// Nesting deeper than this does not cross.
 const DEPTH: usize = 256;
@@ -37,6 +45,10 @@ const DEPTH: usize = 256;
 /// The crate's script types by their path from the crate root, found once
 /// per generation.
 pub(crate) struct Types(BTreeMap<String, type_def::Identity>);
+
+/// The native values a reply moves to native code, in the order its
+/// [`NATIVE`] tags name them.
+pub(crate) type Natives = Vec<Box<dyn std::any::Any>>;
 
 /// Bytes being read.
 pub(crate) struct Reader<'a> {
@@ -159,6 +171,8 @@ impl Model {
             }
             NONE => crate::option::none(),
             SOME => crate::option::some(self.island_read(types, lent, reader, depth)?),
+            OK => crate::result::ok(self.island_read(types, lent, reader, depth)?),
+            ERR => crate::result::err(self.island_read(types, lent, reader, depth)?),
             STRUCT => {
                 let name = reader.text()?;
                 let identity = types
@@ -215,11 +229,13 @@ impl Model {
         })
     }
 
-    /// Write `value` for native code; `Err` names what can't cross.
+    /// Write `value` for native code, moving each native value it holds
+    /// to `natives`; `Err` names what can't cross.
     pub(crate) fn island_write(
         &self,
         value: &Dynamic,
         out: &mut Vec<u8>,
+        natives: &mut Natives,
         depth: usize,
     ) -> Result<(), String> {
         if depth > DEPTH {
@@ -249,7 +265,7 @@ impl Model {
                 out.push(ARRAY);
                 count(items.len(), out);
                 for item in items.iter() {
-                    self.island_write(item, out, depth)?;
+                    self.island_write(item, out, natives, depth)?;
                 }
             }
             Union::Struct(value, ..) => {
@@ -260,7 +276,7 @@ impl Model {
                 );
                 count(value.fields().len(), out);
                 for field in value.fields() {
-                    self.island_write(field, out, depth)?;
+                    self.island_write(field, out, natives, depth)?;
                 }
             }
             Union::Enum(value, ..) => {
@@ -272,10 +288,10 @@ impl Model {
                 text(value.variant().name(), out);
                 count(value.payload().len(), out);
                 for item in value.payload() {
-                    self.island_write(item, out, depth)?;
+                    self.island_write(item, out, natives, depth)?;
                 }
             }
-            Union::Shared(..) => self.island_write(&value.flatten_clone(), out, depth)?,
+            Union::Shared(..) => self.island_write(&value.flatten_clone(), out, natives, depth)?,
             Union::Variant(..) => {
                 // A lent value can't leave the call it was lent for, in its
                 // result or in an argument native code takes back.
@@ -287,15 +303,27 @@ impl Model {
                         lent.name()
                     ));
                 }
-                let Some(option) = value.read_lock::<crate::option::Value>() else {
-                    return Err(format!("a `{}` can't cross yet", value.type_name()));
-                };
-                match &*option {
-                    None => out.push(NONE),
-                    Some(inner) => {
-                        out.push(SOME);
-                        self.island_write(inner, out, depth)?;
+                if let Some(option) = value.read_lock::<crate::option::Value>() {
+                    match &*option {
+                        None => out.push(NONE),
+                        Some(inner) => {
+                            out.push(SOME);
+                            self.island_write(inner, out, natives, depth)?;
+                        }
                     }
+                } else if let Some(result) = value.read_lock::<crate::result::Value>() {
+                    let (tag, inner) = match &*result {
+                        Ok(inner) => (OK, inner),
+                        Err(inner) => (ERR, inner),
+                    };
+                    out.push(tag);
+                    self.island_write(inner, out, natives, depth)?;
+                } else {
+                    let native = crate::island::moved(value)
+                        .ok_or_else(|| format!("a `{}` can't cross yet", value.type_name()))??;
+                    out.push(NATIVE);
+                    count(natives.len(), out);
+                    natives.push(native);
                 }
             }
             _ => return Err(format!("a `{}` can't cross yet", value.type_name())),

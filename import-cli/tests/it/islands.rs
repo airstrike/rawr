@@ -87,12 +87,13 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
 
     fs::write(root.join("stop"), "").unwrap();
     let status = run.child.wait().unwrap();
-    assert!(status.success(), "{}", run.seen.join("\n"));
+    assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
 
-/// winit's event loop must run on the process's main thread, so the
-/// runner keeps that thread for a native `main` and runs its protocol on
-/// another one.
+/// winit's event loop must run on the process's main thread, so a native
+/// `main` runs there, and so does the marked code it calls (#1119). A
+/// marked function gives back a `Result` of types that cross, and an alias
+/// of one whose `Err` is a native type, as `iced::Result` (#1118).
 #[test]
 fn a_native_main_runs_on_the_process_main_thread() {
     const MAIN_THREAD: &str = concat!(
@@ -107,11 +108,23 @@ fn a_native_main_runs_on_the_process_main_thread() {
         line.starts_with("main thread ")
     });
     assert_eq!(line, "main thread true", "{}", run.seen.join("\n"));
+    let line = run.until(Duration::from_secs(30), |line| {
+        line.starts_with("marked main thread ")
+    });
+    assert_eq!(line, "marked main thread true", "{}", run.seen.join("\n"));
     run.until(Duration::from_secs(30), |line| line == "answer 42");
     // The interpreter keeps a `u64` in an `i64`'s bits.
     run.until(Duration::from_secs(30), |line| {
         line == "wide 13907096814508502785"
     });
+    for expected in [
+        "checked Ok(3)",
+        "checked Err(\"0 is not positive\")",
+        "run Ok(())",
+        "run Err(Failure(\"no window\"))",
+    ] {
+        run.until(Duration::from_secs(30), |line| line == expected);
+    }
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
 }

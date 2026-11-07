@@ -88,7 +88,7 @@ pub fn draw(frame: &amp;mut Frame, app: &amp;mut App) {
   <li>Marked code holds the app&rsquo;s state and what a key does to it.</li>
   <li>Marked code draws, too. A marked function may take <code>&amp;mut Frame</code>, and build ratatui&rsquo;s widgets and layouts on it, as <code>ui::draw</code> does.</li>
 </ul>
-<p>Values cross between native and marked code as they do for any <a href="/docs/run#native-main">native main</a>. Numbers, <code>bool</code>, <code>char</code>, <code>String</code>, <code>Vec</code>, <code>Option</code> and the structs and enums of marked modules cross. A key reaches the app as an enum of its own, which native code makes from crossterm&rsquo;s <code>KeyCode</code>.</p>
+<p>Values cross between native and marked code as they do for any <a href="/docs/run#native-main">native main</a>. Numbers, <code>bool</code>, <code>char</code>, <code>String</code>, <code>Vec</code>, <code>Option</code>, <code>Result</code> and the structs and enums of marked modules cross. A key reaches the app as an enum of its own, which native code makes from crossterm&rsquo;s <code>KeyCode</code>.</p>
 
 <h2 id="frame">The lent frame</h2>
 <p>A <code>&amp;mut Frame</code> borrows the terminal&rsquo;s buffer, so it can&rsquo;t be copied into marked code. rawr lends it instead, for the length of the call. Each of <code>frame</code>&rsquo;s methods reaches the native frame itself, so what <code>draw</code> renders is in the buffer when the call returns. A borrowed parameter of any type your marked crate doesn&rsquo;t declare is lent the same way.</p>
