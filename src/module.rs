@@ -1315,6 +1315,24 @@ impl Module {
         })
     }
 
+    /// The script-defined function `name` written with `num_params`
+    /// parameters, its `&mut` receiver among them: the function a host
+    /// call with that many arguments, none of them lent apart, names.
+    #[must_use]
+    pub(crate) fn get_written_script_fn(
+        &self,
+        name: &str,
+        num_params: usize,
+    ) -> Option<&Shared<crate::ast::ScriptFuncDef>> {
+        self.get_script_fn(name, num_params)
+            .filter(|function| function.this_parameter.is_none())
+            .or_else(|| {
+                let lowered = num_params.checked_sub(1)?;
+                self.get_script_fn(name, lowered)
+                    .filter(|function| function.this_parameter.is_some())
+            })
+    }
+
     /// Get a mutable reference to the underlying [`BTreeMap`] of sub-modules,
     /// creating one if empty.
     ///

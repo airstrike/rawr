@@ -218,6 +218,11 @@ codegen-units = 1
 #opt-level = "z"     # optimize for size
 #panic = 'abort'     # remove stack backtrace
 
+# A script call evaluates on a stack grown on demand, so the call-depth limit,
+# not a debug build's frame sizes or the host thread's stack, ends recursion.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+stacker = "0.1.15"
+
 [target.'cfg(target_family = "wasm")'.dependencies]
 web-time = { version = "1.1.0" } # WASM implementation of std::time::Instant
 

@@ -2912,6 +2912,9 @@ fn lower_with_context(
     // The name the program gave each generated function's receiver, which
     // its body reads as `this`: a debugger reads it by that name (#534).
     let mut receivers: BTreeMap<ImmutableString, ImmutableString> = BTreeMap::new();
+    // Where each free function's `&mut` parameter, its receiver, is written
+    // among its parameters, for a host call that passes it there.
+    let mut written_receivers: BTreeMap<ImmutableString, usize> = BTreeMap::new();
     let mut symbol_rewrites: BTreeMap<ImmutableString, ImmutableString> = program
         .methods
         .iter()
@@ -3047,6 +3050,7 @@ fn lower_with_context(
                         generated_name.as_str().into(),
                         definition.parameters[index].name.text.clone(),
                     );
+                    written_receivers.insert(generated_name.as_str().into(), index);
                 }
                 let body = write_function(
                     &mut generated,
@@ -3249,6 +3253,7 @@ fn lower_with_context(
         if named {
             function.this_name = receivers.get(&function.name).cloned();
         }
+        function.this_parameter = written_receivers.get(&function.name).copied();
         if let Some(name) = rewrites.get(&function.name)
             && name.as_str() != NATIVE_ONLY
         {
