@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.3.161",
+      "date": "2026-11-06",
+      "entries": [
+        {"text":"?play snippets no longer copy the universe's bindings for each run: every compile shares the engine's registry, so a snippet pays only for its own compile and run (locally, the site's snippets went from about 0.7 s each to 26 ms, and the live bot took about 2 minutes each).","issues":[1065]},
+        {"text":"The site deploy's snippet check waits for the Durable Object to run the version just deployed, so a deploy no longer fails its own check, and a run a limit stopped fails the check instead of passing it.","issues":[1066]}
+      ]
+    },
+    {
       "version": "0.3.160",
       "date": "2026-11-06",
       "entries": [

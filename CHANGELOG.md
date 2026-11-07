@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.161 (2026-11-06)
+
+- ?play snippets no longer copy the universe's bindings for each run: every compile shares the engine's registry, so a snippet pays only for its own compile and run (locally, the site's snippets went from about 0.7 s each to 26 ms, and the live bot took about 2 minutes each). (#1065)
+- The site deploy's snippet check waits for the Durable Object to run the version just deployed, so a deploy no longer fails its own check, and a run a limit stopped fails the check instead of passing it. (#1066)
+
 ## 0.3.160 (2026-11-06)
 
 - A crate function that takes a crate value whose type has a lifetime the call picks, as serde's `de::Error::invalid_value(Unexpected::Unsigned(n), ..)` in a derived visitor, is called through the opaque error type as rustc calls it. (#1031)

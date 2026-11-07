@@ -1,12 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-06",
-  "version": "0.3.160",
+  "version": "0.3.161",
   "examples": {"running":26,"total":56,"note":"0.3.150: 24 at 0.3.148 plus styling and vectorial_text (#973)"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.161",
+        "date": "2026-11-06",
+        "entries": [
+          {"text":"?play snippets no longer copy the universe's bindings for each run: every compile shares the engine's registry, so a snippet pays only for its own compile and run (locally, the site's snippets went from about 0.7 s each to 26 ms, and the live bot took about 2 minutes each).","issues":[1065]},
+          {"text":"The site deploy's snippet check waits for the Durable Object to run the version just deployed, so a deploy no longer fails its own check, and a run a limit stopped fails the check instead of passing it.","issues":[1066]}
+        ]
+      },
       {
         "version": "0.3.160",
         "date": "2026-11-06",
@@ -2582,9 +2590,10 @@
     {"issue":1062,"title":"RangeInclusive<T> has none of Clone, Debug, PartialEq, Eq or Hash as a type's capabilities","state":"open","category":"Divergences from rustc"},
     {"issue":1063,"title":"An a..=b of i128 or u128 is an iterator chain, not a RangeInclusive<i128>","state":"open","category":"Divergences from rustc"},
     {"issue":1064,"title":"A borrowed string fills a crate parameter bounded by 'static, where rustc gives E0597","state":"open","category":"Divergences from rustc"},
-    {"issue":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"open","category":"Health"},
-    {"issue":1066,"title":"The site deploy's snippet check fails on 'Durable Object reset because its code was updated'","state":"open","category":"Health"},
-    {"issue":1067,"title":"An enum variant field &'a str of a crate type can't be built (serde's Unexpected::Str(&text))","state":"open","category":"Divergences from rustc"}
+    {"issue":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"closed","category":"Health","release":"0.3.161"},
+    {"issue":1066,"title":"The site deploy's snippet check fails on 'Durable Object reset because its code was updated'","state":"closed","category":"Health","release":"0.3.161"},
+    {"issue":1067,"title":"An enum variant field &'a str of a crate type can't be built (serde's Unexpected::Str(&text))","state":"open","category":"Divergences from rustc"},
+    {"issue":1068,"title":"The import path copies the engine's host registry once per compile","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3488,7 +3497,7 @@
             {"number":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open"},
             {"number":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"open"},
             {"number":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open"},
-            {"number":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"open"}
+            {"number":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"closed"}
           ]
         }
       ]
