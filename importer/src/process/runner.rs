@@ -19,6 +19,8 @@ use std::os::unix::process::CommandExt as _;
 
 static SOCKET_ID: AtomicU64 = AtomicU64::new(1);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a frame that has begun may take to finish, either way. A reply
+/// may take any time to begin ([`receive_reply`]).
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 /// Read and write poll interval while a guarded exchange awaits its peer.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -1310,7 +1312,7 @@ fn exchange<B>(
             inner,
             &crate::protocol::Frame::new(send, payload.into_boxed_slice())?,
         )?;
-        let response = receive_guarded(inner, IO_TIMEOUT)?;
+        let response = receive_reply(inner, None)?;
         if response.tag() == crate::protocol::Tag::ProfileRejected {
             return Err(profile_rejected(response.payload()));
         }
@@ -1374,7 +1376,7 @@ fn hot_commit_exchange<B>(inner: &mut Inner<B>, identity: &[u8; 48]) -> Result<(
                 Box::from(identity.as_slice()),
             )?,
         )?;
-        hot_commit_outcome(receive_guarded(inner, IO_TIMEOUT)?, identity)
+        hot_commit_outcome(receive_reply(inner, None)?, identity)
     })
 }
 
@@ -1428,36 +1430,52 @@ fn work_request<B>(
             inner,
             &crate::protocol::Frame::new(send, payload.into_boxed_slice())?,
         )?;
-        let mut partial_started = None;
-        let mut decoder = crate::protocol::Decoder::new();
-        loop {
-            let before = Instant::now();
-            let decoded = match decoder.receive_step(&mut inner.stream) {
-                Ok(decoded) => decoded,
-                Err(error) => return Err(work_protocol_error(inner, error)),
-            };
-            match decoded {
-                Some(frame) => {
-                    partial_started = None;
-                    if frame.tag() == crate::protocol::Tag::WorkProgress {
-                        progress.observe(frame.payload())?;
-                        continue;
-                    }
-                    return Ok(frame);
+        receive_reply(inner, Some(&mut progress))
+    })
+}
+
+/// The runner's reply to one exchange. A live runner answers every exchange
+/// from its protocol thread, beside its program, but the OS may not run it
+/// for a while: an idle window that macOS naps on a busy machine. So the
+/// reply may take as long as it takes to begin, and a runner that exits
+/// closes the socket instead. Only a frame that has begun must finish
+/// within `IO_TIMEOUT`. `progress` takes the work progress a reply to work
+/// sends first; without it, a progress frame is the reply.
+fn receive_reply<B>(
+    inner: &mut Inner<B>,
+    mut progress: Option<&mut ProgressState>,
+) -> Result<crate::protocol::Frame, Error> {
+    let mut partial_started = None;
+    let mut decoder = crate::protocol::Decoder::new();
+    loop {
+        let before = Instant::now();
+        let decoded = match decoder.receive_step(&mut inner.stream) {
+            Ok(decoded) => decoded,
+            Err(error) => return Err(work_protocol_error(inner, error)),
+        };
+        match decoded {
+            Some(frame) => {
+                partial_started = None;
+                if frame.tag() == crate::protocol::Tag::WorkProgress
+                    && let Some(progress) = progress.as_deref_mut()
+                {
+                    progress.observe(frame.payload())?;
+                    continue;
                 }
-                // The read itself blocks up to `POLL_INTERVAL`; a header just
-                // read is followed by its body at once, never after a sleep.
-                None => {
-                    if decoder.has_partial_frame() {
-                        let partial_started = *partial_started.get_or_insert(before);
-                        if partial_started.elapsed() >= IO_TIMEOUT {
-                            return Err(Error::WorkFrameTimeout);
-                        }
+                return Ok(frame);
+            }
+            // The read itself blocks up to `POLL_INTERVAL`; a header just
+            // read is followed by its body at once, never after a sleep.
+            None => {
+                if decoder.has_partial_frame() {
+                    let partial_started = *partial_started.get_or_insert(before);
+                    if partial_started.elapsed() >= IO_TIMEOUT {
+                        return Err(Error::WorkFrameTimeout);
                     }
                 }
             }
         }
-    })
+    }
 }
 
 fn guarded<B, T>(
@@ -1511,6 +1529,8 @@ fn after_reply<T>(value: T, exited: Error) -> Result<T, Error> {
     }
 }
 
+/// The runner's first frame, which it sends as it connects, before any
+/// program runs: unlike a reply, it has a deadline.
 fn receive_guarded<B>(
     inner: &mut Inner<B>,
     timeout: Duration,
@@ -1545,6 +1565,10 @@ fn resource_error(error: crate::Error) -> Error {
 }
 
 fn terminal_owner_loss<B>(inner: &mut Inner<B>, error: Error) -> Error {
+    // `guarded` already stopped the runner and said why.
+    if matches!(error, Error::OwnerLost { .. }) {
+        return error;
+    }
     let mut reason = error.to_string();
     if !inner.reaped {
         if let Err(cleanup) = inner.child.terminate() {

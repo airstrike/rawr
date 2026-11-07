@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::support::{copy, start};
 
@@ -88,6 +88,73 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     fs::write(root.join("stop"), "").unwrap();
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+}
+
+/// An idle program is a healthy one (#1165): a native `main` waiting on its
+/// events makes no call into marked code, and its runner may not run at
+/// all for a while (an occluded window that macOS naps on a busy machine;
+/// here a SIGSTOP longer than every protocol deadline). The owner's
+/// periodic exchanges and a save's wait for the runner's reply instead of
+/// stopping it, and the program's next call into marked code runs the save.
+#[cfg(unix)]
+#[test]
+fn an_idle_native_main_outlives_every_deadline_and_takes_a_save_at_its_next_call() {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+
+    const IDLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-idle");
+    // Longer than the runner protocol's 10 s transport deadline.
+    const STOPPED: Duration = Duration::from_secs(12);
+    let root = crate::support::scratch().join("islands-idle");
+    let go = root.join("go");
+    let events = root.join("events.jsonl");
+    let _ = fs::remove_file(&go);
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(IDLE), &root);
+    let physics = root.join("src/physics.rs");
+    let mut run = start(
+        &root,
+        &[("IDLE_GO", go.clone()), ("RAWR_MCP_EVENTS", events.clone())],
+    );
+    let pid = run.until(Duration::from_secs(900), |line| line.starts_with("pid "));
+    let pid = Pid::from_raw(pid["pid ".len()..].parse().unwrap());
+    run.until(Duration::from_secs(30), |line| line == "value 1");
+    // A runner the owner stopped is gone, and its output says why.
+    let pause = |run: &mut crate::support::Run| {
+        kill(pid, Signal::SIGSTOP).unwrap();
+        std::thread::sleep(STOPPED);
+        if kill(pid, Signal::SIGCONT).is_err() {
+            run.until(Duration::from_secs(5), |_| false);
+        }
+    };
+
+    // The owner polls an idle program while it can't answer.
+    pause(&mut run);
+    // A save reaches it while it can't answer either.
+    edit(&physics, "const SCALE: i64 = 1;", "const SCALE: i64 = 100;");
+    pause(&mut run);
+    let queued = Instant::now() + Duration::from_secs(120);
+    while !fs::read_to_string(&events).is_ok_and(|text| text.contains("\"queued\"")) {
+        assert!(
+            Instant::now() < queued && run.child.try_wait().unwrap().is_none(),
+            "{}\n{}",
+            fs::read_to_string(&events).unwrap_or_default(),
+            run.seen.join("\n")
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        run.child.try_wait().unwrap().is_none(),
+        "{}",
+        run.seen.join("\n")
+    );
+
+    fs::write(&go, "").unwrap();
+    run.until(Duration::from_secs(30), |line| line == "value 100");
+    let seen = run.seen.join("\n");
+    assert!(!seen.contains("restarting"), "{seen}");
+    assert!(!seen.contains("deadline"), "{seen}");
 }
 
 /// winit's event loop must run on the process's main thread, so a native
