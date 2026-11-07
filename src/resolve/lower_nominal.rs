@@ -13576,7 +13576,6 @@ impl<'a> Parser<'a> {
                     ),
                 ));
             }
-            Err(Selection::Opaque(ty, opaque)) => return Err(opaque_impl_use(&ty, &opaque, span)),
         }
         if contains_inference(&self.inference.resolve(hidden)) {
             return Err(unfixed(
@@ -13605,14 +13604,10 @@ impl<'a> Parser<'a> {
         // A script type's own impl of the trait, which fixes what it can
         // and is compiled for the use (D629). Otherwise a crate's blanket
         // impl may lead to the script's own impl of another trait.
-        if matches!(ty, Ty::Script(..)) {
-            match self.select_script_impl(&ty, identity, arguments) {
-                Ok(Some(())) => return Ok(()),
-                Ok(None) => {}
-                Err(opaque) => {
-                    return Err(Selection::Opaque(ty.name(&self.models).to_string(), opaque));
-                }
-            }
+        if matches!(ty, Ty::Script(..))
+            && self.select_script_impl(&ty, identity, arguments).is_some()
+        {
+            return Ok(());
         }
         let open = contains_inference(&ty)
             || arguments
@@ -13675,10 +13670,6 @@ impl<'a> Parser<'a> {
                 match self.select_impl(bounded, *trait_identity, bound_arguments, owner, depth + 1)
                 {
                     Ok(()) => self.inference.commit(checkpoint),
-                    Err(Selection::Opaque(ty, opaque)) => {
-                        self.inference.rollback(checkpoint);
-                        return Err(Selection::Opaque(ty, opaque));
-                    }
                     Err(_) => self.inference.rollback(checkpoint),
                 }
             }
@@ -13697,19 +13688,13 @@ impl<'a> Parser<'a> {
     /// script type `ty` at `arguments`, applied: its parameters and what it
     /// fixes of `arguments` are bound, as rustc selects a program's own impl
     /// of a crate's trait. The use is recorded, so an impl whose parameters
-    /// touch a crate's types is compiled for it (D629). `None` when none
-    /// fits, or more than one. An impl used at a type that holds a crate's
-    /// opaque type, which the runner can't name to compile the impl for
-    /// it, is the opaque type's name as the error.
+    /// touch a crate's types is compiled for it (D629), as at a type that
+    /// holds a crate's opaque type, which the runner names by a name of its
+    /// own. `None` when none fits, or more than one.
     #[cfg(feature = "rust-import")]
-    fn select_script_impl(
-        &mut self,
-        ty: &Ty,
-        identity: [u8; 32],
-        arguments: &[Ty],
-    ) -> Result<Option<()>, String> {
+    fn select_script_impl(&mut self, ty: &Ty, identity: [u8; 32], arguments: &[Ty]) -> Option<()> {
         let Ty::Script(definition, _) = self.inference.resolve(ty) else {
-            return Ok(None);
+            return None;
         };
         let candidates = self
             .models
@@ -13735,22 +13720,16 @@ impl<'a> Parser<'a> {
             }
         }
         let [chosen] = fits.as_slice() else {
-            return Ok(None);
+            return None;
         };
         let checkpoint = self.inference.checkpoint();
         let Some((types, full)) = self.apply_script_impl(chosen, ty, identity, arguments) else {
             self.inference.rollback(checkpoint);
-            return Ok(None);
+            return None;
         };
         self.inference.commit(checkpoint);
-        if let Some(opaque) = types
-            .iter()
-            .find_map(|(_, ty)| held_opaque(&self.inference.resolve(ty)))
-        {
-            return Err(opaque);
-        }
         self.impl_uses.push((chosen.index, types, full));
-        Ok(Some(()))
+        Some(())
     }
 
     /// `script` at fresh variables, unified with `ty` and `arguments`, the
@@ -21025,9 +21004,6 @@ impl<'a> Parser<'a> {
             let checkpoint = self.inference.checkpoint();
             match self.select_impl(&bounded, identity, &arguments, owner.as_ref(), 0) {
                 Ok(()) => self.inference.commit(checkpoint),
-                Err(Selection::Opaque(ty, opaque)) => {
-                    return Err(opaque_impl_use(&ty, &opaque, span));
-                }
                 Err(_) => self.inference.rollback(checkpoint),
             }
         }
@@ -55727,9 +55703,6 @@ struct ImplProjection {
 enum Selection {
     None(String),
     Many(String),
-    /// The program's impl fits, at a type that holds a crate's opaque type:
-    /// the type the impl is used at and the opaque type, by name.
-    Opaque(String, String),
 }
 
 /// Whether a type still has an inference variable in it.
@@ -55755,44 +55728,6 @@ fn reaches_param(ty: &Ty) -> bool {
 
 /// Whether `ty` is a script type, or holds one as a crate type's argument
 /// or behind a borrow.
-#[cfg(feature = "rust-import")]
-/// The name of a crate's opaque `impl Trait` type `ty` holds, as iced's
-/// `Widget::explain` gives (`surface::opaque`): Rust code can't name it.
-#[cfg(feature = "rust-import")]
-fn held_opaque(ty: &Ty) -> Option<String> {
-    match ty {
-        Ty::Host { proof, arguments } => {
-            let path = proof.definition.path_ref().to_string();
-            if rawr_import::surface::opaque::declared(&path) {
-                return Some(path);
-            }
-            arguments.iter().find_map(held_opaque)
-        }
-        Ty::Script(_, members) | Ty::Tuple(members) => members.iter().find_map(held_opaque),
-        Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Option(target) => {
-            held_opaque(target)
-        }
-        Ty::Array { element, .. } => held_opaque(element),
-        Ty::Result(ok, err) => held_opaque(ok).or_else(|| held_opaque(err)),
-        _ => None,
-    }
-}
-
-/// The program's impl of a crate's trait used at `ty`, which holds the
-/// crate's opaque type `opaque`: the runner compiles the impl for each type
-/// it is used at, and can't name that one.
-#[cfg(feature = "rust-import")]
-fn opaque_impl_use(ty: &str, opaque: &str, span: Span) -> Error {
-    Error::UnsupportedNominalSyntax {
-        construct: format!(
-            "the program's impl of a crate's trait for `{ty}`, which holds the crate's \
-             `impl Trait` type `{opaque}`,"
-        )
-        .into(),
-        source: span,
-    }
-}
-
 #[cfg(feature = "rust-import")]
 fn mentions_script(ty: &Ty) -> bool {
     match ty {

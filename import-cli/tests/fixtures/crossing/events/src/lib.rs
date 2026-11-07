@@ -1236,6 +1236,53 @@ pub mod widgets {
         }
     }
 
+    /// A body under a title bar, as iced's `pane_grid::Content<'a, Message,
+    /// T, W, Theme>`, invariant in `'a` through its title bar's container.
+    pub struct Pane<'a, T, W, Theme = crate::Theme> {
+        title: Option<Container<'a, T, Theme>>,
+        body: W,
+    }
+
+    /// A pane of `body` with no title bar, as iced's `Content::new(body)`.
+    pub fn pane<'a, W, Theme>(body: W) -> Pane<'a, (), W, Theme> {
+        Pane { title: None, body }
+    }
+
+    impl<'a, T, W, Theme> Pane<'a, T, W, Theme> {
+        /// The pane under `title_bar`, as iced's `Content::title_bar`, which
+        /// takes a title bar at the pane's own lifetime.
+        pub fn title_bar<Title>(
+            self,
+            title_bar: Container<'a, Title, Theme>,
+        ) -> Pane<'a, Title, W, Theme> {
+            Pane {
+                title: Some(title_bar),
+                body: self.body,
+            }
+        }
+    }
+
+    impl<T, W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Pane<'_, T, W, Theme>
+    where
+        T: Widget<Message, Theme, Renderer>,
+        W: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push("pane".to_owned());
+            if let Some(title) = &self.title {
+                title.labels(labels);
+            }
+            self.body.labels(labels);
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.title
+                .as_ref()
+                .and_then(|title| title.press(label))
+                .or_else(|| self.body.press(label))
+        }
+    }
+
     /// A text field, as iced's `TextInput<'a, Message>`, which borrows its
     /// placeholder and value for `'a`.
     pub struct Field<'a, Message> {

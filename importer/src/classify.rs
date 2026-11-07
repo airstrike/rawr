@@ -9138,6 +9138,24 @@ impl<P: api::Phase> Context<'_, P> {
                 bounds,
                 captures,
             } => {
+                // The bounds name the opaque type's own parameters, which
+                // its captures fill: a trait's provided method reached as a
+                // member of a type, as `Button::explain` of `Framed`,
+                // captures the trait's parameters at that type's arguments.
+                let bindings = captures
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, capture)| match capture {
+                        model::Argument::Type(ty) => Some((u32::try_from(index).ok()?, ty.clone())),
+                        _ => None,
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let bounds = &bounds
+                    .iter()
+                    .map(|predicate| {
+                        mapped_predicate(predicate, &|ty| substitute_bindings(ty, &bindings))
+                    })
+                    .collect::<Vec<_>>();
                 let excluded = self.opaque_output.borrow().clone();
                 let Some(excluded) = excluded else {
                     return Err(representability::reject::Kind::OpaqueType.into());
@@ -12436,7 +12454,14 @@ fn substituted_predicate(
     predicate: &model::Predicate,
     substitutions: &[((api::identity::Definition, u32), model::Type)],
 ) -> model::Predicate {
-    let substitute = |ty: &model::Type| substitute_parameters(ty, substitutions);
+    mapped_predicate(predicate, &|ty| substitute_parameters(ty, substitutions))
+}
+
+/// `predicate` with each type it names mapped by `substitute`.
+fn mapped_predicate(
+    predicate: &model::Predicate,
+    substitute: &dyn Fn(&model::Type) -> model::Type,
+) -> model::Predicate {
     match predicate {
         model::Predicate::Bound { ty, bound } => model::Predicate::Bound {
             ty: substitute(ty),

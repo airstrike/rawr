@@ -15,7 +15,14 @@
 //! rustc fails to compile its output where a region holds it. Such a type is
 //! held boxed instead, as `Box<dyn RawrOpaque0<'x> + 'x>`: a trait of the
 //! runner's own, implemented for every type of the opaque type's bounds,
-//! whose methods are the calls the program makes on it ([`Ops`]).
+//! whose methods are the calls the program makes on it ([`Ops`]). So is a
+//! type that holds an opaque type, as `Container<'x, impl Widget<..>,
+//! Theme>`, and an opaque type a free function makes of a region's value,
+//! as `opaque(content)`: its trait is implemented for the type's shape, each
+//! opaque position a parameter of the opaque type's bounds ([`Shape`]).
+//!
+//! A script type's proxy that takes such a type as an argument, as loupe's
+//! `Zoomed<impl Widget>`, names it by a name of the runner's ([`named`]).
 
 use std::collections::BTreeMap;
 
@@ -28,6 +35,34 @@ thread_local! {
     /// the type spelled at `'x`.
     static OPS: std::cell::RefCell<BTreeMap<String, Ops>> =
         const { std::cell::RefCell::new(BTreeMap::new()) };
+    /// The bounds of each opaque type a call gives, by the type spelled at
+    /// `'x`, as the call's signature writes them.
+    static BOUNDS: std::cell::RefCell<BTreeMap<String, String>> =
+        const { std::cell::RefCell::new(BTreeMap::new()) };
+    /// The runner's name of each opaque type a script type's proxy takes
+    /// as an argument, by the type spelled at `'x` ([`named`]).
+    static NAMES: std::cell::RefCell<BTreeMap<String, usize>> =
+        const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+/// The name a script type's proxy takes the type spelled `key` at `'x`
+/// by, a type that holds an opaque type, as loupe's `Zoomed<impl Widget>`
+/// takes what `explain` gives: `RawrOpaqueName0`. A proxy holds only the
+/// script's value, so its arguments name types and hold none, and each
+/// opaque type takes a name no other type has.
+pub(super) fn named(key: String) -> String {
+    NAMES.with_borrow_mut(|names| {
+        let next = names.len();
+        format!("RawrOpaqueName{}", names.entry(key).or_insert(next))
+    })
+}
+
+/// A type that holds opaque types, as an impl names it: the type spelled at
+/// `'x` with `RawrHeld{i}` at its `i`-th opaque position, and each
+/// position's bounds. An opaque type itself is the shape `RawrHeld0`.
+pub(super) struct Shape {
+    spelled: String,
+    bounds: Vec<String>,
 }
 
 /// The trait of the runner's own an opaque type a region holds boxed is
@@ -36,8 +71,8 @@ thread_local! {
 /// ..>` for `.boxed()`.
 pub(super) struct Ops {
     index: usize,
-    /// The opaque type's bounds, which every type it is implemented for has.
-    bounds: String,
+    /// The types it is implemented for.
+    shape: Shape,
     methods: Vec<Method>,
 }
 
@@ -171,14 +206,52 @@ pub(super) fn of(key: &str) -> Option<Family> {
 pub(super) fn clear() {
     WRAPPERS.with_borrow_mut(BTreeMap::clear);
     OPS.with_borrow_mut(BTreeMap::clear);
+    BOUNDS.with_borrow_mut(BTreeMap::clear);
+    NAMES.with_borrow_mut(BTreeMap::clear);
+}
+
+/// Record `bounds` as those of the opaque type spelled `key` at `'x`,
+/// unless some are.
+pub(super) fn bound(key: String, bounds: String) {
+    BOUNDS.with_borrow_mut(|known| {
+        known.entry(key).or_insert(bounds);
+    });
+}
+
+/// The bounds of the opaque type spelled `key` at `'x`, when a call that
+/// gives it has them.
+pub(super) fn bounds(key: &str) -> Option<String> {
+    BOUNDS.with_borrow(|known| known.get(key).cloned())
+}
+
+impl Shape {
+    /// The shape spelled `spelled`, whose `i`-th opaque position is
+    /// `parameter(i)`, of `bounds[i]`.
+    pub(super) fn new(spelled: String, bounds: Vec<String>) -> Self {
+        Self { spelled, bounds }
+    }
+
+    /// The impl's parameter at the `position`-th opaque position.
+    pub(super) fn parameter(position: usize) -> String {
+        format!("RawrHeld{position}")
+    }
+
+    /// The type as messages show it, `impl Bounds` at each position.
+    fn shown(&self) -> String {
+        let mut shown = self.spelled.clone();
+        // From the last, so `RawrHeld1` isn't read inside `RawrHeld10`.
+        for (position, bounds) in self.bounds.iter().enumerate().rev() {
+            shown = shown.replace(&Self::parameter(position), &format!("impl {bounds}"));
+        }
+        shown
+    }
 }
 
 impl Ops {
-    /// Declare the trait the opaque type spelled `key` at `'x`, of
-    /// `bounds`, is held boxed through, unless one is, and give the type a
-    /// region holds it as, `Box<dyn RawrOpaque0<'x> + 'x>`, and whether it
-    /// is new.
-    pub(super) fn declare(key: String, bounds: String) -> (String, bool) {
+    /// Declare the trait the type spelled `key` at `'x`, of `shape`, is
+    /// held boxed through, unless one is, and give the type a region holds
+    /// it as, `Box<dyn RawrOpaque0<'x> + 'x>`, and whether it is new.
+    pub(super) fn declare(key: String, shape: Shape) -> (String, bool) {
         OPS.with_borrow_mut(|ops| {
             let next = ops.len();
             let mut new = false;
@@ -188,7 +261,7 @@ impl Ops {
                     new = true;
                     Self {
                         index: next,
-                        bounds,
+                        shape,
                         methods: Vec::new(),
                     }
                 })
@@ -197,13 +270,13 @@ impl Ops {
         })
     }
 
-    /// The Rust name of the opaque type a region holds as `held`, as
-    /// `impl Widget<..>`, when it holds one so.
+    /// The Rust name of the type a region holds as `held`, as `impl
+    /// Widget<..>`, when it holds one so.
     pub(super) fn shown(held: &str) -> Option<String> {
         OPS.with_borrow(|ops| {
             ops.values()
                 .find(|ops| held == format!("Box<dyn RawrOpaque{}<'x> + 'x>", ops.index))
-                .map(|ops| format!("impl {}", ops.bounds))
+                .map(|ops| ops.shape.shown())
         })
     }
 
@@ -286,9 +359,19 @@ impl Method {
     }
 }
 
-/// Each wrapper, with the family of its inputs, into `rawr_families`.
+/// Each wrapper, with the family of its inputs, each trait a region holds a
+/// value boxed through, and each opaque type's name, into `rawr_families`.
 pub(super) fn render(output: &mut String) {
     use std::fmt::Write as _;
+    NAMES.with_borrow(|names| {
+        for (key, index) in names {
+            let _ = writeln!(
+                output,
+                "/// `{}` as a proxy's argument.\npub(super) struct RawrOpaqueName{index};\n",
+                key.replace("'x", "'_")
+            );
+        }
+    });
     WRAPPERS.with_borrow(|wrappers| {
         for wrapper in wrappers.values() {
             let Wrapper {
@@ -331,10 +414,16 @@ pub(super) fn rawr_given_{index}<'x>(({names}): ({types})) -> impl {bounds} + us
     OPS.with_borrow(|ops| {
         for Ops {
             index,
-            bounds,
+            shape,
             methods,
         } in ops.values()
         {
+            let parameters = shape
+                .bounds
+                .iter()
+                .enumerate()
+                .map(|(position, bounds)| format!(", {}: {bounds} + 'x", Shape::parameter(position)))
+                .collect::<String>();
             let mut declared = String::new();
             let mut implemented = String::new();
             for method in methods {
@@ -362,9 +451,10 @@ pub(super) fn rawr_given_{index}<'x>(({names}): ({types})) -> impl {bounds} + us
                 "pub(super) trait RawrOpaque{index}<'x> {{{declared}
 }}
 
-impl<'x, W: {bounds} + 'x> RawrOpaque{index}<'x> for W {{{implemented}
+impl<'x{parameters}> RawrOpaque{index}<'x> for {spelled} {{{implemented}
 }}
-"
+",
+                spelled = shape.spelled
             );
         }
     });
@@ -372,7 +462,7 @@ impl<'x, W: {bounds} + 'x> RawrOpaque{index}<'x> for W {{{implemented}
 
 #[cfg(test)]
 mod tests {
-    use super::{Family, Reach};
+    use super::{Family, Method, Ops, Reach, Shape};
 
     /// A family struct is reached by its type, and a wrapper's family by
     /// its inputs' family and the wrapper itself, which rustc infers it from.
@@ -387,5 +477,49 @@ mod tests {
             "get_mut_given(RawrGiven3, rawr_given_3, scoped)"
         );
         assert_eq!(Family::Given(3).named(), None);
+    }
+
+    /// A type that holds opaque types is held boxed through a trait
+    /// implemented for its shape, each opaque position a parameter of its
+    /// bounds, and a call on it is that trait's method.
+    #[test]
+    fn a_shape_is_implemented_over_its_opaque_positions() {
+        super::clear();
+        let shape = Shape::new(
+            "Container<'x, RawrHeld0, Theme>".to_owned(),
+            vec!["Widget<Message>".to_owned()],
+        );
+        let (held, new) = Ops::declare("container".to_owned(), shape);
+        assert_eq!(
+            (held.as_str(), new),
+            ("Box<dyn RawrOpaque0<'x> + 'x>", true)
+        );
+        assert_eq!(
+            Ops::shown(&held).as_deref(),
+            Some("Container<'x, impl Widget<Message>, Theme>")
+        );
+        Ops::add(
+            "container",
+            Method::new(
+                2,
+                crate::classify::representability::ownership::Receiver::Owned,
+                vec![("argument_0".to_owned(), "u16".to_owned())],
+                held.clone(),
+                "Box::new(receiver.padding(argument_0))".to_owned(),
+            ),
+        );
+        assert_eq!(
+            Ops::call("container", 2, "receiver", 1).as_deref(),
+            Some("RawrOpaque0::rawr_2(receiver, argument_0)")
+        );
+        let mut rendered = String::new();
+        super::render(&mut rendered);
+        assert!(
+            rendered.contains(
+                "impl<'x, RawrHeld0: Widget<Message> + 'x> RawrOpaque0<'x> for Container<'x, RawrHeld0, Theme> {"
+            ),
+            "{rendered}"
+        );
+        super::clear();
     }
 }
