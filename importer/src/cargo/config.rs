@@ -739,8 +739,10 @@ fn validate_environment_entry(
         || key.starts_with(UNSTABLE_ENVIRONMENT_PREFIX)
     {
         return Err(Error::Request {
-            reason: format!("rawr can't build Rust with the environment variable `{key}` set")
-                .into_boxed_str(),
+            reason: format!(
+                "the environment variable `{key}` is not supported yet; unset it and run again"
+            )
+            .into_boxed_str(),
         });
     }
     if values.contains_key(key) {
@@ -1903,9 +1905,7 @@ mod tests {
         ] {
             let error = Environment::from_pairs([(key, "unsupported")])
                 .expect_err("private importer controls reject");
-            assert!(
-                format!("{error}").contains("rawr can't build Rust with the environment variable")
-            );
+            assert!(format!("{error}").contains("is not supported yet; unset it and run again"));
         }
     }
 

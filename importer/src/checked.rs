@@ -37,7 +37,7 @@ where
 {
     let profile_parent = profile
         .node_chain()
-        .expect("rawr checks a program against its profile's current node");
+        .expect("the profile has no current node to check the program against");
     let observations = contract
         .raw_graph()
         .callback_observations(contract.raw_graph().freshness_fingerprint());
@@ -77,7 +77,7 @@ pub(crate) fn authority(
 ) -> Result<Vec<u8>, Error> {
     assert_eq!(
         graph, profile_graph,
-        "rawr checks a program against the profile classified from the same crates"
+        "the program's crates differ from the crates its profile was classified from"
     );
     let mut authority = Vec::new();
     authority
@@ -212,7 +212,7 @@ impl Product {
     ) -> Result<Self, Error> {
         assert!(
             demand.contract_fingerprint() == contract && demand.snapshot() == snapshot,
-            "rawr checks the program it builds, against the bindings it builds it with"
+            "the checked program's demand names other bindings than the ones it is built with"
         );
         let payload = checked.profile_payload();
         let mut retained_payload = Vec::new();
@@ -580,7 +580,7 @@ mod tests {
         assert!(drift
             .downcast_ref::<String>()
             .is_some_and(|message| message.contains(
-                "rawr checks a program against the profile classified from the same crates"
+                "the program's crates differ from the crates its profile was classified from"
             )));
     }
 

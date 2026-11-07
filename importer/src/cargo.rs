@@ -2314,7 +2314,7 @@ impl Builder {
         });
         assert!(
             !profile.is_empty() && valid,
-            "rawr selects only Cargo profile names, never `{profile}`"
+            "`{profile}` is not a Cargo profile name"
         );
         self.profile = profile.into();
         self

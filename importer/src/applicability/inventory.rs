@@ -131,7 +131,7 @@ impl Acquired {
         foreign: BTreeMap<identity::Unit, Box<[identity::Definition]>>,
     ) -> Self {
         if let Err(violation) = facts.validate() {
-            panic!("captured crate facts break their invariant: {violation}");
+            panic!("captured crate facts are invalid: {violation}");
         }
         let mut fingerprint = Sha256::new();
         fingerprint.update(b"rawr.import.intrinsic-inventory/v2");

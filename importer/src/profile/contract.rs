@@ -997,7 +997,7 @@ fn evidence_matches_graph(
 fn surface_error(error: crate::surface::Error) -> Error {
     match error {
         crate::surface::Error::Allocation => Error::Allocation,
-        error => panic!("copying a bindings site fails only for want of memory: {error}"),
+        error => panic!("cannot copy a bindings site: {error}"),
     }
 }
 

@@ -1741,13 +1741,13 @@ pub enum Error {
     Node(#[from] crate::node::Error),
     #[error(transparent)]
     Generation(#[from] crate::bridge::request::Error),
-    #[error("hot admission failed: {failure}; pin rollback also failed: {cleanup}")]
+    #[error("cannot reload the program: {failure}; restoring the previous runner also failed: {cleanup}")]
     PinCleanup {
         #[source]
         failure: Box<Error>,
         cleanup: crate::node::Error,
     },
-    #[error("hot admission failed: {failure}; hot abort also failed: {cleanup}")]
+    #[error("cannot reload the program: {failure}; cancelling the reload also failed: {cleanup}")]
     HotCleanup {
         #[source]
         failure: Box<Error>,
@@ -1794,12 +1794,12 @@ pub enum Error {
     Stale,
     #[error("runner semantic progress was invalid: {0}")]
     WorkProgress(&'static str),
-    #[error("runner work began a frame but did not complete it before the frame deadline")]
+    #[error("the runner did not finish a frame before its deadline")]
     WorkFrameTimeout,
-    #[error("generated owner was terminated after unproven work failure: {reason}")]
+    #[error("the runner was stopped after its work failed: {reason}")]
     OwnerLost { reason: Box<str> },
     #[error(
-        "generated owner exited during authenticated work with status {status:?}: {protocol}; bounded stderr: {stderr}"
+        "the runner exited with status {status:?}: {protocol}; its stderr ends with: {stderr}"
     )]
     WorkPeer {
         status: Option<i32>,
@@ -1808,17 +1808,17 @@ pub enum Error {
     },
     #[error("runner profile route is absent")]
     MissingRoute,
-    #[error("runner lifecycle command does not match the sealed process mode")]
+    #[error("the runner's lifecycle command does not match its process mode")]
     Lifecycle,
     #[error("the admitted runner selected no profile")]
     NoProfile,
     #[error("no admitted runner owns the profile route")]
     NoCurrent,
-    #[error("the generated owner rejected profile work: {0}")]
+    #[error("the runner rejected the work: {0}")]
     ProfileRejected(Box<str>),
-    #[error("the generated owner consumed hot preparation without installing: {0}")]
+    #[error("the runner took the reload without installing it: {0}")]
     HotConsumedRejected(Box<str>),
-    #[error("a newer edit superseded the generated owner's hot preparation")]
+    #[error("a newer save replaced this reload")]
     HotSuperseded,
     #[error(transparent)]
     Invocation(#[from] super::invoke::Error),

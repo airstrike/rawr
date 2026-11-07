@@ -63,7 +63,7 @@ impl Context {
         let cargo_home = canonical_directory("Cargo home", &cargo_home)?;
         assert!(
             !target.is_empty() && !target.contains('\0'),
-            "rawr names a target triple"
+            "the target triple is empty or contains a NUL byte"
         );
         let target: Box<str> = target.into();
         let rawr = crate::location::rawr_directory(&project, &environment);

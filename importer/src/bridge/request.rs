@@ -39,19 +39,19 @@ impl Error {
 /// rawr bug can cause it, so it panics naming the invariant.
 #[track_caller]
 pub(crate) fn drift(field: &'static str) -> Error {
-    panic!("rawr's generated Rust agrees with the crates on {field}")
+    panic!("the generated Rust disagrees with the crates on {field}")
 }
 
 /// rawr can't read back the runner's Cargo.toml or Cargo.lock that it and
 /// Cargo wrote: only a rawr bug can cause it.
 #[track_caller]
 pub(crate) fn misread(reason: impl std::fmt::Display) -> Error {
-    panic!("rawr reads the runner's Cargo.toml and Cargo.lock as they were written: {reason}")
+    panic!("cannot read back the runner's Cargo.toml or Cargo.lock: {reason}")
 }
 
 /// Writing the runner's source in memory failed, which only a rawr bug
 /// can cause.
 #[track_caller]
 pub(crate) fn unwritable(error: impl std::fmt::Display) -> Error {
-    panic!("rawr writes the runner's generated source in memory: {error}")
+    panic!("cannot write the runner's generated source in memory: {error}")
 }

@@ -155,7 +155,7 @@ impl Projection {
             if unmodeled {
                 return Err(Error::Request {
                     reason: format!(
-                        "rawr can't build Rust with the environment variable `{key}` set"
+                        "the environment variable `{key}` is not supported yet; unset it and run again"
                     )
                     .into_boxed_str(),
                 });
@@ -787,7 +787,7 @@ mod tests {
             assert!(matches!(
                 error,
                 crate::Error::Request { reason }
-                    if reason.starts_with("rawr can't build Rust with the environment variable")
+                    if reason.starts_with("the environment variable")
             ));
         }
     }

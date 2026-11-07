@@ -627,11 +627,11 @@ impl Settlement {
                     ..
                 } => {
                     if publish.meta.inputs.is_none() {
-                        eprintln!("rawr: bindings of `{}` stay in this project: crate-specific input evidence is unavailable", publish.meta.crate_name);
+                        eprintln!("rawr: not sharing the bindings of `{}` with other projects: its build inputs were not recorded", publish.meta.crate_name);
                         continue;
                     }
                     let Some(nightly) = nightly else {
-                        eprintln!("rawr: bindings of `{}` stay in this project: the extraction nightly's build-script outputs are missing or unreadable", publish.meta.crate_name);
+                        eprintln!("rawr: not sharing the bindings of `{}` with other projects: the nightly build's build-script outputs are missing or unreadable", publish.meta.crate_name);
                         continue;
                     };
                     let differs = packages.iter().find(|package| {
@@ -641,9 +641,9 @@ impl Settlement {
                     if let Some(package) = differs {
                         let name = package_name(package);
                         if verdicts.contains_key(package) {
-                            eprintln!("rawr: bindings of `{}` stay in this project: the build script of `{name}` gives the extraction nightly other output than this project's build, after running it again too, so the nightly and the project's toolchain differ", publish.meta.crate_name);
+                            eprintln!("rawr: not sharing the bindings of `{}` with other projects: the build script of `{name}` gives the nightly build other output than this project's build, so the two toolchains differ", publish.meta.crate_name);
                         } else {
-                            eprintln!("rawr: bindings of `{}` stay in this project: the output of the build script of `{name}` is unavailable from the extraction nightly or this project's build", publish.meta.crate_name);
+                            eprintln!("rawr: not sharing the bindings of `{}` with other projects: the output of the build script of `{name}` is missing from the nightly build or this project's build", publish.meta.crate_name);
                         }
                         continue;
                     }

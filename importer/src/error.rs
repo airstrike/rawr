@@ -78,10 +78,10 @@ pub enum Error {
 
     /// A Rust future a task runs is not `Send`, so the runner cannot run it.
     #[error(
-        "the future `{function}` returns is not `Send` ({location}). Its runtime runs it \
-         on whichever thread polls it, so it takes only a `Send` future, as iced's \
-         `Task::future` and tokio's `spawn` do. Hold `Send` values across each `.await`, \
-         such as `Arc` in place of `Rc`."
+        "the future returned by `{function}` cannot be sent between threads safely \
+         ({location}); a task takes only a `Send` future, as iced's `Task::future` and \
+         tokio's `spawn` do, so hold only `Send` values, such as `Arc` in place of `Rc`, \
+         across each `.await`"
     )]
     NonSendFuture {
         /// The Rust function whose future is not `Send`.
@@ -93,11 +93,10 @@ pub enum Error {
     /// A generic Rust item bounds a type parameter that a script type fills
     /// by a trait `rawr::Value` lacks (D513.2).
     #[error(
-        "a generic Rust item needs `{bound}` of the script type it is called with \
-         ({location}). Rawr passes a script value to native generic code as \
-         `rawr::Value`, which carries it but can't give native code a trait that \
-         picks behaviour by type alone, such as `Default`, `Copy` or `Deserialize`. \
-         Call it with a Rust type there."
+        "the trait bound `rawr::Value: {bound}` is not satisfied ({location}); a script \
+         type reaches generic Rust code as `rawr::Value`, which can't implement a trait \
+         that works from the type alone, such as `Default`, `Copy` or `Deserialize`; \
+         call it with a Rust type there"
     )]
     ErasedBound {
         /// The bound `rawr::Value` doesn't meet, as rustc wrote it.
@@ -130,7 +129,7 @@ pub enum Error {
 
     /// rawr could not read what Cargo, rustup or its own cache wrote: a bug
     /// in rawr, never in the program, so it says so as rustc's ICEs do.
-    #[error("internal error: rawr misread {document}: {reason}. This is a rawr bug")]
+    #[error("internal error: cannot read {document}: {reason}; this is a rawr bug")]
     Schema {
         /// The bounded document being decoded.
         document: &'static str,
@@ -168,7 +167,7 @@ pub enum Error {
 
     /// rawr could not read what its rustc driver wrote: a bug in rawr,
     /// never in the program, so it says so as rustc's own ICEs do.
-    #[error("internal error: rawr misread rustc's output (`{code}`): {reason}")]
+    #[error("internal error: cannot read the rustc driver's output (`{code}`): {reason}")]
     Extraction {
         /// Stable machine-readable rejection code.
         code: &'static str,
@@ -192,14 +191,12 @@ impl Error {
     pub fn invariant(&self) -> Option<String> {
         match self {
             Self::Node { source, .. } => source.invariant(),
-            Self::Schema { document, reason } => {
-                Some(format!("rawr reads {document} as it was written: {reason}"))
+            Self::Schema { document, reason } => Some(format!("cannot read {document}: {reason}")),
+            Self::Input { code, reason } if input_condition(code, reason).is_none() => {
+                Some(format!("lost track of a build input (`{code}`): {reason}"))
             }
-            Self::Input { code, reason } if input_condition(code, reason).is_none() => Some(
-                format!("rawr keeps track of each build input (`{code}`): {reason}"),
-            ),
             Self::Extraction { code, reason } => Some(format!(
-                "rawr reads what its rustc driver writes (`{code}`): {reason}"
+                "cannot read the rustc driver's output (`{code}`): {reason}"
             )),
             _ => None,
         }
@@ -212,8 +209,8 @@ impl Error {
 fn input_message(code: &str, reason: &str) -> String {
     input_condition(code, reason).unwrap_or_else(|| {
         format!(
-            "internal error: rawr lost track of a build input (`{code}`): {reason}. \
-             This is a rawr bug"
+            "internal error: lost track of a build input (`{code}`): {reason}; \
+             this is a rawr bug"
         )
     })
 }
@@ -234,7 +231,7 @@ fn input_condition(code: &str, reason: &str) -> Option<String> {
         | "runner-harness-fixture-path"
         | "runner-harness-fixture-root" => format!("a path is not valid UTF-8: {reason}"),
         "symlink-input" => {
-            format!("`{reason}` is reached through a symlink, which rawr can't build from yet")
+            format!("cannot build from `{reason}`: paths reached through a symlink are not supported yet")
         }
         "cargo-commit-skew" => format!(
             "this Cargo (commit `{reason}`) is not the one rawr builds with; \
@@ -244,8 +241,8 @@ fn input_condition(code: &str, reason: &str) -> Option<String> {
             format!("`{reason}` has no checksum in Cargo.lock")
         }
         "registry-root-outside-cargo-home" => format!(
-            "`{reason}` is outside CARGO_HOME: a replaced or vendored registry source, \
-             which rawr can't build from yet"
+            "cannot build from `{reason}`: replaced or vendored registry sources outside \
+             CARGO_HOME are not supported yet"
         ),
         "registry-marker-malformed" | "registry-marker-schema" => format!(
             "Cargo's registry copy of a package is damaged ({reason}); \
@@ -255,7 +252,7 @@ fn input_condition(code: &str, reason: &str) -> Option<String> {
             format!("CARGO_HOME is unset and there is no home directory, so Cargo can't fetch `{reason}`")
         }
         "cargo-env-config-unproved" => "a build script's `cargo::rerun-if-env-changed` names a \
-             variable that `[env]` in .cargo/config.toml sets, which rawr can't build with yet"
+             variable that `[env]` in .cargo/config.toml sets; this is not supported yet"
             .into(),
         _ => return None,
     })
@@ -296,8 +293,8 @@ mod tests {
                     document: "Cargo unit graph",
                     reason: "missing field `units`".into(),
                 },
-                "internal error: rawr misread Cargo unit graph: missing field `units`. \
-                 This is a rawr bug",
+                "internal error: cannot read Cargo unit graph: missing field `units`; \
+                 this is a rawr bug",
             ),
             (
                 Error::Input {
@@ -318,8 +315,8 @@ mod tests {
                     code: "protected-build-package-owner-missing",
                     reason: "crunchy 0.2.4".into(),
                 },
-                "internal error: rawr lost track of a build input \
-                 (`protected-build-package-owner-missing`): crunchy 0.2.4. This is a rawr bug",
+                "internal error: lost track of a build input \
+                 (`protected-build-package-owner-missing`): crunchy 0.2.4; this is a rawr bug",
             ),
         ];
         for (error, expected) in cases {

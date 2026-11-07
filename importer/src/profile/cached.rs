@@ -14,11 +14,11 @@ pub(super) fn classify<C: Checked, D: Definition<C>>(
     let parent = graph
         .node_chain()
         .cloned()
-        .expect("rawr classifies a cached profile under its graph's node");
+        .expect("the cached profile's graph has no node");
     assert_eq!(
         parent.output_limit(),
         limits.node_output_bytes(),
-        "rawr classifies a profile under its graph's own limits"
+        "the profile's output limit differs from its graph's"
     );
     let identity = definition.identity();
     let version = definition.version();
@@ -277,7 +277,7 @@ mod tests {
     /// naming the invariant; other failures pass through (#538, D664).
     #[test]
     #[should_panic(
-        expected = "rawr's cached profile entries decode under the inputs that key them"
+        expected = "a cached profile entry went stale under a key that holds all its inputs"
     )]
     fn a_keyed_profile_entry_that_does_not_decode_is_a_rawr_bug() {
         let allocation = crate::profile::Error::Allocation.fresh();
