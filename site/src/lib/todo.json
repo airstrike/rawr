@@ -2790,7 +2790,8 @@
     {"issue":1163,"title":"The generated runner's own items share a namespace with the program's types (a program `struct Program` fails to build)","state":"open","category":"Divergences from rustc"},
     {"issue":1164,"title":"A marked src/main.rs can't name its own package's lib by the crate name","state":"open","category":"Divergences from rustc"},
     {"issue":1165,"title":"An idle but live iced app is stopped after a few minutes with 'the runner did not finish a frame before its deadline'","state":"open","category":"Health"},
-    {"issue":1166,"title":"A program running under rawr run can tell it is, and can observe reload outcomes as events","state":"open","category":"Health"}
+    {"issue":1166,"title":"A program running under rawr run can tell it is, and can observe reload outcomes as events","state":"open","category":"Health"},
+    {"issue":1167,"title":"A crossing test's 120 s budget counts time spent waiting for Cargo's build-directory lock","state":"open","category":"Health"}
   ],
   "groups": [
     {
