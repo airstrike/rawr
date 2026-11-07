@@ -62,7 +62,7 @@ fn a_native_module_declaring_a_marked_module_is_an_error() {
     let target = rawr::project::Target::discover(project.path()).unwrap();
     let error = Graph::load(&Engine::new(), &target).unwrap_err();
     let message = error.to_string();
-    assert!(message.contains("native module `crate::model` declares `mod view;`") && message.contains("not yet from a native module."), "{message}");
+    assert!(message.contains("native module `crate::model` cannot declare the marked module `mod view;`") && message.contains(") yet. Declare it from the crate root"), "{message}");
     let report = error.report().unwrap();
     assert!(report.labels()[0].source().identity().ends_with("src/model.rs"));
 }
@@ -181,6 +181,57 @@ fn a_qualified_type_path_into_a_rust_module_names_the_app_crate() {
     let mut engine = Engine::new();
     engine.register_host_facade(facade.finish().unwrap()).unwrap();
     engine.compile_package_executable(&target).unwrap();
+}
+
+/// A `use` that binds a `.rs` module (`use crate::model;`, `use
+/// crate::model as m;`, `use super::model::inner;`) binds it as a module:
+/// its constants, functions, types and nested modules are reached through
+/// the name, as rustc reaches them (#1117).
+#[test]
+fn a_use_bound_rust_module_names_the_app_crate() {
+    use rawr::host;
+    struct Thing;
+    let project = Project::new("bound-module");
+    project.write("Cargo.toml", "[package]\nname = \"poly-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    project.write("src/main.rs", "// rawr\nmod model;\nmod view;\n\npub fn main() -> i64 {\n    view::total()\n}\n");
+    project.write(
+        "src/view.rs",
+        "// rawr\nuse crate::model;\nuse crate::model as m;\nuse super::model::inner;\nuse model::BONUS;\n\n\
+         pub fn keep(t: model::Thing) -> m::Thing {\n    t\n}\n\n\
+         pub fn total() -> i64 {\n    let t: m::Thing = keep(model::make());\n    \
+         model::BONUS + m::BONUS + BONUS + model::answer() + m::answer() + inner::deep() + model::inner::deep()\n}\n",
+    );
+    project.write(
+        "src/model.rs",
+        "pub const BONUS: i64 = 7;\npub struct Thing;\npub fn make() -> Thing { Thing }\npub fn answer() -> i64 { 21 }\npub mod inner {\n    pub fn deep() -> i64 { 1 }\n}\n",
+    );
+
+    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let i64 = || host::type_ref::Type::builtin(host::type_ref::Builtin::I64);
+    let mut facade = host::facade::Builder::new("poly_app", host::facade::Abi::new(1).unwrap()).unwrap();
+    facade.module("model").unwrap();
+    facade.module("model::inner").unwrap();
+    facade.type_::<Thing>("model::Thing", &[], &[]).unwrap();
+    facade.item(host::item::Definition::value("model::BONUS", i64()).unwrap()).unwrap();
+    let mut make = host::signature::Builder::new();
+    make.output(host::type_ref::Type::registered("model::Thing").unwrap());
+    facade.item(host::item::Definition::function("model::make", make.finish()).unwrap()).unwrap();
+    for function in ["model::answer", "model::inner::deep"] {
+        let mut signature = host::signature::Builder::new();
+        signature.output(i64());
+        facade.item(host::item::Definition::function(function, signature.finish()).unwrap()).unwrap();
+    }
+    let mut engine = Engine::new();
+    engine.register_host_facade(facade.finish().unwrap()).unwrap();
+    engine.compile_package_executable(&target).unwrap();
+
+    #[cfg(feature = "rust-import")]
+    {
+        let seed = Graph::load(&engine, &target).unwrap().rust_demand_seed();
+        for path in ["poly_app::model::BONUS", "poly_app::model::answer", "poly_app::model::inner::deep", "poly_app::model::Thing"] {
+            assert!(seed.contains(&Box::<str>::from(path)), "{path} in {seed:?}");
+        }
+    }
 }
 
 /// The app's own crate is a Cargo dependency generated from its
