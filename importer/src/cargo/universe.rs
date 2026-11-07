@@ -2829,19 +2829,7 @@ impl Closure {
                 return Err(schema("duplicate package identity"));
             }
         }
-        let mut dependency_index = DependencyIndex::new();
-        for key in raw.keys() {
-            for spelling in dependency_spellings(key)? {
-                match dependency_index.entry(spelling) {
-                    std::collections::btree_map::Entry::Vacant(entry) => {
-                        entry.insert(Some(key.clone()));
-                    }
-                    std::collections::btree_map::Entry::Occupied(mut entry) => {
-                        entry.insert(None);
-                    }
-                }
-            }
-        }
+        let dependency_index = dependency_index(raw.keys())?;
         let mut edges = 0_usize;
         for table in raw.values() {
             let count = table
@@ -2996,6 +2984,37 @@ fn dependencies(table: &Table, index: &DependencyIndex) -> Result<Vec<Key>> {
     }
     resolved.sort_unstable();
     Ok(resolved)
+}
+
+/// Each spelling a lock's `dependencies` entry may use, and the package it
+/// names. Cargo writes the shortest spelling no other package shares, and a
+/// package with no source (a path package) can only be written without one.
+/// So when a sourced package and a path package share a name and version,
+/// the bare `name version` names the path package, and the sourced one is
+/// always written with its `(source)`. A spelling two path packages share,
+/// or two sourced packages and no path package, names none.
+fn dependency_index<'a>(keys: impl Iterator<Item = &'a Key> + Clone) -> Result<DependencyIndex> {
+    let mut index = DependencyIndex::new();
+    for key in keys.clone().filter(|key| !key.source.is_empty()) {
+        for spelling in dependency_spellings(key)? {
+            index
+                .entry(spelling)
+                .and_modify(|named| *named = None)
+                .or_insert_with(|| Some(key.clone()));
+        }
+    }
+    let mut by_path = BTreeSet::new();
+    for key in keys.filter(|key| key.source.is_empty()) {
+        for spelling in dependency_spellings(key)? {
+            let named = if by_path.insert(spelling.clone()) {
+                Some(key.clone())
+            } else {
+                None
+            };
+            index.insert(spelling, named);
+        }
+    }
+    Ok(index)
 }
 
 fn dependency_spellings(key: &Key) -> Result<Vec<Box<str>>> {
@@ -3390,6 +3409,24 @@ mod tests {
         let error = super::Closure::parse(ambiguous.as_bytes())
             .expect_err("name-only dependency cannot select an ambiguous indexed package");
         assert!(format!("{error}").contains("ambiguous"));
+    }
+
+    /// A path package and a git package of one name and version, as a
+    /// `[patch]` of a git source leaves them: Cargo writes the path one bare
+    /// and the git one with its source.
+    #[test]
+    fn a_bare_name_and_version_shared_with_a_sourced_package_names_the_path_package() {
+        let git = "git+https://example.com/emporium.git?branch=master#82d4c650";
+        let lock = format!(
+            "version = 4\n\n\
+             [[package]]\nname = \"rawr-iced\"\nversion = \"1.0.0\"\n\
+             dependencies = [\"types 0.0.1\", \"shop\"]\n\n\
+             [[package]]\nname = \"types\"\nversion = \"0.0.1\"\n\n\
+             [[package]]\nname = \"types\"\nversion = \"0.0.1\"\nsource = \"{git}\"\n\n\
+             [[package]]\nname = \"shop\"\nversion = \"0.1.0\"\nsource = \"{git}\"\n\
+             dependencies = [\"types 0.0.1 (git+https://example.com/emporium.git?branch=master#82d4c650)\"]\n"
+        );
+        super::Closure::parse(lock.as_bytes()).expect("each spelling names one package");
     }
 
     #[test]
