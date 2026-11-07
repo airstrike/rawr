@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.166 (2026-11-07)
+
 - Error, panic and status messages say what failed, on what, and what to do, in rustc's and Cargo's plain style. A future that isn't `Send` now reads "the future returned by `f` cannot be sent between threads safely", and an unsupported construct followed by a hint no longer has "is not supported" tacked onto the end of the hint. (#1109)
 
 ## 0.3.165 (2026-11-07)

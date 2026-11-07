@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-07",
-  "version": "0.3.165",
+  "version": "0.3.166",
   "examples": {
     "running": 29,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"Error, panic and status messages say what failed, on what, and what to do, in rustc's and Cargo's plain style. A future that isn't `Send` now reads \"the future returned by `f` cannot be sent between threads safely\", and an unsupported construct followed by a hint no longer has \"is not supported\" tacked onto the end of the hint.","issues":[1109]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.166",
+        "date": "2026-11-07",
+        "entries": [
+          {"text":"Error, panic and status messages say what failed, on what, and what to do, in rustc's and Cargo's plain style. A future that isn't `Send` now reads \"the future returned by `f` cannot be sent between threads safely\", and an unsupported construct followed by a hint no longer has \"is not supported\" tacked onto the end of the hint.","issues":[1109]}
+        ]
+      },
       {
         "version": "0.3.165",
         "date": "2026-11-07",
@@ -2674,7 +2676,7 @@
     {"issue":1106,"title":"range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc"},
     {"issue":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"open","category":"Divergences from rustc"},
     {"issue":1108,"title":"A git dependency on a branch with a slash panics rawr-import while it reads Cargo metadata","state":"closed","category":"Health","release":"0.3.165"},
-    {"issue":1109,"title":"Error messages that don't read like a program's error messages","state":"closed","category":"Health"},
+    {"issue":1109,"title":"Error messages that don't read like a program's error messages","state":"closed","category":"Health","release":"0.3.166"},
     {"issue":1110,"title":"A Git dependency whose branch or tag has `&` or `#` is declared with the wrong reference","state":"open","category":"Health"},
     {"issue":1111,"title":"A package from an alternative sparse registry panics rawr-import instead of a plain unsupported-registry error","state":"open","category":"Health"},
     {"issue":1112,"title":"Unsupported-construct messages depend on a \"not supported\" substring","state":"open","category":"Health"},
