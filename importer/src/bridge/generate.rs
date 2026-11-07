@@ -9324,8 +9324,14 @@ fn opaque_table_source(
         };
         // An operand that holds the table's opaque type, where the table's
         // type is that opaque type itself, is taken at the type that holds
-        // it (`shape_witnesses`).
-        let holding = same_opaque(&returned, &key) && !same_opaque(&operand, &key);
+        // it (`shape_witnesses`). So is a receiver whose type's arguments
+        // hold it, as `MouseArea<'_, Message, Container<'_, _>>` of
+        // `.on_press(..)`: `opaque_operand` gives the opaque type there.
+        let receiver_holds = position == 0
+            && matches!(consumer.operation(), Operation::Method { signature, .. }
+                if signature.instance().is_none());
+        let holding =
+            same_opaque(&returned, &key) && (receiver_holds || !same_opaque(&operand, &key));
         // A call that gives a value of another opaque type, as iced's
         // `Application::subscription` gives another `impl Program`, makes
         // that value's own table here, where rustc knows its type. One that
@@ -9484,11 +9490,11 @@ fn shape_witnesses(body: &str, position: usize) -> String {
             shaped.push_str(line);
             continue;
         };
-        let holding = format!("{}T{}", &ty[..hole], &ty[hole + 1..]);
+        let (holding, lifetimes) = named_lifetimes(&format!("{}T{}", &ty[..hole], &ty[hole + 1..]));
         shaped.push_str(&line.replacen(
             &take,
             &format!(
-                " = take_like(arguments, {position}, {{ fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<{holding}> {{ std::marker::PhantomData }} shape(_w) }})?;"
+                " = take_like(arguments, {position}, {{ fn shape<{lifetimes}T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<{holding}> {{ std::marker::PhantomData }} shape(_w) }})?;"
             ),
             1,
         ));
@@ -9496,11 +9502,50 @@ fn shape_witnesses(body: &str, position: usize) -> String {
     shaped
 }
 
+/// The Rust type `ty`, which `concrete_type` wrote for a body, as an item
+/// names it: each lifetime it leaves to inference, `'_`, a lifetime of the
+/// item's own, `'l0`, `'l1` and on, and those lifetimes as the item
+/// declares them, each followed by `, `. An item's lifetimes are its
+/// caller's to pick, as a body's inferred ones are.
+fn named_lifetimes(ty: &str) -> (String, String) {
+    let mut declared = String::new();
+    let named = inferred_lifetimes(ty, |index| {
+        declared.push_str(&format!("'l{index}, "));
+        format!("'l{index}")
+    });
+    (named, declared)
+}
+
+/// `ty` with each lifetime it leaves to inference, `'_`, as `name` names
+/// the one at its index among them.
+fn inferred_lifetimes(ty: &str, mut name: impl FnMut(usize) -> String) -> String {
+    let mut named = String::with_capacity(ty.len());
+    let mut rest = ty;
+    let mut count = 0;
+    while let Some(at) = rest.find("'_") {
+        named.push_str(&rest[..at]);
+        if rest[at + 2..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_alphanumeric() || next == '_')
+        {
+            named.push_str("'_");
+        } else {
+            named.push_str(&name(count));
+            count += 1;
+        }
+        rest = &rest[at + 2..];
+    }
+    named.push_str(rest);
+    named
+}
+
 /// The offsets of each `_` in the Rust type `ty` that stands for a whole
 /// type, as in `Map<_, F, M>`, and not inside a name.
 fn opaque_holes(ty: &str) -> Vec<usize> {
     let bytes = ty.as_bytes();
-    let name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    // Neither inside a name nor a lifetime's, `'_`.
+    let name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'\'';
     (0..bytes.len())
         .filter(|&at| {
             bytes[at] == b'_'
@@ -16897,16 +16942,33 @@ fn render_container_path(
             .write_all(instance.as_bytes())
             .map_err(request::unwritable);
     }
-    output
-        .write_all(path.as_bytes())
-        .map_err(request::unwritable)?;
+    let mut arguments = Vec::new();
     render_generic_arguments(
         partition.container_parameters,
         partition.container_types,
         partition.container_constants,
         if type_position { b"<" } else { b"::<" },
-        output,
-    )
+        &mut arguments,
+    )?;
+    output
+        .write_all(path.as_bytes())
+        .map_err(request::unwritable)?;
+    // A type names each lifetime it declares as rustc infers it in a body,
+    // `'_` (`concrete_type`); a turbofish leaves them out, as rustc allows.
+    let lifetimes =
+        SCOPED_PATHS.with_borrow(|paths| paths.get(path).map_or(0, |found| found.count));
+    if type_position && lifetimes != 0 {
+        let marks = vec!["'_"; lifetimes as usize].join(", ");
+        let arguments = String::from_utf8(arguments).map_err(request::unwritable)?;
+        let written = match arguments.strip_prefix('<') {
+            Some(rest) => format!("<{marks}, {rest}"),
+            None => format!("<{marks}>"),
+        };
+        return output
+            .write_all(written.as_bytes())
+            .map_err(request::unwritable);
+    }
+    output.write_all(&arguments).map_err(request::unwritable)
 }
 
 /// `instance` with each parameter given its substitution from `types`, the
@@ -18033,16 +18095,24 @@ fn names_inferred(text: &str) -> bool {
     let identifier = |character: Option<char>| {
         character.is_some_and(|character| character.is_alphanumeric() || character == '_')
     };
+    // Not a lifetime rustc infers, `'_`.
     text.match_indices('_').any(|(at, _)| {
-        !identifier(text[..at].chars().next_back()) && !identifier(text[at + 1..].chars().next())
+        let before = text[..at].chars().next_back();
+        !identifier(before) && before != Some('\'') && !identifier(text[at + 1..].chars().next())
     })
 }
 
 /// The family of `ty`, an imported type that carries lifetimes. An opaque
 /// type's is what the wrapper of the call that makes it gives, when it has
-/// one (`family`).
+/// one (`family`). A type that holds an opaque type, as iced's
+/// `Container<'a, impl Widget>`, has none: Rust code can't name it, so its
+/// value is held where rustc infers its type and lifetimes, in the arena.
 fn family_of(ty: &convert::Type) -> Option<family::Family> {
-    let convert::Type::Nominal { definition, .. } = ty else {
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = ty
+    else {
         return None;
     };
     if !carries_lifetime(ty) {
@@ -18054,6 +18124,9 @@ fn family_of(ty: &convert::Type) -> Option<family::Family> {
             Some(held) => family(held, BOXED_LIFETIMES),
             None => family::of(&key),
         };
+    }
+    if arguments.iter().any(holds_opaque) {
+        return None;
     }
     let lifetimes = TYPE_TRAITS.with_borrow(|types| types.get(definition.as_bytes()).copied())?;
     family(scoped_type(ty)?, lifetimes)
@@ -18082,8 +18155,12 @@ fn container_family(path: &str, container: &str) -> Option<family::Family> {
     // A borrowed type argument, as `Reader<&[u8]>`'s, borrows at `'x`.
     let borrowed = rest.contains('&');
     // So does a type argument that is a scoped type, as `Column<Element<'x,
-    // ..>>`'s.
-    let (rest, inner) = mark_scoped_arguments(rest);
+    // ..>>`'s, and each lifetime the container's spelling leaves to
+    // inference, `'_` (`concrete_type`).
+    let rest = inferred_lifetimes(rest, |_| "'x".to_owned());
+    let written = rest.contains("'x");
+    let (rest, inner) = mark_scoped_arguments(&rest);
+    let inner = inner || written;
     if lifetimes.count == 0 && !borrowed && !inner {
         return None;
     }
@@ -18100,7 +18177,9 @@ fn container_family(path: &str, container: &str) -> Option<family::Family> {
     let rest = marked;
     let marks = vec!["'x"; lifetimes.count as usize].join(", ");
     let text = match rest.strip_prefix('<') {
-        Some(arguments) if lifetimes.count != 0 => format!("{path}<{marks}, {arguments}"),
+        Some(arguments) if lifetimes.count != 0 && !arguments.starts_with('\'') => {
+            format!("{path}<{marks}, {arguments}")
+        }
         Some(_) => format!("{path}{rest}"),
         None if rest.is_empty() => format!("{path}<{marks}>"),
         None => return None,
@@ -19433,13 +19512,15 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         } => {
             let mut text =
                 TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())?;
-            if !arguments.is_empty() {
-                let arguments = arguments
-                    .iter()
-                    .map(concrete_type)
-                    .collect::<Option<Vec<_>>>()?;
+            // Each lifetime the type declares, as rustc names one it
+            // infers in a body: `'_`. An item names them (`named_lifetimes`).
+            let lifetimes = scoped_definition(definition).map_or(0, |lifetimes| lifetimes.count);
+            let parts = std::iter::repeat_n(Some("'_".to_owned()), lifetimes as usize)
+                .chain(arguments.iter().map(concrete_type))
+                .collect::<Option<Vec<_>>>()?;
+            if !parts.is_empty() {
                 text.push('<');
-                text.push_str(&arguments.join(", "));
+                text.push_str(&parts.join(", "));
                 text.push('>');
             }
             text

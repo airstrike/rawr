@@ -1638,6 +1638,62 @@ fn an_option_of_an_opaque_widget_crosses_whole_while_it_is_none() {
     );
 }
 
+/// iced's modal (#955), without what borrows the view: a script function
+/// `wrapped<'a, Message>(content: impl Widget<Message> + 'a, ..) -> impl
+/// Widget<Message> + 'a` wraps an opaque widget in a container and a mouse
+/// area, whose types declare a lifetime, and puts that in another opaque
+/// widget. The runner names each type with its lifetimes, as rustc does: a
+/// witness of `MouseArea<'_, Message, Container<'_, _>>` names them, and so
+/// does each receiver that holds the opaque type. Beside it, a field
+/// borrows the state's email for the view's lifetime through `Field<'a,
+/// ..>::value(self, &'a str) -> Self`, a crate method rustc reads as keeping
+/// it borrowed (#598). The output is `cargo run`'s.
+#[test]
+fn a_script_function_wraps_an_opaque_widget_in_types_that_declare_a_lifetime() {
+    let (rawr, cargo) = both_printed("wrapped.rs", "rule,rule,Email,outside,Email");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("3 view pad 0 |Email| opaque area container 2 opaque rule 2")
+            && rawr.contains("4 view pad 0 |me2@rawr| opaque area container 2 opaque rule 2")
+            && rawr.ends_with("last view pad 0 |me0@rawr| opaque area container 2 opaque rule 0"),
+        "{rawr}"
+    );
+}
+
+/// iced's modal (#955) itself: as `wrapped.rs`, but the content the opaque
+/// widget wraps borrows the view, so the opaque value is made in the view's
+/// region. The output is `cargo run`'s.
+#[test]
+#[ignore = "blocked: #965, an opaque value made from a value in a view's region has no family, so its region branch stores it in the arena at 'static (E0521-like `'1` must outlive `'static`)"]
+fn a_script_function_wraps_opaque_widgets_in_types_that_declare_a_lifetime() {
+    let (rawr, cargo) = both_printed("modal.rs", "Show,Email,outside,Show,Submit");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("3 view pad 0 container 10 pad 0 [Show] <x Shown:0> opaque area container 2 opaque container 1 pad 0 |me1@rawr| [Submit]")
+            && rawr.contains("5 message HideModal")
+            && rawr.ends_with("last view container 10 pad 0 [Show] <Shown:0>"),
+        "{rawr}"
+    );
+}
+
+/// iced's lazy (#328): `lazy(self.version, |_| ..)` is a widget only where
+/// what its closure gives is `'static`, as its impl's `W: Widget + 'static`
+/// says, and a container and `column!` take it. The widgets the closure
+/// makes own what they show, so rustc names them at `'static` and so does
+/// the runner. The output is `cargo run`'s.
+#[test]
+#[ignore = "blocked: a region's family writes the type its closure fills, `W` of `Lazy<'x, W, u8>`, at the region's `'x`, where rustc names it `'static`, so `boxed` of a region's `Container<'x, Lazy<..>>` is E0521"]
+fn a_widget_whose_closure_gives_static_widgets_is_boxed_in_a_view() {
+    let (rawr, cargo) = both_printed("lazy.rs", "Add,Add,item2,Add");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("3 view pad 0 container 1 lazy pad 0 [item2] [item3] [Add]")
+            && rawr.contains("3 message Delete(\"item2\")")
+            && rawr.ends_with("last view pad 0 container 1 lazy pad 0 [item2] [item3] [Add]"),
+        "{rawr}"
+    );
+}
+
 /// iced's pick_list: `column!` boxes a string literal through the crate's
 /// impl of its trait for `&str`, and a choice takes an `Option` of a script
 /// enum, a script `&[T]` constant as its `L: Borrow<[T]>`, and the enum's
