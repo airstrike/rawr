@@ -3600,8 +3600,8 @@ fn imported_runtime(
             if adapter.instance != [0; 32] {
                 builder.bind_imported_instance(adapter.selector, adapter.instance, adapter.item, move |call, values| runtime_invoke(adapter, call, values))?;
             }
-            if builder.accepts_imported(&adapter.selector) {
-                builder.bind_imported(adapter.selector, move |call, values| runtime_invoke(adapter, call, values))?;
+            if builder.accepts_imported_at(&adapter.selector, adapter.item) {
+                builder.bind_imported_at(adapter.selector, adapter.item, move |call, values| runtime_invoke(adapter, call, values))?;
             }
         }
         // A proof-backed application has no facade selector: a call reaches
@@ -7077,12 +7077,14 @@ fn hidden_segments(source: &[u8]) -> std::collections::BTreeSet<String> {
     found
 }
 
-/// The path below the crate root of the facade item the adapter is for, as
-/// the runtime's facade names it: a method after the type it is on, as
-/// `widgets::Row::boxed`. A trait's method has one selector on every type,
+/// The path of the facade item the adapter is for, as the runtime's facade
+/// names it: from the crate's root, with a method after the type it is on,
+/// as `events::widgets::Row::boxed`. A trait's method has one selector on every type,
 /// so the runtime binds the instance of each type's item by this path.
 fn facade_item_path(plan: &Plan) -> String {
-    let mut segments = plan.export().path().collect::<Vec<_>>();
+    let mut segments = std::iter::once(plan.export().root_alias())
+        .chain(plan.export().path())
+        .collect::<Vec<_>>();
     if matches!(plan.operation(), Operation::Method { .. }) && segments.last() != Some(&plan.name())
     {
         segments.push(plan.name());
