@@ -1777,6 +1777,43 @@ mod tests {
         assert_eq!(format!("{copy:?}"), format!("<&str: {}>", Error::Expired));
     }
 
+    /// A region kept past its call is reached by its handles for as long
+    /// as its pins hold it: pins let go end it, and pins never let go end
+    /// it when its site keeps the next one (#1217).
+    #[test]
+    fn a_kept_region_lives_as_long_as_its_pins_hold_it() {
+        use super::{Pins, Region, Scoped, Site};
+        fn kept(pins: &Pins, text: &str, site: &'static Site) -> Scoped {
+            let mut region = Region::anchored(pins);
+            let word = region.insert::<WordF>(pins.pin(text.into()));
+            region.keep(site);
+            word
+        }
+        static ONE: Site = Site::new();
+        static TWO: Site = Site::new();
+        let mut pins = Pins::new();
+        let word = kept(&pins, "one", &ONE);
+        let again = kept(&pins, "two", &ONE);
+        assert_eq!(depth(), 0);
+        assert_eq!(word.debug(), Ok(Some("\"one\"".to_owned())));
+        assert_eq!(again.debug(), Ok(Some("\"two\"".to_owned())));
+        pins.clear();
+        assert_eq!(word.debug(), Err(Error::Expired));
+        assert_eq!(again.debug(), Err(Error::Expired));
+        let lasting = Pins::lasting();
+        let first = kept(&lasting, "one", &ONE);
+        let other = kept(&lasting, "two", &TWO);
+        let next = kept(&lasting, "three", &ONE);
+        assert_eq!(first.debug(), Err(Error::Expired));
+        assert_eq!(other.debug(), Ok(Some("\"two\"".to_owned())));
+        assert_eq!(next.debug(), Ok(Some("\"three\"".to_owned())));
+        // A region of no pins ends with its call.
+        let mut region = Region::new();
+        let word = region.insert::<WordF>("four");
+        region.keep(&ONE);
+        assert_eq!(word.debug(), Err(Error::Expired));
+    }
+
     /// A frame opens once; what its call gives back is there once it ends.
     #[test]
     fn an_opening_opens_once_and_gives_back_its_copies() {
