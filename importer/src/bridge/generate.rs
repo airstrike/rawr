@@ -3932,26 +3932,9 @@ mod __rawr_profile_host {
                 return Task(Box::new(move || Box::pin(future)));
             }
             // Elsewhere it runs at the first poll, on whatever runs the
-            // future: a runtime the call needs and that thread lacks is
-            // named, not reported as tokio's missing reactor (D527).
-            Task(Box::new(move || {
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(make)) {
-                    Ok(future) => Box::pin(future),
-                    Err(payload) => {
-                        let said = payload
-                            .downcast_ref::<&str>()
-                            .map(|said| (*said).to_owned())
-                            .or_else(|| payload.downcast_ref::<String>().cloned())
-                            .unwrap_or_default();
-                        if said.contains("reactor") || said.contains("runtime") {
-                            panic!(
-                                "rawr: this native call needs its async runtime, and the program runs none: give `async fn main` the runtime's attribute, as `#[tokio::main]` (D527). It said: {said}"
-                            );
-                        }
-                        std::panic::resume_unwind(payload)
-                    }
-                }
-            }))
+            // future, and a panic it raises there is its own, as cargo
+            // shows it.
+            Task(Box::new(move || Box::pin(make())))
         }
 
         pub struct Project<T>(std::cell::Cell<Option<T>>);

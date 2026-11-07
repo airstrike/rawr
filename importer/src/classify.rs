@@ -9864,24 +9864,26 @@ impl<P: api::Phase> Context<'_, P> {
     }
 
     /// Whether `ty` is a type parameter `generics` bounds by `Future`, or by
-    /// a trait of the `sipper` crate, as a closure's `Fut` is in `F:
-    /// FnOnce(Sender<P>) -> Fut, Fut: Future<Output = O>`.
+    /// a trait whose supertraits include it as rustc elaborates them, as a
+    /// closure's `Fut` is in `F: FnOnce(Sender<P>) -> Fut, Fut:
+    /// Future<Output = O>`.
     fn future_bounded(&self, generics: &model::Generics, ty: &model::Type) -> bool {
         let model::Type::Parameter { index, .. } = ty else {
             return false;
         };
-        generics.predicates().any(|predicate| {
-            matches!(predicate, model::Predicate::Bound {
-                ty: model::Type::Parameter { index: bounded, .. },
-                bound: model::Bound::Trait {
-                    trait_id,
-                    polarity: model::Polarity::Positive,
+        let bounds = generics
+            .predicates()
+            .filter(|predicate| {
+                matches!(predicate, model::Predicate::Bound {
+                    ty: model::Type::Parameter { index: bounded, .. },
                     ..
-                },
-            } if *bounded == *index
-                && (self.is_core_trait(trait_id, "Future")
-                    || trait_id.unit().crate_name() == "sipper"))
-        })
+                } if bounded == index)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        self.bound_traits(&bounds)
+            .iter()
+            .any(|(trait_id, _)| self.is_core_trait(trait_id, "Future"))
     }
 
     fn is_core_trait(&self, id: &api::identity::Definition, name: &str) -> bool {
