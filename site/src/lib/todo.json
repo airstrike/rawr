@@ -2726,7 +2726,8 @@
     {"issue":1133,"title":"Embedding: the call-stack depth limit is 8 in debug builds and 64 in release","state":"open","category":"Health"},
     {"issue":1134,"title":"Embedding: the host boundary carries no enums, Vec or &mut","state":"open","category":"Divergences from rustc"},
     {"issue":1135,"title":"The generated target/rawr/crate manifest puts src/main.rs in both its lib and bin targets, so cargo warns","state":"open","category":"Health"},
-    {"issue":1136,"title":"The runner's copy of a crate misses the files the crate reads at compile time, such as include_bytes! assets","state":"open","category":"Divergences from rustc"}
+    {"issue":1136,"title":"The runner's copy of a crate misses the files the crate reads at compile time, such as include_bytes! assets","state":"open","category":"Divergences from rustc"},
+    {"issue":1137,"title":"A build script whose rerun-if-env-changed names a variable that Cargo config's [env] sets is refused","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3511,7 +3512,8 @@
             {"number":1125,"title":"A marked module can't name a direct proc-macro dependency's macros","state":"open"},
             {"number":1127,"title":"A native main announces a restart on a changed field but keeps running the old program","state":"open"},
             {"number":1135,"title":"The generated target/rawr/crate manifest puts src/main.rs in both its lib and bin targets, so cargo warns","state":"open"},
-            {"number":1136,"title":"The runner's copy of a crate misses the files the crate reads at compile time, such as include_bytes! assets","state":"open"}
+            {"number":1136,"title":"The runner's copy of a crate misses the files the crate reads at compile time, such as include_bytes! assets","state":"open"},
+            {"number":1137,"title":"A build script whose rerun-if-env-changed names a variable that Cargo config's [env] sets is refused","state":"open"}
           ]
         }
       ]
