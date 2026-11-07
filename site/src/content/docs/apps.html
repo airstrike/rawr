@@ -102,6 +102,36 @@ fn main() {
 <h2 id="async">Async runtimes</h2>
 <p>A marked crate root may have an <code>async fn main</code> under its runtime&rsquo;s attribute, such as <code>#[tokio::main]</code>. The runtime is the one in your <code>Cargo.toml</code>, built by Cargo. rawr adds none. <a href="/docs/run#async">An async main</a> says what works.</p>
 
+<h2 id="outcomes">An app that shows its reloads</h2>
+<p>An app with an editor of its own can show what each save did. <code>rawr run</code> tells the running program through one environment variable.</p>
+<p><code>RAWR_RELOAD_EVENTS</code> names a Unix socket. It is set only under <code>rawr run</code>, and under <code>rawr start</code> from <a href="/docs/agents">rawr mcp</a>. Under <code>cargo run</code> it is absent. Its presence is the sign that the program runs under rawr.</p>
+<p>Each connection to the socket gets one JSON object per line, in order, from the moment it connects. The program may connect late, or never. rawr doesn&rsquo;t wait for it.</p>
+<table class="wide">
+  <tr><th>Event</th><th>Means</th></tr>
+  <tr><td><code>{"event":"restarted","reason":"`Scale` changed its fields"}</code></td><td>A save restarted this process, for that reason. It comes first, and only in a restarted process. A first start gets none.</td></tr>
+  <tr><td><code>{"event":"queued"}</code></td><td>A save compiled. The program takes it at its next call into marked code.</td></tr>
+  <tr><td><code>{"event":"swapped"}</code></td><td>The program runs the saved code now. It kept its state.</td></tr>
+  <tr><td><code>{"event":"failed","message":"no field `missing` on type `Scale`","file":"/app/src/main.rs","line":11,"column":44,…}</code></td><td>A save failed. The program keeps running the last good code. <code>file</code>, <code>line</code> and <code>column</code> are the error&rsquo;s position, or <code>null</code> when it has none. Columns count from 1.</td></tr>
+  <tr><td><code>{"event":"restarting","reason":"`Scale` changed its fields"}</code></td><td>A save can&rsquo;t swap into this process. rawr ends it and starts the program again.</td></tr>
+</table>
+<p>The lines are the ones <a href="/docs/agents">rawr mcp</a> reads. Other events, such as <code>running</code>, may appear on the stream as well. A reader skips any event it doesn&rsquo;t know.</p>
+<p>The <code>rawr-reload</code> crate reads the stream. It has no dependencies, and a native crate can take it as an ordinary dependency:</p>
+<div class="block"><pre><code data-lang="toml">rawr-reload = { git = "https://github.com/airstrike/rawr" }</code></pre></div>
+<div class="block">
+  <div class="file"><b>src/editor.rs</b></div>
+  <pre><code data-lang="rust">if let Some(outcomes) = rawr_reload::outcomes() {
+    std::thread::spawn(move || {
+        for outcome in outcomes {
+            match outcome {
+                rawr_reload::Outcome::Failed { message, at } =&gt; show_error(message, at),
+                outcome =&gt; show_status(outcome.to_string()),
+            }
+        }
+    });
+}</code></pre>
+</div>
+<p><code>outcomes()</code> is <code>None</code> outside <code>rawr run</code>. Each <code>next</code> blocks until rawr says what a save did, so read it on a thread of its own. <code>Outcome</code> has five variants: <code>Restarted { reason }</code>, <code>Queued</code>, <code>Swapped</code>, <code>Failed { message, at }</code> and <code>Restarting { reason }</code>. <code>at</code> is an <code>Option&lt;Span&gt;</code> with <code>file</code>, <code>line</code> and <code>column</code>. <code>running()</code> says whether the variable is set.</p>
+
 <h2 id="others">Other libraries</h2>
 <p>A library not on this page runs the same way, through the same generated bindings. Freya, for example, starts its own winit loop from a marked <code>main</code>. It calls a component again only when the component&rsquo;s state changes, so an edit shows at the next click or key.</p>
 <p>A library that reaches a part of Rust rawr doesn&rsquo;t support yet stops with an error at that part. <a href="/docs/imports">Imports</a> lists the known gaps, and <a href="https://github.com/airstrike/rawr/issues">an issue</a> with a small reproduction helps close one.</p>

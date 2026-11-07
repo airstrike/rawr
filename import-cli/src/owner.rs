@@ -96,14 +96,14 @@ pub fn run(
 ) -> Result<bool, diagnostic::Report> {
     let ran = session(target, graph, lifecycle, profile, None);
     events(&ran);
-    ran.map(|ended| matches!(ended, Ended::Exit(0) | Ended::Restart))
+    ran.map(|ended| matches!(ended, Ended::Exit(0) | Ended::Restart(_)))
 }
 
 /// Tell a supervising `rawr mcp` how a session ended (D537.4).
 fn events(ran: &Result<Ended, diagnostic::Report>) {
     match ran {
         Ok(Ended::Exit(code)) => rawr_cli::events::ended(*code),
-        Ok(Ended::Restart) => {}
+        Ok(Ended::Restart(_)) => {}
         Err(report) => rawr_cli::events::failed(report),
     }
 }
@@ -128,16 +128,29 @@ pub fn run_program(
     let program = rawr_import::process::Arguments {
         name: rawr_cli::supervise::program_name(target),
         arguments: arguments.to_vec(),
-        prepare: Some(crate::signals::unblocked),
+        prepare: Some(prepare),
     };
+    // The program hears its reload outcomes on this stream (#1166). A
+    // program runs without it when it can't be made.
+    let reload = rawr_cli::events::reload::Stream::open()
+        .inspect_err(|error| {
+            eprintln!("rawr: the program won't hear its reload outcomes: {error}");
+        })
+        .ok();
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let interactive = rawr_cli::supervise::interactive();
     let mut watcher = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open);
     let mut ran = session(target, graph, lifecycle, profile, Some(&program));
     loop {
-        let restart = matches!(ran, Ok(Ended::Restart));
         events(&ran);
-        if !restart {
+        let restarted = match &ran {
+            Ok(Ended::Restart(reason)) => Some(reason.as_str()),
+            _ => None,
+        };
+        if let Some(reload) = &reload {
+            reload.starting(restarted);
+        }
+        if restarted.is_none() {
             rawr_cli::cargo::after_run(cargo.take());
             match ran {
                 Ok(Ended::Exit(code)) if !interactive || code == INTERRUPTED => return Ok(code),
@@ -178,6 +191,15 @@ pub fn run_program(
     }
 }
 
+/// What each runner's command gets before it spawns: no blocked signals,
+/// and the program's reload stream.
+fn prepare(command: &mut std::process::Command) {
+    crate::signals::unblocked(command);
+    if let Some(path) = rawr_cli::events::reload::path() {
+        command.env(rawr_cli::events::reload::VARIABLE, path);
+    }
+}
+
 /// The contents of the program's files: its sources, its native modules
 /// and its manifests. `None` when it doesn't load.
 fn contents(target: &rawr::project::Target) -> Option<Vec<(PathBuf, Option<Vec<u8>>)>> {
@@ -197,9 +219,9 @@ fn location(target: &rawr::project::Target) -> PathBuf {
 enum Ended {
     /// The program exited with this status.
     Exit(i32),
-    /// A save changed a program that restarts on each save; its runner is
-    /// gone.
-    Restart,
+    /// A save changed the program in a way its running process can't
+    /// take, for this reason; its runner is gone.
+    Restart(String),
 }
 
 /// One run of the program's runners, until the program ends or a save
@@ -277,7 +299,7 @@ fn session(
                 let reason = "the program panicked after a save";
                 rawr_import::process::say(format_args!("rawr: {reason}; restarting the program"));
                 rawr_cli::events::restarting(reason);
-                return Ok(Ended::Restart);
+                return Ok(Ended::Restart(reason.to_owned()));
             }
             Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
                 code,
@@ -338,7 +360,7 @@ fn session(
                             "rawr: {reason}; restarting the program"
                         ));
                         rawr_cli::events::restarting(&reason);
-                        return Ok(Ended::Restart);
+                        return Ok(Ended::Restart(reason));
                     }
                     // Latest wins: a newer save reports for itself.
                     Err(_) if adapter.deadline().is_some() => {}
@@ -447,7 +469,7 @@ fn session(
                             "rawr: {reason}; restarting the program"
                         ));
                         rawr_cli::events::restarting(&reason);
-                        return Ok(Ended::Restart);
+                        return Ok(Ended::Restart(reason.into()));
                     }
                     Err(error) => {
                         settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
@@ -509,7 +531,7 @@ fn session(
                         "rawr: {reason}; restarting the program"
                     ));
                     rawr_cli::events::restarting(&reason);
-                    return Ok(Ended::Restart);
+                    return Ok(Ended::Restart(reason));
                 }
                 rawr_import::process::hot::Preparation::Miss(miss) => {
                     // D500.4: a new native build restarts the program, and
