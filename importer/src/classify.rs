@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 119;
+const CLASSIFIER_VERSION: u32 = 120;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2558,7 +2558,41 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .iter()
                 .filter(|argument| !matches!(argument, model::Argument::Lifetime(_)))
                 .collect::<Vec<_>>();
-            if !binders.is_empty() || arguments.is_empty() {
+            if !binders.is_empty() {
+                continue;
+            }
+            // `T: Float` with no arguments, as iced's `Animation<T: Float>`:
+            // its implementations for number types are the cases, so a
+            // literal whose kind only one of them fits is that type, as
+            // rustc selects lilt's `impl Float for f32` for `new(0.)` (#1028).
+            // The driver brings a crate trait's impls for numbers; a std
+            // trait's, as `Copy`'s, are only those something else used.
+            if arguments.is_empty() {
+                if trait_id.unit().authority().sysroot().is_some() {
+                    continue;
+                }
+                let cases = self
+                    .graph
+                    .implementations_of(trait_id)
+                    .filter(|implementation| {
+                        implementation.polarity() == model::Polarity::Positive
+                    })
+                    .filter_map(|implementation| match implementation.self_type() {
+                        // The Rust number itself: `convert` gives the
+                        // value Rawr holds, an `f64` for an `f32`.
+                        model::Type::Primitive(name) => {
+                            representability::convert::Builtin::primitive(name)
+                                .filter(|builtin| builtin.is_number())
+                                .map(|builtin| Case::new(Type::Builtin(builtin), Box::default()))
+                        }
+                        _ => None,
+                    })
+                    .take(CASES)
+                    .collect::<Vec<_>>();
+                if !cases.is_empty() {
+                    self.retain_array::<Case>(cases.len())?;
+                    relations.push(Relation::new(*index, Box::default(), cases.into()));
+                }
                 continue;
             }
             let Some(converted) = arguments

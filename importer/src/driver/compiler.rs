@@ -101,7 +101,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // method gives from its default body as the trait's opaque type.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 53;
+const PROTOCOL_SCHEMA: u32 = 54;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2340,7 +2340,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         // string reference says at which lifetime a `&str` fills the
         // parameter, as `impl Heading for &'static str` makes a literal
         // passed to `heading(impl Heading)` live for the program. Two such
-        // impls would overlap, so there is at most one.
+        // impls would overlap, so there is at most one. Its impls for
+        // numbers say which type a literal is where only one of its kind
+        // has one, as lilt's `Float` is `f32` alone (#1028).
         if obligation.arguments.len() < 2 {
             let mut implementations = Vec::new();
             for impl_id in self.tcx.all_impls(obligation.trait_id) {
@@ -2352,10 +2354,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     continue;
                 };
                 let reference = reference.instantiate_identity().skip_norm_wip();
-                if matches!(
-                    reference.self_ty().kind(),
-                    ty::Ref(_, target, ty::Mutability::Not) if target.is_str()
-                ) && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
+                let lends_or_numbers = match reference.self_ty().kind() {
+                    ty::Ref(_, target, ty::Mutability::Not) => target.is_str(),
+                    kind => matches!(kind, ty::Int(_) | ty::Uint(_) | ty::Float(_)),
+                };
+                if lends_or_numbers
+                    && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
                 {
                     implementations.push(impl_id);
                 }
