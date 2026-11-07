@@ -242,4 +242,65 @@ c = ["dep:off"]
         );
         assert_eq!(Features::default().enabled(&cargo.dependencies).len(), 1);
     }
+
+    /// A member's optional dependency inherited from its workspace, one
+    /// declared for a target, keeps the member's `optional` and the
+    /// features Cargo resolves for it, and a feature enables it.
+    #[test]
+    fn an_inherited_optional_dependency_resolves_as_cargo_resolves_it() {
+        let root =
+            std::env::temp_dir().join(format!("rawr-inherited-optional-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"app\"]\nresolver = \"2\"\n\n\
+             [workspace.dependencies]\nextra = { path = \"extra\", features = [\"a\"] }\n\
+             unix-only = { path = \"unix-only\" }\n",
+        );
+        let library = "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+            [features]\na = []\nb = []\n";
+        write("extra/Cargo.toml", &library.replace("{}", "extra"));
+        write("extra/src/lib.rs", "");
+        write("unix-only/Cargo.toml", &library.replace("{}", "unix-only"));
+        write("unix-only/src/lib.rs", "");
+        let member = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+            [dependencies]\nextra = { workspace = true, optional = true, features = [\"b\"] }\n\n\
+            [target.'cfg(any(unix, windows))'.dependencies]\nunix-only.workspace = true\n\n\
+            [features]\ndefault = [\"dep:extra\"]\n";
+        write("app/Cargo.toml", member);
+        write("app/src/lib.rs", "");
+        let cargo = Cargo::parse(
+            root.join("app/Cargo.toml"),
+            member.to_owned(),
+            &root.join("app"),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        let declared = cargo
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                (
+                    dependency.key.as_str(),
+                    dependency.optional,
+                    dependency.features.join(","),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            declared,
+            [
+                ("extra", true, "a,b".to_owned()),
+                ("unix-only", false, String::new())
+            ]
+        );
+        assert_eq!(cargo.enabled_dependencies().len(), 2);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
