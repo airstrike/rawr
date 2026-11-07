@@ -725,6 +725,32 @@ fn background_cargo_check_restarts_on_saves_and_reports_only_the_newest() {
     assert_eq!(lines("finished"), ["2"]);
 }
 
+/// Marked modules named `switch`, `import` and `import::print`, words the
+/// old engine read as keywords, are ordinary names: Rawr opens their files
+/// and runs the crate as `cargo run` does.
+#[test]
+fn marked_modules_named_as_old_engine_keywords_run_as_cargo_runs_them() {
+    let Some(cargo) = std::env::var_os("CARGO") else {
+        panic!("run under cargo: $CARGO names the cargo to test with");
+    };
+    let sandbox = Sandbox::new("marked-names");
+    let root = copy("rs-marker-names", &sandbox.work());
+
+    let native = Command::new(&cargo)
+        .args(["run", "--quiet", "--offline"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", sandbox.path.join("target"))
+        .env("RUSTFLAGS", "--deny warnings")
+        .output()
+        .unwrap();
+    let run = sandbox.rawr(&["run", "rs-marker-names"]);
+
+    assert_success(&native);
+    assert_eq!(stdout(&native), "1 2 20 true\n42\n");
+    assert_success(&run);
+    assert_eq!(stdout(&run), stdout(&native));
+}
+
 /// A marked crate's Cargo.toml dependencies are its Rust imports.
 #[test]
 fn a_marked_crate_imports_its_cargo_dependencies() {

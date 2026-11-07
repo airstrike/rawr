@@ -129,6 +129,35 @@ fn a_native_main_runs_on_the_process_main_thread() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A native `main` reaches marked modules named `import`, `switch` and
+/// `import::print` through `crate::`, and a marked struct's method, as
+/// `cargo run` does: words the old engine read as keywords are ordinary
+/// names, in the files Rawr opens and the Rust it writes.
+#[test]
+fn a_native_main_calls_marked_modules_named_as_old_engine_keywords() {
+    const NAMES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-names");
+    let root = crate::support::scratch().join("islands-names");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(NAMES), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&native.stdout), "1 2 20 true\n");
+    let mut run = start(&root, &[]);
+    run.until(Duration::from_secs(900), |line| line == "1 2 20 true");
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 #[test]
 fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin() {
     use std::io::Write as _;
