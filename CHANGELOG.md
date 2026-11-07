@@ -10,6 +10,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - An embedded script can hold inline modules: `Engine::script`, `load`, `compile`, `eval` and `run` resolve `mod m { .. }` with rustc's paths, `pub`, `use`, `super` and E0603, and the host calls the root's functions by name. A file module (`mod m;`) still needs a package. (#1131)
 - `call_fn` calls a script function with the parameters it is written with, a `&mut` one included, so `call_fn("update", (model, by))` works. `CallFnOptions::bind_this_ptr` still lends that value apart. (#1132)
 - The default call-depth limit is 64 in debug and release builds alike. A script call that finds the host thread's stack nearly full gets more stack, so the limit, not the thread, ends deep recursion. (#1133)
+- A package with marked modules builds its native side with the package's own files: `include_bytes!` and `include_str!` through `env!("CARGO_MANIFEST_DIR")` or a path relative to the source file, even outside the package, and its build script, which runs in the package's directory with its build-dependencies. Cargo reruns the script on the files its `rerun-if-changed` lines name, never on a save to a marked module. (#1136)
+- A native `src/main.rs` with marked modules no longer prints Cargo's warning that the file is in both the lib and bin targets. (#1135)
 
 ## 0.3.169 (2026-11-07)
 
