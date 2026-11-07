@@ -2119,12 +2119,29 @@ fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T,
 /// authority, including non-Send values. Its synchronous lease is always
 /// restored before the source operation returns or unwinds.
 struct PlaceOwner<T>(std::marker::PhantomData<fn() -> T>);
+
+/// A value lent from its slot for a synchronous use on the owner thread,
+/// as a native place's access or a call's `&mut T` input is: it never
+/// leaves the thread, so it needs no `Send`, as rand's `ThreadRng` isn't.
 struct PlaceHeld<T: 'static> { value: Option<T>, handle: NativeHandle }
+
+#[allow(dead_code)]
+impl<T: 'static> PlaceHeld<T> {
+    fn get_mut(&mut self) -> &mut T {
+        self.value.as_mut().expect("a lent value is held till it drops")
+    }
+}
 
 impl<T: 'static> Drop for PlaceHeld<T> {
     fn drop(&mut self) {
         if let Some(value) = self.value.take() {
-            let _ = with_arena(|arena| { arena.restore(self.handle.clone(), Box::new(value)); Ok(()) });
+            // The call that borrowed it may still hold the arena: the value
+            // waits in this thread's queue for its next use.
+            RELENDS.with_borrow_mut(|relends| {
+                relends.push((self.handle.clone(), Box::new(value) as Box<dyn Any>));
+            });
+            queued_here();
+            let _ = with_arena(|_| Ok(()));
         }
     }
 }
@@ -13618,7 +13635,7 @@ fn render_slot(
                 if *borrowed_mutably {
                     mutable.push(position.to_string());
                 }
-                lends.push((position, *borrowed_mutably, rust));
+                lends.push(LentInput::new(position, *borrowed_mutably, rust));
             }
             convert::Type::Borrowed {
                 mutable: borrowed_mutably,
@@ -14490,10 +14507,12 @@ fn render_take_input(
         );
     }
     if let convert::Type::Borrowed { .. } = ty {
+        let future = is_future(&substituted(signature.output(), signature, substitutions)?);
         return render_lease(
             local,
             index,
             &substituted(ty, signature, substitutions)?,
+            future,
             output,
         );
     }
@@ -14702,10 +14721,17 @@ impl Lease {
                     && !is_made_for_call(lent) =>
             {
                 let rust = concrete_type(lent)?;
+                // A call holds it on the owner thread: only a future asks
+                // `Send` (`render_lease`).
+                let (held, lease) = if future {
+                    ("Held", "lease")
+                } else {
+                    ("PlaceHeld", "lease_place")
+                };
                 Some(Self {
-                    held: format!("Held<{rust}>"),
+                    held: format!("{held}<{rust}>"),
                     take: format!(
-                        "{{ let handle = value_{depth}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?; arguments.arena.lease::<{rust}>(handle)? }}"
+                        "{{ let handle = value_{depth}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?; arguments.arena.{lease}::<{rust}>(handle)? }}"
                     ),
                     kind: LeaseKind::Native { mutable: *mutable },
                 })
@@ -14931,10 +14957,14 @@ fn future_borrows(
 /// `render_stateful_widget` takes `&mut ListState`: the value leaves its
 /// slot for the call, which refuses every other use meanwhile (E0499), and
 /// goes back when the lease drops, before the arena is next used (D558.5).
+/// Only a `future` that may run on another thread holds it as a `Held`,
+/// which asks `Send`; a call holds it on the owner thread, so a value that
+/// isn't `Send`, as rand's `ThreadRng`, is lent as rustc lends it.
 fn render_lease(
     local: usize,
     index: usize,
     ty: &convert::Type,
+    future: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let convert::Type::Borrowed { mutable, ty } = ty else {
@@ -14942,6 +14972,11 @@ fn render_lease(
     };
     let rust = concrete_type(ty).ok_or_else(|| request::drift("borrowed input type"))?;
     let borrow = if *mutable { "" } else { "&*" };
+    let (held, lease) = if future {
+        ("Held", "lease")
+    } else {
+        ("PlaceHeld", "lease_place")
+    };
     if LENT_ARGUMENTS.get() && !carries_lifetime(ty) {
         // Or a value native code lent a marked function (D558.3), reached
         // through its accessor, which the call runs inside.
@@ -14953,11 +14988,11 @@ fn render_lease(
         return writeln!(
             output,
             "    #[allow(unused_mut)]
-    let mut argument_{local}_held: Held<{rust}>;
+    let mut argument_{local}_held: {held}<{rust}>;
     let argument_{local}: {reference}{rust} = match lent_argument(lent, {index}) {{
         Some(value) => value.{reach}::<{rust}>().ok_or(Error::Lent({rust:?}, __rawr_internal::scope::Error::Mismatch))?,
         None => {{
-            argument_{local}_held = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease(handle)? }};
+            argument_{local}_held = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.{lease}(handle)? }};
             {borrow}argument_{local}_held.get_mut()
         }}
     }};"
@@ -14966,7 +15001,7 @@ fn render_lease(
     }
     writeln!(
         output,
-        "    let mut argument_{local}_held: Held<{rust}> = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease(handle)? }};\n    let argument_{local} = {borrow}argument_{local}_held.get_mut();"
+        "    let mut argument_{local}_held: {held}<{rust}> = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.{lease}(handle)? }};\n    let argument_{local} = {borrow}argument_{local}_held.get_mut();"
     )
     .map_err(request::unwritable)
 }
@@ -15145,7 +15180,7 @@ fn render_callable_closure(
             parameters.push(format!("input_{position}: &mut {rust}"));
             values.push(lent_value(position, true, &rust));
             lent.push(position.to_string());
-            lends.push((position, true, rust));
+            lends.push(LentInput::new(position, true, rust));
             continue;
         }
         let rust = concrete_type(input).ok_or_else(|| request::drift("closure input type"))?;
@@ -18664,7 +18699,22 @@ fn render_impl_function(
                 let target =
                     concrete_type(ty).ok_or_else(|| drift("a script impl function's input"))?;
                 values.push(lent_value(position, *borrowed_mutably, &target));
-                lends.push((position, *borrowed_mutably, target));
+                lends.push(LentInput::new(position, *borrowed_mutably, target));
+            }
+            // One whose type carries lifetimes, as iced's `update(..,
+            // shell: &mut Shell<'_, Message>)` takes: lent for the call too,
+            // at every lifetime its family takes, and never copied (#957).
+            convert::Type::Borrowed {
+                mutable: borrowed_mutably,
+                ty,
+            } if matches!(**ty, convert::Type::Nominal { .. })
+                && !is_value(ty)
+                && let Some(family) = scoped_type(ty) =>
+            {
+                let target =
+                    concrete_type(ty).ok_or_else(|| drift("a script impl function's input"))?;
+                values.push(lent_value(position, *borrowed_mutably, &target));
+                lends.push(LentInput::scoped(position, *borrowed_mutably, target, family));
             }
             convert::Type::Borrowed { ty, .. } => {
                 // A copy of a value Rawr holds by value, as a `&str` or a
@@ -18868,14 +18918,55 @@ fn render_impl_function(
     ))
 }
 
-/// The call `call` with each borrowed native value of `lends` (its input's
-/// position, whether it is `&mut`, and its Rust type) lent around it,
-/// innermost last, and the items that reach each one (D558.3): what a script
-/// impl function and a slot write where native code lends them a value.
-fn lent_around(lends: &[(usize, bool, String)], call: String) -> (String, String) {
+/// A borrowed native value native code gives a script function, lent around
+/// its call (`lent_around`): the input's position, whether it is `&mut`,
+/// its Rust type, and that type at the scope family's `'x`.
+struct LentInput {
+    position: usize,
+    mutable: bool,
+    rust: String,
+    family: String,
+}
+
+impl LentInput {
+    /// A value of a type without lifetimes, which its family is at every
+    /// `'x`.
+    fn new(position: usize, mutable: bool, rust: String) -> Self {
+        Self {
+            position,
+            mutable,
+            family: rust.clone(),
+            rust,
+        }
+    }
+
+    /// A value of a type with lifetimes, as iced's `Shell<'_, Message>`:
+    /// `rust` elides them, so the accessor reaches it at every lifetime,
+    /// and `family` names each `'x`.
+    fn scoped(position: usize, mutable: bool, rust: String, family: String) -> Self {
+        Self {
+            position,
+            mutable,
+            rust,
+            family,
+        }
+    }
+}
+
+/// The call `call` with each borrowed native value of `lends` lent around
+/// it, innermost last, and the items that reach each one (D558.3): what a
+/// script impl function and a slot write where native code lends them a
+/// value.
+fn lent_around(lends: &[LentInput], call: String) -> (String, String) {
     let mut call = call;
     let mut items = String::new();
-    for (position, borrowed_mutably, target) in lends.iter().rev() {
+    for LentInput {
+        position,
+        mutable: borrowed_mutably,
+        rust: target,
+        family,
+    } in lends.iter().rev()
+    {
         let lend = if *borrowed_mutably {
             "lend"
         } else {
@@ -18889,7 +18980,7 @@ fn lent_around(lends: &[(usize, bool, String)], call: String) -> (String, String
         items.push_str(&format!(
             "        struct Lend{position};
         impl __rawr_internal::scope::Family for Lend{position} {{
-            type Of<'x> = {target};
+            type Of<'x> = {family};
         }}
         fn reach_{position}(nonce: u64, visit: &mut dyn FnMut(&{target})) -> Result<(), u8> {{
             __rawr_internal::scope::with_ref::<Lend{position}, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value))
