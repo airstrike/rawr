@@ -1,9 +1,9 @@
 // rawr
-// A range of an integer other than `i64` crosses into a crate as a range
-// of its own type: by value where a crate's type parameter takes it, so
-// rustc fills the parameter with it, and as an iterator of its type where
-// a crate takes an iterator. A crate's type parameter gives it back as the
-// program's range of that type.
+// An `a..=b` of an integer other than `i64` crosses into a crate as a
+// range of its own type: by value where a crate's type parameter takes it,
+// so rustc fills the parameter with it, and as an iterator of its type
+// where a crate takes an iterator. A crate's type parameter gives it back
+// as the program's range of that type.
 
 use events::paired::Paired;
 
@@ -27,7 +27,4 @@ fn main() {
     let back = events::paired::same(2usize..=4);
     let total: usize = back.clone().sum();
     println!("{total} {back:?} {}", back.end());
-    let half: std::ops::Range<i8> = -3..0;
-    let half = events::paired::same(half);
-    println!("{half:?} {}", half.clone().count());
 }

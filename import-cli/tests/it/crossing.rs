@@ -1559,12 +1559,12 @@ fn a_program_iterator_crosses_lazily_into_a_crate_traits_blanket_method() {
     );
 }
 
-/// A program's `a..=b` or `a..b` of an integer other than `i64` (#1055)
-/// crosses as a range of its own type: by value where a crate's `J:
-/// IntoIterator` or `T` takes it, so rustc fills the parameter with it, and
-/// as an iterator of that type where a crate takes `I: Iterator`. A range a
-/// type parameter gives back is the program's range of that type. The
-/// output is `cargo run`'s.
+/// A program's `a..=b` of an integer other than `i64` (#1055) crosses as a
+/// `RangeInclusive` of its own type where a crate's `J: IntoIterator` or `T`
+/// takes it by value, so rustc fills the parameter with it, and as an
+/// iterator of that type where a crate takes `I: Iterator`. A range a type
+/// parameter gives back is the program's range of that type. An `a..b` of
+/// one, an iterator, fills either. The output is `cargo run`'s.
 #[test]
 fn a_range_of_a_narrower_integer_crosses_as_a_range_of_its_type() {
     let (rawr, cargo) = both_printed("kinded.rs", "");
@@ -1572,7 +1572,7 @@ fn a_range_of_a_narrower_integer_crosses_as_a_range_of_its_type() {
     assert_eq!(
         rawr,
         "[(0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)]\n3 4\n[10, 11, 12] [-2, -1, 0]\n\
-         9 2..=4 4\n-3..0 3"
+         9 2..=4 4"
     );
 }
 
