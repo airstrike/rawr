@@ -40356,13 +40356,15 @@ impl<'a> Parser<'a> {
         let unit = matches!(self.peek(), Token::Unit);
         let (tokens, end) = self.take_argument_tokens()?;
         let call = span(name_span.start(), end);
+        // The `)` that closes the arguments, which `()` starts before.
+        let closing = if unit { text_end(end, "(") } else { end };
         let name = name.strip_prefix("debug_").unwrap_or(name);
         if let Some(operator) = match name {
             "assert_eq" => Some((Token::EqualsTo, "==")),
             "assert_ne" => Some((Token::NotEqualsTo, "!=")),
             _ => None,
         } {
-            return self.parse_assert_compare(operator, tokens, name_span, end);
+            return self.parse_assert_compare(operator, tokens, name_span, closing);
         }
         if name == "assert" {
             // rustc's errors for a missing condition: none at all, or an
@@ -40376,7 +40378,6 @@ impl<'a> Parser<'a> {
                 });
             }
             if tokens.is_empty() {
-                let closing = if unit { text_end(end, "(") } else { end };
                 return Err(Error::Syntax {
                     message: "macro requires a boolean expression as an argument".into(),
                     label: "boolean expression required".into(),
@@ -40466,11 +40467,30 @@ impl<'a> Parser<'a> {
         name_span: Span,
         end: Position,
     ) -> Result<ParsedExpr, Error> {
+        // rustc's errors for missing operands, as its `macro_rules!`
+        // matcher reports them: a leading `,` is no rule's, and arguments
+        // that end early end at the `)`, or are the whole call when none.
+        if let Some((Token::Comma, comma)) = tokens.first() {
+            return Err(Error::Syntax {
+                message: "no rules expected `,`".into(),
+                label: "no rules expected this token in macro call".into(),
+                help: None,
+                at: point_span(*comma),
+            });
+        }
+        let none = tokens.is_empty();
         let mut parts = split_arguments(tokens).into_iter();
         let (Some(left), Some(right)) = (parts.next(), parts.next()) else {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "an assertion without two values".into(),
-                source: span(name_span.start(), end),
+            let at = if none {
+                span(name_span.start(), text_end(end, ")"))
+            } else {
+                point_span(end)
+            };
+            return Err(Error::Syntax {
+                message: "unexpected end of macro invocation".into(),
+                label: "missing tokens in macro arguments".into(),
+                help: None,
+                at,
             });
         };
         if left.is_empty() || right.is_empty() {

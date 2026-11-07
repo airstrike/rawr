@@ -304,6 +304,20 @@ fn errors_rustc_gives_without_a_code_print_a_plain_error() {
         .starts_with("error: macro requires a boolean expression as an argument\n"));
     assert!(plain("fn main() {\n    assert!(, \"m\");\n}\n")
         .starts_with("error: expected expression, found `,`\n"));
+    // rustlings' tests2 leaves `assert_eq!()`'s operands.
+    let assert_eq = plain("fn main() {\n    assert_eq!();\n}\n");
+    assert!(
+        assert_eq.starts_with("error: unexpected end of macro invocation\n"),
+        "{assert_eq}"
+    );
+    assert!(
+        assert_eq.contains("^^^^^^^^^^^^ missing tokens in macro arguments"),
+        "{assert_eq}"
+    );
+    assert!(plain("fn main() {\n    assert_ne!(1,);\n}\n")
+        .starts_with("error: unexpected end of macro invocation\n"));
+    assert!(plain("fn main() {\n    assert_eq!(, 1);\n}\n")
+        .starts_with("error: no rules expected `,`\n"));
 }
 
 #[test]
