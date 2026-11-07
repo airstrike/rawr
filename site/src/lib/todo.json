@@ -2720,7 +2720,11 @@
     {"issue":1127,"title":"A native main announces a restart on a changed field but keeps running the old program","state":"open","category":"Health"},
     {"issue":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"open","category":"Health"},
     {"issue":1129,"title":"progress_bar: a transition moved into a row! in one branch and a column! in the other fails with a lent-value mismatch","state":"open","category":"Divergences from rustc"},
-    {"issue":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"open","category":"Divergences from rustc"}
+    {"issue":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"open","category":"Divergences from rustc"},
+    {"issue":1131,"title":"Embedding: Engine::script refuses an inline module","state":"open","category":"Divergences from rustc"},
+    {"issue":1132,"title":"Embedding: a script function's leading &mut parameter becomes `this`, but bind_this_ptr says typed scripts can't read it","state":"open","category":"Divergences from rustc"},
+    {"issue":1133,"title":"Embedding: the call-stack depth limit is 8 in debug builds and 64 in release","state":"open","category":"Health"},
+    {"issue":1134,"title":"Embedding: the host boundary carries no enums, Vec or &mut","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
