@@ -244,7 +244,7 @@ fn a_marked_module_names_the_items_of_its_native_crate_root() {
     );
     let mut run = start(&root, &[]);
     for line in PRINTED {
-        let seen = run.until(Duration::from_secs(900), |_| true);
+        let seen = run.until(|_| true);
         assert_eq!(seen, line, "{}", run.seen.join("\n"));
     }
     let status = run.child.wait().unwrap();
