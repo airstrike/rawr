@@ -1288,7 +1288,7 @@ mod tests {
 
     #[test]
     fn a_switch_arm_awaits_and_others_give_their_value() {
-        let script = "fn body(r) { let total = 0; for k in 0..3 { total += switch k { 1 => __rawr_await(7) + 1, _ => k } } total }";
+        let script = "fn body(r) { let total = 0; for k in 0..3 { total += __rawr_switch k { 1 => __rawr_await(7) + 1, _ => k } } total }";
         assert_eq!(drive(script), (71 + 2, vec![7]));
     }
 

@@ -115,14 +115,14 @@ pub(super) fn fold_reference_impls(items: &mut Vec<item::Shell>) -> Result<(), L
             else {
                 return Err(refuse(&format!(
                     "that leaves `{}` to the trait's default",
-                    crate::tokenizer::demangle_names(&function.name.text)
+                    crate::tokenizer::raw_names(&function.name.text)
                 )));
             };
             let copy = generic.bounds.contains(capability::Kind::Copy);
             if !forwards_function(written, parameter, &name.text, *mutable, copy) {
                 return Err(refuse(&format!(
                     "whose `{}` does not forward to `{parameter}`'s",
-                    crate::tokenizer::demangle_names(&function.name.text)
+                    crate::tokenizer::raw_names(&function.name.text)
                 )));
             }
         }

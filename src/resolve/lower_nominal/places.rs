@@ -402,7 +402,7 @@ impl Parser<'_> {
                     binding: owner,
                     ..
                 },
-            )) if place.as_str() == "this" => (place.as_str().to_string(), owner.clone()),
+            )) if place.as_str() == "self" => (place.as_str().to_string(), owner.clone()),
             Some(_) => return Ok(None),
             None => (root.to_string(), root.clone()),
         };
@@ -458,8 +458,8 @@ impl Parser<'_> {
                 range.push_text(" + 1");
             }
             range.push_text(format!(
-                "; if {hi} > {place}.len() {{ throw \"range end index \" + {hi} + \" out of range \
-                 for slice of length \" + {place}.len(); }} if {lo} > {hi} {{ throw \"slice index \
+                "; if {hi} > {place}.len() {{ __rawr_throw \"range end index \" + {hi} + \" out of range \
+                 for slice of length \" + {place}.len(); }} if {lo} > {hi} {{ __rawr_throw \"slice index \
                  starts at \" + {lo} + \" but ends at \" + {hi}; }} {lo}..{hi} }})"
             ));
             Some(range)
@@ -1419,13 +1419,13 @@ impl Parser<'_> {
         // `match self` in a `&mut self` method matches the receiver.
         let receiver = subject.lvalue.is_none()
             && self.closures.is_empty()
-            && subject.source.as_str() == "this"
-            && self.bindings.get("this").is_some_and(|binding| {
+            && subject.source.as_str() == "self"
+            && self.bindings.get("self").is_some_and(|binding| {
                 binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
             });
         let lvalue = if receiver {
             Lvalue::Binding {
-                binding: "this".into(),
+                binding: "self".into(),
                 ty: Ty::Unknown,
             }
         } else {
@@ -1968,8 +1968,8 @@ impl Parser<'_> {
             return Ok(value);
         };
         let place = value.lvalue.clone().or_else(|| {
-            (value.source.as_str() == "this").then(|| Lvalue::Binding {
-                binding: "this".into(),
+            (value.source.as_str() == "self").then(|| Lvalue::Binding {
+                binding: "self".into(),
                 ty: value.ty.clone(),
             })
         });
@@ -2102,7 +2102,7 @@ impl Parser<'_> {
             construct: construct.to_string().into(),
             source: at,
         };
-        if place.binding().as_str() != "this" {
+        if place.binding().as_str() != "self" {
             return Err(unsupported(
                 "returning a `&mut` borrowed from a value other than `self` (or a free \
                  function's first `&mut` parameter)",
@@ -2165,10 +2165,10 @@ impl Parser<'_> {
 /// `(this)[a][b]`) gives the ranges of `a` and `b`; `None` for another
 /// place.
 fn place_groups(text: &str) -> Option<Vec<(usize, usize)>> {
-    let mut at = if text.starts_with("(this)") {
-        "(this)".len()
-    } else if text.starts_with("this") {
-        "this".len()
+    let mut at = if text.starts_with("(self)") {
+        "(self)".len()
+    } else if text.starts_with("self") {
+        "self".len()
     } else {
         return None;
     };
@@ -2235,8 +2235,8 @@ impl Parser<'_> {
         let lvalue = match &value.lvalue {
             Some(Lvalue::Slice(_)) => None,
             Some(lvalue) => Some(lvalue.clone()),
-            None if value.source.as_str() == "this" => Some(Lvalue::Binding {
-                binding: "this".into(),
+            None if value.source.as_str() == "self" => Some(Lvalue::Binding {
+                binding: "self".into(),
                 ty: value.ty.clone(),
             }),
             None => None,

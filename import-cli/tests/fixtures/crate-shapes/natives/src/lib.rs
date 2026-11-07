@@ -502,6 +502,31 @@ pub mod deref {
     }
 }
 
+/// Items named as words the old engine read as keywords, which are names
+/// in Rust: a function `print`, a module `import`, a field `this` and a
+/// method `call`.
+pub mod names {
+    pub fn print(text: &str) -> String {
+        format!("printed {text}")
+    }
+
+    pub mod import {
+        pub fn switch(on: bool) -> bool {
+            !on
+        }
+    }
+
+    pub struct Handle {
+        pub this: u32,
+    }
+
+    impl Handle {
+        pub fn call(&self, step: u32) -> u32 {
+            self.this + step
+        }
+    }
+}
+
 /// A type whose methods a program names as function values, as iced's
 /// `pick_list(selected, Theme::ALL, Theme::to_string)` names one: its own
 /// methods, its `Display`'s `to_string` and a trait's method, and a function
