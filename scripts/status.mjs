@@ -30,13 +30,15 @@ const fetchText = async (url) => {
 const items = read("plan/items.json").items;
 const gantt = read("plan/gantt.json");
 const byIssue = new Map(items.map((item) => [item.issue, item]));
+// A retired item was closed as not planned: it is not open.
 const open = items.filter((item) => item.state === "open").length;
+const retired = items.filter((item) => item.state === "retired").length;
 const percent = ((100 * open) / items.length).toFixed(1);
 
 const repoVersion = /^version = "([^"]+)"/m.exec(readFileSync(new URL("../Cargo.toml", import.meta.url), "utf8"))?.[1];
 const minor = repoVersion?.split(".").slice(0, 2).join(".");
 
-console.log(`Items: ${open} open of ${items.length} (${percent}% open)`);
+console.log(`Items: ${open} open of ${items.length} (${percent}% open${retired ? `, ${retired} retired` : ""})`);
 console.log("");
 
 // What gates the minor series (D739).

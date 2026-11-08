@@ -15,6 +15,7 @@
         "oneOf": [
           { "$ref": "#/$defs/add" },
           { "$ref": "#/$defs/close" },
+          { "$ref": "#/$defs/retire" },
           { "$ref": "#/$defs/edit" },
           { "$ref": "#/$defs/row" },
           { "$ref": "#/$defs/add-row" },
@@ -69,6 +70,24 @@
         "commit": { "$ref": "defs.schema.json#/$defs/commit" },
         "note": { "$ref": "defs.schema.json#/$defs/text", "description": "Added after \"Done in <commit>.\", such as the decision: \"(D640)\"." },
         "comment": { "$ref": "defs.schema.json#/$defs/text", "description": "Markdown posted on the issue under the commit line: what changed, measurements, which examples now run, what's left and where it went. Expected on every close." }
+      }
+    },
+    "retire": {
+      "type": "object",
+      "description": "Retire an open item for one of four reasons, named by \"kind\" and \"by\": tick it in TODO.md with \"Retired <date>: <kind> <by>\", comment that on the issue as \"Retired: <kind> <by>.\" and close it as not planned. A retired item ships nothing, so no changelog entry may name it.",
+      "required": ["op", "t", "issue", "kind", "by"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "retire" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "t": { "$ref": "defs.schema.json#/$defs/t" },
+        "issue": { "$ref": "defs.schema.json#/$defs/issue" },
+        "kind": {
+          "enum": ["superseded", "duplicate", "fixed", "not-applicable"],
+          "description": "superseded: a more accurate issue now describes the work (by: that issue). duplicate: the same work as another issue, old or new (by: that issue). fixed: another change already fixed it (by: the commit or the issue that shipped it). not-applicable: another change removed the premise (by: the D entry, issue or commit)."
+        },
+        "by": { "type": "string", "pattern": "^(#[1-9][0-9]*|D[0-9]{3,}|[0-9a-f]{7,40})$", "description": "What retired it: an issue as #N, a decision as D662, or a commit hash." },
+        "note": { "type": "string", "minLength": 1, "maxLength": 300, "pattern": "^[^\\n]+$", "description": "One sentence more, after the reason." }
       }
     },
     "edit": {

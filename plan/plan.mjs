@@ -356,7 +356,7 @@ export function rest(method, path, body) {
 
 export function fetchIssues(repo) {
   const out = gh(["api", "--paginate", `repos/${repo}/issues?state=all&per_page=100`, "--jq",
-    ".[] | select(.pull_request == null) | {number, title, state, labels: [.labels[].name], node_id, milestone: .milestone.title}"]);
+    ".[] | select(.pull_request == null) | {number, title, state, state_reason, labels: [.labels[].name], node_id, milestone: .milestone.title}"]);
   const issues = new Map();
   for (const line of out.split("\n").filter(Boolean)) {
     const issue = JSON.parse(line);
@@ -364,6 +364,10 @@ export function fetchIssues(repo) {
   }
   return issues;
 }
+
+/** The state an issue records: open, closed (as completed) or retired (closed as not planned or as a duplicate). */
+export const issueState = ({ state, state_reason }) =>
+  state === "open" ? "open" : state_reason === "not_planned" || state_reason === "duplicate" ? "retired" : "closed";
 
 const q = (s) => JSON.stringify(s);
 
@@ -445,7 +449,9 @@ export function labelsFor(project, category, text) {
 function desiredFields(plan, item) {
   const row = item.gantt && findRow(plan, item.gantt)?.row;
   return {
-    status: item.state === "closed" ? "Done" : row?.state === "now" ? "In Progress" : "Todo",
+    // The Project's Status has no Retired option, so a retired item is Done
+    // there; its issue, closed as not planned, says which.
+    status: item.state !== "open" ? "Done" : row?.state === "now" ? "In Progress" : "Todo",
     category: item.category,
     t: item.t,
     gantt: rowLabel(plan, item.gantt),
@@ -624,6 +630,7 @@ export function drift(plan, todo, issues, projectItems) {
     }
     if (item.release && !versions.has(item.release)) say(`${item.t}: release ${item.release} isn't in the changelog`);
     if (item.state === "open" && (item.commit || item.release)) say(`${item.t} is open but names a commit or release`);
+    if (item.state === "retired" && (item.commit || item.release)) say(`${item.t} is retired but names a commit or release; a retired item ships nothing`);
   }
 
   if (todoItems) {
@@ -631,7 +638,7 @@ export function drift(plan, todo, issues, projectItems) {
       const item = byT(plan, line.t);
       if (!item) { say(`TODO.md: ${line.t} has no issue; adopt it with an "add" change`); continue; }
       if (line.issue !== item.issue) say(`TODO.md: ${line.t} names ${line.issue ? `#${line.issue}` : "no issue"}, not #${item.issue}; run render`);
-      if (line.done !== (item.state === "closed")) say(`TODO.md: ${line.t} is ${line.done ? "ticked" : "open"} but #${item.issue} is recorded ${item.state}`);
+      if (line.done !== (item.state !== "open")) say(`TODO.md: ${line.t} is ${line.done ? "ticked" : "open"} but #${item.issue} is recorded ${item.state}`);
       if (line.category !== item.category) say(`TODO.md: ${line.t} sits under "${line.category}", recorded under "${item.category}"`);
       for (const t of tRefs(line.text)) if (!tExists(t)) say(`TODO.md: ${line.t} names ${t}, which doesn't exist`);
     }
@@ -658,7 +665,7 @@ export function drift(plan, todo, issues, projectItems) {
       }
       const listed = r.issues.map((n) => byIssue(plan, n)).filter(Boolean);
       if (r.state !== "done" && listed.length > 0 && listed.every((item) => item.state !== "open"))
-        say(`chart: ${g.id}/${r.id} is ${r.state}, but all its issues are closed: mark it done`);
+        say(`chart: ${g.id}/${r.id} is ${r.state}, but all its issues are closed or retired: mark it done`);
     }
   }
   if (plan.gantt.version !== cargoVersion()) say(`chart: version ${plan.gantt.version}, but the crates are at ${cargoVersion()}`);
@@ -679,6 +686,7 @@ export function drift(plan, todo, issues, projectItems) {
       for (const n of e.issues) {
         const item = byIssue(plan, n);
         if (!item) say(`changelog: ${name} names #${n}, which is no item's issue`);
+        else if (item.state === "retired") say(`changelog: ${name} names ${item.t} (#${n}), which is retired and ships nothing`);
         else if (tracked && item.release !== version) say(`changelog: ${name} names ${item.t} (#${n}), recorded as shipped in ${item.release ?? "nothing yet"}`);
       }
       for (const n of e.refs ?? []) if (!byIssue(plan, n)) say(`changelog: ${name} refers to #${n}, which is no item's issue`);
@@ -695,7 +703,11 @@ export function drift(plan, todo, issues, projectItems) {
       const issue = issues.get(item.issue);
       if (!issue) { say(`#${item.issue} (${item.t}) doesn't exist on GitHub`); continue; }
       if (issue.title !== item.title) say(`#${item.issue}: GitHub's title is "${issue.title}", recorded "${item.title}"`);
-      if (issue.state !== item.state) say(`#${item.issue} (${item.t}) is ${issue.state} on GitHub, recorded ${item.state}`);
+      const state = issueState(issue);
+      if (state !== item.state) {
+        const github = state === "retired" ? `closed as ${issue.state_reason.replace("_", " ")}` : state;
+        say(`#${item.issue} (${item.t}) is ${github} on GitHub, recorded ${item.state}`);
+      }
       const have = issue.labels.filter((l) => mine.has(l)).sort().join(", ");
       if (have !== [...item.labels].sort().join(", ")) say(`#${item.issue}: GitHub's labels are [${have}], recorded [${[...item.labels].sort().join(", ")}]`);
       const milestone = item.release ? milestoneOf(item.release) : null;
@@ -744,7 +756,7 @@ class Context {
     { input: { repositoryId: repoId, title, body, labelIds: this.labelIds(labels), projectV2Ids: [project.id] } });
     const issue = data.createIssue.issue;
     const entry = issue.projectItems.nodes.find((n) => n.project.id === project.id);
-    this.issues.set(issue.number, { number: issue.number, title, state: "open", labels, node_id: issue.id });
+    this.issues.set(issue.number, { number: issue.number, title, state: "open", state_reason: null, labels, node_id: issue.id });
     if (entry) (this.projectItems ??= new Map()).set(issue.number, { id: entry.id, values: new Map() });
     return issue.number;
   }
@@ -760,7 +772,13 @@ class Context {
   close(number) {
     if (this.dry) return;
     rest("PATCH", `repos/${this.repo}/issues/${number}`, { state: "closed", state_reason: "completed" });
-    this.issues.get(number).state = "closed";
+    Object.assign(this.issues.get(number), { state: "closed", state_reason: "completed" });
+  }
+  // Closes an issue as not planned, with the comment that says why.
+  retire(number, comment) {
+    if (this.dry) return;
+    gh(["issue", "close", String(number), "--repo", this.repo, "--reason", "not planned", "--comment", comment], undefined, { write: true });
+    Object.assign(this.issues.get(number), { state: "closed", state_reason: "not_planned" });
   }
   patch(number, fields) {
     if (this.dry) return;
@@ -783,6 +801,7 @@ function entryRefs(ctx, refs = []) {
   for (const n of refs) {
     const item = byIssue(ctx.plan, n) ?? fail(`#${n} is no item's issue`);
     if (item.state === "closed") fail(`${item.t} (#${n}) is closed; name it in "issues" if the entry ships it`);
+    if (item.state === "retired") fail(`${item.t} (#${n}) is retired`);
   }
 }
 
@@ -905,6 +924,28 @@ function addItem(ctx, op, { category, text, title, labels, decisions, gantt, rel
   return item;
 }
 
+// How each kind of retirement reads before what retired it.
+const RETIRE_PHRASE = { superseded: "superseded by", duplicate: "duplicate of", fixed: "fixed by", "not-applicable": "not applicable after" };
+
+// What retired an item, checked against its kind: an issue (#N), a decision
+// (D662) or a commit. Returns how the issue comment and TODO.md name it.
+function retiredBy(ctx, op, item) {
+  const allowed = { superseded: ["issue"], duplicate: ["issue"], fixed: ["commit", "issue"], "not-applicable": ["decision", "issue", "commit"] }[op.kind];
+  const what = op.by.startsWith("#") ? "issue" : op.by.startsWith("D") ? "decision" : "commit";
+  if (!allowed.includes(what)) fail(`a ${op.kind} retirement names ${allowed.map((a) => `a${a === "issue" ? "n" : ""} ${a}`).join(" or ")} in "by", not ${op.by}`);
+  if (what === "commit") {
+    try { git("cat-file", "-e", `${op.by}^{commit}`); } catch { fail(`commit ${op.by} isn't in this repository`); }
+    return { github: op.by, todo: `\`${op.by}\`` };
+  }
+  if (what === "decision") return { github: op.by, todo: op.by };
+  const n = +op.by.slice(1);
+  if (n === item.issue) fail(`#${n} can't retire itself`);
+  const other = byIssue(ctx.plan, n) ?? fail(`${op.by} is no item's issue`);
+  if (other.state === "retired") fail(`${other.t} (${op.by}) is retired too; name what carries the work now`);
+  if (op.kind === "fixed" && other.state !== "closed") fail(`${other.t} (${op.by}) is open; a fixed retirement names the closed issue or the commit that shipped the fix`);
+  return { github: op.by, todo: op.by };
+}
+
 const OPS = {
   add(ctx, op) {
     const item = addItem(ctx, op, op);
@@ -914,7 +955,7 @@ const OPS = {
 
   close(ctx, op) {
     const item = itemFor(ctx, op);
-    if (item.state === "closed") fail(`${op.t} is already closed`);
+    if (item.state !== "open") fail(`${op.t} is already ${item.state}`);
     try { git("cat-file", "-e", `${op.commit}^{commit}`); } catch { fail(`commit ${op.commit} isn't in this repository`); }
     const line = ctx.todo.parsed.items.get(op.t) ?? fail(`${op.t} isn't in TODO.md`);
     // "Done in `abc` (D640)." as the file's other done items say it.
@@ -925,6 +966,27 @@ const OPS = {
     Object.assign(item, { state: "closed", commit: op.commit });
     ctx.sync(item);
     return `${item.t} (#${item.issue}) closed in ${op.commit}`;
+  },
+
+  // An item retired for one of four reasons, each naming what retired it.
+  // It ships nothing: no commit, no release and no changelog entry.
+  retire(ctx, op) {
+    const item = itemFor(ctx, op);
+    if (item.state !== "open") fail(`${op.t} is already ${item.state}`);
+    const entry = ctx.plan.changelog.unreleased.entries.findIndex((e) => e.issues.includes(item.issue));
+    if (entry >= 0) fail(`entry ${entry} under Unreleased ships #${item.issue}; remove the entry, or close the item instead`);
+    const by = retiredBy(ctx, op, item);
+    const note = op.note ? publicText(op.note.trim()) : null;
+    if (note) checkRefs(ctx, note, item.t);
+    const said = `${RETIRE_PHRASE[op.kind]} ${by.github}`;
+    const tail = note ? ` ${/[.!?]$/.test(note) ? note : `${note}.`}` : "";
+    const line = ctx.todo.parsed.items.get(op.t) ?? fail(`${op.t} isn't in TODO.md`);
+    ctx.retire(item.issue, `Retired: ${said}.${tail}`);
+    // "Retired 2026-11-08: superseded by #1234." opens the line, as close's "Done in `abc`." does.
+    ctx.todo.set({ ...line, done: true, text: `Retired ${today()}: ${RETIRE_PHRASE[op.kind]} ${by.todo}.${tail} ${line.text}` });
+    item.state = "retired";
+    ctx.sync(item);
+    return `${item.t} (#${item.issue}) retired: ${said}`;
   },
 
   edit(ctx, op) {
@@ -1030,6 +1092,7 @@ const OPS = {
         ctx.saveChange();
       } else {
         const item = byIssue(ctx.plan, ref) ?? fail(`#${ref} is no item's issue`);
+        if (item.state === "retired") fail(`${item.t} (#${ref}) is retired; a retired item ships nothing`);
         if (item.release) fail(`${item.t} (#${ref}) already shipped in ${item.release}`);
         issues.push(ref);
       }
@@ -1062,6 +1125,7 @@ const OPS = {
     if (op.issues) {
       for (const n of op.issues) {
         const item = byIssue(ctx.plan, n) ?? fail(`#${n} is no item's issue`);
+        if (item.state === "retired") fail(`${item.t} (#${n}) is retired; a retired item ships nothing`);
         if (item.release) fail(`${item.t} (#${n}) already shipped in ${item.release}`);
       }
       entry.issues = op.issues;
@@ -1262,8 +1326,8 @@ function main([command, ...args]) {
     const { problems, warnings } = drift(plan, todo, issues, projectItems);
     for (const w of warnings) console.log(`note: ${w}`);
     for (const p of problems) console.log(`drift: ${p}`);
-    const open = plan.items.items.filter((i) => i.state === "open").length;
-    const summary = `${plan.items.items.length} items (${open} open, ${plan.items.items.length - open} closed), ` +
+    const count = (state) => plan.items.items.filter((i) => i.state === state).length;
+    const summary = `${plan.items.items.length} items (${count("open")} open, ${count("closed")} closed, ${count("retired")} retired), ` +
       `${plan.gantt.groups.reduce((n, g) => n + g.rows.length, 0)} chart rows, ${plan.changelog.releases.length} releases` +
       (offline ? ", GitHub not checked" : ", GitHub and the Project checked");
     console.log(problems.length ? `check: ${problems.length} problems; ${summary}` : `check: no drift; ${summary}`);

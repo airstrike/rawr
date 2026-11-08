@@ -20,7 +20,7 @@ import ThemeSwitch from "../components/ThemeSwitch.astro";
 import Text from "../components/todo/Text.astro";
 import { FONT_GATE, THEME_INIT } from "../lib/theme-init.ts";
 import "../styles/tokens.css";
-import { CHANGELOG, EXAMPLES, GROUPS, ITEMS, REPO, UPDATED, VERSION, categories, issueUrl, parts, type Row } from "../lib/todo.ts";
+import { CHANGELOG, EXAMPLES, GROUPS, ITEMS, REPO, STATE_NAME, UPDATED, VERSION, categories, issueUrl, parts, stateClass, type Row } from "../lib/todo.ts";
 
 const rows = GROUPS.flatMap((g) => g.rows);
 // Milestones by version, ascending, then the rows with no milestone. Each
@@ -58,7 +58,7 @@ const sum = (state: Row["state"]) => rows.filter((r) => r.state === state).reduc
 const counts = { done: sum("done"), now: sum("now"), next: sum("next") };
 const all = counts.done + counts.now + counts.next;
 const label = { done: "Done", now: "In progress", next: "Next" };
-const hover = (i: Row["issues"][number]) => `${i.title}${i.state === "closed" ? " (closed)" : ""}`;
+const hover = (i: Row["issues"][number]) => `${i.title}${i.state === "open" ? "" : ` (${i.state})`}`;
 const count = (r: Row) => {
   const open = r.issues.filter((i) => i.state === "open").length;
   return `${r.issues.length} issues${open ? `, ${open} open` : ""}`;
@@ -393,11 +393,11 @@ const tally = (rows: Row[]) => {
             <div class="row" id={`${g.id}-${r.id}`} data-start={r.start} data-size={r.size}>
               <div>
                 <span class="name">{r.name}</span>
-                {r.issues.length > 0 && r.issues.length <= 4 && <span class="refs">{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>}
+                {r.issues.length > 0 && r.issues.length <= 4 && <span class="refs">{r.issues.map((i) => <a class={stateClass(i.state)} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>}
                 {r.issues.length > 4 && (
                   <details class="refs">
                     <summary>{count(r)}</summary>
-                    <span>{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>
+                    <span>{r.issues.map((i) => <a class={stateClass(i.state)} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>
                   </details>
                 )}
               </div>
@@ -449,12 +449,12 @@ const tally = (rows: Row[]) => {
   </div>
   {cats.map((c) => (
     <details class="cat" open id={c.slug}>
-      <summary><span class="t"><Text text={c.name} /></span><span class="c">{[c.open && `${c.open} open`, c.items.length - c.open && `${c.items.length - c.open} closed`].filter(Boolean).join(" · ")}</span></summary>
+      <summary><span class="t"><Text text={c.name} /></span><span class="c">{[c.open && `${c.open} open`, c.closed && `${c.closed} closed`, c.retired && `${c.retired} retired`].filter(Boolean).join(" · ")}</span></summary>
       {c.items.map((i) => (
-        <div class={`item ${i.state}`}>
-          <span class="n"><a href={issueUrl(i.issue)} title={i.state === "closed" ? "Closed" : "Open"}>#{i.issue}</a></span>
+        <div class={`item ${stateClass(i.state)}`}>
+          <span class="n"><a href={issueUrl(i.issue)} title={STATE_NAME[i.state]}>#{i.issue}</a></span>
           <span class="what"><Text text={i.title} /></span>
-          {i.release && <span class="rel">{i.release}</span>}
+          {i.state === "retired" ? <span class="rel">retired</span> : i.release && <span class="rel">{i.release}</span>}
         </div>
       ))}
     </details>

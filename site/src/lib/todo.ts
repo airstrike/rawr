@@ -15,10 +15,13 @@ import data from "./todo.json";
 
 export type State = "done" | "now" | "next";
 
+/** An issue's state. A retired one was closed as not planned: its premise went, or another issue covers it. */
+export type ItemState = "open" | "closed" | "retired";
+
 export interface Issue {
   number: number;
   title: string;
-  state: "open" | "closed";
+  state: ItemState;
 }
 
 export interface Row {
@@ -63,7 +66,7 @@ export interface Changelog {
 export interface Item {
   issue: number;
   title: string;
-  state: "open" | "closed";
+  state: ItemState;
   category: string;
   release?: string;
 }
@@ -78,9 +81,14 @@ export const ITEMS = data.items as Item[];
 
 export const issueUrl = (n: number) => `https://github.com/${REPO}/issues/${n}`;
 
-const closedIssues = new Set(ITEMS.filter((i) => i.state === "closed").map((i) => i.issue));
-/** Whether issue `n` is closed, so the page can cross it off. */
+const closedIssues = new Set(ITEMS.filter((i) => i.state !== "open").map((i) => i.issue));
+/** Whether issue `n` is closed or retired, so the page can cross it off. */
 export const isClosed = (n: number) => closedIssues.has(n);
+
+/** The classes of an issue in a state: a retired one is styled as closed, and also marked retired. */
+export const stateClass = (state: ItemState) => (state === "retired" ? "closed retired" : state);
+/** A state's name, as the page says it. */
+export const STATE_NAME: Record<ItemState, string> = { open: "Open", closed: "Closed", retired: "Retired" };
 
 /** A piece of a line of text: plain, `code`, or an issue named as #N. */
 export type Part = { text: string; code?: true; issue?: number };
@@ -100,8 +108,8 @@ export function parts(text: string): Part[] {
   return out;
 }
 
-/** The categories in the order the items first name them, each with its items. */
-export function categories(items: Item[]): { name: string; slug: string; items: Item[]; open: number }[] {
+/** The categories in the order the items first name them, each with its items and how many are in each state. */
+export function categories(items: Item[]): { name: string; slug: string; items: Item[]; open: number; closed: number; retired: number }[] {
   const by = new Map<string, Item[]>();
   for (const item of items) by.set(item.category, [...(by.get(item.category) ?? []), item]);
   return [...by].map(([name, items]) => ({
@@ -109,5 +117,7 @@ export function categories(items: Item[]): { name: string; slug: string; items: 
     slug: `cat-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`,
     items,
     open: items.filter((i) => i.state === "open").length,
+    closed: items.filter((i) => i.state === "closed").length,
+    retired: items.filter((i) => i.state === "retired").length,
   }));
 }
