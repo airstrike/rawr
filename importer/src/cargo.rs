@@ -3440,43 +3440,7 @@ fn render_manifest(request: &Request, internal: Option<&internal::Recipe>) -> Re
         {
             continue;
         }
-        let mut specification = InlineTable::new();
-        if let Some(package) = dependency.package() {
-            specification.insert("package", Value::from(package));
-        }
-        match dependency.source() {
-            config::Source::Path(path) => {
-                let path = path_string("dependency", path)?;
-                specification.insert("path", Value::from(path));
-            }
-            config::Source::Registry { manifest, .. } => {
-                specification.insert("version", Value::from(manifest.as_ref()));
-            }
-            config::Source::Git {
-                url,
-                reference,
-                version,
-            } => {
-                specification.insert("git", Value::from(url.as_ref()));
-                if let Some((key, name)) = reference.key_value() {
-                    specification.insert(key, Value::from(name));
-                }
-                if let Some(version) = version {
-                    specification.insert("version", Value::from(version.as_ref()));
-                }
-            }
-        }
-        specification.insert(
-            "default-features",
-            Value::from(dependency.default_features()),
-        );
-        if !dependency.features().is_empty() {
-            let mut features = Array::new();
-            for feature in dependency.features() {
-                features.push(feature.as_ref());
-            }
-            specification.insert("features", Value::Array(features));
-        }
+        let specification = specification(dependency)?;
         // Rawr's own crate is a build dependency of the harness, which has
         // no build script: Cargo resolves, locks and fetches it but builds
         // no unit of it. Only the runner, which the project's Cargo builds,
@@ -3499,6 +3463,68 @@ fn render_manifest(request: &Request, internal: Option<&internal::Recipe>) -> Re
         internal.apply_profile(&mut document, &request.profile)?;
     }
     formatted(format_args!("{document}"))
+}
+
+/// How a harness manifest names `dependency`.
+fn specification(dependency: &config::Selected) -> Result<InlineTable> {
+    let mut specification = InlineTable::new();
+    if let Some(package) = dependency.package() {
+        specification.insert("package", Value::from(package));
+    }
+    match dependency.source() {
+        config::Source::Path(path) => {
+            let path = path_string("dependency", path)?;
+            specification.insert("path", Value::from(path));
+        }
+        config::Source::Registry { manifest, .. } => {
+            specification.insert("version", Value::from(manifest.as_ref()));
+        }
+        config::Source::Git {
+            url,
+            reference,
+            version,
+        } => {
+            specification.insert("git", Value::from(url.as_ref()));
+            if let Some((key, name)) = reference.key_value() {
+                specification.insert(key, Value::from(name));
+            }
+            if let Some(version) = version {
+                specification.insert("version", Value::from(version.as_ref()));
+            }
+        }
+    }
+    specification.insert(
+        "default-features",
+        Value::from(dependency.default_features()),
+    );
+    if !dependency.features().is_empty() {
+        let mut features = Array::new();
+        for feature in dependency.features() {
+            features.push(feature.as_ref());
+        }
+        specification.insert("features", Value::Array(features));
+    }
+    Ok(specification)
+}
+
+/// A manifest whose only dependency is rawr's own crate, written as a
+/// harness writes it, so a runtime warmed without a project has the key a
+/// project's runner gives it (#1388).
+pub(crate) fn internal_manifest() -> Result<String> {
+    let root = crate::host::root()?;
+    // The dependency's path is absolute, so the root it seals against is
+    // never read.
+    let dependency = internal::Seed::transform(&root)?
+        .dependency()?
+        .seal(&root)?;
+    let mut dependencies = Table::new();
+    dependencies.insert(
+        dependency.alias(),
+        Item::Value(Value::InlineTable(specification(&dependency)?)),
+    );
+    let mut document = DocumentMut::new();
+    document["dependencies"] = Item::Table(dependencies);
+    Ok(document.to_string())
 }
 
 fn finalize_harness(

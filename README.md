@@ -77,7 +77,10 @@ rawr new hello && cd hello && rawr run
 ```
 
 The installer puts prebuilt `rawr`, `cargo-rawr`, `rawr-import` and
-`rawr-import-driver` in `~/.cargo/bin`. `rawr new hello` writes a crate
+`rawr-import-driver` in `~/.cargo/bin`. Then it runs `rawr cache warm`,
+which installs the nightly rawr-import reads crate APIs with and compiles
+rawr's runtime for your Rust compiler, so the first program with
+dependencies doesn't wait for them. `rawr new hello` writes a crate
 with no dependencies whose `src/main.rs` starts with `// rawr`. `rawr run`
 restarts it when you save. Arguments after `--` go to the program, as under
 `cargo run`, and it reads the same stdin.
@@ -101,7 +104,12 @@ beta release. Any nightly from
 that needs one installs it through [rustup](https://rustup.rs), once per
 machine. The installed `rawr-import-driver` is the pinned nightly's; for
 another nightly, rawr-import builds a driver once and keeps it in rawr's
-home.
+home. Run `rawr cache warm` in a project that names another toolchain to
+build all of that before its first run:
+
+```sh
+rawr cache warm
+```
 
 Prebuilt binaries cover macOS on Apple Silicon and Intel, and Linux on
 x86_64 and aarch64. rawr-import has been tested on Apple Silicon Macs, and

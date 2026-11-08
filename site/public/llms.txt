@@ -23,7 +23,7 @@
 - Windows (best effort, no rawr-import, so no dependencies): `irm https://rawr.airstrike.fyi/install.ps1 | iex`.
 - From source (rawr only): `cargo install --locked --git https://github.com/airstrike/rawr rawr-cli` (Rust 1.95+).
 - `cargo rawr run` == `rawr run`.
-- rawr-import: 64-bit macOS/Linux (x86_64, aarch64; prebuilt Linux needs glibc 2.35+). Reads crate APIs with a nightly + `rustc-dev` + `rust-src`, installed through rustup on first need.
+- rawr-import: 64-bit macOS/Linux (x86_64, aarch64; prebuilt Linux needs glibc 2.35+). Reads crate APIs with a nightly + `rustc-dev` + `rust-src`, installed through rustup by install.sh's `rawr cache warm`, else on first need.
 - Full: https://rawr.airstrike.fyi/docs/start, https://rawr.airstrike.fyi/docs/reference/requirements
 
 ## The `// rawr` marker
@@ -49,6 +49,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - `rawr mcp [path]`: MCP server on stdio; relative tool paths start at `path` (default cwd). See MCP below.
 - `rawr init [--claude] [--codex] [path]`: registers `rawr mcp`. `--claude` writes `mcpServers.rawr` in `.mcp.json`; `--codex` writes `[mcp_servers.rawr]` in `.codex/config.toml` (tool timeout 120 s, startup 30 s). No flag: detects a `.claude`/`.codex` dir, else exits 2. Entry runs rawr by absolute path, `args = ["mcp"]`, cwd = project. Old file kept as `.bak`; other settings kept. Restart the agent once.
 - `rawr doctor [path]`: where rawr and each extension are, the program found, install commands for missing extensions, each extension's report.
+- `rawr cache warm` (from rawr-import): builds what a first run with dependencies builds once per toolchain: installs the nightly the cwd resolves (pinned one outside a project) with its driver and std table, and compiles rawr's runtime for the cwd's compiler. Prints a first run's progress lines, or one line saying nothing was needed. install.sh runs it.
 - `rawr cache clean` (from rawr-import): removes what rawr's home holds that no build used lately (runtimes, shared bindings, nightly check build). Skips anything in use; never waits.
 - `rawr -h|--help|help`, `rawr -V|--version`. `rawr <cmd> --help` prints the same top-level help, except `rawr new --help` and extension commands.
 - Unknown commands go to an installed `rawr-<name>` binary (next to `rawr`, then PATH).

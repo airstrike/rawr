@@ -17,6 +17,7 @@
 
 use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -68,6 +69,8 @@ const RECORD: Record = Record {
 };
 
 static STATE: Mutex<State> = Mutex::new(State::new());
+/// How many lines [`note`] and [`say`] have printed in this process.
+static SAID: AtomicUsize = AtomicUsize::new(0);
 
 /// Who hears each stage and each 5% step of a launch beside the status
 /// line, such as a supervising `rawr mcp` (set by the command).
@@ -167,7 +170,14 @@ pub(crate) fn say(line: &str) {
     say_above(&mut lock(), line);
 }
 
+/// How many lines this process has printed above the status line: a
+/// command that did nothing printed none.
+pub fn said() -> usize {
+    SAID.load(Ordering::Relaxed)
+}
+
 fn say_above(state: &mut State, line: &str) {
+    SAID.fetch_add(1, Ordering::Relaxed);
     let shown = state.drawn;
     clear(state);
     crate::process::say(line);
