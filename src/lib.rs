@@ -173,6 +173,10 @@ pub mod resolve;
 pub mod result;
 /// Scoped loans: a borrow native code lends script code for one call.
 pub mod scope;
+/// A crate's own interpreter: a marked file loaded against the generated
+/// bindings the crate links, and reloaded in process (#1387).
+#[cfg(all(feature = "rust-import", feature = "sync"))]
+pub mod universe;
 /// A result that borrows the values a runner lends it, kept beside them in
 /// one value: a generated runner's own dependency (#846).
 #[doc(hidden)]

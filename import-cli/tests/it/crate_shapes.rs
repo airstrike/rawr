@@ -580,3 +580,88 @@ fn array_types_cross_as_rustc_has_them() {
         "3 children: slot=1 slot=2 slot=3\n2 children: slot=\"a\" slot=\"b\"\n[1, 7, 3, 8]\n[0, 9, 0, 10]\n6 60\n[1, 2, 4, 8] 8\n",
     );
 }
+
+/// A universe runner (`RAWR_UNIVERSE_RUNNER=1`, as ?play's image builds
+/// one) loads a marked file in a `rawr::universe::Universe` of the bindings
+/// its build generated for the crate's dependencies, and runs it in
+/// process: the file calls into the crate's `natives` and prints what
+/// `cargo run` of the same file prints (#1387).
+#[test]
+fn a_universe_runner_loads_a_marked_file_against_the_crates_bindings() {
+    let program = SHAPES.read("mains/universe.rs");
+    let root = SHAPES.lease(&[("src/main.rs", &program)]);
+    let expected = "printed by the universe\n9\n";
+    let native = Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(native.status.success(), "{}", text(&native.stderr));
+    assert_eq!(text(&native.stdout), expected);
+
+    let directory = crate::support::scratch();
+    let built = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_UNIVERSE_RUNNER", "1")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{}", text(&built.stderr));
+    assert_eq!(text(&built.stdout), expected, "{}", text(&built.stderr));
+
+    // The runner serves the file as ?play's server serves a snippet.
+    let runner = built_runner(&root.join("target/rawr/runner/target"));
+    let socket = std::env::temp_dir().join(format!("rawr-1387-{}.sock", std::process::id()));
+    let mut server = Command::new(&runner)
+        .env_clear()
+        .env("RAWR_PLAY_ROOT", &*root)
+        .env(rawr::play::SOCKET, &socket)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("{}: {error}", runner.display()));
+    let mut ready = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(server.stdout.take().unwrap()),
+        &mut ready,
+    )
+    .unwrap();
+    assert_eq!(ready.trim_end(), rawr::play::READY);
+    let ran = rawr::play::run(
+        &socket,
+        &rawr::play::Request {
+            source: program,
+            env: Vec::new(),
+            time: std::time::Duration::from_secs(60),
+            deadline: None,
+            memory: None,
+        },
+    );
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = std::fs::remove_file(&socket);
+    let ran = ran.unwrap();
+    assert_eq!(ran.status, 0, "{}", text(&ran.stderr));
+    assert_eq!(text(&ran.stdout), expected, "{}", text(&ran.stderr));
+}
+
+/// The runner Cargo built under `target`: in `debug/`, or in a target
+/// triple's `debug/` when the build names one.
+fn built_runner(target: &std::path::Path) -> std::path::PathBuf {
+    let triples = std::fs::read_dir(target)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path().join("debug"));
+    std::iter::once(target.join("debug"))
+        .chain(triples)
+        .flat_map(|debug| ["crate-shapes", "rawr-generated-runner"].map(|name| debug.join(name)))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| panic!("no runner under {}", target.display()))
+}

@@ -23,17 +23,29 @@ impl BoundCatalog {
     /// no `main`.
     #[doc(hidden)]
     pub fn invoke_main(&self) -> Option<Result<crate::Dynamic, program::Error>> {
+        self.invoke_root("main", &mut [])
+    }
+
+    /// Call the root package's function `name` with `args`, from its
+    /// crate root. `None` when the package has no such function. A `&mut`
+    /// parameter the call changes is changed in `args`.
+    #[doc(hidden)]
+    pub fn invoke_root(
+        &self,
+        name: &str,
+        args: &mut [crate::Dynamic],
+    ) -> Option<Result<crate::Dynamic, program::Error>> {
         let package = self.authority.package();
-        let main = self.authority.items().find(|item| {
+        let function = self.authority.items().find(|item| {
             let key = item.key();
             item.kind() == crate::item::Kind::Function
                 && key.package() == package
                 && key.modules().is_empty()
-                && key.name() == "main"
+                && key.name() == name
         })?;
         Some(
             self.authority
-                .invoke_bound(main, &mut [], self.runtime.clone()),
+                .invoke_bound(function, args, self.runtime.clone()),
         )
     }
 

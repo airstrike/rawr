@@ -567,6 +567,16 @@ pub fn invoke_main() -> Option<Result<Dynamic, program::Error>> {
     current()?.bootstrap.invoke_main()
 }
 
+/// Call the published generation's root function `name` with
+/// `arguments`, as a call from native code into script code: the outermost
+/// one first admits the generation offered last (D553.3). `None` when
+/// nothing is published on this thread or its program has no such
+/// function.
+pub fn invoke(name: &str, arguments: &mut [Dynamic]) -> Option<Result<Dynamic, program::Error>> {
+    let _entry = crate::future::entry();
+    current()?.bootstrap.invoke_root(name, arguments)
+}
+
 /// Check `value`, which native code gave back where a script type was
 /// erased to [`crate::Value`] (D513.2), against the exact type `witness`
 /// proves, in the generation published on this thread.
