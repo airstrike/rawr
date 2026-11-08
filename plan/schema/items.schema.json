@@ -19,7 +19,7 @@
         "t": { "$ref": "defs.schema.json#/$defs/t" },
         "issue": { "$ref": "defs.schema.json#/$defs/issue" },
         "title": { "type": "string", "pattern": "^T[0-9]{3,}: \\S", "maxLength": 256, "description": "The issue's title, exactly." },
-        "state": { "enum": ["open", "closed"], "description": "The issue's state. A closed item is ticked in TODO.md." },
+        "state": { "enum": ["open", "closed", "retired"], "description": "The issue's state. A closed item was done; a retired one was closed as not planned and ships nothing. Both are ticked in TODO.md." },
         "category": { "type": "string", "minLength": 1, "description": "The TODO.md heading the item sits under." },
         "labels": { "type": "array", "items": { "$ref": "defs.schema.json#/$defs/label" }, "uniqueItems": true },
         "gantt": {

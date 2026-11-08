@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { changelogMarkdown, doneCommits, format, issueRefs, parseTodo, publicText, sentences, shortTitle, siteData, validate } from "./plan.mjs";
+import { changelogMarkdown, doneCommits, format, issueRefs, issueState, parseTodo, publicText, sentences, shortTitle, siteData, validate } from "./plan.mjs";
 
 const schema = (name) => JSON.parse(readFileSync(new URL(`schema/${name}.schema.json`, import.meta.url)));
 
@@ -47,6 +47,35 @@ test("a change picks its schema by op, and names a real issue or \"new\"", () =>
   assert.ok(errors.some((e) => e.startsWith("$.changes[2].issue")), errors.join("\n"));
 });
 
+test("a retire names its reason, on one line of at most 500 characters, and may name the issue it duplicates", () => {
+  const change = schema("change");
+  const ok = { changes: [{ op: "retire", t: "T031", issue: 31, reason: "rawr-iced is gone (D662)." }, { op: "retire", t: "T032", issue: 32, reason: "Covered there.", duplicate: 1234 }] };
+  assert.deepEqual(validate(change, ok, change), []);
+  const bad = { changes: [
+    { op: "retire", t: "T031", issue: 31 },
+    { op: "retire", t: "T031", issue: 31, reason: "x".repeat(501) },
+    { op: "retire", t: "T031", issue: 31, reason: "one\ntwo" },
+    { op: "retire", t: "T031", issue: 31, reason: "Covered.", duplicate: "new" },
+    { op: "retire", t: "T031", issue: 31, reason: "Gone.", commit: "607e319ab" },
+  ] };
+  const errors = validate(change, bad, change);
+  for (const [i, start] of [[0, '$.changes[0]: missing "reason"'], [1, "$.changes[1].reason: longer than 500"], [2, "$.changes[2].reason"], [3, "$.changes[3].duplicate"], [4, '$.changes[4]: unknown property "commit"']]) {
+    assert.ok(errors.some((e) => e.startsWith(start)), `${i}: ${errors.join("\n")}`);
+  }
+  const items = schema("items");
+  const item = { t: "T031", issue: 31, title: "T031: X", state: "retired", category: "Health", labels: [], gantt: null, decisions: [], commit: null, release: null };
+  assert.deepEqual(validate(items, { items: [item] }, items), []);
+});
+
+test("an issue closed as not planned or as a duplicate is retired; one closed as completed is closed", () => {
+  assert.equal(issueState({ state: "open", state_reason: null }), "open");
+  assert.equal(issueState({ state: "open", state_reason: "reopened" }), "open");
+  assert.equal(issueState({ state: "closed", state_reason: "completed" }), "closed");
+  assert.equal(issueState({ state: "closed", state_reason: null }), "closed");
+  assert.equal(issueState({ state: "closed", state_reason: "not_planned" }), "retired");
+  assert.equal(issueState({ state: "closed", state_reason: "duplicate" }), "retired");
+});
+
 test("the changelog renders entries with their issues, and the committed JSON is CHANGELOG.md", () => {
   const md = changelogMarkdown({
     intro: ["Intro."],
@@ -80,6 +109,9 @@ test("the page's data names each recorded T number as its issue", () => {
   assert.deepEqual(data.items, [{ issue: 2, title: "Fix #10", state: "open", category: "Health" }, { issue: 10, title: "X", state: "closed", category: "Health", release: "0.3.1" }]);
   assert.equal(data.changelog.unreleased.notes[0], "Aim at #2.");
   assert.equal(data.changelog.releases[0].entries[0].text, "Fixed #10.");
+  plan.items.items[0].state = "retired";
+  assert.equal(siteData(plan).items[0].state, "retired");
+  assert.deepEqual(siteData(plan).groups[0].rows[0].issues[0].state, "retired");
   plan.changelog.intro = ["T999"];
   assert.throws(() => siteData(plan), /T999 is no recorded item/);
 });

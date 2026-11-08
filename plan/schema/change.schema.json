@@ -15,6 +15,7 @@
         "oneOf": [
           { "$ref": "#/$defs/add" },
           { "$ref": "#/$defs/close" },
+          { "$ref": "#/$defs/retire" },
           { "$ref": "#/$defs/edit" },
           { "$ref": "#/$defs/row" },
           { "$ref": "#/$defs/add-row" },
@@ -69,6 +70,20 @@
         "commit": { "$ref": "defs.schema.json#/$defs/commit" },
         "note": { "$ref": "defs.schema.json#/$defs/text", "description": "Added after \"Done in <commit>.\", such as the decision: \"(D640)\"." },
         "comment": { "$ref": "defs.schema.json#/$defs/text", "description": "Markdown posted on the issue under the commit line: what changed, measurements, which examples now run, what's left and where it went. Expected on every close." }
+      }
+    },
+    "retire": {
+      "type": "object",
+      "description": "Retire an open item whose premise is gone (a deleted subsystem, a superseded design) or that duplicates another: tick it in TODO.md with \"Retired <date>: <reason>\", comment the reason on the issue and close it as not planned. A retired item ships nothing, so no changelog entry may name it.",
+      "required": ["op", "t", "issue", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "retire" },
+        "applied": { "$ref": "#/$defs/applied" },
+        "t": { "$ref": "defs.schema.json#/$defs/t" },
+        "issue": { "$ref": "defs.schema.json#/$defs/issue" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\n]+$", "description": "Why the item no longer applies, on one line. Posted on the issue and written into TODO.md after \"Retired <date>:\"." },
+        "duplicate": { "$ref": "defs.schema.json#/$defs/issue", "description": "The recorded issue this one duplicates. The comment then starts with \"Duplicate of #M\", and TODO.md names its T number." }
       }
     },
     "edit": {
