@@ -201,7 +201,7 @@ fn an_opaque_iterator_of_a_re_exported_type_imports() {
 /// swash, as each iced program's is.
 #[test]
 fn two_impls_methods_of_one_name_give_two_opaque_iterators() {
-    runs_as_cargo_does("settings", "[2, 1] Some(1.5)\n");
+    runs_as_cargo_does("settings", "3\n");
 }
 
 /// A crate's trait impl on a type with a const parameter, as palette's

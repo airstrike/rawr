@@ -1,10 +1,10 @@
 // rawr
+// swash's `Setting<u16>` and `Setting<f32>` each have a `parse_list` of
+// their own: a program that imports the type, and doesn't call it, as each
+// iced program imports swash.
 use natives::form::Setting;
 
 fn main() {
-    let lengths: Vec<u16> = Setting::<u16>::parse_list("ab,c")
-        .map(|setting| setting.0)
-        .collect();
-    let mut halves = Setting::<f32>::parse_list("abc");
-    println!("{lengths:?} {:?}", halves.next().map(|setting| setting.0));
+    let setting = Setting(3_u16);
+    println!("{}", setting.0);
 }

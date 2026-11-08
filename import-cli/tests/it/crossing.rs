@@ -1928,7 +1928,7 @@ fn an_option_of_a_late_bound_reference_is_lent_for_the_call() {
 /// value of each item, while `update` changes the rest of the state. The
 /// output is `cargo run`'s.
 #[test]
-#[ignore = "blocked: the renderer of a borrowing opaque `impl Framed` stays unknown, so the lent cell's proxy bound names it `_` (E0121), and `&self.items` of a crate-value Vec field fails attestation as `&[T]`"]
+#[ignore = "blocked: `.map(..)` takes the borrowing value by value, and a lent cell's value moves only where it implements its one trait, without arguments, through its proxy (#856); `Framed<String, Theme, Renderer>` has arguments"]
 fn an_opaque_widget_borrows_a_slice_of_crate_values_for_the_views_lifetime() {
     let (rawr, cargo) = both_printed("notes.rs", "first,Reset");
     assert_eq!(rawr, cargo);
