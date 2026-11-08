@@ -4665,6 +4665,8 @@ struct Tables {
     #[cfg(feature = "rust-import")]
     lexical: BTreeMap<crate::program::source::Id, Box<[crate::item::Use]>>,
     by_name: BTreeMap<(crate::program::source::Id, ImmutableString), Nominal>,
+    /// The source that declares each script type.
+    declared_in: BTreeMap<type_def::Id, crate::program::source::Id>,
     /// The enum variants each source imports by name (`use Shape::*;`), with
     /// the name of their enum in that source.
     variants: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[ImmutableString]>>,
@@ -4828,6 +4830,7 @@ impl Models {
             .map(|definition| (definition.id(), definition))
             .collect();
         let mut by_name = BTreeMap::new();
+        let mut declared_in = BTreeMap::new();
         let mut by_definition = BTreeMap::new();
         let mut by_identity = BTreeMap::new();
         let methods = program
@@ -4994,6 +4997,7 @@ impl Models {
                 | item::Kind::Function(_) => continue,
             };
             by_name.insert((shell.source, nominal.name().into()), nominal.clone());
+            declared_in.insert(nominal.definition().id(), shell.source);
             by_definition.insert(nominal.definition().id(), nominal.clone());
             by_identity.insert(nominal.identity(), nominal);
         }
@@ -5343,6 +5347,7 @@ impl Models {
             #[cfg(feature = "rust-import")]
             lexical: program.lexical.clone(),
             by_name,
+            declared_in,
             variants,
             host_variants,
             by_definition,
@@ -5523,6 +5528,11 @@ impl Models {
     fn qualified_pattern_owner(&self, span: Span) -> Option<&Nominal> {
         let identity = self.qualified_pattern_owners.get(&(self.context, span))?;
         self.by_identity.get(identity)
+    }
+
+    /// Whether the source being lowered declares the script type `id`.
+    fn declared_here(&self, id: type_def::Id) -> bool {
+        self.declared_in.get(&id) == Some(&self.context)
     }
 
     fn definition(&self, id: type_def::Id) -> &Nominal {
@@ -10892,12 +10902,94 @@ impl PatternSyntax {
             | Self::Slice { span, .. }
             | Self::Rest { span, .. }
             | Self::Reference { span, .. } => *span,
-            Self::Enum(pattern) => {
-                Span::new(pattern.owner_span.start(), pattern.variant_span.end())
-            }
+            Self::Enum(pattern) => Span::new(
+                pattern.owner_span.start(),
+                text_end(pattern.variant_span.start(), &pattern.variant),
+            ),
             Self::At {
                 name_span, pattern, ..
             } => Span::new(name_span.start(), pattern.span().end()),
+        }
+    }
+
+    /// The pattern of a value `witness` matches at the part written at
+    /// `at` (rustc's witness), every other part `_`; `None` when no part
+    /// of the pattern is at `at`.
+    fn witness_at(&self, at: Span, witness: &str) -> Option<String> {
+        if self.span() == at {
+            return Some(witness.to_string());
+        }
+        let members = |members: &[Self]| {
+            let mut found = false;
+            let rendered = members
+                .iter()
+                .map(|member| match member.witness_at(at, witness) {
+                    Some(placed) => {
+                        found = true;
+                        placed
+                    }
+                    None if matches!(member, Self::Rest { .. }) => "..".to_string(),
+                    None => "_".to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            found.then_some(rendered)
+        };
+        match self {
+            Self::Tuple { members: parts, .. } => Some(format!("({})", members(parts)?)),
+            Self::TupleStruct {
+                definition,
+                members: parts,
+                ..
+            } => Some(format!("{}({})", definition.name(), members(parts)?)),
+            Self::Enum(pattern) => {
+                let owner = pattern
+                    .owner
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                let path = if pattern.host_struct {
+                    owner
+                } else {
+                    format!("{owner}::{}", pattern.variant)
+                };
+                match &pattern.named {
+                    Some((names, _)) => {
+                        names
+                            .iter()
+                            .zip(pattern.payload.iter())
+                            .find_map(|((name, _), member)| {
+                                let placed = member.witness_at(at, witness)?;
+                                Some(format!("{path} {{ {name}: {placed}, .. }}"))
+                            })
+                    }
+                    None => Some(format!("{path}({})", members(&pattern.payload)?)),
+                }
+            }
+            Self::Prelude {
+                variant,
+                payload: Some(payload),
+                ..
+            } => Some(format!(
+                "{}({})",
+                variant.name(),
+                payload.witness_at(at, witness)?
+            )),
+            Self::Cow { owned, payload, .. } => Some(format!(
+                "Cow::{}({})",
+                if *owned { "Owned" } else { "Borrowed" },
+                payload.witness_at(at, witness)?
+            )),
+            Self::Reference {
+                mutable, pattern, ..
+            } => Some(format!(
+                "{}{}",
+                if *mutable { "&mut " } else { "&" },
+                pattern.witness_at(at, witness)?
+            )),
+            Self::At { pattern, .. } => pattern.witness_at(at, witness),
+            _ => None,
         }
     }
 
@@ -11488,6 +11580,8 @@ pub(super) enum PatternSite {
     Let,
     /// `for pattern in values`.
     For,
+    /// A function's parameter, `fn f(E::A(x): E)`.
+    Argument,
 }
 
 struct CoverageConstructor {
@@ -19162,12 +19256,40 @@ impl<'a> Parser<'a> {
                     .filter(|model| {
                         matches!(model, Nominal::Struct { item, .. }
                             if item.form == crate::item::StructForm::Tuple)
-                    })
-                    .ok_or_else(|| Error::UnknownType {
-                        name: last.text.clone(),
-                        reference: *span,
-                        path: false,
-                    })?;
+                    });
+                // `E::A(x): E`: an enum's variant, which the coverage check
+                // finds irrefutable for an enum of one variant, as the
+                // pattern parser reads it.
+                let Some(model) = model else {
+                    let [owner @ .., variant] = &path[..] else {
+                        unreachable!("a tuple struct pattern has a path");
+                    };
+                    let (Some(first), Some(end)) = (owner.first(), owner.last()) else {
+                        return Err(Error::UnknownType {
+                            name: last.text.clone(),
+                            reference: *span,
+                            path: false,
+                        });
+                    };
+                    return Ok(PatternSyntax::Enum(EnumPatternSyntax {
+                        owner: owner
+                            .iter()
+                            .map(|name| (name.text.clone(), name.span))
+                            .collect(),
+                        owner_span: Span::new(
+                            first.span.start(),
+                            text_end(end.span.start(), &end.text),
+                        ),
+                        variant: variant.text.clone(),
+                        variant_span: variant.span,
+                        payload: members
+                            .iter()
+                            .map(|member| self.parameter_pattern_syntax(member))
+                            .collect::<Result<_, _>>()?,
+                        named: None,
+                        host_struct: false,
+                    }));
+                };
                 let (ty, substitution) = self.fresh_nominal(&model, *span);
                 let Nominal::Struct { definition, item } = model else {
                     unreachable!("filtered to a tuple struct");
@@ -19178,16 +19300,17 @@ impl<'a> Parser<'a> {
                     .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
                     .collect::<Box<[_]>>();
                 if members.len() != fields.len() {
-                    return Err(Error::InvalidMatch {
-                        owner: definition.name().into(),
-                        reason: format!(
-                            "the pattern has {} field(s), the struct {}",
-                            members.len(),
-                            fields.len()
-                        )
-                        .into(),
-                        pattern: *span,
-                    });
+                    return Err(self.pattern_fields(
+                        false,
+                        Span::new(path[0].span.start(), last.span.end()),
+                        &members
+                            .iter()
+                            .map(crate::item::ParameterPattern::span)
+                            .collect::<Vec<_>>(),
+                        &fields,
+                        definition.id(),
+                        item.fields.iter().map(|field| field.span),
+                    ));
                 }
                 PatternSyntax::TupleStruct {
                     ty,
@@ -19238,7 +19361,36 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let syntax = self.parameter_pattern_syntax(pattern)?;
-            self.refuse_refutable(&syntax, &ty, BindingSite::Argument)?;
+            // `E::A(x): E` of a one-variant enum, or `Some(x): Option<T>`:
+            // matched as `let` matches it, `let pattern = parameter;`, after
+            // the coverage check finds it irrefutable, or refused as rustc's
+            // E0005.
+            if syntax.may_refute() {
+                let at = syntax.span();
+                self.splice_tokens(vec![
+                    (
+                        Token::Identifier(Box::new(parameter.name.text.as_str().into())),
+                        at.start(),
+                    ),
+                    (Token::SemiColon, at.end()),
+                ]);
+                let pending = self.field_entries.len();
+                let value_start = self.flow().value_start();
+                let subject = self.parse_expr()?;
+                self.expect(Token::SemiColon, "';' after a parameter's value")?;
+                let matched = self.matched(&subject, value_start);
+                self.bind_let_pattern(
+                    PatternSite::Argument,
+                    at.start(),
+                    &syntax,
+                    subject,
+                    Some(matched),
+                    None,
+                    at.end(),
+                    pending,
+                )?;
+                continue;
+            }
             let statements = self.destructure(&syntax, &parameter.name.text, &ty)?;
             self.write_output(statements, body);
             // The parameter's value keeps what the pattern does not move out.
@@ -27126,6 +27278,7 @@ impl<'a> Parser<'a> {
                     binds: !resolved.bindings.is_empty(),
                 },
                 PatternSite::For => BindingSite::ForLoop,
+                PatternSite::Argument => BindingSite::Argument,
             };
             self.require_irrefutable(syntax, &resolved.coverage, &written_ty, site)?;
         }
@@ -27237,7 +27390,9 @@ impl<'a> Parser<'a> {
 
     /// rustc's E0005 when `syntax`, whose coverage is `coverage`, on `ty`
     /// misses some of its values, with the patterns of the values it
-    /// misses: an integer's or a `char`'s ranges, as a `match` names them.
+    /// misses: an integer's or a `char`'s ranges, as a `match` names them,
+    /// or a facade struct's field's, which the pattern's facade checks
+    /// still to lower test.
     fn require_irrefutable(
         &mut self,
         syntax: &PatternSyntax,
@@ -27245,6 +27400,103 @@ impl<'a> Parser<'a> {
         ty: &Ty,
         site: BindingSite,
     ) -> Result<(), Error> {
+        let mut witnesses = self.uncovered(syntax, coverage, ty);
+        let checks = self.host_checks.borrow().clone();
+        for (_, check, check_ty, _) in checks {
+            if !witnesses.is_empty() {
+                break;
+            }
+            // A facade part's witness in its place in the pattern, the
+            // rest of it `_`: `(Style { width: 0_i64, .. }, _)`.
+            let at = check.span();
+            let prefix = match syntax {
+                PatternSyntax::Reference { .. } => String::new(),
+                _ => self.reference_prefix(ty),
+            };
+            witnesses = self
+                .host_uncovered(&check, &check_ty)?
+                .into_iter()
+                .map(|missed| match syntax.witness_at(at, &missed) {
+                    Some(placed) if syntax.span() != at => format!("{prefix}{placed}"),
+                    _ => missed,
+                })
+                .collect();
+        }
+        if witnesses.is_empty() {
+            return Ok(());
+        }
+        Err(Error::Refutable {
+            witnesses: witnesses.into_iter().map(Into::into).collect(),
+            ty: self.matched_type(ty),
+            site,
+            pattern: syntax.span(),
+        })
+    }
+
+    /// The values of `ty` that `syntax`, a pattern on a facade value, misses,
+    /// as rustc writes them: `Style { width: i64::MIN..=0_i64, .. }` for the
+    /// first field whose pattern misses some.
+    fn host_uncovered(&mut self, syntax: &PatternSyntax, ty: &Ty) -> Result<Vec<String>, Error> {
+        if !syntax.may_refute() {
+            return Ok(Vec::new());
+        }
+        let referenced = self.referenced(ty);
+        match syntax {
+            PatternSyntax::At { pattern, .. } | PatternSyntax::Reference { pattern, .. } => {
+                self.host_uncovered(pattern, &referenced)
+            }
+            PatternSyntax::Enum(pattern)
+                if pattern.host_struct && matches!(referenced, Ty::Host { .. }) =>
+            {
+                let names = pattern
+                    .named
+                    .as_ref()
+                    .map(|(names, _)| names.as_ref())
+                    .unwrap_or_default();
+                let owner = pattern
+                    .owner
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                let prefix = self.reference_prefix(ty);
+                for ((field, at), member) in names.iter().zip(pattern.payload.iter()) {
+                    if !member.may_refute() {
+                        continue;
+                    }
+                    let value = origin::Fragment::plain("__rawr_field");
+                    let read = self.host_struct_field(value, &referenced, field, *at)?;
+                    let missed = self.host_uncovered(member, &read.ty)?;
+                    if !missed.is_empty() {
+                        return Ok(missed
+                            .into_iter()
+                            .map(|missed| format!("{prefix}{owner} {{ {field}: {missed}, .. }}"))
+                            .collect());
+                    }
+                }
+                Ok(Vec::new())
+            }
+            // A facade enum's variant, whose siblings the facade names.
+            _ if matches!(referenced, Ty::Host { .. }) => {
+                Ok(vec![format!("{}_", self.reference_prefix(ty))])
+            }
+            _ => {
+                let checks = self.host_checks.borrow().len();
+                let resolved = self.resolve_root_pattern(syntax, ty);
+                self.host_checks.borrow_mut().truncate(checks);
+                Ok(self.uncovered(syntax, &resolved?.coverage, ty))
+            }
+        }
+    }
+
+    /// The patterns of the values of `ty` that `syntax`, whose coverage is
+    /// `coverage`, misses, as rustc writes them.
+    fn uncovered(
+        &self,
+        syntax: &PatternSyntax,
+        coverage: &CoveragePattern,
+        ty: &Ty,
+    ) -> Vec<String> {
         // The value below the references, whose witnesses read through
         // them, as `&None` (`reference_prefix`).
         let referenced = self.referenced(ty);
@@ -27275,19 +27527,11 @@ impl<'a> Parser<'a> {
                     .collect()
             }
         };
-        if witnesses.is_empty() {
-            return Ok(());
-        }
         let prefix = self.reference_prefix(ty);
-        Err(Error::Refutable {
-            witnesses: witnesses
-                .iter()
-                .map(|witness| format!("{prefix}{witness}").into())
-                .collect(),
-            ty: self.matched_type(ty),
-            site,
-            pattern: syntax.span(),
-        })
+        witnesses
+            .into_iter()
+            .map(|witness| format!("{prefix}{witness}"))
+            .collect()
     }
 
     /// rustc's E0005 for `syntax`, a `for` or parameter pattern at `site`
@@ -27298,11 +27542,129 @@ impl<'a> Parser<'a> {
         ty: &Ty,
         site: BindingSite,
     ) -> Result<(), Error> {
-        if !syntax.may_refute() {
+        if !syntax.may_refute() && !self.matches_unsized_slice(syntax, ty) {
             return Ok(());
         }
-        let resolved = self.resolve_root_pattern(syntax, ty)?;
-        self.require_irrefutable(syntax, &resolved.coverage, ty, site)
+        // The facade parts the check meets are destructured after it.
+        let checks = self.host_checks.borrow().len();
+        let resolved = self.resolve_root_pattern(syntax, ty);
+        let refused = resolved
+            .and_then(|resolved| self.require_irrefutable(syntax, &resolved.coverage, ty, site));
+        self.host_checks.borrow_mut().truncate(checks);
+        refused
+    }
+
+    /// Whether a slice pattern in `syntax` matches a slice of unknown
+    /// length in `ty`, which only a coverage check finds irrefutable
+    /// (`[..]`, `[a @ ..]`), where an array's length decides it.
+    fn matches_unsized_slice(&self, syntax: &PatternSyntax, ty: &Ty) -> bool {
+        let ty = self.referenced(ty);
+        match (syntax, &ty) {
+            (PatternSyntax::Slice { .. }, Ty::Array { kind, .. })
+                if !matches!(kind, sequence::Kind::Array(_)) =>
+            {
+                true
+            }
+            (PatternSyntax::Slice { before, after, .. }, Ty::Array { element, .. }) => before
+                .iter()
+                .chain(after.iter())
+                .any(|member| self.matches_unsized_slice(member, element)),
+            (PatternSyntax::Tuple { members, .. }, Ty::Tuple(types)) => members
+                .iter()
+                .zip(types.iter())
+                .any(|(member, ty)| self.matches_unsized_slice(member, ty)),
+            (
+                PatternSyntax::TupleStruct {
+                    members, fields, ..
+                },
+                _,
+            ) => members
+                .iter()
+                .zip(fields.iter())
+                .any(|(member, ty)| self.matches_unsized_slice(member, ty)),
+            (PatternSyntax::Reference { pattern, .. } | PatternSyntax::At { pattern, .. }, _) => {
+                self.matches_unsized_slice(pattern, &ty)
+            }
+            _ => false,
+        }
+    }
+
+    /// rustc's E0023 for a tuple struct's or, when `variant`, a tuple
+    /// variant's pattern, its path at `path`, whose field patterns at
+    /// `members` (its `..` aside) are more or fewer than the declared
+    /// `fields` of the type `owner`, written at `declared`, which rustc
+    /// labels when the pattern's file declares the type.
+    #[allow(clippy::too_many_arguments)]
+    fn pattern_fields(
+        &self,
+        variant: bool,
+        path: Span,
+        members: &[Span],
+        fields: &[Ty],
+        owner: type_def::Id,
+        declared: impl Iterator<Item = Span>,
+    ) -> Error {
+        let declared = if self.models.declared_here(owner) {
+            declared.collect()
+        } else {
+            Box::default()
+        };
+        let (expected, found) = (fields.len(), members.len());
+        let written_owner = self.written(path).unwrap_or_default();
+        // The pattern's fields as written, between its parentheses.
+        let written = self.written_from(path.end()).and_then(|rest| {
+            let rest = rest.trim_start().strip_prefix('(')?;
+            let mut depth = 0_usize;
+            for (index, character) in rest.char_indices() {
+                match character {
+                    '(' | '[' | '{' => depth += 1,
+                    ')' | ']' | '}' if depth == 0 => return Some(rest[..index].trim().to_string()),
+                    ')' | ']' | '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            None
+        });
+        // From the first field pattern to the end of the last.
+        let pattern = match (members.first(), &written) {
+            (Some(first), Some(written)) => span(first.start(), text_end(first.start(), written)),
+            (Some(first), None) => *first,
+            (None, _) => path,
+        };
+        let tuple = match fields {
+            [field] => match self.inference.resolve(field) {
+                Ty::Tuple(members) => members.len() == found,
+                _ => false,
+            },
+            _ => false,
+        };
+        let help = written.and_then(|written| {
+            if tuple && found > 0 {
+                return Some(format!("missing parentheses: `{written_owner}(({written}))`").into());
+            }
+            if expected <= found {
+                return None;
+            }
+            let ignored = vec!["_"; expected - found].join(", ");
+            let rewritten = if found == 0 {
+                ignored
+            } else {
+                format!("{written}, {ignored}")
+            };
+            Some(
+                format!("use `_` to explicitly ignore each field: `{written_owner}({rewritten})`")
+                    .into(),
+            )
+        });
+        Error::PatternFields {
+            owner: written_owner.into(),
+            variant,
+            expected,
+            found,
+            pattern,
+            fields: declared,
+            help,
+        }
     }
 
     fn parse_pattern_binding(&mut self, start: Position) -> Result<(), Error> {
@@ -27364,10 +27726,10 @@ impl<'a> Parser<'a> {
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
         }
-        // `let Wrapper(x) = w;` of a one-variant enum, or `let Some(x) =
-        // o;`: matched as `let .. else` is, after the coverage check finds
-        // it irrefutable, or refused as rustc's E0005.
-        if !syntax.has_ref_mut() && syntax.may_refute() {
+        // `let Wrapper(x) = w;` of a one-variant enum, `let Some(x) = o;`
+        // or `let [a, ..] = slice;`: matched as `let .. else` is, after the
+        // coverage check finds it irrefutable, or refused as rustc's E0005.
+        if syntax.may_refute() || self.matches_unsized_slice(&syntax, &value.ty) {
             let end = self.position();
             self.terminate(start, Continuation::Let)?;
             return self.bind_let_pattern(
@@ -29804,6 +30166,30 @@ impl<'a> Parser<'a> {
             }
             (None, _) => tuple_members(&syntax.payload, variant.payload.len(), &discard)?,
         };
+        if children.len() != variant.payload.len() && !variant.payload.is_empty() {
+            let written = syntax
+                .payload
+                .iter()
+                .filter(|member| !matches!(member, PatternSyntax::Rest { .. }))
+                .map(PatternSyntax::span)
+                .collect::<Vec<_>>();
+            let fields = variant
+                .payload
+                .iter()
+                .map(Ty::from_resolved)
+                .collect::<Vec<_>>();
+            return Err(self.pattern_fields(
+                true,
+                span(
+                    syntax.owner_span.start(),
+                    text_end(syntax.variant_span.start(), &syntax.variant),
+                ),
+                &written,
+                &fields,
+                definition.id(),
+                variant.payload.iter().map(type_ref::Type::span),
+            ));
+        }
         if children.len() != variant.payload.len() {
             return Err(Error::InvalidMatch {
                 owner: definition.name().into(),
@@ -32670,6 +33056,31 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `field` of `value`, a facade struct of type `ty`, as a pattern on it
+    /// reads it: an imported struct's by its selector, as `event.split`
+    /// reads it.
+    fn host_struct_field(
+        &mut self,
+        value: origin::Fragment,
+        ty: &Ty,
+        field: &ImmutableString,
+        at: Span,
+    ) -> Result<ParsedExpr, Error> {
+        #[cfg(feature = "rust-import")]
+        if let Ty::Host { proof, .. } = ty
+            && proof.definition.identity().imported().is_some()
+            && matches!(
+                proof.definition.shape(),
+                crate::host::type_def::Shape::Struct { .. }
+            )
+        {
+            let definition = proof.definition.clone();
+            let receiver = self.operator_expr(value, ty.clone(), at);
+            return self.read_imported_field(receiver, definition, field.clone(), at);
+        }
+        self.host_read(value, ty, field.clone(), at)
+    }
+
     fn require_new_host_binding(
         &self,
         out: &HostPattern,
@@ -32736,31 +33147,8 @@ impl<'a> Parser<'a> {
                 .as_ref()
                 .map(|(names, _)| names.as_ref())
                 .unwrap_or_default();
-            // An imported struct's fields are read by their selectors, as
-            // `event.split` reads them.
-            #[cfg(feature = "rust-import")]
-            let imported = (proof.definition.identity().imported().is_some()
-                && matches!(
-                    proof.definition.shape(),
-                    crate::host::type_def::Shape::Struct { .. }
-                ))
-            .then(|| proof.definition.clone());
-            #[cfg(not(feature = "rust-import"))]
-            let imported: Option<crate::host::type_def::Definition> = None;
             for ((field, field_span), member) in names.iter().zip(pattern.payload.iter()) {
-                let field_value = match &imported {
-                    #[cfg(feature = "rust-import")]
-                    Some(definition) => {
-                        let receiver = self.operator_expr(value.clone(), ty.clone(), *field_span);
-                        self.read_imported_field(
-                            receiver,
-                            definition.clone(),
-                            field.clone(),
-                            *field_span,
-                        )?
-                    }
-                    _ => self.host_read(value.clone(), ty, field.clone(), *field_span)?,
-                };
+                let field_value = self.host_struct_field(value.clone(), ty, field, *field_span)?;
                 self.host_pattern(member, field_value.rendered_source(), &field_value.ty, out)?;
             }
             return Ok(());
@@ -43981,6 +44369,11 @@ impl<'a> Parser<'a> {
             self.expect(Token::RightParen, "')' after tuple struct patterns")?
         };
         let span = span(start.start(), end);
+        let written = members
+            .iter()
+            .filter(|member| !matches!(member, PatternSyntax::Rest { .. }))
+            .map(PatternSyntax::span)
+            .collect::<Vec<_>>();
         // `W(a, ..)`: `_` for the fields `..` skips.
         if let Some(rest) = tuple_rest(&members)? {
             let fill = (fields.len() + 1).saturating_sub(members.len());
@@ -43990,16 +44383,14 @@ impl<'a> Parser<'a> {
             );
         }
         if members.len() != fields.len() {
-            return Err(Error::InvalidMatch {
-                owner: definition.name().into(),
-                reason: format!(
-                    "the pattern has {} field(s), the struct {}",
-                    members.len(),
-                    fields.len()
-                )
-                .into(),
-                pattern: span,
-            });
+            return Err(self.pattern_fields(
+                false,
+                start,
+                &written,
+                &fields,
+                definition.id(),
+                item.fields.iter().map(|field| field.span),
+            ));
         }
         Ok(PatternSyntax::TupleStruct {
             ty,

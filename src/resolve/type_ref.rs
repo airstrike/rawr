@@ -1531,6 +1531,14 @@ fn prelude_arity(parsed: &item::type_ref::Path) -> Option<usize> {
 }
 
 impl Type {
+    /// Where the type is written.
+    pub(crate) const fn span(&self) -> Span {
+        match self {
+            Self::Unit(span) | Self::Tuple { span, .. } | Self::Reference { span, .. } => *span,
+            Self::Path(path) => path.span,
+        }
+    }
+
     /// Whether this is a written `&str`: Rawr's `String` path with the
     /// reference's lifetime (`resolve`).
     pub(crate) fn is_str(&self) -> bool {

@@ -859,3 +859,250 @@ fn a_refutable_pattern_in_a_let_or_a_for_is_e0005() {
         .map(|_| ())
         .unwrap_or_else(|error| panic!("{error}"));
 }
+
+struct Style;
+
+/// A facade `Style` whose `width` and `height` a pattern reads.
+fn style_facade() -> crate::host::facade::Definition {
+    use crate::host::{facade, item, signature, type_ref};
+    let mut builder = facade::Builder::new("ui", facade::Abi::new(1).unwrap()).unwrap();
+    builder.type_::<Style>("Style", &[], &[]).unwrap();
+    let mut default = signature::Builder::new();
+    default.output(type_ref::Type::registered("Style").unwrap());
+    builder
+        .item(item::Definition::associated_function("Style::default", default.finish()).unwrap())
+        .unwrap();
+    for field in ["width", "height"] {
+        let mut read = signature::Builder::new();
+        read.output(type_ref::Type::builtin(type_ref::Builtin::I64));
+        builder
+            .item(
+                item::Definition::method(
+                    format!("Style::{field}"),
+                    crate::receiver::Mode::Shared,
+                    read.finish(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    builder.finish().unwrap()
+}
+
+/// rustc's code, message, label on the pattern and help for `source`,
+/// which `engine` refuses.
+fn report(engine: &Engine, source: &str) -> (String, String, String, Option<String>) {
+    let error = engine
+        .compile(source)
+        .map(|_| ())
+        .map_or_else(|error| error, |()| panic!("rawr refuses {source}"));
+    let file = Source::new("main.rs", source).expect("a test source has an identity");
+    let report = Report::from_parse(file, &error).expect("the error is in the source");
+    let label = report
+        .labels()
+        .first()
+        .and_then(|label| label.message())
+        .unwrap_or_default()
+        .to_string();
+    (
+        report.code().as_str().to_string(),
+        report.message().to_string(),
+        label,
+        report.help().map(str::to_string),
+    )
+}
+
+#[test]
+fn refutable_patterns_rawr_lowered_elsewhere_are_e0005() {
+    let refutable = |engine: &Engine, source: &str| {
+        let (code, message, label, _) = report(engine, source);
+        assert_eq!(code, "E0005", "{source}");
+        (message, label)
+    };
+    let local = "refutable pattern in local binding".to_string();
+    let engine = Engine::new();
+    // A `let` with `ref mut` and a refutable part.
+    assert_eq!(
+        refutable(
+            &engine,
+            "fn main() {\n    let mut o = Some(1);\n    let Some(ref mut x) = o;\n}\n"
+        ),
+        (local.clone(), "pattern `None` not covered".into())
+    );
+    assert_eq!(
+        refutable(
+            &engine,
+            "fn main() {\n    let mut t = (1, Some(2));\n    let (ref mut x, None) = t;\n}\n"
+        ),
+        (local.clone(), "pattern `(_, Some(_))` not covered".into())
+    );
+    assert_eq!(
+        engine
+            .eval::<i64>(
+                "enum One { Only(i64) }\nfn main() -> i64 {\n    let mut t = (1, One::Only(2));\n    \
+                 let (ref mut a, One::Only(b)) = t;\n    *a += b;\n    t.0\n}\nmain()\n"
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+        3
+    );
+    // A slice pattern on a slice of unknown length, irrefutable only as a
+    // rest pattern with no required element.
+    let slice = |pattern: &str| {
+        refutable(
+            &engine,
+            &format!(
+                "fn main() {{\n    let v = vec![1i64];\n    let s: &[i64] = &v;\n    \
+                 let {pattern} = s;\n}}\n"
+            ),
+        )
+    };
+    assert_eq!(
+        slice("[a, ..]"),
+        (local.clone(), "pattern `&[]` not covered".into())
+    );
+    assert_eq!(slice("[]").1, "pattern `&[_, ..]` not covered");
+    assert_eq!(
+        slice("[a, b]").1,
+        "patterns `&[]`, `&[_]` and `&[_, _, _, ..]` not covered"
+    );
+    assert_eq!(
+        engine
+            .eval::<i64>(
+                "fn main() -> i64 {\n    let v = vec![1i64, 2, 3];\n    let s: &[i64] = &v;\n    \
+                 let [..] = s;\n    let [all @ ..] = s;\n    all.len() as i64 + all[2]\n}\nmain()\n"
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+        6
+    );
+    // A native struct pattern with refutable fields, its witness in place
+    // in what is matched.
+    let mut native = Engine::new();
+    native.register_host_facade(style_facade()).unwrap();
+    let style = |body: &str| {
+        refutable(
+            &native,
+            &format!("use ui::Style;\npub fn f(s: Style) -> i64 {{\n    {body}\n    0\n}}\n"),
+        )
+    };
+    assert_eq!(
+        style("let Style { width: 1, height } = s;"),
+        (
+            local,
+            "patterns `Style { width: i64::MIN..=0_i64, .. }` and \
+             `Style { width: 2_i64..=i64::MAX, .. }` not covered"
+                .into()
+        )
+    );
+    assert_eq!(
+        style("let (Style { height: 0.., .. }, n) = (s, 2);").1,
+        "pattern `(Style { height: i64::MIN..=-1_i64, .. }, _)` not covered"
+    );
+    assert_eq!(
+        style("for Style { width: 0, .. } in vec![s] {}"),
+        (
+            "refutable pattern in `for` loop binding".into(),
+            "patterns `Style { width: i64::MIN..=-1_i64, .. }` and \
+             `Style { width: 1_i64..=i64::MAX, .. }` not covered"
+                .into()
+        )
+    );
+    native
+        .compile_executable(
+            "use ui::Style;\npub fn f(s: Style) -> i64 {\n    let Style { width, .. } = s;\n    \
+             width\n}\n",
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    // A user enum's variant in a function parameter.
+    assert_eq!(
+        refutable(
+            &engine,
+            "enum E { A(i64), B }\nfn f(E::A(x): E) -> i64 {\n    x\n}\nfn main() {}\n"
+        ),
+        (
+            "refutable pattern in function argument".into(),
+            "pattern `E::B` not covered".into()
+        )
+    );
+    assert_eq!(
+        engine
+            .eval::<i64>(
+                "enum E { A(i64) }\nfn f(E::A(x): E) -> i64 {\n    x + 1\n}\nf(E::A(41))\n"
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+        42
+    );
+}
+
+#[test]
+fn a_tuple_pattern_of_the_wrong_field_count_is_e0023() {
+    let engine = Engine::new();
+    let source =
+        "enum Message { Move(i64, i64) }\nfn main() {\n    let m = Message::Move(1, 2);\n    \
+                  match m {\n        Message::Move(value) => {}\n    }\n}\n";
+    let (code, message, label, help) = report(&engine, source);
+    assert_eq!(
+        (code.as_str(), message.as_str(), label.as_str()),
+        (
+            "E0023",
+            "this pattern has 1 field, but the corresponding tuple variant has 2 fields",
+            "expected 2 fields, found 1"
+        )
+    );
+    assert_eq!(
+        help.as_deref(),
+        Some("use `_` to explicitly ignore each field: `Message::Move(value, _)`")
+    );
+    // The label under the field patterns, and rustc's on the declared
+    // fields.
+    let error = engine.compile(source).map(|_| ()).unwrap_err();
+    let file = Source::new("main.rs", source).unwrap();
+    let rendered = render(&Report::from_parse(file, &error).unwrap());
+    assert!(
+        rendered.contains("|                       ^^^^^ expected 2 fields, found 1"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("|                          --- tuple variant has 2 fields"),
+        "{rendered}"
+    );
+    // One field that is a tuple of as many: the help wraps them.
+    let (code, message, label, help) = report(
+        &engine,
+        "enum Message { Move((i64, i64)), Quit }\nfn main() {\n    let m = Message::Quit;\n    \
+         match m {\n        Message::Move(x, y) => {}\n        _ => {}\n    }\n}\n",
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str(), label.as_str()),
+        (
+            "E0023",
+            "this pattern has 2 fields, but the corresponding tuple variant has 1 field",
+            "expected 1 field, found 2"
+        )
+    );
+    assert_eq!(
+        help.as_deref(),
+        Some("missing parentheses: `Message::Move((x, y))`")
+    );
+    // A tuple struct, in a `let`, a `match` and a parameter.
+    for body in [
+        "fn main() {\n    let p = Point(1, 2);\n    let Point(x) = p;\n}\n",
+        "fn main() {\n    let p = Point(1, 2);\n    match p {\n        Point(x) => {}\n    }\n}\n",
+        "fn f(Point(x): Point) {}\nfn main() {}\n",
+    ] {
+        let source = format!("struct Point(i64, i64);\n{body}");
+        let (code, message, label, help) = report(&engine, &source);
+        assert_eq!(
+            (code.as_str(), message.as_str(), label.as_str()),
+            (
+                "E0023",
+                "this pattern has 1 field, but the corresponding tuple struct has 2 fields",
+                "expected 2 fields, found 1"
+            ),
+            "{source}"
+        );
+        assert_eq!(
+            help.as_deref(),
+            Some("use `_` to explicitly ignore each field: `Point(x, _)`")
+        );
+    }
+}

@@ -501,6 +501,20 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::Refutable {
                     witnesses, site, ..
                 } => write!(f, "{}", crate::resolve::Refutable { witnesses, site }),
+                crate::resolve::Error::PatternFields {
+                    variant,
+                    expected,
+                    found,
+                    ..
+                } => write!(
+                    f,
+                    "{}",
+                    crate::resolve::PatternFields {
+                        variant: *variant,
+                        expected: *expected,
+                        found: *found,
+                    }
+                ),
                 crate::resolve::Error::NotYet { path, .. } => {
                     write!(f, "rawr doesn't run `{path}` yet")
                 }

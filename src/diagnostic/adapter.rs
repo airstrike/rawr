@@ -524,6 +524,26 @@ fn resolution_report_with_sources(
             ),
         )?;
     }
+    // rustc labels the last of a tuple pattern's declared fields.
+    if let resolve::Error::PatternFields {
+        variant,
+        expected,
+        found,
+        fields,
+        ..
+    } = error
+    {
+        let declared = resolve::PatternFields {
+            variant: *variant,
+            expected: *expected,
+            found: *found,
+        }
+        .declared();
+        for (index, field) in fields.iter().enumerate() {
+            let label = (index + 1 == fields.len()).then(|| declared.clone().into());
+            builder = builder.secondary(source.clone(), *field, label)?;
+        }
+    }
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
         builder = builder.secondary(
             secondary_source.unwrap_or(source),
@@ -560,6 +580,20 @@ fn primary_label(
         resolve::Error::Refutable {
             witnesses, site, ..
         } => Some(resolve::Refutable { witnesses, site }.label().into()),
+        resolve::Error::PatternFields {
+            variant,
+            expected,
+            found,
+            ..
+        } => Some(
+            resolve::PatternFields {
+                variant: *variant,
+                expected: *expected,
+                found: *found,
+            }
+            .label()
+            .into(),
+        ),
         resolve::Error::CannotCompare { lhs, rhs, .. } => {
             Some(format!("no implementation for `{lhs} == {rhs}`").into())
         }
@@ -700,6 +734,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::InvalidMatch => code::RESOLVE_MATCH,
         resolve::Category::NonExhaustive => code::RESOLVE_NON_EXHAUSTIVE,
         resolve::Category::Refutable => code::RESOLVE_REFUTABLE,
+        resolve::Category::PatternFields => code::RESOLVE_PATTERN_FIELDS,
         resolve::Category::UnsupportedNominalSyntax => code::RESOLVE_UNSUPPORTED_SYNTAX,
         resolve::Category::Syntax => code::PARSE_SYNTAX,
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
@@ -778,6 +813,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 None => builder,
             }
         }
+        resolve::Error::PatternFields {
+            help: Some(help), ..
+        } => builder.help(help.clone()),
         resolve::Error::UnknownFunction {
             import: Some(path), ..
         } => builder.help(format!("consider importing this function: `use {path};`")),
@@ -1095,6 +1133,17 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::Refutable {
             witnesses, site, ..
         } => resolve::Refutable { witnesses, site }.to_string(),
+        resolve::Error::PatternFields {
+            variant,
+            expected,
+            found,
+            ..
+        } => resolve::PatternFields {
+            variant: *variant,
+            expected: *expected,
+            found: *found,
+        }
+        .to_string(),
         resolve::Error::NotYet { path, .. } => format!("rawr doesn't run `{path}` yet"),
         resolve::Error::TypeAnnotationsNeeded { parameter, .. } => {
             format!("type annotations needed: cannot infer the type of the type parameter `{parameter}`")
