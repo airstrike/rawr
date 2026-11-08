@@ -74,7 +74,8 @@
       {"text":"A marked crate's `cfg!(feature = \"..\")`, `#[cfg(feature = \"..\")]` and `#[cfg_attr(..)]` follow the features Cargo enables for it, and `rawr run`, `rawr check` and `rawr test` take `--features`, `--no-default-features` and `--all-features` as `cargo run` does.","issues":[1259]},
       {"text":"A message that a closure gives on iced's executor thread, such as `keyboard::listen().filter_map(..)`'s `Some(Message::SplitFocused(Axis::Vertical))`, keeps the crate values it holds. pane_grid's hotkeys no longer panic.","issues":[1234]},
       {"text":"A crate function returning `impl Trait`, where the trait has a supertrait like `Add<Output = Self>` (as num-traits' `Num` does), now imports. Before, rawr-import overflowed its stack on it.","issues":[1262]},
-      {"text":"A method of an opaque output that gives another opaque output of the same method, as `explain(..).explain(..)` does, can be used again. The fix for #1262 had left it unusable at `rawr check`.","issues":[1270]}
+      {"text":"A method of an opaque output that gives another opaque output of the same method, as `explain(..).explain(..)` does, can be used again. The fix for #1262 had left it unusable at `rawr check`.","issues":[1270]},
+      {"text":"A marked module names a native module's trait by path (`Box<dyn page::Page>`, `use crate::page::Page;`) and takes, keeps and returns its objects.","issues":[1263]}
     ]
   },
   "releases": [
