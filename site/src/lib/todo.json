@@ -132,7 +132,9 @@
         {"text":"A project's target/rawr now grows by an edit's changes, not by a full copy per edit. The API, generic contract, facade, overlay and a runner's generated sources are kept as shared parts in target/rawr/store.parts, so a new generation writes only the parts it changed. When a runner leaves the four the project keeps, the units only its generation used go with it, and so does every part nothing lists any more. An undo to any of the four newest generations still rebuilds nothing.","issues":[1356,1358]},
         {"text":"Shared bindings and trait facts are kept in one directory per extraction protocol in rawr's home (`formats/<protocol>`). Each directory records the installed rawr executables that use it. An older protocol's directory is removed once it has gone a day unused and no installed rawr uses it, so a protocol bump no longer leaves gigabytes of unreachable entries. `rawr cache clean` now also removes idle shared trait facts, and the home's stale `digests` file is removed.","issues":[1359]},
         {"text":"The docs are grouped as Get started, Guides, Reference and Tools. On desktop they show a sidebar tree; on phones a drawer opens from the bar's Docs control. Every page has breadcrumbs, and every heading on the site links to its own anchor. /docs opens with four reader paths. The iced, iced reload and ratatui pages are now worked examples in Apps and libraries, rewritten as plain documentation, and previews moved to Tools as Editor previews. Old docs URLs no longer redirect.","issues":[1378]},
-        {"text":"A push to main that changes `play/universe`, the bot's code or `play/Dockerfile` builds the ?play image and deploys it by itself. A snippet on the site that needs a crate the universe gained no longer waits for the release workflow. Every other change to the site or the docs deploys on push, as before.","issues":[1380]}
+        {"text":"A push to main that changes `play/universe`, the bot's code or `play/Dockerfile` builds the ?play image and deploys it by itself. A snippet on the site that needs a crate the universe gained no longer waits for the release workflow. Every other change to the site or the docs deploys on push, as before.","issues":[1380]},
+        {"text":"`rawr run` starts its file watcher on apps with a thousand dependencies: the OS watches the project's source directories, each path dependency's and each manifest's directory, never every dependency file, and registry and git dependencies get no watch, since a changed one arrives through `Cargo.lock`.","issues":[1375]},
+        {"text":"Installing a contract counted its facade roots by rescanning every prior outcome for each outcome, which took minutes on a workspace of a thousand packages. The roots are collected once.","issues":[1383]}
       ]
     },
     "releases": [
@@ -3115,12 +3117,15 @@
     {"issue":1372,"title":"The landing page's iced and ratatui snippets run on rawr's server, like its other snippets","state":"open","category":"Health"},
     {"issue":1373,"title":"Call ratatui's Terminal::draw from rawr, and resolve TestBackend's Error","state":"open","category":"Divergences from rustc"},
     {"issue":1374,"title":"Generated adapters call a trait method two traits share by method syntax (ratatui List::render, E0034)","state":"open","category":"Divergences from rustc"},
-    {"issue":1375,"title":"The watcher hands every input file to FSEvents (13,847 for a real app); watch roots and filter in rawr","state":"open","category":"Health"},
+    {"issue":1375,"title":"The watcher hands every input file to FSEvents (13,847 for a real app); watch roots and filter in rawr","state":"closed","category":"Health"},
     {"issue":1376,"title":"Charge store.parts to the installation ledger so the store's size targets see parts","state":"open","category":"Health"},
     {"issue":1377,"title":"Trim generations that never build a new runner, and keep siblings reused across generations","state":"open","category":"Health"},
     {"issue":1378,"title":"The docs have a sidebar tree, a mobile drawer, a landing page and one Apps and libraries guide for iced and ratatui","state":"open","category":"Health"},
     {"issue":1379,"title":"Delete `#[widget]`: the no-op rawr-macros attribute, the parser's acceptance, the island marker…","state":"open","category":"Health"},
-    {"issue":1380,"title":"The ?play image builds and deploys on a push that changes the universe or the bot, not only in a release","state":"open","category":"Health"}
+    {"issue":1380,"title":"The ?play image builds and deploys on a push that changes the universe or the bot, not only in a release","state":"open","category":"Health"},
+    {"issue":1381,"title":"A package with no file directly in src/ gets one watch root per input subdirectory instead of…","state":"open","category":"Health"},
+    {"issue":1382,"title":"`rawr check` spun for minutes on a thousand-package workspace: install rescanned every prior…","state":"closed","category":"Health"},
+    {"issue":1383,"title":"`rawr check` no longer spins for minutes on a thousand-package workspace while counting facade roots","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -4041,7 +4046,7 @@
             {"number":1351,"title":"A watched package tree covers its .git and nested packages","state":"open"},
             {"number":1364,"title":"A native trait object's `&[T]`/`&T` result that borrows the receiver comes back as a copy per call","state":"open"},
             {"number":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open"},
-            {"number":1375,"title":"The watcher hands every input file to FSEvents (13,847 for a real app); watch roots and filter in rawr","state":"open"}
+            {"number":1375,"title":"The watcher hands every input file to FSEvents (13,847 for a real app); watch roots and filter in rawr","state":"closed"}
           ]
         }
       ]
