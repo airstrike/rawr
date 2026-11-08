@@ -58,6 +58,17 @@ impl Bootstrap {
         self.binding.invoke_main()
     }
 
+    /// Call the root package's function `name` with `args`. `None` when
+    /// the package has no such function.
+    #[doc(hidden)]
+    pub fn invoke_root(
+        &self,
+        name: &str,
+        args: &mut [Dynamic],
+    ) -> Option<Result<Dynamic, program::Error>> {
+        self.binding.invoke_root(name, args)
+    }
+
     /// The bound catalog native islands call into.
     #[cfg(feature = "rust-import")]
     pub(crate) fn catalog(&self) -> &reload::BoundCatalog {
