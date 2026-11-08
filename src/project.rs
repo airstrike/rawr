@@ -359,7 +359,7 @@ fn marked_root(
             path: path.clone(),
             source,
         })?;
-        if !marking.marked && !reaches_marked(&path)? {
+        if !marking.marked && !reaches_marked(&path, package)? {
             unmarked.get_or_insert(path);
             continue;
         }
@@ -389,8 +389,11 @@ fn workspace(manifest: &Path) -> Result<Option<std::sync::Arc<cargo::Workspace>>
 /// Whether the unmarked crate root `root` reaches a marked module through
 /// the `mod` declarations of it and of the native modules it declares,
 /// under Rust's file rules (`name.rs` or `name/mod.rs`). `#[path]` and
-/// `#[cfg]`-disabled declarations are Rust's own and are not followed.
-fn reaches_marked(root: &Path) -> Result<bool, Error> {
+/// `#[path]` declarations are Rust's own and are not followed, and neither
+/// are those a `#[cfg]` leaves out under the features and target options
+/// Cargo builds the root's target of `package` with (the host's own
+/// without a package). Cargo is asked only for a tree that has a `cfg`.
+fn reaches_marked(root: &Path, package: Option<&cargo::Package>) -> Result<bool, Error> {
     let Some(directory) = root.parent() else {
         return Ok(false);
     };
@@ -401,10 +404,25 @@ fn reaches_marked(root: &Path) -> Result<bool, Error> {
             source,
         })
     };
+    let mut features: Option<cargo::features::Enabled> = None;
     let mut pending = vec![(Vec::<String>::new(), read(root)?)];
     let mut seen = std::collections::BTreeSet::new();
     while let Some((modules, text)) = pending.pop() {
-        for declaration in crate::package::polyglot::declarations(&text) {
+        if features.is_none() && text.contains("cfg") {
+            let target = package.and_then(|package| Some((package, package.target_at(root)?)));
+            features = Some(match target {
+                Some((package, target)) => cargo::Unit::of(package, target)
+                    .map_err(|source| Error::Cargo {
+                        manifest: package.manifest().to_path_buf(),
+                        source,
+                    })?
+                    .features()
+                    .clone(),
+                None => cargo::features::Enabled::default(),
+            });
+        }
+        let enabled = features.clone().unwrap_or_default();
+        for declaration in crate::package::polyglot::declarations(&text, &enabled) {
             if declaration.explicit_path || declaration.disabled {
                 continue;
             }

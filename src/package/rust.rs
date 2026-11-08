@@ -343,7 +343,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
         ));
     }
     if !entry.is_script() {
-        files.extend(build_script(cargo, &directory)?);
+        files.extend(build_script(cargo, &directory, entry.features())?);
     }
     write_changed(files)?;
     // The features Cargo enabled for the package under the command's
@@ -353,18 +353,23 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
         .package(&cargo.package)?
         .features(features(), false)?];
     if let Some(bin) = entry.bin() {
-        crates.push(bin_crate(bin, cargo, &directory, &module_root)?.features(features(), false)?);
+        crates.push(
+            bin_crate(bin, cargo, &directory, &module_root, entry.features())?
+                .features(features(), false)?,
+        );
     }
     Ok(crates)
 }
 
 /// The generated package of a native binary that runs the program from the
-/// library in `library`: [`app_crate`] says how it is laid out.
+/// library in `library`: [`app_crate`] says how it is laid out. Its build
+/// script's `cfg`s read `features`, the package's.
 fn bin_crate(
     bin: &super::graph::Bin,
     cargo: &super::manifest::cargo::Cargo,
     library: &Path,
     module_root: &Path,
+    features: &crate::project::cargo::features::Enabled,
 ) -> rawr_import::Result<Dependency> {
     let directory = library.with_file_name("bin");
     let package = cargo.path.parent().unwrap_or(module_root);
@@ -387,7 +392,7 @@ fn bin_crate(
             super::polyglot::widened(module.text(), false, module.path(), package),
         ));
     }
-    files.extend(build_script(cargo, &directory)?);
+    files.extend(build_script(cargo, &directory, features)?);
     write_changed(files)?;
     Dependency::path(super::island::BIN, &directory)?.package(&bin_package(cargo))
 }
@@ -416,10 +421,13 @@ const BUILD_DIRECTORY: &str = "build-script";
 /// `CARGO_MANIFEST_DIR` naming it, so what it reads at run time is the
 /// package's, and with its relative `rerun-if-changed` paths made
 /// absolute, so Cargo watches the package's files and runs it again
-/// exactly when Cargo's build of the package would.
+/// exactly when Cargo's build of the package would. A module a `cfg`
+/// leaves out under `features`, the package's on the host Cargo builds
+/// the script for, is not copied.
 fn build_script(
     cargo: &super::manifest::cargo::Cargo,
     directory: &Path,
+    features: &crate::project::cargo::features::Enabled,
 ) -> rawr_import::Result<Vec<(std::path::PathBuf, String)>> {
     let (Some(script), Some(copy)) = (
         cargo.build.as_deref(),
@@ -452,7 +460,7 @@ fn build_script(
     let there = directory.join(BUILD_DIRECTORY);
     let mut pending = vec![(Vec::<String>::new(), original)];
     while let Some((modules, text)) = pending.pop() {
-        for declaration in super::polyglot::declarations(&text) {
+        for declaration in super::polyglot::declarations(&text, features) {
             if declaration.explicit_path || declaration.disabled {
                 continue;
             }
@@ -1353,7 +1361,12 @@ preview = ["dep:rawr-macros"]
             "[package]\nname = \"app\"\nversion = \"0.1.0\"\nbuild = \"tools/build.rs\"\n",
         );
         let directory = root.join("generated");
-        let mut files = super::build_script(&cargo, &directory).unwrap();
+        let mut files = super::build_script(
+            &cargo,
+            &directory,
+            &crate::project::cargo::features::Enabled::default(),
+        )
+        .unwrap();
         files.sort();
         let copies = files
             .iter()

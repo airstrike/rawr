@@ -46,13 +46,17 @@ fn start(bin: bool) -> String {
     format!("\nfn main() {{\n    {owner}::{MODULE}::main();\n}}\n")
 }
 
-/// The Rawr text of a native crate root: its `mod name;` declarations at
-/// their places, everything else blanked (line breaks kept, so positions
-/// stay the file's), and a `main` that starts the native program, the
-/// binary's with `bin`.
-pub(crate) fn root_text(text: &str, bin: bool) -> String {
+/// The Rawr text of a native crate root: its `mod name;` declarations that
+/// Cargo compiles under `features` at their places, everything else
+/// blanked (line breaks kept, so positions stay the file's), and a `main`
+/// that starts the native program, the binary's with `bin`.
+pub(crate) fn root_text(
+    text: &str,
+    bin: bool,
+    features: &crate::project::cargo::features::Enabled,
+) -> String {
     let mut kept: Vec<std::ops::Range<usize>> = Vec::new();
-    for declaration in super::polyglot::declarations(text) {
+    for declaration in super::polyglot::declarations(text, features) {
         if declaration.explicit_path || declaration.disabled || declaration.path.len() != 1 {
             continue;
         }
@@ -2766,7 +2770,11 @@ mod tests {
     fn a_root_keeps_only_its_module_declarations() {
         let text = "//! Native.\nmod physics;\npub mod util;\n#[cfg(test)]\nmod tests;\n\
                     fn main() { physics::run(); }\n";
-        let rawr = root_text(text, false);
+        let rawr = root_text(
+            text,
+            false,
+            &crate::project::cargo::features::Enabled::default(),
+        );
         let lines = rawr.lines().collect::<Vec<_>>();
         assert_eq!(lines[0].trim(), "");
         assert_eq!(lines[1], "mod physics;");

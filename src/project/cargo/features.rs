@@ -201,6 +201,19 @@ impl Enabled {
             .unwrap_or_else(|| super::cfg::Target::host())
     }
 
+    /// Whether the `cfg` option `name` holds, `name = "<value>"` with
+    /// `value`: `feature = ".."` for a feature Cargo enables, `test` when
+    /// the crate builds as rustc's `--test` builds it, and any other as
+    /// rustc sets it for the target. Every reader of a `cfg(..)` asks this.
+    #[must_use]
+    pub fn cfg(&self, name: &str, value: Option<&str>, test: bool) -> bool {
+        match (name, value) {
+            ("feature", Some(feature)) => self.holds(feature),
+            ("test", None) => test,
+            (name, value) => self.option(name, value),
+        }
+    }
+
     /// Whether `cfg(feature = "<name>")` holds.
     #[must_use]
     pub fn holds(&self, name: &str) -> bool {
@@ -212,6 +225,40 @@ impl Enabled {
     /// The enabled features' names, sorted.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.names.iter().map(AsRef::as_ref)
+    }
+}
+
+/// A `cfg` operator over the predicates in its parentheses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Operator {
+    /// `not(..)`: its one predicate does not hold.
+    Not,
+    /// `all(..)`: every predicate holds.
+    All,
+    /// `any(..)`: some predicate holds.
+    Any,
+}
+
+impl Operator {
+    /// The operator `name` names: `not`, `all` or `any`.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        match name {
+            "not" => Some(Self::Not),
+            "all" => Some(Self::All),
+            "any" => Some(Self::Any),
+            _ => None,
+        }
+    }
+
+    /// Whether the operator holds over its predicates' `values`.
+    #[must_use]
+    pub fn holds(self, values: &[bool]) -> bool {
+        match self {
+            Self::Not => !values.first().copied().unwrap_or(false),
+            Self::All => values.iter().all(|value| *value),
+            Self::Any => values.iter().any(|value| *value),
+        }
     }
 }
 

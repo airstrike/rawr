@@ -27518,13 +27518,12 @@ impl<'a> Parser<'a> {
                         })
                     }
                 };
-                if name == "feature" {
-                    return Ok(self.models.features.holds(&value));
-                }
-                Ok(self.models.features.option(&name, Some(&value)))
+                Ok(self
+                    .models
+                    .features
+                    .cfg(&name, Some(&value), self.models.test))
             }
-            "test" => Ok(self.models.test),
-            _ => Ok(self.models.features.option(&name, None)),
+            _ => Ok(self.models.features.cfg(&name, None, self.models.test)),
         }
     }
 
