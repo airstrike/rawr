@@ -122,6 +122,11 @@ pub struct Signature {
     /// output names.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     lends: Box<[u32]>,
+    /// The inputs, by position, written as a shared reference at
+    /// `'static`, as `State::new(blocks: &'static [Block])` takes one: only
+    /// a value that lives as long as the runner fills it.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    statics: Box<[u32]>,
 }
 
 /// The associated types an opaque `impl Trait` type binds, each at the
@@ -582,6 +587,7 @@ impl Signature {
             through: None,
             opaques: Box::new([]),
             lends: Box::new([]),
+            statics: Box::new([]),
         }
     }
 
@@ -665,6 +671,17 @@ impl Signature {
     #[must_use]
     pub fn lends(&self) -> &[u32] {
         &self.lends
+    }
+
+    pub(crate) fn with_statics(mut self, statics: Box<[u32]>) -> Self {
+        self.statics = statics;
+        self
+    }
+
+    /// The inputs, by position, that borrow at `'static`.
+    #[must_use]
+    pub fn statics(&self) -> &[u32] {
+        &self.statics
     }
 
     pub(crate) fn with_guard(mut self, guard: Option<Guard>) -> Self {

@@ -1194,7 +1194,8 @@ fn clone_signature_at(
     // The trait object an opaque output that borrows its call's values is
     // held as (`Opaque::principal`), and which inputs it borrows.
     .with_opaques(source.opaques().into())
-    .with_lends(source.lends().into()))
+    .with_lends(source.lends().into())
+    .with_statics(source.statics().into()))
 }
 
 fn clone_parameters(source: &[signature::Parameter]) -> Result<Box<[signature::Parameter]>, Error> {

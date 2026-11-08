@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 141;
+const CLASSIFIER_VERSION: u32 = 142;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8684,6 +8684,7 @@ impl<P: api::Phase> Context<'_, P> {
         .with_guard(guard)
         .with_scope(scope)
         .with_lends(lends.into_boxed_slice())
+        .with_statics(static_inputs(signature))
         .with_opaques(opaques.into_boxed_slice());
         // A receiver of an impl that fixes its type's arguments, as
         // `impl<'a> Reader<&'a [u8]>`: the instance the bridge reaches.
@@ -12846,6 +12847,28 @@ fn borrows_mutably_at_early_lifetime(ty: &model::Type) -> bool {
         | model::Type::ImplTrait { .. }
         | model::Type::Projection { .. } => false,
     }
+}
+
+/// The inputs of `signature`, by position, written as a shared reference
+/// at `'static`, as `State::new(blocks: &'static [Block])` takes one: Rust
+/// fills it only with a value that lives as long as the program
+/// (`Signature::statics`).
+fn static_inputs(signature: &model::Signature) -> Box<[u32]> {
+    signature
+        .inputs()
+        .enumerate()
+        .filter(|(_, input)| {
+            matches!(
+                input,
+                model::Type::Reference {
+                    mutability: model::Mutability::Shared,
+                    lifetime: model::Lifetime::Static,
+                    ..
+                }
+            )
+        })
+        .filter_map(|(index, _)| u32::try_from(index).ok())
+        .collect()
 }
 
 fn borrows_at_early_lifetime(ty: &model::Type) -> bool {

@@ -84,3 +84,20 @@ pub fn titles() {
         page::lay_out(children, 2);
     }
 }
+
+/// The page's state, which keeps native code's `BLOCKS` for as long as the
+/// app runs.
+pub fn state() -> page::State {
+    page::State::new(4, BLOCKS)
+}
+
+/// A state that keeps part of `BLOCKS`.
+pub fn part() -> page::State {
+    page::State::new(5, &BLOCKS[1..2])
+}
+
+/// A state that keeps a block written in the call, which Rust promotes to
+/// a `'static`.
+pub fn promoted() -> page::State {
+    page::State::new(6, &[page::Block::Md("promoted")])
+}

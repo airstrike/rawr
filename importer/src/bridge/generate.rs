@@ -3250,6 +3250,44 @@ fn with_slice_argument<E: __rawr_internal::place::Policy>(
     .map_err(|error| Error::Value(error.to_string()))?
 }
 
+/// Run `body` with the `&'static [T]` argument at `index`, as
+/// `State::new(page_index, blocks: &'static [Block])` takes one (#1437): a
+/// native slice that lives as long as the runner, as a marked `static`
+/// does (`place::slice::lasting`), or the values of an array the call is
+/// given, pinned for the runner's life ([`pin_slice`]), as rustc promotes
+/// `&[Block::Md("..")]` to a `'static`.
+#[allow(dead_code)]
+fn with_lasting_slice_argument<E: __rawr_internal::place::Policy>(
+    arguments: &mut Arguments<'_, '_, '_>,
+    index: usize,
+    body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, &'static [E::Value]) -> Result<Dynamic, Error>,
+) -> Result<Dynamic, Error> {
+    let Some(place) = arguments.values.get(index).and_then(|value| __rawr_internal::place::get(value)) else {
+        let value = (**arguments.values.get_mut(index).ok_or(Error::MissingArgument)?).take().flatten();
+        let handles = value
+            .into_array()
+            .map_err(|_| Error::TypeMismatch)?
+            .into_iter()
+            .map(|item| item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch))
+            .collect::<Result<Vec<_>, Error>>()?;
+        let slice = pin_slice(lend_slice::<E::Value>(arguments.arena, handles)?);
+        return body(arguments, slice);
+    };
+    let slice = __rawr_internal::place::slice::lasting_of::<E>(&place).ok_or_else(|| {
+        Error::Home("borrowed value does not live long enough: argument requires that it is borrowed for `'static` (E0597)".into())
+    })?;
+    body(arguments, slice)
+}
+
+/// The values `lent` holds, pinned for the runner's life, as a `&'static
+/// [T]` parameter takes them (#1437): no value is copied, each slot reads
+/// its value in the slice from then on (`SliceHome`), and none goes back.
+#[allow(dead_code)]
+fn pin_slice<T: 'static>(lent: SliceLent<T>) -> &'static [T] {
+    let items: &'static std::rc::Rc<Vec<T>> = Box::leak(Box::new(lent.items.clone()));
+    items
+}
+
 #[allow(dead_code)]
 fn nest_lent(
     arguments: &mut Arguments<'_, '_, '_>,
@@ -9445,7 +9483,7 @@ fn render_adapter(
     } else {
         Vec::new()
     };
-    let _slices = SliceArguments::enter(slices.iter().map(|(index, ..)| *index).collect());
+    let _slices = SliceArguments::enter(slices.iter().map(|slice| slice.index).collect());
     if lent.is_empty() && slices.is_empty() {
         writeln!(
             output,
@@ -9454,22 +9492,22 @@ fn render_adapter(
         .map_err(encoding)?;
     } else if lent.is_empty() {
         // Each `&[T]` argument a native slice place fills is reached where
-        // it is for the call, and the call runs inside them all (#1291).
+        // it is for the call, and the call runs inside them all (#1291). A
+        // `&'static [T]` one is a slice that lives as long as the runner
+        // (#1437).
         let names = slices
             .iter()
-            .map(|(index, ..)| format!("slice_{index}"))
+            .map(|slice| format!("slice_{}", slice.index))
             .collect::<Vec<_>>()
             .join(", ");
         let parameters = slices
             .iter()
-            .map(|(index, _, rust)| format!("slice_{index}: Option<&[{rust}]>"))
+            .map(|slice| format!("slice_{}: {}", slice.index, slice.parameter()))
             .collect::<Vec<_>>()
             .join(", ");
         let mut call = format!("{name}_sliced(arguments, {names})");
-        for (index, policy, rust) in slices.iter().rev() {
-            call = format!(
-                "with_slice_argument::<{policy}>(arguments, {index}, &mut |arguments: &mut Arguments<'_, '_, '_>, slice_{index}: Option<&[{rust}]>| {call})"
-            );
+        for slice in slices.iter().rev() {
+            call = slice.around(&call);
         }
         writeln!(
             output,
@@ -9579,11 +9617,50 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
     Ok(lent)
 }
 
-/// The `&[T]` inputs of crate values a call takes (`lent_slice_element`),
+/// A `&[T]` input of crate values a call takes (`lent_slice_element`),
 /// which a native slice place may fill, as a marked page's `&BLOCKS[1..2]`
-/// does (#1291): each one's argument index, its element's descriptor and
-/// the element's Rust type.
-fn slice_inputs(plan: &Plan) -> Result<Vec<(usize, String, String)>, request::Error> {
+/// does (#1291).
+struct SliceInput {
+    /// The argument's index.
+    index: usize,
+    /// The element's place descriptor.
+    policy: String,
+    /// The element's Rust type.
+    rust: String,
+    /// Whether the input is a `&'static [T]`, as `State::new(page_index,
+    /// blocks: &'static [Block])` takes (#1437), which only a slice that
+    /// lives as long as the runner fills.
+    lasting: bool,
+}
+
+impl SliceInput {
+    /// The type of `slice_{index}`, which the call's adapter takes.
+    fn parameter(&self) -> String {
+        let rust = &self.rust;
+        if self.lasting {
+            format!("&'static [{rust}]")
+        } else {
+            format!("Option<&[{rust}]>")
+        }
+    }
+
+    /// `call` run with this argument reached as `slice_{index}`.
+    fn around(&self, call: &str) -> String {
+        let Self { index, policy, .. } = self;
+        let parameter = self.parameter();
+        let reach = if self.lasting {
+            "with_lasting_slice_argument"
+        } else {
+            "with_slice_argument"
+        };
+        format!(
+            "{reach}::<{policy}>(arguments, {index}, &mut |arguments: &mut Arguments<'_, '_, '_>, slice_{index}: {parameter}| {call})"
+        )
+    }
+}
+
+/// The `&[T]` inputs of crate values a call takes ([`SliceInput`]).
+fn slice_inputs(plan: &Plan) -> Result<Vec<SliceInput>, request::Error> {
     let Some((signature, substitutions, offset)) = call_signature(plan) else {
         return Ok(Vec::new());
     };
@@ -9594,10 +9671,32 @@ fn slice_inputs(plan: &Plan) -> Result<Vec<(usize, String, String)>, request::Er
             && place::available(element)
             && let Some(rust) = concrete_type(element)
         {
-            slices.push((index, place::policy(element)?, rust));
+            slices.push(SliceInput {
+                index,
+                policy: place::policy(element)?,
+                rust,
+                lasting: lasting_input(signature, index - offset),
+            });
         }
     }
     Ok(slices)
+}
+
+/// Whether the input at `position` of `signature`'s runtime inputs
+/// (`runtime_inputs`) is a shared reference at `'static`
+/// (`Signature::statics`).
+fn lasting_input(
+    signature: &crate::classify::representability::signature::Signature,
+    position: usize,
+) -> bool {
+    signature
+        .inputs()
+        .iter()
+        .enumerate()
+        .filter(|(_, input)| !matches!(input, convert::Type::FunctionItem { .. }))
+        .nth(position)
+        .and_then(|(declared, _)| u32::try_from(declared).ok())
+        .is_some_and(|declared| signature.statics().contains(&declared))
 }
 
 /// The inputs a call takes by value whose type carries a lifetime, so a
@@ -11151,13 +11250,14 @@ fn render_adapter_body(
             };
             // A static slice of crate values (#1291): a native place that
             // reaches the static at each operation, so its elements are read
-            // where they are.
+            // where they are, and that a `&'static [T]` parameter takes
+            // (#1437).
             if let Some(element) = lent_elements(ty) {
                 let policy = place::policy(element)?;
                 writeln!(
                     output,
                     "    let witness = output_witness().ok_or(Error::Stale)?;
-    __rawr_internal::place::slice::lent_by::<{policy}>(&witness, |visit| visit({constant}))
+    __rawr_internal::place::slice::lasting::<{policy}>(&witness, || {constant})
         .map_err(|error| Error::Value(error.to_string()))"
                 )
                 .map_err(request::unwritable)?;
@@ -15221,10 +15321,29 @@ fn render_take_input(
         let take = format!(
             "{{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let handles = value.into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|item| item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)).collect::<Result<Vec<_>, Error>>()?; lend_slice::<{item}>(arguments.arena, handles)? }}"
         );
+        let lasting = u32::try_from(local).is_ok_and(|local| signature.statics().contains(&local));
+        let sliced = !VIEWED_ARGUMENTS.get()
+            && SLICE_ARGUMENTS.with_borrow(|slices| slices.contains(&index));
+        // A `&'static [T]`: a slice that lives as long as the runner
+        // (`with_lasting_slice_argument`), or the values the call is given,
+        // pinned for the runner's life (#1437).
+        if lasting && sliced {
+            return writeln!(
+                output,
+                "    let argument_{local}: &'static [{item}] = slice_{index};"
+            )
+            .map_err(request::unwritable);
+        }
+        if lasting {
+            return writeln!(
+                output,
+                "    let argument_{local}: &'static [{item}] = pin_slice({take});"
+            )
+            .map_err(request::unwritable);
+        }
         // A native slice place, reached where it is for the call
         // (`with_slice_argument`, #1291).
-        if !VIEWED_ARGUMENTS.get() && SLICE_ARGUMENTS.with_borrow(|slices| slices.contains(&index))
-        {
+        if sliced {
             return writeln!(
                 output,
                 "    let argument_{local}_lent;

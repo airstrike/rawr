@@ -43,3 +43,22 @@ pub fn heading(block: Block) -> String {
         Block::Example { title, .. } | Block::Group { title, .. } => title.to_owned(),
     }
 }
+
+/// A page's state: the blocks it shows, kept for as long as the app runs.
+pub struct State {
+    pub page_index: usize,
+    blocks: &'static [Block],
+}
+
+impl State {
+    /// The state of page `page_index`, which shows `blocks`.
+    pub fn new(page_index: usize, blocks: &'static [Block]) -> Self {
+        Self { page_index, blocks }
+    }
+
+    /// Lays the page out under its number.
+    pub fn show(&self) {
+        println!("page {} of {} blocks", self.page_index, self.blocks.len());
+        lay_out(self.blocks, 1);
+    }
+}

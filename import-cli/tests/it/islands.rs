@@ -619,7 +619,12 @@ fn a_marked_static_of_native_blocks_is_read_by_native_code() {
              md A badge marks a count.\ngroup Examples, 2 children\n\
              first Dot Some(\"A badge with no count.\")\n  md Counts past 99 show 99+.\n\
              \x20   example dot \"Dot\" Some(\"A badge with no count.\") \"badge()\"\n\
-             \x20   md Counts past 99 show 99+.\n"
+             \x20   md Counts past 99 show 99+.\npage 4 of 3 blocks\n\
+             \x20 example demo \"\" None \"\"\n  md A badge marks a count.\n\
+             \x20 group Examples\n\
+             \x20   example dot \"Dot\" Some(\"A badge with no count.\") \"badge()\"\n\
+             \x20   md Counts past 99 show 99+.\npage 5 of 1 blocks\n\
+             \x20 md A badge marks a count.\npage 6 of 1 blocks\n  md promoted\n"
         ),
         "{printed}"
     );
