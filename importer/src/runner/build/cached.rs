@@ -16,6 +16,8 @@ const BUNDLE_MAGIC: &[u8; 8] = b"RAWRBNDL";
 const SCHEMA: u32 = 3;
 const BUNDLE_SCHEMA: u32 = 2;
 const COMMAND_SCHEMA: u32 = 6;
+/// The generated runner's package.
+const RUNNER: &str = "rawr-generated-runner";
 
 /// The runner's store schema: its codec with every version its execution key
 /// carries, through the build request (generator, request schema, contract
@@ -334,8 +336,18 @@ fn compile<B>(
     let mirrored = std::str::from_utf8(generated_manifest)
         .ok()
         .map(|text| crate::runner::mirror::mirror(&workspace, &work, text));
+    let version = runner_version(context.project());
+    let sources = |runtime: Option<&crate::runner::runtime::Runtime>| {
+        runner_sources(
+            manifest,
+            mirrored.as_deref(),
+            runtime,
+            &level,
+            version.as_deref(),
+        )
+    };
     let sync = |runtime: Option<&crate::runner::runtime::Runtime>| {
-        let mut sources = runner_sources(manifest, mirrored.as_deref(), runtime, &level);
+        let mut sources = sources(runtime);
         // The lock cargo settled this pruned lock to, at an earlier build.
         if runtime.is_some()
             && let Some(settled) = settled_lock(&work, &sources)
@@ -361,7 +373,7 @@ fn compile<B>(
     };
     sync(runtime.as_ref())?;
     if let Some(runtime) = &runtime {
-        let sources = runner_sources(manifest, mirrored.as_deref(), Some(runtime), &level);
+        let sources = sources(Some(runtime));
         let file = |name: &str| {
             sources
                 .iter()
@@ -522,12 +534,14 @@ fn runner_executable(messages: &[u8]) -> Option<PathBuf> {
 
 /// The runner's sources as Cargo builds them: the generated files with the
 /// mirrored manifest, linked to the shared `runtime` when there is one, else
-/// with the `rawr` crate at the opt-level setting (T302).
+/// with the `rawr` crate at the opt-level setting (T302), and with the
+/// runner at `version` when it has one ([`runner_version`]).
 fn runner_sources<'a, B>(
     manifest: &'a super::super::Manifest<super::super::Generated, B>,
     mirrored: Option<&'a str>,
     runtime: Option<&crate::runner::runtime::Runtime>,
     level: &toml_edit::Item,
+    version: Option<&str>,
 ) -> Vec<(&'a str, std::borrow::Cow<'a, [u8]>)> {
     use std::borrow::Cow;
     manifest
@@ -549,6 +563,10 @@ fn runner_sources<'a, B>(
                 }
                 _ => None,
             };
+            let rewired = match (version, rewired.as_deref().or(text)) {
+                (Some(version), Some(text)) => with_version(path, text, version).or(rewired),
+                _ => rewired,
+            };
             let bytes = match (rewired, path, mirrored) {
                 (Some(text), _, _) => Cow::Owned(text.into_bytes()),
                 (None, "Cargo.toml", Some(mirrored)) => Cow::Borrowed(mirrored.as_bytes()),
@@ -557,6 +575,42 @@ fn runner_sources<'a, B>(
             (path, bytes)
         })
         .collect()
+}
+
+/// The runner's version for `project`: none for a project's own runner, and
+/// `0.0.0+<digest>` of its path under the workspace root for a workspace
+/// member's. Every member's runner builds in the workspace's one build
+/// directory, and Cargo keys a package that roots its own workspace by its
+/// name and version alone. Without a version of its own, a member's runner
+/// would take another's build script and units as its own (#1421).
+fn runner_version(project: &Path) -> Option<String> {
+    let member = rawr_location::member_path(project)?;
+    let digest = Sha256::digest(member.as_os_str().as_encoded_bytes());
+    let mut version = String::from("0.0.0+");
+    for byte in &digest[..8] {
+        version.push_str(&format!("{byte:02x}"));
+    }
+    Some(version)
+}
+
+/// `text`, the runner's manifest or lockfile at `path`, with the runner at
+/// `version`. `None` for any other file.
+fn with_version(path: &str, text: &str, version: &str) -> Option<String> {
+    let mut document = text.parse::<toml_edit::DocumentMut>().ok()?;
+    let package: &mut dyn toml_edit::TableLike = match path {
+        "Cargo.toml" => document.get_mut("package")?.as_table_like_mut()?,
+        "Cargo.lock" => document
+            .get_mut("package")?
+            .as_array_of_tables_mut()?
+            .iter_mut()
+            .find(|package| {
+                package.get("name").and_then(toml_edit::Item::as_str) == Some(RUNNER)
+                    && !package.contains_key("source")
+            })?,
+        _ => return None,
+    };
+    package.insert("version", toml_edit::value(version));
+    Some(document.to_string())
 }
 
 /// The settled lock for the pruned manifest and lock in `sources`
