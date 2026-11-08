@@ -495,6 +495,9 @@ impl fmt::Display for ParseErrorType {
                     f.write_str(crate::resolve::ASYNC_MAIN)
                 }
                 crate::resolve::Error::StdPath { message, .. } => f.write_str(message),
+                crate::resolve::Error::NonExhaustive { witnesses, .. } => {
+                    write!(f, "{}", crate::resolve::NonExhaustive(witnesses))
+                }
                 crate::resolve::Error::NotYet { path, .. } => {
                     write!(f, "rawr doesn't run `{path}` yet")
                 }

@@ -11120,6 +11120,180 @@ fn bool_literals(syntax: &PatternSyntax, seen: &mut [bool; 2]) {
     }
 }
 
+/// The type of a match on integers or `char`s, whose arms' values rawr
+/// reads as ranges to name the values no arm matches as rustc does
+/// (E0004). Values are ordinals: an integer's in the order of its kind,
+/// a `char`'s its scalar value.
+#[derive(Clone, Copy)]
+enum Scalar {
+    Int(Int),
+    Char,
+}
+
+impl Scalar {
+    /// The sign bit, which orders a signed integer's ordinals.
+    const SIGN: u128 = 1 << 127;
+
+    /// The scalar kind of `ty`; an integer whose kind is still open is
+    /// rustc's fallback `i32`.
+    fn of(ty: &Ty) -> Option<Self> {
+        match ty {
+            Ty::Int(Int::Var(_)) => Some(Self::Int(Int::I32)),
+            Ty::Int(kind) => Some(Self::Int(*kind)),
+            Ty::Char => Some(Self::Char),
+            _ => None,
+        }
+    }
+
+    /// The lowest and highest ordinal of the type.
+    fn bounds(self) -> (u128, u128) {
+        match self {
+            Self::Int(kind) if kind.signed() => (
+                (i128::MIN >> (128 - kind.bits())) as u128 ^ Self::SIGN,
+                (i128::MAX >> (128 - kind.bits())) as u128 ^ Self::SIGN,
+            ),
+            Self::Int(kind) => (0, u128::MAX >> (128 - kind.bits())),
+            Self::Char => (0, u128::from(u32::from(char::MAX))),
+        }
+    }
+
+    /// The ordinal of `literal`, if it is one of the type's.
+    fn ordinal(self, literal: &ast::NominalLiteral) -> Option<u128> {
+        match (self, literal) {
+            (Self::Int(kind), ast::NominalLiteral::Int(value)) => {
+                let value = kind.widen(*value);
+                if kind.signed() {
+                    Some(value as u128 ^ Self::SIGN)
+                } else {
+                    u128::try_from(value).ok()
+                }
+            }
+            (Self::Char, ast::NominalLiteral::Char(value)) => Some(u128::from(u32::from(*value))),
+            _ => None,
+        }
+    }
+
+    /// The value of `ordinal` as rustc writes it in a witness: `5_i32`,
+    /// `'a'`.
+    fn value(self, ordinal: u128) -> String {
+        match self {
+            Self::Int(kind) if kind.signed() => {
+                format!("{}_{}", (ordinal ^ Self::SIGN) as i128, kind.name())
+            }
+            Self::Int(kind) => format!("{ordinal}_{}", kind.name()),
+            Self::Char => {
+                let value = u32::try_from(ordinal).ok().and_then(char::from_u32);
+                format!("{:?}", value.unwrap_or(char::REPLACEMENT_CHARACTER))
+            }
+        }
+    }
+
+    /// rustc's witness for the ordinals `low..=high`: `i32::MIN..=0_i32`,
+    /// `2_i32`, `u8::MAX`, `'a'..='z'`. A pointer-sized or 128-bit kind's
+    /// top is open, as `1_usize..`, and an `isize`'s bottom, as
+    /// `..=-1_isize`.
+    fn witness(self, low: u128, high: u128) -> String {
+        let (min, max) = self.bounds();
+        let Self::Int(kind) = self else {
+            return if low == high {
+                self.value(low)
+            } else {
+                format!("{}..={}", self.value(low), self.value(high))
+            };
+        };
+        let open_low = low == min && matches!(kind, Int::Isize);
+        let open_high =
+            high == max && matches!(kind, Int::Isize | Int::Usize | Int::I128 | Int::U128);
+        // An end at the kind's bound is its constant, `i32::MIN` or
+        // `u8::MAX`; an unsigned kind's bottom is `0`.
+        let end = |ordinal: u128| {
+            if ordinal == max {
+                format!("{}::MAX", kind.name())
+            } else if ordinal == min && kind.signed() {
+                format!("{}::MIN", kind.name())
+            } else {
+                self.value(ordinal)
+            }
+        };
+        match (open_low, open_high) {
+            (true, true) => "_".to_string(),
+            (false, true) => format!("{}..", end(low)),
+            (true, false) => format!("..={}", end(high)),
+            (false, false) if low == high => end(low),
+            (false, false) => format!("{}..={}", end(low), end(high)),
+        }
+    }
+
+    /// The ordinals `syntax` matches, added to `covered`; `None` for a
+    /// pattern whose values rawr doesn't read, as a constant's path.
+    fn covered(self, syntax: &PatternSyntax, covered: &mut Vec<(u128, u128)>) -> Option<()> {
+        match syntax {
+            PatternSyntax::Literal { literal, .. } => {
+                let ordinal = self.ordinal(literal)?;
+                covered.push((ordinal, ordinal));
+            }
+            PatternSyntax::Range {
+                low,
+                high,
+                inclusive,
+                ..
+            } => {
+                let (min, max) = self.bounds();
+                let low = match low {
+                    Some((low, _)) => self.ordinal(low)?,
+                    None => min,
+                };
+                let high = match high {
+                    Some((high, _)) if *inclusive => self.ordinal(high)?,
+                    Some((high, _)) => self.ordinal(high)?.checked_sub(1)?,
+                    None => max,
+                };
+                if low <= high {
+                    covered.push((low, high));
+                }
+            }
+            PatternSyntax::Binding { .. } | PatternSyntax::Discard { .. } => {
+                covered.push(self.bounds());
+            }
+            PatternSyntax::Or { alternatives, .. } => {
+                for alternative in alternatives.iter() {
+                    self.covered(alternative, covered)?;
+                }
+            }
+            PatternSyntax::At { pattern, .. } => self.covered(pattern, covered)?,
+            _ => return None,
+        }
+        Some(())
+    }
+
+    /// The ranges of ordinals `covered` misses, in order. A `char`'s
+    /// surrogates are no values, so count as covered.
+    fn uncovered(self, covered: &[(u128, u128)]) -> Vec<(u128, u128)> {
+        let (min, max) = self.bounds();
+        let mut covered = covered.to_vec();
+        if matches!(self, Self::Char) {
+            covered.push((0xD800, 0xDFFF));
+        }
+        covered.sort_unstable();
+        let mut uncovered = Vec::new();
+        // The lowest ordinal not yet covered; `None` past the top.
+        let mut next = Some(min);
+        for (low, high) in covered {
+            let Some(from) = next else { break };
+            if low > from {
+                uncovered.push((from, low - 1));
+            }
+            if high >= from {
+                next = high.checked_add(1).filter(|next| *next <= max);
+            }
+        }
+        if let Some(from) = next {
+            uncovered.push((from, max));
+        }
+        uncovered
+    }
+}
+
 /// A pattern literal as Rust spells it.
 fn render_literal(literal: &ast::NominalLiteral) -> String {
     match literal {
@@ -26783,9 +26957,9 @@ impl<'a> Parser<'a> {
                 .into_iter()
                 .map(|alternative| vec![alternative])
                 .collect::<Vec<_>>();
-            if self
-                .missing_coverage_witness(std::slice::from_ref(&written_ty), &rows)
-                .is_some()
+            if !self
+                .coverage_witnesses(std::slice::from_ref(&written_ty), &rows, true)
+                .is_empty()
             {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: "a refutable pattern in a binding is not supported; use `if let` \
@@ -29696,68 +29870,141 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn missing_coverage_witness(
+    /// The values `rows` miss, as rustc's witnesses: at the `scrutinee`
+    /// each missing constructor, as `Message::B`; below it, `_` where the
+    /// rows name none of the type's constructors. Constructors no row names
+    /// are reported before the ones some row names, and alone, as rustc
+    /// reports `None` for `Some(1)`. Empty when the rows cover every value.
+    fn coverage_witnesses(
         &self,
         types: &[Ty],
         rows: &[Vec<CoveragePattern>],
-    ) -> Option<Vec<CoverageWitness>> {
+        scrutinee: bool,
+    ) -> Vec<Vec<CoverageWitness>> {
         debug_assert!(rows.iter().all(|row| row.len() == types.len()));
 
         if types.is_empty() {
-            return rows.is_empty().then(Vec::new);
+            return if rows.is_empty() {
+                vec![Vec::new()]
+            } else {
+                Vec::new()
+            };
         }
         if rows
             .iter()
             .any(|row| row.iter().all(CoveragePattern::is_wildcard))
         {
-            return None;
+            return Vec::new();
         }
-        if rows.is_empty() {
-            let Some(constructors) = self.coverage_constructors(&types[0]) else {
-                return Some(vec![CoverageWitness::Wildcard; types.len()]);
-            };
-            let constructor = constructors.first()?;
-            let mut witness = vec![CoverageWitness::Constructor {
-                name: constructor.name.clone(),
-                payload: (0..constructor.payload.len())
-                    .map(|_| CoverageWitness::Wildcard)
-                    .collect(),
-            }];
-            witness.extend((1..types.len()).map(|_| CoverageWitness::Wildcard));
-            return Some(witness);
-        }
-        if rows.iter().all(|row| row[0].is_wildcard()) {
-            let default_rows = default_coverage_rows(rows);
-            let mut witness = self.missing_coverage_witness(&types[1..], &default_rows)?;
-            witness.insert(0, CoverageWitness::Wildcard);
-            return Some(witness);
-        }
-
-        let Some(constructors) = self.coverage_constructors(&types[0]) else {
-            let default_rows = default_coverage_rows(rows);
-            let mut witness = self.missing_coverage_witness(&types[1..], &default_rows)?;
-            witness.insert(0, CoverageWitness::Wildcard);
-            return Some(witness);
+        let prefixed = |heads: &[CoverageWitness], tails: Vec<Vec<CoverageWitness>>| {
+            tails
+                .iter()
+                .flat_map(|tail| {
+                    heads.iter().map(move |head| {
+                        let mut witness = vec![head.clone()];
+                        witness.extend_from_slice(tail);
+                        witness
+                    })
+                })
+                .collect::<Vec<_>>()
         };
-
-        for constructor in &constructors {
-            let specialized_rows = specialize_coverage_rows(rows, constructor);
-            let specialized_types = specialize_coverage_types(types, constructor);
-            let Some(mut witness) =
-                self.missing_coverage_witness(&specialized_types, &specialized_rows)
-            else {
-                continue;
-            };
-            let tail = witness.split_off(constructor.payload.len());
-            let mut combined = vec![CoverageWitness::Constructor {
-                name: constructor.name.clone(),
-                payload: witness.into_boxed_slice(),
-            }];
-            combined.extend(tail);
-            return Some(combined);
+        let Some(constructors) = self.coverage_constructors(&types[0]) else {
+            let tails = self.coverage_witnesses(&types[1..], &default_coverage_rows(rows), false);
+            return prefixed(&[CoverageWitness::Wildcard], tails);
+        };
+        let (present, missing): (Vec<_>, Vec<_>) = constructors.iter().partition(|constructor| {
+            rows.iter().any(|row| {
+                !row[0].is_wildcard() && specialize_coverage_pattern(&row[0], constructor).is_some()
+            })
+        });
+        if !missing.is_empty() {
+            let tails = self.coverage_witnesses(&types[1..], &default_coverage_rows(rows), false);
+            if !tails.is_empty() {
+                let heads = if scrutinee || !present.is_empty() {
+                    missing
+                        .iter()
+                        .map(|constructor| CoverageWitness::Constructor {
+                            name: constructor.name.clone(),
+                            payload: (0..constructor.payload.len())
+                                .map(|_| CoverageWitness::Wildcard)
+                                .collect(),
+                        })
+                        .collect()
+                } else {
+                    vec![CoverageWitness::Wildcard]
+                };
+                return prefixed(&heads, tails);
+            }
         }
+        present
+            .into_iter()
+            .flat_map(|constructor| {
+                let specialized_rows = specialize_coverage_rows(rows, constructor);
+                let specialized_types = specialize_coverage_types(types, constructor);
+                self.coverage_witnesses(&specialized_types, &specialized_rows, false)
+                    .into_iter()
+                    .map(|mut witness| {
+                        let tail = witness.split_off(constructor.payload.len());
+                        let mut combined = vec![CoverageWitness::Constructor {
+                            name: constructor.name.clone(),
+                            payload: witness.into_boxed_slice(),
+                        }];
+                        combined.extend(tail);
+                        combined
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
 
-        None
+    /// The name of a matched value's type `ty` as rustc gives it in E0004,
+    /// once inference is done: an integer or a float still open is its
+    /// fallback, `Option<i32>`. The fallback isn't kept.
+    fn matched_type(&mut self, ty: &Ty) -> ImmutableString {
+        let checkpoint = self.inference.checkpoint();
+        let mut ty = self.inference.resolve(ty);
+        loop {
+            let open = std::cell::RefCell::new(None);
+            contains(&ty, &|inner| {
+                let fallback = literal_fallback(inner);
+                let found = fallback.is_some();
+                if let Some(fallback) = fallback {
+                    open.replace(Some((inner.clone(), fallback)));
+                }
+                found
+            });
+            let Some((open, fallback)) = open.into_inner() else {
+                break;
+            };
+            if !self.unify_type(&fallback, &open) {
+                break;
+            }
+            ty = self.inference.resolve(&ty);
+        }
+        let name = ty.name(&self.models);
+        self.inference.rollback(checkpoint);
+        name
+    }
+
+    /// Where rustc points at a match's scrutinee: the whole of a local's
+    /// name, which its use's span only starts.
+    fn scrutinee_span(&self, subject: &ParsedExpr) -> Span {
+        match &subject.lvalue {
+            Some(Lvalue::Binding { binding, .. }) => self.name_span(subject.span, binding),
+            _ => subject.span,
+        }
+    }
+
+    /// The `&` and `&mut ` of each reference `ty` is, outermost first: a
+    /// witness of the value below them reads through them, as `&None`.
+    fn reference_prefix(&self, ty: &Ty) -> String {
+        let mut prefix = String::new();
+        let mut ty = self.inference.resolve(ty);
+        while let Ty::Reference { mutable, target } = ty {
+            prefix.push_str(if mutable { "&mut " } else { "&" });
+            ty = self.inference.resolve(&target);
+        }
+        prefix
     }
 
     /// The value below every `&` of a pattern's subject, which its
@@ -29832,6 +30079,7 @@ impl<'a> Parser<'a> {
             return self.parse_host_match(subject, matched, subject_ty, variants, match_span);
         }
         let subject_span = subject.span;
+        let scrutinee_span = self.scrutinee_span(&subject);
         let owner: ImmutableString = match &subject_ty {
             Ty::Script(definition_id, ..) => self.models.definition(*definition_id).name().into(),
             ty => ty.name(&self.models),
@@ -30160,18 +30408,25 @@ impl<'a> Parser<'a> {
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
-        if !wildcard
-            && let Some(missing) = self.missing_coverage_witness(&coverage_types, &coverage_rows)
-        {
-            let missing = missing
-                .first()
-                .map(CoverageWitness::render)
-                .unwrap_or_else(|| "_".to_string());
-            return Err(Error::InvalidMatch {
-                owner,
-                reason: format!("non-exhaustive patterns; missing {missing}").into(),
-                pattern: span(match_span.start(), end),
-            });
+        if !wildcard {
+            let witnesses = self.coverage_witnesses(&coverage_types, &coverage_rows, true);
+            if !witnesses.is_empty() {
+                let prefix = self.reference_prefix(&binding_ty);
+                let witnesses = witnesses
+                    .iter()
+                    .map(|witness| {
+                        let rendered = witness
+                            .first()
+                            .map_or_else(|| "_".to_string(), CoverageWitness::render);
+                        format!("{prefix}{rendered}").into()
+                    })
+                    .collect();
+                return Err(Error::NonExhaustive {
+                    witnesses,
+                    ty: self.matched_type(&binding_ty),
+                    scrutinee: scrutinee_span,
+                });
+            }
         }
         self.bindings = original_bindings;
         let merged = arm_bindings
@@ -31629,6 +31884,10 @@ impl<'a> Parser<'a> {
         let mut arms = Vec::new();
         let mut exhaustive = false;
         let (mut saw_true, mut saw_false) = (false, false);
+        // The values the unguarded arms of an integer or `char` match
+        // cover, `None` once one's pattern isn't read (`Scalar::covered`).
+        let scalar = Scalar::of(&subject_ty);
+        let mut covered = Some(Vec::new());
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             let pattern_start = self.position();
             self.flow().arm(tested);
@@ -31693,6 +31952,10 @@ impl<'a> Parser<'a> {
             if !guarded {
                 saw_false |= seen[0];
                 saw_true |= seen[1];
+                covered = covered.zip(scalar).and_then(|(mut covered, scalar)| {
+                    scalar.covered(&syntax, &mut covered)?;
+                    Some(covered)
+                });
             }
             exhaustive = catch_all && !guarded || (saw_true && saw_false);
             self.expect(Token::DoubleArrow, "'=>' after a match pattern")?;
@@ -31720,11 +31983,34 @@ impl<'a> Parser<'a> {
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
         if !exhaustive {
-            return Err(Error::InvalidMatch {
-                owner: subject_ty.name(&self.models),
-                reason: "non-exhaustive patterns; add a `_` arm".into(),
-                pattern: span(match_span.start(), end),
-            });
+            // rustc's witnesses: the ranges no arm covers, the `bool` no arm
+            // names, `&_` for a `&str`, or `_` (a float's, or an integer's
+            // no unguarded arm names).
+            let witnesses = match (scalar, &covered) {
+                (Some(scalar), Some(covered)) if !covered.is_empty() => scalar
+                    .uncovered(covered)
+                    .into_iter()
+                    .map(|(low, high)| scalar.witness(low, high))
+                    .collect(),
+                _ if matches!(subject_ty, Ty::Bool) => [(saw_false, "false"), (saw_true, "true")]
+                    .into_iter()
+                    .filter(|(seen, _)| !seen)
+                    .map(|(_, value)| value.to_string())
+                    .collect(),
+                _ if matches!(subject_ty, Ty::Str) => vec!["&_".to_string()],
+                _ => vec!["_".to_string()],
+            };
+            if !witnesses.is_empty() {
+                let prefix = self.reference_prefix(&written);
+                return Err(Error::NonExhaustive {
+                    witnesses: witnesses
+                        .iter()
+                        .map(|witness| format!("{prefix}{witness}").into())
+                        .collect(),
+                    ty: self.matched_type(&written),
+                    scrutinee: self.scrutinee_span(&subject),
+                });
+            }
         }
         let output = self.coerce_branches(
             &mut arms
@@ -32919,10 +33205,22 @@ impl<'a> Parser<'a> {
                 match_span,
             )?
         {
-            return Err(Error::InvalidMatch {
-                owner: owner_path.as_str().into(),
-                reason: "non-exhaustive patterns; add a `_` arm".into(),
-                pattern: span(match_span.start(), end),
+            // rustc's witnesses: each variant no arm covers, by the type's
+            // own name; `_` where arms cover each variant only in part.
+            let owner = owner_path.as_str().rsplit("::").next().unwrap_or_default();
+            let prefix = self.reference_prefix(&written);
+            let mut witnesses = variants
+                .iter()
+                .filter(|variant| !covered.contains(variant))
+                .map(|variant| format!("{prefix}{owner}::{variant}").into())
+                .collect::<Vec<ImmutableString>>();
+            if witnesses.is_empty() {
+                witnesses.push(format!("{prefix}_").into());
+            }
+            return Err(Error::NonExhaustive {
+                witnesses: witnesses.into(),
+                ty: self.matched_type(&written),
+                scrutinee: self.scrutinee_span(&subject),
             });
         }
         let output = self.coerce_branches(

@@ -54,10 +54,7 @@ fn test_match_errors() {
     // As in Rust, a match on a number must cover every value, and a guarded
     // catch-all arm doesn't count.
     for script in ["let x = 1; match x { 1 => 123 }", "let x = 1; match x { 1 => 123, _ if true => 42 }"] {
-        assert!(matches!(
-            engine.compile(script).unwrap_err().err_type(),
-            ParseErrorType::Resolution(rawr::resolve::Error::InvalidMatch { reason, .. }) if reason.contains("non-exhaustive")
-        ));
+        assert!(matches!(engine.compile(script).unwrap_err().err_type(), ParseErrorType::Resolution(rawr::resolve::Error::NonExhaustive { .. })));
     }
 }
 

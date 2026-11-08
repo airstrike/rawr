@@ -314,8 +314,8 @@ fn recursive_constructor_matrix_reports_nested_missing_witnesses_and_guarded_gap
                 }
             }
         "#,
-        Category::InvalidMatch,
-        "non-exhaustive patterns; missing Bits::Pair(Bit::One, Bit::One)",
+        Category::NonExhaustive,
+        "non-exhaustive patterns: `Bits::Pair(Bit::One, Bit::One)` not covered",
     );
     assert!(!partial.primary_span().is_none());
 
@@ -330,8 +330,8 @@ fn recursive_constructor_matrix_reports_nested_missing_witnesses_and_guarded_gap
                 }
             }
         "#,
-        Category::InvalidMatch,
-        "non-exhaustive patterns; missing Root::Wrap(Child::First)",
+        Category::NonExhaustive,
+        "non-exhaustive patterns: `Root::Wrap(Child::First)` not covered",
     );
     assert!(!guarded.primary_span().is_none());
 }
@@ -687,8 +687,16 @@ pub fn invalid() -> Element<Message> { if true { text() } else { false } }
 #[test]
 fn exhaustiveness_duplicates_unreachable_arms_and_binding_escape_are_rejected() {
     let cases = [
-        ("enum Message { Tick, Tock } pub fn f(message: Message) { match message { Message::Tick => () } }", Category::InvalidMatch, "non-exhaustive patterns; missing Message::Tock"),
-        ("enum Message { Tick } pub fn f(message: Message) { match message { Message::Tick if true => () } }", Category::InvalidMatch, "non-exhaustive patterns; missing Message::Tick"),
+        (
+            "enum Message { Tick, Tock } pub fn f(message: Message) { match message { Message::Tick => () } }",
+            Category::NonExhaustive,
+            "non-exhaustive patterns: `Message::Tock` not covered",
+        ),
+        (
+            "enum Message { Tick } pub fn f(message: Message) { match message { Message::Tick if true => () } }",
+            Category::NonExhaustive,
+            "non-exhaustive patterns: `Message::Tick` not covered",
+        ),
         (
             "enum Message { Tick } pub fn f(message: Message) { match message { Message::Tick => (), Message::Tick => () } }",
             Category::InvalidMatch,
