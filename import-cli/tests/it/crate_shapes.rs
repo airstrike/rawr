@@ -452,12 +452,14 @@ fn a_forwarding_impls_parameters_are_its_own() {
 /// row whose message type only its last child's impl fixes (`From<Rule>
 /// for Slot<'a, ()>`), each child before it still selects the one impl
 /// that unifies with its type, as rustc does, rather than E0283 (#1403).
+///
+/// A `String` takes `From<String>` and a literal `From<&str>`, and only the program's own `Cow<str>` takes `From<Cow<str>>` (#1390).
 #[test]
 fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     runs_as_cargo_does(
         "slots",
         "icon 12 | str Verified | string Verified\nstr into\nstr from | string qualified\n\
-         str a | str b\nstr lent | str literal\nstr first | str second\n\
+         cow borrowed | cow owned\nstr a | str b\nstr lent | str literal\nstr first | str second\n\
          text check 12 | str Verified\nlabel own | string mine 7 | text plain 16\n\
          text into 16 | string mine 3 | label from\n\
          row 8 [string badge secondary 4 [icon 12 | str Verified] | \

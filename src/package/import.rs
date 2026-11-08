@@ -3709,12 +3709,27 @@ impl Types {
     ) -> Result<host::type_ref::Type, Error> {
         let (items, bytes) = type_usage(ty, parameters)?;
         allocation.retain(items, bytes)?;
+        Self::item_input(ty, parameters)
+    }
+
+    /// `convert_input` of a charged type. A `Cow<'a, str>` input is std's
+    /// `Cow<str>`, apart from a `String` and a `&str`: `From<String>`,
+    /// `From<&'a str>` and `From<Cow<'a, str>>` of one type are three forms
+    /// an argument picks, as rustc's impl selection has them (#1390).
+    fn item_input(
+        ty: &representability::convert::Type,
+        parameters: &[representability::signature::Parameter],
+    ) -> Result<host::type_ref::Type, Error> {
+        use representability::convert::{Builtin, Type};
+        if matches!(ty, Type::Builtin(Builtin::Text)) {
+            return Ok(host::type_ref::Type::builtin(host::type_ref::Builtin::Text));
+        }
         Self::input_charged(ty, parameters)
     }
 
-    /// `convert_input` of a charged type. A `&str` that an input holds, as
-    /// a future's `Option<&str>` or `(&str, &Catalog)` does, is a borrow
-    /// there too (#677).
+    /// `item_input` of a type other than `Cow<str>`. A `&str` that an
+    /// input holds, as a future's `Option<&str>` or `(&str, &Catalog)`
+    /// does, is a borrow there too (#677).
     fn input_charged(
         ty: &representability::convert::Type,
         parameters: &[representability::signature::Parameter],
@@ -4649,5 +4664,29 @@ mod tests {
             super::unsupported_use(Surface::Allocation, "a::b", "main.rs", text, span).report(),
             Ok(report) if !report.message().contains("calling")
         ));
+    }
+
+    /// A crate's `String`, `&str` and `Cow<'a, str>` inputs are three host
+    /// shapes, so `From<String>`, `From<&'a str>` and `From<Cow<'a, str>>`
+    /// for one type stay three forms the argument's type picks (#1390).
+    #[test]
+    fn a_cow_str_input_is_apart_from_string_and_str() {
+        use super::representability::convert::{Builtin, Type};
+        use crate::host::{signature, type_ref};
+        let input = |builtin| super::Types::item_input(&Type::Builtin(builtin), &[]).unwrap();
+        assert_eq!(
+            input(Builtin::Text),
+            type_ref::Type::builtin(type_ref::Builtin::Text)
+        );
+        let forms = [Builtin::String, Builtin::Str, Builtin::Text].map(|builtin| {
+            let mut builder = signature::Builder::new();
+            builder.parameter(input(builtin));
+            builder.finish()
+        });
+        for (index, form) in forms.iter().enumerate() {
+            for (other, against) in forms.iter().enumerate() {
+                assert_eq!(form.same_inputs(against).unwrap(), index == other);
+            }
+        }
     }
 }
