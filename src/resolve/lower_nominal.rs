@@ -13956,47 +13956,6 @@ impl<'a> Parser<'a> {
             .map(|path| path.as_str().into())
     }
 
-    /// `Trait::method(value, ..)`, spliced as `value.method(..)` at
-    /// `member_span`, called as the trait's method over its `Self`
-    /// (`surface::member`): `Err(value)` back when the call was not written
-    /// through a crate's trait, or the trait has no such method.
-    #[cfg(feature = "rust-import")]
-    fn spliced_trait_call(
-        &mut self,
-        mut value: ParsedExpr,
-        member: &str,
-        member_span: Span,
-    ) -> Result<Result<ParsedExpr, ParsedExpr>, Error> {
-        let Some(path) = self.spliced_trait_member(member, member_span) else {
-            return Ok(Err(value));
-        };
-        let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
-            return Ok(Err(value));
-        };
-        let owner = self.models.item_owner(&path).cloned();
-        let start = value.span.start();
-        let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
-        let mut inputs = Vec::with_capacity(arguments.len() + 1);
-        self.move_local(&mut value)?;
-        inputs.push(value);
-        for mut argument in arguments {
-            self.move_local(&mut argument)?;
-            inputs.push(argument);
-        }
-        self.call_host_function(&items, owner, inputs, span(start, end))
-            .map(Ok)
-    }
-
-    /// The path of the trait's method over its `Self` (`surface::member`)
-    /// for `Trait::method(value, ..)` spliced as `value.method(..)` at
-    /// `member_span`, when the trait has it.
-    #[cfg(feature = "rust-import")]
-    fn spliced_trait_member(&self, member: &str, member_span: Span) -> Option<String> {
-        let trait_path = self.spliced_traits.get(&member_span.start())?;
-        let path = rawr_import::surface::member::path(trait_path, member);
-        self.models.host_items(&path).is_some().then_some(path)
-    }
-
     /// The inputs and output of a crate value whose type is an opaque
     /// `impl Fn(A..) -> B`, as iced's `Function::with` gives: its type's
     /// arguments the classifier marked as the bound's (`Definition::callable`).
@@ -14017,22 +13976,6 @@ impl<'a> Parser<'a> {
             .map_while(|index| argument(&format!("Input{index}")))
             .collect();
         Some((inputs, output))
-    }
-
-    /// The path of the method `member` over its `Self` (`surface::member`)
-    /// of a crate's trait this source imports by name, as Rust finds a
-    /// method of a trait in scope.
-    #[cfg(feature = "rust-import")]
-    fn scoped_trait_member(&self, member: &str) -> Option<String> {
-        let context = self.models.context;
-        self.models
-            .imports
-            .iter()
-            .filter(|((source, _), binding)| {
-                *source == context && matches!(binding.target, item::Import::Module)
-            })
-            .map(|(_, binding)| rawr_import::surface::member::path(&binding.qualified, member))
-            .find(|path| self.models.host_items(path).is_some())
     }
 
     /// Whether the crate gives the host type `ty` (or the type it refers
@@ -36299,32 +36242,6 @@ impl<'a> Parser<'a> {
             construct: construct.into(),
             source: point_span(self.position()),
         }
-    }
-
-    /// `Trait::f::<T>(..)`'s turbofish, given to `f`'s own parameters
-    /// `generics` in `substitution`, as rustc's E0107 counts them.
-    fn apply_trait_turbofish(
-        &mut self,
-        generics: &[item::Generic],
-        substitution: &BTreeMap<ImmutableString, Ty>,
-        call: Span,
-    ) -> Result<(), Error> {
-        let Some(arguments) = self.trait_turbofish.take() else {
-            return Ok(());
-        };
-        if arguments.len() != generics.len() {
-            return Err(Error::InvalidTypeArguments {
-                ty: "function".into(),
-                expected: generics.len(),
-                actual: arguments.len(),
-                reference: call,
-            });
-        }
-        for (generic, argument) in generics.iter().zip(arguments) {
-            let fresh = substitution[&generic.name.text].clone();
-            self.require_type(&fresh, &argument, call)?;
-        }
-        Ok(())
     }
 
     /// The types of a turbofish after its `::<`, through its `>`.
