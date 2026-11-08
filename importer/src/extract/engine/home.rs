@@ -7,12 +7,10 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-/// Where shared tables live, under rawr's home.
-pub(crate) const DIRECTORY: &str = "bindings";
 const TABLE: &str = "table.json";
 const GENERATION: &str = ".generation";
 
@@ -199,11 +197,6 @@ fn temporary_key(name: &str) -> Option<&str> {
         .or_else(|| suffix.rsplitn(3, '-').nth(2))
 }
 
-/// The bindings directory under rawr's home.
-pub(crate) fn directory(home: &Path) -> PathBuf {
-    home.join(DIRECTORY)
-}
-
 fn unique() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
@@ -243,9 +236,9 @@ pub(crate) fn alone(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        evict, generation, prune, publish, read, replace, unique, File, PathBuf, SystemTime,
-    };
+    use std::path::PathBuf;
+
+    use super::{evict, generation, prune, publish, read, replace, unique, File, SystemTime};
     use super::{fs, io, Duration, TABLE};
 
     fn scratch() -> PathBuf {

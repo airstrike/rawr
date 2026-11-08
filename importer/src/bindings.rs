@@ -23,6 +23,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::extract::engine::home;
 
+pub(crate) mod format;
 mod rerun;
 
 pub(crate) use rerun::Stale;
@@ -34,9 +35,7 @@ const META: &str = "meta.json";
 /// runner's work directory.
 pub(crate) const RUNNER_SCRIPTS: &str = "build-scripts.json";
 /// An entry unused this long goes when another is published.
-const IDLE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
-/// `rawr cache clean` removes entries unused this long.
-const CLEAN_IDLE: Duration = Duration::from_secs(60 * 60);
+const IDLE: Duration = format::ENTRY_IDLE;
 
 /// One build script's complete cfg/environment results and generated files.
 /// Paths to generated files compare relative to `OUT_DIR`, since the two
@@ -241,9 +240,10 @@ pub(crate) fn read(bindings: &Path, key: &str) -> Option<Entry> {
     })
 }
 
-/// The bindings directory under the home that `cargo_home` gives.
+/// The bindings directory of this rawr's extraction protocol under the home
+/// that `cargo_home` gives ([`format`]).
 pub(crate) fn directory(cargo_home: &Path) -> PathBuf {
-    home::directory(&crate::store::home(cargo_home))
+    format::bindings(&crate::store::home(cargo_home))
 }
 
 /// Where the project whose Rawr directory is `rawr` keeps the tables it
@@ -850,9 +850,11 @@ fn package_name(package: &str) -> &str {
     }
 }
 
-/// `rawr cache clean`: remove shared bindings unused for an hour.
+/// `rawr cache clean`: remove shared bindings and inventories unused for an
+/// hour, of every extraction protocol, and each protocol's directory that no
+/// installed rawr uses once it has gone an hour unused.
 pub fn clean(cargo_home: &Path) {
-    home::prune(&directory(cargo_home), CLEAN_IDLE);
+    format::clean(&crate::store::home(cargo_home));
 }
 
 #[cfg(test)]

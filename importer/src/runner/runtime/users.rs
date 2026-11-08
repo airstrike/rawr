@@ -15,14 +15,14 @@ use std::time::UNIX_EPOCH;
 const FILE: &str = "users";
 
 /// The executables recorded in one entry.
-pub(super) struct Users {
+pub(crate) struct Users {
     file: PathBuf,
     lines: Vec<String>,
 }
 
 impl Users {
     /// The users `entry` records; none when it records none.
-    pub(super) fn of(entry: &Path) -> Self {
+    pub(crate) fn of(entry: &Path) -> Self {
         let file = entry.join(FILE);
         let lines = fs::read_to_string(&file)
             .map(|text| text.lines().map(str::to_owned).collect())
@@ -31,14 +31,14 @@ impl Users {
     }
 
     /// Whether an executable recorded here is still there unchanged.
-    pub(super) fn any_installed(&self) -> bool {
+    pub(crate) fn any_installed(&self) -> bool {
         self.lines.iter().any(|line| installed(line))
     }
 
     /// Record `executable` among the users, dropping users that are gone or
     /// replaced. The caller holds the entry's exclusive lock. One read and
     /// no write when it is already recorded.
-    pub(super) fn enroll(self, executable: &Path) {
+    pub(crate) fn enroll(self, executable: &Path) {
         let Some(user) = line(executable) else {
             return;
         };

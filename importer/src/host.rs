@@ -126,9 +126,10 @@ const HOST_IDLE: Duration = Duration::from_secs(60 * 60);
 const HOSTS_KEPT: usize = 3;
 
 /// `rawr cache clean`: retire idle hosts beyond the most recently used ones,
-/// idle compiled runtimes the same way, idle shared bindings, idle nightly
-/// check build directories and drivers built from other sources (everything
-/// else a project derives lives in its own target directory).
+/// idle compiled runtimes the same way, idle shared bindings and inventories
+/// and the protocols no installed rawr uses, idle nightly check build
+/// directories and drivers built from other sources (everything else a
+/// project derives lives in its own target directory).
 pub fn clean(cargo_home: &Path) {
     prune(
         &crate::store::runtime_home(cargo_home).join("hosts"),
