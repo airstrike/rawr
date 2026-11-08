@@ -40,6 +40,10 @@ pub(crate) enum Std {
     Duration,
     /// std's `Instant`: rawr's own.
     Instant,
+    /// std's `thread::JoinHandle<T>`: rawr's thread handle, where a
+    /// crate's function gives one of a `T` that crosses by value (#1266).
+    /// Elsewhere it is [`Unrun::JoinHandle`].
+    JoinHandle,
     /// A std type rawr's std holds as its Rust value (`crossing::Std`), by
     /// its path under `std`, and whether it is `Clone`.
     Held { path: &'static str, clone: bool },
@@ -73,6 +77,11 @@ pub enum Unrun {
     BTreeMap,
     /// `std::collections::BTreeSet`, as `HashMap` is.
     BTreeSet,
+    /// `std::thread::JoinHandle` other than a function's output of a `T`
+    /// that crosses by value: the crate's thread gives a crate value, which
+    /// only a call's arena holds, or the crate takes the handle, which
+    /// rawr's thread handle doesn't hold as a Rust one.
+    JoinHandle,
     /// Any other std type: one rawr has no representation for yet.
     Other,
 }
@@ -97,13 +106,16 @@ impl Unrun {
             Self::BTreeSet => {
                 "rawr doesn't run `std::collections::BTreeSet` in a crate's signature yet"
             }
+            Self::JoinHandle => {
+                "rawr doesn't run `std::thread::JoinHandle` here in a crate's signature yet"
+            }
             Self::Other => "rawr doesn't run this standard library type in a crate's signature yet",
         }
     }
 }
 
 /// Each std definition rawr represents, by its definition path.
-pub(crate) const BINDING: [(&[&str], Std); 23] = [
+pub(crate) const BINDING: [(&[&str], Std); 24] = [
     (&["alloc", "borrow", "Cow"], Std::Cow),
     (&["alloc", "boxed", "Box"], Std::Box),
     (
@@ -174,6 +186,10 @@ pub(crate) const BINDING: [(&[&str], Std); 23] = [
             path: "path::PathBuf",
             clone: true,
         },
+    ),
+    (
+        &["std", "thread", "join_handle", "JoinHandle"],
+        Std::JoinHandle,
     ),
     (&["std", "time", "Instant"], Std::Instant),
 ];

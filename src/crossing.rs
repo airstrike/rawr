@@ -532,3 +532,15 @@ pub fn pointee(pointer: &Dynamic) -> Option<(Dynamic, usize, bool)> {
 pub fn link(pointer: &Dynamic, link: Link) {
     crate::resolve::lower_nominal::counted::link(pointer, link);
 }
+
+/// Rawr's thread handle of a crate's `JoinHandle<T>`, as a crate's function
+/// gives one: its `join` waits for the crate's thread and `give` makes the
+/// thread's `T` rawr's, where it is joined (#1266).
+#[cfg(feature = "sync")]
+pub fn joined<T, F>(handle: std::thread::JoinHandle<T>, give: F) -> Dynamic
+where
+    T: Send + 'static,
+    F: FnOnce(T) -> RawrResultOf<Dynamic> + Send + 'static,
+{
+    Dynamic::from(crate::eval::threads::Handle::native(handle, give))
+}

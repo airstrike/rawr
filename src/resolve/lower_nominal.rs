@@ -19558,6 +19558,13 @@ impl<'a> Parser<'a> {
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
             Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
+            // The `JoinHandle` of a crate's thread, as a crate gives one
+            // (#1266): rawr's thread handle, whose value becomes rawr's
+            // where it is joined.
+            #[cfg(feature = "sync")]
+            Ty::Thread(thread::Kind::JoinHandle, _) => {
+                intrinsic::Type::builtin("JoinHandle", TypeId::of::<crate::eval::threads::Handle>())
+            }
             Ty::Thread(..) => return Err(unpassable(ty.name(&self.models), operation, span)),
             Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } | Ty::Callable { .. } => {
                 return Err(Error::InvalidHostOperation {
@@ -21657,6 +21664,19 @@ impl<'a> Parser<'a> {
             // crate's own pointer at runtime (#775).
             Shape::Counted(arc, element) => Ty::Counted(
                 if *arc { Counter::Arc } else { Counter::Rc },
+                Box::new(self.instantiate_host_type(
+                    element,
+                    parameters,
+                    operation,
+                    span,
+                    owner,
+                    originating,
+                )?),
+            ),
+            // A crate's `JoinHandle<T>`: rawr's, which joins the crate's
+            // thread (#1266).
+            Shape::JoinHandle(element) => Ty::Thread(
+                thread::Kind::JoinHandle,
                 Box::new(self.instantiate_host_type(
                     element,
                     parameters,

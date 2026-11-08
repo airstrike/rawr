@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 130;
+const CLASSIFIER_VERSION: u32 = 131;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -9022,6 +9022,14 @@ impl<P: api::Phase> Context<'_, P> {
                     Some(Std::Unrun(unrun)) => {
                         return Err(representability::reject::Kind::StdNotRun(unrun).into())
                     }
+                    // A `JoinHandle` crosses only as a function gives one
+                    // (`convert_output`).
+                    Some(Std::JoinHandle) => {
+                        return Err(representability::reject::Kind::StdNotRun(
+                            std_binding::Unrun::JoinHandle,
+                        )
+                        .into())
+                    }
                     None => {
                         definition_is_publishable_nominal(definition)?;
                         let mut converted = Vec::new();
@@ -9433,6 +9441,29 @@ impl<P: api::Phase> Context<'_, P> {
     /// a type that implements `Future`, is iced's `Task<T>`: the bridge
     /// runs it natively and the facade's `Task` carries it.
     fn convert_output(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        // A thread's `JoinHandle<T>`, as open's `that_in_background` gives:
+        // rawr's thread handle, whose `join` makes the thread's `T` rawr's.
+        // A `T` that holds a crate's value would need a call's arena, which
+        // the join has none of (#1266).
+        if let model::Type::Definition { id, arguments } = ty
+            && let Some(definition) = self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+            && std_binding::of(definition) == Some(Std::JoinHandle)
+        {
+            let unrun =
+                || representability::reject::Kind::StdNotRun(std_binding::Unrun::JoinHandle);
+            let element =
+                self.convert_value(std_binding::type_argument(arguments, 0).ok_or_else(unrun)?)?;
+            if !crosses_by_value(&element) {
+                return Err(unrun().into());
+            }
+            return Ok(representability::convert::Type::Nominal {
+                definition: crate::surface::identity::Definition::join_handle(),
+                arguments: Box::new([element]),
+            });
+        }
         let output = match ty {
             model::Type::ImplTrait { bounds, .. } => self.future_bound_output(bounds).cloned(),
             model::Type::Definition { id, arguments } if arguments.is_empty() => {
@@ -13301,6 +13332,35 @@ pub(crate) fn vec_element<'a>(
     arguments: &'a [model::Argument],
 ) -> Option<&'a model::Type> {
     std_binding::argument_of(definition, arguments, Std::Vec, 0)
+}
+
+/// Whether a value of `ty` becomes rawr's with no call's arena: it holds
+/// no crate value, only rawr's builtins and std's types rawr holds as its
+/// own, as a thread's `io::Result<()>` does.
+fn crosses_by_value(ty: &representability::convert::Type) -> bool {
+    use representability::convert::Type;
+    match ty {
+        Type::Unit | Type::Builtin(_) => true,
+        Type::Option(element)
+        | Type::Sequence {
+            element,
+            owned: true,
+            ..
+        } => crosses_by_value(element),
+        Type::Result(ok, err) => crosses_by_value(ok) && crosses_by_value(err),
+        Type::Tuple(members) => members.iter().all(crosses_by_value),
+        Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            use crate::surface::identity::Definition;
+            arguments.is_empty()
+                && (Definition::std_path(definition.as_bytes()).is_some()
+                    || *definition == Definition::duration()
+                    || *definition == Definition::instant())
+        }
+        _ => false,
+    }
 }
 
 /// The element type of std's `Rc<[T]>`, `Arc<[T]>` or `Box<[T]>`, whose

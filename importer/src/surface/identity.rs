@@ -21,6 +21,7 @@ const BOX_DOMAIN: &[u8] = b"rawr.identity.box/v1";
 const RC_DOMAIN: &[u8] = b"rawr.identity.rc/v1";
 const ARC_DOMAIN: &[u8] = b"rawr.identity.arc/v1";
 const KEYED_DOMAIN: &[u8] = b"rawr.identity.keyed/v1";
+const JOIN_HANDLE_DOMAIN: &[u8] = b"rawr.identity.join-handle/v1";
 /// std's keyed collections, which cross as rawr's (#777).
 const KEYED: [&str; 4] = ["HashMap", "HashSet", "BTreeMap", "BTreeSet"];
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
@@ -316,6 +317,15 @@ impl Definition {
             .find(|arc| Self::counted(*arc).0 == *bytes)
     }
 
+    /// Rust's `std::thread::JoinHandle<T>` a crate's function gives, of a
+    /// `T` that crosses by value, which crosses as rawr's thread handle:
+    /// its `join` waits for the crate's thread and gives its `T` as rawr's
+    /// (#1266). It lives in `std`, which no crate's facade declares.
+    #[must_use]
+    pub fn join_handle() -> Self {
+        Self(Framed::new(JOIN_HANDLE_DOMAIN).finish())
+    }
+
     /// std's keyed collection `name` (`HashMap`, `HashSet`, `BTreeMap` or
     /// `BTreeSet`), which crosses as rawr's collection of that kind (#777).
     /// It lives in `std` or `alloc`, which no crate's facade declares.
@@ -402,7 +412,8 @@ impl Definition {
     /// Whether these bytes name a type rawr declares for a Rust value no
     /// imported crate declares: a future, a program's iterator, a duration,
     /// an instant, an inclusive range, a box, an `Rc` or an `Arc`, a keyed
-    /// collection, `Infallible`, one of std's held types or a script value.
+    /// collection, a thread's `JoinHandle`, `Infallible`, one of std's held
+    /// types or a script value.
     #[must_use]
     pub fn is_projected(bytes: &[u8; 32]) -> bool {
         Self::std_path(bytes).is_some()
@@ -415,6 +426,7 @@ impl Definition {
             || *bytes == Self::boxed().0
             || Self::counter(bytes).is_some()
             || Self::keyed_kind(bytes).is_some()
+            || *bytes == Self::join_handle().0
             || *bytes == Self::value().0
     }
 
