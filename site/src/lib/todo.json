@@ -98,7 +98,9 @@
         {"text":"A `let` with `ref mut` and a refutable part, a slice pattern on a slice of unknown length, a native struct pattern with refutable fields, and an enum variant in a function parameter are rustc's E0005, with rustc's witnesses. Their irrefutable forms (`let [all @ ..] = s;`, `fn f(One::Only(x): One)`) now run.","issues":[1294]},
         {"text":"A tuple variant or tuple struct pattern with the wrong number of fields is rustc's E0023 (`this pattern has 1 field, but the corresponding tuple variant has 2 fields`), with the declared fields marked and rustc's help to add `_` or wrap the fields in parentheses.","issues":[1290]},
         {"text":"A marked function's `&mut` parameter whose type is a native alias of a plain type, such as `&mut Width` for `type Width = usize`, now crosses as `&mut usize` does. Native callers see the change after the call. A `&mut` of a native type is still lent.","issues":[1297]},
-        {"text":"`rawr check` no longer stalls after reading parse cells on an app over iced: a type from another crate's facade is named by that facade's fingerprint, never by re-walking that facade's contract at each mention.","issues":[1309]}
+        {"text":"`rawr check` no longer stalls after reading parse cells on an app over iced: a type from another crate's facade is named by that facade's fingerprint, never by re-walking that facade's contract at each mention.","issues":[1309]},
+        {"text":"A native trait with supertraits works as a marked type's trait object: `Debug`, `Display`, `Clone`, `PartialEq`, `Eq`, `Hash`, `Default`, `PartialOrd` and `Ord`, derived or written, run the marked type's own impl, and a supertrait the type lacks is rustc's E0277.","issues":[1301]},
+        {"text":"A `&self` method of a marked type's native trait object can call back into the same object through native code: `&self` calls share the value, as shared borrows do.","issues":[1302]}
       ]
     },
     "releases": [
@@ -3007,15 +3009,18 @@
     {"issue":1298,"title":"`rawr check` refuses a native alias of a trait-object type in a marked signature","state":"open","category":"Divergences from rustc"},
     {"issue":1299,"title":"A marked type becomes the object of a generic or lifetime-parameterized native trait, or of a dependency's trait","state":"open","category":"Divergences from rustc"},
     {"issue":1300,"title":"A native trait object's stand-in method that names Self (`other: &Self`, `-> Self`) crosses","state":"open","category":"Divergences from rustc"},
-    {"issue":1301,"title":"A stand-in implements the native trait's supertraits (Debug, Clone, ..) that the marked type implements","state":"open","category":"Divergences from rustc"},
-    {"issue":1302,"title":"A native trait object's &self method may be re-entered while a call on it runs","state":"open","category":"Divergences from rustc"},
+    {"issue":1301,"title":"A stand-in implements the native trait's supertraits (Debug, Clone, ..) that the marked type implements","state":"closed","category":"Divergences from rustc"},
+    {"issue":1302,"title":"A native trait object's &self method may be re-entered while a call on it runs","state":"closed","category":"Divergences from rustc"},
     {"issue":1303,"title":"Dropping a native trait object of a marked type runs the type's impl Drop","state":"open","category":"Divergences from rustc"},
     {"issue":1304,"title":"`&dyn Trait` and `Rc`/`Arc<dyn Trait>` of a native trait from a marked type","state":"open","category":"Divergences from rustc"},
     {"issue":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"open","category":"Divergences from rustc"},
     {"issue":1306,"title":"Coverage witnesses split integer literals below the top level","state":"open","category":"Divergences from rustc"},
     {"issue":1307,"title":"Struct patterns in fn parameters","state":"open","category":"Divergences from rustc"},
     {"issue":1308,"title":"rustc's witnesses for native patterns with several refutable fields or a native enum variant","state":"open","category":"Divergences from rustc"},
-    {"issue":1309,"title":"rawr check spins in Fingerprint::retained_bytes / Type::dynamic_bytes for an hour on a recursive native type","state":"closed","category":"Health"}
+    {"issue":1309,"title":"rawr check spins in Fingerprint::retained_bytes / Type::dynamic_bytes for an hour on a recursive native type","state":"closed","category":"Health"},
+    {"issue":1310,"title":"rawr check shows the failed build of rawr's crate copy before cargo's error when native code in it fails to compile","state":"open","category":"Divergences from rustc"},
+    {"issue":1311,"title":"A written Hash on a marked type behind a native trait object","state":"open","category":"Divergences from rustc"},
+    {"issue":1312,"title":"Formatter flags on a native trait object's Debug/Display","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3886,12 +3891,15 @@
             {"number":1298,"title":"`rawr check` refuses a native alias of a trait-object type in a marked signature","state":"open"},
             {"number":1299,"title":"A marked type becomes the object of a generic or lifetime-parameterized native trait, or of a dependency's trait","state":"open"},
             {"number":1300,"title":"A native trait object's stand-in method that names Self (`other: &Self`, `-> Self`) crosses","state":"open"},
-            {"number":1301,"title":"A stand-in implements the native trait's supertraits (Debug, Clone, ..) that the marked type implements","state":"open"},
-            {"number":1302,"title":"A native trait object's &self method may be re-entered while a call on it runs","state":"open"},
+            {"number":1301,"title":"A stand-in implements the native trait's supertraits (Debug, Clone, ..) that the marked type implements","state":"closed"},
+            {"number":1302,"title":"A native trait object's &self method may be re-entered while a call on it runs","state":"closed"},
             {"number":1303,"title":"Dropping a native trait object of a marked type runs the type's impl Drop","state":"open"},
             {"number":1304,"title":"`&dyn Trait` and `Rc`/`Arc<dyn Trait>` of a native trait from a marked type","state":"open"},
             {"number":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"open"},
-            {"number":1309,"title":"rawr check spins in Fingerprint::retained_bytes / Type::dynamic_bytes for an hour on a recursive native type","state":"closed"}
+            {"number":1309,"title":"rawr check spins in Fingerprint::retained_bytes / Type::dynamic_bytes for an hour on a recursive native type","state":"closed"},
+            {"number":1310,"title":"rawr check shows the failed build of rawr's crate copy before cargo's error when native code in it fails to compile","state":"open"},
+            {"number":1311,"title":"A written Hash on a marked type behind a native trait object","state":"open"},
+            {"number":1312,"title":"Formatter flags on a native trait object's Debug/Display","state":"open"}
           ]
         }
       ]
