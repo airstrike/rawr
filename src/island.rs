@@ -136,6 +136,14 @@ struct Held {
     value: Option<Dynamic>,
     /// How many `&self` calls on it run.
     readers: usize,
+    /// What native code borrows of the value through its `&self` calls'
+    /// results (#1322, #1321): the program's strings a `&str` result reads
+    /// in place, and the regions those calls ran in, which a result such as
+    /// `view(&self)`'s `Element<'_, Message>` borrows. They are let go when
+    /// the value is next taken `&mut`, as rustc has ended every such borrow
+    /// by then (D772). Boxed, so a region kept in them can name them while
+    /// the table moves.
+    pins: Box<crate::scope::Pins>,
 }
 
 /// How a call has the program value it is the receiver of.
@@ -196,6 +204,7 @@ fn keep(value: Dynamic) -> u64 {
             Held {
                 value: Some(value),
                 readers: 0,
+                pins: Box::default(),
             },
         );
         kept.next
@@ -238,8 +247,12 @@ pub(crate) fn object(value: Dynamic, owner: &str, trait_name: &str) -> Result<Dy
 /// that runs, at any depth of calls back into the same object (#1302), and
 /// a `&mut self` call takes it. A `&mut self` call while another call on
 /// it runs is the borrow conflict rustc reports of such code.
+///
+/// A `&mut self` call lets go of what native code borrowed of the value
+/// (`Held::pins`), once the table is free again.
 fn take_kept(handle: u64, borrow: Borrow) -> Result<Dynamic, String> {
-    kept(|kept| {
+    let mut released = None;
+    let taken = kept(|kept| {
         let held = kept.values.get_mut(&handle).ok_or_else(|| {
             "rawr: a native trait object's program value was used after it was dropped".to_owned()
         })?;
@@ -252,6 +265,9 @@ fn take_kept(handle: u64, borrow: Borrow) -> Result<Dynamic, String> {
                 Ok(value.clone())
             }
             (Borrow::Mutable, Some(_)) if held.readers == 0 => {
+                if !held.pins.is_empty() {
+                    released = Some(std::mem::take(&mut held.pins));
+                }
                 Ok(held.value.take().map(Dynamic::flatten).unwrap_or_default())
             }
             (Borrow::Mutable, Some(_)) => Err(
@@ -272,6 +288,17 @@ fn take_kept(handle: u64, borrow: Borrow) -> Result<Dynamic, String> {
                     .to_owned(),
             ),
         }
+    });
+    drop(released);
+    taken
+}
+
+/// The pins of the program value of `handle` (`Held::pins`), while a
+/// `&self` call on it runs.
+fn pins_of(handle: u64) -> Option<std::ptr::NonNull<crate::scope::Pins>> {
+    kept(|kept| {
+        let held = kept.values.get(&handle)?;
+        Some(std::ptr::NonNull::from(&*held.pins))
     })
 }
 
@@ -1184,7 +1211,9 @@ impl Calls {
         let mut reader = Reader {
             bytes: call.arguments,
         };
-        let owned = reader.byte().map_err(malformed)? != 0;
+        let flags = reader.byte().map_err(malformed)?;
+        let owned = flags & program::model::island::OWNED != 0;
+        let borrows = flags & program::model::island::BORROWS != 0;
         let count = u32::from_le_bytes(reader.array().map_err(malformed)?) as usize;
         let mutable = u64::from_le_bytes(reader.array().map_err(malformed)?);
         let item = self.items.get(&(owned, path.to_owned())).ok_or_else(|| {
@@ -1243,6 +1272,63 @@ impl Calls {
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
+        let made = Made {
+            item,
+            held,
+            references,
+            mutable,
+        };
+        // A `&self` call on a native trait object's program value runs in a
+        // region anchored on the value's pins, so what its result borrows,
+        // as `view(&self)`'s `Element<'_, Message>` borrows the value's
+        // strings, lives till the value is next taken `&mut` (#1321, D772).
+        let shared = made
+            .held
+            .iter()
+            .find(|(_, _, borrow)| matches!(borrow, Borrow::Shared))
+            .and_then(|&(_, handle, _)| pins_of(handle));
+        let Some(pins) = shared else {
+            return self.finish(call, made, values, None, natives);
+        };
+        // SAFETY: the pins are boxed in the value's `Held`, which stays in
+        // the table while the stand-in is borrowed, as it is for this call,
+        // and they are let go only by a `&mut self` call (`take_kept`) or
+        // the stand-in's drop, which rustc allows only once every borrow of
+        // the stand-in, and so of what this call gives back, has ended.
+        let pins = unsafe { pins.as_ref() };
+        let mut region = crate::scope::Region::anchored(pins);
+        let anchored = Anchored {
+            region: region.nonce(),
+            pins: borrows.then_some(pins),
+        };
+        let reply = crate::scope::open_anchored(&mut region, || {
+            self.finish(call, made, values, Some(anchored), natives)
+        });
+        static SITE: crate::scope::Site = crate::scope::Site::new();
+        region.keep(&SITE);
+        reply
+    }
+
+    /// The rest of `call` once its arguments are read: invoke the function,
+    /// give back its receivers and write its reply. A `&self` call on a
+    /// native trait object runs `anchored`, and its result may borrow the
+    /// value.
+    fn finish(
+        &self,
+        call: &Call<'_>,
+        made: Made<'_>,
+        mut values: Vec<Dynamic>,
+        anchored: Option<Anchored<'_>>,
+        natives: &mut Natives,
+    ) -> Result<Vec<u8>, String> {
+        let Made {
+            item,
+            held,
+            references,
+            mutable,
+        } = made;
+        let path = call.path;
+        let model = call.model;
         let invoked = (call.invoke)(item, &mut values);
         // The receiver changed in place, as a method's is, goes back.
         restore(&held, &mut values);
@@ -1273,9 +1359,31 @@ impl Calls {
         let unsent = |error: String| {
             format!("rawr: `{path}` gave back a value native code can't take: {error}")
         };
-        model
-            .island_write(&result, &mut reply, natives, 0)
-            .map_err(unsent)?;
+        match anchored {
+            Some(Anchored {
+                pins: Some(pins), ..
+            }) => {
+                // A `&str` that borrows the receiver reads the program's own
+                // text where it is, pinned with the value (#1322).
+                let text = result
+                    .flatten_clone()
+                    .into_immutable_string()
+                    .map_err(|actual| unsent(format!("a `{actual}` is no `&str`")))?;
+                let text = pins.pin(text);
+                reply.push(program::model::island::PINNED);
+                reply.extend_from_slice(&(text.as_ptr().expose_provenance() as u64).to_le_bytes());
+                reply.extend_from_slice(&(text.len() as u64).to_le_bytes());
+            }
+            _ => model
+                .island_write_in(
+                    &result,
+                    anchored.map(|anchored| anchored.region),
+                    &mut reply,
+                    natives,
+                    0,
+                )
+                .map_err(unsent)?,
+        }
         // Then each `&mut` argument in argument order: a copied one's copy,
         // and for one native code lent, `()` when its place is still the
         // lent one, and else the value `*place = value` gave it, which moves
@@ -1434,6 +1542,24 @@ impl Calls {
             }
         })
     }
+}
+
+/// A call whose arguments are read (`Calls::call`): its function, the
+/// stand-ins' receivers it took, its `&mut` arguments and those it copies.
+struct Made<'i> {
+    item: &'i item::Value,
+    held: Vec<(usize, u64, Borrow)>,
+    references: Vec<usize>,
+    mutable: u64,
+}
+
+/// The region a `&self` call on a native trait object runs in, and, when
+/// its result is a `&str` that borrows the value, the value's pins it is
+/// pinned in (`Calls::call`).
+#[derive(Clone, Copy)]
+struct Anchored<'p> {
+    region: crate::scope::Nonce,
+    pins: Option<&'p crate::scope::Pins>,
 }
 
 /// What a stand-in's std trait gets back (`Calls::ask`).
@@ -1628,6 +1754,36 @@ fn shared_calls_share_a_kept_value_and_a_mutable_one_takes_it() {
     assert_eq!(take_kept(handle, Borrow::Shared).unwrap().as_int(), Ok(2));
     __rawr_island_release_v1(handle);
     assert!(take_kept(handle, Borrow::Shared).is_err());
+}
+
+/// What native code borrows of a kept value through its `&self` calls is
+/// pinned with the value in place, once however often it is read, and let
+/// go when the value is next taken `&mut`: a page whose label is read and
+/// renamed in a loop pins one string, never one per call (#1322, #1321).
+#[cfg(all(test, feature = "sync"))]
+#[test]
+fn a_kept_value_s_pins_stay_flat_and_go_at_its_next_mutable_take() {
+    let pinned = |handle: u64| {
+        // SAFETY: a `&self` share of the value is held while they're read.
+        unsafe { pins_of(handle).unwrap().as_ref() }
+    };
+    let handle = keep(Dynamic::from(ImmutableString::from("clicks")));
+    for round in 0..100 {
+        let label = take_kept(handle, Borrow::Shared).unwrap();
+        let text = label.flatten_clone().into_immutable_string().unwrap();
+        for _ in 0..10 {
+            let read = pinned(handle).pin(text.clone());
+            assert!(std::ptr::eq(read, text.as_str()));
+        }
+        assert_eq!(pinned(handle).len(), 1);
+        put_kept(handle, Borrow::Shared, label);
+        let renamed = take_kept(handle, Borrow::Mutable).unwrap();
+        assert!(pinned(handle).is_empty());
+        drop(renamed);
+        let name = ImmutableString::from(format!("name {round}"));
+        put_kept(handle, Borrow::Mutable, Dynamic::from(name));
+    }
+    __rawr_island_release_v1(handle);
 }
 
 /// A generation compiled on the protocol thread is admitted on the thread

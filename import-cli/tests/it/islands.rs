@@ -483,7 +483,11 @@ fn a_native_root_s_modules_load_as_cargo_configures_them_for_the_target() {
 /// (#1302). `label(&self) -> &str` and `items(&self) -> &[String]` give
 /// borrows of the page that native code reads after their calls, and an
 /// `update` once they are gone sees the page whole; an `update` while one
-/// lives is E0502 (#1305). `rawr check` passes as `cargo check` does, and
+/// lives is E0502 (#1305). A `&str` borrow is the program's own text, read
+/// where it is however often (#1322), and `draw(&self) -> Drawn<'_>`, a
+/// native type that borrows the page as `view(&self) -> Element<'_,
+/// Message>` does, borrows that same text, its pins the page's own and let
+/// go at its next `update` (#1321). `rawr check` passes as `cargo check` does, and
 /// `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_marked_type_becomes_a_native_trait_object() {
@@ -522,6 +526,13 @@ fn a_marked_type_becomes_a_native_trait_object() {
         "{printed}"
     );
     assert!(printed.contains("held 1 sees badge 2\n"), "{printed}");
+    // A `label` read many times is the page's own text each time, and a
+    // `draw(&self) -> Drawn<'_>` the marked impl builds borrows that same
+    // text, drawn and renamed in a loop (#1322, #1321).
+    assert!(
+        printed.contains("held true\nheld true\nheld true\nheld true\nname 99 true home\n"),
+        "{printed}"
+    );
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
         .arg(&root)

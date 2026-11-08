@@ -3969,11 +3969,10 @@ fn imported_runtime(
         }
         for adapter in adapters().copied().filter(|adapter| adapter.bound && adapter.root == definition.root()) {
             // Each instance of a generic item has its own adapter, which
-            // a call reaches by the key of its instance's types.
+            // a call reaches by the key of its instance's types alone.
             if adapter.instance != [0; 32] {
                 builder.bind_imported_instance(adapter.selector, adapter.instance, adapter.item, move |call, values| runtime_invoke(adapter, call, values))?;
-            }
-            if builder.accepts_imported_at(&adapter.selector, adapter.item) {
+            } else if builder.accepts_imported_at(&adapter.selector, adapter.item) {
                 builder.bind_imported_at(adapter.selector, adapter.item, move |call, values| runtime_invoke(adapter, call, values))?;
             }
         }

@@ -566,6 +566,13 @@ trait Erased<'r> {
     fn duplicate(&self) -> Option<Box<dyn Erased<'r> + 'r>>;
     fn equal(&self, other: &(dyn Erased<'r> + 'r)) -> Option<bool>;
     fn equal_native(&self, other: &dyn Any) -> Option<bool>;
+    /// The value as its type at `'static`, its type erased
+    /// ([`Region::take_native`]).
+    ///
+    /// # Safety
+    ///
+    /// As for [`Region::take_native`].
+    unsafe fn into_native(self: Box<Self>) -> Box<dyn Any>;
 }
 
 struct Slot<'r, F: Regional>(F::Of<'r>);
@@ -600,6 +607,16 @@ impl<'r, F: Regional> Erased<'r> for Slot<'r, F> {
 
     fn equal_native(&self, other: &dyn Any) -> Option<bool> {
         F::equal_native(&self.0, other)
+    }
+
+    unsafe fn into_native(self: Box<Self>) -> Box<dyn Any> {
+        let value = std::mem::ManuallyDrop::new(self.0);
+        // SAFETY: the types differ only in their lifetime, which has no
+        // layout, and the value is moved: the original is forgotten. That
+        // it is read no longer than what it borrows lives is the caller's.
+        Box::new(unsafe {
+            std::ptr::read(std::ptr::from_ref::<F::Of<'r>>(&value).cast::<F::Of<'static>>())
+        })
     }
 }
 
@@ -823,6 +840,30 @@ impl<'r> Region<'r> {
         // turned back into the box it was made as.
         let slot = unsafe { Box::from_raw(Box::into_raw(slot).cast::<Slot<'r, F>>()) };
         Ok(slot.0)
+    }
+
+    /// Move the value `handle` names out of the region as its type at
+    /// `'static`, its type erased, for native code that takes it: a native
+    /// trait object's `view(&self) -> Element<'_, Message>` gives native
+    /// code the element its marked impl made so (#1321). Every handle to it
+    /// is then [`Error::Moved`].
+    ///
+    /// # Safety
+    ///
+    /// The value borrows `'r`: the caller keeps the region's pins, and the
+    /// region itself kept in them ([`Region::keep`]), for as long as the
+    /// value lives, and native code reads it at no lifetime longer than
+    /// theirs.
+    pub unsafe fn take_native(&mut self, handle: Scoped) -> Result<Box<dyn Any>, Error> {
+        if handle.nonce != self.nonce {
+            return Err(Error::Mismatch);
+        }
+        self.slot(handle.index)?;
+        let slot = self.slots[handle.index as usize]
+            .take()
+            .ok_or(Error::Moved)?;
+        // SAFETY: as this function's own.
+        Ok(unsafe { slot.into_native() })
     }
 
     /// [`Region::take`] of a value of the region `handle` names, which
@@ -1461,10 +1502,15 @@ impl Pins {
                 .len()
     }
 
-    /// Whether nothing is pinned.
+    /// Whether nothing is pinned, and no region is kept in them.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+            && self
+                .regions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
     }
 }
 
