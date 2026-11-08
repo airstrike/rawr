@@ -74,7 +74,8 @@
         {"text":"A package's `panic = \"abort\"` profile aborts a panic, as the binary Cargo builds does: status 134.","issues":[1176]},
         {"text":"A [target.'cfg(..)'.dependencies] table joins a program's dependencies when Cargo's own build links it on the host. rawr asks Cargo's unit graph and evaluates no cfg itself.","issues":[1214]},
         {"text":"A large project is never refused for its size: the semantic API, the node store, the extraction driver and the attempt record no longer have byte or count caps.","issues":[1231]},
-        {"text":"Each runnable snippet on the site had a hand-written output that nothing checked. One error showed only its first line, six compile errors were not marked as errors, and the drop-order output showed what Rust prints rather than what rawr prints. The site's build now runs every snippet in rawr-web, or on the server through /play/render for the three blocks marked data-where=\"server\", and draws each output with the same function the Run button uses (site/src/lib/output.ts). A hand-written output fails the build. /play/render skips Turnstile for the smoke token, and the deploy's smoke test checks each server block's output against the deployed server.","issues":[1246]}
+        {"text":"Each runnable snippet on the site had a hand-written output that nothing checked. One error showed only its first line, six compile errors were not marked as errors, and the drop-order output showed what Rust prints rather than what rawr prints. The site's build now runs every snippet in rawr-web, or on the server through /play/render for the three blocks marked data-where=\"server\", and draws each output with the same function the Run button uses (site/src/lib/output.ts). A hand-written output fails the build. /play/render skips Turnstile for the smoke token, and the deploy's smoke test checks each server block's output against the deployed server.","issues":[1246]},
+        {"text":"The reference pages were checked claim by claim against the current rawr: overview, requirements, iced, std, closures, generics, items, moves, play and commands. These were stale: gaps that now run (serde derives, crate functions taking your type, async without a runtime, try_join! and select!, consts captured in format strings, entry borrows, std::fs, char::from_u32), a removed difference (the index panic's column), lenient cases rustc's errors now catch (HashMap without use, a field returned by value), a Send bound said to go unchecked, the &dyn gap (it is std traits' trait objects), and quoted errors rawr no longer gives (unknown import, RwLock's not-yet message). Requirements lists rawr-reload, and commands gives exit status 134 under panic = \"abort\" and the default-run rule. Merged as e94629ca8.","issues":[1250]}
       ]
     },
     "releases": [
@@ -2931,7 +2932,18 @@
     {"issue":1246,"title":"Generate the site's snippet outputs by running them at build, not by hand","state":"closed","category":"Health"},
     {"issue":1247,"title":"A snippet of statements doesn't drop its locals at its end","state":"open","category":"Divergences from rustc"},
     {"issue":1248,"title":"rawr-web prints u128 and i128 values as their type names","state":"open","category":"Divergences from rustc"},
-    {"issue":1249,"title":"A native root can't name a marked module's types: `Program::new(..) -> (Program, Task<Message>)` from native main","state":"open","category":"Divergences from rustc"}
+    {"issue":1249,"title":"A native root can't name a marked module's types: `Program::new(..) -> (Program, Task<Message>)` from native main","state":"open","category":"Divergences from rustc"},
+    {"issue":1250,"title":"The reference pages say what the current tree does: stale gaps removed, wrong errors and limits corrected","state":"open","category":"Health"},
+    {"issue":1251,"title":"A program using Box<dyn Error> or another std trait object fails with E0425 unless it implements the trait itself","state":"open","category":"Divergences from rustc"},
+    {"issue":1252,"title":"print(\"hi\") says rawr doesn't run `print` yet instead of rustc's error","state":"open","category":"Divergences from rustc"},
+    {"issue":1253,"title":"std::rc::Rc::new by its full path says rawr doesn't run it, while Rc::new after a use runs","state":"open","category":"Divergences from rustc"},
+    {"issue":1254,"title":"std::fs::File and std::sync::RwLock fail with unknown-member errors that name the wrong type","state":"open","category":"Divergences from rustc"},
+    {"issue":1255,"title":"Formatter::pad in a Display impl is E0599 naming String","state":"open","category":"Divergences from rustc"},
+    {"issue":1256,"title":"A non-exhaustive match is RAWR-RESOLVE-MATCH, not rustc's E0004","state":"open","category":"Divergences from rustc"},
+    {"issue":1257,"title":"let v = Vec::new() with no type settled is accepted where rustc gives E0282","state":"open","category":"Divergences from rustc"},
+    {"issue":1258,"title":"rawr test in a package with several binaries stops where cargo test tests each one","state":"open","category":"Divergences from rustc"},
+    {"issue":1259,"title":"A marked crate's default features are off in its marked code","state":"open","category":"Divergences from rustc"},
+    {"issue":1260,"title":"A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3771,7 +3783,9 @@
             {"number":1243,"title":"A cargo script's profile and target tables","state":"open"},
             {"number":1244,"title":"The semantic API encodes each direct dependency's whole surface when the program names nothing in it","state":"open"},
             {"number":1245,"title":"Process capture and Cargo environment caps can still fire on a large project","state":"open"},
-            {"number":1249,"title":"A native root can't name a marked module's types: `Program::new(..) -> (Program, Task<Message>)` from native main","state":"open"}
+            {"number":1249,"title":"A native root can't name a marked module's types: `Program::new(..) -> (Program, Task<Message>)` from native main","state":"open"},
+            {"number":1258,"title":"rawr test in a package with several binaries stops where cargo test tests each one","state":"open"},
+            {"number":1259,"title":"A marked crate's default features are off in its marked code","state":"open"}
           ]
         }
       ]
