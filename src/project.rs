@@ -1,5 +1,6 @@
 //! Canonical Rawr source and project discovery.
 
+pub mod cargo;
 mod error;
 pub mod frontmatter;
 pub mod marker;
@@ -19,47 +20,81 @@ const CARGO_NAME: &str = "Cargo.toml";
 const LEGACY_CONFIG: &str = "rawr.toml";
 /// The entry of the old `.rawr` projects, which Rawr no longer reads.
 const LEGACY_SOURCE: &str = "main.rawr";
-/// The crate roots a Cargo package's program starts from, in order.
-const RUST_ROOTS: [&str; 2] = ["main.rs", "lib.rs"];
 const VCS_BOUNDARY: &str = ".git";
 
-/// A Cargo crate whose root source starts with `// rawr`, or whose root is
-/// native Rust and declares, directly or through native modules, a module
-/// that starts with it.
+/// A Cargo package's binary or library whose crate root starts with
+/// `// rawr`, or whose root is native Rust and declares, directly or
+/// through native modules, a module that starts with it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Project {
     root: root::Directory,
     source: source::File,
+    /// `None` when Cargo is not installed.
+    package: Option<cargo::Package>,
+    /// The target was picked by its crate root's file, not found from a
+    /// directory.
+    by_file: bool,
 }
 
 /// A validated explicit source file or canonical Rawr project.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Target {
-    /// One explicitly selected `.rs` file; ancestor projects are ignored.
-    /// An explicit `.rs` file runs whether or not it is marked.
+    /// One explicitly selected `.rs` file that no package lists as a
+    /// target; ancestor projects are ignored. An explicit `.rs` file runs
+    /// whether or not it is marked.
     File(source::File),
-    /// A marked crate discovered from a directory or an explicit `Cargo.toml`.
+    /// A package's target, discovered from a directory, an explicit
+    /// `Cargo.toml`, or its crate root's `.rs` file.
     Project(Project),
 }
 
 impl Project {
-    /// Return the canonical project root.
+    /// Return the canonical project root: the package's directory.
     #[must_use]
     pub const fn root(&self) -> &root::Directory {
         &self.root
     }
 
-    /// Return the validated entry source: `src/main.rs` when its tree is
-    /// marked, else `src/lib.rs`.
+    /// Return the validated entry source: the crate root of the target
+    /// that runs, the binary `cargo run` runs when its tree is marked,
+    /// else the library.
     #[must_use]
     pub const fn source(&self) -> &source::File {
         &self.source
     }
 
-    fn load(root: PathBuf, source: PathBuf) -> Result<Self, Error> {
+    /// Where discovery finds this project again: the crate root's file
+    /// when that picked the target, else the package's directory, from
+    /// which a save may make another target the entry.
+    #[must_use]
+    pub fn location(&self) -> &Path {
+        if self.by_file {
+            self.source.path()
+        } else {
+            self.root.as_path()
+        }
+    }
+
+    /// The package, as Cargo describes it: `None` when Cargo is not
+    /// installed.
+    #[must_use]
+    pub const fn package(&self) -> Option<&cargo::Package> {
+        self.package.as_ref()
+    }
+
+    fn load(
+        root: PathBuf,
+        source: PathBuf,
+        package: Option<cargo::Package>,
+    ) -> Result<Self, Error> {
         let root = root::Directory::from_canonical(root);
         let source = source::File::load_project(source, &root)?;
-        Ok(Self { root, source })
+        Ok(Self {
+            root,
+            source,
+            package,
+            by_file: false,
+        })
     }
 }
 
@@ -67,11 +102,12 @@ impl Project {
 /// script its crate root is.
 fn load_directory(root: PathBuf) -> Result<Target, Error> {
     match entry(&root)? {
-        Entry::Found(source) => Project::load(root, source).map(Target::Project),
+        Entry::Found(source, package) => Project::load(root, source, package).map(Target::Project),
         Entry::Script(source) => source::File::load_explicit(source).map(Target::File),
         Entry::Unmarked(entry) => Err(Error::Unmarked { root, entry }),
+        Entry::Ambiguous(binaries) => Err(Error::AmbiguousBinary { root, binaries }),
         Entry::None => Err(Error::MissingSource {
-            expected: root.join(SOURCE_DIRECTORY).join(RUST_ROOTS[0]),
+            expected: root.join(SOURCE_DIRECTORY).join("main.rs"),
             root,
         }),
     }
@@ -96,6 +132,43 @@ impl Target {
         }
 
         discover_directory(canonical)
+    }
+
+    /// The crate root of the binary target `name`, as `cargo run --bin
+    /// <name>` finds it from `start`: of the package whose manifest is
+    /// nearest above, or of any member of a workspace with no root package.
+    pub fn binary(start: &Path, name: &str) -> Result<PathBuf, Error> {
+        let start = canonicalize_input(start)?;
+        let manifest = start
+            .ancestors()
+            .map(|directory| directory.join(CARGO_NAME))
+            .find(|manifest| manifest.is_file())
+            .ok_or_else(|| Error::NotFound {
+                start: start.clone(),
+                boundary: start.ancestors().last().unwrap_or(&start).to_path_buf(),
+                legacy: None,
+            })?;
+        let workspace = cargo::Workspace::of(&manifest).map_err(|source| Error::Cargo {
+            manifest: manifest.clone(),
+            source,
+        })?;
+        let packages = match workspace.package(&manifest) {
+            Some(package) => vec![package],
+            None => workspace.packages().collect(),
+        };
+        if let Some(binary) = packages.iter().find_map(|package| package.binary(name)) {
+            return Ok(binary.path().to_path_buf());
+        }
+        let mut binaries = packages
+            .iter()
+            .flat_map(|package| package.binaries())
+            .map(|binary| Box::from(binary.name()))
+            .collect::<Vec<_>>();
+        binaries.sort_unstable();
+        Err(Error::NoBinary {
+            name: name.into(),
+            binaries: binaries.into_boxed_slice(),
+        })
     }
 
     /// Discover a project from the process current directory.
@@ -137,7 +210,42 @@ fn discover_file(path: PathBuf) -> Result<Target, Error> {
     if path.extension() != Some(OsStr::new("rs")) {
         return Err(Error::UnsupportedInput { path });
     }
-    source::File::load_explicit(path).map(Target::File)
+    let file = source::File::load_explicit(path)?;
+    // A script is its own package wherever it sits (D608 point 6).
+    if frontmatter::is_script(file.text()) {
+        return Ok(Target::File(file));
+    }
+    Ok(match owner(file.path())? {
+        Some(package) => Target::Project(Project {
+            root: root::Directory::from_canonical(package.directory().to_path_buf()),
+            source: file,
+            package: Some(package),
+            by_file: true,
+        }),
+        None => Target::File(file),
+    })
+}
+
+/// The package that lists the file at `path` as a library or binary
+/// target, as Cargo describes the workspace of the nearest manifest above
+/// it, within the VCS boundary.
+fn owner(path: &Path) -> Result<Option<cargo::Package>, Error> {
+    let mut directory = path.parent();
+    while let Some(current) = directory {
+        let manifest = current.join(CARGO_NAME);
+        if path_exists(&manifest, Resource::Manifest)? {
+            return Ok(workspace(&manifest)?.and_then(|workspace| {
+                workspace
+                    .target_at(path)
+                    .map(|(package, _)| package.clone())
+            }));
+        }
+        if path_exists(&current.join(VCS_BOUNDARY), Resource::Boundary)? {
+            break;
+        }
+        directory = current.parent();
+    }
+    Ok(None)
 }
 
 fn discover_directory(start: PathBuf) -> Result<Target, Error> {
@@ -150,7 +258,7 @@ fn discover_directory(start: PathBuf) -> Result<Target, Error> {
     let mut current = start.clone();
 
     loop {
-        if matches!(entry(&current)?, Entry::Found(_) | Entry::Script(_)) {
+        if matches!(entry(&current)?, Entry::Found(..) | Entry::Script(_)) {
             candidates.push(current.clone());
         }
         if legacy.is_none() {
@@ -176,32 +284,73 @@ fn discover_directory(start: PathBuf) -> Result<Target, Error> {
 /// What a directory holds as a program's entry.
 enum Entry {
     /// A Cargo package's marked crate root.
-    Found(PathBuf),
+    Found(PathBuf, Option<cargo::Package>),
     /// A marked crate root with a frontmatter block: a cargo script, which
     /// is one wherever it sits (D608 point 6), so it is not the package's.
     Script(PathBuf),
     /// A Cargo package's crate root without the `// rawr` marker.
     Unmarked(PathBuf),
+    /// A package with several binaries, none of them its `default-run`:
+    /// these, as `cargo run` names them.
+    Ambiguous(Box<[Box<str>]>),
     None,
 }
 
-/// The entry of the crate at `root`: the first of `src/main.rs` and
-/// `src/lib.rs` whose first line of Rust is the `// rawr` marker or whose
-/// `mod` tree reaches a file that starts with it. So a package whose
-/// marked modules are all in its library's tree runs from `src/lib.rs`,
-/// and its binary is native. A root that starts with the marker is read
-/// only to its first line, and one that may start with a shebang or
-/// frontmatter is read whole. An unmarked one is read whole, with the
-/// native modules it declares, until a marked module turns up. With
-/// neither marked, the first that exists is the unmarked entry.
+/// The entry of the package at `root`, as Cargo lists its targets: the
+/// first of the binary `cargo run` runs and the library whose first line
+/// of Rust is the `// rawr` marker or whose `mod` tree reaches a file that
+/// starts with it. So a package whose marked modules are all in its
+/// library's tree runs from its library, and its binary is native. A root
+/// that starts with the marker is read only to its first line, and one
+/// that may start with a shebang or frontmatter is read whole. An unmarked
+/// one is read whole, with the native modules it declares, until a marked
+/// module turns up. With neither marked, the first that exists is the
+/// unmarked entry. With several binaries and no `default-run`, the
+/// package's entry is ambiguous, as `cargo run` finds it.
 fn entry(root: &Path) -> Result<Entry, Error> {
-    if !path_exists(&root.join(CARGO_NAME), Resource::Manifest)? {
+    let manifest = root.join(CARGO_NAME);
+    if !path_exists(&manifest, Resource::Manifest)? {
         return Ok(Entry::None);
     }
-    let source = root.join(SOURCE_DIRECTORY);
+    let Some(workspace) = workspace(&manifest)? else {
+        // Without Cargo, Rawr knows only Cargo's default crate roots.
+        let source = root.join(SOURCE_DIRECTORY);
+        return marked_root([source.join("main.rs"), source.join("lib.rs")], None);
+    };
+    let Some(package) = workspace.package(&manifest) else {
+        return Ok(Entry::None);
+    };
+    let paths = |targets: Vec<&cargo::Target>| {
+        targets
+            .into_iter()
+            .map(|target| target.path().to_path_buf())
+            .collect::<Vec<_>>()
+    };
+    if package.run_binary().is_none() && package.binaries().nth(1).is_some() {
+        let binaries = package
+            .binaries()
+            .map(|binary| binary.name().into())
+            .collect();
+        return Ok(Entry::Ambiguous(binaries));
+    }
+    let roots = paths(
+        package
+            .run_binary()
+            .into_iter()
+            .chain(package.library())
+            .collect(),
+    );
+    marked_root(roots, Some(package))
+}
+
+/// The entry of `package` (`None` without Cargo) that the first of `roots`
+/// that is marked or reaches a marked module makes, as [`entry`] picks it.
+fn marked_root(
+    roots: impl IntoIterator<Item = PathBuf>,
+    package: Option<&cargo::Package>,
+) -> Result<Entry, Error> {
     let mut unmarked = None;
-    for name in RUST_ROOTS {
-        let path = source.join(name);
+    for path in roots {
         if !path_exists(&path, Resource::Source)? {
             continue;
         }
@@ -217,10 +366,24 @@ fn entry(root: &Path) -> Result<Entry, Error> {
         return Ok(if marking.script {
             Entry::Script(path)
         } else {
-            Entry::Found(path)
+            Entry::Found(path, package.cloned())
         });
     }
     Ok(unmarked.map_or(Entry::None, Entry::Unmarked))
+}
+
+/// Cargo's description of the workspace of `manifest`, or none when Cargo
+/// is not installed. Then Rawr runs what needs no build, as it skips
+/// `cargo check` (D459.5), and knows only Cargo's default crate roots.
+fn workspace(manifest: &Path) -> Result<Option<std::sync::Arc<cargo::Workspace>>, Error> {
+    match cargo::Workspace::of(manifest) {
+        Ok(workspace) => Ok(Some(workspace)),
+        Err(source) if source.is_not_installed() => Ok(None),
+        Err(source) => Err(Error::Cargo {
+            manifest: manifest.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 /// Whether the unmarked crate root `root` reaches a marked module through

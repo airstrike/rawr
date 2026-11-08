@@ -137,6 +137,15 @@ pub fn run_program(
             eprintln!("rawr: the program won't hear its reload outcomes: {error}");
         })
         .ok();
+    // A program whose profile has `panic = "abort"` ends a panic, which the
+    // runner reports as Rust's status 101, as SIGABRT does in a shell.
+    const ABORTED: i32 = 128 + 6;
+    let aborts = |graph: Option<&rawr::package::Graph>| {
+        graph.is_some_and(|graph| {
+            graph.entry_package().panic() == rawr::project::cargo::Panic::Abort
+        })
+    };
+    let mut abort = aborts(graph.as_ref());
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let interactive = rawr_cli::supervise::interactive();
     let mut watcher = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open);
@@ -153,6 +162,7 @@ pub fn run_program(
         if restarted.is_none() {
             rawr_cli::cargo::after_run(cargo.take());
             match ran {
+                Ok(Ended::Exit(101)) if abort && !interactive => return Ok(ABORTED),
                 Ok(Ended::Exit(code)) if !interactive || code == INTERRUPTED => return Ok(code),
                 Ok(_) => eprintln!("rawr: the program ended; a save runs it again"),
                 Err(report) if !interactive || watcher.is_none() => return Err(report),
@@ -187,6 +197,7 @@ pub fn run_program(
         if let Some(next) = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open) {
             watcher = Some(next);
         }
+        abort = aborts(graph.as_ref());
         ran = session(&next, graph, lifecycle, profile, Some(&program));
     }
 }
@@ -211,7 +222,7 @@ fn contents(target: &rawr::project::Target) -> Option<Vec<(PathBuf, Option<Vec<u
 fn location(target: &rawr::project::Target) -> PathBuf {
     target.project().map_or_else(
         || target.source().path().to_path_buf(),
-        |project| project.root().as_path().to_path_buf(),
+        |project| project.location().to_path_buf(),
     )
 }
 

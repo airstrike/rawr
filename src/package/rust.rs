@@ -294,7 +294,10 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
                 directory.join("Cargo.toml"),
                 app_manifest(cargo, &Path::new("src").join(relative)),
             ),
-            (copies.join(relative), native_root(root, package)),
+            (
+                copies.join(relative),
+                native_root(root, package, !entry.is_library()),
+            ),
         ];
         files.extend(
             shadow
@@ -350,8 +353,13 @@ fn bin_crate(
     let copies = directory.join("src");
     let mut files = vec![
         (directory.join("Cargo.toml"), bin_manifest(cargo, library)),
-        (copies.join("main.rs"), native_root(bin.root(), package)),
+        (
+            copies.join("main.rs"),
+            native_root(bin.root(), package, true),
+        ),
     ];
+    // The binary's modules are beside its root, wherever Cargo finds it.
+    let module_root = bin.root().path().parent().unwrap_or(module_root);
     for module in bin.modules() {
         let Ok(relative) = module.path().strip_prefix(module_root) else {
             continue;
@@ -533,15 +541,12 @@ fn write_changed(files: Vec<(std::path::PathBuf, String)>) -> rawr_import::Resul
 /// module and every root item a marked module may name, `#[path]` and
 /// `include_str!` paths absolute, and the island's runtime support at the
 /// end. A `forbid(unsafe_code)` becomes `deny`, which the support module's
-/// own `allow` can lift for its two calls into the runner.
-fn native_root(root: &super::graph::RustModule, package: &Path) -> String {
+/// own `allow` can lift for its two calls into the runner. A binary's
+/// root (`main`) has the `main` the support runs.
+fn native_root(root: &super::graph::RustModule, package: &Path, main: bool) -> String {
     let text = super::polyglot::widened(root.text(), false, root.path(), package);
     let public = super::polyglot::root_items_public(&text);
     let public = public.replace("#![forbid(unsafe_code)]", "#![deny(unsafe_code)]");
-    let main = root
-        .path()
-        .file_name()
-        .is_some_and(|name| name == "main.rs");
     format!("{public}\n{}", super::island::support(main))
 }
 

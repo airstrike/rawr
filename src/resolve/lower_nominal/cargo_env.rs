@@ -80,6 +80,20 @@ impl Package {
     /// The target whose root is `entry`: its crate name, and its name when
     /// it is a binary.
     fn target(&self, entry: &Path) -> (String, Option<String>) {
+        // Cargo names the target; without Cargo, its default layout does.
+        let described = crate::project::cargo::Workspace::of(&self.directory.join("Cargo.toml"))
+            .ok()
+            .and_then(|workspace| {
+                let (_, target) = workspace.target_at(entry)?;
+                let binary = target.kind() == crate::project::cargo::Kind::Binary;
+                Some((
+                    target.crate_name(),
+                    binary.then(|| target.name().to_owned()),
+                ))
+            });
+        if let Some(described) = described {
+            return described;
+        }
         let package = self.name();
         let relative = entry.strip_prefix(&self.directory).unwrap_or(entry);
         // A `[[bin]]` naming its path.

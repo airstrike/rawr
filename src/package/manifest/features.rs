@@ -282,6 +282,11 @@ c = ["dep:off"]
         )
         .unwrap()
         .unwrap();
+        // The table for unix and windows joins as Cargo builds it here.
+        let workspace = crate::project::cargo::Workspace::of(&root.join("app/Cargo.toml")).unwrap();
+        let package = workspace.package(&root.join("app/Cargo.toml")).unwrap();
+        let unit = crate::project::cargo::Unit::of(package, package.library().unwrap()).unwrap();
+        let cargo = cargo.on_host(super::super::cargo::Host::Built(&unit));
         let declared = cargo
             .dependencies
             .iter()

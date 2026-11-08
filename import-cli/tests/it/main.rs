@@ -17,6 +17,7 @@ mod shapes;
 mod std_types;
 mod support;
 mod swap;
+mod targets;
 mod tokio;
 #[cfg(unix)]
 mod tui;

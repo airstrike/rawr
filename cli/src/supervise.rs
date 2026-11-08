@@ -43,30 +43,38 @@ pub fn program_name(target: &rawr::project::Target) -> OsString {
         return target.source().path().with_extension("").into_os_string();
     };
     let root = project.root().as_path();
-    let name = package_name(&root.join("Cargo.toml")).unwrap_or_else(|| {
-        root.file_name().map_or_else(
-            || "main".to_owned(),
-            |name| name.to_string_lossy().into_owned(),
-        )
+    // The binary that runs: the program's own, or the one that runs its
+    // library, as Cargo names it.
+    let binary = project.package().and_then(|package| {
+        package
+            .target_at(project.source().path())
+            .filter(|target| target.kind() == rawr::project::cargo::Kind::Binary)
+            .or_else(|| package.run_binary())
+            .map(|binary| binary.name().to_owned())
     });
+    let name = binary
+        .or_else(|| package_name(&root.join("Cargo.toml")))
+        .unwrap_or_else(|| {
+            root.file_name().map_or_else(
+                || "main".to_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            )
+        });
     crate::cells::target_directory(root)
         .join("debug")
         .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
         .into_os_string()
 }
 
-/// The binary name a `Cargo.toml` gives: its first `[[bin]]`'s name, else
-/// its package's name.
+/// The name of the default binary, `src/main.rs`, without Cargo: its
+/// package's name.
 fn package_name(manifest: &Path) -> Option<String> {
     let text = std::fs::read_to_string(manifest).ok()?;
     let document = text.parse::<toml_edit::DocumentMut>().ok()?;
-    let bin = document
-        .get("bin")
-        .and_then(|bin| bin.as_array_of_tables())
-        .and_then(|bins| bins.iter().next())
-        .and_then(|bin| bin.get("name"))
-        .and_then(|name| name.as_str());
-    bin.or_else(|| document.get("package")?.get("name")?.as_str())
+    document
+        .get("package")?
+        .get("name")?
+        .as_str()
         .map(str::to_owned)
 }
 
@@ -88,7 +96,7 @@ pub fn contents(graph: &rawr::package::Graph) -> Vec<(PathBuf, Option<Vec<u8>>)>
 fn location(target: &rawr::project::Target) -> PathBuf {
     target.project().map_or_else(
         || target.source().path().to_path_buf(),
-        |project| project.root().as_path().to_path_buf(),
+        |project| project.location().to_path_buf(),
     )
 }
 

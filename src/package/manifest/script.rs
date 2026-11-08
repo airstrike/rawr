@@ -185,7 +185,9 @@ pub(crate) fn cargo(script: &Path, text: &str) -> Result<Option<Cargo>, Error> {
     let name = string("name").unwrap_or_else(|| stem_name(script));
     let edition = string("edition").unwrap_or_else(|| EDITION.to_owned());
     let base = script.parent().unwrap_or(Path::new("/"));
-    let dependencies = super::cargo::dependencies(&padded, base, table, "dependencies", None)?;
+    let dependencies =
+        super::rust::cargo_dependencies(&padded, base, table.get("dependencies"), None)?;
+    let targets = super::cargo::targets(&padded, base, table, None, None)?;
     let features = super::features::Features::parse(&padded, table)?;
     let expanded =
         expand(script, &text[range], &name, &edition, script).map_err(|message| Error {
@@ -201,6 +203,7 @@ pub(crate) fn cargo(script: &Path, text: &str) -> Result<Option<Cargo>, Error> {
         edition: Some(edition),
         dependencies,
         build_dependencies: Box::default(),
+        targets,
         features,
         build: None,
         links: None,

@@ -217,9 +217,10 @@ struct Running {
 }
 
 impl Running {
-    /// Start cargo, or say why it didn't start: cargo is unavailable, or a
-    /// script's manifest failed as cargo's would.
-    fn start(program: &OsString, manifest: &Path) -> Result<Self, Status> {
+    /// Start cargo on the package of `manifest`, or on its `target` when
+    /// options select one, or say why it didn't start: cargo is
+    /// unavailable, or a script's manifest failed as cargo's would.
+    fn start(program: &OsString, manifest: &Path, target: &[OsString]) -> Result<Self, Status> {
         let mut command = Command::new(program);
         if manifest
             .extension()
@@ -248,7 +249,9 @@ impl Running {
         } else {
             settle_lock(program, manifest);
             command
-                .args(["check", "--message-format=json", "--manifest-path"])
+                .args(["check", "--message-format=json"])
+                .args(target)
+                .arg("--manifest-path")
                 .arg(manifest);
             // From the crate's directory, as `cargo check` run there picks
             // its toolchain: its build-script outputs are the project's.
@@ -325,7 +328,7 @@ impl Pending {
     /// [`Pending::start`] with an explicit cargo command.
     #[must_use]
     pub fn start_with(program: &OsString, manifest: &Path) -> Self {
-        Self(Running::start(program, manifest))
+        Self(Running::start(program, manifest, &[]))
     }
 
     /// Wait for cargo and read what it said.
@@ -362,7 +365,22 @@ pub fn print(status: &Status) -> bool {
 /// crate of marked files.
 #[must_use]
 pub fn begin(graph: &rawr::package::Graph) -> Option<Pending> {
-    manifest(graph).map(|manifest| Pending::start(&manifest))
+    let target = selection(graph);
+    manifest(graph).map(|manifest| Pending(Running::start(&program(), &manifest, &target)))
+}
+
+/// The options that check only the binary Rawr runs, as `cargo check
+/// --bin <name>` selects it, which checks the package's library too. A
+/// program that runs from the library runs from its package's binary, and
+/// a script, a file no package lists or a package without Cargo has no
+/// target to select: theirs is the whole package's check.
+fn selection(graph: &rawr::package::Graph) -> Vec<OsString> {
+    match graph.entry_package().cargo_target() {
+        Some(target) if target.kind() == rawr::project::cargo::Kind::Binary => {
+            vec!["--bin".into(), target.name().into()]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// End `rawr check`: Rawr's result first, then cargo's under its own
@@ -457,7 +475,7 @@ impl Background {
                     }
                     if due.is_some_and(|due| Instant::now() >= due) {
                         due = None;
-                        match Running::start(&program, &manifest) {
+                        match Running::start(&program, &manifest, &[]) {
                             Ok(started) => running = Some(started),
                             Err(status) => {
                                 // Said once: a missing cargo stays missing.

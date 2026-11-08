@@ -7,6 +7,12 @@
 <p>In a Cargo workspace, <code>-p</code> names a package, as under <code>cargo run</code>:</p>
 <div class="block"><pre><code>rawr run -p invaders</code></pre></div>
 <p><code>rawr check -p</code> takes a package name too.</p>
+<p>rawr finds a package&rsquo;s targets as Cargo lists them, from <code>cargo metadata</code>. A binary may be <code>src/main.rs</code>, a file under <code>src/bin/</code> or a <code>[[bin]]</code> entry. In a package with several binaries, <code>--bin</code> names the one to run, as under <code>cargo run --bin</code>. Without <code>--bin</code>, the package&rsquo;s <code>default-run</code> picks one:</p>
+<div class="block"><pre><code>rawr run --bin async1</code></pre></div>
+<p>A <code>.rs</code> file that the package lists as a binary runs as that binary. So <code>rawr run exercises/async1.rs</code> in rustlings&rsquo; package gets the package&rsquo;s dependencies and profile, as <code>cargo run --bin async1</code> does. A file that no package lists runs on its own.</p>
+<p>A program gets the dependencies Cargo links for the host. A <code>[target.'cfg(..)'.dependencies]</code> table joins when Cargo&rsquo;s build includes it on this machine. rawr asks Cargo&rsquo;s unit graph, so it never evaluates a <code>cfg</code> itself.</p>
+<p>The program runs with its package&rsquo;s profile. Under <code>panic = "abort"</code>, a panic aborts the program, as it aborts the binary Cargo builds. A shell sees status 134, SIGABRT&rsquo;s.</p>
+<p>Without Cargo installed, rawr runs only <code>src/main.rs</code> or <code>src/lib.rs</code>, and only what needs no build.</p>
 
 <h2 id="arguments">Arguments and stdin</h2>
 <p>Arguments after <code>--</code> go to the program, as under <code>cargo run</code>:</p>
@@ -108,9 +114,9 @@ fn main() {
 }</code></pre></div>
 <p>Mark a module of the library, such as <code>src/score.rs</code>, and <code>rawr run</code> runs the package from its library. The binary stays native and its <code>main</code> is the program&rsquo;s. It reaches the marked module through the library, as <code>cargo build</code> builds it, so <code>arcade::score::Game::new()</code> calls the stub of the marked function. Native modules of the library call it through the same stubs. The binary&rsquo;s own modules stay native too.</p>
 <p>The library root stays native, and the modules it declares are marked. A marked <code>src/lib.rs</code> beside a native <code>src/main.rs</code> stops <code>rawr run</code> with an error that says so.</p>
-<p>rawr keeps a copy of the binary under <code>target/rawr/bin</code>, beside the library&rsquo;s copy in <code>target/rawr/crate</code>. It runs <code>src/main.rs</code> from there. <code>cargo build --release</code> builds the package as it is, and the marker is only a comment.</p>
+<p>rawr keeps a copy of the binary under <code>target/rawr/bin</code>, beside the library&rsquo;s copy in <code>target/rawr/crate</code>. It runs the binary from there. <code>cargo build --release</code> builds the package as it is, and the marker is only a comment.</p>
 <p>When both the binary&rsquo;s tree and the library&rsquo;s have marked modules, <code>rawr run</code> stops with an error that names both trees. Remove the marker from one of them.</p>
-<p>rawr looks for the binary at <code>src/main.rs</code> only. Binaries under <code>src/bin/</code> or named by <code>[[bin]]</code> aren&rsquo;t found yet.</p>
+<p>The binary is the one <code>cargo run</code> runs. It may be <code>src/main.rs</code>, a file under <code>src/bin/</code> or a <code>[[bin]]</code> entry. Its own modules sit beside it, as Cargo finds them.</p>
 <p>The marked modules run on the process&rsquo;s main thread when <code>main</code> calls them, as cargo&rsquo;s build runs them. So a library whose marked <code>app.rs</code> has <code>pub fn run() -&gt; iced::Result { iced::run(..) }</code> runs from a <code>main.rs</code> that is only <code>fn main() -&gt; iced::Result { mycrate::app::run() }</code>. It opens its window, a save to <code>app.rs</code> shows at iced&rsquo;s next <code>update</code> or <code>view</code>, and <code>main</code> gets back iced&rsquo;s own <code>iced::Result</code>.</p>
 <p>A marked <code>main</code> runs on the process&rsquo;s main thread too, with the interpreter. So a marked crate root can start a winit event loop itself, as Freya&rsquo;s <code>launch</code> does. A save reaches such a program while it runs, as <a href="#swap">a running marked main</a> says.</p>
 
