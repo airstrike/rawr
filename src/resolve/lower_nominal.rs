@@ -76,8 +76,8 @@ mod str_tests;
 mod trait_instance_tests;
 
 use super::borrowck::{
+    self,
     record::{Matched, ScopeEnd},
-    Access as FactAccess, Path as FactPath, Projection as FactStep, Step as FactRegion,
 };
 use super::{
     intrinsic, item, type_ref, BindingSite, Callee, Error, LoweringFailure, MoveCause, Program,
@@ -2233,7 +2233,7 @@ fn symbolic_input_type(ty: &type_ref::Type) -> Option<Ty> {
 type LoopElement = (
     Option<super::borrowck::Local>,
     super::borrowck::Local,
-    Vec<(FactPath, FactPath)>,
+    Vec<(borrowck::Path, borrowck::Path)>,
     Vec<super::borrowck::Local>,
 );
 
@@ -14644,14 +14644,14 @@ impl<'a> Parser<'a> {
         let mut name = root.to_string();
         for (index, step) in place.projection.iter().enumerate() {
             match step {
-                FactStep::Field(field) => {
+                borrowck::Projection::Field(field) => {
                     let owner = self.part_ty(&root_ty, &place.projection[..index]);
                     if let Some(Ty::Script(owner, _)) = owner {
                         self.reject_drop_move(owner, true, value.span)?;
                     }
                     name = format!("{name}.{field}");
                 }
-                FactStep::Deref => {
+                borrowck::Projection::Deref => {
                     let mutable = matches!(
                         self.part_ty(&root_ty, &place.projection[..index]),
                         Some(Ty::Reference { mutable: true, .. })
@@ -14660,7 +14660,7 @@ impl<'a> Parser<'a> {
                     let rest = place.projection[index + 1..]
                         .iter()
                         .map(|step| match step {
-                            FactStep::Field(field) => format!(".{field}"),
+                            borrowck::Projection::Field(field) => format!(".{field}"),
                             _ => String::new(),
                         })
                         .collect::<String>();
@@ -14845,7 +14845,7 @@ impl<'a> Parser<'a> {
     fn move_capture_parts(
         &mut self,
         name: &ImmutableString,
-        parts: &[&(Span, Vec<FactStep>, bool)],
+        parts: &[&(Span, Vec<borrowck::Projection>, bool)],
         at: Span,
     ) -> Result<bool, Error> {
         let Some(binding) = self.bindings.get(name.as_str()) else {
@@ -14859,7 +14859,7 @@ impl<'a> Parser<'a> {
             return Ok(false);
         }
         let ty = binding.ty.clone();
-        let moved: Vec<&Vec<FactStep>> = parts
+        let moved: Vec<&Vec<borrowck::Projection>> = parts
             .iter()
             .filter(|(_, _, copy)| !copy)
             .map(|(_, path, _)| path)
@@ -14883,7 +14883,7 @@ impl<'a> Parser<'a> {
                 let path = path
                     .iter()
                     .map(|step| match step {
-                        FactStep::Field(field) => format!(".{field}"),
+                        borrowck::Projection::Field(field) => format!(".{field}"),
                         _ => String::new(),
                     })
                     .collect::<String>();
@@ -16843,7 +16843,7 @@ impl<'a> Parser<'a> {
             let outer = entered.or(mode);
             entered = Some(outer.map_or(mutable, |outer| outer && mutable));
             ty = self.inference.resolve(&target);
-            self.trace_enter(FactStep::Deref);
+            self.trace_enter(borrowck::Projection::Deref);
         }
         match entered {
             Some(entered) => {
@@ -16998,7 +16998,7 @@ impl<'a> Parser<'a> {
                             .cloned()
                             .unwrap_or_else(|| slot.to_string().into());
                         let step = self.trace_enter_at(
-                            FactStep::Field(field),
+                            borrowck::Projection::Field(field),
                             borrows::TraceRegion::Field(definition.id(), None, slot),
                         );
                         self.destructure_into(member, path, ty, statements)?;
@@ -17041,8 +17041,10 @@ impl<'a> Parser<'a> {
                     self.require_type(&Ty::Tuple(types.clone()), &target, *span)?;
                     for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
                         let step = self.trace_enter_at(
-                            FactStep::Field(index.to_string().into()),
-                            borrows::TraceRegion::At(FactPath::of(&[FactRegion::Arg(index as u8)])),
+                            borrowck::Projection::Field(index.to_string().into()),
+                            borrows::TraceRegion::At(borrowck::Path::of(&[borrowck::Step::Arg(
+                                index as u8,
+                            )])),
                         );
                         self.destructure_into(member, &format!("{path}[{index}]"), ty, statements)?;
                         self.trace_leave(step);
@@ -17103,7 +17105,7 @@ impl<'a> Parser<'a> {
                     Ty::Reference { target: inner, .. } => {
                         // `&pat` matches the reference and binds by move.
                         let mode = self.binding_mode.replace(None);
-                        let step = self.trace_enter(FactStep::Deref);
+                        let step = self.trace_enter(borrowck::Projection::Deref);
                         let destructured = self.destructure_into(pattern, path, &inner, statements);
                         self.trace_leave(step);
                         self.binding_mode.set(mode);
@@ -17114,7 +17116,7 @@ impl<'a> Parser<'a> {
                 self.require_type(&expected, ty, *span)?;
                 // References are the referenced value at runtime.
                 let mode = self.binding_mode.replace(None);
-                let step = self.trace_enter(FactStep::Deref);
+                let step = self.trace_enter(borrowck::Projection::Deref);
                 let destructured = self.destructure_into(pattern, path, &target, statements);
                 self.trace_leave(step);
                 self.binding_mode.set(mode);
@@ -17215,7 +17217,7 @@ impl<'a> Parser<'a> {
                 .map(|(index, member)| (trailing + index, member)),
         );
         for (index, member) in members {
-            let step = self.trace_enter(FactStep::ConstantIndex {
+            let step = self.trace_enter(borrowck::Projection::ConstantIndex {
                 offset: index as u32,
                 min_length: length as u32,
                 from_end: false,
@@ -25075,7 +25077,7 @@ impl<'a> Parser<'a> {
             .map(|(index, member)| {
                 (
                     member,
-                    borrows::Slot::At(FactPath::of(&[FactRegion::Arg(index as u8)])),
+                    borrows::Slot::At(borrowck::Path::of(&[borrowck::Step::Arg(index as u8)])),
                 )
             })
             .collect();
@@ -27694,7 +27696,7 @@ impl<'a> Parser<'a> {
             .map(|element| {
                 (
                     element,
-                    borrows::Slot::At(FactPath::of(&[FactRegion::Arg(0)])),
+                    borrows::Slot::At(borrowck::Path::of(&[borrowck::Step::Arg(0)])),
                 )
             })
             .collect();
@@ -27984,13 +27986,13 @@ impl<'a> Parser<'a> {
             _ => None,
         };
         let at = match variant {
-            Prelude::Err => FactRegion::Arg(1),
-            _ => FactRegion::Arg(0),
+            Prelude::Err => borrowck::Step::Arg(1),
+            _ => borrowck::Step::Arg(0),
         };
         self.compose(
             expression,
             &ty,
-            &[(&*value, borrows::Slot::At(FactPath::of(&[at])))],
+            &[(&*value, borrows::Slot::At(borrowck::Path::of(&[at])))],
         );
         let source = self.prelude_op(op, [value.rendered_source()]);
         let mut value = self.operator_expr(source, ty, expression);
@@ -30491,7 +30493,7 @@ impl<'a> Parser<'a> {
                 value,
                 match slot {
                     Some(slot) => borrows::Slot::Field(definition.id(), None, slot),
-                    None => borrows::Slot::At(FactPath::ROOT),
+                    None => borrows::Slot::At(borrowck::Path::ROOT),
                 },
             ));
         }

@@ -527,14 +527,14 @@ impl Parser<'_> {
             reference_to((**borrowed).clone())
         };
         // The pattern tests the variant; its payload is below it.
-        self.trace_test(FactAccess::Read, None);
+        self.trace_test(borrowck::Access::Read, None);
         let path = self.trace_enter_at(
-            FactStep::Downcast(variant.into()),
-            borrows::TraceRegion::At(FactPath::of(&[FactRegion::Arg(0)])),
+            borrowck::Projection::Downcast(variant.into()),
+            borrows::TraceRegion::At(borrowck::Path::of(&[borrowck::Step::Arg(0)])),
         );
         self.trace_enter_at(
-            FactStep::Field("0".into()),
-            borrows::TraceRegion::At(FactPath::ROOT),
+            borrowck::Projection::Field("0".into()),
+            borrows::TraceRegion::At(borrowck::Path::ROOT),
         );
         let (child, coverage) = self.resolve_child_pattern(
             payload,

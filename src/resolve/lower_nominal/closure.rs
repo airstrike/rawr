@@ -9,7 +9,7 @@ use super::{
     Binding, BindingKind, ParsedExpr, Parser, ASYNC_RESUME, CORE_ASYNC, SELF_CAPTURE,
 };
 use crate::resolve::borrowck::record::ScopeEnd;
-use crate::resolve::borrowck::{record, Projection as FactStep};
+use crate::resolve::borrowck::{self, record};
 use crate::resolve::{BindingSite, Error};
 use crate::tokenizer::Token;
 use crate::{ImmutableString, Position, Span};
@@ -706,7 +706,7 @@ impl<'a> Parser<'a> {
             .collect();
         let closure = {
             let this = &*self;
-            let copy_of = |declaration: Span, path: &[FactStep]| {
+            let copy_of = |declaration: Span, path: &[borrowck::Projection]| {
                 this.part_copy(capture_types.get(&declaration)?, path)
             };
             let mut flow = this.flow();

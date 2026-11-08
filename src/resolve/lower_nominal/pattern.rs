@@ -19,10 +19,8 @@ use super::{
 use crate::ast::{NominalEnumPattern, NominalPattern, NominalPayloadType};
 #[cfg(feature = "rust-import")]
 use crate::capability;
+use crate::resolve::borrowck;
 use crate::resolve::borrowck::record::Matched;
-use crate::resolve::borrowck::{
-    Access as FactAccess, Path as FactPath, Projection as FactStep, Step as FactRegion,
-};
 use crate::resolve::{type_ref, BindingSite, Error};
 use crate::tokenizer::Token;
 use crate::types::nominal;
@@ -1521,7 +1519,7 @@ impl<'a> Parser<'a> {
                 // `&&T` matches the `T` below both, as rustc does.
                 let mut mutable = *mutable;
                 let mut target = self.inference.resolve(target);
-                self.trace_enter(FactStep::Deref);
+                self.trace_enter(borrowck::Projection::Deref);
                 while let Ty::Reference {
                     target: inner,
                     mutable: inner_mutable,
@@ -1529,7 +1527,7 @@ impl<'a> Parser<'a> {
                 {
                     mutable = mutable && inner_mutable;
                     target = self.inference.resolve(&inner);
-                    self.trace_enter(FactStep::Deref);
+                    self.trace_enter(borrowck::Projection::Deref);
                 }
                 let mode = self.binding_mode.get();
                 self.binding_mode
@@ -1577,7 +1575,7 @@ impl<'a> Parser<'a> {
         {
             // The facade's tests read the part; what they bind is not in
             // the borrow facts.
-            self.trace_test(FactAccess::Read, None);
+            self.trace_test(borrowck::Access::Read, None);
             if !drops::pattern_names(syntax).is_empty() {
                 self.trace_unmodeled("a pattern binding a part of a host value", syntax.span());
             }
@@ -1712,7 +1710,7 @@ impl<'a> Parser<'a> {
             ),
             PatternSyntax::Literal { literal, ty, span } => {
                 self.require_pattern_type(&expected, ty, *span)?;
-                self.trace_test(FactAccess::Read, None);
+                self.trace_test(borrowck::Access::Read, None);
                 Ok((
                     NominalPattern::Literal(literal.clone()),
                     CoveragePattern::Constructor {
@@ -1739,7 +1737,7 @@ impl<'a> Parser<'a> {
                     self.require_pattern_type(&expected, ty, *span)?;
                 }
                 reject_empty_range(low.as_ref(), high.as_ref(), *inclusive, owner, *span)?;
-                self.trace_test(FactAccess::Read, None);
+                self.trace_test(borrowck::Access::Read, None);
                 Ok((
                     NominalPattern::Range {
                         low: low.as_ref().map(|(literal, _)| literal.clone()),
@@ -1792,7 +1790,7 @@ impl<'a> Parser<'a> {
                     .enumerate()
                 {
                     let path = self.trace_enter_at(
-                        FactStep::Field(field.name.text.clone()),
+                        borrowck::Projection::Field(field.name.text.clone()),
                         borrows::TraceRegion::Field(*id, None, slot),
                     );
                     let (proof, member_coverage) = self.resolve_child_pattern(
@@ -1837,8 +1835,10 @@ impl<'a> Parser<'a> {
                 let mut coverage = Vec::with_capacity(members.len());
                 for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
                     let path = self.trace_enter_at(
-                        FactStep::Field(index.to_string().into()),
-                        borrows::TraceRegion::At(FactPath::of(&[FactRegion::Arg(index as u8)])),
+                        borrowck::Projection::Field(index.to_string().into()),
+                        borrows::TraceRegion::At(borrowck::Path::of(&[borrowck::Step::Arg(
+                            index as u8,
+                        )])),
                     );
                     let (proof, member_coverage) = self.resolve_child_pattern(
                         member,
@@ -1887,7 +1887,7 @@ impl<'a> Parser<'a> {
                 // References are the referenced value at runtime; an explicit
                 // `&` pattern binds by value below it.
                 let mode = self.binding_mode.replace(None);
-                let path = self.trace_enter(FactStep::Deref);
+                let path = self.trace_enter(borrowck::Projection::Deref);
                 let resolved = self.resolve_child_pattern(
                     pattern,
                     target,
@@ -2004,7 +2004,7 @@ impl<'a> Parser<'a> {
                 }
                 // A slice's length is tested; an array's is known.
                 if length.is_none() {
-                    self.trace_test(FactAccess::Length, Some(*span));
+                    self.trace_test(borrowck::Access::Length, Some(*span));
                 }
                 let mut resolve = |members: &[PatternSyntax], after: bool| {
                     let mut proofs = Vec::with_capacity(members.len());
@@ -2216,22 +2216,22 @@ impl<'a> Parser<'a> {
             }
         };
         // The pattern tests the discriminant; its payload is below it.
-        self.trace_test(FactAccess::Read, None);
+        self.trace_test(borrowck::Access::Read, None);
         let (child, coverage) = match (payload, element) {
             (Some(payload), Some(element)) => {
                 // `Some`'s and `Ok`'s payload is the first argument, `Err`'s
                 // the second.
                 let payload_at = match variant {
-                    Prelude::Err => FactRegion::Arg(1),
-                    _ => FactRegion::Arg(0),
+                    Prelude::Err => borrowck::Step::Arg(1),
+                    _ => borrowck::Step::Arg(0),
                 };
                 let path = self.trace_enter_at(
-                    FactStep::Downcast(variant.name().into()),
-                    borrows::TraceRegion::At(FactPath::of(&[payload_at])),
+                    borrowck::Projection::Downcast(variant.name().into()),
+                    borrows::TraceRegion::At(borrowck::Path::of(&[payload_at])),
                 );
                 self.trace_enter_at(
-                    FactStep::Field("0".into()),
-                    borrows::TraceRegion::At(FactPath::ROOT),
+                    borrowck::Projection::Field("0".into()),
+                    borrows::TraceRegion::At(borrowck::Path::ROOT),
                 );
                 let (child, coverage) = self.resolve_child_pattern(
                     payload,
@@ -2498,11 +2498,11 @@ impl<'a> Parser<'a> {
         // An enum of more than one variant is tested by its discriminant, and
         // the payload is below the variant.
         if item.variants.len() > 1 {
-            self.trace_test(FactAccess::Read, None);
+            self.trace_test(borrowck::Access::Read, None);
         }
         let path = self.trace_enter_at(
-            FactStep::Downcast(variant.name.text.clone()),
-            borrows::TraceRegion::At(FactPath::ROOT),
+            borrowck::Projection::Downcast(variant.name.text.clone()),
+            borrows::TraceRegion::At(borrowck::Path::ROOT),
         );
         let names = variant.fields.as_deref().unwrap_or_default();
         for (index, (child, expected)) in
@@ -2512,7 +2512,7 @@ impl<'a> Parser<'a> {
                 .get(index)
                 .map_or_else(|| index.to_string().into(), |name| name.text.clone());
             let field_path = self.trace_enter_at(
-                FactStep::Field(field),
+                borrowck::Projection::Field(field),
                 borrows::TraceRegion::Field(
                     definition.id(),
                     Some(variant.name.text.clone()),
