@@ -42,7 +42,6 @@ export const GROUPS: [string, Item[]][] = [
       ["/docs/reference/macros", "Macros"],
       ["/docs/reference/std", "std"],
     ]],
-    ["/docs/reference/iced", "iced"],
     ["/docs/reference/play", "Play"],
     ["/docs/reference/commands", "Commands"],
     ["/docs/reference/requirements", "Requirements"],

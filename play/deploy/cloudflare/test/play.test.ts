@@ -262,7 +262,6 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   const at = (page: string) => all.filter((block) => block.page === page).map((block) => block.name);
   assert.ok(at("index.html").length > 0, "the landing page has run blocks");
   assert.ok(all.some((block) => block.page.startsWith("docs/reference/")), "the reference has run blocks");
-  assert.deepEqual(at("docs/reference/iced.html"), [], "?play runs plain programs only");
   assert.deepEqual(at("docs/iced/index.html"), [], "?play runs plain programs only");
   assert.deepEqual(at("docs/embedding.html"), [], "host code needs the rawr crate");
   assert.deepEqual(at("docs/imports.html"), [], "a dependency needs a Cargo project");
@@ -338,6 +337,8 @@ test("docs pages that moved redirect to their new paths", async () => {
     "/docs/play/reference",
     "/docs/play/reference.html",
     "/docs/reference",
+    "/docs/reference/iced",
+    "/docs/reference/iced.html",
     "/docs/requirements",
     "/docs/requirements.html",
   ]);
