@@ -13490,10 +13490,11 @@ impl<'a> Parser<'a> {
     /// arguments and defaults fix what the tail left open before the body's
     /// end falls back (`finish_structural_instances`), as rustc proves an
     /// opaque type's bounds before its fallback. The renderer of iced's
-    /// gallery's `float(image(handle)).boxed()` is then the default one,
-    /// which fixes the image's `Handle` (#1213), and the renderer of
-    /// changelog's `markdown::view(..)` is known where its call's types are
-    /// taken (#917). What stays open is `reveal`'s `fix_opaque` to report.
+    /// gallery's viewer, `Some(opaque(mouse_area(container(image))))` in an
+    /// `Option<impl Widget<Message>>`, is then the default one, which fixes
+    /// the image's `Handle` (#1213) before `impl Into<Handle>` would take
+    /// the argument's type, so the revealed output names iced's handle. What
+    /// stays open is `reveal`'s `fix_opaque` to report.
     #[cfg(feature = "rust-import")]
     fn settle_opaque(&mut self, written: &type_ref::Type) {
         if let Some(hidden) = self.revealing.clone() {
