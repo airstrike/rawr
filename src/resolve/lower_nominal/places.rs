@@ -726,6 +726,7 @@ impl Parser<'_> {
             let last_type = self.last_type.clone();
             let last_expression = self.last_expression.take();
             let bound = self.bind_let_pattern(
+                PatternSite::For,
                 parts.span().start(),
                 &parts,
                 subject,

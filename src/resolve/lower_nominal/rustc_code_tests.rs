@@ -749,3 +749,113 @@ fn a_non_exhaustive_match_is_e0004() {
         .map(|_| ())
         .unwrap_or_else(|error| panic!("{error}"));
 }
+
+#[test]
+fn a_refutable_pattern_in_a_let_or_a_for_is_e0005() {
+    // rustc's message, its label on the pattern, its notes and its help.
+    let refutable = |body: &str| {
+        let source = format!("fn main() {{\n    let o = Some(1);\n    {body}\n}}\n");
+        let error = Engine::new()
+            .compile(&source)
+            .map(|_| ())
+            .map_or_else(|error| error, |()| panic!("rawr refuses {source}"));
+        let file = Source::new("main.rs", &source).expect("a test source has an identity");
+        let report = Report::from_parse(file, &error).expect("the error is in the source");
+        assert_eq!(report.code().as_str(), "E0005", "{source}");
+        // The pattern after `let ` or `for `, or a closure's `|`.
+        let pattern = body.find('|').map_or(4, |bar| bar + 1);
+        let label = report.labels().first().expect("a label on the pattern");
+        assert_eq!(
+            label.span().start(),
+            crate::Position::new(3, 5 + u16::try_from(pattern).expect("a short body")),
+            "{source}"
+        );
+        let label = label.message().unwrap_or_default().to_string();
+        let notes = report.notes().map(str::to_string).collect::<Vec<_>>();
+        let help = report.help().map(str::to_string);
+        (report.message().to_string(), label, notes, help)
+    };
+    let inform = [
+        "`let` bindings require an \"irrefutable pattern\", like a `struct` or an `enum` with \
+         only one variant",
+        "for more information, visit https://doc.rust-lang.org/book/ch19-02-refutability.html",
+    ];
+
+    let (text, label, notes, help) = refutable("let Some(x) = o;");
+    assert_eq!(text, "refutable pattern in local binding");
+    assert_eq!(label, "pattern `None` not covered");
+    assert_eq!(
+        notes,
+        [
+            inform[0],
+            inform[1],
+            "the matched value is of type `Option<i32>`"
+        ]
+    );
+    assert_eq!(
+        help.as_deref(),
+        Some(
+            "you might want to use `let else` to handle the variant that isn't matched: \
+             `let Some(x) = o else { todo!() };`"
+        )
+    );
+    // A pattern that binds nothing is `if let`'s.
+    let (_, label, _, help) = refutable("let None = o;");
+    assert_eq!(label, "pattern `Some(_)` not covered");
+    assert_eq!(
+        help.as_deref(),
+        Some(
+            "you might want to use `if let` to ignore the variant that isn't matched: \
+             `if let None = o { todo!() }`"
+        )
+    );
+    // `for`: no `let` notes and no help.
+    let (text, label, notes, help) = refutable("for Some(x) in vec![o] {}");
+    assert_eq!(text, "refutable pattern in `for` loop binding");
+    assert_eq!(label, "pattern `None` not covered");
+    assert_eq!(notes, ["the matched value is of type `Option<i32>`"]);
+    assert_eq!(help, None);
+    // A literal, through a reference, and the witnesses of an integer.
+    let (_, label, notes, _) = refutable("let &Some(x) = &o;");
+    assert_eq!(label, "pattern `&None` not covered");
+    assert_eq!(notes[2], "the matched value is of type `&Option<i32>`");
+    let (_, label, _, help) = refutable("let 1 = 2;");
+    assert_eq!(
+        label,
+        "patterns `i32::MIN..=0_i32` and `2_i32..=i32::MAX` not covered"
+    );
+    assert_eq!(
+        help.as_deref(),
+        Some(
+            "you might want to use `if let` to ignore the variants that aren't matched: \
+             `if let 1 = 2 { todo!() }`"
+        )
+    );
+    // A closure's parameter is a function argument.
+    let (text, label, notes, help) = refutable("let f = |Some(x): Option<i32>| x;");
+    assert_eq!(text, "refutable pattern in function argument");
+    assert_eq!(label, "pattern `None` not covered");
+    assert_eq!(notes, ["the matched value is of type `Option<i32>`"]);
+    assert_eq!(help, None);
+    // So is a function's.
+    assert_eq!(
+        refused("fn f(Some(x): Option<i32>) -> i32 {\n    x\n}\nfn main() {}\n"),
+        (
+            "E0005".into(),
+            "refutable pattern in function argument".into(),
+            Some("pattern `None` not covered".into())
+        )
+    );
+
+    // Irrefutable patterns, `let else` and `if let` are fine.
+    Engine::new()
+        .compile(
+            "struct P { x: i32 }\nstruct W(i32);\nenum One { Only(i32) }\nfn main() {\n    \
+             let o = Some(1);\n    let P { x } = P { x: 1 };\n    let W(w) = W(2);\n    \
+             let One::Only(n) = One::Only(3);\n    let (a, _) = (1, 2);\n    let _ = o;\n    \
+             let Some(y) = o else { return };\n    if let Some(z) = o {\n        \
+             println!(\"{x} {w} {n} {a} {y} {z}\");\n    }\n}\n",
+        )
+        .map(|_| ())
+        .unwrap_or_else(|error| panic!("{error}"));
+}

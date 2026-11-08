@@ -65,7 +65,9 @@ use super::borrowck::{
     record::{Matched, ScopeEnd},
     Access as FactAccess, Path as FactPath, Projection as FactStep, Step as FactRegion,
 };
-use super::{intrinsic, item, type_ref, Callee, Error, LoweringFailure, MoveCause, Program};
+use super::{
+    intrinsic, item, type_ref, BindingSite, Callee, Error, LoweringFailure, MoveCause, Program,
+};
 use crate::ast::{
     self, BinaryExpr, FlowControl, FnCallExpr, FnCallHashes, NominalEnumPattern, NominalPattern,
     NominalPayloadType, Stmt, NOMINAL_MATCH_SENTINEL,
@@ -10895,24 +10897,28 @@ impl PatternSyntax {
         }
     }
 
-    /// Whether a script enum variant appears in the pattern. A `let` of
-    /// one is irrefutable only when its enum has that one variant, which
-    /// the coverage check decides.
-    fn has_script_variant(&self) -> bool {
+    /// Whether a part of the pattern may miss a value: a script enum's
+    /// variant, a prelude or `Cow` variant, a literal, a range or an
+    /// or-pattern. A `let` of one is irrefutable only when the coverage
+    /// check finds it covers every value, as `let One(x)` of a one-variant
+    /// enum does, and rustc's E0005 otherwise.
+    fn may_refute(&self) -> bool {
         match self {
             Self::Enum(pattern) => {
-                !pattern.host_struct || pattern.payload.iter().any(Self::has_script_variant)
+                !pattern.host_struct || pattern.payload.iter().any(Self::may_refute)
             }
+            Self::Prelude { .. }
+            | Self::Cow { .. }
+            | Self::Literal { .. }
+            | Self::Range { .. }
+            | Self::Or { .. } => true,
             Self::TupleStruct { members, .. } | Self::Tuple { members, .. } => {
-                members.iter().any(Self::has_script_variant)
+                members.iter().any(Self::may_refute)
             }
-            Self::Slice { before, after, .. } => before
-                .iter()
-                .chain(after.iter())
-                .any(Self::has_script_variant),
-            Self::Reference { pattern, .. } | Self::At { pattern, .. } => {
-                pattern.has_script_variant()
+            Self::Slice { before, after, .. } => {
+                before.iter().chain(after.iter()).any(Self::may_refute)
             }
+            Self::Reference { pattern, .. } | Self::At { pattern, .. } => pattern.may_refute(),
             _ => false,
         }
     }
@@ -11452,6 +11458,16 @@ impl CoveragePattern {
             }
         }
     }
+}
+
+/// The statement a pattern that must match every value binds in, which
+/// names it in rustc's E0005.
+#[derive(Clone, Copy)]
+pub(super) enum PatternSite {
+    /// `let pattern = value;`.
+    Let,
+    /// `for pattern in values`.
+    For,
 }
 
 struct CoverageConstructor {
@@ -19081,6 +19097,24 @@ impl<'a> Parser<'a> {
                 pattern: Box::new(self.parameter_pattern_syntax(pattern)?),
                 span: *span,
             },
+            // `Some(x): Option<i32>`, which the coverage check refuses as
+            // rustc's E0005, as the pattern parser reads the prelude's
+            // variants.
+            crate::item::ParameterPattern::TupleStruct {
+                path,
+                members,
+                span,
+            } if let [name] = &path[..]
+                && let [member] = &members[..]
+                && let Some(variant) = Prelude::from_name(&name.text)
+                && self.models.get(&name.text).is_none() =>
+            {
+                PatternSyntax::Prelude {
+                    variant,
+                    payload: Some(Box::new(self.parameter_pattern_syntax(member)?)),
+                    span: *span,
+                }
+            }
             crate::item::ParameterPattern::TupleStruct {
                 path,
                 members,
@@ -19171,6 +19205,7 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let syntax = self.parameter_pattern_syntax(pattern)?;
+            self.refuse_refutable(&syntax, &ty, BindingSite::Argument)?;
             let statements = self.destructure(&syntax, &parameter.name.text, &ty)?;
             self.write_output(statements, body);
             // The parameter's value keeps what the pattern does not move out.
@@ -26025,6 +26060,27 @@ impl<'a> Parser<'a> {
             || let_keyword
                 && matches!(self.peek(), Token::Identifier(ref name) if name.as_str() == "ref")
                 && matches!(self.peek_second(), Token::Identifier(_) | Token::Mut)
+            // `let None = o;` and `let 1 = n;`, which the coverage check
+            // refuses as rustc's E0005.
+            || let_keyword
+                && matches!(
+                    self.peek(),
+                    Token::Identifier(ref name) if Prelude::from_name(name) == Some(Prelude::None)
+                )
+            || let_keyword
+                && matches!(
+                    self.peek(),
+                    Token::IntegerConstant(_)
+                        | Token::FloatConstant(_)
+                        | Token::ByteConstant(_)
+                        | Token::ByteStringConstant(_)
+                        | Token::CharConstant(_)
+                        | Token::StringConstant(_)
+                        | Token::True
+                        | Token::False
+                        | Token::Minus
+                        | Token::UnaryMinus
+                )
         {
             return self.parse_pattern_binding(start);
         }
@@ -26989,6 +27045,7 @@ impl<'a> Parser<'a> {
         let end = otherwise.syntax.end();
         self.consume_terminator(start)?;
         self.bind_let_pattern(
+            PatternSite::Let,
             start,
             &syntax,
             subject,
@@ -26999,12 +27056,15 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// The bindings of `let pattern = subject`, after the statement. Without
-    /// `otherwise` the pattern must be irrefutable. A pattern matched on a
-    /// `&mut` place matches it where it is, and its `&mut` bindings reach
-    /// their parts of it (`PlacePattern`).
+    /// The bindings of `let pattern = subject`, after the statement, or of
+    /// a `for` pattern, as `site` says. Without `otherwise` the pattern
+    /// must be irrefutable, as rustc's E0005. A pattern matched on a `&mut`
+    /// place matches it where it is, and its `&mut` bindings reach their
+    /// parts of it (`PlacePattern`).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn bind_let_pattern(
         &mut self,
+        site: PatternSite,
         start: Position,
         syntax: &PatternSyntax,
         subject: ParsedExpr,
@@ -27024,23 +27084,17 @@ impl<'a> Parser<'a> {
             None => self.pattern_unrecorded(&resolved.bindings, resolved.span),
         }
         if otherwise.is_none() {
-            let rows = resolved
-                .coverage
-                .alternatives()
-                .into_iter()
-                .map(|alternative| vec![alternative])
-                .collect::<Vec<_>>();
-            if !self
-                .coverage_witnesses(std::slice::from_ref(&written_ty), &rows, true)
-                .is_empty()
-            {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a refutable pattern in a binding is not supported; use `if let` \
-                                or `match`"
-                        .into(),
-                    source: resolved.span,
-                });
-            }
+            let site = match site {
+                // The statement up to its `;`, where `end` is.
+                PatternSite::Let => BindingSite::Local {
+                    statement: self
+                        .written(span(start, end))
+                        .map(|statement| statement.trim_end().into()),
+                    binds: !resolved.bindings.is_empty(),
+                },
+                PatternSite::For => BindingSite::ForLoop,
+            };
+            self.require_irrefutable(syntax, &resolved.coverage, &written_ty, site)?;
         }
         let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
         let place = self.pattern_place(&subject, &mut resolved.proof, &resolved.bindings)?;
@@ -27148,6 +27202,76 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// rustc's E0005 when `syntax`, whose coverage is `coverage`, on `ty`
+    /// misses some of its values, with the patterns of the values it
+    /// misses: an integer's or a `char`'s ranges, as a `match` names them.
+    fn require_irrefutable(
+        &mut self,
+        syntax: &PatternSyntax,
+        coverage: &CoveragePattern,
+        ty: &Ty,
+        site: BindingSite,
+    ) -> Result<(), Error> {
+        // The value below the references, whose witnesses read through
+        // them, as `&None` (`reference_prefix`).
+        let referenced = self.referenced(ty);
+        let scalar = Scalar::of(&referenced).and_then(|scalar| {
+            let mut covered = Vec::new();
+            scalar.covered(syntax, &mut covered)?;
+            Some((scalar, covered))
+        });
+        let witnesses = match scalar {
+            Some((scalar, covered)) => scalar
+                .uncovered(&covered)
+                .into_iter()
+                .map(|(low, high)| scalar.witness(low, high))
+                .collect::<Vec<_>>(),
+            None => {
+                let rows = coverage
+                    .alternatives()
+                    .into_iter()
+                    .map(|alternative| vec![alternative])
+                    .collect::<Vec<_>>();
+                self.coverage_witnesses(std::slice::from_ref(&referenced), &rows, true)
+                    .iter()
+                    .map(|witness| {
+                        witness
+                            .first()
+                            .map_or_else(|| "_".to_string(), CoverageWitness::render)
+                    })
+                    .collect()
+            }
+        };
+        if witnesses.is_empty() {
+            return Ok(());
+        }
+        let prefix = self.reference_prefix(ty);
+        Err(Error::Refutable {
+            witnesses: witnesses
+                .iter()
+                .map(|witness| format!("{prefix}{witness}").into())
+                .collect(),
+            ty: self.matched_type(ty),
+            site,
+            pattern: syntax.span(),
+        })
+    }
+
+    /// rustc's E0005 for `syntax`, a `for` or parameter pattern at `site`
+    /// on `ty` that misses some of its values, before it is destructured.
+    fn refuse_refutable(
+        &mut self,
+        syntax: &PatternSyntax,
+        ty: &Ty,
+        site: BindingSite,
+    ) -> Result<(), Error> {
+        if !syntax.may_refute() {
+            return Ok(());
+        }
+        let resolved = self.resolve_root_pattern(syntax, ty)?;
+        self.require_irrefutable(syntax, &resolved.coverage, ty, site)
+    }
+
     fn parse_pattern_binding(&mut self, start: Position) -> Result<(), Error> {
         let pending = self.field_entries.len();
         let syntax = self.parse_pattern_no_alt()?;
@@ -27190,20 +27314,39 @@ impl<'a> Parser<'a> {
                 _ => false,
             }
         {
-            let end = value.span.end();
+            let end = self.position();
             self.terminate(start, Continuation::Let)?;
-            return self.bind_let_pattern(start, &syntax, value, Some(matched), None, end, pending);
+            return self.bind_let_pattern(
+                PatternSite::Let,
+                start,
+                &syntax,
+                value,
+                Some(matched),
+                None,
+                end,
+                pending,
+            );
         }
         self.reject_invocation(&value.ty, value.span, "kept in a `let` binding")?;
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
         }
-        // `let Wrapper(x) = w;` of a one-variant enum: matched as `let ..
-        // else` is, after the coverage check finds it irrefutable.
-        if !syntax.has_ref_mut() && syntax.has_script_variant() {
-            let end = value.span.end();
+        // `let Wrapper(x) = w;` of a one-variant enum, or `let Some(x) =
+        // o;`: matched as `let .. else` is, after the coverage check finds
+        // it irrefutable, or refused as rustc's E0005.
+        if !syntax.has_ref_mut() && syntax.may_refute() {
+            let end = self.position();
             self.terminate(start, Continuation::Let)?;
-            return self.bind_let_pattern(start, &syntax, value, Some(matched), None, end, pending);
+            return self.bind_let_pattern(
+                PatternSite::Let,
+                start,
+                &syntax,
+                value,
+                Some(matched),
+                None,
+                end,
+                pending,
+            );
         }
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
         // `ref mut` bindings are the subject's places: it is not copied.
@@ -31824,7 +31967,8 @@ impl<'a> Parser<'a> {
         self.note_drop_here(&name, declaration, &ty)?;
         let wrap = match pattern {
             Some(pattern) => match self
-                .destructure(pattern, &name, &ty)
+                .refuse_refutable(pattern, &ty, BindingSite::ForLoop)
+                .and_then(|()| self.destructure(pattern, &name, &ty))
                 .inspect(|_| {
                     // The pattern's bindings, given a value each iteration.
                     let bound: Vec<_> = self
@@ -47497,7 +47641,8 @@ impl<'a> Parser<'a> {
             let (name, ty, _) = &parameters[*index];
             let (name, ty) = (name.clone(), ty.clone());
             let destructure = self
-                .destructure(pattern, &name, &ty)
+                .refuse_refutable(pattern, &ty, BindingSite::Argument)
+                .and_then(|()| self.destructure(pattern, &name, &ty))
                 .and_then(|statements| {
                     if !self.drops() {
                         return Ok(statements);
