@@ -12,12 +12,19 @@ for (const t of document.querySelectorAll("code[data-run] + template[data-hl]"))
 {warm && <template data-run-warm></template>}
 <script>
   import { setup } from "../scripts/run.ts";
+  import { universe } from "../scripts/universe.ts";
   import { WEB_MODULE } from "../play/session.ts";
   setup({
     document,
     window,
     fetch: fetch.bind(window),
     warm: document.querySelector("template[data-run-warm]") !== null,
+    // The browser's universe, for blocks that use crates.
+    universe: universe({
+      document,
+      fetch: fetch.bind(window),
+      compile: (response) => WebAssembly.compileStreaming(response),
+    }),
     // rawr-web, as the playground loads it.
     web: async () => {
       const m = await import(/* @vite-ignore */ WEB_MODULE);

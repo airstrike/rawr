@@ -43,3 +43,12 @@ test("a warmed run that gave nothing, failed or threw is run again at Run", asyn
   await thrown.warm().catch(() => {});
   assert.deepEqual(await thrown.take(), { kind: "text" });
 });
+
+test("a universe frame imports the glue, hides WebKit's WebGPU and takes the module from the page", async () => {
+  const { frameDocument } = await import("../src/scripts/universe.ts");
+  const html = frameDocument("https://example.org/web/universe.js");
+  assert.match(html, /import \* as glue from "https:\/\/example\.org\/web\/universe\.js";/);
+  assert.match(html, /navigator\.vendor === "Apple Computer, Inc\."[\s\S]*defineProperty\(navigator, "gpu"/);
+  assert.match(html, /glue\.default\(\{ module_or_path: event\.data \}\)/, "a module this large instantiates asynchronously");
+  assert.match(html, /<div id="iced"><\/div>/, "iced's web shell puts its canvas in place of #iced");
+});
