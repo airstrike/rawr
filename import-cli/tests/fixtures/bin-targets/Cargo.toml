@@ -1,0 +1,23 @@
+[package]
+name = "bin-targets"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A binary Cargo finds by its `[[bin]]`; `src/bin/app/` is another.
+[[bin]]
+name = "tool"
+path = "exercises/tool.rs"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+gated = { path = "gated" }
+
+# Built only for wasm32: it refuses to compile anywhere else.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-only = { path = "wasm-only" }
+
+[profile.dev]
+panic = "abort"
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

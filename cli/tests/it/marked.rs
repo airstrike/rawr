@@ -812,3 +812,112 @@ fn the_rawr_attribute_crate_builds_under_cargo_and_means_nothing_to_rawr() {
     assert_success(&output);
     assert_eq!(stdout(&output), "hello 3 items\n");
 }
+
+/// A file a package lists as a `[[bin]]` runs as that package's binary,
+/// by its path and by `--bin`, with the package's profile: under
+/// `panic = "abort"` its panic aborts, as the binary Cargo builds does
+/// (#1175, #1176). A file the package doesn't list still runs alone, and
+/// its panic is Rust's status 101.
+#[cfg(unix)]
+#[test]
+fn a_bin_target_runs_as_its_packages_binary_with_its_profile() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let Some(cargo) = std::env::var_os("CARGO") else {
+        panic!("run under cargo: $CARGO names the cargo to test with");
+    };
+    let sandbox = Sandbox::new("marked-bin-target");
+    let root = sandbox.work().join("lessons");
+    fs::create_dir_all(root.join("exercises")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"lessons\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+         [[bin]]\nname = \"clippy3\"\npath = \"exercises/clippy3.rs\"\n\n\
+         [profile.dev]\npanic = \"abort\"\n\n[workspace]\n",
+    )
+    .unwrap();
+    let program = "// rawr\nfn main() {\n    println!(\"before\");\n    \
+                   let empty: Option<i32> = None;\n    empty.unwrap();\n}\n";
+    fs::write(root.join("exercises/clippy3.rs"), program).unwrap();
+    fs::write(root.join("exercises/alone.rs"), program).unwrap();
+    let bin = Path::new(&cargo).parent().unwrap();
+    let target = sandbox.path.join("target");
+
+    let built = Command::new(&cargo)
+        .args(["build", "--quiet", "--offline", "--bin", "clippy3"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", &target)
+        .output()
+        .unwrap();
+    assert_success(&built);
+    let native = Command::new(target.join("debug/clippy3")).output().unwrap();
+    assert_eq!(native.status.signal(), Some(6), "{}", stderr(&native));
+    assert_eq!(stdout(&native), "before\n");
+
+    let rawr = |arguments: &[&str]| {
+        Command::new(sandbox.path.join("bin/rawr"))
+            .args(arguments)
+            .current_dir(&root)
+            .env("PATH", bin)
+            .env("CARGO", &cargo)
+            .env("CARGO_TARGET_DIR", &target)
+            .env("RAWR_HOME", sandbox.path.join("home"))
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap()
+    };
+    for arguments in [
+        &["run", "exercises/clippy3.rs"][..],
+        &["run", "--bin", "clippy3"],
+    ] {
+        let run = rawr(arguments);
+        // SIGABRT, as a shell gives it.
+        assert_eq!(
+            run.status.code(),
+            Some(128 + 6),
+            "{arguments:?}: {}",
+            stderr(&run)
+        );
+        assert_eq!(stdout(&run), "before\n");
+        assert!(
+            stderr(&run).contains("called `Option::unwrap()` on a `None` value"),
+            "{}",
+            stderr(&run)
+        );
+    }
+    let alone = rawr(&["run", "exercises/alone.rs"]);
+    assert_eq!(alone.status.code(), Some(101), "{}", stderr(&alone));
+
+    let unknown = rawr(&["run", "--bin", "clippy4"]);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert_eq!(
+        stderr(&unknown),
+        "error: no bin target named `clippy4`\navailable bin targets:\n    clippy3\n"
+    );
+}
+
+/// A package's binary under `src/bin/`, with its own module beside it,
+/// runs the marked modules of the library, as the binary at `src/main.rs`
+/// does (#1116).
+#[test]
+fn a_marked_module_of_the_library_runs_from_a_binary_under_src_bin() {
+    let sandbox = Sandbox::new("marked-lib-src-bin");
+    let root = copy("rs-marker-lib", &sandbox.work());
+    let scores = root.join("src/bin/scores");
+    fs::create_dir_all(&scores).unwrap();
+    fs::rename(root.join("src/main.rs"), scores.join("main.rs")).unwrap();
+    fs::rename(root.join("src/rounds.rs"), scores.join("rounds.rs")).unwrap();
+
+    let graph = graph(&root, None).unwrap();
+
+    let package = graph.entry_package();
+    assert_eq!(package.name(), "rs_marker_lib");
+    let bin = package.bin().expect("the binary runs the program");
+    assert_eq!(bin.root().path(), scores.join("main.rs"));
+    let modules = bin
+        .modules()
+        .iter()
+        .map(|module| (module.modules().join("::"), module.path().to_path_buf()))
+        .collect::<Vec<_>>();
+    assert_eq!(modules, [("rounds".to_owned(), scores.join("rounds.rs"))]);
+}

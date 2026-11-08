@@ -40,6 +40,8 @@ pub struct Package {
     pub(crate) rust: Option<manifest::rust::Config>,
     /// The profile's panic strategy, as Cargo builds the target.
     panic: project::cargo::Panic,
+    /// The crate is the package's library, not a binary.
+    library: bool,
     /// The crate root has a frontmatter block: a cargo script.
     script: bool,
 }
@@ -172,6 +174,12 @@ impl Package {
     #[must_use]
     pub const fn bin(&self) -> Option<&Bin> {
         self.bin.as_ref()
+    }
+
+    /// Whether the crate is the package's library, not one of its binaries.
+    #[must_use]
+    pub const fn is_library(&self) -> bool {
+        self.library
     }
 
     /// The profile's panic strategy, as Cargo builds the package's target:
@@ -675,6 +683,7 @@ impl<'a> Builder<'a> {
             cargo: None,
             rust: None,
             panic,
+            library,
             script,
         });
 
@@ -748,7 +757,10 @@ impl<'a> Builder<'a> {
         }
         if let Some(bin) = &self.packages[package.0].bin {
             let (path, text) = (bin.root.path.clone(), bin.root.text.clone());
-            self.load_rust_children(package, Tree::Bin, &root, &module_root, &[], &path, &text)?;
+            // A binary's modules are beside its root, as `src/bin/` holds
+            // a binary's there.
+            let bin_root = path.parent().unwrap_or(&module_root).to_path_buf();
+            self.load_rust_children(package, Tree::Bin, &root, &bin_root, &[], &path, &text)?;
         }
         if let Some(cargo) = cargo {
             // A binary reaches its package's library by the library's crate
