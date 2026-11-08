@@ -1,8 +1,9 @@
 //! Position evidence retained while nominal callbacks are emitted.
 
-use std::{cmp::Reverse, fmt, ops::Range};
-
 use crate::{item, program, Position, Span};
+use std::cmp::Reverse;
+use std::fmt;
+use std::ops::Range;
 
 #[derive(Clone)]
 pub(super) struct Output {
@@ -244,6 +245,73 @@ pub(super) fn byte_at(source: &str, position: Position) -> Option<usize> {
         }
     }
     (current_line == line && current_column == column).then_some(source.len())
+}
+
+/// Compiler-created evidence translating one generated callback range.
+pub(crate) struct Location {
+    pub(crate) callable: Option<crate::item::Key>,
+    pub(crate) source: crate::program::source::Id,
+    pub(crate) generated: Span,
+    pub(crate) original: Span,
+    pub(crate) nesting: usize,
+}
+
+pub(super) fn retain_locations(
+    retained: &mut Vec<Pending>,
+    body_offset: usize,
+    callable: Option<&crate::item::Key>,
+    source: crate::program::source::Id,
+    locations: Vec<Output>,
+) {
+    retained.extend(locations.into_iter().filter_map(|location| {
+        let start = body_offset.checked_add(location.generated.start)?;
+        let end = body_offset
+            .checked_add(location.generated.end)?
+            .checked_sub(1)?;
+        Some(Pending {
+            callable: callable.cloned(),
+            source,
+            generated: start..end.saturating_add(1),
+            original: location.original,
+            nesting: location.nesting,
+        })
+    }));
+}
+
+pub(super) fn resolve_locations(generated: &str, locations: Vec<Pending>) -> Vec<Location> {
+    let mut lines = vec![0];
+    lines.extend(
+        generated
+            .char_indices()
+            .filter_map(|(index, character)| (character == '\n').then_some(index + 1)),
+    );
+    locations
+        .into_iter()
+        .filter_map(|location| {
+            let end = location.generated.end.checked_sub(1)?;
+            Some(Location {
+                callable: location.callable,
+                source: location.source,
+                generated: Span::new(
+                    position_at(generated, &lines, location.generated.start),
+                    position_at(generated, &lines, end),
+                ),
+                original: location.original,
+                nesting: location.nesting,
+            })
+        })
+        .collect()
+}
+
+pub(super) fn position_at(source: &str, lines: &[usize], byte: usize) -> Position {
+    let line = lines
+        .partition_point(|start| *start <= byte)
+        .saturating_sub(1);
+    let column = source[lines[line]..byte].chars().count();
+    Position::new(
+        u16::try_from(line.saturating_add(1)).unwrap_or(u16::MAX),
+        u16::try_from(column.saturating_add(1)).unwrap_or(u16::MAX),
+    )
 }
 
 #[cfg(test)]

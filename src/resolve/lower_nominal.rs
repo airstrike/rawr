@@ -148,6 +148,8 @@ use imported::{ImplArguments, ImplUse};
 use inference::{inference_metrics, reset_inference_metrics};
 use inference::{Checkpoint, Inference, Patch};
 use keyed::keyed_query;
+pub(crate) use location::Location;
+use location::{resolve_locations, retain_locations};
 use lvalue::{opens_compound, Lvalue, PlaceStep, Writeback};
 #[cfg(feature = "rust-import")]
 use models::ScriptTraitImpl;
@@ -737,15 +739,6 @@ pub(crate) struct Output {
     pub(crate) closures: Box<[closure::Callable]>,
 }
 
-/// Compiler-created evidence translating one generated callback range.
-pub(crate) struct Location {
-    pub(crate) callable: Option<crate::item::Key>,
-    pub(crate) source: crate::program::source::Id,
-    pub(crate) generated: Span,
-    pub(crate) original: Span,
-    pub(crate) nesting: usize,
-}
-
 /// The index of a free function's `&mut` parameter, which is its receiver
 /// `this` at runtime: the function changes the caller's place in place,
 /// and a call `f(&mut v, x)` is the method call `v.f(x)`.
@@ -853,64 +846,6 @@ fn method_copied(definition: &method::Definition, _models: &Models) -> Vec<usize
         return Vec::new();
     }
     copied_parameters(definition.parameters(), None, definition.formatter())
-}
-
-fn retain_locations(
-    retained: &mut Vec<location::Pending>,
-    body_offset: usize,
-    callable: Option<&crate::item::Key>,
-    source: crate::program::source::Id,
-    locations: Vec<location::Output>,
-) {
-    retained.extend(locations.into_iter().filter_map(|location| {
-        let start = body_offset.checked_add(location.generated.start)?;
-        let end = body_offset
-            .checked_add(location.generated.end)?
-            .checked_sub(1)?;
-        Some(location::Pending {
-            callable: callable.cloned(),
-            source,
-            generated: start..end.saturating_add(1),
-            original: location.original,
-            nesting: location.nesting,
-        })
-    }));
-}
-
-fn resolve_locations(generated: &str, locations: Vec<location::Pending>) -> Vec<Location> {
-    let mut lines = vec![0];
-    lines.extend(
-        generated
-            .char_indices()
-            .filter_map(|(index, character)| (character == '\n').then_some(index + 1)),
-    );
-    locations
-        .into_iter()
-        .filter_map(|location| {
-            let end = location.generated.end.checked_sub(1)?;
-            Some(Location {
-                callable: location.callable,
-                source: location.source,
-                generated: Span::new(
-                    position_at(generated, &lines, location.generated.start),
-                    position_at(generated, &lines, end),
-                ),
-                original: location.original,
-                nesting: location.nesting,
-            })
-        })
-        .collect()
-}
-
-fn position_at(source: &str, lines: &[usize], byte: usize) -> Position {
-    let line = lines
-        .partition_point(|start| *start <= byte)
-        .saturating_sub(1);
-    let column = source[lines[line]..byte].chars().count();
-    Position::new(
-        u16::try_from(line.saturating_add(1)).unwrap_or(u16::MAX),
-        u16::try_from(column.saturating_add(1)).unwrap_or(u16::MAX),
-    )
 }
 
 fn method_name(id: method::Id) -> String {
