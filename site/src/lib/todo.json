@@ -100,7 +100,8 @@
         {"text":"A marked function's `&mut` parameter whose type is a native alias of a plain type, such as `&mut Width` for `type Width = usize`, now crosses as `&mut usize` does. Native callers see the change after the call. A `&mut` of a native type is still lent.","issues":[1297]},
         {"text":"`rawr check` no longer stalls after reading parse cells on an app over iced: a type from another crate's facade is named by that facade's fingerprint, never by re-walking that facade's contract at each mention.","issues":[1309]},
         {"text":"A native trait with supertraits works as a marked type's trait object: `Debug`, `Display`, `Clone`, `PartialEq`, `Eq`, `Hash`, `Default`, `PartialOrd` and `Ord`, derived or written, run the marked type's own impl, and a supertrait the type lacks is rustc's E0277.","issues":[1301]},
-        {"text":"A `&self` method of a marked type's native trait object can call back into the same object through native code: `&self` calls share the value, as shared borrows do.","issues":[1302]}
+        {"text":"A `&self` method of a marked type's native trait object can call back into the same object through native code: `&self` calls share the value, as shared borrows do.","issues":[1302]},
+        {"text":"A crate's impl with a `Future<Output = T>` bound is no longer left out when another future's `Output` names a parameter only its where clause fixes. futures_util's forwarding impls for `TakeWhile`, `Fold`, `PollImmediate` and the `&mut`/`Pin`/`Box` blankets are declared now.","issues":[1295]}
       ]
     },
     "releases": [
@@ -3003,7 +3004,7 @@
     {"issue":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open","category":"Divergences from rustc"},
     {"issue":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"open","category":"Divergences from rustc"},
     {"issue":1294,"title":"The remaining refutable binding patterns are rustc's E0005","state":"closed","category":"Divergences from rustc"},
-    {"issue":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"open","category":"Health"},
+    {"issue":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"closed","category":"Health"},
     {"issue":1296,"title":"The facade build never panics on a type parameter an item doesn't declare; RAWR_VERBOSE names the item","state":"open","category":"Health"},
     {"issue":1297,"title":"A `&mut` of a native alias of a wire type in a marked signature is lent instead of copied and written back","state":"closed","category":"Divergences from rustc"},
     {"issue":1298,"title":"`rawr check` refuses a native alias of a trait-object type in a marked signature","state":"open","category":"Divergences from rustc"},
@@ -3020,7 +3021,8 @@
     {"issue":1309,"title":"rawr check spins in Fingerprint::retained_bytes / Type::dynamic_bytes for an hour on a recursive native type","state":"closed","category":"Health"},
     {"issue":1310,"title":"rawr check shows the failed build of rawr's crate copy before cargo's error when native code in it fails to compile","state":"open","category":"Divergences from rustc"},
     {"issue":1311,"title":"A written Hash on a marked type behind a native trait object","state":"open","category":"Divergences from rustc"},
-    {"issue":1312,"title":"Formatter flags on a native trait object's Debug/Display","state":"open","category":"Divergences from rustc"}
+    {"issue":1312,"title":"Formatter flags on a native trait object's Debug/Display","state":"open","category":"Divergences from rustc"},
+    {"issue":1313,"title":"A projection bound on a crate's own trait (`<F as Trait>::Output = T`) has no cases","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3620,7 +3622,8 @@
             {"number":1279,"title":"A function's nested opaque output, as `-> impl Iterator<Item = impl Display>`, can't be used","state":"open"},
             {"number":1280,"title":"A generic type's `&self` method giving an opaque type that borrows it fails in the generated runner (E0521)","state":"open"},
             {"number":1281,"title":"The opaque type of a method reached through a sole type alias has no members","state":"open"},
-            {"number":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open"}
+            {"number":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open"},
+            {"number":1313,"title":"A projection bound on a crate's own trait (`<F as Trait>::Output = T`) has no cases","state":"open"}
           ]
         }
       ]
@@ -3886,7 +3889,7 @@
             {"number":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"closed"},
             {"number":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"open"},
             {"number":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open"},
-            {"number":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"open"},
+            {"number":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"closed"},
             {"number":1297,"title":"A `&mut` of a native alias of a wire type in a marked signature is lent instead of copied and written back","state":"closed"},
             {"number":1298,"title":"`rawr check` refuses a native alias of a trait-object type in a marked signature","state":"open"},
             {"number":1299,"title":"A marked type becomes the object of a generic or lifetime-parameterized native trait, or of a dependency's trait","state":"open"},
