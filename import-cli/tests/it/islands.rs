@@ -715,6 +715,67 @@ fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
     }
 }
 
+/// The blocks app's badge importing a native module it never uses, `use
+/// crate::icon;`, beside the `use crate::page;` it does use: rustc only
+/// warns, so `rawr check` passes, and `rawr run` prints what `cargo run`
+/// prints. It used to be E0432, "`icon` can't be used yet: it is a module"
+/// (#1436).
+#[test]
+fn an_unused_import_of_a_native_module_is_no_error() {
+    const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");
+    let root = crate::support::scratch().join("islands-blocks-icon");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(BLOCKS), &root);
+    fs::write(
+        root.join("src/icon.rs"),
+        "//! Native: the app's icons.\n\n/// The badge's glyph.\npub fn glyph() -> char {\n    '*'\n}\n",
+    )
+    .unwrap();
+    edit(
+        &root.join("src/main.rs"),
+        "pub mod page;",
+        "pub mod icon;\npub mod page;",
+    );
+    edit(
+        &root.join("src/component/badge.rs"),
+        "use crate::page;",
+        "use crate::icon;\nuse crate::page;",
+    );
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(&root, &[]);
+    for expected in String::from_utf8_lossy(&native.stdout).lines() {
+        let line = run.until(|_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 /// A marked type that implements a native trait but not the trait's
 /// supertrait `Debug` (#1310): `rawr check` fails with `cargo check`'s
 /// E0277 at the program's own path, and with nothing of rawr's copy of the

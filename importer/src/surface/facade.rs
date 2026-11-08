@@ -11,7 +11,7 @@ pub(crate) mod cached;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 53;
+const SCHEMA: u32 = 54;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -141,8 +141,9 @@ pub struct Facade {
     root: Box<str>,
     types: Box<[TypeDefinition]>,
     items: Box<[Item]>,
-    /// The traits Rawr code names (`use rand::Rng;`), in path order. Each
-    /// is a module to Rawr. The bridge brings each into scope, so a method
+    /// The traits Rawr code names (`use rand::Rng;`), and the modules it
+    /// names in a `use` (`use crate::icon;`), in path order. Each is a
+    /// module to Rawr. The bridge brings each trait into scope, so a method
     /// a trait provides resolves in Rust as it does in the program.
     traits: Box<[Box<str>]>,
     /// The type aliases of builtin types, as iced's `pub type Uri = String;`
@@ -1084,7 +1085,16 @@ impl Plan {
                 Representability::Rejected(reason)
                     if reason.kind() == representability::reject::Kind::Trait
             );
+            // A module Rawr code names (`use crate::icon;`) is a module to
+            // Rawr, as a trait is, so an import that nothing below it uses
+            // resolves, as rustc's does (#1436).
+            let named_module = matches!(
+                outcome.representability(),
+                Representability::Rejected(reason)
+                    if reason.kind() == representability::reject::Kind::Module
+            );
             let left_out = !named_trait
+                && !named_module
                 && matches!(
                     outcome.representability(),
                     Representability::Excluded(_) | Representability::Rejected(_)
@@ -1203,6 +1213,8 @@ impl Plan {
                         facade.items = items.into_boxed_slice();
                     }
                 }
+            }
+            if named_trait || named_module {
                 let mut traits = std::mem::take(&mut facade.traits).into_vec();
                 if let Err(position) = traits.binary_search(&relative) {
                     traits
@@ -2597,7 +2609,8 @@ impl Facade {
     pub fn items(&self) -> impl ExactSizeIterator<Item = &Item> {
         self.items.iter()
     }
-    /// Iterate the traits Rawr code names, relative to the root.
+    /// Iterate the traits and the modules Rawr code names, relative to the
+    /// root.
     pub fn traits(&self) -> impl ExactSizeIterator<Item = &str> {
         self.traits.iter().map(AsRef::as_ref)
     }

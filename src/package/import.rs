@@ -1433,7 +1433,8 @@ fn import_path(
 struct Facade<'contract> {
     root: &'contract str,
     entries: Vec<Entry<'contract>>,
-    /// The traits the program names: modules, as in the facade plan.
+    /// The traits and the modules the program names: modules, as in the
+    /// facade plan.
     traits: Vec<Box<str>>,
     /// Each trait the program names with its identity, whose header fixes
     /// a type its defaults leave open (D604).
@@ -1776,6 +1777,20 @@ fn install(
                 index
             }
         };
+        // A module the program names (`use crate::icon;`) is a module, as
+        // the facade plan has it, so an import that nothing below it uses
+        // resolves, as rustc's does (#1436).
+        if let Representability::Rejected(reason) = outcome.representability()
+            && reason.kind() == representability::reject::Kind::Module
+        {
+            let relative = relative_path(key, allocation)?;
+            let traits = &mut facades[facade_index].traits;
+            if let Err(position) = traits.binary_search_by(|path| path.as_ref().cmp(&relative)) {
+                traits.try_reserve(1).map_err(|_| Error::Allocation)?;
+                traits.insert(position, relative.into_boxed_str());
+            }
+            continue;
+        }
         if matches!(
             outcome.representability(),
             Representability::Excluded(_) | Representability::Rejected(_)
