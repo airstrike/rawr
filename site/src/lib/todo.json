@@ -1,6 +1,6 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-07",
+  "updated": "2026-11-08",
   "version": "0.3.171",
   "examples": {
     "running": 34,
@@ -91,7 +91,8 @@
         {"text":"A `match` that misses values reports rustc's E0004 in rustc's words: the patterns not covered (`Message::Decrement`, `None`, `i32::MIN..=0_i32` and `2_i32..=i32::MAX`, `&_`), the label on the scrutinee, the matched type and the arm to add. Integer and `char` arms whose ranges cover the whole type no longer need a `_`.","issues":[1256]},
         {"text":"A marked module builds a native module's structs and enums whose fields are `&'static str`, `Option<&'static str>` and `&'static [T]` from literals, and a marked `pub static` of them is compiled natively, so native code reads it as a Rust item.","issues":[1283]},
         {"text":"An array or `vec!` literal's elements coerce to the trait object a parameter, a `let` or a function's return type expects: `all(&[&A, &B])` for `&[&dyn Named]`, and `vec![Box::new(A), Box::new(B)]` returned as `Vec<Box<dyn Named>>`.","issues":[1285]},
-        {"text":"A refutable pattern in a `let`, a `for` loop or a function argument is rustc's E0005, naming the values it misses and suggesting `let else` or `if let`.","issues":[1289]}
+        {"text":"A refutable pattern in a `let`, a `for` loop or a function argument is rustc's E0005, naming the values it misses and suggesting `let else` or `if let`.","issues":[1289]},
+        {"text":"Importing a crate no longer panics when a type in an item's values form, a type's fields, an alias, a default, a trait or impl header, a relation or an application names a type parameter its declaration doesn't have. One walker (undeclared_parameter in src/package/import.rs) checks everything the build converts for an item; the item is left out with the usual can't-be-used-yet note, and RAWR_VERBOSE=1 prints one line naming the crate, the item, the parameter index, the declared parameter count and the type. The second shape behind #1278 is found with that line on the reporting workspace.","issues":[1296],"refs":[1295]}
       ]
     },
     "releases": [
@@ -2993,7 +2994,9 @@
     {"issue":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"open","category":"Divergences from rustc"},
     {"issue":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open","category":"Divergences from rustc"},
     {"issue":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"open","category":"Divergences from rustc"},
-    {"issue":1294,"title":"The remaining refutable binding patterns are rustc's E0005","state":"open","category":"Divergences from rustc"}
+    {"issue":1294,"title":"The remaining refutable binding patterns are rustc's E0005","state":"open","category":"Divergences from rustc"},
+    {"issue":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"open","category":"Health"},
+    {"issue":1296,"title":"The facade build never panics on a type parameter an item doesn't declare; RAWR_VERBOSE names the item","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3858,7 +3861,8 @@
             {"number":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"closed"},
             {"number":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"closed"},
             {"number":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"open"},
-            {"number":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open"}
+            {"number":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open"},
+            {"number":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"open"}
           ]
         }
       ]

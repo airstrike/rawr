@@ -85,6 +85,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked module builds a native module's structs and enums whose fields are `&'static str`, `Option<&'static str>` and `&'static [T]` from literals, and a marked `pub static` of them is compiled natively, so native code reads it as a Rust item. (#1283)
 - An array or `vec!` literal's elements coerce to the trait object a parameter, a `let` or a function's return type expects: `all(&[&A, &B])` for `&[&dyn Named]`, and `vec![Box::new(A), Box::new(B)]` returned as `Vec<Box<dyn Named>>`. (#1285)
 - A refutable pattern in a `let`, a `for` loop or a function argument is rustc's E0005, naming the values it misses and suggesting `let else` or `if let`. (#1289)
+- Importing a crate no longer panics when a type in an item's values form, a type's fields, an alias, a default, a trait or impl header, a relation or an application names a type parameter its declaration doesn't have. One walker (undeclared_parameter in src/package/import.rs) checks everything the build converts for an item; the item is left out with the usual can't-be-used-yet note, and RAWR_VERBOSE=1 prints one line naming the crate, the item, the parameter index, the declared parameter count and the type. The second shape behind #1278 is found with that line on the reporting workspace. (#1296; part of #1295)
 
 ## 0.3.171 (2026-11-07)
 
