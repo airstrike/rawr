@@ -96,7 +96,8 @@
         {"text":"A type alias from a native module, such as `type Width = usize`, now crosses a marked function's signature as its target does: by value, by `&` and as a result. Native code calling the function no longer fails with `Function not found`.","issues":[1272]},
         {"text":"A marked type that implements one of your crate's native traits becomes its object: `Box::new(BadgePage { .. })` gives a `Box<dyn page::Page>` that native code keeps and calls. `&mut self` changes stay for the next call, and a saved method body takes effect at the next call.","issues":[1264]},
         {"text":"A `let` with `ref mut` and a refutable part, a slice pattern on a slice of unknown length, a native struct pattern with refutable fields, and an enum variant in a function parameter are rustc's E0005, with rustc's witnesses. Their irrefutable forms (`let [all @ ..] = s;`, `fn f(One::Only(x): One)`) now run.","issues":[1294]},
-        {"text":"A tuple variant or tuple struct pattern with the wrong number of fields is rustc's E0023 (`this pattern has 1 field, but the corresponding tuple variant has 2 fields`), with the declared fields marked and rustc's help to add `_` or wrap the fields in parentheses.","issues":[1290]}
+        {"text":"A tuple variant or tuple struct pattern with the wrong number of fields is rustc's E0023 (`this pattern has 1 field, but the corresponding tuple variant has 2 fields`), with the declared fields marked and rustc's help to add `_` or wrap the fields in parentheses.","issues":[1290]},
+        {"text":"A marked function's `&mut` parameter whose type is a native alias of a plain type, such as `&mut Width` for `type Width = usize`, now crosses as `&mut usize` does. Native callers see the change after the call. A `&mut` of a native type is still lent.","issues":[1297]}
       ]
     },
     "releases": [
@@ -3001,7 +3002,7 @@
     {"issue":1294,"title":"The remaining refutable binding patterns are rustc's E0005","state":"closed","category":"Divergences from rustc"},
     {"issue":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"open","category":"Health"},
     {"issue":1296,"title":"The facade build never panics on a type parameter an item doesn't declare; RAWR_VERBOSE names the item","state":"open","category":"Health"},
-    {"issue":1297,"title":"A `&mut` of a native alias of a wire type in a marked signature is lent instead of copied and written back","state":"open","category":"Divergences from rustc"},
+    {"issue":1297,"title":"A `&mut` of a native alias of a wire type in a marked signature is lent instead of copied and written back","state":"closed","category":"Divergences from rustc"},
     {"issue":1298,"title":"`rawr check` refuses a native alias of a trait-object type in a marked signature","state":"open","category":"Divergences from rustc"},
     {"issue":1299,"title":"A marked type becomes the object of a generic or lifetime-parameterized native trait, or of a dependency's trait","state":"open","category":"Divergences from rustc"},
     {"issue":1300,"title":"A native trait object's stand-in method that names Self (`other: &Self`, `-> Self`) crosses","state":"open","category":"Divergences from rustc"},
@@ -3879,7 +3880,7 @@
             {"number":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"open"},
             {"number":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open"},
             {"number":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"open"},
-            {"number":1297,"title":"A `&mut` of a native alias of a wire type in a marked signature is lent instead of copied and written back","state":"open"},
+            {"number":1297,"title":"A `&mut` of a native alias of a wire type in a marked signature is lent instead of copied and written back","state":"closed"},
             {"number":1298,"title":"`rawr check` refuses a native alias of a trait-object type in a marked signature","state":"open"},
             {"number":1299,"title":"A marked type becomes the object of a generic or lifetime-parameterized native trait, or of a dependency's trait","state":"open"},
             {"number":1300,"title":"A native trait object's stand-in method that names Self (`other: &Self`, `-> Self`) crosses","state":"open"},
