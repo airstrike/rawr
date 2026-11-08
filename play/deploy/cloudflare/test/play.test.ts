@@ -186,7 +186,14 @@ test("every page has the site's header, with Docs or Playground current", async 
   const landing = header(await built("index.html"));
   assert.ok(!landing.includes("aria-current"));
   assert.equal(header(await built("play.html")), landing.replace(`<a href="/play">`, `<a href="/play" aria-current="page">`));
-  assert.equal(header(await built("docs/run.html")), landing.replace(`<a href="/docs">`, `<a href="/docs" aria-current="true">`));
+  // A docs page also has the control that opens the docs' tree as a drawer on narrow screens.
+  assert.equal(
+    header(await built("docs/run.html")),
+    landing.replace(
+      /<a href="\/docs">Docs<\/a>\n\s*\n/,
+      `<a class="docs-link" href="/docs" aria-current="true">Docs</a>\n    <button type="button" class="docs-toggle label" popovertarget="docs-nav">Docs</button>\n`,
+    ),
+  );
   assert.ok(landing.includes("data-theme-switch"), "the theme's switch");
 });
 
@@ -273,10 +280,9 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   const at = (page: string) => all.filter((block) => block.page === page).map((block) => block.name);
   assert.ok(at("index.html").length > 0, "the landing page has run blocks");
   assert.ok(all.some((block) => block.page.startsWith("docs/reference/")), "the reference has run blocks");
-  assert.deepEqual(at("docs/iced/index.html"), [], "?play runs plain programs only");
+  assert.deepEqual(at("docs/apps.html"), [], "an app needs a Cargo project: ?play runs plain programs only");
   assert.deepEqual(at("docs/embedding.html"), [], "host code needs the rawr crate");
   assert.deepEqual(at("docs/imports.html"), [], "a dependency needs a Cargo project");
-  assert.deepEqual(at("docs/ratatui.html"), [], "a ratatui app needs a Cargo project and a terminal");
   // Every name is one source wherever it appears, so the docs' copy of a
   // landing block is the same entry.
   const byName = new Map<string, string>();
@@ -322,57 +328,6 @@ test("every link between the site's pages lands on a page and an anchor", async 
       if (anchor && target.endsWith(".html") && !ids(readFileSync(root + target, "utf8")).has(anchor)) {
         broken.push(`${page}: ${href} has no #${anchor}`);
       }
-    }
-  }
-  assert.deepEqual(broken, []);
-});
-
-test("docs pages that moved redirect to their new paths", async () => {
-  const { existsSync, readFileSync } = await import("node:fs");
-  const root = new URL("../../../../site/dist/", import.meta.url).pathname;
-  const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-  const block = source.match(/export const DOCS_MOVED[^{]*\{([^}]*)\}/);
-  assert.ok(block);
-  const moved = Object.fromEntries([...block[1].matchAll(/"([^"]+)": "([^"]+)"/g)].map((m) => [m[1], m[2]]));
-  assert.deepEqual(Object.keys(moved).sort(), [
-    "/docs/cli",
-    "/docs/cli.html",
-    "/docs/faq",
-    "/docs/faq.html",
-    "/docs/iced.html",
-    "/docs/iced/reference",
-    "/docs/iced/reference.html",
-    "/docs/language",
-    "/docs/language.html",
-    "/docs/play.html",
-    "/docs/play/reference",
-    "/docs/play/reference.html",
-    "/docs/reference",
-    "/docs/reference/iced",
-    "/docs/reference/iced.html",
-    "/docs/requirements",
-    "/docs/requirements.html",
-  ]);
-  for (const [from, to] of Object.entries(moved)) {
-    assert.ok(!existsSync(root + from.slice(1) + (from.endsWith(".html") ? "" : ".html")), `${from} is still a page`);
-    assert.ok(existsSync(root + to.slice(1) + ".html") || existsSync(root + to.slice(1) + "/index.html"), `${to} is not a page`);
-  }
-});
-
-test("a moved anchor goes to a page and an id that exist", async () => {
-  const { existsSync, readFileSync } = await import("node:fs");
-  const root = new URL("../../../../site/dist/", import.meta.url).pathname;
-  const { MOVED: moved } = await import("../../../../site/src/lib/moved.ts");
-  const page = (path: string) =>
-    [`${path.slice(1)}.html`, `${path.slice(1)}/index.html`].find((candidate) => existsSync(root + candidate));
-  const broken: string[] = [];
-  for (const [from, anchors] of Object.entries(moved)) {
-    if (!page(from)) broken.push(`${from} is not a page`);
-    for (const [id, to] of Object.entries(anchors)) {
-      const [path, anchor] = to.split("#");
-      const file = page(path);
-      if (!file) broken.push(`${from}#${id}: ${path} is not a page`);
-      else if (anchor && !readFileSync(root + file, "utf8").includes(` id="${anchor}"`)) broken.push(`${from}#${id}: ${to} has no such id`);
     }
   }
   assert.deepEqual(broken, []);

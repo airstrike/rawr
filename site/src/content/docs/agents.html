@@ -143,7 +143,7 @@ stop        {"path": "counter"}</code></pre></div>
 <h2 id="limits">Limits</h2>
 <ul>
   <li>rawr puts no time limit on a call. Each one waits for what it needs: a build, an event, a pause or the program&rsquo;s end. A client that bounds its calls cancels one that runs past its bound. A cancelled <code>start</code> or <code>check</code> leaves its build going, and the next call waits for it again.</li>
-  <li><code>start</code> refuses a program that draws a terminal UI, such as a <a href="/docs/ratatui">ratatui</a> app. Run it with <code>rawr run</code> in a terminal of your own.</li>
+  <li><code>start</code> refuses a program that draws a terminal UI, such as a <a href="/docs/apps#ratatui">ratatui</a> app. Run it with <code>rawr run</code> in a terminal of your own.</li>
   <li>A screenshot uses macOS&rsquo;s window capture. macOS asks for Screen Recording permission for the app the agent runs in. Other systems have no such capture yet.</li>
   <li>The input tools need macOS too. They need no permission, since nothing goes through the system&rsquo;s input.</li>
   <li>One project has one started program at a time.</li></ul>

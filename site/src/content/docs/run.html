@@ -21,7 +21,7 @@
 <p>The program reads the stdin of <code>rawr run</code>, a terminal or a pipe:</p>
 <div class="block"><pre><code>cat menu.txt | rawr run examples/grep -- pie</code></pre></div>
 <p>At a terminal the running program gets the keyboard, so Ctrl-C reaches it as it reaches a program <code>cargo run</code> started. Ctrl-C ends <code>rawr run</code> too.</p>
-<p>At a terminal the program also writes to the terminal itself, as under <code>cargo run</code>. rawr saves the terminal&rsquo;s settings before the program starts. After the program ends, rawr puts them back if the program changed them, even when a restart killed it. While the program holds the terminal raw, rawr&rsquo;s own lines wait until then. <a href="/docs/ratatui#terminal">ratatui</a> says more.</p>
+<p>At a terminal the program also writes to the terminal itself, as under <code>cargo run</code>. rawr saves the terminal&rsquo;s settings before the program starts. After the program ends, rawr puts them back if the program changed them, even when a restart killed it. While the program holds the terminal raw, rawr&rsquo;s own lines wait until then. <a href="/docs/apps#terminal">Apps and libraries</a> says more.</p>
 <p>The <code>examples/grep</code> crate in rawr&rsquo;s repository is a small grep with flags, files and stdin. <code>cargo build --release</code> builds the same crate, and its binary prints the same lines.</p>
 <p>rawr&rsquo;s examples are packages of its Cargo workspace, as iced&rsquo;s are. From the repository&rsquo;s root, <code>rawr run -p grep</code> runs one under rawr. <code>cargo run -p grep</code> runs it natively.</p>
 
@@ -94,7 +94,7 @@ fn main() {
 <p>Numbers, <code>bool</code>, <code>char</code>, <code>String</code> and <code>&amp;str</code> cross between native code and a marked module. <code>Vec</code>, <code>Option</code>, <code>Result</code> and tuples of them cross too. So do the structs and enums of marked modules whose fields cross.</p>
 <p>A function may also return a value of a native type: one your native code declares, such as the <code>Message</code> in your <code>main.rs</code>, or another crate&rsquo;s. It may be bare, or inside a <code>Vec</code>, an <code>Option</code>, a tuple or a <code>Result</code>, or an alias of one such as <code>iced::Result</code>. The native value itself goes back to native code, so <code>fn main() -&gt; iced::Result</code> gets iced&rsquo;s own error. A type with a lifetime, such as <code>iced::Element&lt;'a, Message&gt;</code>, comes back too: the value is the interpreter&rsquo;s own, so it borrows nothing, and it takes the lifetime the signature names.</p>
 <p>A parameter may be one of those values or a reference to one. A <code>&amp;mut</code> argument comes back with the changes the function made. A native value taken by value moves to the function, which keeps it as Rust would. A native parameter type with a lifetime other than <code>'static</code> can&rsquo;t be taken by value yet.</p>
-<p>A reference to another crate&rsquo;s value, such as ratatui&rsquo;s <code>&amp;mut Frame</code>, is lent to the function for the call instead. Its methods reach the native value itself, and the borrow ends when the call returns, as in Rust. The <a href="/docs/ratatui#frame">ratatui</a> page shows one.</p>
+<p>A reference to another crate&rsquo;s value, such as ratatui&rsquo;s <code>&amp;mut Frame</code>, is lent to the function for the call instead. Its methods reach the native value itself, and the borrow ends when the call returns, as in Rust. <a href="/docs/apps#frame">Apps and libraries</a> shows one.</p>
 <p>A function whose values can&rsquo;t cross yet panics when native code calls it, and the message names the function. A public function that returns <code>impl Trait</code> stops <code>rawr run</code> with an error that names it.</p>
 <p>A save of a marked file reaches the running program at its next call into that file. An edit to a function body or to a private item swaps in place, and the program keeps its state. An edit that changes what native code sees needs a new native build. That covers a signature, a struct&rsquo;s fields and a public constant. rawr then restarts the program and prints why:</p>
 <div class="block"><pre><code>rawr: `physics::Ball` changed its fields; restarting the program</code></pre></div>
@@ -106,7 +106,7 @@ fn main() {
 <div class="block"><pre><code>rawr run -p invaders</code></pre></div>
 <p><code>cargo run -p invaders</code> plays the same game natively.</p>
 <p>A save that changes a colour, a speed or a sprite&rsquo;s shape shows at the next frame. The game keeps its score and its invaders. A new field on the game&rsquo;s state restarts the game.</p>
-<p>The <code>examples/tui</code> crate is a to-do list on ratatui. Its native <code>main.rs</code> owns the terminal, and its marked <code>app.rs</code> says what the keys do and what the screen shows. A save repaints the screen at once, with no key pressed. <a href="/docs/ratatui">ratatui</a> covers terminal apps.</p>
+<p>The <code>examples/tui</code> crate is a to-do list on ratatui. Its native <code>main.rs</code> owns the terminal, and its marked <code>app.rs</code> says what the keys do and what the screen shows. A save repaints the screen at once, with no key pressed. <a href="/docs/apps#ratatui">Apps and libraries</a> covers terminal apps.</p>
 <p>Limits today:</p>
 <ul>
   <li>A native module other than the root can&rsquo;t declare a marked module.</li>
@@ -231,14 +231,14 @@ sum 5050</span></div>
   <tr><th>Program</th><th>Runs in</th></tr>
   <tr><td>No dependencies and no native modules</td><td><code>rawr</code> itself.</td></tr>
   <tr><td>Dependencies in <code>Cargo.toml</code> or native modules</td><td><a href="/docs/imports">rawr-import</a>, which compiles the native code with Cargo.</td></tr>
-  <tr><td>Uses the <code>iced</code> crate</td><td><a href="/docs/imports">rawr-import</a>, through <a href="/docs/iced#when">generated bindings</a> like any other crate.</td></tr>
+  <tr><td>Uses the <code>iced</code> crate</td><td><a href="/docs/imports">rawr-import</a>, through <a href="/docs/apps#libraries">generated bindings</a> like any other crate.</td></tr>
 </table>
 <p>If the extension a program needs isn&rsquo;t installed, <code>rawr</code> names it and prints the commands that install it. Set <code>RAWR_VERBOSE=1</code> to see which binary ran a program.</p>
 
 <h2 id="reload">Reload</h2>
 <p><code>rawr run</code> watches every program it runs.</p>
 <ul>
-  <li>An iced app picks up a save at its next message, and keeps running. <a href="/docs/iced/reload">Reload</a> says what it keeps.</li>
+  <li>An iced app picks up a save at its next message, and keeps running. <a href="/docs/apps#iced-reload">Apps and libraries</a> says what it keeps.</li>
   <li>A <a href="#native-main">native main</a> picks up a body edit at its next call into the marked file, and keeps running.</li>
   <li>A <a href="#swap">marked main</a> in a native loop picks up a body edit at the loop&rsquo;s next call into marked code, and keeps running.</li>
   <li>Any other running program restarts when you save, with the same arguments. One line on stderr says so:</li>

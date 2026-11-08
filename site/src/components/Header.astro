@@ -1,17 +1,21 @@
 ---
 // The site bar, the same on every page: the docs mark Docs as current, the
 // playground marks Playground. The switch sets the theme (ThemeSwitch.astro).
+// On a docs page, a narrow screen swaps the Docs link for a control that
+// opens the docs' tree (#docs-nav, lib/docs.ts) as a drawer.
 import ThemeSwitch from "./ThemeSwitch.astro";
 
 interface Props {
   current?: "docs" | "play";
+  drawer?: boolean;
 }
-const { current } = Astro.props;
+const { current, drawer = false } = Astro.props;
 ---
 <header class="bar">
   <a class="brand" href="/" aria-label="rawr home"><b>rawr</b><span class="label">pre-alpha</span></a>
   <nav class="links label" aria-label="Site">
-    <a href="/docs" aria-current={current === "docs" ? "true" : undefined}>Docs</a>
+    <a class:list={{ "docs-link": drawer }} href="/docs" aria-current={current === "docs" ? "true" : undefined}>Docs</a>
+    {drawer && <button type="button" class="docs-toggle label" popovertarget="docs-nav">Docs</button>}
     <a class="wide" href="/docs/start">Get started</a>
     <a href="/play" aria-current={current === "play" ? "page" : undefined}>Playground</a>
     <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>

@@ -40,6 +40,10 @@
   :focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
   code, pre, kbd { font-family: var(--mono); }
   b, strong { font-weight: var(--w-strong); }
+  /* A section heading is a link to itself (lib/docs.ts's anchors): it reads
+     as a heading, and the pointer gives it the links' red underline. */
+  :is(h2, h3) > a.anchor { color: inherit; text-decoration: none; }
+  :is(h2, h3) > a.anchor:hover { color: inherit; text-decoration: underline 2px var(--red); text-underline-offset: 0.18em; }
   /* The site bar stays at the top, so an anchor lands below it. */
   [id] { scroll-margin-top: 72px; }
 }
@@ -63,7 +67,7 @@
   .bar-top { height: 1px; margin-bottom: -1px; }
   @media (prefers-reduced-motion: reduce) { .bar { transition: none; } }
   .bar a { text-decoration: none; }
-  .brand { display: flex; align-items: baseline; gap: 12px; }
+  .brand { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; }
   .brand b { font-size: 16px; font-weight: var(--w-heavy); letter-spacing: 0.01em; color: var(--ink); }
   .links { display: flex; align-items: center; gap: 24px; }
   .links a { color: var(--quiet); padding: 15px 0 12px; border-bottom: 3px solid transparent; margin-bottom: -1px; }

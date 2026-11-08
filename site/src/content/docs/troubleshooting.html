@@ -42,7 +42,7 @@
 <p>The first program on a machine that uses a crate also reads the crate&rsquo;s API with rawr&rsquo;s nightly, which builds the crate&rsquo;s dependencies once more in check mode. That check build is kept once per machine in rawr&rsquo;s home, so a later project checks only its own crates there. Later projects read the crate&rsquo;s API from rawr&rsquo;s home too, including items no earlier program used. <a href="/docs/imports#bindings">Imports</a> explains shared bindings.</p>
 
 <h2 id="reload">An iced app doesn&rsquo;t pick up a save</h2>
-<p>A save that fails the check prints its error and leaves the last good version running. A save that passes shows at the app&rsquo;s next message, because iced builds the view again only when a message arrives. <a href="/docs/iced/reload">Reload</a> says what a reload keeps.</p>
+<p>A save that fails the check prints its error and leaves the last good version running. A save that passes shows at the app&rsquo;s next message, because iced builds the view again only when a message arrives. <a href="/docs/apps#iced-reload">Apps and libraries</a> says what a reload keeps.</p>
 
 <h2 id="report">Reporting a bug</h2>
 <p>If rawr gives a different result than Rust, or rejects Rust it says it supports, report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>

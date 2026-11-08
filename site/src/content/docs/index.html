@@ -1,26 +1,35 @@
-<meta name="description" content="Documentation for rawr, a Rust interpreter for your dev builds: guides to running, importing, embedding and iced, and a reference for the Rust it supports.">
+<meta name="description" content="Documentation for rawr, a Rust interpreter for your dev builds: guides to running, importing, embedding and hot reload in apps, and a reference for the Rust it supports.">
 <article>
 <h1>Docs</h1>
-<p class="lede">rawr is a Rust interpreter for your dev builds. <code>rawr run</code> interprets the files you mark <code>// rawr</code>, and Cargo compiles the rest. A release build compiles every file.</p>
-<p>A snippet with a Run button runs in your browser, as the <a href="/play">playground</a> runs it. Edit it and run it again. The few marked &ldquo;on rawr&rsquo;s server&rdquo; use what rawr doesn&rsquo;t do in a browser yet, such as threads.</p>
-<p>A coding agent can read the whole of these docs in one file: <a href="/llms.txt">llms.txt</a>.</p>
+<p class="lede">rawr interprets the files of a Cargo crate that you mark <code>// rawr</code> and reloads them on save, while Cargo compiles the rest and a release build compiles every file.</p>
+<div class="paths">
+  <a href="/play"><i>01</i><b>Try it in the browser</b><span>Run Rust in the playground with nothing to install.</span></a>
+  <a href="/docs/start"><i>02</i><b>Run your own crate</b><span>Install rawr, mark a file and run a Cargo crate.</span></a>
+  <a href="/docs/apps"><i>03</i><b>Hot reload in your app</b><span>A save reaches the running iced, ratatui or winit app.</span></a>
+  <a href="/docs/embedding"><i>04</i><b>Embed the interpreter</b><span>Your app&rsquo;s users write its scripts in Rust.</span></a>
+</div>
 <h2 id="guides">Guides</h2>
 <div class="cards">
-  <a href="/docs/start">Start<span>Install rawr and run a first crate.</span></a>
-  <a href="/docs/run">Run<span>Which files rawr interprets, and what ships.</span></a>
-  <a href="/docs/imports">Imports<span>Cargo dependencies and native modules.</span></a>
-  <a href="/docs/embedding">Embedding<span>Run Rust scripts inside your app.</span></a>
-  <a href="/docs/apps">Apps and libraries<span>Hot reload in an app on any library.</span></a>
-  <a href="/docs/iced">iced<span>Run an iced app with its marked files interpreted.</span></a>
-  <a href="/docs/play">Play<span>Run Rust in a browser or in Discord.</span></a>
-  <a href="/docs/troubleshooting">Troubleshooting<span>Common errors and what to do about them.</span></a>
-  <a href="/docs/how-it-works">How it works<span>The interpreter, its speed and where it came from.</span></a>
+  <a href="/docs/run">Run<span>Interpreted and native code in one program</span></a>
+  <a href="/docs/imports">Imports<span>Cargo dependencies and native modules in marked code</span></a>
+  <a href="/docs/apps">Apps and libraries<span>Hot reload in an app on the libraries it uses</span></a>
+  <a href="/docs/embedding">Embedding<span>Users change your app in Rust without rebuilding it</span></a>
+  <a href="/docs/agents">Agents<span>A coding agent checks, runs and reloads crates</span></a>
+  <a href="/docs/how-it-works">How it works<span>The interpreter and why it is built this way</span></a>
+  <a href="/docs/troubleshooting">Troubleshooting<span>Common errors and what to do about them</span></a>
 </div>
-<h2 id="reference">API Reference</h2>
+<h2 id="reference">Reference</h2>
 <div class="cards">
-  <a href="/docs/reference/overview">Overview<span>The Rust that rawr supports, and its gaps.</span></a>
-  <a href="/docs/reference/play">Play<span>The playground&rsquo;s sandbox, limits and replies.</span></a>
-  <a href="/docs/reference/commands">Commands<span>Every command, its arguments and exit statuses.</span></a>
-  <a href="/docs/reference/requirements">Requirements<span>Toolchains, platforms and status.</span></a>
+  <a href="/docs/reference/overview">Overview<span>The Rust that passes rawr&rsquo;s check</span></a>
+  <a href="/docs/reference/commands">Commands<span>Every command and the extensions it hands programs to</span></a>
+  <a href="/docs/reference/requirements">Requirements<span>Toolchains, platforms and what is planned</span></a>
+  <a href="/docs/reference/play">Play sandbox<span>Sandbox, output, limits and replies of the playground and <code>?play</code></span></a>
 </div>
+<h2 id="tools">Tools</h2>
+<div class="cards">
+  <a href="/docs/play">Playground<span>Rust in your browser, with share links</span></a>
+  <a href="/docs/play/discord"><code>?play</code> in Discord<span>The bot that runs snippets posted in Discord</span></a>
+  <a href="/docs/previews">Editor previews<span>The <code>#[preview]</code> attribute and the VS Code extension</span></a>
+</div>
+<p class="more">The whole of these docs is also one file for coding agents: <a href="/llms.txt">llms.txt</a>.</p>
 </article>

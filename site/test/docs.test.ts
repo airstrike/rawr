@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { NEXT_IMAGE, PAGES, anchors, decode, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Runs } from "../src/lib/docs.ts";
+import { NEXT_IMAGE, PAGES, anchors, breadcrumbs, decode, headingIds, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Runs } from "../src/lib/docs.ts";
 import type { Result } from "../src/lib/output.ts";
 import { highlightRust, highlightToml } from "../src/lib/highlight.ts";
 
@@ -126,13 +126,23 @@ test("the build refuses an output written by hand, a snippet rawr-web can't run 
   await assert.rejects(runOutputs('<pre><code data-lang="rust" data-run="x.rs" id="src-x">ok</code></pre>', runs), /has no Run button/);
 });
 
-test("headings get a # link, and a long page gets On this page after its lede", () => {
+test("each heading links to itself, and a long page gets On this page after its lede", () => {
   const article = '<h1>T</h1>\n<p class="lede">L</p>\n<h2 id="a">A <code>x</code></h2><h2 id="b">B</h2><h3 id="c">C</h3><h2 id="d">D</h2>';
   const out = toc(anchors(article));
-  assert.ok(out.includes('<h2 id="a"><a class="anchor" href="#a" aria-label="Link to this section">#</a>A <code>x</code></h2>'));
-  assert.ok(out.includes('<h3 id="c"><a class="anchor" href="#c"'));
+  assert.ok(out.includes('<h2 id="a"><a class="anchor" href="#a">A <code>x</code></a></h2>'));
+  assert.ok(out.includes('<h3 id="c"><a class="anchor" href="#c">C</a></h3>'));
   assert.ok(out.includes('<p class="lede">L</p>\n<details class="toc"><summary>On this page</summary><ol><li><a href="#a">A x</a></li><li><a href="#b">B</a></li><li><a href="#d">D</a></li></ol></details>'));
   assert.equal(toc('<p class="lede">L</p><h2 id="a">A</h2>'), '<p class="lede">L</p><h2 id="a">A</h2>', "two sections or fewer: no list");
+  assert.equal(anchors('<h2 id="a">See <a href="/x">x</a></h2>'), '<h2 id="a">See <a href="/x">x</a></h2>', "a heading that holds a link stays as it is");
+});
+
+test("a heading without an id gets one from its text, unique on the page", () => {
+  const html = headingIds('<h2>Run Rust in your browser</h2><h2 class="k">Pre-alpha</h2><h3 id="run-rust-in-your-browser-2">Kept</h3><h2>Run Rust in <code>your</code> browser</h2><h3>Don&rsquo;t</h3>');
+  assert.equal(
+    html,
+    '<h2 id="run-rust-in-your-browser">Run Rust in your browser</h2><h2 class="k" id="pre-alpha">Pre-alpha</h2><h3 id="run-rust-in-your-browser-2">Kept</h3><h2 id="run-rust-in-your-browser-3">Run Rust in <code>your</code> browser</h2><h3 id="don-t">Don&rsquo;t</h3>',
+  );
+  assert.ok(anchors(html).startsWith('<h2 id="run-rust-in-your-browser"><a class="anchor" href="#run-rust-in-your-browser">Run Rust in your browser</a></h2><h2 class="k" id="pre-alpha"><a class="anchor" href="#pre-alpha">'));
 });
 
 test("every page in the navigation has its file, and every file a place in the navigation", () => {
@@ -149,7 +159,15 @@ test("every page in the navigation has its file, and every file a place in the n
 test("the sidebar marks the page and lists its sections; the pager links its neighbours", () => {
   const run = PAGES.find((page) => page.path === "/docs/run")!;
   const side = sidebar(run, '<h2 id="a">A</h2><h2 id="b">B</h2>');
+  assert.ok(side.startsWith('<nav class="side" id="docs-nav" popover aria-label="Docs">'), "the tree is the bar's drawer on narrow screens");
   assert.ok(side.includes('<a href="/docs/run" aria-current="page">Run</a><ol class="secs"><li><a href="#a">A</a></li><li><a href="#b">B</a></li></ol>'));
   assert.ok(side.includes('<p class="grp" data-here>Guides</p>'));
-  assert.equal(pager(run), '<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Start</b></a><a class="next" href="/docs/agents">Next<b>Agents</b></a></nav>');
+  assert.deepEqual([...side.matchAll(/<p class="grp"[^>]*>([^<]+)<\/p>/g)].map((m) => m[1]), ["Get started", "Guides", "Reference", "Tools"]);
+  assert.equal(pager(run), '<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Start</b></a><a class="next" href="/docs/imports">Next<b>Imports</b></a></nav>');
+});
+
+test("breadcrumbs name the group and the parent page; the index has none", () => {
+  const items = PAGES.find((page) => page.path === "/docs/reference/items")!;
+  assert.equal(breadcrumbs(items), '<nav class="crumbs label" aria-label="Breadcrumb"><ol><li><a href="/docs">Docs</a></li><li>Reference</li><li><a href="/docs/reference/overview">Overview</a></li></ol></nav>');
+  assert.equal(breadcrumbs(PAGES[0]), "");
 });

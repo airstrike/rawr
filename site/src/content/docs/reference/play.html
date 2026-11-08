@@ -1,6 +1,6 @@
 <meta name="description" content="How the playground and the ?play bot run snippets: the sandbox, output, limits, where ?play differs from rawr run, and every note and error reply.">
 <article>
-<h1>Play</h1>
+<h1>Play sandbox</h1>
 <p class="lede">How the playground and the <code class="nw">?play</code> bot run a snippet. Both run plain Rust programs with the same limits.</p>
 <h2 id="sandbox">The sandbox</h2>
 <p>A snippet has no files, no environment variables, no process and no network. rawr&rsquo;s engine starts with none of them, and ?play grants none (see <a href="/docs/embedding#access">Access</a>). A call that needs one fails at the call, as the operating system would refuse it. On the server each run is also its own process, and that process starts with an empty environment.</p>

@@ -13,7 +13,9 @@
   followSystem();
 </script>
 <style>
+  /* A 26px box with a 44px tap target around it. */
   .theme {
+    position: relative;
     display: inline-grid; place-items: center; vertical-align: middle;
     width: 26px; height: 26px; padding: 0; margin: 0;
     border: 1px solid var(--grid); border-radius: 0;
@@ -21,6 +23,7 @@
   }
   .theme:hover { color: var(--ink); border-color: var(--ink); background: transparent; }
   .theme:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+  .theme::before { content: ""; position: absolute; inset: -10px; }
   .theme svg { width: 14px; height: 14px; display: block; }
   :global([data-theme="dark"]) .theme .moon, :global([data-theme="light"]) .theme .sun { display: none; }
 </style>

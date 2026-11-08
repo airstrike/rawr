@@ -12,7 +12,7 @@
 <p>These come with <code>rawr-cli</code>, which needs Rust 1.95 or newer. rawr-cli also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works the same as <code>rawr run</code>.</p>
 <table class="wide">
   <tr><th>Command</th><th>What it does</th></tr>
-  <tr><td><code>rawr [run] [path]</code></td><td>Checks a program and runs it. <code>run</code> is the default command, so <code>rawr</code> alone runs the crate in the current directory. Errors from <code>cargo check</code> are printed after a program that runs once. A program with Rust dependencies or native modules goes to <a href="/docs/imports">rawr-import</a>. An iced app goes there too, as <a href="/docs/iced#when">iced</a> describes.</td></tr>
+  <tr><td><code>rawr [run] [path]</code></td><td>Checks a program and runs it. <code>run</code> is the default command, so <code>rawr</code> alone runs the crate in the current directory. Errors from <code>cargo check</code> are printed after a program that runs once. A program with Rust dependencies or native modules goes to <a href="/docs/imports">rawr-import</a>. An iced app goes there too, as <a href="/docs/apps#iced">Apps and libraries</a> describes.</td></tr>
   <tr><td><code>rawr check [path]</code></td><td>Checks a program without running it. It prints <code>Checked</code> and the entry path, or the first error. Then it runs <code>cargo check</code> and prints <code>cargo check passed</code> or rustc&rsquo;s errors. It exits with status 1 if either check fails.</td></tr>
   <tr><td><code>rawr test [path] [filter] [-- options]</code></td><td>Runs the program&rsquo;s <code>#[test]</code> functions, as <code>cargo test</code> runs them. <a href="#test">Tests</a> says more.</td></tr>
   <tr><td><code>rawr new &lt;path&gt;</code></td><td>Creates a Cargo crate with no dependencies. Its <code>src/main.rs</code> starts with <code>// rawr</code> and prints three lines. It refuses a path that holds files.</td></tr>
@@ -41,7 +41,7 @@
 <ul>
   <li><a href="/docs/imports">rawr-import</a> runs <code>rawr run</code> and <code>rawr check</code> for programs with Cargo dependencies or native modules. It adds <code>rawr cache clean</code>, which removes what rawr&rsquo;s home holds that no build has used lately: hosts, rawr&rsquo;s runtimes, shared bindings and the nightly&rsquo;s check build. It skips anything a running build holds and never waits for one.</li>
 </ul>
-<p><code>rawr preview</code> and <code>rawr snapshot</code> came with rawr-iced, which is gone. <code>rawr preview</code> comes back as open work. <a href="/docs/iced/previews">Previews</a> says more.</p>
+<p><code>rawr preview</code> and <code>rawr snapshot</code> came with rawr-iced, which is gone. <code>rawr preview</code> comes back as open work. <a href="/docs/previews">Editor previews</a> says more.</p>
 
 <h2 id="exit">Exit status</h2>
 <ul>
