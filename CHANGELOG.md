@@ -56,6 +56,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - rawr puts no time limit of its own on anything. The runner protocol waits for the runner as long as it lives. The `rawr mcp` tools take no `timeout_ms` or `wait_ms`: `start` answers once the program runs, `check` once it has checked, `wait` at the next event, `step` where it paused; `break` and `continue` answer at once and `wait` tells the pause. A client that bounds its calls cancels them. (#1205)
 - rawr no longer forgets an installed rawr-import: a manifest probe that fails, as one could under heavy load, is asked again on the next run instead of being remembered as 'not installed'. (#1230)
 - A crate type whose impls at different arguments each have a method of one name giving an `impl Trait`, as swash's `Setting<u16>` and `Setting<f32>` do with `parse_list`, imports again, so iced's examples that draw text check. (#1232)
+- The landing page is shorter: each example shows its code, its command and its output, and the bouncing ball is drawn across the page. (#1233)
 
 ## 0.3.171 (2026-11-07)
 
