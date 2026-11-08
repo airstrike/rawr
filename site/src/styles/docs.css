@@ -35,10 +35,13 @@ body { font-size: var(--fs-read); line-height: 1.55; }
 /* Where the page sits, above its title. */
 .crumbs ol { display: flex; flex-wrap: wrap; list-style: none; margin: 0 0 14px; }
 .crumbs li + li::before { content: "/"; margin: 0 8px; color: var(--grid); }
-.crumbs a { color: var(--quiet); text-decoration: none; }
+/* A crumb's tap target is 44px tall; its padding doesn't move the line. */
+.crumbs a { display: inline-block; padding: 14px 4px; margin: -14px -4px; color: var(--quiet); text-decoration: none; }
 .crumbs a:hover { color: var(--red); }
-/* "On this page", for narrow screens where the sidebar hides each page's sections. */
+/* "On this page", for narrow screens where the sidebar hides each page's
+   sections. Its own hairline is the first section's, so no second rule follows it. */
 .toc { display: none; border-top: 1px solid var(--grid); border-bottom: 1px solid var(--grid); margin: 0 0 24px; }
+.toc + h2 { border-top: 0; padding-top: 0; margin-top: 28px; }
 .toc summary { cursor: pointer; padding: 13px 0; font-size: var(--fs-label); font-weight: var(--w-strong); letter-spacing: var(--track-label); text-transform: uppercase; }
 .toc ol { list-style: none; margin: 0; padding: 0 0 10px; }
 .toc li { margin: 0; }

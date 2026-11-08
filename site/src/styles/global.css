@@ -67,7 +67,7 @@
   .bar-top { height: 1px; margin-bottom: -1px; }
   @media (prefers-reduced-motion: reduce) { .bar { transition: none; } }
   .bar a { text-decoration: none; }
-  .brand { display: flex; align-items: baseline; gap: 12px; }
+  .brand { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; }
   .brand b { font-size: 16px; font-weight: var(--w-heavy); letter-spacing: 0.01em; color: var(--ink); }
   .links { display: flex; align-items: center; gap: 24px; }
   .links a { color: var(--quiet); padding: 15px 0 12px; border-bottom: 3px solid transparent; margin-bottom: -1px; }
