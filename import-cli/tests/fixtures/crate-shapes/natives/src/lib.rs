@@ -1309,80 +1309,14 @@ pub mod badge {
     pub struct Wrap(pub i64);
 }
 
-/// A slot a row takes its children as, as a component crate's
-/// `compose::Slot` is: built from a `&str`, a `String` or an icon by
-/// `From`, and gathered by `slots!`, whose children each convert through
-/// `Into::<$crate::compose::Slot<'_, _>>::into` in an array a row takes
-/// as `impl IntoIterator`, as iced's `Row::with_children` does.
+/// A component crate's slots, re-exported from the crate of its parts as
+/// icedxdy re-exports icedxdy_widget's `Slot`, with the widget crate's
+/// text beside them: `slots!` gathers children that each convert through
+/// `Into::<$crate::compose::Slot<'_, _>>::into` in an array a row takes as
+/// `impl IntoIterator`, as iced's `Row::with_children` does.
 pub mod compose {
-    use std::marker::PhantomData;
-
-    pub struct Slot<'a, Message> {
-        label: String,
-        message: PhantomData<&'a Message>,
-    }
-
-    impl<'a, Message> Slot<'a, Message> {
-        fn new(label: String) -> Self {
-            Slot {
-                label,
-                message: PhantomData,
-            }
-        }
-
-        pub fn label(&self) -> &str {
-            &self.label
-        }
-    }
-
-    impl<'a, Message: 'a> From<&'a str> for Slot<'a, Message> {
-        fn from(text: &'a str) -> Self {
-            Slot::new(format!("str {text}"))
-        }
-    }
-
-    impl<'a, Message: 'a> From<String> for Slot<'a, Message> {
-        fn from(text: String) -> Self {
-            Slot::new(format!("string {text}"))
-        }
-    }
-
-    pub struct Icon {
-        size: u32,
-    }
-
-    pub fn icon() -> Icon {
-        Icon { size: 16 }
-    }
-
-    impl Icon {
-        pub fn size(self, size: u32) -> Self {
-            Icon { size }
-        }
-    }
-
-    impl<'a, Message: 'a> From<Icon> for Slot<'a, Message> {
-        fn from(icon: Icon) -> Self {
-            Slot::new(format!("icon {}", icon.size))
-        }
-    }
-
-    pub struct Row<'a, Message> {
-        children: Vec<Slot<'a, Message>>,
-    }
-
-    impl<'a, Message: 'a> Row<'a, Message> {
-        pub fn with_children(children: impl IntoIterator<Item = Slot<'a, Message>>) -> Self {
-            Row {
-                children: children.into_iter().collect(),
-            }
-        }
-
-        pub fn draw(&self) -> String {
-            let labels: Vec<&str> = self.children.iter().map(Slot::label).collect();
-            labels.join(" | ")
-        }
-    }
+    pub use parts::{badge_check, icon, label, Icon, Label, Row, Slot, Theme};
+    pub use widgets::{text, text_like, Text, TextLike};
 }
 
 /// A row of `compose::Slot`s, each child converted as a component crate's

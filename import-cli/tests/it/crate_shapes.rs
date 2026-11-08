@@ -435,10 +435,52 @@ fn a_forwarding_impls_parameters_are_its_own() {
 /// its call opens a scope frame ahead of the statement, and the icon
 /// before it in the array is bound ahead of that frame, as Rust runs it
 /// first (#1326).
+///
+/// The `Slot` is another crate's, re-exported as a component crate
+/// re-exports its parts', with a theme and a renderer that default to
+/// that crate's own. Its impls take the widget crate's generic `Text<'a,
+/// Theme, Renderer = Plain>` at the crate's own theme, beside the crate's
+/// own `Label<'a>`, and the program adds `impl From<Mine> for Slot`. Each
+/// child picks its impl by its full type: a `Text` whose theme only the
+/// impl gives takes it, so the theme is the crate's, as rustc's impl
+/// selection binds it, and a `Label` borrowing a literal opens its frame
+/// in the macro's array. A `TextLike` no impl takes is rustc's E0277, with
+/// the types the impls take (#1336).
 #[test]
 fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     runs_as_cargo_does(
         "slots",
-        "icon 12 | str Verified | string Verified\nstr into\nstr from | string qualified\n",
+        "icon 12 | str Verified | string Verified\nstr into\nstr from | string qualified\n\
+         text check 12 | str Verified\nlabel own | string mine 7 | text plain 16\n\
+         text into 16 | string mine 3 | label from\n",
     );
+    let program = "// rawr\nuse natives::compose::{self, Row, Theme};\nuse natives::slots;\n\n\
+                   fn main() {\n    let row: Row<'_, ()> = \
+                   slots![compose::text_like::<Theme>(\"near\")];\n    \
+                   println!(\"{}\", row.draw());\n}\n";
+    let root = SHAPES.lease(&[("src/main.rs", program)]);
+    let directory = crate::support::scratch();
+    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = text(&check.stderr);
+    assert!(!check.status.success(), "{stderr}");
+    assert!(!stderr.contains("unknown member"), "{stderr}");
+    let rawr = stderr.split("cargo check found").next().unwrap_or_default();
+    for expected in [
+        "error[E0277]: the trait bound `natives::compose::Slot<(), natives::compose::Theme, \
+         widgets::Plain>: From<natives::compose::TextLike<natives::compose::Theme>>` is not \
+         satisfied",
+        "the following other types implement trait `From<T>`:",
+        "From<natives::compose::Label>",
+        "From<natives::compose::Text<natives::compose::Theme, widgets::Plain>>",
+    ] {
+        assert!(rawr.contains(expected), "{stderr}");
+    }
 }

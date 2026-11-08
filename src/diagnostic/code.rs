@@ -258,6 +258,7 @@ pub(crate) fn std_path(rustc: &str) -> Code {
         "E0405" => RESOLVE_UNKNOWN_TRAIT,
         "E0369" => RESOLVE_BINARY_OPERATOR,
         "E0283" => RESOLVE_AMBIGUOUS_IMPL,
+        "E0277" => RESOLVE_CAPABILITY,
         "E0532" => RESOLVE_EXPECTED_PATTERN,
         "E0072" => RESOLVE_INFINITE_SIZE,
         "E0107" => RESOLVE_GENERIC_ARGUMENT_COUNT,
