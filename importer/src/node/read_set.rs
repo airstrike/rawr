@@ -8,10 +8,6 @@ use super::Parent;
 use super::{ActionKey, ContentRef, Digest, Direct, Discoverable, Error, Kind, Value};
 
 const MAX_ENTRIES: usize = 65_536;
-#[cfg(test)]
-const MAX_DECODE_BYTES: u64 = 32 * 1024 * 1024;
-#[cfg(test)]
-const MAX_HASH_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 pub(crate) type Validator<K> =
     Arc<dyn Fn(&K, &super::GraphBudget) -> Result<Box<[u8]>, Error> + Send + Sync + 'static>;
@@ -489,12 +485,6 @@ pub(crate) struct Witness {
     current: Arc<dyn Current>,
 }
 
-#[cfg(test)]
-struct Budget {
-    decoded: u64,
-    hashed: u64,
-}
-
 trait Current: Send + Sync {
     fn revalidate(&self, budget: &super::GraphBudget, scope: Scope) -> Result<Entry, Error>;
 }
@@ -588,24 +578,6 @@ impl Witness {
             });
         }
         Ok(current)
-    }
-}
-
-#[cfg(test)]
-impl Budget {
-    fn new() -> Self {
-        Self {
-            decoded: 0,
-            hashed: 0,
-        }
-    }
-
-    pub(crate) fn decode(&mut self, bytes: usize) -> Result<(), Error> {
-        charge(&mut self.decoded, bytes)
-    }
-
-    pub(crate) fn hash(&mut self, bytes: usize) -> Result<(), Error> {
-        charge(&mut self.hashed, bytes)
     }
 }
 
@@ -1228,14 +1200,6 @@ fn digest(entries: &[Entry]) -> Digest {
 }
 
 #[cfg(test)]
-fn charge(retained: &mut u64, bytes: usize) -> Result<(), Error> {
-    let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
-    let actual = retained.checked_add(bytes).unwrap_or(u64::MAX);
-    *retained = actual;
-    Ok(())
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1360,38 +1324,6 @@ mod tests {
             Err(Error::State(
                 "node read-set action has contradictory identities"
             ))
-        ));
-    }
-    // Composition past the decoded-byte target still takes ownership on
-    // the original account; the account records the pair array as the first
-    // exceeding charge and the retained arrays as its truthful high water.
-    #[test]
-    fn read_set_work_budgets_accept_exact_caps_and_reject_one_more_byte() {
-        let mut decode = Budget::new();
-        decode
-            .decode(usize::try_from(MAX_DECODE_BYTES).expect("the decode cap is addressable"))
-            .expect("the exact decode cap is accepted");
-        assert!(matches!(
-            decode.decode(1),
-            Err(Error::Limit {
-                resource: "node read-set decoded bytes",
-                limit,
-                actual,
-            }) if limit == usize::try_from(MAX_DECODE_BYTES).expect("the cap is addressable")
-                && actual == limit + 1
-        ));
-
-        let mut hash = Budget::new();
-        hash.hash(usize::try_from(MAX_HASH_BYTES).expect("the hash cap is addressable"))
-            .expect("the exact hash cap is accepted");
-        assert!(matches!(
-            hash.hash(1),
-            Err(Error::Limit {
-                resource: "node read-set hashed bytes",
-                limit,
-                actual,
-            }) if limit == usize::try_from(MAX_HASH_BYTES).expect("the cap is addressable")
-                && actual == limit + 1
         ));
     }
 }

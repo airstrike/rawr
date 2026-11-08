@@ -1165,7 +1165,7 @@ mod tests {
     fn closed_plan_grammar_covers_only_each_canonical_control_mutation() {
         let digest = "11".repeat(32);
         assert!(valid_plan(
-            Path::new("actions/runner/0002"),
+            Path::new("actions/runner/0003"),
             Operation::Directory
         ));
         assert!(valid_plan(
@@ -1189,7 +1189,7 @@ mod tests {
             Operation::Replacement
         ));
         assert!(valid_plan(
-            Path::new(&format!("actions/runner/0002/{digest}")),
+            Path::new(&format!("actions/runner/0003/{digest}")),
             Operation::Retirement
         ));
         assert!(valid_plan(

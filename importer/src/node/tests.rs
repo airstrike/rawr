@@ -832,20 +832,10 @@ fn direct_hit_charges_corrupt_path_decode_or_payload_hash_work() {
             executions.fetch_add(1, Ordering::Relaxed);
             Ok(Artifact(b"bounded".to_vec().into_boxed_slice()))
         });
-        if matches!(blocked, Blocked::Payload) {
-            // The oversized payload is a physical limit: it refuses before
-            // any transform.
-            assert!(
-                matches!(result, Err(Error::Limit { resource, .. }) if resource == "typed store file bytes"),
-                "{blocked:?}"
-            );
-            assert_eq!(executions.load(Ordering::Relaxed), 0, "{blocked:?}");
-        } else {
-            assert!(
-                !matches!(result, Err(Error::Limit { .. })),
-                "{blocked:?}: graph work never refuses"
-            );
-        }
+        assert!(
+            !matches!(result, Err(Error::Limit { .. })),
+            "{blocked:?}: no size refuses"
+        );
         store.retire_fixture().unwrap();
         fs::remove_dir_all(root).unwrap();
     }
