@@ -23,14 +23,14 @@ fn main() {
         up: 0.0,
     };
     let mut heights = Vec::new();
-    for _ in 0..13 {
+    for _ in 0..20 {
         heights.push(ball.height.round() as i64);
-        ball.advance(0.25);
+        ball.advance(0.2);
     }
     for row in (0..=8).rev() {
         let cells: Vec<&str> = heights
             .iter()
-            .map(|&height| if height == row { "()" } else { "  " })
+            .map(|&height| if height == row { "•" } else { " " })
             .collect();
         println!("{}", cells.join(" ").trim_end());
     }
