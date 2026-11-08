@@ -85,7 +85,8 @@
         {"text":"A marked module names a native module's trait by path (`Box<dyn page::Page>`, `use crate::page::Page;`) and takes, keeps and returns its objects.","issues":[1263]},
         {"text":"A path into a dependency none of whose items rawr can use yet names the item and says why, as it does for a crate with other items, instead of rustc's \"cannot find module or crate\".","issues":[1267]},
         {"text":"A crate's function that gives a thread's `JoinHandle`, as `open::that_in_background` does, runs: the program can ignore the handle or `.join()` it for what the thread gave.","issues":[1266]},
-        {"text":"A marked crate with Rust dependencies follows Cargo's features: `cfg(feature)` in marked code and in native modules holds as under `cargo run`, with `--features`, `--no-default-features` and `--all-features`.","issues":[1268]}
+        {"text":"A marked crate with Rust dependencies follows Cargo's features: `cfg(feature)` in marked code and in native modules holds as under `cargo run`, with `--features`, `--no-default-features` and `--all-features`.","issues":[1268]},
+        {"text":"A crate whose generic trait has a provided method giving an opaque type, where that type's supertrait binds an associated type to Self (as `Add<Output = Self>` does), no longer panics rawr check while building its API. An item whose signature names another item's type parameter is left out with a can't-be-used-yet note.","issues":[1278]}
       ]
     },
     "releases": [
@@ -2971,7 +2972,11 @@
     {"issue":1275,"title":"A crate's JoinHandle<T> of a T that holds crate values crosses","state":"open","category":"Divergences from rustc"},
     {"issue":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"open","category":"Divergences from rustc"},
     {"issue":1277,"title":"rawr-import: a dependency's feature named on the command line (`--features dep/feat`) reaches the dependency","state":"open","category":"Divergences from rustc"},
-    {"issue":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"open","category":"Health"}
+    {"issue":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"closed","category":"Health"},
+    {"issue":1279,"title":"A function's nested opaque output, as `-> impl Iterator<Item = impl Display>`, can't be used","state":"open","category":"Divergences from rustc"},
+    {"issue":1280,"title":"A generic type's `&self` method giving an opaque type that borrows it fails in the generated runner (E0521)","state":"open","category":"Divergences from rustc"},
+    {"issue":1281,"title":"The opaque type of a method reached through a sole type alias has no members","state":"open","category":"Divergences from rustc"},
+    {"issue":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3567,7 +3572,11 @@
             {"number":1239,"title":"tour: rawr check stops at a host item of cosmic_text's opaque FontRef::fonts whose owner type isn't declared","state":"closed"},
             {"number":1269,"title":"A closure on another thread giving a non-Send crate value, or a tuple mixing crate and program values, still panics","state":"open"},
             {"number":1270,"title":"An opaque type's supertrait binding to Self is dropped, not read as the opaque type","state":"closed"},
-            {"number":1271,"title":"An opaque type's Add, as impl Number gets it through a supertrait, gives the + operator","state":"open"}
+            {"number":1271,"title":"An opaque type's Add, as impl Number gets it through a supertrait, gives the + operator","state":"open"},
+            {"number":1279,"title":"A function's nested opaque output, as `-> impl Iterator<Item = impl Display>`, can't be used","state":"open"},
+            {"number":1280,"title":"A generic type's `&self` method giving an opaque type that borrows it fails in the generated runner (E0521)","state":"open"},
+            {"number":1281,"title":"The opaque type of a method reached through a sole type alias has no members","state":"open"},
+            {"number":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open"}
           ]
         }
       ]
@@ -3829,7 +3838,7 @@
             {"number":1272,"title":"A marked pub fn whose argument is a native alias of a wire type (`type Width = usize`) gets a native handle at the call","state":"open"},
             {"number":1273,"title":"A native module's unit struct used as a value (`page::Home`) can't be used yet","state":"open"},
             {"number":1277,"title":"rawr-import: a dependency's feature named on the command line (`--features dep/feat`) reaches the dependency","state":"open"},
-            {"number":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"open"}
+            {"number":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"closed"}
           ]
         }
       ]

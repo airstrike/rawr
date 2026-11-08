@@ -78,7 +78,8 @@
       {"text":"A marked module names a native module's trait by path (`Box<dyn page::Page>`, `use crate::page::Page;`) and takes, keeps and returns its objects.","issues":[1263]},
       {"text":"A path into a dependency none of whose items rawr can use yet names the item and says why, as it does for a crate with other items, instead of rustc's \"cannot find module or crate\".","issues":[1267]},
       {"text":"A crate's function that gives a thread's `JoinHandle`, as `open::that_in_background` does, runs: the program can ignore the handle or `.join()` it for what the thread gave.","issues":[1266]},
-      {"text":"A marked crate with Rust dependencies follows Cargo's features: `cfg(feature)` in marked code and in native modules holds as under `cargo run`, with `--features`, `--no-default-features` and `--all-features`.","issues":[1268]}
+      {"text":"A marked crate with Rust dependencies follows Cargo's features: `cfg(feature)` in marked code and in native modules holds as under `cargo run`, with `--features`, `--no-default-features` and `--all-features`.","issues":[1268]},
+      {"text":"A crate whose generic trait has a provided method giving an opaque type, where that type's supertrait binds an associated type to Self (as `Add<Output = Self>` does), no longer panics rawr check while building its API. An item whose signature names another item's type parameter is left out with a can't-be-used-yet note.","issues":[1278]}
     ]
   },
   "releases": [

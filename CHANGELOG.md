@@ -79,6 +79,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A path into a dependency none of whose items rawr can use yet names the item and says why, as it does for a crate with other items, instead of rustc's "cannot find module or crate". (#1267)
 - A crate's function that gives a thread's `JoinHandle`, as `open::that_in_background` does, runs: the program can ignore the handle or `.join()` it for what the thread gave. (#1266)
 - A marked crate with Rust dependencies follows Cargo's features: `cfg(feature)` in marked code and in native modules holds as under `cargo run`, with `--features`, `--no-default-features` and `--all-features`. (#1268)
+- A crate whose generic trait has a provided method giving an opaque type, where that type's supertrait binds an associated type to Self (as `Add<Output = Self>` does), no longer panics rawr check while building its API. An item whose signature names another item's type parameter is left out with a can't-be-used-yet note. (#1278)
 
 ## 0.3.171 (2026-11-07)
 
