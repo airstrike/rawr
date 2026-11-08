@@ -91,21 +91,13 @@ pub struct Frame {
     payload: Box<[u8]>,
 }
 
-/// One bounded resumable frame decoder. A timed-out empty read leaves the
-/// decoder ready to poll again; callers remain responsible for bounding both
-/// the complete work transition and the completion of a started frame.
+/// One bounded resumable frame decoder. An empty read from a nonblocking
+/// reader leaves the decoder ready to read again.
 pub struct Decoder {
     header: [u8; HEADER_BYTES],
     header_read: usize,
     body: Vec<u8>,
     body_read: usize,
-}
-
-/// A borrowed frame with progress retained across bounded socket writes.
-pub(crate) struct Encoder<'frame> {
-    prefix: [u8; HEADER_BYTES + PREFIX_BYTES],
-    payload: &'frame [u8],
-    written: usize,
 }
 
 impl Decoder {
@@ -119,32 +111,12 @@ impl Decoder {
         }
     }
 
-    /// Return whether any byte of the current frame has already arrived.
-    #[must_use]
-    pub const fn has_partial_frame(&self) -> bool {
-        self.header_read != 0 || !self.body.is_empty()
-    }
-
-    /// Advance one frame without discarding a partial prefix when a bounded
-    /// socket poll returns `WouldBlock` or `TimedOut`.
+    /// Advance one frame without discarding a partial prefix when a
+    /// nonblocking reader returns `WouldBlock` or `TimedOut`.
     pub fn receive(&mut self, reader: &mut impl Read) -> Result<Option<Frame>, Error> {
-        self.advance(reader, usize::MAX)
-    }
-
-    /// Perform at most one read so a trickling peer cannot starve supervision.
-    pub(crate) fn receive_step(&mut self, reader: &mut impl Read) -> Result<Option<Frame>, Error> {
-        self.advance(reader, 1)
-    }
-
-    fn advance(&mut self, reader: &mut impl Read, attempts: usize) -> Result<Option<Frame>, Error> {
-        let mut reads = 0;
         while self.header_read < HEADER_BYTES {
-            if reads == attempts {
-                return Ok(None);
-            }
-            reads += 1;
             match reader.read(&mut self.header[self.header_read..]) {
-                Ok(0) => return Err(Error::Truncated),
+                Ok(0) => return Err(Error::Closed),
                 Ok(count) => self.header_read += count,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error)
@@ -175,12 +147,8 @@ impl Decoder {
             self.body.resize(length, 0);
         }
         while self.body_read < self.body.len() {
-            if reads == attempts {
-                return Ok(None);
-            }
-            reads += 1;
             match reader.read(&mut self.body[self.body_read..]) {
-                Ok(0) => return Err(Error::Truncated),
+                Ok(0) => return Err(Error::Closed),
                 Ok(count) => self.body_read += count,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error)
@@ -199,63 +167,6 @@ impl Decoder {
         self.header_read = 0;
         self.body_read = 0;
         decode(body)
-    }
-}
-
-impl<'frame> Encoder<'frame> {
-    pub(crate) fn frame(frame: &'frame Frame) -> Result<Self, Error> {
-        let length = PREFIX_BYTES
-            .checked_add(frame.payload.len())
-            .ok_or(Error::Oversized {
-                limit: FRAME_BYTES,
-                actual: usize::MAX,
-            })?;
-        let length = u32::try_from(length).map_err(|_| Error::Oversized {
-            limit: FRAME_BYTES,
-            actual: length,
-        })?;
-        let mut prefix = [0; HEADER_BYTES + PREFIX_BYTES];
-        prefix[..4].copy_from_slice(&length.to_be_bytes());
-        prefix[4..8].copy_from_slice(&VERSION.to_be_bytes());
-        prefix[8] = frame.tag as u8;
-        Ok(Self {
-            prefix,
-            payload: &frame.payload,
-            written: 0,
-        })
-    }
-
-    /// Perform one write or flush, preserving progress after a bounded timeout.
-    pub(crate) fn send_step(&mut self, writer: &mut impl Write) -> Result<bool, Error> {
-        let remaining = if self.written < self.prefix.len() {
-            &self.prefix[self.written..]
-        } else {
-            &self.payload[self.written - self.prefix.len()..]
-        };
-        let result = if remaining.is_empty() {
-            writer.flush().map(|()| 0)
-        } else {
-            writer.write(remaining)
-        };
-        match result {
-            Ok(0) if remaining.is_empty() => Ok(true),
-            Ok(0) => Err(Error::Write(std::io::ErrorKind::WriteZero.into())),
-            Ok(count) => {
-                self.written += count;
-                Ok(false)
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::Interrupted
-                        | std::io::ErrorKind::WouldBlock
-                        | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                Ok(false)
-            }
-            Err(error) => Err(Error::Write(error)),
-        }
     }
 }
 
@@ -392,7 +303,7 @@ pub fn send(writer: &mut impl Write, frame: &Frame) -> Result<(), Error> {
 /// consume exactly one complete versioned frame.
 pub fn receive(reader: &mut impl Read) -> Result<Frame, Error> {
     // A blocking caller has no later poll to resume a partial frame, so a
-    // timed-out read is an error rather than `None`.
+    // would-block read is an error rather than `None`.
     Decoder::new()
         .receive(reader)?
         .ok_or_else(|| Error::Read(std::io::Error::from(std::io::ErrorKind::WouldBlock)))
@@ -476,6 +387,8 @@ pub enum Error {
     Oversized { limit: usize, actual: usize },
     #[error("runner frame was truncated")]
     Truncated,
+    #[error("the runner closed the protocol channel")]
+    Closed,
     #[error("runner wire version mismatch: expected {expected}, received {actual}")]
     Version { expected: u32, actual: u32 },
     #[error("unknown runner frame tag {0}")]
@@ -486,6 +399,16 @@ pub enum Error {
     Read(#[source] std::io::Error),
     #[error("cannot write runner frame")]
     Write(#[source] std::io::Error),
+}
+
+impl Error {
+    /// Whether the peer went away: it closed the channel, or the channel
+    /// failed under a read or write. A peer that sent a bad frame is still
+    /// there.
+    #[must_use]
+    pub const fn is_closed(&self) -> bool {
+        matches!(self, Self::Closed | Self::Read(_) | Self::Write(_))
+    }
 }
 
 #[cfg(test)]
@@ -523,17 +446,15 @@ mod tests {
         };
         let mut decoder = Decoder::new();
         let decoded = loop {
-            match decoder
+            if let Some(frame) = decoder
                 .receive(&mut reader)
                 .expect("the partial frame remains valid")
             {
-                Some(frame) => break frame,
-                None => assert!(decoder.has_partial_frame()),
+                break frame;
             }
         };
         assert_eq!(decoded.tag(), Tag::WorkProgress);
         assert_eq!(decoded.payload(), b"progress");
-        assert!(!decoder.has_partial_frame());
     }
 
     #[test]
@@ -549,84 +470,6 @@ mod tests {
                 actual: 2
             })
         ));
-    }
-
-    #[test]
-    fn guarded_decoder_yields_between_continuously_successful_fragments() {
-        struct Trickle {
-            bytes: Cursor<Vec<u8>>,
-            reads: usize,
-        }
-        impl Read for Trickle {
-            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-                self.reads += 1;
-                self.bytes.read(&mut output[..1])
-            }
-        }
-        let frame = Frame::new(Tag::Prepared, vec![7; 128].into_boxed_slice()).unwrap();
-        let mut wire = Vec::new();
-        send(&mut wire, &frame).unwrap();
-        let mut trickle = Trickle {
-            bytes: Cursor::new(wire),
-            reads: 0,
-        };
-        let mut decoder = Decoder::new();
-        // Each successful fragment gives the owner its clock/resource check
-        // back, even though the peer never produces WouldBlock.
-        for tick in 0..10 {
-            assert!(decoder.receive_step(&mut trickle).unwrap().is_none());
-            assert_eq!(trickle.reads, tick + 1);
-        }
-        assert!(decoder.has_partial_frame());
-        let decoded = loop {
-            let before = trickle.reads;
-            let frame = decoder.receive_step(&mut trickle).unwrap();
-            assert!(trickle.reads - before <= 1);
-            if let Some(frame) = frame {
-                break frame;
-            }
-        };
-        assert_eq!(decoded.payload(), &[7; 128]);
-    }
-
-    #[test]
-    fn guarded_encoder_preserves_partial_writes_and_timeouts() {
-        struct Segmented {
-            bytes: Vec<u8>,
-            calls: usize,
-        }
-        impl Write for Segmented {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.calls += 1;
-                if self.calls.is_multiple_of(3) {
-                    return Err(std::io::ErrorKind::TimedOut.into());
-                }
-                let count = bytes.len().min(2);
-                self.bytes.extend_from_slice(&bytes[..count]);
-                Ok(count)
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                self.calls += 1;
-                Ok(())
-            }
-        }
-        let frame = Frame::new(Tag::Compile, Box::from(&b"fragmented snapshot"[..])).unwrap();
-        let mut expected = Vec::new();
-        send(&mut expected, &frame).unwrap();
-        let mut encoder = Encoder::frame(&frame).unwrap();
-        let mut writer = Segmented {
-            bytes: Vec::new(),
-            calls: 0,
-        };
-        loop {
-            let before = writer.calls;
-            let complete = encoder.send_step(&mut writer).unwrap();
-            assert_eq!(writer.calls, before + 1);
-            if complete {
-                break;
-            }
-        }
-        assert_eq!(writer.bytes, expected);
     }
 }
 

@@ -152,18 +152,15 @@ pub struct Finished {
     pub stdout: Tail,
     /// Its stderr.
     pub stderr: Tail,
-    /// It ran past its deadline and was ended.
-    pub timed_out: bool,
     /// How long it ran.
     pub elapsed: Duration,
 }
 
 /// Run `command` in a group of its own with `stdin` as its input, until it
-/// exits, `deadline` passes or `cancel` fires; then its group is ended.
+/// exits or `cancel` fires; then its group is ended.
 pub fn run(
     command: &mut Command,
     stdin: Option<&str>,
-    deadline: Instant,
     cancel: &Cancel,
 ) -> std::io::Result<Finished> {
     let started = Instant::now();
@@ -188,16 +185,11 @@ pub fn run(
     }
     let stdout = child.stdout.take().map(Tail::read).unwrap_or_default();
     let stderr = child.stderr.take().map(Tail::read).unwrap_or_default();
-    let mut timed_out = false;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break Some(status);
         }
         if cancel.is_cancelled() {
-            break None;
-        }
-        if Instant::now() >= deadline {
-            timed_out = true;
             break None;
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -218,7 +210,6 @@ pub fn run(
         status,
         stdout,
         stderr,
-        timed_out,
         elapsed: started.elapsed(),
     })
 }

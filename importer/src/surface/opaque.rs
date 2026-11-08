@@ -83,6 +83,22 @@ pub fn path(function: &str, index: usize) -> String {
     }
 }
 
+/// The name the opaque type an inherent method `name` of the type at
+/// `owner` gives is declared beside: `{owner}__{name}`, as
+/// `form::Holder__items_mut`. Each impl of a generic type may give one by
+/// the same name, as swash's `Setting<u16>::parse_list` and
+/// `Setting<f32>::parse_list` each give an `impl Iterator`: the
+/// `sibling`-th, in the order the type's impls are, after the first is
+/// apart, so each type and its members have a path of their own.
+#[must_use]
+pub fn inherent_owner(owner: &str, name: &str, sibling: usize) -> String {
+    if sibling == 0 {
+        format!("{owner}__{name}")
+    } else {
+        format!("{owner}__{name}__{sibling}")
+    }
+}
+
 /// The start of the name of each function a facade declares beside a
 /// trait's methods over its `Self` (`surface::member`) for a type
 /// parameter of one of its methods, or an associated type of one, as

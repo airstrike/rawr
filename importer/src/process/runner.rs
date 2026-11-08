@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt as _;
@@ -18,12 +18,9 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt as _;
 
 static SOCKET_ID: AtomicU64 = AtomicU64::new(1);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long a frame that has begun may take to finish, either way. A reply
-/// may take any time to begin ([`receive_reply`]).
-const IO_TIMEOUT: Duration = Duration::from_secs(10);
-/// Read and write poll interval while a guarded exchange awaits its peer.
-const POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// How often the owner looks for a runner's exit while it waits for the
+/// runner to connect.
+const CONNECT_POLL: Duration = Duration::from_millis(2);
 const WORK_PROGRESS_LIMIT: u8 = 16;
 const WORK_PROGRESS_BYTES: usize = 32 + 16 + 3;
 
@@ -413,11 +410,7 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             path: socket,
             source,
         })?;
-        if let Err(source) = stream
-            .set_nonblocking(false)
-            .and_then(|()| stream.set_read_timeout(Some(IO_TIMEOUT)))
-            .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
-        {
+        if let Err(source) = stream.set_nonblocking(false) {
             let failure = Error::ProtocolIo(source);
             let cleanup = child.terminate();
             if child.is_reaped() {
@@ -449,7 +442,9 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             observed: false,
             hot_sequence: 0,
         };
-        let authentication = guarded(&mut inner, |inner| receive_guarded(inner, IO_TIMEOUT))?;
+        let authentication = guarded(&mut inner, |inner| {
+            crate::protocol::receive(&mut inner.stream).map_err(Error::from)
+        })?;
         if !authenticates(&authentication, &capability, &carrier) {
             return Err(Error::Authentication);
         }
@@ -1221,17 +1216,7 @@ impl<B> Inner<B> {
         {
             return;
         }
-        let deadline = Instant::now() + IO_TIMEOUT;
-        loop {
-            match self.child.try_wait() {
-                Ok(Some(_)) => {
-                    self.reaped = true;
-                    return;
-                }
-                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(2)),
-                Ok(None) | Err(_) => return,
-            }
-        }
+        self.reaped = self.child.wait().is_ok();
     }
 }
 
@@ -1250,21 +1235,13 @@ impl<B> Drop for Inner<B> {
     }
 }
 
+/// The runner's socket, once it connects, for as long as that takes; a runner
+/// that exits first is [`Error::EarlyExit`].
 #[cfg(unix)]
 fn accept(
     listener: &UnixListener,
     child: &mut super::ownership::Child,
 ) -> Result<UnixStream, Error> {
-    accept_with_timeout(listener, child, CONNECT_TIMEOUT)
-}
-
-#[cfg(unix)]
-fn accept_with_timeout(
-    listener: &UnixListener,
-    child: &mut super::ownership::Child,
-    timeout: Duration,
-) -> Result<UnixStream, Error> {
-    let deadline = Instant::now() + timeout;
     loop {
         match listener.accept() {
             Ok((stream, _)) => return Ok(stream),
@@ -1272,10 +1249,7 @@ fn accept_with_timeout(
                 if child.try_wait().map_err(resource_error)?.is_some() {
                     return Err(Error::EarlyExit);
                 }
-                if Instant::now() >= deadline {
-                    return Err(Error::ConnectTimeout);
-                }
-                thread::sleep(Duration::from_millis(2));
+                thread::sleep(CONNECT_POLL);
             }
             Err(source) => return Err(Error::ProtocolIo(source)),
         }
@@ -1438,127 +1412,46 @@ fn work_request<B>(
 /// The runner's reply to one exchange. A live runner answers every exchange
 /// from its protocol thread, beside its program, but the OS may not run it
 /// for a while: an idle window that macOS naps on a busy machine. So the
-/// reply may take as long as it takes to begin, and a runner that exits
-/// closes the socket instead. Only a frame that has begun must finish
-/// within `IO_TIMEOUT`. `progress` takes the work progress a reply to work
-/// sends first; without it, a progress frame is the reply.
+/// reply takes as long as it takes, and a runner that exits closes the
+/// socket instead. `progress` takes the work progress a reply to work sends
+/// first; without it, a progress frame is the reply.
 fn receive_reply<B>(
     inner: &mut Inner<B>,
     mut progress: Option<&mut ProgressState>,
 ) -> Result<crate::protocol::Frame, Error> {
-    let mut partial_started = None;
-    let mut decoder = crate::protocol::Decoder::new();
     loop {
-        let before = Instant::now();
-        let decoded = match decoder.receive_step(&mut inner.stream) {
-            Ok(decoded) => decoded,
-            Err(error) => return Err(work_protocol_error(inner, error)),
-        };
-        match decoded {
-            Some(frame) => {
-                partial_started = None;
-                if frame.tag() == crate::protocol::Tag::WorkProgress
-                    && let Some(progress) = progress.as_deref_mut()
-                {
-                    progress.observe(frame.payload())?;
-                    continue;
-                }
-                return Ok(frame);
-            }
-            // The read itself blocks up to `POLL_INTERVAL`; a header just
-            // read is followed by its body at once, never after a sleep.
-            None => {
-                if decoder.has_partial_frame() {
-                    let partial_started = *partial_started.get_or_insert(before);
-                    if partial_started.elapsed() >= IO_TIMEOUT {
-                        return Err(Error::WorkFrameTimeout);
-                    }
-                }
-            }
+        let frame = crate::protocol::receive(&mut inner.stream)
+            .map_err(|error| work_protocol_error(inner, error))?;
+        if frame.tag() == crate::protocol::Tag::WorkProgress
+            && let Some(progress) = progress.as_deref_mut()
+        {
+            progress.observe(frame.payload())?;
+            continue;
         }
+        return Ok(frame);
     }
 }
 
+/// An exchange whose failure is the runner's exit when the runner went
+/// away, and otherwise stops the runner and says why.
 fn guarded<B, T>(
     inner: &mut Inner<B>,
     body: impl FnOnce(&mut Inner<B>) -> Result<T, Error>,
 ) -> Result<T, Error> {
-    if let Err(source) = inner
-        .stream
-        .set_read_timeout(Some(POLL_INTERVAL))
-        .and_then(|()| inner.stream.set_write_timeout(Some(POLL_INTERVAL)))
-    {
-        // Darwin refuses socket options once the peer is gone (EINVAL).
-        return Err(exited_peer(inner, &source).unwrap_or(Error::ProtocolIo(source)));
-    }
-    let result = body(inner);
-    let restored = inner
-        .stream
-        .set_read_timeout(Some(IO_TIMEOUT))
-        .and_then(|()| inner.stream.set_write_timeout(Some(IO_TIMEOUT)));
-    match (result, restored) {
+    match body(inner) {
         // The peer's exit is already proven with its status and stderr.
-        (Err(error @ Error::WorkPeer { .. }), _) => Err(error),
-        (Err(Error::Protocol(error)), _) => Err(match exited_peer(inner, &error) {
+        Err(error @ Error::WorkPeer { .. }) => Err(error),
+        Err(Error::Protocol(error)) => Err(match exited_peer(inner, &error) {
             Some(exited) => exited,
             None => terminal_owner_loss(inner, Error::Protocol(error)),
         }),
-        (Err(error @ (Error::Resource(_) | Error::WorkFrameTimeout)), _) => {
-            Err(terminal_owner_loss(inner, error))
-        }
-        (Ok(value), Err(source)) => match exited_peer(inner, &source) {
-            Some(exited) => after_reply(value, exited),
-            None => Err(terminal_owner_loss(inner, Error::ProtocolIo(source))),
-        },
-        (_, Err(source)) => Err(match exited_peer(inner, &source) {
-            Some(exited) => exited,
-            None => terminal_owner_loss(inner, Error::ProtocolIo(source)),
-        }),
-        (result, Ok(())) => result,
-    }
-}
-
-/// The reply already completed the exchange. A runner that then exits
-/// cleanly, as it does right after acknowledging a shutdown, leaves Darwin
-/// refusing the timeout restore; that is not a failure of the reply.
-fn after_reply<T>(value: T, exited: Error) -> Result<T, Error> {
-    match exited {
-        Error::WorkPeer {
-            status: Some(0), ..
-        } => Ok(value),
-        exited => Err(exited),
-    }
-}
-
-/// The runner's first frame, which it sends as it connects, before any
-/// program runs: unlike a reply, it has a deadline.
-fn receive_guarded<B>(
-    inner: &mut Inner<B>,
-    timeout: Duration,
-) -> Result<crate::protocol::Frame, Error> {
-    let deadline = Instant::now() + timeout;
-    let mut decoder = crate::protocol::Decoder::new();
-    loop {
-        if Instant::now() >= deadline {
-            return Err(Error::WorkFrameTimeout);
-        }
-        if let Some(frame) = decoder.receive_step(&mut inner.stream)? {
-            return Ok(frame);
-        }
+        Err(error @ Error::Resource(_)) => Err(terminal_owner_loss(inner, error)),
+        result => result,
     }
 }
 
 fn send_guarded<B>(inner: &mut Inner<B>, frame: &crate::protocol::Frame) -> Result<(), Error> {
-    let deadline = Instant::now() + IO_TIMEOUT;
-    let mut encoder = crate::protocol::Encoder::frame(frame)?;
-    loop {
-        if Instant::now() >= deadline {
-            return Err(Error::WorkFrameTimeout);
-        }
-        if encoder.send_step(&mut inner.stream)? {
-            return Ok(());
-        }
-    }
+    Ok(crate::protocol::send(&mut inner.stream, frame)?)
 }
 
 fn resource_error(error: crate::Error) -> Error {
@@ -1594,15 +1487,26 @@ fn work_protocol_error<B>(inner: &mut Inner<B>, error: crate::protocol::Error) -
     exited_peer(inner, &error).unwrap_or(Error::Protocol(error))
 }
 
-/// Attribute a broken channel to the runner when it exits within the deadline,
-/// keeping its status and stderr instead of an opaque socket failure.
-fn exited_peer<B>(inner: &mut Inner<B>, failure: &dyn std::fmt::Display) -> Option<Error> {
+/// Attribute a failed exchange to the runner's exit, keeping its status and
+/// stderr instead of an opaque socket failure. A closed channel is a runner
+/// on its way out, so its exit is awaited; a runner that sent a bad frame is
+/// attributed only if it has already exited.
+fn exited_peer<B>(inner: &mut Inner<B>, failure: &crate::protocol::Error) -> Option<Error> {
     if inner.reaped {
         return None;
     }
-    let status = match exit_within(&mut inner.child, IO_TIMEOUT)? {
+    let status = if failure.is_closed() {
+        inner.child.wait()
+    } else {
+        match inner.child.try_wait() {
+            Ok(Some(status)) => Ok(status),
+            Ok(None) => return None,
+            Err(error) => Err(error),
+        }
+    };
+    let status = match status {
         Ok(status) => status,
-        Err(error) => return Some(error),
+        Err(error) => return Some(resource_error(error)),
     };
     inner.reaped = true;
     inner.exited = Some(status);
@@ -1633,21 +1537,6 @@ fn ended(status: std::process::ExitStatus) -> Result<bool, Error> {
     #[cfg(not(unix))]
     let code = status.code();
     Err(Error::Exit(code))
-}
-
-fn exit_within(
-    child: &mut super::ownership::Child,
-    timeout: Duration,
-) -> Option<Result<std::process::ExitStatus, Error>> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Some(Ok(status)),
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(2)),
-            Ok(None) => return None,
-            Err(source) => return Some(Err(resource_error(source))),
-        }
-    }
 }
 
 fn abort_hot<B>(inner: &mut Inner<B>, prepared: &super::hot::Prepared<B>) -> Result<(), Error> {
@@ -1830,16 +1719,12 @@ pub enum Error {
     Snapshot(#[from] crate::supervisor::snapshot::Error),
     #[error("runner exited before connecting its protocol socket")]
     EarlyExit,
-    #[error("runner did not connect before the protocol deadline")]
-    ConnectTimeout,
     #[error("runner authentication capability or compiled manifest mismatched")]
     Authentication,
     #[error("runner response carried a stale tag, key, capability, or receipt")]
     Stale,
     #[error("runner semantic progress was invalid: {0}")]
     WorkProgress(&'static str),
-    #[error("the runner did not finish a frame before its deadline")]
-    WorkFrameTimeout,
     #[error("the runner was stopped after its work failed: {reason}")]
     OwnerLost { reason: Box<str> },
     #[error(
@@ -2030,7 +1915,7 @@ mod tests {
     }
 
     #[test]
-    fn accept_timeout_and_child_death_are_bounded_and_reaped() {
+    fn a_runner_that_exits_before_connecting_is_reaped() {
         let root = temporary("accept");
         fs::create_dir(&root).expect("the accept test root exists");
         let socket = root.join("runner.sock");
@@ -2038,39 +1923,21 @@ mod tests {
         listener
             .set_nonblocking(true)
             .expect("the test listener is nonblocking");
-        let mut sleeper = Command::new("/bin/sh");
-        sleeper.args(["-c", "sleep 30"]).process_group(0);
-        let mut sleeper = super::super::ownership::Child::spawn(&mut sleeper)
-            .expect("the isolated sleeper starts");
-        assert!(matches!(
-            accept_with_timeout(&listener, &mut sleeper, Duration::from_millis(10)),
-            Err(Error::ConnectTimeout)
-        ));
-        terminate(&mut sleeper);
-        assert!(sleeper
-            .try_wait()
-            .expect("the timed-out child is inspectable")
-            .is_some());
-
         let mut exited = Command::new("/bin/sh");
         exited.args(["-c", "exit 0"]).process_group(0);
         let mut exited = super::super::ownership::Child::spawn(&mut exited)
             .expect("the short-lived child starts");
         assert!(matches!(
-            accept_with_timeout(&listener, &mut exited, Duration::from_secs(1)),
+            accept(&listener, &mut exited),
             Err(Error::EarlyExit)
         ));
-        terminate(&mut exited);
-        assert!(exited
-            .try_wait()
-            .expect("the early-exit child is inspectable")
-            .is_some());
+        assert!(exited.is_reaped());
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn runner_exit_explains_a_socket_that_refuses_options() {
-        let (parent, runner) = UnixStream::pair().expect("the protocol pair opens");
+    fn a_closed_channel_is_the_runner_exiting() {
+        let (mut parent, runner) = UnixStream::pair().expect("the protocol pair opens");
         let mut command = Command::new("/bin/sh");
         command
             .args(["-c", "exit 3"])
@@ -2079,15 +1946,12 @@ mod tests {
         let mut child = super::super::ownership::Child::spawn(&mut command)
             .expect("the runner stand-in starts");
         drop(command);
-        let status = exit_within(&mut child, Duration::from_secs(5))
-            .expect("the runner exits within the deadline")
-            .expect("the exit is observable");
+        let Err(closed) = crate::protocol::receive(&mut parent) else {
+            panic!("the runner sends nothing");
+        };
+        assert!(closed.is_closed());
+        let status = child.wait().expect("the exit is observable");
         assert_eq!(status.code(), Some(3));
-        // Darwin rejects socket options once the peer has gone (EINVAL); this
-        // is the failure that must be attributed to the exit above.
-        #[cfg(target_os = "macos")]
-        assert!(parent.set_read_timeout(Some(POLL_INTERVAL)).is_err());
-        drop(parent);
         // The status stands as the program's end, as a shell gives it.
         assert!(matches!(ended(status), Err(Error::Exit(Some(3)))));
         let killed = Command::new("/bin/sh")
@@ -2095,47 +1959,6 @@ mod tests {
             .status()
             .expect("the killed stand-in runs");
         assert!(matches!(ended(killed), Err(Error::Exit(Some(137)))));
-    }
-
-    #[test]
-    fn acknowledged_shutdown_stands_when_the_runner_exits_before_timeout_restore() {
-        use std::io::Read as _;
-
-        let (mut parent, runner) = UnixStream::pair().expect("the protocol pair opens");
-        let mut command = Command::new("/bin/sh");
-        command
-            .args(["-c", "printf ack >&0"])
-            .stdin(Stdio::from(std::os::fd::OwnedFd::from(runner)))
-            .process_group(0);
-        let mut child = super::super::ownership::Child::spawn(&mut command)
-            .expect("the runner stand-in starts");
-        drop(command);
-        let mut reply = [0; 3];
-        parent
-            .read_exact(&mut reply)
-            .expect("the final acknowledgement arrives");
-        let status = exit_within(&mut child, Duration::from_secs(5))
-            .expect("the runner exits after acknowledging")
-            .expect("the exit is observable");
-        assert!(status.success());
-        #[cfg(target_os = "macos")]
-        assert!(parent.set_read_timeout(Some(IO_TIMEOUT)).is_err());
-        let exited = |status| Error::WorkPeer {
-            status,
-            protocol: "Invalid argument (os error 22)".into(),
-            stderr: "rawr runner stderr log".into(),
-        };
-        assert_eq!(
-            after_reply(reply, exited(status.code())).expect("the reply stands"),
-            *b"ack"
-        );
-        assert!(matches!(
-            after_reply(reply, exited(Some(3))),
-            Err(Error::WorkPeer {
-                status: Some(3),
-                ..
-            })
-        ));
     }
 
     #[test]

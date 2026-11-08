@@ -183,6 +183,15 @@ fn a_crates_opaque_iterator_is_iterated() {
     runs_as_cargo_does("iterated", "Some(3)\nstep 2\nstep 1\n4\n[6, 4, 2]\n6 2\n");
 }
 
+/// swash's `Setting<T>`: its impl for `u16` and its impl for `f32` each
+/// give an opaque iterator from `parse_list`, two opaque types, each
+/// declared with its own `next`, so the crate imports, as every iced
+/// program's text stack needs.
+#[test]
+fn a_types_impls_that_give_opaque_iterators_by_one_name_import() {
+    runs_as_cargo_does("settings", "Setting(3) 4\n");
+}
+
 /// A type whose method gives an opaque iterator, reached through a module
 /// that re-exports the type's module, as ratatui's
 /// `macros::ratatui_core::text::Line` is, by a program that never calls the

@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub mod alone;
 pub mod fixture;
@@ -44,12 +44,11 @@ pub struct Run {
 }
 
 impl Run {
-    /// The next stdout line that `accept` takes, waiting up to `limit`.
-    pub fn until(&mut self, limit: Duration, accept: impl Fn(&str) -> bool) -> String {
-        let deadline = Instant::now() + limit;
+    /// The next stdout line that `accept` takes. A run whose output ends
+    /// without one fails the test, with what it printed.
+    pub fn until(&mut self, accept: impl Fn(&str) -> bool) -> String {
         loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            match self.lines.recv_timeout(left) {
+            match self.lines.recv() {
                 Ok(Line::Out(line)) => {
                     self.seen.push(line.clone());
                     if accept(&line) {
@@ -57,21 +56,36 @@ impl Run {
                     }
                 }
                 Ok(Line::Err(line)) => self.seen.push(format!("stderr: {line}")),
-                Err(_) => panic!("timed out; output so far:\n{}", self.seen.join("\n")),
+                Err(_) => panic!(
+                    "the run ended without it; its output:\n{}",
+                    self.seen.join("\n")
+                ),
             }
         }
     }
 
+    /// The text of the `RAWR_MCP_EVENTS` file `events` once `accept` takes
+    /// it. A run that exits first fails the test.
+    pub fn told(&mut self, events: &Path, accept: impl Fn(&str) -> bool) -> String {
+        loop {
+            let text = fs::read_to_string(events).unwrap_or_default();
+            if accept(&text) {
+                return text;
+            }
+            assert!(
+                self.child.try_wait().unwrap().is_none(),
+                "the run exited first; its events:\n{text}\nits output:\n{}",
+                self.seen.join("\n")
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     /// Wait for the run to end, and keep the output it printed since the
-    /// last [`Run::until`].
+    /// last [`Run::until`], to the end of its pipes.
     pub fn wait(&mut self) -> std::process::ExitStatus {
         let status = self.child.wait().unwrap();
-        // A process the run left behind may hold its pipes open.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while let Ok(line) = self
-            .lines
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        {
+        while let Ok(line) = self.lines.recv() {
             self.seen.push(match line {
                 Line::Out(line) => line,
                 Line::Err(line) => format!("stderr: {line}"),

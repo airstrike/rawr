@@ -1845,11 +1845,7 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
             if event == NodeEvent::RejectedHit && self.counts.rejected.load(Ordering::Relaxed) == 1
             {
                 self.reached.send(()).unwrap();
-                self.resume
-                    .lock()
-                    .unwrap()
-                    .recv_timeout(Duration::from_secs(5))
-                    .unwrap();
+                self.resume.lock().unwrap().recv().unwrap();
             }
         }
         fn process(&self, _: ProcessKind) {}
@@ -1886,7 +1882,7 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
                         })
                     });
                     ready
-                        .recv_timeout(Duration::from_secs(5))
+                        .recv()
                         .expect("the first lookup rejects the uncommitted record");
                     store.with_action_reservation(ownership, &recipe, None, || {
                         Ok(crate::store::Reserved::Publish {

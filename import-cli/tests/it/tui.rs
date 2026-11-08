@@ -98,10 +98,10 @@ fn a_lent_frame_draws_the_example_ui_as_cargo_run_does_and_a_body_edit_repaints(
 
     let mut run = start_with(&root, &[], &[], Stdio::piped());
     let mut stdin = run.child.stdin.take().unwrap();
-    let mut frame = |run: &mut crate::support::Run, keys: &str, limit| {
+    let mut frame = |run: &mut crate::support::Run, keys: &str| {
         stdin.write_all(format!("{keys}\n").as_bytes()).unwrap();
         let from = run.seen.len();
-        run.until(limit, |line| line == "end");
+        run.until(|line| line == "end");
         run.seen[from..run.seen.len() - 1]
             .iter()
             .filter(|line| !line.starts_with("stderr: "))
@@ -109,7 +109,7 @@ fn a_lent_frame_draws_the_example_ui_as_cargo_run_does_and_a_body_edit_repaints(
             .collect::<Vec<_>>()
     };
     for (index, keys) in KEYS.iter().enumerate() {
-        let drawn = frame(&mut run, keys, Duration::from_secs(900));
+        let drawn = frame(&mut run, keys);
         assert_eq!(drawn, native[index], "frame {index} after `{keys}`");
     }
     let last = native.last().unwrap();
@@ -118,13 +118,11 @@ fn a_lent_frame_draws_the_example_ui_as_cargo_run_does_and_a_body_edit_repaints(
     // comes once it runs.
     std::thread::sleep(Duration::from_secs(3));
     edit(&root.join("src/ui.rs"), "\" New to-do \"", "\" New task \"");
-    let deadline = Instant::now() + Duration::from_secs(120);
     let swapped = loop {
-        let next = frame(&mut run, "", Duration::from_secs(30));
+        let next = frame(&mut run, "");
         if next[0].contains("New task") {
             break next;
         }
-        assert!(Instant::now() < deadline, "{}", run.seen.join("\n"));
         std::thread::sleep(Duration::from_millis(250));
     };
     let seen = run.seen.join("\n");
@@ -201,6 +199,8 @@ struct Screen {
     main: String,
     /// The end of the last read: a character or an escape it cut.
     pending: Vec<u8>,
+    /// Whether the terminal closed: everything that had it exited.
+    closed: bool,
 }
 
 impl Screen {
@@ -309,6 +309,8 @@ struct Terminal {
     master: Arc<OwnedFd>,
     slave: PathBuf,
     screen: Arc<Mutex<Screen>>,
+    /// The `RAWR_MCP_EVENTS` file the run writes.
+    events: PathBuf,
 }
 
 impl Terminal {
@@ -322,6 +324,8 @@ impl Terminal {
         let pty = nix::pty::openpty(&size, None).unwrap();
         let slave = nix::unistd::ttyname(pty.slave.as_raw_fd()).unwrap();
         let directory = crate::support::scratch();
+        let events = root.with_extension("events");
+        let _ = fs::remove_file(&events);
         let tty = || Stdio::from(pty.slave.try_clone().unwrap());
         let mut command = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
         command
@@ -329,6 +333,7 @@ impl Terminal {
             .arg(root)
             .env("RAWR_HOME", directory.join("rawr-home"))
             .env("TERM", "xterm-256color")
+            .env("RAWR_MCP_EVENTS", &events)
             .env_remove("CARGO_TARGET_DIR")
             .env_remove("RUSTFLAGS")
             .env_remove("RAWR_VERBOSE")
@@ -359,12 +364,14 @@ impl Terminal {
             while let Ok(count @ 1..) = file.read(&mut buffer) {
                 shown.lock().unwrap().feed(&buffer[..count]);
             }
+            shown.lock().unwrap().closed = true;
         });
         Self {
             child,
             master,
             slave,
             screen,
+            events,
         }
     }
 
@@ -397,9 +404,9 @@ impl Terminal {
             .join(":")
     }
 
-    /// Wait until `accept` holds for the screen, up to `limit`. How long it
-    /// took.
-    fn until(&self, limit: Duration, what: &str, accept: impl Fn(&Screen) -> bool) -> Duration {
+    /// Wait until `accept` holds for the screen; how long that took. A
+    /// terminal that closes first fails the test.
+    fn until(&self, what: &str, accept: impl Fn(&Screen) -> bool) -> Duration {
         let started = Instant::now();
         loop {
             {
@@ -408,8 +415,8 @@ impl Terminal {
                     return started.elapsed();
                 }
                 assert!(
-                    started.elapsed() < limit,
-                    "timed out waiting for {what}; the screen:\n{}\nthe main screen's text:\n{}",
+                    !screen.closed,
+                    "the terminal closed before {what}; the screen:\n{}\nthe main screen's text:\n{}",
                     screen.rows().join("\n"),
                     screen.main
                 );
@@ -418,10 +425,27 @@ impl Terminal {
         }
     }
 
-    fn shows(&self, limit: Duration, text: &'static str) -> Duration {
-        self.until(limit, text, move |screen| {
+    fn shows(&self, text: &'static str) -> Duration {
+        self.until(text, move |screen| {
             screen.alternate && screen.rows().iter().any(|row| row.contains(text))
         })
+    }
+
+    /// Wait for the run to tell `event` in its events. A run that exits
+    /// first fails the test.
+    fn told(&mut self, event: &str) {
+        let told = format!("\"event\":\"{event}\"");
+        loop {
+            let text = fs::read_to_string(&self.events).unwrap_or_default();
+            if text.contains(&told) {
+                return;
+            }
+            assert!(
+                self.child.try_wait().unwrap().is_none(),
+                "the run exited before `{event}`; its events:\n{text}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     fn main_text(&self) -> String {
@@ -429,7 +453,7 @@ impl Terminal {
     }
 
     fn ended(&self, times: usize) {
-        self.until(Duration::from_secs(60), "the program's end", |screen| {
+        self.until("the program's end", |screen| {
             screen.main.matches("a save runs it again").count() >= times
         });
     }
@@ -451,10 +475,10 @@ impl Drop for Terminal {
 fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it() {
     let root = ISLANDS.lease(&[]);
     let app = root.join("src/app.rs");
-    let terminal = Terminal::start(&root);
+    let mut terminal = Terminal::start(&root);
     let before = terminal.stty();
 
-    terminal.shows(Duration::from_secs(900), "tui-one");
+    terminal.shows("tui-one");
     // From here it times the live program: a repaint within a minute of a
     // save, and nothing on the screen in the 15 s after a failing one.
     // Beside the suite's builds those windows measure the load, not rawr.
@@ -462,11 +486,11 @@ fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it(
     assert_ne!(terminal.stty(), before, "ratatui holds the terminal raw");
     terminal.keys(b"\x1b[B");
     terminal.keys(b"x");
-    terminal.shows(Duration::from_secs(30), "keys=1:x");
+    terminal.shows("keys=1:x");
 
     // A body edit: no key is pressed, and the program draws it.
     edit(&app, "\"tui-one\"", "\"tui-two\"");
-    let took = terminal.shows(Duration::from_secs(60), "tui-two");
+    let took = terminal.shows("tui-two");
     eprintln!("a body edit repainted in {took:?}");
     let rows = terminal.screen.lock().unwrap().rows();
     assert!(rows.iter().any(|row| row.contains("> beta")), "{rows:#?}");
@@ -474,7 +498,7 @@ fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it(
 
     // A failing save: nothing reaches the screen while the program has it.
     edit(&app, "\"tui-two\"", "\"tui-two\" +");
-    std::thread::sleep(Duration::from_secs(15));
+    terminal.told("failed");
     {
         let screen = terminal.screen.lock().unwrap();
         assert!(screen.alternate);
@@ -500,7 +524,7 @@ fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it(
             "            keys: 0,\n            extra: 0,\n",
         );
     fs::write(&app, text).unwrap();
-    terminal.until(Duration::from_secs(300), "the restart line", |screen| {
+    terminal.until("the restart line", |screen| {
         screen
             .main
             .contains("rawr: `app::App` changed its fields; restarting the program")
@@ -512,11 +536,9 @@ fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it(
         1,
         "{shown}"
     );
-    terminal.until(
-        Duration::from_secs(600),
-        "the restarted program",
-        |screen| screen.alternate && screen.rows().iter().any(|row| row.contains("keys=0:")),
-    );
+    terminal.until("the restarted program", |screen| {
+        screen.alternate && screen.rows().iter().any(|row| row.contains("keys=0:"))
+    });
 
     // `q` ends it, and the terminal is as it was.
     terminal.keys(b"q");
@@ -525,14 +547,14 @@ fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it(
 
     // A save runs it again; Ctrl-C ends it.
     edit(&app, "\"tui-three\"", "\"tui-four\"");
-    terminal.shows(Duration::from_secs(300), "tui-four");
+    terminal.shows("tui-four");
     terminal.keys(b"\x03");
     terminal.ended(2);
     assert_eq!(terminal.stty(), before);
 
     // And a panic ends it.
     edit(&app, "\"tui-four\"", "\"tui-five\"");
-    terminal.shows(Duration::from_secs(300), "tui-five");
+    terminal.shows("tui-five");
     terminal.keys(b"!");
     terminal.ended(3);
     assert!(terminal.main_text().contains("asked to panic"));

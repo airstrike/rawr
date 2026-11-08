@@ -1,8 +1,8 @@
 //! `check`: `rawr check` in a child, which records its diagnostics as data
 //! ([`crate::diagnostic::SINK`]). A first check of a program with Rust
-//! dependencies builds them for minutes, past one call's bound. Then the
-//! check goes on, and the next `check` of that root waits for it again, or
-//! takes its result if nothing changed since it began.
+//! dependencies builds them for minutes. A `check` the client cancels leaves
+//! it going, and the next `check` of that root waits for it again, or takes
+//! its result if nothing changed since it began.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,12 +13,11 @@ use std::time::{Duration, Instant, SystemTime};
 use serde_json::{json, Value};
 
 use super::content;
-use super::process::{self, Tail};
+use super::process::{self, Cancel, Tail};
 
 /// One `rawr check` of a root.
 #[derive(Debug)]
 struct Job {
-    started: Instant,
     /// The root's files when it began.
     files: Fingerprint,
     done: Mutex<Option<Value>>,
@@ -32,8 +31,9 @@ struct Job {
 pub struct Checks(Mutex<HashMap<PathBuf, Arc<Job>>>);
 
 impl Checks {
-    /// Check `path` (whose root is `root`), returning within `bound`.
-    pub fn check(&self, path: &Path, root: &Path, directory: &Path, bound: Duration) -> Value {
+    /// Check `path` (whose root is `root`), until it is checked or `cancel`
+    /// fires.
+    pub fn check(&self, path: &Path, root: &Path, directory: &Path, cancel: &Cancel) -> Value {
         let job = {
             let mut jobs = self.0.lock().unwrap_or_else(PoisonError::into_inner);
             let current = fingerprint(root);
@@ -45,7 +45,6 @@ impl Checks {
             });
             if !reusable {
                 let job = Arc::new(Job {
-                    started: Instant::now(),
                     files: current,
                     done: Mutex::new(None),
                     finished: Condvar::new(),
@@ -56,7 +55,6 @@ impl Checks {
             }
             Arc::clone(jobs.get(root).expect("inserted above"))
         };
-        let deadline = Instant::now() + bound;
         let mut done = job.done.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
             if let Some(result) = done.as_ref() {
@@ -69,20 +67,12 @@ impl Checks {
                 }
                 return result;
             }
-            let now = Instant::now();
-            if now >= deadline {
-                let seconds = job.started.elapsed().as_secs();
-                return content::success(
-                    json!({ "state": "checking", "seconds": seconds }),
-                    format!(
-                        "still checking after {seconds} s: a first check builds the program's Rust dependencies. Call `check` again to keep waiting."
-                    ),
-                    Vec::new(),
-                );
+            if cancel.is_cancelled() {
+                return content::failure("cancelled");
             }
             done = job
                 .finished
-                .wait_timeout(done, deadline - now)
+                .wait_timeout(done, super::POLL)
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }

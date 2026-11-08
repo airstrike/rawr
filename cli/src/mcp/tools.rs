@@ -3,12 +3,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
 use super::process::{self, Cancel};
-use super::{content, extension, session, window, Progress, Server, BOUND};
+use super::{content, extension, session, window, Progress, Server, POLL};
 use crate::layer;
 
 /// Core's tool names: an extension's tool by one of these names is not
@@ -36,7 +36,7 @@ pub const CORE: [&str; 19] = [
 ];
 
 /// What every input tool's description ends with.
-const INPUT: &str = "Positions are logical points from the window's top-left corner, title bar included, as `screenshot` shows it. The input goes to the program alone: your own pointer, keyboard and focus stay as they are, and the window isn't brought forward. The window shows an agent cursor where the pointer last went, also in screenshots. Returns once the program has taken the input and drawn again, so a `screenshot` next shows what it did.";
+const INPUT: &str = "Positions are logical points from the window's top-left corner, title bar included, as `screenshot` shows it. The input goes to the program alone: your own pointer, keyboard and focus stay as they are, and the window isn't brought forward. The window shows an agent cursor where the pointer last went, also in screenshots. Returns once the program has taken the input and drawn again, so a `screenshot` next shows what it did, or once the input made it pause at a breakpoint.";
 
 /// Crates whose programs draw a terminal UI, which `start` can't host yet.
 const TERMINAL_UI: [&str; 6] = [
@@ -57,25 +57,14 @@ pub fn path_schema() -> Value {
     })
 }
 
-fn milliseconds(description: &str, default: u64) -> Value {
-    json!({
-        "type": "integer",
-        "minimum": 0,
-        "maximum": BOUND.as_millis(),
-        "default": default,
-        "description": description,
-    })
-}
-
 /// An input tool's schema: its own `properties`, which `required` names,
-/// and the `path`, `title` and `timeout_ms` every input tool takes.
+/// and the `path` and `title` every input tool takes.
 fn gesture(properties: Value, required: &[&str]) -> Value {
     let mut schema = json!({
         "type": "object",
         "properties": {
             "path": path_schema(),
             "title": { "type": "string", "description": "The window's title, when the program has several; defaults to its front window" },
-            "timeout_ms": milliseconds("How long to wait for the program to take the input and draw", 5_000),
         },
         "required": required,
     });
@@ -152,7 +141,7 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "check",
-            "description": "Check a program without running it: rawr's check and `cargo check`. Returns each error with its absolute file, line and column. A first check of a program with Rust dependencies builds them; when it says it is still checking, call it again.",
+            "description": "Check a program without running it: rawr's check and `cargo check`. Returns each error with its absolute file, line and column. A first check of a program with Rust dependencies builds them first.",
             "inputSchema": { "type": "object", "properties": { "path": path_schema() } },
         }),
         json!({
@@ -164,20 +153,18 @@ pub fn list() -> Vec<Value> {
                     "path": path_schema(),
                     "args": arguments,
                     "stdin": { "type": "string", "description": "The program's input; it then reads end of input" },
-                    "timeout_ms": milliseconds("Stop the program after this long", 30_000),
                 },
             },
         }),
         json!({
             "name": "start",
-            "description": "Start a program that keeps running, such as a window, and keep it running: a save reloads it, and one that ends runs again on the next save. Returns `running`, `failed` with diagnostics, or `building` while a first start builds; then call `wait`. Starting a program again replaces it. Programs that draw a terminal UI are refused for now.",
+            "description": "Start a program that keeps running, such as a window, and keep it running: a save reloads it, and one that ends runs again on the next save. Returns once it runs, with `running`, or `failed` with diagnostics; a first start builds its Rust dependencies first, and tells its progress meanwhile. Starting a program again replaces it. Programs that draw a terminal UI are refused for now.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": path_schema(),
                     "args": arguments,
                     "stdin": { "type": "string", "description": "The program's input; it then reads end of input" },
-                    "wait_ms": milliseconds("How long to wait for it to run before answering", 30_000),
                 },
             },
         }),
@@ -190,7 +177,6 @@ pub fn list() -> Vec<Value> {
                     "path": path_schema(),
                     "cursor": { "type": "integer", "description": "The last event seen; defaults to the last one returned" },
                     "output_cursor": { "type": "integer", "description": "The last output seen; defaults to the last one returned" },
-                    "timeout_ms": milliseconds("How long to wait for an event", 30_000),
                 },
             },
         }),
@@ -294,13 +280,12 @@ pub fn list() -> Vec<Value> {
                     "name": { "type": "string", "description": "A binding's name, such as a local or a parameter like `state`" },
                     "file": { "type": "string", "description": "A source file of the program: absolute, or relative to the server's project root" },
                     "frame": { "type": "integer", "minimum": 0, "default": 0, "description": "Which call's bindings: 0 for the function the program is in, 1 for its caller, and on" },
-                    "timeout_ms": milliseconds("How long to wait for the program to reach such a step", 2_000),
                 },
             },
         }),
         json!({
             "name": "break",
-            "description": "Set a breakpoint in the started program: on a `line` of a `file`, or on a `function`'s first statement. The program pauses when it reaches it. `inspect` then reads its values there, and `step` or `continue` resumes it. Returns where the program paused, if it pauses within `timeout_ms`. A breakpoint stays across saves while its line's text is still in the file, and moves with that text. Code in Rust dependencies has no breakpoints. A pause inside a call from native code, such as a window's event loop, holds that loop: the window doesn't redraw or take input until the program goes on.",
+            "description": "Set a breakpoint in the started program: on a `line` of a `file`, or on a `function`'s first statement. The program pauses when it reaches it, and `wait` returns the `paused` event with where; `inspect` then reads its values there, and `step` or `continue` resumes it. Returns once the breakpoint is set, with where the program is paused if it already is. A breakpoint stays across saves while its line's text is still in the file, and moves with that text. Code in Rust dependencies has no breakpoints. A pause inside a call from native code, such as a window's event loop, holds that loop: the window doesn't redraw or take input until the program goes on.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -308,32 +293,24 @@ pub fn list() -> Vec<Value> {
                     "file": { "type": "string", "description": "A source file of the program: absolute, or relative to the server's project root" },
                     "line": { "type": "integer", "minimum": 1, "description": "A line of `file`, from 1" },
                     "function": { "type": "string", "description": "A function of the program, as `tick` or `counter::tick`, in place of `file` and `line`" },
-                    "timeout_ms": milliseconds("How long to wait for the program to pause", 2_000),
                 },
             },
         }),
         json!({
             "name": "step",
-            "description": "Run the paused program to its next statement and pause there: `over` stays in this function, `into` goes into a function it calls, and `out` returns from this one. A step over native code, such as a crate's function, runs it whole. Returns where it paused, if it pauses within `timeout_ms`.",
+            "description": "Run the paused program to its next statement and pause there: `over` stays in this function, `into` goes into a function it calls, and `out` returns from this one. A step over native code, such as a crate's function, runs it whole. Returns where it paused. A step out of a function native code called, such as a window's `update`, pauses at the program's next call from that code.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": path_schema(),
                     "kind": { "type": "string", "enum": ["over", "into", "out"], "default": "over" },
-                    "timeout_ms": milliseconds("How long to wait for the program to pause", 2_000),
                 },
             },
         }),
         json!({
             "name": "continue",
-            "description": "Let the paused program run on. Returns where it pauses next, if it reaches a breakpoint within `timeout_ms`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": path_schema(),
-                    "timeout_ms": milliseconds("How long to wait for the program to pause", 2_000),
-                },
-            },
+            "description": "Let the paused program run on. Returns once it runs; when it reaches a breakpoint again, `wait` returns the `paused` event with where.",
+            "inputSchema": { "type": "object", "properties": { "path": path_schema() } },
         }),
         json!({
             "name": "clear",
@@ -473,16 +450,6 @@ pub fn target_directory(directory: &Path) -> PathBuf {
     )
 }
 
-fn bounded(arguments: &Value, key: &str, default: u64) -> Duration {
-    Duration::from_millis(
-        arguments
-            .get(key)
-            .and_then(Value::as_u64)
-            .unwrap_or(default),
-    )
-    .min(BOUND)
-}
-
 fn strings(arguments: &Value, key: &str) -> Vec<String> {
     arguments
         .get(key)
@@ -519,31 +486,24 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
         "check" => place(server, text("path")).map(|place| {
             server
                 .checks
-                .check(&place.path, &place.root, &place.directory(), BOUND)
+                .check(&place.path, &place.root, &place.directory(), cancel)
         }),
-        "run" => place(server, text("path")).map(|place| {
-            run(
-                &place,
-                &strings(&arguments, "args"),
-                text("stdin"),
-                bounded(&arguments, "timeout_ms", 30_000),
-                cancel,
-            )
-        }),
+        "run" => place(server, text("path"))
+            .map(|place| run(&place, &strings(&arguments, "args"), text("stdin"), cancel)),
         "start" => place(server, text("path")).and_then(|place| {
             start(
                 server,
                 &place,
                 &strings(&arguments, "args"),
                 text("stdin"),
-                bounded(&arguments, "wait_ms", 30_000),
+                cancel,
                 &progress,
             )
         }),
         "wait" => session(server, text("path")).map(|session| {
             session.next(
                 arguments.get("cursor").and_then(Value::as_u64),
-                bounded(&arguments, "timeout_ms", 30_000),
+                cancel,
                 |stage, percent| progress.send(percent as f64, Some(100.0), stage),
             );
             let answer = session.answer(
@@ -560,11 +520,13 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
             text("name"),
             text("file"),
             arguments.get("frame").and_then(Value::as_u64).unwrap_or(0),
-            bounded(&arguments, "timeout_ms", 2_000),
+            cancel,
         ),
-        "break" | "step" | "continue" | "clear" => debug(server, name, &arguments),
+        "break" | "step" | "continue" | "clear" => debug(server, name, &arguments, cancel),
         "screenshot" => screenshot(server, text("path"), text("title"), cancel, &progress),
-        "move" | "click" | "drag" | "scroll" | "key" | "type" => input(server, name, &arguments),
+        "move" | "click" | "drag" | "scroll" | "key" | "type" => {
+            input(server, name, &arguments, cancel)
+        }
         name => extension_call(server, name, &arguments, cancel, &progress),
     };
     outcome.unwrap_or_else(content::failure)
@@ -590,8 +552,7 @@ fn new(
         command.args(["--template", template]);
     }
     command.current_dir(&server.root);
-    let finished = process::run(&mut command, None, Instant::now() + BOUND, cancel)
-        .map_err(|error| error.to_string())?;
+    let finished = process::run(&mut command, None, cancel).map_err(|error| error.to_string())?;
     let (stdout, _) = finished.stdout.text();
     let (stderr, _) = finished.stderr.text();
     if !finished.status.is_some_and(|status| status.success()) {
@@ -633,13 +594,7 @@ fn new(
 }
 
 /// `run`: `rawr run <path> -- args` to its end.
-fn run(
-    place: &Place,
-    arguments: &[String],
-    stdin: Option<&str>,
-    timeout: Duration,
-    cancel: &Cancel,
-) -> Value {
+fn run(place: &Place, arguments: &[String], stdin: Option<&str>, cancel: &Cancel) -> Value {
     let Ok(executable) = std::env::current_exe() else {
         return content::failure("cannot find rawr");
     };
@@ -658,12 +613,7 @@ fn run(
         } else {
             place.root.parent().unwrap_or(&place.root)
         });
-    let finished = match process::run(
-        &mut command,
-        Some(stdin.unwrap_or_default()),
-        Instant::now() + timeout,
-        cancel,
-    ) {
+    let finished = match process::run(&mut command, Some(stdin.unwrap_or_default()), cancel) {
         Ok(finished) => finished,
         Err(error) => return content::failure(format!("cannot run rawr: {error}")),
     };
@@ -674,17 +624,12 @@ fn run(
         "status": status,
         "stdout": stdout,
         "stderr": stderr,
-        "timed_out": finished.timed_out,
         "output_dropped": stdout_cut || stderr_cut,
         "seconds": finished.elapsed.as_secs_f64(),
     });
-    let mut summary = match (status, finished.timed_out) {
-        (_, true) => format!(
-            "stopped after {} s, still running. A program with Rust dependencies builds them on its first run: use `start` and `wait` for it.\n",
-            timeout.as_secs()
-        ),
-        (Some(status), _) => format!("exit status {status}\n"),
-        (None, _) => "cancelled\n".to_owned(),
+    let mut summary = match status {
+        Some(status) => format!("exit status {status}\n"),
+        None => "cancelled\n".to_owned(),
     };
     for (stream, output) in [("stdout", &stdout), ("stderr", &stderr)] {
         if !output.is_empty() {
@@ -716,7 +661,7 @@ fn start(
     place: &Place,
     arguments: &[String],
     stdin: Option<&str>,
-    wait: Duration,
+    cancel: &Cancel,
     progress: &Progress<'_>,
 ) -> Result<Value, String> {
     if let Some(name) = terminal_ui(&place.root) {
@@ -734,15 +679,15 @@ fn start(
             &place.directory(),
         )
         .map_err(|error| format!("cannot start rawr run: {error}"))?;
-    session.settle(wait, |stage, percent| {
+    session.settle(cancel, |stage, percent| {
         progress.send(percent as f64, Some(100.0), stage);
     });
     let answer = session.answer(None, None);
-    let mut summary = answer.summary;
-    if session.phase().is_pending() {
-        summary.push_str("Still building: call `wait` until it runs.\n");
-    }
-    Ok(content::success(answer.structured, summary, Vec::new()))
+    Ok(content::success(
+        answer.structured,
+        answer.summary,
+        Vec::new(),
+    ))
 }
 
 /// The session for `path`, or why there is none.
@@ -810,14 +755,8 @@ fn stop(server: &Server, path: Option<&str>) -> Result<Value, String> {
             Vec::new(),
         ));
     };
-    // The group has its grace to end.
-    let deadline = Instant::now() + process::GRACE + Duration::from_secs(1);
-    while is_alive(session.pid) {
-        if Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    // The group has its grace to end, then is killed.
+    session.wait_exit();
     Ok(content::success(
         json!({ "stopped": true, "root": session.root, "pid": session.pid }),
         format!("stopped {}", session.root.display()),
@@ -832,7 +771,7 @@ fn inspect(
     name: Option<&str>,
     file: Option<&str>,
     frame: u64,
-    timeout: Duration,
+    cancel: &Cancel,
 ) -> Result<Value, String> {
     let session = session(server, path)?;
     let file = file.map(|file| absolute(server, Some(file)));
@@ -840,20 +779,8 @@ fn inspect(
         "name": name,
         "file": file,
         "frame": frame,
-        "timeout_ms": timeout.as_millis() as u64,
     });
-    let answer = ask(&session.socket, &request, timeout).map_err(|error| {
-        let phase = session.phase();
-        if phase.is_live() {
-            format!("cannot reach the running program: {error}")
-        } else {
-            format!(
-                "the program started for {} isn't running (state: {})",
-                session.root.display(),
-                phase.name()
-            )
-        }
-    })?;
+    let answer = ask(&session, &request, cancel)?;
     if answer["reached"] != true {
         let paused = &answer["paused"];
         if paused.is_object() {
@@ -892,8 +819,7 @@ fn inspect(
             place.push_str(&format!(" in {}", file.display()));
         }
         return Err(format!(
-            "the program ran none of its own code{place} within {} ms, so no values were read. It may be waiting, for example for input or an event; call `inspect` again once it runs.",
-            timeout.as_millis()
+            "the program read no values: it ran none of its own code{place}"
         ));
     }
     let mut summary = match (answer["file"].as_str(), answer["line"].as_u64()) {
@@ -946,33 +872,20 @@ fn inspect(
 
 /// `break`, `step`, `continue` and `clear`: ask the started program over
 /// its socket, and say where it paused.
-fn debug(server: &Server, tool: &str, arguments: &Value) -> Result<Value, String> {
+fn debug(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Result<Value, String> {
     let session = session(server, arguments.get("path").and_then(Value::as_str))?;
     let file = arguments
         .get("file")
         .and_then(Value::as_str)
         .map(|file| absolute(server, Some(file)));
-    let timeout = bounded(arguments, "timeout_ms", 2_000);
     let request = json!({
         "op": tool,
         "file": file,
         "line": arguments.get("line"),
         "function": arguments.get("function"),
         "kind": arguments.get("kind"),
-        "timeout_ms": timeout.as_millis() as u64,
     });
-    let answer = ask(&session.socket, &request, timeout).map_err(|error| {
-        let phase = session.phase();
-        if phase.is_live() {
-            format!("cannot reach the running program: {error}")
-        } else {
-            format!(
-                "the program started for {} isn't running (state: {})",
-                session.root.display(),
-                phase.name()
-            )
-        }
-    })?;
+    let answer = ask(&session, &request, cancel)?;
     match answer["error"].as_str() {
         Some("not paused") => {
             return Err(format!(
@@ -1039,13 +952,12 @@ fn debug(server: &Server, tool: &str, arguments: &Value) -> Result<Value, String
             " ({})\nRead values with `inspect`, and go on with `step` or `continue`.",
             paused["reason"].as_str().unwrap_or_default()
         ));
-    } else if tool == "clear" {
-        summary.push_str("the program runs");
+    } else if tool == "break" {
+        summary.push_str("the program runs; `wait` says when it pauses");
+    } else if tool == "continue" {
+        summary.push_str("the program runs on; `wait` says when it pauses again");
     } else {
-        summary.push_str(&format!(
-            "the program runs and didn't pause within {} ms",
-            timeout.as_millis()
-        ));
+        summary.push_str("the program runs");
     }
     let mut structured = answer;
     structured["root"] = json!(session.root);
@@ -1055,29 +967,35 @@ fn debug(server: &Server, tool: &str, arguments: &Value) -> Result<Value, String
 /// `move`, `click`, `drag`, `scroll`, `key` and `type`: ask the started
 /// program over its socket to hand its window the input, and say what it
 /// reached.
-fn input(server: &Server, tool: &str, arguments: &Value) -> Result<Value, String> {
+fn input(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Result<Value, String> {
     let session = session(server, arguments.get("path").and_then(Value::as_str))?;
-    let timeout = bounded(arguments, "timeout_ms", 5_000);
     let mut request = arguments.clone();
     if !request.is_object() {
         request = json!({});
     }
     request["op"] = json!("input");
     request["action"] = json!(tool);
-    request["timeout_ms"] = json!(timeout.as_millis() as u64);
-    let answer = ask(&session.socket, &request, timeout).map_err(|error| {
-        let phase = session.phase();
-        if phase.is_live() {
-            format!("cannot reach the running program: {error}")
-        } else {
-            format!(
-                "the program started for {} isn't running (state: {})",
-                session.root.display(),
-                phase.name()
-            )
-        }
-    })?;
+    let answer = ask(&session, &request, cancel)?;
     match answer["error"].as_str() {
+        Some("paused") if answer["taken"] == true => {
+            let paused = &answer["paused"];
+            session.observe_pause(Some(paused.clone()));
+            let mut summary = format!(
+                "{tool} sent; the program paused at {}:{}",
+                paused["file"].as_str().unwrap_or_default(),
+                paused["line"]
+            );
+            if let Some(function) = paused["function"].as_str() {
+                summary.push_str(&format!(" in `{function}`"));
+            }
+            summary.push_str(&format!(
+                " ({})\nRead values with `inspect`, and go on with `step` or `continue`.",
+                paused["reason"].as_str().unwrap_or_default()
+            ));
+            let mut structured = answer;
+            structured["root"] = json!(session.root);
+            return Ok(content::success(structured, summary, Vec::new()));
+        }
         Some("paused") => {
             let paused = &answer["paused"];
             return Err(format!(
@@ -1117,45 +1035,80 @@ fn input(server: &Server, tool: &str, arguments: &Value) -> Result<Value, String
     Ok(content::success(structured, summary, Vec::new()))
 }
 
-/// One request and its answer over the program's socket.
+/// One request and its answer over the started program's socket, or why
+/// there is none.
+fn ask(session: &session::Session, request: &Value, cancel: &Cancel) -> Result<Value, String> {
+    let unreachable = |error: std::io::Error| {
+        let phase = session.phase();
+        if phase.is_live() {
+            format!("cannot reach the running program: {error}")
+        } else {
+            format!(
+                "the program started for {} isn't running (state: {})",
+                session.root.display(),
+                phase.name()
+            )
+        }
+    };
+    exchange(session, request, cancel).map_err(unreachable)
+}
+
+/// [`ask`]'s exchange. A program that just started or restarted serves the
+/// socket once it compiled, and answers once it reached what the request
+/// waits for; closing the socket gives the request up.
 #[cfg(unix)]
-fn ask(socket: &Path, request: &Value, timeout: Duration) -> std::io::Result<Value> {
+fn exchange(
+    session: &session::Session,
+    request: &Value,
+    cancel: &Cancel,
+) -> std::io::Result<Value> {
     use std::io::{BufRead as _, BufReader, Write as _};
-    // A program that just started or restarted serves the socket once it
-    // compiled.
-    let deadline = Instant::now() + timeout;
+    let cancelled = || std::io::Error::other("cancelled");
     let mut stream = loop {
-        match std::os::unix::net::UnixStream::connect(socket) {
+        match std::os::unix::net::UnixStream::connect(&session.socket) {
             Ok(stream) => break stream,
-            Err(error) if Instant::now() >= deadline => return Err(error),
+            Err(_) if cancel.is_cancelled() => return Err(cancelled()),
+            Err(error) if !session.phase().is_live() && !session.phase().is_pending() => {
+                return Err(error);
+            }
             Err(_) => std::thread::sleep(Duration::from_millis(20)),
         }
     };
-    // The program gives up on its side at `timeout`; this side waits a
-    // little longer for that answer.
-    stream.set_read_timeout(Some(timeout + Duration::from_secs(2)))?;
     writeln!(stream, "{request}")?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    serde_json::from_str(&line).map_err(std::io::Error::other)
+    // The read wakes at each poll to see the cancel.
+    stream.set_read_timeout(Some(POLL))?;
+    let mut reader = BufReader::new(stream);
+    let mut line = Vec::new();
+    loop {
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            Ok(_) if line.ends_with(b"\n") => break,
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                if cancel.is_cancelled() {
+                    return Err(cancelled());
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    serde_json::from_slice(&line).map_err(std::io::Error::other)
 }
 
 #[cfg(not(unix))]
-fn ask(_socket: &Path, _request: &Value, _timeout: Duration) -> std::io::Result<Value> {
+fn exchange(
+    _session: &session::Session,
+    _request: &Value,
+    _cancel: &Cancel,
+) -> std::io::Result<Value> {
     Err(std::io::Error::other("reading values needs a Unix socket"))
-}
-
-fn is_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        i32::try_from(pid)
-            .is_ok_and(|pid| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        false
-    }
 }
 
 /// `screenshot`: an extension's own capture first (iced's socket needs no
@@ -1178,14 +1131,9 @@ fn screenshot(
             target_dir: place.target_dir.clone(),
             pid: session.as_ref().map(|session| session.pid),
         };
-        let result = extension::call(
-            &offered.binary,
-            "screenshot",
-            &call,
-            Instant::now() + BOUND,
-            cancel,
-            |record| relay(progress, record),
-        );
+        let result = extension::call(&offered.binary, "screenshot", &call, cancel, |record| {
+            relay(progress, record)
+        });
         if result["isError"] != true {
             return Ok(result);
         }
@@ -1298,7 +1246,6 @@ fn extension_call(
         &offered.binary,
         name,
         &call,
-        Instant::now() + BOUND,
         cancel,
         |record| relay(progress, record),
     ))

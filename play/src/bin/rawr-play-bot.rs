@@ -931,6 +931,13 @@ async fn exit_on_sigterm(shared: Arc<Shared>) {
 
 #[tokio::main]
 async fn main() {
+    // It takes its settings from the environment. Refusing an argument
+    // answers `rawr`'s question whether it is a layer at once, where
+    // serving would leave the question waiting.
+    if let Some(argument) = std::env::args().nth(1) {
+        eprintln!("rawr-play-bot: takes no arguments, not `{argument}`");
+        std::process::exit(2);
+    }
     let Some(token) = token() else {
         eprintln!(
             "rawr-play-bot: set DISCORD_TOKEN, or DISCORD_TOKEN_FILE, or write \

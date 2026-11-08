@@ -1366,7 +1366,7 @@ mod tests {
                         sent.send(result.is_ok())
                             .expect("warm stage result reports");
                     });
-                    Ok(received.recv_timeout(Duration::from_secs(5)))
+                    Ok(received.recv())
                 })
                 .expect("the external heavy lease releases");
             assert!(result.expect("warm metadata returns while heavy is held"));

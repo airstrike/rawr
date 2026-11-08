@@ -1,7 +1,6 @@
 //! A runner child and its process group retire together.
 
 use std::process::{self, ExitStatus};
-use std::time::Instant;
 
 use crate::{Error, Result};
 
@@ -82,15 +81,36 @@ impl Child {
             .try_wait()
             .map_err(|error| io("observe runner exit", error))?;
         if status.is_some() {
-            let terminal = self.take_terminal();
-            super::kill_group(self.id());
-            super::groups::release(self.id());
-            self.retained = false;
-            if terminal {
-                super::terminal::restore();
-            }
+            self.retire_exited();
         }
         Ok(status)
+    }
+
+    /// Wait for the leader's exit, for as long as it takes; its leftover
+    /// group is retired with it.
+    pub(super) fn wait(&mut self) -> Result<ExitStatus> {
+        if !self.retained {
+            return self
+                .child
+                .wait()
+                .map_err(|error| io("observe retired runner", error));
+        }
+        let status = self
+            .child
+            .wait()
+            .map_err(|error| io("wait for runner exit", error))?;
+        self.retire_exited();
+        Ok(status)
+    }
+
+    fn retire_exited(&mut self) {
+        let terminal = self.take_terminal();
+        super::kill_group(self.id());
+        super::groups::release(self.id());
+        self.retained = false;
+        if terminal {
+            super::terminal::restore();
+        }
     }
 
     /// Take the terminal back from an ending child's group. Whether it had
@@ -108,24 +128,6 @@ impl Child {
     pub(super) fn wake(&self) {
         if self.terminal && self.retained {
             super::terminal::wake(self.id());
-        }
-    }
-
-    /// Wait briefly for a runner that already acknowledged its shutdown.
-    pub(super) fn wait(&mut self) -> Result<ExitStatus> {
-        let deadline = Instant::now() + super::DRAIN_DEADLINE;
-        loop {
-            if let Some(status) = self.try_wait()? {
-                return Ok(status);
-            }
-            if Instant::now() >= deadline {
-                return Err(Error::Process {
-                    program: "native runner",
-                    status: "reap runner".into(),
-                    stderr: "runner did not exit after shutdown acknowledgement".into(),
-                });
-            }
-            std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }
 
@@ -165,8 +167,6 @@ fn io(operation: &'static str, error: std::io::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
 
     #[test]
@@ -189,21 +189,13 @@ mod tests {
             let result = pipe.read_to_end(&mut bytes);
             let _ = sender.send(result);
         });
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(status) = child
-                .try_wait()
-                .expect("non-reaping exit observation succeeds")
-            {
-                assert!(status.success());
-                break;
-            }
-            assert!(Instant::now() < deadline, "fixture leader did not exit");
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        let status = child
+            .wait()
+            .expect("the fixture leader's exit is observable");
+        assert!(status.success());
         assert!(child.is_reaped());
         receiver
-            .recv_timeout(super::super::DRAIN_DEADLINE)
+            .recv()
             .expect("drained descendants release inherited log pipes")
             .expect("bounded log reader reaches EOF");
         reader.join().expect("log reader finishes");

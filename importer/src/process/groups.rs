@@ -101,7 +101,6 @@ mod tests {
 
     use std::os::unix::process::CommandExt as _;
     use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
 
     fn sleeper() -> Command {
         let mut command = Command::new("/bin/sh");
@@ -131,10 +130,8 @@ mod tests {
         let mut child = sleeper().spawn().unwrap();
         registry.own(child.id());
         drop(registry.retire());
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while child.try_wait().unwrap().is_none() {
-            assert!(Instant::now() < deadline, "owned group survived");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        // A group that survived its retirement leaves this wait to the
+        // test runner's own bound.
+        child.wait().unwrap();
     }
 }

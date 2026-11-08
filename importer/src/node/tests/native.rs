@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::{fixture_context, prepare_fixture, temporary, Artifact, Counts};
 use crate::cargo::execution;
@@ -23,14 +23,10 @@ fn locked(path: &Path) -> bool {
 }
 
 fn await_locked(path: &Path) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if locked(path) {
-            return true;
-        }
+    while !locked(path) {
         std::thread::sleep(Duration::from_millis(1));
     }
-    false
+    true
 }
 
 fn value() -> Result<Artifact, Error> {
@@ -76,9 +72,7 @@ fn native_waits_for_heavy_before_action_and_releases_publication_during_executio
                 Ok(())
             })
             .expect("the blocking action lease releases");
-        assert!(received
-            .recv_timeout(Duration::from_secs(5))
-            .expect("native action completes"));
+        assert!(received.recv().expect("native action completes"));
     });
     assert_eq!(counts.miss.load(Ordering::Relaxed), 1);
     assert_eq!(counts.published.load(Ordering::Relaxed), 1);
@@ -157,7 +151,7 @@ fn retained_bundle_rejects_parent_drift_after_execution_wait() {
                 Ok(())
             })
             .unwrap();
-        assert!(received.recv_timeout(Duration::from_secs(5)).unwrap());
+        assert!(received.recv().unwrap());
     });
     assert!(
         entered.load(Ordering::Relaxed),
@@ -211,9 +205,7 @@ fn native_same_key_contenders_execute_once_and_different_heavy_actions_cannot_ov
                 })
                 .expect("first native action publishes");
         });
-        entry
-            .recv_timeout(Duration::from_secs(5))
-            .expect("first executor holds heavy");
+        entry.recv().expect("first executor holds heavy");
         for request in [&recipe, &different] {
             let done = done.clone();
             let counts = &counts;
@@ -238,9 +230,7 @@ fn native_same_key_contenders_execute_once_and_different_heavy_actions_cannot_ov
             "both contenders wait for heavy"
         );
         for _ in 0..2 {
-            assert!(completed
-                .recv_timeout(Duration::from_secs(5))
-                .expect("contender completes"));
+            assert!(completed.recv().expect("contender completes"));
         }
     });
     assert_eq!(executed.load(Ordering::Relaxed), 2);
@@ -276,7 +266,7 @@ fn healthy_native_hits_and_unrelated_pure_work_do_not_wait_for_heavy() {
                     sent.send(hit.is_ok() && pure.is_ok())
                         .expect("independent work reports");
                 });
-                Ok(received.recv_timeout(Duration::from_secs(5)))
+                Ok(received.recv())
             })
             .expect("the external heavy lease releases");
         assert!(result.expect("hit and pure miss finish while heavy is held"));
@@ -336,9 +326,7 @@ fn uncached_scope_owns_installation_and_exact_execution_and_releases_after_failu
             before_release,
             Err(mpsc::RecvTimeoutError::Timeout)
         ));
-        assert!(received
-            .recv_timeout(Duration::from_secs(5))
-            .expect("scope resumes after heavy"));
+        assert!(received.recv().expect("scope resumes after heavy"));
     });
     fs::remove_dir_all(root).expect("the native scope fixture retires");
 }

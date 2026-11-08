@@ -15,7 +15,7 @@ use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rawr::diagnostic;
 use rawr::layer::{Claims, Facts};
@@ -383,16 +383,28 @@ impl Store {
         let text = match kept {
             Some(text) => text,
             None => {
-                let text = ask(binary)?.unwrap_or_default();
-                let mut entry = Table::new();
-                entry.insert("identity", toml_edit::value(identity));
-                entry.insert("manifest", toml_edit::value(text.clone()));
-                self.document.insert(&key, Item::Table(entry));
-                self.changed = true;
+                // Only an answer the binary gave is kept: a manifest, or a
+                // clean exit without one. A binary that failed to run or
+                // exited with an error is asked again next time, so a
+                // probe that died under load never poisons the store.
+                let text = match ask(binary)? {
+                    Probe::Manifest(text) => text,
+                    Probe::Declined => String::new(),
+                    Probe::Failed => return None,
+                };
+                self.keep(&key, identity, &text);
                 text
             }
         };
         Manifest::parse(&text)
+    }
+
+    fn keep(&mut self, key: &str, identity: String, text: &str) {
+        let mut entry = Table::new();
+        entry.insert("identity", toml_edit::value(identity));
+        entry.insert("manifest", toml_edit::value(text));
+        self.document.insert(key, Item::Table(entry));
+        self.changed = true;
     }
 
     fn close(self) {
@@ -419,20 +431,21 @@ fn home() -> Option<PathBuf> {
         })
 }
 
-/// Run `binary` with [`FLAG`] and return what it printed if it exited
-/// successfully with a manifest of [`FORMAT`], else `Some(None)`. `None`
-/// when it could not be started, so nothing is kept about it.
-fn ask(binary: &Path) -> Option<Option<String>> {
-    // macOS assesses a new executable on its first run, which can take
-    // seconds, so a layer gets this long to answer.
-    ask_within(binary, Duration::from_secs(20))
+/// What a binary answered when asked for its manifest.
+enum Probe {
+    /// It printed a manifest of [`FORMAT`].
+    Manifest(String),
+    /// It exited cleanly without one: not a binary rawr hands programs to.
+    Declined,
+    /// It could not be read or exited with an error, so nothing is known.
+    Failed,
 }
 
-/// [`ask`] with its deadline. A binary still running at the deadline does
-/// not know [`FLAG`], as `rawr-play-bot` which serves until it is stopped.
-/// It is kept as no layer, so it is not asked again until it changes and
-/// every later run is spared the wait.
-fn ask_within(binary: &Path, wait: Duration) -> Option<Option<String>> {
+/// Run `binary` with [`FLAG`] and return what it answered. `None` when it
+/// could not be started, so nothing is kept about it. Its answer takes as
+/// long as it takes: macOS assesses a new executable on its first run,
+/// which can take seconds.
+fn ask(binary: &Path) -> Option<Probe> {
     let mut attempts = 0;
     let mut child = loop {
         match Command::new(binary)
@@ -454,28 +467,18 @@ fn ask_within(binary: &Path, wait: Duration) -> Option<Option<String>> {
             Err(_) => return None,
         }
     };
-    let deadline = Instant::now() + wait;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return Some(None),
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Some(None);
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-        }
-    }
     let mut text = String::new();
-    if child
+    let read = child
         .stdout
         .take()
-        .is_none_or(|mut stdout| stdout.read_to_string(&mut text).is_err())
-    {
-        return Some(None);
+        .is_some_and(|mut stdout| stdout.read_to_string(&mut text).is_ok());
+    if !read || !child.wait().is_ok_and(|status| status.success()) {
+        return Some(Probe::Failed);
     }
-    Some(Manifest::parse(&text).map(|_| text))
+    Some(match Manifest::parse(&text) {
+        Some(_) => Probe::Manifest(text),
+        None => Probe::Declined,
+    })
 }
 
 /// The install commands as one indented block.
@@ -491,6 +494,41 @@ pub fn install_lines(known: &Known) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A probe that fails is not an answer: the store keeps nothing, so the
+    /// binary is asked again next time. A clean exit without a manifest is
+    /// kept as the binary declining.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_probe_is_asked_again_and_a_declined_one_is_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("rawr-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        let failing = script("failing", "exit 1");
+        let declining = script("declining", "exit 0");
+        assert!(matches!(super::ask(&failing), Some(super::Probe::Failed)));
+        assert!(matches!(
+            super::ask(&declining),
+            Some(super::Probe::Declined)
+        ));
+        let mut store = super::Store {
+            path: None,
+            document: Default::default(),
+            changed: false,
+        };
+        assert!(store.manifest(&failing).is_none());
+        assert!(!store.changed, "a failed probe is not kept");
+        assert!(store.manifest(&declining).is_none());
+        assert!(store.changed, "a declined probe is kept");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     use super::{claimed, Installed, Manifest};
     use std::ffi::OsString;
 
@@ -583,28 +621,6 @@ mod tests {
         assert!(!binary.manifest.provides(&arguments(&["check", "x"])));
         assert!(!binary.manifest.provides(&arguments(&["stop"])));
         assert_eq!(Manifest::parse("format = 2\nname = \"x\"\n"), None);
-    }
-
-    /// A `rawr-*` binary that ignores the flag and keeps running, as
-    /// `rawr-play-bot` does, is kept as no layer, so the next run does not
-    /// wait for it again.
-    #[cfg(unix)]
-    #[test]
-    fn a_binary_that_does_not_answer_is_kept_as_no_layer() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../target/layer-test")
-            .join(std::process::id().to_string());
-        std::fs::create_dir_all(&directory).unwrap();
-        let binary = directory.join("rawr-serves");
-        std::fs::write(&binary, "#!/bin/sh\nexec sleep 30\n").unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let start = std::time::Instant::now();
-        let answer = super::ask_within(&binary, std::time::Duration::from_millis(200));
-        std::fs::remove_file(&binary).unwrap();
-        std::fs::remove_dir(&directory).unwrap();
-        assert_eq!(answer, Some(None));
-        assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]
