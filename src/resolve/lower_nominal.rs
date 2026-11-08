@@ -14939,22 +14939,16 @@ impl<'a> Parser<'a> {
                     .cloned(),
             );
         }
-        let mut chosen = None;
         // An `impl From` is as visible as `From`, from every module.
-        for candidate in candidates {
-            let (from, owner) = self.conversion_source(&candidate);
-            let checkpoint = self.inference.checkpoint();
-            let fits = expected.is_none_or(|expected| self.unify_type(&owner, expected))
-                && self.unify_type(&from, source);
-            self.inference.rollback(checkpoint);
-            if fits {
-                if chosen.is_some() {
-                    return Ok(None);
-                }
-                chosen = Some(candidate);
-            }
+        let mut fitting = self.fitting_conversions(candidates, expected, source);
+        // Several fit an unsuffixed literal: rustc's fallback, `i32` or
+        // `f64`, chooses the impl that takes it.
+        if fitting.len() > 1
+            && let Some(fallback) = literal_fallback(&self.inference.resolve(source))
+        {
+            fitting = self.fitting_conversions(fitting, expected, &fallback);
         }
-        let Some(candidate) = chosen else {
+        let Ok([candidate]) = <[_; 1]>::try_from(fitting) else {
             return Ok(None);
         };
         let substitution = self.fresh_generics(candidate.generics(), span);
@@ -14972,6 +14966,34 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         let candidate = self.bind_method_instance(candidate, &substitution, span)?;
         Ok(Some((candidate, from, owner)))
+    }
+
+    /// `ty` as rustc names it in an unsatisfied bound: an unsuffixed
+    /// literal's type is its fallback, `i32` or `f64`, by then.
+    fn fallback_name(&self, ty: &Ty) -> ImmutableString {
+        let ty = self.inference.resolve(ty);
+        literal_fallback(&ty).unwrap_or(ty).name(&self.models)
+    }
+
+    /// The `candidates` whose `impl From<S> for Self` takes `source`, with
+    /// `Self` unified with `expected` when the use names it.
+    fn fitting_conversions(
+        &mut self,
+        candidates: Vec<method::Definition>,
+        expected: Option<&Ty>,
+        source: &Ty,
+    ) -> Vec<method::Definition> {
+        candidates
+            .into_iter()
+            .filter(|candidate| {
+                let (from, owner) = self.conversion_source(candidate);
+                let checkpoint = self.inference.checkpoint();
+                let fits = expected.is_none_or(|expected| self.unify_type(&owner, expected))
+                    && self.unify_type(&from, source);
+                self.inference.rollback(checkpoint);
+                fits
+            })
+            .collect()
     }
 
     /// `S` and `Self` of a conversion's `impl From<S> for Self`, its impl's
@@ -15180,7 +15202,7 @@ impl<'a> Parser<'a> {
                     // rustc names the `From` impl an `Into` bound needs.
                     return Err(Error::MissingCapability {
                         owner: target.name(&self.models),
-                        capability: format!("From<{}>", source.name(&self.models)).into(),
+                        capability: format!("From<{}>", self.fallback_name(&source)).into(),
                         operation: span,
                         derive: false,
                         required_by: None,
@@ -19170,6 +19192,30 @@ impl<'a> Parser<'a> {
             }
             self.inference.rollback(checkpoint);
         }
+        // Several take an unsuffixed literal: rustc's fallback, `i32` or
+        // `f64`, chooses the one that takes it.
+        if fitting.len() > 1
+            && let Some(fallback) = literal_fallback(&self.inference.resolve(source))
+        {
+            let argument =
+                self.operator_expr(origin::Fragment::default(), fallback.clone(), host.receiver);
+            fitting.retain(|item| {
+                let checkpoint = self.inference.checkpoint();
+                let fits = self
+                    .instantiate_host_signature(
+                        item,
+                        None,
+                        Some(std::slice::from_ref(&argument)),
+                        Span::NONE,
+                    )
+                    .is_ok_and(|signature| {
+                        matches!(&signature.inputs[..], [input] if self.unify_type(input, &fallback))
+                            && self.unify_type(&signature.output, target)
+                    });
+                self.inference.rollback(checkpoint);
+                fits
+            });
+        }
         let item = match <[_; 1]>::try_from(fitting) {
             Ok([item]) => item,
             Err(fitting) if fitting.is_empty() => return Ok(None),
@@ -19706,7 +19752,7 @@ impl<'a> Parser<'a> {
                 }
                 return Err(Error::MissingCapability {
                     owner: target.name(&self.models),
-                    capability: format!("From<{}>", conversion.source.name(&self.models)).into(),
+                    capability: format!("From<{}>", self.fallback_name(&conversion.source)).into(),
                     operation: conversion.span,
                     derive: matches!(target, Ty::Script(..)),
                     required_by: None,
@@ -52944,7 +52990,7 @@ impl<'a> Parser<'a> {
                     else {
                         return Err(Error::MissingCapability {
                             owner: full.into(),
-                            capability: format!("From<{}>", source.name(&self.models)).into(),
+                            capability: format!("From<{}>", self.fallback_name(&source)).into(),
                             operation: call,
                             derive: false,
                             required_by: None,
@@ -53546,7 +53592,7 @@ impl<'a> Parser<'a> {
             else {
                 return Err(Error::MissingCapability {
                     owner: model.name().into(),
-                    capability: format!("From<{}>", source.name(&self.models)).into(),
+                    capability: format!("From<{}>", self.fallback_name(&source)).into(),
                     operation: call,
                     derive: true,
                     required_by: None,

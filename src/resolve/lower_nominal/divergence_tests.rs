@@ -804,3 +804,54 @@ main();
         "{report}"
     );
 }
+
+/// With several `From` impls an unsuffixed literal fits, rustc's literal
+/// fallback (`i32`, `f64`) chooses the impl, through `T::from`, `.into()`
+/// and `From::from` (#8). `cargo run` prints `i32 i32 i32 f64 i64 f64 i32
+/// 300`. With no impl of the fallback type, rustc's E0277 names it.
+#[test]
+fn language_a_literal_with_several_from_impls_takes_its_fallback_type() {
+    let impls = r#"
+struct S(&'static str);
+impl From<i32> for S { fn from(_: i32) -> Self { S("i32") } }
+impl From<i64> for S { fn from(_: i64) -> Self { S("i64") } }
+impl From<u8> for S { fn from(_: u8) -> Self { S("u8") } }
+struct F(&'static str);
+impl From<f32> for F { fn from(_: f32) -> Self { F("f32") } }
+impl From<f64> for F { fn from(_: f64) -> Self { F("f64") } }
+"#;
+    assert_eq!(
+        printed(&format!(
+            r#"{impls}
+fn main() {{
+    let a = S::from(5);
+    let b: S = 5.into();
+    let c: S = From::from(7);
+    let d = F::from(1.5);
+    let e = S::from(5i64);
+    let f: F = 2.5.into();
+    let n = 300;
+    let g = S::from(n);
+    println!("{{}} {{}} {{}} {{}} {{}} {{}} {{}} {{}}", a.0, b.0, c.0, d.0, e.0, f.0, g.0, n);
+}}
+main();
+"#
+        )),
+        "i32 i32 i32 f64 i64 f64 i32 300\n"
+    );
+    let report = refused(
+        r#"
+struct T(i32);
+impl From<i64> for T { fn from(_: i64) -> Self { T(1) } }
+impl From<u8> for T { fn from(_: u8) -> Self { T(2) } }
+fn main() { let t = T::from(5); println!("{}", t.0); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0277]: the trait bound `T: From<i32>` is not satisfied\n --> <script>:5:21"
+        ),
+        "{report}"
+    );
+}
