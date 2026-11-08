@@ -176,6 +176,7 @@ struct UiPathBuilder;
 /// iced's `canvas::Path::new(f: impl FnOnce(&mut Builder))` lends its
 /// closure a `&mut Builder`, which the closure's parameter takes as the
 /// facade declares it: once, not `&mut &mut Builder` (#583).
+#[cfg(feature = "rust-import")]
 #[test]
 fn language_a_closure_takes_the_mut_borrow_iced_path_new_lends() {
     use crate::host::{facade, item, signature, type_ref};
