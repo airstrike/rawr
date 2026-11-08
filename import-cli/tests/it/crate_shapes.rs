@@ -612,6 +612,28 @@ fn array_types_cross_as_rustc_has_them() {
     );
 }
 
+/// A crate trait's generic impl for another crate's generic type, as
+/// ratzilla's `impl<B: Backend + ..> WebRenderer for Terminal<B>` is, gives
+/// `Terminal<DomBackend>` its methods: a `&mut self` one and a `self` one,
+/// each taking a script closure (#1450).
+#[test]
+fn a_crate_traits_generic_impl_gives_a_generic_crate_type_its_methods() {
+    runs_as_cargo_does("renderer", "page | hi!\n");
+}
+
+/// `?` turns a crate's error into an `io::Error` by the crate's `impl
+/// From<Error> for io::Error`, and into a `Box<dyn Error>` by the
+/// `std::error::Error` impl thiserror's derive writes, which a `Box` of the
+/// error is too (#1451).
+#[test]
+fn a_crate_errors_from_impl_and_derived_error_impl_serve_question_mark() {
+    runs_as_cargo_does(
+        "errors",
+        "true\nUnable to retrieve element: \nUnable to retrieve element: \n\
+         Unable to retrieve element: x\n",
+    );
+}
+
 /// A universe runner (`RAWR_UNIVERSE_RUNNER=1`, as ?play's image builds
 /// one) loads a marked file in a `rawr::universe::Universe` of the bindings
 /// its build generated for the crate's dependencies, and runs it in

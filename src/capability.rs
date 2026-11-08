@@ -32,10 +32,13 @@ pub enum Kind {
     /// An imported type the crate implements `Iterator` for: a `for` loop
     /// walks it by its `next` (D558 slice 2). Never derived.
     Iterator,
+    /// An imported type the crate implements `std::error::Error` for: a
+    /// value of it boxes as a `Box<dyn Error>` (#1451). Never derived.
+    Error,
 }
 
 impl Kind {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 13] = [
         Self::Default,
         Self::Debug,
         Self::Clone,
@@ -48,6 +51,7 @@ impl Kind {
         Self::Send,
         Self::Static,
         Self::Iterator,
+        Self::Error,
     ];
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
@@ -87,6 +91,7 @@ impl Kind {
             Self::Send => "Send",
             Self::Static => "Static",
             Self::Iterator => "Iterator",
+            Self::Error => "Error",
         }
     }
 
@@ -104,7 +109,7 @@ impl Kind {
             Self::PartialOrd => Some("core::cmp::PartialOrd"),
             Self::Ord => Some("core::cmp::Ord"),
             Self::Hash => Some("core::hash::Hash"),
-            Self::Send | Self::Static | Self::Iterator => None,
+            Self::Send | Self::Static | Self::Iterator | Self::Error => None,
         }
     }
 
@@ -122,6 +127,7 @@ impl Kind {
             Self::Ord => 1 << 9,
             Self::Hash => 1 << 10,
             Self::Iterator => 1 << 11,
+            Self::Error => 1 << 12,
         }
     }
 }
@@ -151,6 +157,7 @@ enum Name {
     Send,
     Static,
     Iterator,
+    Error,
 }
 
 impl Set {
@@ -221,6 +228,7 @@ impl From<Kind> for Name {
             Kind::Send => Self::Send,
             Kind::Static => Self::Static,
             Kind::Iterator => Self::Iterator,
+            Kind::Error => Self::Error,
         }
     }
 }
@@ -254,6 +262,7 @@ impl crate::digest::Write for Fingerprint {
                 Name::Ord => 0x222a,
                 Name::Hash => 0x222b,
                 Name::Iterator => 0x222c,
+                Name::Error => 0x222d,
             });
         }
         Ok(())
@@ -276,6 +285,7 @@ fn write_kind(writer: &mut crate::digest::Writer, capability: Kind) {
         Kind::Ord => 0x223a,
         Kind::Hash => 0x223b,
         Kind::Iterator => 0x223c,
+        Kind::Error => 0x223d,
     });
 }
 
@@ -328,7 +338,7 @@ fn std_derive(path: &[&str]) -> Option<Kind> {
         Kind::Default => "default",
         Kind::Hash => "hash",
         Kind::PartialEq | Kind::Eq | Kind::PartialOrd | Kind::Ord => "cmp",
-        Kind::Send | Kind::Static | Kind::Iterator => return None,
+        Kind::Send | Kind::Static | Kind::Iterator | Kind::Error => return None,
     };
     (*module == home).then_some(kind)
 }

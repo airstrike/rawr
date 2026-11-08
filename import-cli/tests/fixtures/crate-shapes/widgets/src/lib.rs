@@ -69,3 +69,11 @@ pub fn text_like<'a, Theme>(content: &'a str) -> TextLike<'a, Theme> {
         marker: PhantomData,
     }
 }
+
+/// What a derive macro's expansion names `std::error::Error` by, as
+/// thiserror's `::thiserror::__private::Error` re-exports core's.
+#[doc(hidden)]
+pub mod __private {
+    #[doc(hidden)]
+    pub use core::error::Error;
+}

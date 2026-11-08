@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 natives = { path = "natives" }
 opener = { path = "opener" }
+parts = { path = "parts" }
 
 # Its own workspace: it is not a member of Rawr's.
 [workspace]

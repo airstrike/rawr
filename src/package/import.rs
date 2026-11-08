@@ -220,13 +220,15 @@ impl crate::Engine {
                     }
                     None => None,
                 };
+                let hidden = hidden_member_misses(contract, &failure.error);
                 let error = super::Error::resolution(sources.clone(), failure);
                 return Err(match demand {
                     Some((path, through_alias, member)) => {
                         error.with_rust_demand(&path, through_alias, member)
                     }
                     None => error,
-                });
+                }
+                .with_rust_misses(hidden));
             }
         };
         let symbolic =
@@ -238,8 +240,8 @@ impl crate::Engine {
                 Err(crate::resolve::ImportedFailure::Lowering(mut failure)) => {
                     // What the pass missed besides this failure, asked for
                     // with it (#662).
-                    let misses = failure
-                        .take_unknowns()
+                    let unknowns = failure.take_unknowns();
+                    let mut misses = unknowns
                         .iter()
                         .filter_map(|unknown| match rust_miss(contract, unknown) {
                             Some(Miss::Demand(path, through_alias, member)) => {
@@ -248,6 +250,9 @@ impl crate::Engine {
                             _ => None,
                         })
                         .collect::<Vec<_>>();
+                    for unknown in &unknowns {
+                        misses.extend(hidden_member_misses(contract, unknown));
+                    }
                     let (evidence, mut error) = failure.into_parts();
                     // A miss a proof may settle is reported and demanded as
                     // the ordinary miss, carrying the call to prove first.
@@ -281,6 +286,9 @@ impl crate::Engine {
                         Some(call) => error.with_rust_application(call.clone()),
                         None => error,
                     };
+                    if let crate::ParseErrorType::Resolution(resolution) = error.err_type() {
+                        misses.extend(hidden_member_misses(contract, resolution));
+                    }
                     let demand = match error.err_type() {
                         crate::ParseErrorType::Resolution(resolution) => {
                             match rust_miss(contract, resolution) {
@@ -992,6 +1000,24 @@ fn rust_miss(
         Some(Lookup::ThroughCrate) => Some(Miss::Demand(path, true, false)),
         _ => Some(Miss::Demand(path, through_alias, false)),
     }
+}
+
+/// A member `error` misses on a crate's type, demanded as well where each
+/// other crate's table names the type's crate: a trait of that crate may
+/// give the member by an impl for the type, and only that crate's table
+/// reaches the trait (#1450). Each path runs through a hidden crate segment.
+fn hidden_member_misses(
+    contract: &rawr_import::Contract<rawr_import::Classified>,
+    error: &crate::resolve::Error,
+) -> Vec<(String, bool, bool)> {
+    let crate::resolve::Error::UnknownMember { owner, member, .. } = error else {
+        return Vec::new();
+    };
+    contract
+        .hidden_owner_paths(owner)
+        .into_iter()
+        .map(|owner| (format!("{owner}::{member}"), true, true))
+        .collect()
 }
 
 fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNamespace)> {
@@ -2259,6 +2285,7 @@ fn build(
                     plan.partial_ord(),
                     plan.ord(),
                     plan.iterator(),
+                    plan.error(),
                 ]),
             ),
             Representability::Enum(plan) => (
@@ -2275,6 +2302,7 @@ fn build(
                     plan.partial_ord(),
                     plan.ord(),
                     plan.iterator(),
+                    plan.error(),
                 ]),
             ),
             // A type alias of a builtin, as iced's `markdown::Uri` is `String`.
@@ -4514,9 +4542,9 @@ fn names(
 }
 
 /// The traits a crate implements for a type, in the order `copy`,
-/// `default`, `debug`, `clone`, `partial_eq`, `eq` and `hash`, as the
-/// capabilities they give it.
-pub(crate) fn implemented(traits: [bool; 10]) -> Vec<crate::capability::Kind> {
+/// `default`, `debug`, `clone`, `partial_eq`, `eq`, `hash`, `partial_ord`,
+/// `ord`, `iterator` and `error`, as the capabilities they give it.
+pub(crate) fn implemented(traits: [bool; 11]) -> Vec<crate::capability::Kind> {
     use crate::capability::Kind;
     [
         Kind::Copy,
@@ -4529,6 +4557,7 @@ pub(crate) fn implemented(traits: [bool; 10]) -> Vec<crate::capability::Kind> {
         Kind::PartialOrd,
         Kind::Ord,
         Kind::Iterator,
+        Kind::Error,
     ]
     .into_iter()
     .zip(traits)

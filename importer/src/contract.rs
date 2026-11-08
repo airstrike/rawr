@@ -157,6 +157,81 @@ impl Contract<Classified> {
         })
     }
 
+    /// `owner` (`alias::a::Type`) under each other selected root whose
+    /// table reaches `alias`'s crate, by its hidden segment or a whole
+    /// re-export (`other::__rawr_crate_<name>_<id>::a::Type`,
+    /// `other::ratatui::a::Type`), or the crate defining the type by its
+    /// hidden segment, at the type's own path there. A trait of that other
+    /// crate may give the type a member by an impl for it, as ratzilla's
+    /// `impl<B> WebRenderer for Terminal<B>` gives ratatui's terminal
+    /// `draw_web`, and only that crate's table reaches the trait (#1450).
+    #[must_use]
+    pub fn hidden_owner_paths(&self, owner: &str) -> Vec<String> {
+        let mut segments = owner.split("::");
+        let Some(root) = segments.next() else {
+            return Vec::new();
+        };
+        let rest = segments.collect::<Vec<_>>();
+        let exports = || {
+            self.graph.exports().filter_map(|outcome| match outcome {
+                api::ledger::Path::Imported(export) => Some(export),
+                _ => None,
+            })
+        };
+        // `alias`'s own paths, each with what it names.
+        let own = exports()
+            .filter(|export| export.key().root_alias() == root)
+            .map(|export| (export.key().path().collect::<Vec<_>>(), export.target()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut hidden = Vec::new();
+        // Another root reaches `alias`'s crate at a prefix below which it
+        // names what `alias` names at the same path: its hidden segment, or
+        // a module re-exporting the crate whole, as ratzilla's `pub use
+        // ratatui;`. The type is at `a::Type` there; the shortest prefix
+        // is the crate's root.
+        for export in exports().filter(|export| export.key().root_alias() != root) {
+            let path = export.key().path().collect::<Vec<_>>();
+            let reached =
+                (1..path.len()).find(|&split| own.get(&path[split..]) == Some(&export.target()));
+            if let Some(split) = reached {
+                hidden.push(
+                    std::iter::once(export.key().root_alias())
+                        .chain(path[..split].iter().copied())
+                        .chain(rest.iter().copied())
+                        .collect::<Vec<_>>()
+                        .join("::"),
+                );
+            }
+        }
+        // The crate that defines the type, as ratatui re-exports
+        // ratatui-core's `Terminal`: under each root whose table reaches
+        // that crate's segment, the type at its own path there.
+        if let Some(target) = own.get(&rest)
+            && let Some(definition) = self
+                .graph
+                .definitions()
+                .find(|definition| definition.id() == *target)
+        {
+            let unit = target.unit();
+            let segment = format!(
+                "{}{}_{}",
+                api::ledger::CRATE_SEGMENT,
+                unit.crate_name(),
+                unit.stable_crate_id()
+            );
+            let below = definition.display_path().collect::<Vec<_>>().join("::");
+            for export in exports() {
+                let key = export.key();
+                if key.root_alias() != root && key.path().next() == Some(segment.as_str()) {
+                    hidden.push(format!("{}::{segment}::{below}", key.root_alias()));
+                }
+            }
+        }
+        hidden.sort_unstable();
+        hidden.dedup();
+        hidden
+    }
+
     /// What the name index of the dependency `path` (`alias::a::b`)
     /// starts with says about it, or `None` when that dependency was extracted
     /// whole (its exports are then complete) or is not a dependency.

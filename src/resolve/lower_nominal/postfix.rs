@@ -3328,19 +3328,30 @@ impl<'a> Parser<'a> {
             && matches!(*returned, Ty::Host { .. })
             && !self.unifies(&returned, &error)
         {
+            // The error's own `into`s too: a crate's `impl From<Error> for
+            // io::Error` is a member of its error, not of std's (#1451).
+            let (forms, owner) = self.conversion_forms(&error).unwrap_or_default();
             let host = HostInto {
-                forms: Vec::new(),
-                owner: None,
+                forms,
+                owner,
                 receiver: value.span,
             };
             let Some(helper) = self.host_into_helper(&host, &error, &returned, value.span)? else {
-                // An imported error whose `from` the program never named:
-                // its member, which the importer brings once it is demanded.
+                // An imported error whose `from` the program never named,
+                // or an imported error's `into`: its member, which the
+                // importer brings once it is demanded.
                 #[cfg(feature = "rust-import")]
-                if let Some(owner) = self.imported_public_path(&returned, "from") {
+                if let Some((owner, member)) = self
+                    .imported_public_path(&returned, "from")
+                    .map(|owner| (owner, "from"))
+                    .or_else(|| {
+                        self.imported_public_path(&error, "into")
+                            .map(|owner| (owner, "into"))
+                    })
+                {
                     return Err(Error::UnknownMember {
                         owner,
-                        member: "from".into(),
+                        member: member.into(),
                         reference: value.span,
                     });
                 }

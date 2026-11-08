@@ -1780,8 +1780,17 @@ impl<'a> Parser<'a> {
                 .values()
                 .map(|binding| binding.declaration)
                 .collect();
+            // A closure parameter's types the block's place gives reach its
+            // tail closure, as `on_key_event({ let t = ..; move |key| .. })`
+            // has rustc check the tail against the expected type (#1450).
+            let closure_hint = self.closure_hint.take();
+            let closure_output = self.closure_output.take();
 
             while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
+                if self.closure_ahead() {
+                    self.closure_hint.clone_from(&closure_hint);
+                    self.closure_output.clone_from(&closure_output);
+                }
                 match self.peek() {
                     Token::Let => self.parse_binding(true)?,
                     // `const fn f()` is a nested `fn` item.

@@ -300,6 +300,18 @@ impl<'a> Parser<'a> {
     /// captures are shared with its scope, or copied into it with `move`.
     /// `async { .. }`, `async move { .. }`, `async |x| ..` and
     /// `async move |x| ..`.
+    /// Whether a closure starts here: `|..|`, `||`, or either after `move`.
+    pub(super) fn closure_ahead(&mut self) -> bool {
+        match self.peek() {
+            Token::Pipe | Token::Or => true,
+            Token::Identifier(ref name) if name.as_str() == "move" => {
+                !self.bindings.contains_key("move")
+                    && matches!(self.peek_second(), Token::Pipe | Token::Or)
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn parse_async(&mut self, start: Span) -> Result<ParsedExpr, Error> {
         let moved = matches!(self.peek(), Token::Identifier(ref name) if name.as_str() == "move")
             && !self.bindings.contains_key("move");

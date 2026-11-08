@@ -1087,6 +1087,16 @@ impl<'a> Parser<'a> {
         let Some(definition) = alias else {
             return Err(self.unsupported("host method receiver type"));
         };
+        #[cfg(feature = "rust-import")]
+        let definition = match self
+            .models
+            .host_items(&format!("{}::{member}", definition.path()))
+        {
+            Some(_) => definition,
+            None => self
+                .imported_member_elsewhere(&resolved, &member)
+                .unwrap_or(definition),
+        };
         let path = format!("{}::{member}", definition.path());
         let (member, path) = self.exported_member(&definition, member, path, member_span)?;
         // Distinct imported candidates at one path: which one Rust selects
@@ -2244,6 +2254,28 @@ impl<'a> Parser<'a> {
         self.models
             .host
             .imported_type_paths(identity, owner)?
+            .find(|path| {
+                self.models
+                    .host_items(&format!("{path}::{member}"))
+                    .is_some()
+            })
+            .and_then(|path| self.models.host.type_(&path).cloned())
+    }
+
+    /// The imported type `ty` as another crate's facade names it, when only
+    /// that facade has `member`: a trait of that crate gives it by an impl
+    /// for this crate's type, as ratzilla's `impl<B> WebRenderer for
+    /// Terminal<B>` gives ratatui's terminal `draw_web` (#1450).
+    #[cfg(feature = "rust-import")]
+    fn imported_member_elsewhere(
+        &self,
+        ty: &Ty,
+        member: &str,
+    ) -> Option<crate::host::type_def::Definition> {
+        let (identity, _, _) = ty.imported_alias_context()?;
+        self.models
+            .host
+            .imported_type_paths_anywhere(identity)
             .find(|path| {
                 self.models
                     .host_items(&format!("{path}::{member}"))

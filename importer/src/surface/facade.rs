@@ -11,7 +11,7 @@ pub(crate) mod cached;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 54;
+const SCHEMA: u32 = 55;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -578,6 +578,10 @@ pub struct TypeDefinition {
     /// Whether the crate implements `Iterator` for the native type.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
+    /// Whether the crate implements `std::error::Error` for the native
+    /// type (#1451).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    error: bool,
     /// Whether the type is the opaque `impl Trait` a function gives, which
     /// Rust code can't write (`surface::opaque`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1585,6 +1589,7 @@ impl Plan {
                             covariant: false,
                             given: Box::default(),
                             iterator,
+                            error: false,
                             opaque: true,
                             shape: Shape::Struct {
                                 form: Form::Record,
@@ -2097,6 +2102,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         covariant: false,
         given: Box::default(),
         iterator: false,
+        error: false,
         opaque: false,
         associated: Box::default(),
         shape: Shape::Struct {
@@ -2178,6 +2184,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 covariant: false,
                 given: Box::default(),
                 iterator: false,
+                error: false,
                 opaque: false,
                 associated: Box::default(),
                 shape: Shape::Struct {
@@ -2227,6 +2234,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         covariant: false,
         given: Box::default(),
         iterator: false,
+        error: false,
         opaque: false,
         associated: Box::default(),
         shape: Shape::Struct {
@@ -2319,6 +2327,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
         covariant: false,
         given: Box::default(),
         iterator: false,
+        error: false,
         opaque: false,
         shape: Shape::Struct {
             form: Form::Unit,
@@ -3403,6 +3412,11 @@ impl TypeDefinition {
     pub const fn iterator(&self) -> bool {
         self.iterator
     }
+    /// Return whether the crate implements `std::error::Error` for the
+    /// native type.
+    pub const fn error(&self) -> bool {
+        self.error
+    }
     /// Return whether the type is the opaque `impl Trait` a function gives.
     pub const fn opaque(&self) -> bool {
         self.opaque
@@ -3618,6 +3632,11 @@ fn written_type_definition(
         Representability::Enum(plan) => (plan.lifetimes(), plan.iterator(), plan.covariant()),
         _ => (0, false, false),
     };
+    let error = match outcome.representability() {
+        Representability::Struct(plan) => plan.error(),
+        Representability::Enum(plan) => plan.error(),
+        _ => false,
+    };
     let given = match outcome.representability() {
         Representability::Struct(plan) => plan.given(),
         Representability::Enum(plan) => plan.given(),
@@ -3718,6 +3737,7 @@ fn written_type_definition(
         covariant: borrowing.2,
         given,
         iterator: borrowing.1,
+        error,
         opaque: false,
         associated: Box::default(),
         shape,

@@ -789,6 +789,28 @@ impl Registry {
         )
     }
 
+    /// Every path of the imported type `identity` in any facade: another
+    /// crate's facade names it under that crate's hidden segment
+    /// (`natives::__rawr_crate_parts_<id>::Terminal`) when a trait of that
+    /// crate gives it members (#1450).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn imported_type_paths_anywhere<'a>(
+        &'a self,
+        identity: &type_def::import::Identity,
+    ) -> impl Iterator<Item = String> + 'a {
+        let start = self
+            .imported
+            .partition_point(|candidate| candidate.identity < *identity);
+        let end = self
+            .imported
+            .partition_point(|candidate| candidate.identity <= *identity);
+        self.imported[start..end].iter().flat_map(|imported| {
+            self.imported_aliases[imported.aliases.clone()]
+                .iter()
+                .map(|index| self.types[*index].path())
+        })
+    }
+
     /// Look up a registered static item by its canonical qualified path.
     #[must_use]
     pub fn item(&self, path: &str) -> Option<&item::Definition> {

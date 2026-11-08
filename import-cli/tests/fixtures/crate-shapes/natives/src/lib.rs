@@ -1785,3 +1785,127 @@ pub mod pressable {
         }
     }
 }
+
+/// A terminal that draws into a page, as ratzilla's is: its trait gives
+/// another crate's generic `Terminal<B>` methods by a generic impl, and
+/// its error converts into an `io::Error` and is a `std::error::Error` by
+/// the impl a derive writes.
+pub mod web {
+    use parts::terminal::{Backend, Frame, Terminal};
+
+    pub mod error {
+        /// The crate's error, whose `std::error::Error` and `Display`
+        /// impls are what thiserror's derive expands to.
+        #[derive(Debug)]
+        pub enum Error {
+            UnableToRetrieveElementById(String),
+        }
+
+        #[allow(unused_qualifications)]
+        #[automatically_derived]
+        impl ::widgets::__private::Error for Error {}
+
+        #[allow(unused_qualifications)]
+        #[automatically_derived]
+        impl ::core::fmt::Display for Error {
+            fn fmt(&self, formatter: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+                match self {
+                    Error::UnableToRetrieveElementById(id) => {
+                        formatter.write_fmt(format_args!("Unable to retrieve element: {id}"))
+                    }
+                }
+            }
+        }
+
+        impl From<Error> for std::io::Error {
+            fn from(error: Error) -> Self {
+                std::io::Error::other(error.to_string())
+            }
+        }
+    }
+
+    use error::Error;
+
+    /// A key pressed.
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum Key {
+        Char(char),
+        Enter,
+    }
+
+    /// A page's element, which hears the keys `typed` holds.
+    pub struct DomBackend {
+        id: String,
+        typed: Vec<Key>,
+    }
+
+    impl DomBackend {
+        /// The element of id `id`; an empty id names none.
+        pub fn new_by_id(id: &str) -> Result<Self, Error> {
+            if id.is_empty() {
+                return Err(Error::UnableToRetrieveElementById(id.to_owned()));
+            }
+            let typed = vec![Key::Char('h'), Key::Char('i'), Key::Enter];
+            Ok(Self {
+                id: id.to_owned(),
+                typed,
+            })
+        }
+    }
+
+    impl Backend for DomBackend {
+        fn name(&self) -> String {
+            self.id.clone()
+        }
+    }
+
+    /// What hands a terminal's keys to a program.
+    pub trait EventHandler {
+        fn on_key_event<F>(&mut self, callback: F) -> Result<(), Error>
+        where
+            F: FnMut(Key) + 'static;
+    }
+
+    impl EventHandler for DomBackend {
+        fn on_key_event<F>(&mut self, mut callback: F) -> Result<(), Error>
+        where
+            F: FnMut(Key) + 'static,
+        {
+            for key in self.typed.drain(..) {
+                callback(key);
+            }
+            Ok(())
+        }
+    }
+
+    /// A terminal that draws on the page's frames, as ratzilla's
+    /// `WebRenderer` is.
+    pub trait WebRenderer {
+        fn draw_web<F>(self, render: F)
+        where
+            F: FnMut(&mut Frame) + 'static;
+
+        fn on_key_event<F>(&mut self, callback: F) -> Result<(), Error>
+        where
+            F: FnMut(Key) + 'static;
+    }
+
+    impl<B> WebRenderer for Terminal<B>
+    where
+        B: Backend + EventHandler + 'static,
+    {
+        fn draw_web<F>(mut self, mut render: F)
+        where
+            F: FnMut(&mut Frame) + 'static,
+        {
+            self.draw(|frame| render(frame));
+        }
+
+        fn on_key_event<F>(&mut self, callback: F) -> Result<(), Error>
+        where
+            F: FnMut(Key) + 'static,
+        {
+            self.backend_mut().on_key_event(callback)
+        }
+    }
+}

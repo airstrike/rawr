@@ -767,6 +767,7 @@ fn build(
                     ty.partial_ord(),
                     ty.ord(),
                     ty.iterator(),
+                    ty.error(),
                 ]),
                 parameters,
                 defaults,
