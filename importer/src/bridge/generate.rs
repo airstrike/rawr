@@ -2286,6 +2286,26 @@ impl Arena {
             Err(panic) => std::panic::resume_unwind(panic),
         }
     }
+
+    /// The value of `handle` kept in its slot's home with the guard `reach`
+    /// makes of it (#1325), as a crate method's `&mut` borrows it: a guard
+    /// kept before ends here, as its borrow did.
+    #[allow(dead_code)]
+    fn yoke<T: 'static, U: ?Sized + 'static>(
+        &mut self,
+        handle: &NativeHandle,
+        reach: impl for<'a> FnOnce(&'a mut T) -> Box<dyn std::ops::DerefMut<Target = U> + 'a>,
+    ) -> Result<YokeEnd<U>, Error> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        self.settle(handle);
+        let index = self.index::<T>(handle)?;
+        let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        let value = value.downcast::<T>().map_err(|_| Error::TypeMismatch)?;
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let yoke = __rawr_internal::island::place::Yoke::new(value, reach);
+        self.slots[index].homed = Some(Box::new(Yoked { id, yoke: RefCell::new(yoke) }));
+        Ok(YokeEnd { handle: handle.clone(), id, target: std::marker::PhantomData })
+    }
 }
 
 /// The native value `value` holds, moved out of this thread's arena for
@@ -2755,18 +2775,25 @@ fn scoped_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__raw
         .and_then(|value| value.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped))
 }
 
-/// The first value of a scope frame's region in the array at `index`, as
-/// `column![..]`'s elements are, or in the option there, as `column![..,
-/// maybe.map(|x| text(x))]`'s `Option<Text>` is.
+/// The value among the arguments at `indices`, and in the arrays there,
+/// as `column![..]`'s elements are, and the options, as `column![..,
+/// maybe.map(|x| text(x))]`'s `Option<Text>` is, whose scope frame's
+/// region ends first: a call that takes values of several frames runs in
+/// it, as `with_children([a, b])` of two `let`s does (#1329).
 #[allow(dead_code)]
-fn scoped_item(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Scoped> {
-    let value = arguments.values.get(index)?;
+fn scoped_innermost(arguments: &Arguments<'_, '_, '_>, indices: &[usize]) -> Option<__rawr_internal::scope::Scoped> {
     let scoped = |item: &Dynamic| item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped);
-    if let Some(option) = value.read_lock::<__rawr_internal::option::Value>() {
-        return option.as_ref().and_then(scoped);
+    let mut handles = Vec::new();
+    for value in indices.iter().filter_map(|index| arguments.values.get(*index)) {
+        if let Some(handle) = scoped(value) {
+            handles.push(handle);
+        } else if let Some(option) = value.read_lock::<__rawr_internal::option::Value>() {
+            handles.extend(option.as_ref().and_then(scoped));
+        } else if let Some(items) = value.read_lock::<__rawr_internal::Array>() {
+            handles.extend(items.iter().filter_map(scoped));
+        }
     }
-    let items = value.read_lock::<__rawr_internal::Array>()?;
-    items.iter().find_map(scoped)
+    __rawr_internal::scope::innermost(handles)
 }
 
 /// A value native code lent the call (D558.3) that an argument reaches,
@@ -2919,6 +2946,94 @@ struct Lending(([u8; 32], u32, u64));
 impl Drop for Lending {
     fn drop(&mut self) {
         LENDERS.with_borrow_mut(|lenders| lenders.remove(&self.0));
+    }
+}
+
+/// A native value a `&mut` of its crate method's borrows (#1325), kept in
+/// its slot's home with the guard (`island::place::Yoke`): the guard's
+/// place reaches the target here by the yoke's `id`. Any other use of the
+/// value ends the guard first, as rustc ends the borrow at its last use,
+/// and the value goes back to its slot the next time the slot settles.
+#[allow(dead_code)]
+struct Yoked<U: ?Sized + 'static> {
+    id: u64,
+    yoke: RefCell<__rawr_internal::island::place::Yoke<U>>,
+}
+
+impl<U: ?Sized + 'static> Homed for Yoked<U> {
+    fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error> {
+        let mut yoke = self.yoke.try_borrow_mut().map_err(|_| Error::Leased)?;
+        call(yoke.owner());
+        Ok(())
+    }
+
+    fn mutable(&self, call: &mut dyn FnMut(&mut dyn Any)) -> Result<(), Error> {
+        let mut yoke = self.yoke.try_borrow_mut().map_err(|_| Error::Leased)?;
+        call(yoke.owner());
+        Ok(())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn settle(self: Box<Self>) -> Result<Box<dyn Any>, Box<dyn Homed>> {
+        Ok(self.yoke.into_inner().into_owner())
+    }
+}
+
+/// What a guard's place holds of the guard `id` on the value of `handle`
+/// ([`Arena::yoke`]): the guard ends when the last copy of the place
+/// drops, as Rust drops it at the end of its statement or block.
+#[allow(dead_code)]
+struct YokeEnd<U: ?Sized + 'static> {
+    handle: NativeHandle,
+    id: u64,
+    target: std::marker::PhantomData<fn() -> Box<U>>,
+}
+
+#[allow(dead_code)]
+impl<U: ?Sized + 'static> YokeEnd<U> {
+    /// `body` of the guard's target, while the guard lasts.
+    fn with<R>(&self, arena: &Arena, body: impl FnOnce(&mut U) -> R) -> Result<R, Error> {
+        let ended = || Error::Lent(std::any::type_name::<U>(), __rawr_internal::scope::Error::Expired);
+        let yoked = arena
+            .homed(&self.handle)
+            .and_then(|homed| homed.as_any().downcast_ref::<Yoked<U>>())
+            .filter(|yoked| yoked.id == self.id)
+            .ok_or_else(ended)?;
+        let mut yoke = yoked.yoke.try_borrow_mut().map_err(|_| Error::Leased)?;
+        yoke.target().map(body).ok_or_else(ended)
+    }
+}
+
+impl<U: ?Sized + 'static> Drop for YokeEnd<U> {
+    fn drop(&mut self) {
+        let ended = Unyoke::<U> { handle: self.handle.clone(), id: self.id, target: std::marker::PhantomData };
+        UNLENDS.with_borrow_mut(|unlends| unlends.push(Box::new(ended)));
+        queued_here();
+        let _ = with_arena(|_| Ok(()));
+    }
+}
+
+/// A guard whose place is gone, ended the next time the owner thread has
+/// the arena, unless a later guard took its place.
+#[allow(dead_code)]
+struct Unyoke<U: ?Sized + 'static> {
+    handle: NativeHandle,
+    id: u64,
+    target: std::marker::PhantomData<fn() -> Box<U>>,
+}
+
+impl<U: ?Sized + 'static> Unlend for Unyoke<U> {
+    fn unlend(self: Box<Self>, arena: &mut Arena) {
+        let current = arena
+            .homed(&self.handle)
+            .and_then(|homed| homed.as_any().downcast_ref::<Yoked<U>>())
+            .is_some_and(|yoked| yoked.id == self.id);
+        if current {
+            arena.settle(&self.handle);
+        }
     }
 }
 
@@ -3900,7 +4015,8 @@ fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package
     input = &input[domain.len()..];
     let entry = std::str::from_utf8(snapshot_bytes(&mut input, 1024 * 1024)?)
         .map_err(|_| std::io::Error::other("snapshot entry UTF-8"))?;
-    // The features the parent's Cargo enabled for the entry package.
+    // The entry package's configuration, as `rustc --print cfg` lines: the
+    // features the parent's Cargo enabled and the options rustc sets.
     if input.len() < 8 { return Err(std::io::Error::other("snapshot features")); }
     let count = u64::from_le_bytes(input[..8].try_into().map_err(|_| std::io::Error::other("snapshot features"))?);
     input = &input[8..];
@@ -3924,7 +4040,7 @@ fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package
     }
     if files.is_empty() { return Err(std::io::Error::other("snapshot files")); }
     __rawr_internal::package::snapshot::Snapshot::new(std::path::PathBuf::from(entry), files)
-        .map(|snapshot| snapshot.with_features(__rawr_internal::project::cargo::features::Enabled::of_names(features)))
+        .map(|snapshot| snapshot.with_features(__rawr_internal::project::cargo::features::Enabled::of_lines(features)))
         .map_err(|error| std::io::Error::other(error.to_string()))
 }
 
@@ -7358,15 +7474,17 @@ fn instance_key(plan: &Plan) -> [u8; 32] {
     match plan.operation() {
         Operation::Function {
             substitutions,
+            constants,
             slots,
             ..
         }
         | Operation::Method {
             substitutions,
+            constants,
             slots,
             ..
-        } if !substitutions.is_empty() || !slots.is_empty() => {
-            crate::surface::instance::key_with_slots(substitutions, slots)
+        } if !substitutions.is_empty() || !constants.is_empty() || !slots.is_empty() => {
+            crate::surface::instance::key_with_constants(substitutions, constants, slots)
         }
         _ => [0; 32],
     }
@@ -9356,7 +9474,7 @@ fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'
             .join(", ");
         writeln!(
             output,
-            "    if let Some((nonce, name)) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))).map(|scoped| (scoped.nonce(), scoped.name())).or_else(|| __rawr_internal::scope::anchor().map(|anchor| (anchor, \"a slot's region\"))) {{
+            "    if let Some((nonce, name)) = scoped_innermost(arguments, &[{indices}]).map(|scoped| (scoped.nonce(), scoped.name())).or_else(|| __rawr_internal::scope::anchor().map(|anchor| (anchor, \"a slot's region\"))) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(nonce, |region| -> Result<Dynamic, Error> {{"
         )
         .map_err(encoding)?;
@@ -9878,7 +9996,7 @@ fn opaque_table_source(
                     .join(", ");
                 writeln!(
                     body,
-                    "    if let Some(scoped) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))) {{
+                    "    if let Some(scoped) = scoped_innermost(arguments, &[{indices}]) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{"
                 )
                 .map_err(request::unwritable)?;
@@ -12886,14 +13004,14 @@ fn render_borrowed_std(
 /// and `State::write` give. The guard borrows the receiver, which lives in
 /// the arena, so it never leaves the one call that holds the receiver.
 /// A `Deref` guard gives a copy of its target. A `DerefMut` guard gives a
-/// place (`island::place::Place`) whose accesses each call the method
-/// again and drop the guard before they return: a read copies the target,
-/// a store assigns it, and an update (`op=`, D554.7(f)) copies it, has the
-/// script change the copy and assigns the result, all through one guard.
-/// An update takes the receiver out of its slot while the script runs, so
-/// the arena can be lent to the native calls the change makes. The
-/// method's inputs are taken first, so they are owned values the call
-/// borrows.
+/// place (`island::place::Place`): the method is called once, its guard is
+/// kept with the receiver's value in the slot's home (`Arena::yoke`), and
+/// each access reaches it there (#1325). A read copies the target, a store
+/// assigns it, and an update (`op=`, D554.7(f)) copies it, has the script
+/// change the copy and assigns the result. The guard ends when the place's
+/// last copy drops or the receiver is next reached, as rustc ends the
+/// borrow. The method's inputs are taken first, so they are owned values
+/// the call borrows.
 #[allow(clippy::too_many_arguments)]
 fn render_guard(
     plan: &Plan,
@@ -12931,23 +13049,17 @@ fn render_guard(
         );
     }
     let copy = copy_macro(&target);
-    // The method's inputs, given as they were taken, or copies of them,
-    // so a place reaches its target again with each access (#1318).
+    // The method's inputs, given as they were taken: it is called once.
     let inputs = signature.inputs().len();
     let mut taken = Vec::new();
     argument_list(inputs, 1, &mut taken)?;
     let taken = String::from_utf8(taken).map_err(request::unwritable)?;
-    let copies = (0..inputs)
-        .map(|input| format!("Clone::clone(&argument_{input})"))
-        .collect::<Vec<_>>()
-        .join(", ");
     // `arena.shared::<Receiver, _>(handle, |receiver| { let mut guard =
-    // receiver.method(given); ` through `access`, whose closure takes
+    // receiver.method(inputs); ` through `access`, whose closure takes
     // `taking`.
     let call = |access: &str,
                 handle: &str,
                 taking: &str,
-                given: &str,
                 output: &mut Vec<u8>|
      -> Result<(), request::Error> {
         write!(output, "{access}::<").map_err(encoding)?;
@@ -12973,7 +13085,7 @@ fn render_guard(
             container_parameters,
             output,
         )?;
-        write!(output, "({given}); let _ = &mut guard; ").map_err(encoding)
+        write!(output, "({taken}); let _ = &mut guard; ").map_err(encoding)
     };
     let indented = |lines: &[u8], indent: &str, output: &mut Vec<u8>| {
         for line in String::from_utf8_lossy(lines).lines() {
@@ -13083,7 +13195,7 @@ fn render_guard(
     match guard {
         Guard::Shared => {
             output.write_all(b"    let output = ").map_err(encoding)?;
-            call(borrow, "receiver", "receiver", &taken, output)?;
+            call(borrow, "receiver", "receiver", output)?;
             output
                 .write_all(format!("{copy}!(&*guard) }})??;\n").as_bytes())
                 .map_err(encoding)?;
@@ -13092,7 +13204,7 @@ fn render_guard(
         // `Some` of a copy of the target, or `None`.
         Guard::OptionShared => {
             output.write_all(b"    let output = ").map_err(encoding)?;
-            call(borrow, "receiver", "receiver", &taken, output)?;
+            call(borrow, "receiver", "receiver", output)?;
             output
                 .write_all(
                     format!("guard.map(|target| {copy}!(&*target)).transpose() }})??;\n")
@@ -13221,97 +13333,57 @@ fn render_guard(
             let mut take = Vec::new();
             // The stored value is the local after the inputs.
             render_take(inputs, 0, &target, &mut take)?;
+            // The method is called once: its guard is kept with the
+            // receiver's value (`Arena::yoke`), and each access of the
+            // place reaches it there (#1325).
+            output
+                .write_all(b"    let witness = output_witness();\n    let end = ")
+                .map_err(encoding)?;
+            call("arguments.arena.yoke", "&receiver", "receiver", output)?;
             output
                 .write_all(
-                    b"    let witness = output_witness();\n    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {
+                    b"Box::new(guard) })?;
+    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {
         use __rawr_internal::island::place::Access;
-        let mut stored = match access {
-            Access::Read => None,
-            Access::Store(value) => Some(value),
-            Access::Update(apply) => {
-                return with_arena(|arena| {
-                    ",
-                )
-                .map_err(encoding)?;
-            call(
-                "arena.held",
-                "receiver.clone()",
-                "arena, receiver",
-                &copies,
-                output,
-            )?;
-            output
-                .write_all(
-                    format!(
-                        "
-                        let output = {copy}!(&*guard)?;
-                        let value = {{
-                            #[allow(unused_variables)]
-                            let arguments = &mut Arguments {{ values: &mut [], arena: &mut *arena }};
-"
-                    )
-                    .as_bytes(),
-                )
-                .map_err(encoding)?;
-            indented(&give, "                        ", output)?;
-            output
-                .write_all(
-                    b"                        }?;
-                        let mut stored = match lend(arena, || apply(value)) {
-                            Ok(stored) => stored,
-                            Err(error) => return Ok(Err(error)),
-                        };
-                        let mut values = [&mut stored];
-                        let arguments = &mut Arguments { values: &mut values, arena };
+        let reach = |mut stored: Option<Dynamic>| {
+            with_arena(|arena| {
+                let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
+                let arguments = &mut Arguments { values: values.as_mut_slice(), arena };
+                if arguments.values.is_empty() {
 ",
                 )
                 .map_err(encoding)?;
-            indented(&take, "                    ", output)?;
+            writeln!(
+                output,
+                "                    let output = end.with(&*arguments.arena, |guard| {copy}!(&*guard))??;"
+            )
+            .map_err(encoding)?;
+            indented(&give, "                    ", output)?;
             output
-                .write_all(
-                    format!(
-                        "                        *guard = argument_{inputs};
-                        Ok(Ok(Dynamic::UNIT))
-                    }})?
-                }})
-                .map_err(runtime_error)?;
-            }}
+                .write_all(b"                } else {\n")
+                .map_err(encoding)?;
+            indented(&take, "                ", output)?;
+            write!(
+                output,
+                "                    end.with(&*arguments.arena, |guard| *guard = argument_{inputs})?;
+                    Ok(Dynamic::UNIT)
+                }}
+            }})
+            .map_err(runtime_error)
         }};
-        with_arena(|arena| {{
-            let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
-            let arguments = &mut Arguments {{ values: values.as_mut_slice(), arena }};
-            if arguments.values.is_empty() {{
-                let output = "
-                    )
-                    .as_bytes(),
-                )
-                .map_err(encoding)?;
-            call(borrow, "receiver.clone()", "receiver", &copies, output)?;
-            output
-                .write_all(format!("{copy}!(&*guard) }})??;\n").as_bytes())
-                .map_err(encoding)?;
-            indented(&give, "            ", output)?;
-            output
-                .write_all(b"            } else {\n")
-                .map_err(encoding)?;
-            indented(&take, "            ", output)?;
-            output.write_all(b"                ").map_err(encoding)?;
-            call(borrow, "receiver.clone()", "receiver", &copies, output)?;
-            output
-                .write_all(
-                    format!(
-                        "*guard = argument_{inputs}; }})?;
-                Ok(Dynamic::UNIT)
+        match access {{
+            Access::Read => reach(None),
+            Access::Store(value) => reach(Some(value)),
+            Access::Update(apply) => {{
+                let value = reach(None)?;
+                reach(Some(apply(value)?))
             }}
-        }})
-        .map_err(runtime_error)
+        }}
     }});
     Ok(Dynamic::from(place))
 "
-                    )
-                    .as_bytes(),
-                )
-                .map_err(encoding)
+            )
+            .map_err(encoding)
         }
     }
 }
@@ -14209,6 +14281,7 @@ fn render_rust_type(
             render_rust_type(err, facade, output)?;
             output.write_all(b">").map_err(request::unwritable)
         }
+        convert::Type::ConstArray { .. } => Err(unlengthed()),
         convert::Type::Sequence {
             element,
             length: Some(length),
@@ -16426,6 +16499,7 @@ fn render_take(
         .map_err(request::unwritable);
     }
     let helper = match ty {
+        convert::Type::ConstArray { .. } => return Err(unlengthed()),
         convert::Type::Builtin(convert::Builtin::String) => "take_string",
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_range",
         // Named, so an item rustc chooses by its input's type, as
@@ -16628,6 +16702,9 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
+    convert::Type::ConstArray { .. } => {
+            return Err(unlengthed())
+        }
         // A value of a generic impl function's own parameter's opaque type
         // stays in its frame (`render_frame`).
         convert::Type::Nominal { definition, .. } if let Some((frame, slot)) = frame_slot(definition) => {
@@ -16802,6 +16879,9 @@ fn render_from_dynamic(
             "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| {frame}.out_{slot}(arguments.arena, handle))"
         ),
         convert::Type::Inferred => return Err(request::drift("an inferred type parameter reached a runtime value")),
+        convert::Type::ConstArray { .. } => {
+            return Err(unlengthed())
+        }
         convert::Type::Unit | convert::Type::Never => cast(output, "()"),
         convert::Type::Builtin(convert::Builtin::Bool) => cast(output, "bool"),
         convert::Type::Builtin(convert::Builtin::Char) => cast(output, "char"),
@@ -17098,6 +17178,9 @@ fn render_to_dynamic(
 ) -> Result<(), request::Error> {
     use std::fmt::Write as _;
     match ty {
+    convert::Type::ConstArray { .. } => {
+            return Err(unlengthed())
+        }
         convert::Type::Nominal { definition, .. } if let Some((frame, slot)) = frame_slot(definition) => {
             write!(output, "{frame}.give_{slot}(arguments.arena, {value})")
         }
@@ -17851,6 +17934,10 @@ fn instantiated(
             owned: *owned,
             length: *length,
         },
+        convert::Type::ConstArray { element, parameter } => convert::Type::ConstArray {
+            element: one(element)?,
+            parameter: *parameter,
+        },
         convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
         convert::Type::Script { path, arguments } => convert::Type::Script {
             path: path.clone(),
@@ -17867,6 +17954,12 @@ fn instantiated(
         convert::Type::Inferred => ty.clone(),
         convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => ty.clone(),
     })
+}
+
+/// A `[T; N]` of a const parameter where the bridge needs a value: an
+/// instance's adapter has each at its argument's length (`adapter::at_lengths`).
+fn unlengthed() -> request::Error {
+    request::drift("an array of a const length reached the bridge without its length")
 }
 
 fn substitute<'a>(
@@ -19734,6 +19827,7 @@ fn names_parameter(ty: &convert::Type) -> bool {
         | convert::Type::Range(inner)
         | convert::Type::Borrowed { ty: inner, .. }
         | convert::Type::Sequence { element: inner, .. }
+        | convert::Type::ConstArray { element: inner, .. }
         | convert::Type::ProfileMessage { payload: inner, .. } => names_parameter(inner),
         convert::Type::Result(ok, err) => names_parameter(ok) || names_parameter(err),
         convert::Type::FunctionItem { input, output } => {
@@ -20362,12 +20456,23 @@ use super::*;
         } else {
             String::new()
         };
+        // A value of an enclosing frame's region joins a call in an inner
+        // one where the type is covariant in its own lifetimes and nothing
+        // else among its arguments borrows (#1329).
+        let shorten = if lifetimes.covariant
+            && text.matches('\'').count() <= lifetimes.count as usize
+            && !text.contains('&')
+        {
+            "\n    fn shorten<'s, 'l: 's>(value: &'s Self::Of<'l>) -> Option<&'s Self::Of<'s>> {\n        Some(value)\n    }"
+        } else {
+            ""
+        };
         let shown = family::Ops::shown(&text)
             .unwrap_or_else(|| text.clone())
             .replace("'x", "'_");
         writeln!(
             output,
-            "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{display}{clone}{equal}\n}}\n"
+            "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{display}{clone}{shorten}{equal}\n}}\n"
         )
         .map_err(request::unwritable)?;
     }
@@ -20676,6 +20781,7 @@ fn output_names(ty: &convert::Type, index: u32) -> bool {
         | convert::Type::Borrowed { ty: element, .. }
         | convert::Type::Range(element)
         | convert::Type::Sequence { element, .. } => output_names(element, index),
+        convert::Type::ConstArray { element, .. } => output_names(element, index),
         convert::Type::Result(ok, err) => output_names(ok, index) || output_names(err, index),
         convert::Type::FunctionItem { input, output } => {
             output_names(input, index) || output_names(output, index)
@@ -20954,6 +21060,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 format!("crate::{path}<{}>", arguments.join(", "))
             }
         }
+        convert::Type::ConstArray { .. } => return None,
         convert::Type::Sequence {
             element,
             length: Some(length),
@@ -21223,6 +21330,7 @@ fn render_generic_arguments(
                         | convert::Type::Range(_)
                         | convert::Type::Result(..)
                         | convert::Type::Sequence { .. }
+                        | convert::Type::ConstArray { .. }
                         | convert::Type::Tuple(_) => concrete.as_deref().unwrap_or("_").as_bytes(),
                         // `&[u8]` or `&str`, as `Reader<&'a [u8]>` takes
                         // (D558 tier 1).
@@ -21626,6 +21734,7 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         | convert::Type::Nominal { .. }
         | convert::Type::Script { .. }
         | convert::Type::Sequence { .. }
+        | convert::Type::ConstArray { .. }
         | convert::Type::Tuple(_)
         | convert::Type::FunctionItem { .. }
         | convert::Type::Borrowed { .. }

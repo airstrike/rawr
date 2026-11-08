@@ -534,6 +534,14 @@ pub trait Regional: Family {
         None
     }
 
+    /// The value at a shorter lifetime, when its type is covariant in
+    /// `'x`, as rustc's variance says: a value an enclosing frame's region
+    /// holds then joins a call made in an inner one ([`Region::take`]). A
+    /// runner's impl is `Some(value)`, which rustc checks.
+    fn shorten<'s, 'l: 's>(_value: &'s Self::Of<'l>) -> Option<&'s Self::Of<'s>> {
+        None
+    }
+
     /// `a == b`, when the type is `PartialEq`.
     fn equal<'x>(_a: &Self::Of<'x>, _b: &Self::Of<'x>) -> Option<bool> {
         None
@@ -747,8 +755,14 @@ impl<'r> Region<'r> {
     }
 
     /// Move the value `handle` names out of the region. Every handle to it
-    /// is then [`Error::Moved`].
+    /// is then [`Error::Moved`]. A value of a region that encloses this
+    /// one is moved out of that region at this one's `'r` when its type
+    /// shortens ([`Regional::shorten`]), as Rust passes two `let`s'
+    /// borrows to one call that lives as long as the shorter (#1329).
     pub fn take<F: Regional>(&mut self, handle: Scoped) -> Result<F::Of<'r>, Error> {
+        if handle.nonce != self.nonce {
+            return self.take_enclosing::<F>(handle);
+        }
         self.slot_of::<F>(handle)?;
         let slot = self.slots[handle.index as usize]
             .take()
@@ -757,6 +771,30 @@ impl<'r> Region<'r> {
         // turned back into the box it was made as.
         let slot = unsafe { Box::from_raw(Box::into_raw(slot).cast::<Slot<'r, F>>()) };
         Ok(slot.0)
+    }
+
+    /// [`Region::take`] of a value of the region `handle` names, which
+    /// was opened further down this thread's stack than this one, so it
+    /// ends after this one does.
+    fn take_enclosing<F: Regional>(&self, handle: Scoped) -> Result<F::Of<'r>, Error> {
+        if !encloses(handle.nonce, self.nonce) {
+            return Err(Error::Mismatch);
+        }
+        with::<RegionF, _>(handle.nonce, |outer| {
+            if F::shorten(outer.get::<F>(handle)?).is_none() {
+                return Err(Error::Mismatch);
+            }
+            let value = std::mem::ManuallyDrop::new(outer.take::<F>(handle)?);
+            // SAFETY: the types differ only in their lifetime, which has
+            // no layout. The outer region's frame is below this one's on
+            // the stack, so its `'r` outlives this region's, and `F::Of` is
+            // covariant in it (`shorten` compiled as `Some(value)`), so its
+            // value is one at this region's `'r`. It is moved: the original
+            // is forgotten and its slot is empty.
+            Ok(unsafe {
+                std::ptr::read(std::ptr::from_ref::<F::Of<'_>>(&value).cast::<F::Of<'r>>())
+            })
+        })?
     }
 
     /// Store `value`, which the function `wrapper` gives, under its family
@@ -845,6 +883,34 @@ impl<'r> Region<'r> {
             slot.debug()
         })
     }
+}
+
+/// Whether the lend `outer` names is further down this thread's stack
+/// than the one `inner` names, so it ends after that one does.
+fn encloses(outer: Nonce, inner: Nonce) -> bool {
+    FRAMES.with_borrow(|frames| {
+        let at = |nonce: Nonce| frames.iter().rposition(|frame| frame.nonce == nonce);
+        matches!((at(outer), at(inner)), (Some(outer), Some(inner)) if outer < inner)
+    })
+}
+
+/// The handle among `handles` whose region is highest on this thread's
+/// stack, so it ends first: a call that takes values of several frames'
+/// regions makes its output there, as Rust's output lives as long as its
+/// shortest borrow (#1329). The first, of equals.
+pub fn innermost(handles: impl IntoIterator<Item = Scoped>) -> Option<Scoped> {
+    FRAMES.with_borrow(|frames| {
+        let at = |handle: &Scoped| {
+            frames
+                .iter()
+                .rposition(|frame| frame.nonce == handle.nonce)
+                .map_or(0, |at| at + 1)
+        };
+        handles.into_iter().fold(None, |inner, handle| match inner {
+            Some(inner) if at(&inner) >= at(&handle) => Some(inner),
+            _ => Some(handle),
+        })
+    })
 }
 
 /// A [`Region`] as a family, so it is lent whole.

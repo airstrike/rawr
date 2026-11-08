@@ -156,7 +156,7 @@ pub fn run(
                 Ok(Some(status)) => {
                     child = None;
                     crate::events::exited(status);
-                    crate::cargo::after_run(cargo.take());
+                    crate::cargo::after_run(cargo.take().map(crate::cargo::Pending::finish));
                     if !interactive || watcher.is_none() {
                         return exit_code(status);
                     }

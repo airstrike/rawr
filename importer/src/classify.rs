@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 137;
+const CLASSIFIER_VERSION: u32 = 138;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -4359,6 +4359,9 @@ fn field_type_nameable(
         | Type::Range(payload)
         | Type::Sequence {
             element: payload, ..
+        }
+        | Type::ConstArray {
+            element: payload, ..
         } => field_type_nameable(payload, nominal),
         Type::Result(ok, err) => {
             field_type_nameable(ok, nominal) && field_type_nameable(err, nominal)
@@ -4529,6 +4532,9 @@ fn type_nameable(
         | representability::convert::Type::Borrowed { ty: payload, .. }
         | representability::convert::Type::Range(payload)
         | representability::convert::Type::Sequence {
+            element: payload, ..
+        }
+        | representability::convert::Type::ConstArray {
             element: payload, ..
         } => type_nameable(payload, root, names),
         representability::convert::Type::Result(ok, err) => {
@@ -7923,6 +7929,9 @@ impl<P: api::Phase> Context<'_, P> {
                 }
                 Ok(Type::Tuple(converted.into_boxed_slice()))
             }
+            // An array of a known length, as `corners() -> [u8; 4]` gives:
+            // Rawr's array of that length (#1330).
+            model::Type::Array { .. } => self.convert_held(ty),
             ty => self.convert(ty),
         }
     }
@@ -7944,7 +7953,8 @@ impl<P: api::Phase> Context<'_, P> {
             Type::Option(element)
             | Type::Borrowed { ty: element, .. }
             | Type::Range(element)
-            | Type::Sequence { element, .. } => self.clones(element),
+            | Type::Sequence { element, .. }
+            | Type::ConstArray { element, .. } => self.clones(element),
             Type::Result(ok, err) => self.clones(ok) && self.clones(err),
             Type::Tuple(members) => members.iter().all(|member| self.clones(member)),
             Type::FunctionItem { .. }
@@ -8858,6 +8868,22 @@ impl<P: api::Phase> Context<'_, P> {
                 })
             }
             ty => self.convert(ty),
+        }
+    }
+
+    /// An array an item takes: as `convert_held`, and `[T; N]` of a const
+    /// parameter `N`, as `with_children<const N: usize>(children: [Slot;
+    /// N])` takes, whose length the call's argument gives (#1330).
+    fn convert_array(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        match ty {
+            model::Type::Array {
+                element,
+                length: model::Const::Parameter { index, .. },
+            } => Ok(representability::convert::Type::ConstArray {
+                element: Box::new(self.convert_value(element)?),
+                parameter: *index,
+            }),
+            ty => self.convert_held(ty),
         }
     }
 
@@ -10186,11 +10212,12 @@ impl<P: api::Phase> Context<'_, P> {
     /// The type a borrowing method's guard output dereferences to, and how
     /// it is reached, from rustc's evidence (`model::Guard`): `None` when
     /// the output is no guard or Rawr can't hold its target. A `DerefMut`
-    /// guard is a place each read and store reaches by calling the method
-    /// again with copies of its inputs, so only a method whose inputs
-    /// besides its receiver all clone is one, as image's
-    /// `get_pixel_mut(&mut self, x, y) -> &mut P` (#1318); with other
-    /// inputs it is read through `Deref` alone.
+    /// guard is a place, as image's `get_pixel_mut(&mut self, x, y) -> &mut
+    /// P` gives (#1318). Its method is called once for a receiver in the
+    /// arena (#1325), but a receiver a scope frame's region holds reaches
+    /// it again by calling the method again with copies of its inputs, so
+    /// only a method whose inputs besides its receiver all clone is one;
+    /// with other inputs it is read through `Deref` alone.
     fn guard_output(
         &self,
         signature: &model::Signature,
@@ -10373,6 +10400,25 @@ impl<P: api::Phase> Context<'_, P> {
                     .map(|member| self.convert_input(member))
                     .collect::<Result<_, _>>()?,
             ));
+        }
+        // An array, as `sum(&[i64; 3])` and `fill(&mut [u8; 4], u8)` take
+        // and `Row::with_children([Slot; N])` moves: Rawr's array of the
+        // length, lent or moved; a `&mut` one is copied in and back out, as
+        // a `&mut Vec<T>` is (#1330).
+        if let model::Type::Array { .. } = ty {
+            return self.convert_array(ty);
+        }
+        if let model::Type::Reference {
+            mutability,
+            ty: target,
+            ..
+        } = ty
+            && let model::Type::Array { .. } = &**target
+        {
+            return Ok(representability::convert::Type::Borrowed {
+                mutable: *mutability == model::Mutability::Mutable,
+                ty: Box::new(self.convert_array(target)?),
+            });
         }
         // `&mut Vec<T>` of scalars, as quick-xml's `read_event_into` takes
         // its buffer: Rawr's array, copied in and back out (D558 slice 2).
@@ -11924,6 +11970,7 @@ fn names_other_parameter(ty: &representability::convert::Type, except: u32) -> b
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
         | Type::Sequence { element, .. } => other(element),
+        Type::ConstArray { element, parameter } => *parameter != except || other(element),
         Type::Result(ok, err) => other(ok) || other(err),
         Type::FunctionItem { input, output } => other(input) || other(output),
         Type::ProfileMessage { payload, .. } => other(payload),
@@ -11944,6 +11991,9 @@ fn names_parameter(ty: &representability::convert::Type, index: u32) -> bool {
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
         | Type::Sequence { element, .. } => names_parameter(element, index),
+        Type::ConstArray { element, parameter } => {
+            *parameter == index || names_parameter(element, index)
+        }
         Type::Result(ok, err) => names_parameter(ok, index) || names_parameter(err, index),
         Type::Tuple(members)
         | Type::Script {
@@ -12113,6 +12163,12 @@ fn declares_its_parameters(plan: &representability::Representability) -> bool {
             | Type::ProfileMessage {
                 payload: element, ..
             } => declared(element, parameters),
+            Type::ConstArray { element, parameter } => {
+                parameters
+                    .iter()
+                    .any(|declared| declared.index() == *parameter)
+                    && declared(element, parameters)
+            }
             Type::Result(ok, err) => declared(ok, parameters) && declared(err, parameters),
             Type::FunctionItem { input, output } => {
                 declared(input, parameters) && declared(output, parameters)

@@ -21,6 +21,20 @@ fn main() {
     let owned = <Slot<_> as From<_>>::from(String::from("qualified"));
     let row: Row<()> = Row::with_children([from, owned]);
     println!("{}", row.draw());
+    let a: Slot<()> = "a".into();
+    let b: Slot<()> = From::from("b");
+    let row: Row<()> = Row::with_children([a, b]);
+    println!("{}", row.draw());
+    let lent: Slot<()> = "lent".into();
+    let row: Row<'_, ()> = slots![lent, "literal"];
+    println!("{}", row.draw());
+    let first: Slot<()> = "first".into();
+    let second: Slot<()> = "second".into();
+    let mut pushed = Vec::new();
+    pushed.push(first);
+    pushed.push(second);
+    let row: Row<()> = Row::with_children(pushed);
+    println!("{}", row.draw());
     let row: Row<'_, ()> = slots![compose::badge_check().size(12), "Verified"];
     println!("{}", row.draw());
     let row: Row<()> = slots![

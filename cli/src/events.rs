@@ -135,6 +135,29 @@ pub fn failed(report: &rawr::diagnostic::Report) {
     }));
 }
 
+/// A start or a save failed as `cargo check` failed, and cargo's errors
+/// are the whole report: [`failed`], from rustc's diagnostics.
+pub fn failed_cargo(outcome: &crate::cargo::Outcome) {
+    #[cfg(unix)]
+    let streamed = reload::path().is_some();
+    #[cfg(not(unix))]
+    let streamed = false;
+    if file().is_none() && !streamed {
+        return;
+    }
+    let first = outcome.diagnostics.first();
+    let field = |name: &str| first.and_then(|first| first.get(name)).cloned();
+    emit(&json!({
+        "event": "failed",
+        "message": field("message").unwrap_or(Value::Null),
+        "file": field("file").unwrap_or(Value::Null),
+        "line": field("line").unwrap_or(Value::Null),
+        "column": field("column").unwrap_or(Value::Null),
+        "diagnostics": outcome.diagnostics,
+        "rendered": outcome.render(),
+    }));
+}
+
 /// The program ended with `status`.
 pub fn ended(status: i32) {
     emit(&json!({ "event": "ended", "status": status }));

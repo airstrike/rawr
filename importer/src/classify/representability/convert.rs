@@ -142,6 +142,15 @@ pub enum Type {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         length: Option<u32>,
     },
+    /// Rust's array `[T; N]` of the item's const parameter `N` (its
+    /// `parameter` index), as `with_children<const N: usize>(children:
+    /// [Slot; N])` takes: a Rawr array, whose length the call's argument
+    /// gives `N` (#1330). An instance's adapter has it as the `Sequence`
+    /// of that length.
+    ConstArray {
+        element: Box<Type>,
+        parameter: u32,
+    },
     /// An output tuple: a Rawr tuple of the converted members.
     Tuple(Box<[Type]>),
     /// An input `&T` or `&mut T` of a type a runner's arena holds, as

@@ -2,6 +2,8 @@
 //! command gives Cargo (`--features`, `--no-default-features` and
 //! `--all-features`), and the features Cargo's unit graph enables for a
 //! target from them. Rawr never reads them from `Cargo.toml` itself.
+//! With them are the options rustc sets for the target (`super::cfg`):
+//! together, the configuration a target's `cfg(..)`s read.
 
 use std::ffi::OsString;
 use std::process::Command;
@@ -15,16 +17,23 @@ pub struct Selection {
     flags: Box<[OsString]>,
 }
 
-/// The features Cargo enables for one target: its unit's `features`.
+/// The features Cargo enables for one target, its unit's `features`, and
+/// the options rustc sets for the target: what its `cfg(..)`s read.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Enabled {
     /// Sorted.
     names: Arc<[Box<str>]>,
+    /// `None` for a source built outside any Cargo package, which has the
+    /// host rustc's own (`Target::host`).
+    target: Option<super::cfg::Target>,
 }
 
 /// The variable that hands a selection to a `rawr` process `rawr` starts:
 /// the program's own process, or the binary that serves the program.
 const VARIABLE: &str = "RAWR_CARGO_FEATURES";
+
+/// How a feature starts as a line of [`Enabled::lines`].
+const FEATURE: &str = "feature=\"";
 
 /// The selection this process runs with; read from [`VARIABLE`] when
 /// nothing selected one.
@@ -142,7 +151,54 @@ impl Enabled {
         names.dedup();
         Self {
             names: names.into(),
+            target: None,
         }
+    }
+
+    /// The set with `target`'s options: the ones rustc sets for the target
+    /// and profile Cargo builds the unit with.
+    #[must_use]
+    pub(super) fn with_target(self, target: super::cfg::Target) -> Self {
+        Self {
+            target: Some(target),
+            ..self
+        }
+    }
+
+    /// The set rustc's lines give, as [`Enabled::lines`] writes them: a
+    /// runner's, handed on in its snapshot.
+    #[must_use]
+    pub fn of_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> Self {
+        let (features, options): (Vec<_>, Vec<_>) = lines
+            .into_iter()
+            .partition(|line| line.starts_with(FEATURE));
+        Self::of_names(features.into_iter().map(|line| {
+            let name = &line[FEATURE.len()..];
+            name.strip_suffix('"').unwrap_or(name)
+        }))
+        .with_target(super::cfg::Target::of_lines(options))
+    }
+
+    /// The whole set as rustc's `--print cfg` writes it, one option to a
+    /// line, each feature as `feature="<name>"`.
+    pub fn lines(&self) -> impl Iterator<Item = String> + '_ {
+        self.names
+            .iter()
+            .map(|name| format!("{FEATURE}{name}\""))
+            .chain(self.target().lines().map(str::to_owned))
+    }
+
+    /// Whether `cfg(<name>)`, or `cfg(<name> = "<value>")`, holds for an
+    /// option rustc sets: `unix`, `target_os = ".."`, `debug_assertions`.
+    #[must_use]
+    pub fn option(&self, name: &str, value: Option<&str>) -> bool {
+        self.target().holds(name, value)
+    }
+
+    fn target(&self) -> &super::cfg::Target {
+        self.target
+            .as_ref()
+            .unwrap_or_else(|| super::cfg::Target::host())
     }
 
     /// Whether `cfg(feature = "<name>")` holds.
@@ -199,5 +255,16 @@ mod tests {
         assert!(enabled.holds("x") && enabled.holds("default"));
         assert!(!enabled.holds("y"));
         assert_eq!(enabled.names().collect::<Vec<_>>(), ["default", "x"]);
+    }
+
+    #[test]
+    fn a_set_s_lines_give_the_set_back() {
+        let target = super::super::cfg::Target::of_lines(["unix", "target_os=\"macos\""]);
+        let enabled = Enabled::of_names(["x"]).with_target(target);
+        let lines = enabled.lines().collect::<Vec<_>>();
+        assert_eq!(lines, ["feature=\"x\"", "target_os=\"macos\"", "unix"]);
+        let back = Enabled::of_lines(lines.iter().map(String::as_str));
+        assert_eq!(back, enabled);
+        assert!(back.holds("x") && back.option("unix", None) && !back.holds("unix"));
     }
 }

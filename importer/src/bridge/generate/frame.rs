@@ -552,6 +552,7 @@ fn nominal_types(ty: &convert::Type, found: &mut Vec<convert::Type>) {
         | convert::Type::Range(inner)
         | convert::Type::Borrowed { ty: inner, .. }
         | convert::Type::Sequence { element: inner, .. }
+        | convert::Type::ConstArray { element: inner, .. }
         | convert::Type::ProfileMessage { payload: inner, .. } => nominal_types(inner, found),
         convert::Type::Result(ok, err) => {
             nominal_types(ok, found);

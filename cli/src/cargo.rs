@@ -422,9 +422,9 @@ pub fn concluded(
 
 /// End `rawr run` of a program that ran once: report cargo's errors, if
 /// any, after the program's output. The program's exit code stands.
-pub fn after_run(cargo: Option<Pending>) {
+pub fn after_run(cargo: Option<Status>) {
     if let Some(cargo) = cargo {
-        match cargo.finish() {
+        match cargo {
             Status::Finished(outcome) if outcome.is_clean() => {}
             status => {
                 print(&status);

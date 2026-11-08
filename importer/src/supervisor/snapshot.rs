@@ -90,8 +90,9 @@ impl Capture {
         Ok(())
     }
 
-    /// Frame the features Cargo enabled for the entry package, after the
-    /// entry and before any file: their count, then each name. A capture
+    /// Frame the entry package's configuration (the features Cargo enabled
+    /// and the options rustc sets, as `rustc --print cfg` lines), after the
+    /// entry and before any file: their count, then each line. A capture
     /// that frames none has none.
     pub fn features<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) -> Result<(), Error> {
         if !self.entry {

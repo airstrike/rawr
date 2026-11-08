@@ -606,6 +606,10 @@ fn parameter_indices(ty: &convert::Type, found: &mut BTreeSet<u32>) {
         | convert::Type::Borrowed { ty: inner, .. }
         | convert::Type::Range(inner)
         | convert::Type::ProfileMessage { payload: inner, .. } => parameter_indices(inner, found),
+        convert::Type::ConstArray { element, parameter } => {
+            found.insert(*parameter);
+            parameter_indices(element, found);
+        }
         convert::Type::Result(ok, err)
         | convert::Type::FunctionItem {
             input: ok,
