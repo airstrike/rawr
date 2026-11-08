@@ -1428,3 +1428,91 @@ pub mod arrays {
         [1, 2, 4, 8]
     }
 }
+
+/// A simulation that owns its building and lends it to a program's
+/// functions, as elevato's `Simulation` lends `&Building` to the program's
+/// `update` and `view`. The building isn't `Clone`: a script function
+/// borrows it for each call, and passes the borrow on to the crate's
+/// functions that take `&Building`.
+pub mod simulation {
+    use std::fmt;
+    use std::marker::PhantomData;
+
+    #[derive(Debug, PartialEq)]
+    pub struct Building {
+        floors: usize,
+    }
+
+    impl Building {
+        pub fn new(floors: usize) -> Self {
+            Self { floors }
+        }
+
+        pub fn floors(&self) -> usize {
+            self.floors
+        }
+    }
+
+    impl fmt::Display for Building {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}-storey building", self.floors)
+        }
+    }
+
+    pub fn summary(building: &Building) -> String {
+        format!("summary of {} floors", building.floors)
+    }
+
+    /// What a view gives, at the lifetime of what it borrows, as iced's
+    /// `Element<'a, Message>`.
+    pub struct Picture<'a, M> {
+        title: &'a str,
+        floors: usize,
+        message: PhantomData<M>,
+    }
+
+    impl<M> Picture<'_, M> {
+        pub fn describe(&self) -> String {
+            format!("{} of {} floors", self.title, self.floors)
+        }
+    }
+
+    /// The building drawn, as elevato's `view<'a, Message: 'a>(&Building)
+    /// -> Element<'a, Message>`: the picture borrows nothing of it.
+    pub fn picture<'a, M: 'a>(building: &Building) -> Picture<'a, M> {
+        Picture {
+            title: "picture",
+            floors: building.floors,
+            message: PhantomData,
+        }
+    }
+
+    pub struct Simulation<P> {
+        program: P,
+        building: Building,
+    }
+
+    impl<P> Simulation<P> {
+        pub fn new(program: P, floors: usize) -> Self {
+            Self {
+                program,
+                building: Building::new(floors),
+            }
+        }
+
+        /// `update` of the program, `message` and the building, which
+        /// gains a floor after.
+        pub fn step<M>(&mut self, message: M, mut update: impl FnMut(&mut P, M, &Building)) {
+            update(&mut self.program, message, &self.building);
+            self.building.floors += 1;
+        }
+
+        /// What the program's `view` of the building draws.
+        pub fn draw<M, V>(&self, view: V) -> String
+        where
+            V: for<'a> Fn(&'a P, &'a Building) -> Picture<'a, M>,
+        {
+            view(&self.program, &self.building).describe()
+        }
+    }
+}

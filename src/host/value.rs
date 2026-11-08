@@ -132,10 +132,14 @@ pub(crate) fn register_carry<T: Carry>() {
 pub(crate) fn host_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
     {
         let scoped = |value: &Dynamic| value.is::<crate::scope::Scoped>();
+        let lent = |value: &Dynamic| value.is::<crate::scope::Lent>();
         // A value in a scope frame's region compares with one of its type
-        // in a runner's arena (D558 tier 1).
+        // in a runner's arena (D558 tier 1), and so does a value native
+        // code lent a script function (D558.3).
         let ty = if scoped(lhs) || scoped(rhs) {
             TypeId::of::<crate::scope::Scoped>()
+        } else if lent(lhs) || lent(rhs) {
+            TypeId::of::<crate::scope::Lent>()
         } else {
             let ty = lhs.type_id();
             if ty != rhs.type_id() {

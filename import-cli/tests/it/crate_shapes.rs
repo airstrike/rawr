@@ -274,6 +274,26 @@ fn a_mut_input_with_a_lifetime_is_lent_not_cloned() {
     runs_as_cargo_does("shell", "2 4\n");
 }
 
+/// elevato's `Simulation` lends its `&Building` to the program's `update`
+/// and `view`, as iced lends `&State` to `view`: the script function
+/// borrows it for each call, with no `Clone` and no copy, and sees each
+/// change native code made between calls (#1405). It reads the building
+/// through its method, its `Display`, its `Debug` and its `PartialEq`, and
+/// passes the same borrow to the crate's `summary(&Building) -> String`
+/// and `picture(&Building) -> Picture<'a, M>`, as elevato's
+/// `view(building)` (#1406).
+#[test]
+fn a_native_borrow_lent_to_a_script_function_is_a_borrow_for_each_call() {
+    runs_as_cargo_does(
+        "lobby",
+        "1 3 floors in the 3-storey building Building { floors: 3 } false\n\
+         2 summary of 4 floors Building { floors: 4 } true\n\
+         picture of 5 floors\n\
+         3 5 floors in the 5-storey building Building { floors: 5 } false\n\
+         picture of 6 floors\n",
+    );
+}
+
 /// A method whose own early-bound lifetime its output borrows a `&F` at,
 /// as jiff's `strftime<'f, F: 'f + ?Sized + AsRef<[u8]>>(&self, format:
 /// &'f F) -> Display<'f>` is (#1014): a literal fills `F` with `str`, and a
