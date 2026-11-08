@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 131;
+const CLASSIFIER_VERSION: u32 = 132;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2260,10 +2260,24 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
         let mut found = Vec::new();
         let mut pending = Vec::new();
+        // A supertrait's predicates name the trait's `Self`, which is the
+        // bound's self type: `Number: Add<Output = Self>` binds `Output` to
+        // the opaque type `impl Number` is, not to the self type of the
+        // impl a member is classified in (#1278).
         let mut read = |predicates: &[model::Predicate],
                         bindings: &BTreeMap<u32, model::Type>,
+                        this: Option<(&api::identity::Definition, &model::Type)>,
                         depth: usize,
                         pending: &mut Vec<_>| {
+            let at = |ty: &model::Type| {
+                let ty = substitute_bindings(ty, bindings);
+                match this {
+                    Some((trait_id, this)) => {
+                        type_replaced(&ty, &model::Type::SelfType(trait_id.clone()), this)
+                    }
+                    None => ty,
+                }
+            };
             for predicate in predicates {
                 match predicate {
                     model::Predicate::ProjectionEquality {
@@ -2278,11 +2292,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         || matches!(arguments.first(),
                             Some(model::Argument::Type(this)) if is_self(this)) =>
                     {
-                        found.push((
-                            trait_id.clone(),
-                            associated.clone(),
-                            substitute_bindings(ty, bindings),
-                        ));
+                        found.push((trait_id.clone(), associated.clone(), at(ty)));
                     }
                     model::Predicate::Bound {
                         ty,
@@ -2297,21 +2307,20 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         let arguments = arguments
                             .iter()
                             .map(|argument| match argument {
-                                model::Argument::Type(ty) => {
-                                    model::Argument::Type(substitute_bindings(ty, bindings))
-                                }
+                                model::Argument::Type(ty) => model::Argument::Type(at(ty)),
                                 other => other.clone(),
                             })
                             .collect::<Vec<_>>();
-                        pending.push((trait_id.clone(), arguments, depth));
+                        let this = this.map_or_else(|| ty.clone(), |(_, this)| this.clone());
+                        pending.push((trait_id.clone(), arguments, this, depth));
                     }
                     _ => {}
                 }
             }
         };
-        read(bounds, &BTreeMap::new(), 0, &mut pending);
+        read(bounds, &BTreeMap::new(), None, 0, &mut pending);
         let mut seen = Vec::new();
-        while let Some((trait_id, arguments, depth)) = pending.pop() {
+        while let Some((trait_id, arguments, this, depth)) = pending.pop() {
             if depth >= DEPTH || seen.contains(&(trait_id.clone(), arguments.clone())) {
                 continue;
             }
@@ -2328,7 +2337,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 continue;
             };
             // The trait's own parameters after `Self` take the bound's
-            // arguments, in order.
+            // arguments, in order, and `Self` its self type.
             let bindings = generics
                 .parameters()
                 .filter(|parameter| parameter.index() != 0)
@@ -2337,8 +2346,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     model::Argument::Type(ty) => Some((parameter.index(), ty.clone())),
                     _ => None,
                 })
+                .chain([(0, this.clone())])
                 .collect();
-            read(supertraits, &bindings, depth + 1, &mut pending);
+            read(
+                supertraits,
+                &bindings,
+                Some((&trait_id, &this)),
+                depth + 1,
+                &mut pending,
+            );
             seen.push((trait_id, arguments));
         }
         (found, seen)
@@ -9238,9 +9254,21 @@ impl<P: api::Phase> Context<'_, P> {
                 _ => None,
             })
             .collect::<BTreeMap<_, _>>();
+        // Their `Self` is the opaque type at these captures, which an
+        // associated type that is the type itself reaches again (#1262).
+        let this = model::Type::SelfType(id.clone());
+        let opaque = model::Type::ImplTrait {
+            id: id.clone(),
+            bounds: bounds.into(),
+            captures: captures.into(),
+        };
         let bounds = &bounds
             .iter()
-            .map(|predicate| mapped_predicate(predicate, &|ty| substitute_bindings(ty, &bindings)))
+            .map(|predicate| {
+                mapped_predicate(predicate, &|ty| {
+                    type_replaced(&substitute_bindings(ty, &bindings), &this, &opaque)
+                })
+            })
             .collect::<Vec<_>>();
         let excluded = self.opaque_output.borrow().clone();
         let Some(excluded) = excluded else {

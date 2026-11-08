@@ -2413,10 +2413,12 @@ fn build(
             // type's associated functions, as `widget::Text::new`; its
             // methods are reached through the type's values.
             let alias = matches!(entry.outcome.representability(), Representability::Value(_));
-            if let Some(item) = imported_item(&types, &path, associated, allocation)?
-                .filter(|_| names_declared(associated, resolved))
-                .filter(|item| !alias || item.receiver().is_none())
-            {
+            let item = if names_declared(associated, resolved) {
+                imported_item(&types, &path, associated, allocation)?
+            } else {
+                None
+            };
+            if let Some(item) = item.filter(|item| !alias || item.receiver().is_none()) {
                 builder.imported_item(item)?;
                 if let Some(values) = imported_values(&types, &path, associated, allocation)?
                     .filter(|item| !alias || item.receiver().is_none())
@@ -2438,11 +2440,9 @@ fn build(
                 .implementations()
                 .flat_map(rawr_import::classify::ImplementationOutcome::associated)
                 .filter(|_| opaque_paths.contains(&opaque));
-            for member in members {
+            for member in members.filter(|member| names_declared(*member, resolved)) {
                 let path = format!("{opaque}::{}", member.name());
-                if let Some(item) = imported_item(&types, &path, member, allocation)?
-                    .filter(|_| names_declared(member, resolved))
-                {
+                if let Some(item) = imported_item(&types, &path, member, allocation)? {
                     builder.imported_item(item)?;
                     if let Some(values) = imported_values(&types, &path, member, allocation)? {
                         builder.imported_item(values)?;
@@ -2454,9 +2454,10 @@ fn build(
     // A member of the opaque type a trait's method over its `Self` gives,
     // as a function's member is (`surface::opaque`).
     for (path, member) in &facade.opaque_members {
-        if let Some(item) = imported_item(&types, path, *member, allocation)?
-            .filter(|_| names_declared(*member, resolved))
-        {
+        if !names_declared(*member, resolved) {
+            continue;
+        }
+        if let Some(item) = imported_item(&types, path, *member, allocation)? {
             builder.imported_item(item)?;
             if let Some(values) = imported_values(&types, path, *member, allocation)? {
                 builder.imported_item(values)?;
@@ -2989,20 +2990,52 @@ fn names_declared(
         Representability::Method(plan) => (plan.signature(), None, &[][..]),
         Representability::FunctionItem(plan) => (plan.signature(), plan.call(), plan.crossings()),
         Representability::Invocation(plan) => (plan.signature(), plan.call(), plan.crossings()),
-        Representability::Constant(plan) => return ty_ok(plan.ty(), declared),
+        Representability::Constant(plan) => {
+            return ty_ok(plan.ty(), declared) && parameters_declared(plan.ty(), &[]);
+        }
         _ => return true,
     };
+    // Each type parameter it names is one it declares, not another item's
+    // (#1278).
+    let ok = |ty| ty_ok(ty, declared) && parameters_declared(ty, signature.parameters());
     // What a callable it takes is given and gives, as `Cache::draw`'s
     // `&mut Frame<Renderer>`, is named in the bridge too.
-    signature
-        .inputs()
-        .iter()
-        .all(|input| ty_ok(input, declared))
-        && ty_ok(signature.output(), declared)
-        && call.into_iter().chain(crossings).all(|callable| {
-            callable.inputs().iter().all(|input| ty_ok(input, declared))
-                && ty_ok(callable.output(), declared)
-        })
+    signature.inputs().iter().all(ok)
+        && ok(signature.output())
+        && call
+            .into_iter()
+            .chain(crossings)
+            .all(|callable| callable.inputs().iter().all(ok) && ok(callable.output()))
+}
+
+/// Whether each type parameter `ty` names is among `parameters`.
+fn parameters_declared(
+    ty: &representability::convert::Type,
+    parameters: &[representability::signature::Parameter],
+) -> bool {
+    use representability::convert::Type;
+    let declared = |ty| parameters_declared(ty, parameters);
+    match ty {
+        Type::Parameter(index) => parameters
+            .iter()
+            .any(|parameter| parameter.index() == *index),
+        Type::Nominal { arguments, .. }
+        | Type::Tuple(arguments)
+        | Type::Script { arguments, .. } => arguments.iter().all(declared),
+        Type::Option(element)
+        | Type::Borrowed { ty: element, .. }
+        | Type::Range(element)
+        | Type::Sequence { element, .. }
+        | Type::ProfileMessage {
+            payload: element, ..
+        } => declared(element),
+        Type::Result(first, second)
+        | Type::FunctionItem {
+            input: first,
+            output: second,
+        } => declared(first) && declared(second),
+        Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => true,
+    }
 }
 
 /// An opaque type a facade declares: its path, its definition, the names

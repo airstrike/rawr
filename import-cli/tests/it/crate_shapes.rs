@@ -360,3 +360,14 @@ fn a_crate_with_no_usable_item_says_why_its_item_cant_be_used() {
 fn a_marked_binary_names_its_packages_library_by_the_crate_name() {
     lane_runs_as_cargo_does(&OWN_LIBRARY.lease(&[]), "floor 2 after 4 trips\ntrue\n");
 }
+
+/// A generic trait's provided method that gives an opaque `impl Total`,
+/// whose supertrait `Add<Output = Self>` binds `Output` to the opaque type
+/// itself, is a member of a plain type and of a generic one, each of
+/// which calls it and the opaque type's method. The crate imports: `Self`
+/// there is the opaque type, not the type the method is a member of
+/// (#1278).
+#[test]
+fn a_provided_methods_opaque_output_whose_supertrait_binds_self() {
+    runs_as_cargo_does("doubling", "6\n4\n");
+}

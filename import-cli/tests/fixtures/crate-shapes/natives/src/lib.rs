@@ -1048,3 +1048,55 @@ pub mod numbers {
         Seven(7)
     }
 }
+
+/// A generic trait's provided method that gives an opaque `impl Total`,
+/// whose supertrait binds `Add::Output` to `Self`, reached as a member of
+/// a generic type and of a plain one: the opaque type's `Output` is the
+/// opaque type, not the type the method is a member of (#1278).
+pub mod doubling {
+    use std::ops::Add;
+
+    pub trait Total: Add<Output = Self> + Sized {
+        fn get(&self) -> u32;
+    }
+
+    struct Sum(u32);
+
+    impl Add for Sum {
+        type Output = Self;
+
+        fn add(self, other: Self) -> Self {
+            Sum(self.0 + other.0)
+        }
+    }
+
+    impl Total for Sum {
+        fn get(&self) -> u32 {
+            self.0
+        }
+    }
+
+    pub trait Counted<M>: Sized {
+        fn count(&self) -> u32;
+
+        fn doubled(self) -> impl Total {
+            Sum(self.count() * 2)
+        }
+    }
+
+    pub struct Tally(pub u32);
+
+    impl Counted<u8> for Tally {
+        fn count(&self) -> u32 {
+            self.0
+        }
+    }
+
+    pub struct Bag<T>(pub Vec<T>);
+
+    impl<T> Counted<T> for Bag<T> {
+        fn count(&self) -> u32 {
+            self.0.len() as u32
+        }
+    }
+}
