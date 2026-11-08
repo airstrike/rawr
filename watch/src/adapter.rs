@@ -82,6 +82,14 @@ pub enum Notice {
 pub enum Error {
     /// The platform's recommended raw watcher could not start.
     Start(notify::Error),
+    /// The OS refused the stream over the paths the watcher asked for.
+    Stream {
+        /// Each registered path, a directory watched recursively or a path
+        /// watched by name.
+        paths: Box<[PathBuf]>,
+        /// The OS's refusal, as the native watcher reports it.
+        source: notify::Error,
+    },
     /// A canonical parent directory could not be registered.
     Watch {
         /// Canonical non-recursive transport directory.
@@ -284,7 +292,7 @@ impl Adapter {
             directories.iter().map(PathBuf::as_path),
             trees.iter().map(PathBuf::as_path),
         )?;
-        let registered = registration(&roots, &filter.paths());
+        let registered = registration(&roots, &filter.watched());
         register_all(&mut watcher, &registered)?;
         let handler = native.then(|| Handler {
             history: history.clone(),
@@ -483,7 +491,7 @@ impl Control {
                     .and_modify(|current| *current |= recursive)
                     .or_insert(recursive);
             }
-            watch.replace(desired, &self.filter.paths())
+            watch.replace(desired, &self.filter.watched())
         })();
         if result.is_err() {
             self.gate.suspend();
@@ -500,7 +508,7 @@ impl Control {
                 directories.iter().map(PathBuf::as_path),
                 trees.iter().map(PathBuf::as_path),
             )?;
-            watch.replace(desired, &self.filter.paths())
+            watch.replace(desired, &self.filter.watched())
         })();
         match result {
             Ok(()) => Vec::new(),
@@ -569,43 +577,37 @@ fn register_all(
                 source,
             })?;
     }
-    registration.commit().map_err(Error::Start)
+    registration.commit().map_err(|source| Error::Stream {
+        paths: roots.keys().cloned().collect(),
+        source,
+    })
 }
 
 /// The paths the native watcher registers for `roots`. FSEvents watches a
-/// directory's whole subtree, whatever the mode: a directory watched for its
-/// own entries that holds another root (`/` for a missing Cargo config, a
-/// home, a workspace whose `target` builds) would deliver every event below
-/// it, and under a busy disk the stream lags seconds and drops into rescans.
-/// Such a directory registers the exact inputs it stands for instead, which
-/// FSEvents reports whether or not they exist yet.
+/// directory's whole subtree, whatever the mode: a parent directory watched
+/// for its own entries (a package root beside its `target`, a home, `/` for
+/// a missing Cargo config) would deliver every event below it, rawr's own
+/// writes under `target/rawr` among them, and under a busy disk the stream
+/// lags seconds and drops into rescans. So only a recursive root registers
+/// as a directory; every other watched path, an input file or a missing
+/// tree, registers by name, which FSEvents reports whether or not it exists
+/// yet.
 #[cfg(target_os = "macos")]
 fn registration(
     roots: &BTreeMap<PathBuf, bool>,
-    exact: &BTreeSet<PathBuf>,
+    watched: &BTreeSet<PathBuf>,
 ) -> BTreeMap<PathBuf, bool> {
-    let holds_root = |root: &PathBuf| {
-        roots
-            .range::<PathBuf, _>((std::ops::Bound::Excluded(root), std::ops::Bound::Unbounded))
-            .next()
-            .is_some_and(|(next, _)| next.starts_with(root))
-    };
-    let replaced = roots
+    let trees = roots
         .iter()
-        .filter(|(root, recursive)| !**recursive && holds_root(root))
+        .filter(|(_, recursive)| **recursive)
         .map(|(root, _)| root)
-        .collect::<BTreeSet<_>>();
-    let mut registered = roots
+        .collect::<Vec<_>>();
+    let mut registered = trees
         .iter()
-        .filter(|(root, _)| !replaced.contains(root))
-        .map(|(root, recursive)| (root.clone(), *recursive))
+        .map(|root| ((*root).clone(), true))
         .collect::<BTreeMap<_, _>>();
-    for path in exact {
-        let nearest = path
-            .ancestors()
-            .skip(1)
-            .find(|ancestor| roots.contains_key(*ancestor));
-        if nearest.is_some_and(|root| replaced.contains(&root.to_path_buf())) {
+    for path in watched {
+        if !trees.iter().any(|tree| path.starts_with(tree)) {
             registered.insert(path.clone(), false);
         }
     }
@@ -615,7 +617,7 @@ fn registration(
 #[cfg(not(target_os = "macos"))]
 fn registration(
     roots: &BTreeMap<PathBuf, bool>,
-    _exact: &BTreeSet<PathBuf>,
+    _watched: &BTreeSet<PathBuf>,
 ) -> BTreeMap<PathBuf, bool> {
     roots.clone()
 }
@@ -783,17 +785,23 @@ impl Filter {
         }
     }
 
-    /// Every exact input path, current and staged.
-    fn paths(&self) -> BTreeSet<PathBuf> {
+    /// Every exact input path and recursive root, current and staged: what
+    /// the watcher stands for, by path.
+    fn watched(&self) -> BTreeSet<PathBuf> {
         match self {
             Self::Publication(publication) => {
-                publication.read().paths().into_vec().into_iter().collect()
+                let read = publication.read();
+                read.paths()
+                    .into_vec()
+                    .into_iter()
+                    .chain(read.trees().into_vec())
+                    .collect()
             }
             Self::Direct(state) => {
                 let state = read(state);
                 std::iter::once(&state.current)
                     .chain(state.staged.iter().map(|entry| &entry.inputs))
-                    .flat_map(|inputs| inputs.paths().iter().cloned())
+                    .flat_map(|inputs| inputs.paths().iter().chain(inputs.trees()).cloned())
                     .collect()
             }
         }
@@ -975,6 +983,17 @@ impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Start(error) => write!(formatter, "cannot start the file watcher: {error}"),
+            Self::Stream { paths, source } => {
+                write!(
+                    formatter,
+                    "cannot start the file watcher: {source}; it asked for {} paths:",
+                    paths.len()
+                )?;
+                for path in paths {
+                    write!(formatter, "\n  {}", path.display())?;
+                }
+                Ok(())
+            }
             Self::Watch { path, source } => write!(
                 formatter,
                 "cannot watch directory `{}`: {source}",
@@ -1002,6 +1021,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Start(error)
+            | Self::Stream { source: error, .. }
             | Self::Watch { source: error, .. }
             | Self::Unwatch { source: error, .. } => Some(error),
             Self::FixedFilter | Self::StageExhausted | Self::StaleStage => None,
@@ -1027,7 +1047,7 @@ mod tests {
         let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
         let (adapter, _) = attached(gate, Arc::clone(&fixture.publication));
         let mut watch = super::lock(&adapter.control.watch);
-        let exact = adapter.filter.paths();
+        let exact = adapter.filter.watched();
         let desired = watch.roots.clone();
         watch
             .replace_with(desired, &exact, || {
@@ -1041,13 +1061,13 @@ mod tests {
         let fixture = Fixture::new("failed-successor");
         let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
         let (adapter, _) = attached(gate, Arc::clone(&fixture.publication));
-        let exact = adapter.filter.paths();
+        let exact = adapter.filter.watched();
         let mut watch = super::lock(&adapter.control.watch);
         let original = watch.roots.clone();
         let mut desired = original.clone();
-        // No backend registers a path none of whose ancestors exist. FSEvents
-        // registers a missing path below an existing directory by name.
-        desired.insert(std::path::PathBuf::from("rawr-absent-root/missing"), false);
+        // No backend registers a missing tree. FSEvents registers only trees
+        // as directories, and a missing path below an existing one by name.
+        desired.insert(std::path::PathBuf::from("rawr-absent-root/missing"), true);
         assert!(watch
             .replace_with(desired.clone(), &exact, || Err(notify::Error::generic(
                 "start failed"
@@ -1357,28 +1377,106 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn fsevents_register_the_exact_inputs_of_a_directory_holding_another_root() {
+    fn fsevents_register_each_input_by_name_and_only_trees_as_directories() {
         use std::collections::{BTreeMap, BTreeSet};
         use std::path::PathBuf;
         let roots = BTreeMap::from([
             (PathBuf::from("/"), false),
             (PathBuf::from("/work/app"), false),
             (PathBuf::from("/work/app/src"), false),
+            (PathBuf::from("/work"), false),
             (PathBuf::from("/registry/dep"), true),
         ]);
-        let exact = BTreeSet::from([
+        let watched = BTreeSet::from([
             PathBuf::from("/.cargo/config.toml"),
+            PathBuf::from("/registry/dep"),
+            PathBuf::from("/registry/dep/src/lib.rs"),
             PathBuf::from("/work/app/Cargo.toml"),
             PathBuf::from("/work/app/src/main.rs"),
+            PathBuf::from("/work/absent/tree"),
         ]);
         assert_eq!(
-            super::registration(&roots, &exact),
+            super::registration(&roots, &watched),
             BTreeMap::from([
                 (PathBuf::from("/.cargo/config.toml"), false),
                 (PathBuf::from("/registry/dep"), true),
+                (PathBuf::from("/work/absent/tree"), false),
                 (PathBuf::from("/work/app/Cargo.toml"), false),
-                (PathBuf::from("/work/app/src"), false),
+                (PathBuf::from("/work/app/src/main.rs"), false),
             ])
+        );
+    }
+
+    /// A package beside its `target`, whose build script reads the whole
+    /// package and whose build wrote rawr's copy of the marked file and an
+    /// `OUT_DIR`: the watcher stands for the package's inputs by path, and
+    /// nothing under `target` reaches it.
+    #[test]
+    fn a_package_s_watched_set_names_its_inputs_and_leaves_out_its_target() {
+        use rawr_import::input::proof::Watch;
+        let fixture = Fixture::new("package-target");
+        let root = fs::canonicalize(&fixture.root).unwrap();
+        let target = root.join("target");
+        for (path, text) in [
+            ("Cargo.toml", "[package]\nname = \"app\"\n"),
+            ("build.rs", "fn main() {}\n"),
+            ("assets/logo.txt", "logo\n"),
+            ("target/rawr/crate/src/main.rs", MAIN),
+            ("target/debug/build/app-1/out/icons.rs", "\n"),
+            ("target/debug/deps/libapp-1.rmeta", ""),
+        ] {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        }
+        let native = rawr::reload::source::Inputs::imported([
+            Watch::Tree(root.clone()),
+            Watch::Exact(root.join("Cargo.toml")),
+            Watch::Exact(target.join("rawr/crate/src/main.rs")),
+            Watch::Exact(target.join("debug/deps/libapp-1.rmeta")),
+            Watch::Tree(target.join("debug/build/app-1/out")),
+        ])
+        .outside(std::slice::from_ref(&target));
+        let inputs = fixture
+            .publication
+            .read()
+            .current()
+            .clone()
+            .with_native(&native);
+        let adapter = Adapter::open_inputs(inputs, Duration::ZERO).unwrap();
+
+        let watched = adapter.filter.watched();
+        for input in ["Cargo.toml", "build.rs", "src/main.rs", "assets/logo.txt"] {
+            let input = root.join(input);
+            assert!(
+                watched.iter().any(|path| input.starts_with(path)),
+                "{} is not watched: {watched:?}",
+                input.display()
+            );
+        }
+        let registered = super::lock(&adapter.control.watch).registered.clone();
+        assert!(
+            watched
+                .iter()
+                .chain(registered.keys())
+                .all(|path| !path.starts_with(&target)),
+            "{watched:?}\n{registered:?}"
+        );
+        // A directory registered recursively, or on FSEvents at all, covers
+        // its subtree: neither may hold `target`.
+        assert!(
+            registered.iter().all(|(path, recursive)| {
+                !target.starts_with(path) || !*recursive && !cfg!(target_os = "macos")
+            }),
+            "{registered:?}"
+        );
+        assert!(
+            !adapter
+                .filter
+                .classify(&crate::input::Change::from_event(&source_event(
+                    &target.join("rawr/crate/src/main.rs")
+                )))
+                .0
         );
     }
 

@@ -84,6 +84,49 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
 
+/// A package whose `target` holds a big subtree that git ignores, as a
+/// real app's does: the watcher stands for the program's inputs, not the
+/// tree, so a save of the marked file still reaches the running program,
+/// and writes under `target` while it runs are no save.
+#[test]
+fn a_save_reaches_a_native_main_beside_a_big_ignored_target() {
+    let root = crate::support::scratch().join("islands-big-target");
+    let _ = fs::remove_dir_all(&root);
+    copy(Path::new(FIXTURE), &root);
+    fs::write(root.join(".gitignore"), "/target\n").unwrap();
+    let big = root.join("target/big");
+    for directory in 0..200 {
+        let directory = big.join(directory.to_string());
+        fs::create_dir_all(&directory).unwrap();
+        for file in 0..50 {
+            fs::write(directory.join(format!("{file}.o")), "object").unwrap();
+        }
+    }
+    let physics = root.join("src/physics.rs");
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    let first = run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
+    assert_eq!(parse(&first), Some((3, 3)));
+
+    // Writes under `target`, as a build's, reach no reload.
+    for file in 0..200 {
+        fs::write(big.join(format!("0/{file}.d")), "written").unwrap();
+    }
+    edit(&physics, "const SCALE: i64 = 1;", "const SCALE: i64 = 100;");
+    let swapped = run.until(|line| parse(line).is_some_and(|(tick, value)| value == tick * 100));
+    let (tick, _) = parse(&swapped).unwrap();
+    assert!(tick > 3, "{}", run.seen.join("\n"));
+    assert!(
+        !run.seen
+            .iter()
+            .any(|line| line.contains("restarting") || line.contains("file watcher")),
+        "{}",
+        run.seen.join("\n")
+    );
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+}
+
 /// An idle program is a healthy one (#1165): a native `main` waiting on its
 /// events makes no call into marked code, and its runner may not run at
 /// all for a while (an occluded window that macOS naps on a busy machine;

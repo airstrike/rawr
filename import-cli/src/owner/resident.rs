@@ -126,6 +126,7 @@ pub(super) fn attempt(
         let limits = graph.rust_limits();
         let eligible =
             !refresh_required && native_current && Manifests::from_graph(&graph) == *baseline;
+        let project = graph.entry_package().root().to_path_buf();
         let graph = source::Graph::from_package(&graph);
         let snapshot = source::Snapshot::from_graph(&graph);
         let expected = snapshot
@@ -141,7 +142,8 @@ pub(super) fn attempt(
         // No native event since the baseline: the native part derived for
         // these exact identities still stands; a Rawr edit derives only its own.
         if !native_current || native_inputs.as_ref().is_none_or(|(key, _)| *key != watch) {
-            let derived = source::Inputs::imported(watch.iter().cloned());
+            let outputs = rawr_import::location::outputs_here(&project);
+            let derived = source::Inputs::imported(watch.iter().cloned()).outside(&outputs);
             *native_inputs = Some((watch, derived));
         }
         let native = &native_inputs.as_ref().expect("derived above").1;

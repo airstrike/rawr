@@ -647,7 +647,9 @@ fn prepare(
     let request = demand
         .request_retained(native, profile, revision)
         .map_err(Error::cache)?;
-    let inputs = rawr::reload::source::Inputs::from_graph(&source).with_imported(request.watch());
+    let outputs = rawr_import::location::outputs_here(&project);
+    let native = rawr::reload::source::Inputs::imported(request.watch()).outside(&outputs);
+    let inputs = rawr::reload::source::Inputs::from_graph(&source).with_native(&native);
     Ok(
         crate::Prepared::new(request, transport, project, inputs, &graph, limits)
             .with_settlement(settlement),
