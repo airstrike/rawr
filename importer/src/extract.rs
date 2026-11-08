@@ -12,6 +12,7 @@ use crate::{Error, Result};
 const CANONICAL_EVIDENCE_ITEMS: usize = 25_000_000;
 const CANONICAL_EVIDENCE_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
+mod conflict;
 #[cfg(feature = "rustc-driver")]
 #[allow(
     dead_code,
@@ -3325,9 +3326,11 @@ impl Candidate {
         limits: &cargo::Limits,
         allocation: &mut Allocation,
     ) -> Result<Self> {
-        let mut definitions = BTreeMap::<identity::Definition, model::Definition>::new();
+        let mut definitions =
+            BTreeMap::<identity::Definition, conflict::Sourced<model::Definition>>::new();
         let mut spellings = BTreeMap::new();
-        let mut rejected = BTreeMap::new();
+        let mut rejected = BTreeMap::<identity::Definition, conflict::Sourced<Rejected>>::new();
+        let mut sources = Vec::new();
         let mut implementations = Vec::new();
         let mut unmodeled = BTreeSet::new();
         let mut scalar_predicate_proofs = Vec::new();
@@ -3368,6 +3371,9 @@ impl Candidate {
             }
             allocation.reserve(&mut invocations, 1)?;
             invocations.push(invocation(&fragment, allocation)?);
+            let source = sources.len();
+            allocation.reserve(&mut sources, 1)?;
+            sources.push(conflict::Source::new(&fragment.handshake));
             for raw in fragment.definitions {
                 let local = is_local_id(&raw.id, &fragment.handshake);
                 let sysroot_shape = matches!(&raw.shape, protocol::Shape::Sysroot { .. });
@@ -3395,17 +3401,26 @@ impl Candidate {
                 let span = span(raw.span.clone(), allocation)?;
                 match definition(raw, catalog, limits, allocation) {
                     Ok(definition) => {
-                        if rejected.contains_key(&id) {
-                            return Err(extraction("duplicate-definition", id.def_path_hash()));
+                        if let Some(previous) = rejected.get(&id) {
+                            return Err(extraction(
+                                "duplicate-definition",
+                                &conflict::mixed(
+                                    (&definition, &sources[source]),
+                                    &sources[previous.fragment],
+                                ),
+                            ));
                         }
                         match definitions.get_mut(&id) {
-                            Some(previous) if previous == &definition => {}
+                            Some(previous) if previous.value == definition => {}
                             // One selected crate extracts the definition for
                             // shape only and its own crate as a selected root; they
                             // are one definition under its own crate's spelling.
-                            Some(previous) if previous.same_except_display_path(&definition) => {
+                            Some(previous)
+                                if previous.value.same_except_display_path(&definition) =>
+                            {
                                 let other = if local {
-                                    std::mem::replace(previous, definition)
+                                    previous.fragment = source;
+                                    std::mem::replace(&mut previous.value, definition)
                                 } else {
                                     definition
                                 };
@@ -3414,16 +3429,26 @@ impl Candidate {
                                 spellings
                                     .insert(key, other.display_path().map(Box::from).collect());
                             }
-                            Some(_) => {
+                            Some(previous) => {
                                 return Err(extraction(
                                     "conflicting-definition",
-                                    id.def_path_hash(),
+                                    &conflict::definition(
+                                        (&previous.value, &sources[previous.fragment]),
+                                        (&definition, &sources[source]),
+                                        conflict::Detail::from_env(),
+                                    ),
                                 ));
                             }
                             None => {
                                 let key = allocation.clone_identity(&id)?;
                                 allocation.items(1)?;
-                                definitions.insert(key, definition);
+                                definitions.insert(
+                                    key,
+                                    conflict::Sourced {
+                                        value: definition,
+                                        fragment: source,
+                                    },
+                                );
                             }
                         }
                     }
@@ -3435,23 +3460,15 @@ impl Candidate {
                             },
                             span,
                         };
-                        if definitions.contains_key(&id) {
-                            return Err(extraction("duplicate-definition", id.def_path_hash()));
-                        }
-                        match rejected.get(&id) {
-                            Some(previous) if previous != &outcome => {
-                                return Err(extraction(
-                                    "conflicting-definition",
-                                    id.def_path_hash(),
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                let key = allocation.clone_identity(&id)?;
-                                allocation.items(1)?;
-                                rejected.insert(key, outcome);
-                            }
-                        }
+                        reject(
+                            &id,
+                            outcome,
+                            source,
+                            &sources,
+                            &definitions,
+                            &mut rejected,
+                            allocation,
+                        )?;
                     }
                     Err(ShapeFailure::UnnameablePrivate) => {
                         let outcome = Rejected {
@@ -3460,23 +3477,15 @@ impl Candidate {
                             ),
                             span,
                         };
-                        if definitions.contains_key(&id) {
-                            return Err(extraction("duplicate-definition", id.def_path_hash()));
-                        }
-                        match rejected.get(&id) {
-                            Some(previous) if previous != &outcome => {
-                                return Err(extraction(
-                                    "conflicting-definition",
-                                    id.def_path_hash(),
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                let key = allocation.clone_identity(&id)?;
-                                allocation.items(1)?;
-                                rejected.insert(key, outcome);
-                            }
-                        }
+                        reject(
+                            &id,
+                            outcome,
+                            source,
+                            &sources,
+                            &definitions,
+                            &mut rejected,
+                            allocation,
+                        )?;
                     }
                     Err(ShapeFailure::ExternalAuthorityUnavailable {
                         crate_name,
@@ -3489,23 +3498,15 @@ impl Candidate {
                             },
                             span,
                         };
-                        if definitions.contains_key(&id) {
-                            return Err(extraction("duplicate-definition", id.def_path_hash()));
-                        }
-                        match rejected.get(&id) {
-                            Some(previous) if previous != &outcome => {
-                                return Err(extraction(
-                                    "conflicting-definition",
-                                    id.def_path_hash(),
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                let key = allocation.clone_identity(&id)?;
-                                allocation.items(1)?;
-                                rejected.insert(key, outcome);
-                            }
-                        }
+                        reject(
+                            &id,
+                            outcome,
+                            source,
+                            &sources,
+                            &definitions,
+                            &mut rejected,
+                            allocation,
+                        )?;
                     }
                     Err(ShapeFailure::Fatal(error)) => return Err(error),
                 }
@@ -3589,6 +3590,14 @@ impl Candidate {
                 scalar_predicate_proofs.push(scalar_predicate_proof(raw, catalog, allocation)?);
             }
         }
+        let definitions: BTreeMap<_, _> = definitions
+            .into_iter()
+            .map(|(id, sourced)| (id, sourced.value))
+            .collect();
+        let rejected: BTreeMap<_, _> = rejected
+            .into_iter()
+            .map(|(id, sourced)| (id, sourced.value))
+            .collect();
         for export in imports {
             let import = anonymous_import(export, &definitions, &spellings)?;
             if !anonymous.contains(&import) {
@@ -6173,6 +6182,56 @@ fn validate_origin(raw: &protocol::Origin) -> Result<()> {
             validate_span(definition_site)
         }
         protocol::Origin::Synthesized { mechanism } => nonempty("synthesis mechanism", mechanism),
+    }
+}
+
+/// Record `outcome` for `id`, which `sources[source]`'s fragment rejected;
+/// another fragment that extracted or rejected it otherwise is a conflict.
+fn reject(
+    id: &identity::Definition,
+    outcome: Rejected,
+    source: usize,
+    sources: &[conflict::Source],
+    definitions: &BTreeMap<identity::Definition, conflict::Sourced<model::Definition>>,
+    rejected: &mut BTreeMap<identity::Definition, conflict::Sourced<Rejected>>,
+    allocation: &mut Allocation,
+) -> Result<()> {
+    if let Some(previous) = definitions.get(id) {
+        return Err(extraction(
+            "duplicate-definition",
+            &conflict::mixed(
+                (&previous.value, &sources[previous.fragment]),
+                &sources[source],
+            ),
+        ));
+    }
+    match rejected.get(id) {
+        Some(previous) if previous.value != outcome => Err(extraction(
+            "conflicting-definition",
+            &conflict::rejection(
+                id,
+                (
+                    &previous.value.reason,
+                    &previous.value.span,
+                    &sources[previous.fragment],
+                ),
+                (&outcome.reason, &outcome.span, &sources[source]),
+                conflict::Detail::from_env(),
+            ),
+        )),
+        Some(_) => Ok(()),
+        None => {
+            let key = allocation.clone_identity(id)?;
+            allocation.items(1)?;
+            rejected.insert(
+                key,
+                conflict::Sourced {
+                    value: outcome,
+                    fragment: source,
+                },
+            );
+            Ok(())
+        }
     }
 }
 
