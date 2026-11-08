@@ -5203,6 +5203,12 @@ fn check_generic_arity(
                 .iter()
                 .try_for_each(|member| check(member, arity, traits)),
             type_ref::Type::Reference { target, .. } => check(target, arity, traits),
+            // A native trait's object: the crate checked the trait.
+            type_ref::Type::Path(_) if ty.dyn_trait().is_some_and(type_ref::is_native_trait) => ty
+                .dyn_arguments()
+                .into_iter()
+                .chain(ty.dyn_bindings().into_iter().map(|(_, ty)| ty))
+                .try_for_each(|ty| check(ty, arity, traits)),
             type_ref::Type::Path(path) if let Some(name) = ty.dyn_trait() => {
                 let Some((_, declared)) = traits.get(name) else {
                     return Err(Error::UnknownType {
