@@ -833,6 +833,7 @@ fn a_bin_target_runs_as_its_packages_binary_with_its_profile() {
         root.join("Cargo.toml"),
         "[package]\nname = \"lessons\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
          [[bin]]\nname = \"clippy3\"\npath = \"exercises/clippy3.rs\"\n\n\
+         [[bin]]\nname = \"clippy1\"\npath = \"exercises/clippy1.rs\"\n\n\
          [profile.dev]\npanic = \"abort\"\n\n[workspace]\n",
     )
     .unwrap();
@@ -840,6 +841,9 @@ fn a_bin_target_runs_as_its_packages_binary_with_its_profile() {
                    let empty: Option<i32> = None;\n    empty.unwrap();\n}\n";
     fs::write(root.join("exercises/clippy3.rs"), program).unwrap();
     fs::write(root.join("exercises/alone.rs"), program).unwrap();
+    // Another binary: the package's own entry is ambiguous, so the run is
+    // the file's, not the directory's.
+    fs::write(root.join("exercises/clippy1.rs"), "// rawr\nfn main() {}\n").unwrap();
     let bin = Path::new(&cargo).parent().unwrap();
     let target = sandbox.path.join("target");
 
@@ -892,7 +896,7 @@ fn a_bin_target_runs_as_its_packages_binary_with_its_profile() {
     assert_eq!(unknown.status.code(), Some(2));
     assert_eq!(
         stderr(&unknown),
-        "error: no bin target named `clippy4`\navailable bin targets:\n    clippy3\n"
+        "error: no bin target named `clippy4`\navailable bin targets:\n    clippy1\n    clippy3\n"
     );
 }
 

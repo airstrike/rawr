@@ -96,7 +96,7 @@ pub fn contents(graph: &rawr::package::Graph) -> Vec<(PathBuf, Option<Vec<u8>>)>
 fn location(target: &rawr::project::Target) -> PathBuf {
     target.project().map_or_else(
         || target.source().path().to_path_buf(),
-        |project| project.root().as_path().to_path_buf(),
+        |project| project.location().to_path_buf(),
     )
 }
 

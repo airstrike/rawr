@@ -222,7 +222,7 @@ fn contents(target: &rawr::project::Target) -> Option<Vec<(PathBuf, Option<Vec<u
 fn location(target: &rawr::project::Target) -> PathBuf {
     target.project().map_or_else(
         || target.source().path().to_path_buf(),
-        |project| project.root().as_path().to_path_buf(),
+        |project| project.location().to_path_buf(),
     )
 }
 

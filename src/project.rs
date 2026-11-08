@@ -31,6 +31,9 @@ pub struct Project {
     source: source::File,
     /// `None` when Cargo is not installed.
     package: Option<cargo::Package>,
+    /// The target was picked by its crate root's file, not found from a
+    /// directory.
+    by_file: bool,
 }
 
 /// A validated explicit source file or canonical Rawr project.
@@ -60,6 +63,18 @@ impl Project {
         &self.source
     }
 
+    /// Where discovery finds this project again: the crate root's file
+    /// when that picked the target, else the package's directory, from
+    /// which a save may make another target the entry.
+    #[must_use]
+    pub fn location(&self) -> &Path {
+        if self.by_file {
+            self.source.path()
+        } else {
+            self.root.as_path()
+        }
+    }
+
     /// The package, as Cargo describes it: `None` when Cargo is not
     /// installed.
     #[must_use]
@@ -78,6 +93,7 @@ impl Project {
             root,
             source,
             package,
+            by_file: false,
         })
     }
 }
@@ -204,6 +220,7 @@ fn discover_file(path: PathBuf) -> Result<Target, Error> {
             root: root::Directory::from_canonical(package.directory().to_path_buf()),
             source: file,
             package: Some(package),
+            by_file: true,
         }),
         None => Target::File(file),
     })
