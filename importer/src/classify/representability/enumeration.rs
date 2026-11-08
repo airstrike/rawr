@@ -53,6 +53,10 @@ pub struct Plan {
     /// B-tree map or set.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     ord: bool,
+    /// The crate implements `std::error::Error` for the type: a value of
+    /// it boxes as a `Box<dyn Error>` (#1451).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    error: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -158,6 +162,7 @@ impl Plan {
             iterator: false,
             partial_ord: false,
             ord: false,
+            error: false,
         }
     }
 
@@ -222,6 +227,17 @@ impl Plan {
         self.partial_ord = partial_ord;
         self.ord = ord;
         self
+    }
+
+    pub(crate) const fn with_error(mut self, error: bool) -> Self {
+        self.error = error;
+        self
+    }
+
+    /// Whether the crate implements `std::error::Error` for the type.
+    #[must_use]
+    pub const fn error(&self) -> bool {
+        self.error
     }
 
     /// Whether the crate implements `PartialOrd` for the type.

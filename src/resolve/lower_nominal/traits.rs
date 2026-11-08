@@ -653,10 +653,11 @@ impl<'a> Parser<'a> {
                 true
             }
             // An imported type the crate implements `Iterator`,
-            // `PartialOrd` or `Ord` for.
+            // `PartialOrd`, `Ord` or `std::error::Error` for.
             Ty::Host { proof, .. }
                 if match trait_name {
                     "Iterator" => Some(capability::Kind::Iterator),
+                    "Error" if self.models.std_error_trait() => Some(capability::Kind::Error),
                     "PartialOrd" | "Ord" => capability::Kind::from_derive(trait_name),
                     _ => None,
                 }

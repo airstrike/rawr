@@ -127,7 +127,7 @@ fn capabilities(value: &held::Value) -> Vec<capability::Kind> {
                 Kind::PartialOrd => ("core::cmp::PartialOrd", true),
                 Kind::Ord => ("core::cmp::Ord", false),
                 Kind::Hash => ("core::hash::Hash", false),
-                Kind::Send | Kind::Static | Kind::Iterator => return true,
+                Kind::Send | Kind::Static | Kind::Iterator | Kind::Error => return true,
             };
             let arguments = if with_self {
                 vec![own.clone()]

@@ -141,6 +141,18 @@ impl Parser<'_> {
                 )
             }
             Ty::String | Ty::Str if text => (local.clone(), self.debug_source(&from, local, span)?),
+            // A crate's error, by the `std::error::Error` impl its crate
+            // writes or derives: its `Display` text through its own impl,
+            // which `Error` requires (#1451).
+            Ty::Host { proof, .. }
+                if proof
+                    .definition
+                    .capabilities()
+                    .contains(capability::Kind::Error) =>
+            {
+                let display = self.prelude_op(PreludeOp::DisplayText, [local.clone()]);
+                (display, self.debug_source(&from, local, span)?)
+            }
             _ => return Ok(None),
         };
         let mut source = origin::Fragment::plain(format!("{{ let {held} = "));
@@ -170,6 +182,14 @@ impl Parser<'_> {
                 Some(crate::resolve::Boxing::New)
             }
             Ty::ParseError(_) => Some(crate::resolve::Boxing::New),
+            Ty::Host { proof, .. }
+                if proof
+                    .definition
+                    .capabilities()
+                    .contains(capability::Kind::Error) =>
+            {
+                Some(crate::resolve::Boxing::New)
+            }
             Ty::String => Some(crate::resolve::Boxing::Into("String".into())),
             Ty::Str => {
                 let ty = if self.text_literal_at(value.start()) {

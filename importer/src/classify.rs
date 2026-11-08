@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 143;
+const CLASSIFIER_VERSION: u32 = 144;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7196,6 +7196,7 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements_for_any(definition, "PartialOrd"),
             self.implements_for_any(definition, "Ord"),
         )
+        .with_error(self.implements_for_any(definition, "Error"))
         .with_borrowing(
             lifetime_parameters(generics),
             covariant_lifetimes(generics),
@@ -7742,6 +7743,7 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements_for_any(definition, "PartialOrd"),
             self.implements_for_any(definition, "Ord"),
         )
+        .with_error(self.implements_for_any(definition, "Error"))
         .with_borrowing(
             lifetime_parameters(generics),
             covariant_lifetimes(generics),
@@ -9560,6 +9562,7 @@ impl<P: api::Phase> Context<'_, P> {
             implements("Hash"),
         )
         .with_order(implements("PartialOrd"), implements("Ord"))
+        .with_error(implements("Error"))
     }
 
     /// A function's output. A Rust future, an `impl Future<Output = T>` or
