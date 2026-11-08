@@ -13,7 +13,7 @@ use crate::{ast, type_def, ImmutableString, Span};
 /// One constructor of a matched type: an enum variant, or a prelude
 /// constructor (`Some`, `None`, `Ok`, `Err`).
 #[derive(Clone, PartialEq)]
-pub(super) enum CoverageKey {
+pub(super) enum Key {
     Enum {
         identity: type_def::Identity,
         variant: nominal::variant::Id,
@@ -48,10 +48,10 @@ pub(super) enum CoverageKey {
 pub(super) fn specialize_slice(
     before: usize,
     rest: bool,
-    payload: &[CoveragePattern],
+    payload: &[Pattern],
     length: usize,
     open: bool,
-) -> Option<Vec<CoveragePattern>> {
+) -> Option<Vec<Pattern>> {
     if !rest {
         return (!open && payload.len() == length).then(|| payload.to_vec());
     }
@@ -60,7 +60,7 @@ pub(super) fn specialize_slice(
     }
     let mut specialized = payload[..before].to_vec();
     specialized.extend(std::iter::repeat_n(
-        CoveragePattern::Wildcard,
+        Pattern::Wildcard,
         length - payload.len(),
     ));
     specialized.extend_from_slice(&payload[before..]);
@@ -116,42 +116,38 @@ pub(super) fn tuple_members<'a>(
 /// The payload of `pattern` under `constructor`: a slice pattern's
 /// elements for one of its lengths, else a matching key's payload.
 pub(super) fn specialize_coverage_pattern(
-    pattern: &CoveragePattern,
-    constructor: &CoverageConstructor,
-) -> Option<Vec<CoveragePattern>> {
+    pattern: &Pattern,
+    constructor: &Constructor,
+) -> Option<Vec<Pattern>> {
     match (pattern, &constructor.key) {
-        (CoveragePattern::Wildcard, _) => {
-            Some(vec![CoveragePattern::Wildcard; constructor.payload.len()])
-        }
+        (Pattern::Wildcard, _) => Some(vec![Pattern::Wildcard; constructor.payload.len()]),
         (
-            CoveragePattern::Constructor {
-                key: CoverageKey::Slice { before, rest },
+            Pattern::Constructor {
+                key: Key::Slice { before, rest },
                 payload,
                 ..
             },
-            CoverageKey::SliceLength { length, open },
+            Key::SliceLength { length, open },
         ) => specialize_slice(*before, *rest, payload, *length, *open),
-        (CoveragePattern::Constructor { key, payload, .. }, constructor_key)
-            if key == constructor_key =>
-        {
+        (Pattern::Constructor { key, payload, .. }, constructor_key) if key == constructor_key => {
             Some(payload.to_vec())
         }
-        (CoveragePattern::Constructor { .. }, _) => None,
-        (CoveragePattern::Or(_), _) => unreachable!("or-patterns are expanded first"),
+        (Pattern::Constructor { .. }, _) => None,
+        (Pattern::Or(_), _) => unreachable!("or-patterns are expanded first"),
     }
 }
 
 #[derive(Clone)]
-pub(super) enum CoveragePattern {
+pub(super) enum Pattern {
     Wildcard,
     Constructor {
-        key: CoverageKey,
+        key: Key,
         /// `Enum::Variant`, `Some`, `None`, a literal, or `(..)`.
         name: ImmutableString,
-        payload: Box<[CoveragePattern]>,
+        payload: Box<[Pattern]>,
     },
     /// `p | q`, expanded before coverage is checked.
-    Or(Box<[CoveragePattern]>),
+    Or(Box<[Pattern]>),
 }
 
 /// For each declared field, the index of the written field pattern that
@@ -450,7 +446,7 @@ pub(super) fn render_constructor<T>(
     )
 }
 
-impl CoveragePattern {
+impl Pattern {
     pub(super) fn is_wildcard(&self) -> bool {
         matches!(self, Self::Wildcard)
     }
@@ -459,7 +455,7 @@ impl CoveragePattern {
         match self {
             Self::Wildcard => "_".to_string(),
             Self::Constructor {
-                key: CoverageKey::Tuple,
+                key: Key::Tuple,
                 payload,
                 ..
             } => format!(
@@ -471,7 +467,7 @@ impl CoveragePattern {
                     .join(", ")
             ),
             Self::Constructor {
-                key: CoverageKey::Slice { before, rest },
+                key: Key::Slice { before, rest },
                 payload,
                 ..
             } => {
@@ -525,22 +521,22 @@ impl CoveragePattern {
     }
 }
 
-pub(super) struct CoverageConstructor {
-    pub(super) key: CoverageKey,
+pub(super) struct Constructor {
+    pub(super) key: Key,
     pub(super) name: ImmutableString,
     pub(super) payload: Box<[Ty]>,
 }
 
 #[derive(Clone)]
-pub(super) enum CoverageWitness {
+pub(super) enum Witness {
     Wildcard,
     Constructor {
         name: ImmutableString,
-        payload: Box<[CoverageWitness]>,
+        payload: Box<[Witness]>,
     },
 }
 
-impl CoverageWitness {
+impl Witness {
     pub(super) fn render(&self) -> String {
         match self {
             Self::Wildcard => "_".to_string(),
@@ -566,9 +562,9 @@ impl CoverageWitness {
 }
 
 pub(super) fn specialize_coverage_rows(
-    rows: &[Vec<CoveragePattern>],
-    constructor: &CoverageConstructor,
-) -> Vec<Vec<CoveragePattern>> {
+    rows: &[Vec<Pattern>],
+    constructor: &Constructor,
+) -> Vec<Vec<Pattern>> {
     rows.iter()
         .filter_map(|row| {
             let mut specialized = specialize_coverage_pattern(&row[0], constructor)?;
@@ -579,25 +575,22 @@ pub(super) fn specialize_coverage_rows(
 }
 
 pub(super) fn specialize_coverage_candidate(
-    candidate: &[CoveragePattern],
-    constructor: &CoverageConstructor,
-) -> Vec<CoveragePattern> {
+    candidate: &[Pattern],
+    constructor: &Constructor,
+) -> Vec<Pattern> {
     let mut specialized = specialize_coverage_pattern(&candidate[0], constructor)
         .expect("the candidate matches its constructor");
     specialized.extend_from_slice(&candidate[1..]);
     specialized
 }
 
-pub(super) fn specialize_coverage_types(
-    types: &[Ty],
-    constructor: &CoverageConstructor,
-) -> Vec<Ty> {
+pub(super) fn specialize_coverage_types(types: &[Ty], constructor: &Constructor) -> Vec<Ty> {
     let mut specialized = constructor.payload.to_vec();
     specialized.extend_from_slice(&types[1..]);
     specialized
 }
 
-pub(super) fn default_coverage_rows(rows: &[Vec<CoveragePattern>]) -> Vec<Vec<CoveragePattern>> {
+pub(super) fn default_coverage_rows(rows: &[Vec<Pattern>]) -> Vec<Vec<Pattern>> {
     rows.iter()
         .filter(|row| row[0].is_wildcard())
         .map(|row| row[1..].to_vec())
@@ -613,7 +606,7 @@ impl<'a> Parser<'a> {
     pub(super) fn require_irrefutable(
         &mut self,
         syntax: &PatternSyntax,
-        coverage: &CoveragePattern,
+        coverage: &Pattern,
         ty: &Ty,
         site: BindingSite,
     ) -> Result<(), Error> {
@@ -715,7 +708,7 @@ impl<'a> Parser<'a> {
     pub(super) fn uncovered(
         &self,
         syntax: &PatternSyntax,
-        coverage: &CoveragePattern,
+        coverage: &Pattern,
         ty: &Ty,
     ) -> Vec<String> {
         // The value below the references, whose witnesses read through
@@ -743,7 +736,7 @@ impl<'a> Parser<'a> {
                     .map(|witness| {
                         witness
                             .first()
-                            .map_or_else(|| "_".to_string(), CoverageWitness::render)
+                            .map_or_else(|| "_".to_string(), Witness::render)
                     })
                     .collect()
             }
@@ -775,10 +768,10 @@ impl<'a> Parser<'a> {
         refused
     }
 
-    pub(super) fn coverage_constructors(&self, ty: &Ty) -> Option<Vec<CoverageConstructor>> {
+    pub(super) fn coverage_constructors(&self, ty: &Ty) -> Option<Vec<Constructor>> {
         let resolved = self.inference.resolve(ty);
-        let prelude = |variant: Prelude, payload: &[Ty]| CoverageConstructor {
-            key: CoverageKey::Prelude(variant),
+        let prelude = |variant: Prelude, payload: &[Ty]| Constructor {
+            key: Key::Prelude(variant),
             name: variant.name().into(),
             payload: payload.into(),
         };
@@ -788,8 +781,8 @@ impl<'a> Parser<'a> {
                 return Some(
                     [false, true]
                         .into_iter()
-                        .map(|value| CoverageConstructor {
-                            key: CoverageKey::Literal(ast::NominalLiteral::Bool(value)),
+                        .map(|value| Constructor {
+                            key: Key::Literal(ast::NominalLiteral::Bool(value)),
                             name: value.to_string().into(),
                             payload: Box::default(),
                         })
@@ -800,8 +793,8 @@ impl<'a> Parser<'a> {
                 return Some(
                     ["Less", "Equal", "Greater"]
                         .into_iter()
-                        .map(|name| CoverageConstructor {
-                            key: CoverageKey::Literal(ast::NominalLiteral::Int(
+                        .map(|name| Constructor {
+                            key: Key::Literal(ast::NominalLiteral::Int(
                                 ordering_discriminant(name).expect("an `Ordering` variant"),
                             )),
                             name: format!("Ordering::{name}").into(),
@@ -811,8 +804,8 @@ impl<'a> Parser<'a> {
                 );
             }
             Ty::Tuple(members) => {
-                return Some(vec![CoverageConstructor {
-                    key: CoverageKey::Tuple,
+                return Some(vec![Constructor {
+                    key: Key::Tuple,
                     name: ImmutableString::new(),
                     payload: members,
                 }]);
@@ -820,8 +813,8 @@ impl<'a> Parser<'a> {
             // An array's one length; a slice's lengths up to the longest
             // slice pattern seen, then every longer one at once.
             Ty::Array { element, kind } => {
-                let constructor = |length, open| CoverageConstructor {
-                    key: CoverageKey::SliceLength { length, open },
+                let constructor = |length, open| Constructor {
+                    key: Key::SliceLength { length, open },
                     name: if open { "[..]" } else { "[]" }.into(),
                     payload: vec![(*element).clone(); length].into(),
                 };
@@ -853,8 +846,8 @@ impl<'a> Parser<'a> {
                 return Some(
                     [(false, cow::reference_to(*borrowed)), (true, owned)]
                         .into_iter()
-                        .map(|(owned, payload)| CoverageConstructor {
-                            key: CoverageKey::Cow(owned),
+                        .map(|(owned, payload)| Constructor {
+                            key: Key::Cow(owned),
                             name: if owned { "Cow::Owned" } else { "Cow::Borrowed" }.into(),
                             payload: Box::new([payload]),
                         })
@@ -874,8 +867,8 @@ impl<'a> Parser<'a> {
             // A struct's one constructor, as a tuple's.
             Nominal::Struct { item, .. } => {
                 return (item.form != crate::item::StructForm::Unit).then(|| {
-                    vec![CoverageConstructor {
-                        key: CoverageKey::Tuple,
+                    vec![Constructor {
+                        key: Key::Tuple,
                         name: item.name.text.clone(),
                         payload: item
                             .fields
@@ -892,8 +885,8 @@ impl<'a> Parser<'a> {
         Some(
             item.variants
                 .iter()
-                .map(|variant| CoverageConstructor {
-                    key: CoverageKey::Enum {
+                .map(|variant| Constructor {
+                    key: Key::Enum {
                         identity: identity.clone(),
                         variant: nominal::variant::Id::from_name(&variant.name),
                     },
@@ -911,8 +904,8 @@ impl<'a> Parser<'a> {
     pub(super) fn coverage_pattern_is_covered(
         &self,
         types: &[Ty],
-        rows: &[Vec<CoveragePattern>],
-        candidate: &[CoveragePattern],
+        rows: &[Vec<Pattern>],
+        candidate: &[Pattern],
     ) -> bool {
         debug_assert!(rows.iter().all(|row| row.len() == types.len()));
         debug_assert_eq!(candidate.len(), types.len());
@@ -923,17 +916,14 @@ impl<'a> Parser<'a> {
         if rows.is_empty() {
             return false;
         }
-        if rows
-            .iter()
-            .any(|row| row.iter().all(CoveragePattern::is_wildcard))
-        {
+        if rows.iter().any(|row| row.iter().all(Pattern::is_wildcard)) {
             return true;
         }
 
         match &candidate[0] {
             // A slice pattern covers each length it matches.
-            CoveragePattern::Constructor {
-                key: CoverageKey::Slice { .. },
+            Pattern::Constructor {
+                key: Key::Slice { .. },
                 ..
             } => {
                 let Some(constructors) = self.coverage_constructors(&types[0]) else {
@@ -953,7 +943,7 @@ impl<'a> Parser<'a> {
                     }
                 })
             }
-            CoveragePattern::Constructor { key, .. } => {
+            Pattern::Constructor { key, .. } => {
                 let Some(constructor) =
                     self.coverage_constructors(&types[0])
                         .and_then(|constructors| {
@@ -973,12 +963,12 @@ impl<'a> Parser<'a> {
                     &specialized_candidate,
                 )
             }
-            CoveragePattern::Or(_) => unreachable!("or-patterns are expanded first"),
-            CoveragePattern::Wildcard if rows.iter().all(|row| row[0].is_wildcard()) => {
+            Pattern::Or(_) => unreachable!("or-patterns are expanded first"),
+            Pattern::Wildcard if rows.iter().all(|row| row[0].is_wildcard()) => {
                 let default_rows = default_coverage_rows(rows);
                 self.coverage_pattern_is_covered(&types[1..], &default_rows, &candidate[1..])
             }
-            CoveragePattern::Wildcard => {
+            Pattern::Wildcard => {
                 let Some(constructors) = self.coverage_constructors(&types[0]) else {
                     let default_rows = default_coverage_rows(rows);
                     return self.coverage_pattern_is_covered(
@@ -1011,9 +1001,9 @@ impl<'a> Parser<'a> {
     pub(super) fn coverage_witnesses(
         &self,
         types: &[Ty],
-        rows: &[Vec<CoveragePattern>],
+        rows: &[Vec<Pattern>],
         scrutinee: bool,
-    ) -> Vec<Vec<CoverageWitness>> {
+    ) -> Vec<Vec<Witness>> {
         debug_assert!(rows.iter().all(|row| row.len() == types.len()));
 
         if types.is_empty() {
@@ -1023,13 +1013,10 @@ impl<'a> Parser<'a> {
                 Vec::new()
             };
         }
-        if rows
-            .iter()
-            .any(|row| row.iter().all(CoveragePattern::is_wildcard))
-        {
+        if rows.iter().any(|row| row.iter().all(Pattern::is_wildcard)) {
             return Vec::new();
         }
-        let prefixed = |heads: &[CoverageWitness], tails: Vec<Vec<CoverageWitness>>| {
+        let prefixed = |heads: &[Witness], tails: Vec<Vec<Witness>>| {
             tails
                 .iter()
                 .flat_map(|tail| {
@@ -1043,7 +1030,7 @@ impl<'a> Parser<'a> {
         };
         let Some(constructors) = self.coverage_constructors(&types[0]) else {
             let tails = self.coverage_witnesses(&types[1..], &default_coverage_rows(rows), false);
-            return prefixed(&[CoverageWitness::Wildcard], tails);
+            return prefixed(&[Witness::Wildcard], tails);
         };
         let (present, missing): (Vec<_>, Vec<_>) = constructors.iter().partition(|constructor| {
             rows.iter().any(|row| {
@@ -1056,15 +1043,15 @@ impl<'a> Parser<'a> {
                 let heads = if scrutinee || !present.is_empty() {
                     missing
                         .iter()
-                        .map(|constructor| CoverageWitness::Constructor {
+                        .map(|constructor| Witness::Constructor {
                             name: constructor.name.clone(),
                             payload: (0..constructor.payload.len())
-                                .map(|_| CoverageWitness::Wildcard)
+                                .map(|_| Witness::Wildcard)
                                 .collect(),
                         })
                         .collect()
                 } else {
-                    vec![CoverageWitness::Wildcard]
+                    vec![Witness::Wildcard]
                 };
                 return prefixed(&heads, tails);
             }
@@ -1078,7 +1065,7 @@ impl<'a> Parser<'a> {
                     .into_iter()
                     .map(|mut witness| {
                         let tail = witness.split_off(constructor.payload.len());
-                        let mut combined = vec![CoverageWitness::Constructor {
+                        let mut combined = vec![Witness::Constructor {
                             name: constructor.name.clone(),
                             payload: witness.into_boxed_slice(),
                         }];

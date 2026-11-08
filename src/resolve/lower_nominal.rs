@@ -98,8 +98,7 @@ pub(crate) use closure::ClosureCallable;
 use closure::{ClosureOutput, ClosureScope, LiftedClosure};
 use compare::Shape;
 use coverage::{
-    bool_literals, field_order, reject_empty_range, scalar_text, tuple_members, CoverageKey,
-    CoveragePattern, CoverageWitness, Scalar,
+    bool_literals, field_order, reject_empty_range, scalar_text, tuple_members, Scalar,
 };
 use dispatch::{
     builtin_conversions_from, builtin_operator, write_closures, write_default_dispatcher,
@@ -17815,7 +17814,7 @@ impl<'a> Parser<'a> {
         let mut arm_ends = Vec::new();
         let mut arms = Vec::new();
         let coverage_types = vec![subject_ty.clone()];
-        let mut coverage_rows = Vec::<Vec<CoveragePattern>>::new();
+        let mut coverage_rows = Vec::<Vec<coverage::Pattern>>::new();
         let mut wildcard = false;
         let original_bindings = self.bindings.clone();
         let mut arm_bindings = Vec::new();
@@ -18132,7 +18131,7 @@ impl<'a> Parser<'a> {
                     .map(|witness| {
                         let rendered = witness
                             .first()
-                            .map_or_else(|| "_".to_string(), CoverageWitness::render);
+                            .map_or_else(|| "_".to_string(), coverage::Witness::render);
                         format!("{prefix}{rendered}").into()
                     })
                     .collect();

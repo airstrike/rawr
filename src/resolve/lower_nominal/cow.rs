@@ -511,7 +511,7 @@ impl Parser<'_> {
         expected: &Ty,
         bound_names: &mut BTreeMap<ImmutableString, Span>,
         binding_declarations: &mut Vec<PatternBinding>,
-    ) -> Result<(NominalPattern, CoveragePattern), Error> {
+    ) -> Result<(NominalPattern, coverage::Pattern), Error> {
         let variant = if owned { "Owned" } else { "Borrowed" };
         let expected = self.inference.resolve(expected);
         let Ty::Cow(borrowed) = &expected else {
@@ -550,8 +550,8 @@ impl Parser<'_> {
                 owned,
                 payload: Box::new(child),
             },
-            CoveragePattern::Constructor {
-                key: CoverageKey::Cow(owned),
+            coverage::Pattern::Constructor {
+                key: coverage::Key::Cow(owned),
                 name: format!("Cow::{variant}").into(),
                 payload: Box::new([coverage]),
             },

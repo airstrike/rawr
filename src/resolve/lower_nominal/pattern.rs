@@ -1,9 +1,9 @@
 //! Patterns and the bindings they make: their syntax, and patterns resolved
 //! against script and crate types.
 
+use super::coverage;
 use super::coverage::{
     field_order, reject_empty_range, render_literal, scalar_text, tuple_members, tuple_rest,
-    CoverageKey, CoveragePattern,
 };
 use super::lvalue::Lvalue;
 use super::models::Nominal;
@@ -357,7 +357,7 @@ pub(in crate::resolve) enum PatternSite {
 
 pub(super) struct ResolvedEnumPattern {
     pub(super) proof: NominalEnumPattern,
-    pub(super) coverage: CoveragePattern,
+    pub(super) coverage: coverage::Pattern,
 }
 
 /// One name a pattern binds.
@@ -610,7 +610,7 @@ impl HostPattern {
 /// bindings it declares.
 pub(super) struct ResolvedRootPattern {
     pub(super) proof: NominalPattern,
-    pub(super) coverage: CoveragePattern,
+    pub(super) coverage: coverage::Pattern,
     pub(super) span: Span,
     pub(super) bindings: Vec<PatternBinding>,
     /// What the pattern does to its subject's parts (`borrows.rs`).
@@ -1500,7 +1500,7 @@ impl<'a> Parser<'a> {
         variant: &str,
         bound_names: &mut BTreeMap<ImmutableString, Span>,
         binding_declarations: &mut Vec<PatternBinding>,
-    ) -> Result<(NominalPattern, CoveragePattern), Error> {
+    ) -> Result<(NominalPattern, coverage::Pattern), Error> {
         let expected = self.inference.resolve(expected);
         let path = self.trace_length();
         // Matching a constructor, literal or tuple through `&T` matches the
@@ -1559,7 +1559,7 @@ impl<'a> Parser<'a> {
         variant: &str,
         bound_names: &mut BTreeMap<ImmutableString, Span>,
         binding_declarations: &mut Vec<PatternBinding>,
-    ) -> Result<(NominalPattern, CoveragePattern), Error> {
+    ) -> Result<(NominalPattern, coverage::Pattern), Error> {
         let expected = expected.clone();
         // A refutable pattern on a facade value: bind the value to a hidden
         // name, and leave its tests to the pattern's site.
@@ -1599,7 +1599,7 @@ impl<'a> Parser<'a> {
                     name,
                     expected: self.payload_type(&expected),
                 },
-                CoveragePattern::Wildcard,
+                coverage::Pattern::Wildcard,
             ));
         }
         match syntax {
@@ -1666,14 +1666,14 @@ impl<'a> Parser<'a> {
                         name: name.clone(),
                         expected: self.payload_type(&expected),
                     },
-                    CoveragePattern::Wildcard,
+                    coverage::Pattern::Wildcard,
                 ))
             }
             PatternSyntax::Discard { .. } => Ok((
                 NominalPattern::Discard {
                     expected: self.payload_type(&expected),
                 },
-                CoveragePattern::Wildcard,
+                coverage::Pattern::Wildcard,
             )),
             PatternSyntax::UnitStruct { ty, span } => {
                 self.require_pattern_type(&expected, ty, *span)?;
@@ -1681,7 +1681,7 @@ impl<'a> Parser<'a> {
                     NominalPattern::Discard {
                         expected: self.payload_type(&expected),
                     },
-                    CoveragePattern::Wildcard,
+                    coverage::Pattern::Wildcard,
                 ))
             }
             PatternSyntax::Enum(pattern) => {
@@ -1713,8 +1713,8 @@ impl<'a> Parser<'a> {
                 self.trace_test(borrowck::Access::Read, None);
                 Ok((
                     NominalPattern::Literal(literal.clone()),
-                    CoveragePattern::Constructor {
-                        key: CoverageKey::Literal(literal.clone()),
+                    coverage::Pattern::Constructor {
+                        key: coverage::Key::Literal(literal.clone()),
                         name: render_literal(literal).into(),
                         payload: Box::default(),
                     },
@@ -1744,8 +1744,8 @@ impl<'a> Parser<'a> {
                         high: high.as_ref().map(|(literal, _)| literal.clone()),
                         inclusive: *inclusive,
                     },
-                    CoveragePattern::Constructor {
-                        key: CoverageKey::Range,
+                    coverage::Pattern::Constructor {
+                        key: coverage::Key::Range,
                         name: "..".into(),
                         payload: Box::default(),
                     },
@@ -1807,8 +1807,8 @@ impl<'a> Parser<'a> {
                 }
                 Ok((
                     NominalPattern::Struct(proofs.into_boxed_slice()),
-                    CoveragePattern::Constructor {
-                        key: CoverageKey::Tuple,
+                    coverage::Pattern::Constructor {
+                        key: coverage::Key::Tuple,
                         name: ImmutableString::new(),
                         payload: coverage.into_boxed_slice(),
                     },
@@ -1854,8 +1854,8 @@ impl<'a> Parser<'a> {
                 }
                 Ok((
                     NominalPattern::Tuple(proofs.into_boxed_slice()),
-                    CoveragePattern::Constructor {
-                        key: CoverageKey::Tuple,
+                    coverage::Pattern::Constructor {
+                        key: coverage::Key::Tuple,
                         name: ImmutableString::new(),
                         payload: coverage.into_boxed_slice(),
                     },
@@ -2074,8 +2074,8 @@ impl<'a> Parser<'a> {
                         rest: rest_proof,
                         after: after_proofs.into_boxed_slice(),
                     },
-                    CoveragePattern::Constructor {
-                        key: CoverageKey::Slice {
+                    coverage::Pattern::Constructor {
+                        key: coverage::Key::Slice {
                             before: before.len(),
                             rest: rest.is_some(),
                         },
@@ -2149,7 +2149,7 @@ impl<'a> Parser<'a> {
                 }
                 Ok((
                     NominalPattern::Or(proofs.into_boxed_slice()),
-                    CoveragePattern::Or(coverage.into_boxed_slice()),
+                    coverage::Pattern::Or(coverage.into_boxed_slice()),
                 ))
             }
         }
@@ -2194,7 +2194,7 @@ impl<'a> Parser<'a> {
         expected: &Ty,
         bound_names: &mut BTreeMap<ImmutableString, Span>,
         binding_declarations: &mut Vec<PatternBinding>,
-    ) -> Result<(NominalPattern, CoveragePattern), Error> {
+    ) -> Result<(NominalPattern, coverage::Pattern), Error> {
         let PatternSyntax::Prelude {
             variant, payload, ..
         } = syntax
@@ -2253,8 +2253,8 @@ impl<'a> Parser<'a> {
         };
         Ok((
             proof,
-            CoveragePattern::Constructor {
-                key: CoverageKey::Prelude(*variant),
+            coverage::Pattern::Constructor {
+                key: coverage::Key::Prelude(*variant),
                 name: variant.name().into(),
                 payload: coverage.into_boxed_slice(),
             },
@@ -2549,8 +2549,8 @@ impl<'a> Parser<'a> {
                 variant: variant_id.clone(),
                 payload: payload.into_boxed_slice(),
             },
-            coverage: CoveragePattern::Constructor {
-                key: CoverageKey::Enum {
+            coverage: coverage::Pattern::Constructor {
+                key: coverage::Key::Enum {
                     identity,
                     variant: variant_id,
                 },
