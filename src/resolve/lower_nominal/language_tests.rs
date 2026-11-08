@@ -14288,3 +14288,71 @@ fn language_a_module_and_a_function_of_one_name_import_together() {
         );
     }
 }
+
+/// The program's own unit struct, named by any path in the value
+/// namespace, is its value, and an uncalled tuple struct is its
+/// constructor as a function, as rustc reads `parts::badge::Secondary`,
+/// `badge::Secondary` after `use parts::badge;` and `.map(badge::Wrap)`.
+/// So is a unit struct's path before the block of a `match` or an `if
+/// let`, where no struct literal stands (#1327).
+#[test]
+fn language_a_program_struct_by_path_is_its_value() {
+    let parts = r#"mod parts {
+    pub mod badge {
+        pub struct Secondary;
+
+        impl Secondary {
+            pub fn weight(&self) -> i64 {
+                40
+            }
+        }
+
+        pub struct Wrap(pub i64);
+
+        pub fn badge(label: &str) -> i64 {
+            label.len() as i64
+        }
+    }
+}
+"#;
+    let calls = [
+        ("", "parts::badge::Secondary.weight()"),
+        ("", "crate::parts::badge::Secondary.weight()"),
+        ("use parts::badge;", "badge::Secondary.weight()"),
+        (
+            "use parts::badge::{self, badge};",
+            "badge(\"\") + badge::Secondary.weight()",
+        ),
+        (
+            "use parts::badge;",
+            "(|| { let s = badge::Secondary; s.weight() })()",
+        ),
+        ("", "Some(40).map(parts::badge::Wrap).unwrap().0"),
+        (
+            "use parts::badge;",
+            "[20, 20].into_iter().map(badge::Wrap).map(|w| w.0).sum()",
+        ),
+        (
+            "",
+            "match parts::badge::Secondary { parts::badge::Secondary => 40 }",
+        ),
+        (
+            "use parts::badge;",
+            "match badge::Secondary { badge::Secondary => 40 }",
+        ),
+        (
+            "use parts::badge;",
+            "if let badge::Secondary = badge::Secondary { 40 } else { 0 }",
+        ),
+        (
+            "",
+            "match parts::badge::Wrap(40) { parts::badge::Wrap(n) => n }",
+        ),
+    ];
+    for (imports, value) in calls {
+        let program = format!(
+            "{parts}{imports}\npub fn run() -> i64 {{ let v: i64 = {value}; v + 2 }}\nrun()"
+        );
+        assert_eq!(run(&program), 42, "{value}");
+    }
+}

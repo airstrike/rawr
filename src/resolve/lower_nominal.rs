@@ -52375,8 +52375,11 @@ impl<'a> Parser<'a> {
                 return self.parse_qualified(first, first_span);
             }
         }
-        // `module::S`, `module::W(x)`, `module::W`.
-        if !matches!(self.peek(), Token::DoubleColon | Token::LeftBrace)
+        // `module::S`, `module::W(x)`, `module::W`, and `module::S` before
+        // the block of a `match` or an `if let`, where no struct literal
+        // stands.
+        if !matches!(self.peek(), Token::DoubleColon)
+            && (self.no_struct || !matches!(self.peek(), Token::LeftBrace))
             && let Some(model) = self.models.qualified_owner(path_span).cloned()
             && let Some(value) = self.parse_struct_value(model, path_span)?
         {
