@@ -187,7 +187,7 @@ export const NEXT_IMAGE = '<span class="next">This runs once rawr&rsquo;s server
  * and a run a limit stopped all fail the build.
  *
  * A server block marked `data-image="next"` needs a crate that only the
- * server's next image has, and the release workflow builds that image. While
+ * server's next image has; the Bot workflow builds that image on the push that changes the universe. While
  * the live server answers it with a compile error, its output says so
  * (`class="next"`, which the deploy's smoke test reads) and the build warns
  * instead of failing. Once the live server runs it, its output is the run's.
@@ -210,7 +210,7 @@ export async function runOutputs(html: string, runs: Runs): Promise<string> {
     const result = await run(runs, block);
     if (result.limit) throw new Error(`${block.name}: a limit stopped its run, so it has no output to show`);
     if (block.next && result.kind === "error") {
-      console.warn(`${block.name} needs the server's next image: the live server answers it with a compile error, so its output waits for the release workflow's image and the site's next build`);
+      console.warn(`${block.name} needs the server's next image: the live server answers it with a compile error, so its output waits for the Bot workflow's image and the site's next build`);
       filled.set(out, NEXT_IMAGE);
       continue;
     }

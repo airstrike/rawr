@@ -416,7 +416,11 @@ stage makes the one deploy, so the site never goes live ahead of its bot,
 and a failed stage leaves the live site as it was. Run alone, `playground.yml`
 and `bot.yml` deploy through `site.yml` themselves (input `deploy`). A
 playground deploy keeps the running image. A bot deploy keeps the live
-rawr-web.
+rawr-web. `bot.yml` also runs on a push to main that changes the universe
+(`play/universe`), the bot's code (`play/src`, `play/snippet`) or `play/Dockerfile`: the
+image builds and deploys by itself, so a snippet on the site that needs a
+crate the universe gained never waits for a release. Every other change to
+the site or the docs deploys on push through `site.yml` alone.
 
 The bot stage skips its build when nothing the image is built from has
 changed. `image-changed.sh` compares this commit with the commit of the

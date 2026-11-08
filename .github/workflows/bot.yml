@@ -18,6 +18,11 @@
 # Run on its own (Run workflow), it then deploys through site.yml with the
 # new image and the live rawr-web. In the chained release, `deploy` is false
 # and the site stage deploys it.
+#
+# A push to main that changes what the server can run (the universe, the
+# bot's own code, the Dockerfile) builds and deploys the image by itself, `auto`:
+# a site snippet that needs a crate the universe gained never waits for a
+# release. Other pushes leave the image alone; site.yml deploys them.
 name: Bot
 
 on:
@@ -44,6 +49,15 @@ on:
       image:
         description: The image pushed (registry.cloudflare.com/…/rawr-play:<commit>), or empty when the build was skipped.
         value: ${{ jobs.image.outputs.ref }}
+  push:
+    branches: [main]
+    paths:
+      - "play/universe/**"
+      - "play/src/**"
+      - "play/snippet/**"
+      - "play/Cargo.toml"
+      - "play/Dockerfile"
+      - ".github/workflows/bot.yml"
 
 # See site.yml: `release-play` when run alone, a group of its own when called.
 concurrency:
@@ -203,7 +217,8 @@ jobs:
 
   deploy:
     needs: image
-    if: inputs.deploy
+    # A push has no inputs; it always deploys what it built.
+    if: inputs.deploy || github.event_name == 'push'
     uses: ./.github/workflows/site.yml
     with:
       image: ${{ needs.image.outputs.ref }}
