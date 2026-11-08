@@ -18,7 +18,7 @@
   <tr><td><code>std::net</code></td><td>The snippet doesn&rsquo;t compile. rawr doesn&rsquo;t have the module.</td></tr>
   <tr><td><code>std::thread::spawn</code> in the browser</td><td>It panics as std does on the web, with <code>failed to spawn thread</code>: a page runs one thread.</td></tr>
   <tr><td><code>std::thread::sleep</code> in the browser</td><td>A page has no way to wait, so rawr stops there, and the snippet runs on the server instead.</td></tr>
-  <tr><td><code>use reqwest;</code> or any other crate</td><td>The snippet doesn&rsquo;t compile. The error is <code>unknown import `reqwest`</code>.</td></tr>
+  <tr><td><code>use reqwest;</code> or any other crate</td><td>The snippet doesn&rsquo;t compile. The error is rustc&rsquo;s <code>error[E0432]: unresolved import `reqwest`</code>.</td></tr>
 </table>
 
 

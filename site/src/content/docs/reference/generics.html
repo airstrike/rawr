@@ -65,7 +65,7 @@ fn main() {
   <div class="run"><button type="button" class="runbtn" data-source="src-generics" data-out="out-generics" aria-label="Run generics.rs" hidden></button><b>rawr run generics.rs</b><span id="out-generics" aria-live="polite"></span></div>
 </div>
 <h2 id="dyn">Trait objects</h2>
-<p><code>Box&lt;dyn Trait&gt;</code> holds any type that implements the trait. <code>&amp;dyn Trait</code> arguments aren&rsquo;t supported yet.</p>
+<p><code>Box&lt;dyn Trait&gt;</code> and <code>&amp;dyn Trait</code> of your own trait hold any type that implements the trait. A trait object of a std trait, as <code>&amp;dyn Display</code> or <code>Box&lt;dyn Debug&gt;</code>, isn&rsquo;t supported yet. <code>Box&lt;dyn Error&gt;</code> works in a program that implements <code>Error</code> for a type of its own.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="shapes.rs" id="src-shapes">trait Shape {
     fn area(&amp;self) -&gt; f64;
