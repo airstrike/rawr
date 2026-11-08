@@ -154,6 +154,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A function bounded by a trait with more than 64 impls, such as icedxdy's `badge(content: impl Into<Slot<'a, Message>>)`, now ties its argument's types to the callee's, so `badge![icon, "Verified"]` no longer reports E0282. (#1435)
 - A native function that keeps the blocks it is given, such as `State::new(page_index, blocks: &'static [Block])`, takes a marked module's `static BLOCKS`, a range of it, or a slice literal, as Rust does. Before, the generated runner failed to compile with E0713/E0521. (#1437)
 - A marked type that native code holds as a `Box<dyn Trait>` can return references: a `&'static Meta` or `&'static [Block]` that is a static gives native code the static itself, and `&self.state` is lent where the value holds it. A reference result rawr can't give yet is an error at `rawr check` instead of a panic at the call. (#1442)
+- A marked type that native code holds as a `Box<dyn Trait>` can clone a field of a value it lent in place, as `fn scrollable_id(&self) -> Id { self.state.scrollable_id.clone() }` does while native code still holds `&State` from `state()` or a view from `preview()`. icedxdy's browser no longer exits when a page is selected. (#1445)
 
 ## 0.3.171 (2026-11-07)
 
