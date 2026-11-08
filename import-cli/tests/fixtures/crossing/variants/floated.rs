@@ -1,23 +1,24 @@
 // rawr
-// iced's gallery card: `float(image(allocation.handle()))` wraps the image
-// in a widget whose type names no renderer, and boxes it in a function
-// written `-> impl Widget<Message> + 'a`. Only that output's defaulted
-// renderer fixes the image's `Handle`, through the renderer's
+// iced's gallery: `float(image(allocation.handle()))` wraps the image in a
+// widget whose type names no renderer, in a function written `-> impl
+// Widget<Message> + 'a`, and the viewer's `Option<impl Widget<Message>>`
+// holds one too. Each output's type names the image, and only the output's
+// defaulted renderer fixes the image's `Handle`, through the renderer's
 // `imaging::Renderer::Handle`, so `&Handle` converts into the crate's own
 // handle, as rustc infers it (#1213, #1099).
 
 use events::image::Handle;
-use events::widgets::{button, column, picture, tile, text, Framed, Widget};
+use events::widgets::{button, column, picture, tile, Widget};
 
 struct Gallery {
-    handle: Option<Handle>,
+    handle: Handle,
     count: u16,
 }
 
 impl Default for Gallery {
     fn default() -> Self {
         Self {
-            handle: Some(Handle::from_name("sun")),
+            handle: Handle::from_name("sun"),
             count: 0,
         }
     }
@@ -37,18 +38,22 @@ impl Gallery {
 
     fn view(&self) -> impl Widget<Message> {
         column![
-            card(self.handle.as_ref(), self.count),
+            card(&self.handle, self.count),
+            self.viewer(),
             button("Increment").on_press(Message::Increment),
         ]
     }
+
+    fn viewer(&self) -> Option<impl Widget<Message> + '_> {
+        if self.count == 0 {
+            return None;
+        }
+        Some(tile(picture(&self.handle)))
+    }
 }
 
-fn card<'a>(handle: Option<&'a Handle>, count: u16) -> impl Widget<Message> + 'a {
-    if let Some(handle) = handle {
-        tile(picture(handle).width(count)).boxed()
-    } else {
-        text("none").boxed()
-    }
+fn card<'a>(handle: &'a Handle, count: u16) -> impl Widget<Message> + 'a {
+    tile(picture(handle).width(count))
 }
 
 fn main() {

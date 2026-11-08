@@ -387,16 +387,19 @@ fn a_parameter_an_impls_associated_type_fixes_runs() {
     );
 }
 
-/// iced's gallery card (#1213): `tile(picture(handle)).boxed()` in a
-/// function written `-> impl Widget<Message> + 'a`, where only the
-/// output's defaulted renderer fixes the picture's handle. The output is
-/// `cargo run`'s.
+/// iced's gallery (#1213): `tile(picture(handle))` given by a function
+/// written `-> impl Widget<Message> + 'a`, and by one written `->
+/// Option<impl Widget<Message>>`, where only the output's defaulted
+/// renderer fixes the picture's handle. The output is `cargo run`'s.
 #[test]
 fn a_handle_only_an_opaque_outputs_renderer_fixes_runs() {
     let (rawr, cargo) = both_printed("floated.rs", "Increment");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("<picture Handle { name: \"sun\" }@1>"),
+        rawr.contains("1 view pad 0 <picture Handle { name: \"sun\" }@0> none [Increment]")
+            && rawr.contains(
+                "2 view pad 0 <picture Handle { name: \"sun\" }@1> <picture Handle { name: \"sun\" }@0>"
+            ),
         "{rawr}"
     );
 }
