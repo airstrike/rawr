@@ -379,8 +379,11 @@ fn a_marked_module_names_the_items_of_a_native_module() {
 /// (#1301): the box prints by the page's derived `Debug`, and clones by
 /// its derived `Clone` into a page of its own. A `&self` `summary` calls
 /// a native helper that calls `title()` on the same object while it runs
-/// (#1302). `rawr check` passes as `cargo check` does, and `rawr run`
-/// prints what `cargo run` prints.
+/// (#1302). `label(&self) -> &str` and `items(&self) -> &[String]` give
+/// borrows of the page that native code reads after their calls, and an
+/// `update` once they are gone sees the page whole; an `update` while one
+/// lives is E0502 (#1305). `rawr check` passes as `cargo check` does, and
+/// `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_marked_type_becomes_a_native_trait_object() {
     const OBJECTS: &str = concat!(
@@ -406,12 +409,18 @@ fn a_marked_type_becomes_a_native_trait_object() {
     assert!(printed.contains("badge 1: clicks 8\n"), "{printed}");
     assert!(
         printed.contains(
-            "BadgePage { page_index: 2, count: 1, label: \"count\" } \
-             BadgePage { page_index: 2, count: 11, label: \"count\" }\n"
+            "BadgePage { page_index: 2, count: 1, label: \"count\", names: [\"clicks\"] } \
+             BadgePage { page_index: 2, count: 11, label: \"count\", names: [\"clicks\"] }\n"
         ),
         "{printed}"
     );
-    assert!(printed.contains("count 1 sees badge 2\n"), "{printed}");
+    // `label` and `items` borrow the page: native code reads them after
+    // their calls, and the page's next `update` sees the change (#1305).
+    assert!(
+        printed.contains("count [\"clicks\"] badge 2\nheld [\"clicks\", \"count\"]\n"),
+        "{printed}"
+    );
+    assert!(printed.contains("held 1 sees badge 2\n"), "{printed}");
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
         .arg(&root)
@@ -433,6 +442,34 @@ fn a_marked_type_becomes_a_native_trait_object() {
     }
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
+    drop(run);
+    // An `update` while a borrowed result still lives is rustc's E0502
+    // under `rawr check`, as under `cargo check`: the stand-in's methods
+    // carry the trait's lifetimes (#1305).
+    edit(
+        &root.join("src/main.rs"),
+        "    println!(\"{label} {items:?} {}\", pages[1].title());\n    \
+         pages[1].update(Message::Rename(\"held\".to_string()));\n",
+        "    pages[1].update(Message::Rename(\"held\".to_string()));\n    \
+         println!(\"{label} {items:?} {}\", pages[1].title());\n",
+    );
+    let mut cargo = std::process::Command::new("cargo");
+    cargo.arg("check").current_dir(&root);
+    let mut rawr = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"));
+    rawr.arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home());
+    for (tool, command) in [("cargo check", &mut cargo), ("rawr check", &mut rawr)] {
+        let checked = command
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&checked.stderr);
+        assert!(!checked.status.success(), "{tool}: {stderr}");
+        assert!(stderr.contains("error[E0502]"), "{tool}: {stderr}");
+    }
 }
 
 /// A marked leaf writes its page as a native module's enum, whose fields
@@ -440,8 +477,11 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// literals: a `pub static BLOCKS` native code reads as a Rust item, and
 /// functions that give a built block back by value, lend built blocks to
 /// a native function, give one to it by value and read `BLOCKS` themselves
-/// (#1283). `rawr check` passes as `cargo check` does, and `rawr run`
-/// prints what `cargo run` prints.
+/// (#1283). Marked code reads native code's `BLOCKS` where it is: its
+/// length, a range of it lent to native code, each block through a
+/// pattern and a group's `children`, indexed, walked and lent (#1291).
+/// `rawr check` passes as `cargo check` does, and `rawr run` prints what
+/// `cargo run` prints.
 #[test]
 fn a_marked_static_of_native_blocks_is_read_by_native_code() {
     const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");
@@ -462,7 +502,13 @@ fn a_marked_static_of_native_blocks_is_read_by_native_code() {
         String::from_utf8_lossy(&native.stderr)
     );
     assert!(
-        printed.ends_with("Count\n3\n  md A badge marks a count.\n3\n"),
+        printed.ends_with(
+            "Count\n3\n  md A badge marks a count.\n3\n3 blocks\nexample demo \"\"\n\
+             md A badge marks a count.\ngroup Examples, 2 children\n\
+             first Dot Some(\"A badge with no count.\")\n  md Counts past 99 show 99+.\n\
+             \x20   example dot \"Dot\" Some(\"A badge with no count.\") \"badge()\"\n\
+             \x20   md Counts past 99 show 99+.\n"
+        ),
         "{printed}"
     );
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))

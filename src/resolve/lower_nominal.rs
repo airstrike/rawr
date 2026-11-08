@@ -29164,6 +29164,16 @@ impl<'a> Parser<'a> {
                 host_struct: true,
             }));
         }
+        // `badge::Secondary` and an imported `Secondary`: a crate's unit
+        // struct, as rustc reads the path in the value namespace.
+        #[cfg(feature = "rust-import")]
+        if !mutable && let Some(ty) = self.imported_unit_struct(&segments) {
+            let (last, last_span) = segments.last().expect("a pattern path");
+            return Ok(PatternSyntax::UnitStruct {
+                ty,
+                span: Span::new(segments[0].1.start(), text_end(last_span.start(), last)),
+            });
+        }
         if segments.len() == 1 {
             let (name, span) = segments
                 .pop()
@@ -32871,6 +32881,39 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The crate's unit struct a pattern's path names, of no parameters,
+    /// as its type.
+    #[cfg(feature = "rust-import")]
+    fn imported_unit_struct(&mut self, path: &[(ImmutableString, Span)]) -> Option<Ty> {
+        if matches!(
+            self.peek(),
+            Token::LeftParen | Token::Unit | Token::LeftBrace
+        ) {
+            return None;
+        }
+        let full = self.host_pattern_owner(path);
+        let definition = self
+            .models
+            .host
+            .source_type(&full)
+            .filter(|definition| definition.identity().imported().is_some())?;
+        let crate::host::type_def::Shape::Struct {
+            form: crate::host::type_def::Form::Unit,
+            ..
+        } = definition.shape()
+        else {
+            return None;
+        };
+        if !definition.parameters().is_empty() {
+            return None;
+        }
+        let owner = self.models.host.type_owner(&full).cloned();
+        Some(Ty::Host {
+            proof: HostTyProof::new(definition.clone(), Some(definition.clone()), owner),
+            arguments: Box::default(),
+        })
+    }
+
     /// The facade type a pattern path names: `Event`, `keyboard::Event`,
     /// `iced::keyboard::Key`, through the file's imports.
     fn host_pattern_owner(&self, owner: &[(ImmutableString, Span)]) -> String {
@@ -33110,6 +33153,8 @@ impl<'a> Parser<'a> {
             PatternSyntax::Enum(pattern) if matches!(ty, Ty::Host { .. }) => {
                 self.host_variant_pattern(pattern, value, &ty, out)
             }
+            // A unit struct has one value: its pattern tests nothing.
+            PatternSyntax::UnitStruct { ty: unit, span } => self.require_type(unit, &ty, *span),
             other => Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
                     "this pattern on `{}` below a pattern on a library value",
@@ -42906,17 +42951,19 @@ impl<'a> Parser<'a> {
             && let item::Import::Type { definition, owner } = binding.target
             && let crate::host::type_def::Shape::Struct { form, .. } = definition.shape()
         {
-            let syntax_matches = match form {
-                crate::host::type_def::Form::Record => {
-                    matches!(self.peek(), Token::LeftBrace)
-                }
-                crate::host::type_def::Form::Tuple => {
-                    matches!(self.peek(), Token::LeftParen | Token::Unit)
-                }
-                crate::host::type_def::Form::Unit => !matches!(self.peek(), Token::DoubleColon),
-            };
-            if syntax_matches {
+            if matches!(form, crate::host::type_def::Form::Record)
+                && matches!(self.peek(), Token::LeftBrace)
+            {
                 return self.parse_imported_struct(binding.qualified, definition, owner, name_span);
+            }
+            if let Some(value) = self.imported_struct_value(
+                binding.qualified,
+                definition,
+                owner,
+                &[(&name, name_span)],
+                name_span,
+            )? {
+                return Ok(value);
             }
         }
 
@@ -49723,6 +49770,91 @@ impl<'a> Parser<'a> {
         .retain_origin())
     }
 
+    /// A crate's struct that `path` names in the value namespace, as rustc
+    /// reads `badge::Secondary` and `badge::Wrap(1)`: its constructor. An
+    /// uncalled tuple struct is its constructor as a function value, the
+    /// closure that calls it by the path as `written`, as `.map(Wrap)`
+    /// passes it.
+    #[cfg(feature = "rust-import")]
+    fn imported_struct_path(
+        &mut self,
+        path: &str,
+        written: &[(&ImmutableString, Span)],
+        path_span: Span,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        let Some(definition) = self
+            .models
+            .host
+            .source_type(path)
+            .filter(|definition| definition.identity().imported().is_some())
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let owner = self.models.host.type_owner(path).cloned();
+        self.imported_struct_value(path.into(), definition, owner, written, path_span)
+    }
+
+    /// [`Self::imported_struct_path`] for the struct `definition` at `path`.
+    #[cfg(feature = "rust-import")]
+    fn imported_struct_value(
+        &mut self,
+        path: ImmutableString,
+        definition: crate::host::type_def::Definition,
+        owner: Option<crate::host::facade::Dependency>,
+        written: &[(&ImmutableString, Span)],
+        path_span: Span,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        let crate::host::type_def::Shape::Struct { form, fields, .. } = definition.shape() else {
+            return Ok(None);
+        };
+        let called = matches!(self.peek(), Token::LeftParen | Token::Unit);
+        match form {
+            crate::host::type_def::Form::Unit if !matches!(self.peek(), Token::DoubleColon) => {}
+            crate::host::type_def::Form::Tuple if called => {}
+            crate::host::type_def::Form::Tuple
+                if !fields.is_empty()
+                    && !matches!(self.peek(), Token::DoubleColon)
+                    && (self.no_struct || !matches!(self.peek(), Token::LeftBrace)) =>
+            {
+                let at = path_span.start();
+                let parameter =
+                    |index: usize| Token::Identifier(Box::new(format!("__a{index}").into()));
+                let arity = fields.len();
+                let mut tokens = Vec::new();
+                for index in 0..arity {
+                    if index > 0 {
+                        tokens.push((Token::Comma, at));
+                    }
+                    tokens.push((parameter(index), at));
+                }
+                tokens.push((Token::Pipe, at));
+                for (index, (name, name_span)) in written.iter().enumerate() {
+                    if index > 0 {
+                        tokens.push((Token::DoubleColon, name_span.start()));
+                    }
+                    tokens.push((
+                        Token::Identifier(Box::new(name.as_str().into())),
+                        name_span.start(),
+                    ));
+                }
+                tokens.push((Token::LeftParen, at));
+                for index in 0..arity {
+                    if index > 0 {
+                        tokens.push((Token::Comma, at));
+                    }
+                    tokens.push((parameter(index), at));
+                }
+                tokens.push((Token::RightParen, at));
+                self.splice_tokens(tokens);
+                return self.parse_closure(Token::Pipe, path_span, false).map(Some);
+            }
+            _ => return Ok(None),
+        }
+        self.parse_imported_struct(path, definition, owner, path_span)
+            .map(Some)
+    }
+
     #[cfg(feature = "rust-import")]
     fn parse_imported_struct(
         &mut self,
@@ -51913,6 +52045,22 @@ impl<'a> Parser<'a> {
                 let inputs = (0..arity).map(|_| self.inference.fresh()).collect();
                 return self.method_value(member, inputs, owner_span, member_span);
             }
+            // `badge::Secondary` after `use components::badge;`: the
+            // crate's struct at the module's path, as a value.
+            #[cfg(feature = "rust-import")]
+            if self.models.host_items(&path).is_none()
+                && matches!(
+                    binding.target,
+                    item::Import::Module | item::Import::ModuleItem { .. }
+                )
+                && let Some(value) = self.imported_struct_path(
+                    &path,
+                    &[(&segments[0].0, segments[0].1), (&member, member_span)],
+                    path_span,
+                )?
+            {
+                return Ok(value);
+            }
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                 #[cfg(feature = "rust-import")]
                 if let Some(error) = self.pending_family_call(&path, &member, member_span) {
@@ -52020,6 +52168,19 @@ impl<'a> Parser<'a> {
                         path_span,
                     )
                 };
+            }
+            // A crate's struct named in full or through a nested module, as
+            // `natives::badge::Secondary`.
+            #[cfg(feature = "rust-import")]
+            if self.models.host_items(&path).is_none() {
+                let written = segments
+                    .iter()
+                    .map(|(name, name_span)| (name, *name_span))
+                    .chain([(&member, member_span)])
+                    .collect::<Vec<_>>();
+                if let Some(value) = self.imported_struct_path(&path, &written, path_span)? {
+                    return Ok(value);
+                }
             }
         }
 
@@ -60121,11 +60282,22 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
             value
         })
     };
+    // A native slice, as a marked page's `&BLOCKS[1..2]` (#1291), is cut
+    // where it is: the range borrows its elements, as Rust's does.
+    let place = crate::place::get(args[0]);
     let text = args[0].clone().into_immutable_string().ok();
-    let len = match (&text, args[0].as_array_ref()) {
-        (Some(text), _) => text.len(),
-        (None, Ok(array)) => array.len(),
-        (None, Err(_)) => return Err(invariant("a slice is not an array or a string at runtime")),
+    let len = match (&place, &text, args[0].as_array_ref()) {
+        (Some(place), ..) => place
+            .invoke(crate::place::Operation::Len, &mut [])?
+            .as_int()
+            .ok()
+            .and_then(|len| usize::try_from(len).ok())
+            .ok_or_else(|| invariant("a native slice's length is not a usize"))?,
+        (None, Some(text), _) => text.len(),
+        (None, None, Ok(array)) => array.len(),
+        (None, None, Err(_)) => {
+            return Err(invariant("a slice is not an array or a string at runtime"))
+        }
     };
     let at = |value: &Dynamic| usize::try_from(value.as_int().unwrap_or_default()).ok();
     let (low, high) = if op == PreludeOp::SplitAt {
@@ -60155,6 +60327,20 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
         }
         (low, high)
     };
+    if let Some(place) = place {
+        let window = |range: std::ops::Range<usize>| {
+            place
+                .window(range)
+                .unwrap_or_else(|| Err(invariant("a native slice that can't be cut")))
+        };
+        if op == PreludeOp::SplitAt {
+            return Ok(Dynamic::from_array(vec![
+                window(0..low)?,
+                window(low..len)?,
+            ]));
+        }
+        return window(low..high).and_then(found);
+    }
     let pieces: Vec<Dynamic> = match (&text, args[0].as_array_ref()) {
         (Some(text), _) => {
             for index in [low, high] {

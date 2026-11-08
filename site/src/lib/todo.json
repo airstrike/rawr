@@ -101,7 +101,10 @@
         {"text":"`rawr check` no longer stalls after reading parse cells on an app over iced: a type from another crate's facade is named by that facade's fingerprint, never by re-walking that facade's contract at each mention.","issues":[1309]},
         {"text":"A native trait with supertraits works as a marked type's trait object: `Debug`, `Display`, `Clone`, `PartialEq`, `Eq`, `Hash`, `Default`, `PartialOrd` and `Ord`, derived or written, run the marked type's own impl, and a supertrait the type lacks is rustc's E0277.","issues":[1301]},
         {"text":"A `&self` method of a marked type's native trait object can call back into the same object through native code: `&self` calls share the value, as shared borrows do.","issues":[1302]},
-        {"text":"A crate's impl with a `Future<Output = T>` bound is no longer left out when another future's `Output` names a parameter only its where clause fixes. futures_util's forwarding impls for `TakeWhile`, `Fold`, `PollImmediate` and the `&mut`/`Pin`/`Box` blankets are declared now.","issues":[1295]}
+        {"text":"A crate's impl with a `Future<Output = T>` bound is no longer left out when another future's `Output` names a parameter only its where clause fixes. futures_util's forwarding impls for `TakeWhile`, `Fold`, `PollImmediate` and the `&mut`/`Pin`/`Box` blankets are declared now.","issues":[1295]},
+        {"text":"Marked code reads a marked `pub static` of native values, such as a page's `BLOCKS: &[page::Block]`, where native code holds it. It reads the length, indexes, iterates, matches, and reads a block's `children`, with no copy. `&BLOCKS[1..2]` lends a range of it to a native function.","issues":[1291]},
+        {"text":"A crate's unit struct is a value, as `badge::Secondary` is, through a module or a re-export: it is passed where a method takes `impl Into<T>` through the crate's `From`, compared, printed and matched as a pattern. A tuple struct's constructor is a function value, as in `.map(Wrap)`.","issues":[1317]},
+        {"text":"A native trait's `&self` method can return a borrow of the marked value, as `fn label(&self) -> &str` or `fn items(&self) -> &[String]`; native code reads it after the call, and calling a `&mut self` method while it is still in use is rustc's E0502, as under cargo.","issues":[1305]}
       ]
     },
     "releases": [
@@ -3000,7 +3003,7 @@
     {"issue":1288,"title":"A constant path in a range pattern (`i32::MIN..=-5`) is refused with E0308","state":"open","category":"Divergences from rustc"},
     {"issue":1289,"title":"A refutable pattern in `let` is RAWR-RESOLVE-UNSUPPORTED-SYNTAX, not rustc's E0005","state":"closed","category":"Divergences from rustc"},
     {"issue":1290,"title":"A variant pattern with the wrong number of fields is RAWR-RESOLVE-MATCH, not rustc's E0023","state":"closed","category":"Divergences from rustc"},
-    {"issue":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"open","category":"Divergences from rustc"},
+    {"issue":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"closed","category":"Divergences from rustc"},
     {"issue":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open","category":"Divergences from rustc"},
     {"issue":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"open","category":"Divergences from rustc"},
     {"issue":1294,"title":"The remaining refutable binding patterns are rustc's E0005","state":"closed","category":"Divergences from rustc"},
@@ -3014,7 +3017,7 @@
     {"issue":1302,"title":"A native trait object's &self method may be re-entered while a call on it runs","state":"closed","category":"Divergences from rustc"},
     {"issue":1303,"title":"Dropping a native trait object of a marked type runs the type's impl Drop","state":"open","category":"Divergences from rustc"},
     {"issue":1304,"title":"`&dyn Trait` and `Rc`/`Arc<dyn Trait>` of a native trait from a marked type","state":"open","category":"Divergences from rustc"},
-    {"issue":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"open","category":"Divergences from rustc"},
+    {"issue":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"closed","category":"Divergences from rustc"},
     {"issue":1306,"title":"Coverage witnesses split integer literals below the top level","state":"open","category":"Divergences from rustc"},
     {"issue":1307,"title":"Struct patterns in fn parameters","state":"open","category":"Divergences from rustc"},
     {"issue":1308,"title":"rustc's witnesses for native patterns with several refutable fields or a native enum variant","state":"open","category":"Divergences from rustc"},
@@ -3022,7 +3025,16 @@
     {"issue":1310,"title":"rawr check shows the failed build of rawr's crate copy before cargo's error when native code in it fails to compile","state":"open","category":"Divergences from rustc"},
     {"issue":1311,"title":"A written Hash on a marked type behind a native trait object","state":"open","category":"Divergences from rustc"},
     {"issue":1312,"title":"Formatter flags on a native trait object's Debug/Display","state":"open","category":"Divergences from rustc"},
-    {"issue":1313,"title":"A projection bound on a crate's own trait (`<F as Trait>::Output = T`) has no cases","state":"open","category":"Divergences from rustc"}
+    {"issue":1313,"title":"A projection bound on a crate's own trait (`<F as Trait>::Output = T`) has no cases","state":"open","category":"Divergences from rustc"},
+    {"issue":1314,"title":"A native &[T] parameter takes a native slice place when the call also takes a lent &T or &mut T, or its output borrows","state":"open","category":"Divergences from rustc"},
+    {"issue":1315,"title":"Moving a &'static [T] field out of an owned native value keeps the reference instead of copying elements","state":"open","category":"Divergences from rustc"},
+    {"issue":1316,"title":"&v[a..b] of an owned native Vec place cuts it in place","state":"open","category":"Divergences from rustc"},
+    {"issue":1317,"title":"A crate's unit struct used as a value (`badge::Secondary`), through a re-export, with its From conversion at a call","state":"closed","category":"Divergences from rustc"},
+    {"issue":1318,"title":"Assigning through a crate method's returned `&mut` into a public field: `rgba.get_pixel_mut(x, y).0 = [0; 4]`","state":"open","category":"Divergences from rustc"},
+    {"issue":1319,"title":"`use m::{self, f}` binds both a module and its same-named function","state":"open","category":"Divergences from rustc"},
+    {"issue":1320,"title":"A struct's constructor is no separate rejected export","state":"open","category":"Divergences from rustc"},
+    {"issue":1321,"title":"A stand-in's `&self` result of a native type with `'_` lets its borrowed strings go at the next `&mut` reach","state":"open","category":"Divergences from rustc"},
+    {"issue":1322,"title":"A stand-in's borrowed result (`&str`, `&[T]`, `&T`) is a copy the stand-in keeps, not a borrow of the kept value","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3579,7 +3591,10 @@
             {"number":1267,"title":"A dependency whose every item is left out reads as an unknown crate (E0433) instead of naming the unsupported item","state":"closed"},
             {"number":1274,"title":"A crate's JoinHandle nested in an output (Option, Result, a tuple) or taken as an input crosses","state":"open"},
             {"number":1275,"title":"A crate's JoinHandle<T> of a T that holds crate values crosses","state":"open"},
-            {"number":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"open"}
+            {"number":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"open"},
+            {"number":1317,"title":"A crate's unit struct used as a value (`badge::Secondary`), through a re-export, with its From conversion at a call","state":"closed"},
+            {"number":1319,"title":"`use m::{self, f}` binds both a module and its same-named function","state":"open"},
+            {"number":1320,"title":"A struct's constructor is no separate rejected export","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3887,7 +3902,7 @@
             {"number":1277,"title":"rawr-import: a dependency's feature named on the command line (`--features dep/feat`) reaches the dependency","state":"open"},
             {"number":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"closed"},
             {"number":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"closed"},
-            {"number":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"open"},
+            {"number":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"closed"},
             {"number":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open"},
             {"number":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"closed"},
             {"number":1297,"title":"A `&mut` of a native alias of a wire type in a marked signature is lent instead of copied and written back","state":"closed"},
@@ -3898,11 +3913,17 @@
             {"number":1302,"title":"A native trait object's &self method may be re-entered while a call on it runs","state":"closed"},
             {"number":1303,"title":"Dropping a native trait object of a marked type runs the type's impl Drop","state":"open"},
             {"number":1304,"title":"`&dyn Trait` and `Rc`/`Arc<dyn Trait>` of a native trait from a marked type","state":"open"},
-            {"number":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"open"},
+            {"number":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"closed"},
             {"number":1309,"title":"rawr check spins in Fingerprint::retained_bytes / Type::dynamic_bytes for an hour on a recursive native type","state":"closed"},
             {"number":1310,"title":"rawr check shows the failed build of rawr's crate copy before cargo's error when native code in it fails to compile","state":"open"},
             {"number":1311,"title":"A written Hash on a marked type behind a native trait object","state":"open"},
-            {"number":1312,"title":"Formatter flags on a native trait object's Debug/Display","state":"open"}
+            {"number":1312,"title":"Formatter flags on a native trait object's Debug/Display","state":"open"},
+            {"number":1314,"title":"A native &[T] parameter takes a native slice place when the call also takes a lent &T or &mut T, or its output borrows","state":"open"},
+            {"number":1315,"title":"Moving a &'static [T] field out of an owned native value keeps the reference instead of copying elements","state":"open"},
+            {"number":1316,"title":"&v[a..b] of an owned native Vec place cuts it in place","state":"open"},
+            {"number":1318,"title":"Assigning through a crate method's returned `&mut` into a public field: `rgba.get_pixel_mut(x, y).0 = [0; 4]`","state":"open"},
+            {"number":1321,"title":"A stand-in's `&self` result of a native type with `'_` lets its borrowed strings go at the next `&mut` reach","state":"open"},
+            {"number":1322,"title":"A stand-in's borrowed result (`&str`, `&[T]`, `&T`) is a copy the stand-in keeps, not a borrow of the kept value","state":"open"}
           ]
         }
       ]

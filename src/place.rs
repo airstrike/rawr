@@ -365,6 +365,13 @@ trait Storage: Any + crate::func::SendSync {
     /// Whether the element `path` names has native `Copy` evidence.
     fn copies(&self, path: &[usize]) -> bool;
 
+    /// The elements `range` of the slice `root`, whose storage this is, as
+    /// a slice place of their own; `None` for storage that isn't a lent
+    /// slice.
+    fn window(&self, _root: &Place, _range: std::ops::Range<usize>) -> Option<RawrResult> {
+        None
+    }
+
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -395,6 +402,15 @@ impl Place {
     #[must_use]
     pub const fn is_mutable(&self) -> bool {
         self.mutable
+    }
+
+    /// The elements `range` of this slice, as Rust's `&v[low..high]` borrows
+    /// them: a slice place that reaches this one at each operation, never a
+    /// copy (#1291). `None` when this place isn't a lent slice. The range
+    /// is in bounds now; the borrow checker keeps the slice as it is while
+    /// the borrow lives.
+    pub fn window(&self, range: std::ops::Range<usize>) -> Option<RawrResult> {
+        self.storage.window(self, range)
     }
 
     /// Whether two handles carry the same checked native storage authority.
