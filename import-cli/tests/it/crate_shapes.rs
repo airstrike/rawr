@@ -453,7 +453,9 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
         "icon 12 | str Verified | string Verified\nstr into\nstr from | string qualified\n\
          str a | str b\nstr lent | str literal\nstr first | str second\n\
          text check 12 | str Verified\nlabel own | string mine 7 | text plain 16\n\
-         text into 16 | string mine 3 | label from\n",
+         text into 16 | string mine 3 | label from\n\
+         row 8 [string badge secondary 4 [icon 12 | str Verified] | \
+         string badge ghost 4 [str Bookmark | icon 12]]\n107997\n",
     );
     let program = "// rawr\nuse natives::compose::{self, Row, Theme};\nuse natives::slots;\n\n\
                    fn main() {\n    let row: Row<'_, ()> = \

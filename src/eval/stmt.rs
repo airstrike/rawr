@@ -457,11 +457,16 @@ fn collect_some_place(
 }
 
 impl Engine {
-    /// If the value is a string, intern it.
+    /// If the value is a string, intern it, keeping its tag (text lent at
+    /// `'static`, `scope::lend_static`).
     #[inline(always)]
     fn intern_string(&self, value: Dynamic) -> Dynamic {
         match value.0 {
-            Union::Str(s, ..) => self.get_interned_string(s).into(),
+            Union::Str(s, tag, ..) => {
+                let mut interned: Dynamic = self.get_interned_string(s).into();
+                interned.set_tag(tag);
+                interned
+            }
             _ => value,
         }
     }

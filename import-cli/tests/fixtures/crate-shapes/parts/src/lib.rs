@@ -97,17 +97,35 @@ impl<'a, Message: 'a> From<Label<'a>> for Slot<'a, Message> {
 
 pub struct Row<'a, Message> {
     children: Vec<Slot<'a, Message>>,
+    spacing: u32,
 }
 
 impl<'a, Message: 'a> Row<'a, Message> {
     pub fn with_children(children: impl IntoIterator<Item = Slot<'a, Message>>) -> Self {
         Row {
             children: children.into_iter().collect(),
+            spacing: 0,
         }
+    }
+
+    pub fn spacing(mut self, spacing: u32) -> Self {
+        self.spacing = spacing;
+        self
+    }
+
+    pub fn gap(&self) -> u32 {
+        self.spacing
     }
 
     pub fn draw(&self) -> String {
         let labels: Vec<&str> = self.children.iter().map(Slot::label).collect();
         labels.join(" | ")
+    }
+}
+
+/// A row is a slot of a row, as `row![..].into()` gives an `Element`.
+impl<'a, Message: 'a> From<Row<'a, Message>> for Slot<'a, Message> {
+    fn from(row: Row<'a, Message>) -> Self {
+        Slot::new(format!("row {} [{}]", row.spacing, row.draw()))
     }
 }
