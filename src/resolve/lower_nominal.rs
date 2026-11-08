@@ -4377,6 +4377,39 @@ fn pattern_name(index: usize) -> String {
     format!("{NOMINAL_MATCH_SENTINEL}{index}")
 }
 
+/// The path of each trait object type the program's sources write, by its
+/// segments: `["std", "fmt", "Debug"]` of `dyn std::fmt::Debug`. A source
+/// with no `dyn` is never lexed.
+fn trait_objects(engine: &Engine, source: &crate::program::Source) -> Vec<Vec<String>> {
+    let mut objects = Vec::new();
+    for text in source.texts().filter(|text| text.contains("dyn")) {
+        let tokens = lex_rust(engine, text);
+        let mut rest = tokens.iter().map(|(token, _)| token).peekable();
+        while let Some(token) = rest.next() {
+            if !matches!(token, Token::Identifier(name) | Token::Reserved(name)
+                if name.as_str() == "dyn")
+            {
+                continue;
+            }
+            let mut segments = Vec::new();
+            while let Some(Token::Identifier(name) | Token::Reserved(name)) = rest.peek() {
+                segments.push(name.to_string());
+                rest.next();
+                if rest
+                    .next_if(|token| matches!(token, Token::DoubleColon))
+                    .is_none()
+                {
+                    break;
+                }
+            }
+            if !segments.is_empty() {
+                objects.push(segments);
+            }
+        }
+    }
+    objects
+}
+
 fn source_span(source: &str, selected: Span) -> String {
     let mut output = String::with_capacity(source.len());
     let mut line = 1_u16;
@@ -4869,14 +4902,45 @@ impl Models {
             }
         }
         let mut declarations = program.std_traits().clone();
-        // std's `Error`, which `Box<dyn Error>` names without an impl.
-        if !declarations.contains_key("Error")
-            && let Some(error) = crate::resolve::std_trait::anywhere("Error")
-                .and_then(|error| crate::resolve::std_trait::declaration(error, &[], &host))
+        // std's `Error`, which `Box<dyn Error>` names without an impl, and
+        // each std trait a body names a trait object of (`Vec<Box<dyn
+        // Display>>`), as the program's scope has it.
+        let uses = crate::resolve::std_trait::uses(&program.items);
+        let objects = trait_objects(engine, &program.source);
+        let named = objects.iter().filter_map(|segments| {
+            let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
+            let name = *segments.last()?;
+            // `dyn Iterator<Item = T>` is rawr's own iterator (`dyn_type`).
+            if is_iterator_trait(name) {
+                return None;
+            }
+            let definition = match &segments[..] {
+                [_] => crate::resolve::std_trait::named(
+                    name,
+                    uses.iter()
+                        .map(|(binding, qualified)| (binding.as_str(), qualified.as_str())),
+                )?,
+                _ => crate::resolve::std_trait::by_path(&segments)?,
+            };
+            Some((ImmutableString::from(name), Some(definition)))
+        });
+        for (name, definition) in
+            std::iter::once((ImmutableString::from("Error"), None)).chain(named)
         {
-            declarations.insert("Error".into(), error);
+            if traits.contains_key(&name) {
+                continue;
+            }
+            if !declarations.contains_key(&name)
+                && let Some(declared) = definition
+                    .or_else(|| crate::resolve::std_trait::anywhere(&name))
+                    .and_then(|definition| {
+                        crate::resolve::std_trait::declaration(definition, &[], &host)
+                    })
+            {
+                declarations.insert(name.clone(), declared);
+            }
+            used.insert(name);
         }
-        used.insert("Error".into());
         for trait_name in &used {
             if !traits.contains_key(trait_name)
                 && let Some(declared) = declarations.get(trait_name)
@@ -15618,9 +15682,16 @@ impl<'a> Parser<'a> {
                 .models
                 .std_impl(*id, "Display", "fmt")
                 .map(|definition| Self::std_call(definition, value, &["\"\"".into()])),
-            Ty::Param(_) | Ty::Projection(..) if self.type_implements(ty, "Display") => Some(
-                Self::std_dispatch("Display", "fmt", value, &["\"\"".into()]),
-            ),
+            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..)
+                if self.type_implements(ty, "Display") =>
+            {
+                Some(Self::std_dispatch(
+                    "Display",
+                    "fmt",
+                    value,
+                    &["\"\"".into()],
+                ))
+            }
             // A `ParseIntError` and kin is its message.
             Ty::ParseError(error) => Some(self.parse_error_display(*error, value)),
             Ty::Thread(thread::Kind::SendError | thread::Kind::RecvError, _) => {
@@ -19447,10 +19518,12 @@ impl<'a> Parser<'a> {
                 _ => false,
             },
 
-            // A trait object has only its trait's methods; std's `dyn Error`
-            // is `Debug`, its supertrait.
+            // A trait object has only its trait's methods: a std trait's
+            // object has the capability its trait or a supertrait is
+            // (`dyn Debug`, `dyn Error`'s `Debug`).
             dynamic @ Ty::Dyn(..) => {
                 capability == capability::Kind::Debug && self.std_error(&dynamic, false)
+                    || self.type_implements(&dynamic, capability.name())
             }
             Ty::Host { proof, .. } => proof.definition.capabilities().contains(capability),
             // A derive on a generic type holds when its arguments provide
@@ -38843,6 +38916,16 @@ impl<'a> Parser<'a> {
                             .find(|function| function.name.text == member)
                             .map(|function| (trait_name.clone(), function.clone()))
                     });
+                // std's blanket `ToString` of a `Display` object.
+                if found.is_none()
+                    && member.as_str() == "to_string"
+                    && matches!(self.peek(), Token::Unit)
+                    && let Some(text) = self.display_text(&object, value.rendered_source())
+                {
+                    let (_, end) = self.parse_borrowing_arguments("`to_string` arguments")?;
+                    value = self.operator_expr(text, Ty::String, span(value.span.start(), end));
+                    continue;
+                }
                 let (Some((trait_name, function)), Token::LeftParen | Token::Unit) =
                     (found, self.peek())
                 else {
@@ -45523,8 +45606,9 @@ impl<'a> Parser<'a> {
             }
             Ty::Weak(..) => origin::Fragment::plain("\"(Weak)\""),
 
-            // A generic value, or an associated type's by its bounds.
-            Ty::Param(_) | Ty::Projection(..) => {
+            // A generic value, an associated type's by its bounds, or a
+            // trait object by its trait's.
+            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..) => {
                 if !self.type_provides(&ty, capability::Kind::Debug) {
                     return Err(Error::MissingCapability {
                         owner: ty.name(&self.models),
@@ -53616,7 +53700,12 @@ impl<'a> Parser<'a> {
                 });
             }
             let positional = dyn_arguments(&bindings);
-            if !self.type_implements_with(&concrete, &trait_name, &positional) {
+            // A capability's std trait (`dyn Debug` of an `i32` or a
+            // derive) holds by the capability.
+            let capable = positional.is_empty()
+                && capability::Kind::from_derive(&trait_name)
+                    .is_some_and(|kind| self.type_provides(&concrete, kind));
+            if !capable && !self.type_implements_with(&concrete, &trait_name, &positional) {
                 return Err(Error::MissingCapability {
                     owner: concrete.name(&self.models),
                     capability: trait_name,

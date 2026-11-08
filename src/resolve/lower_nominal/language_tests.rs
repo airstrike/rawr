@@ -2673,6 +2673,52 @@ fn language_trait_objects() {
     );
 }
 
+/// A std trait's object, as rustc reads one (#1251): `Box<dyn Error>` that
+/// `?` converts a `parse` error into, `&dyn Debug` of a derive and of a
+/// builtin, `&dyn Display` of the program's impl, and a `Vec<Box<dyn
+/// Display>>` of mixed values, without the program implementing `Error`.
+#[test]
+fn language_std_trait_objects() {
+    let source = r##"
+use std::error::Error;
+use std::fmt::{self, Debug, Display};
+
+#[derive(Debug)]
+struct Point { x: i32 }
+struct Tag(i32);
+impl Display for Tag {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "#{}", self.0) }
+}
+
+fn parsed(text: &str) -> Result<i32, Box<dyn Error>> { Ok(text.parse()?) }
+fn debug(value: &dyn Debug) -> String { format!("{value:?}") }
+fn display(value: &dyn Display) -> String { format!("{value}") }
+
+fn main() {
+    println!("{:?}", parsed("4"));
+    match parsed("x") {
+        Ok(value) => println!("{value}"),
+        Err(error) => println!("{error} {}", error.source().is_none()),
+    }
+    println!("{} {}", debug(&Point { x: 1 }), debug(&3));
+    println!("{} {}", display(&Tag(2)), display(&"s"));
+    let shown: Vec<Box<dyn Display>> = vec![Box::new(Tag(5)), Box::new(6), Box::new("seven")];
+    for value in &shown {
+        println!("{value}");
+    }
+    let texts: Vec<String> = shown.iter().map(|value| value.to_string()).collect();
+    let debugs: Vec<Box<dyn std::fmt::Debug>> = vec![Box::new(Point { x: 8 }), Box::new(Some(9))];
+    println!("{} {debugs:?}", texts.join(","));
+}
+main();
+"##;
+    assert_eq!(
+        printed(source),
+        "Ok(4)\ninvalid digit found in string true\nPoint { x: 1 } 3\n#2 s\n#5\n6\nseven\n\
+         #5,6,seven [Point { x: 8 }, Some(9)]\n"
+    );
+}
+
 #[test]
 fn language_generic_trait_functions_without_self() {
     let value = run_string(

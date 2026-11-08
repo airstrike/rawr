@@ -497,7 +497,17 @@ fn resolve_path(
         // Traits are crate-wide by name; a native trait is its full path,
         // as the resolver writes it (`package::write_native_trait_objects`).
         let last = &rest[rest.len() - 1];
-        let name = native_trait(rest, host).unwrap_or_else(|| last.name.text.clone());
+        let name = native_trait(rest, host).unwrap_or_else(|| {
+            // `dyn std::fmt::Debug`: a std trait the program names by a path.
+            if rest.len() > 1 {
+                let segments = rest
+                    .iter()
+                    .map(|segment| segment.name.text.as_str())
+                    .collect::<Vec<_>>();
+                super::std_trait::by_path(&segments);
+            }
+            last.name.text.clone()
+        });
         // `Output = i64` bindings, kept as the arguments `=Output<i64>`.
         let mut arguments = Vec::new();
         for argument in &last.arguments {

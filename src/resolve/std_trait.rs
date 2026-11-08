@@ -288,15 +288,41 @@ pub(crate) fn declarations(
             named.extend(generic.traits.iter().map(|name| name.text.clone()));
         }
     };
+    let signature = |function: &item::Function, named: &mut Vec<crate::ImmutableString>| {
+        for parameter in function.parameters.iter() {
+            objects(&parameter.ty, named);
+        }
+        if let Some(output) = &function.output {
+            objects(output, named);
+        }
+    };
     for shell in items {
         match &shell.kind {
-            item::Kind::Struct(own) => generics(&own.generics, &mut named),
-            item::Kind::Enum(own) => generics(&own.generics, &mut named),
-            item::Kind::Function(own) => generics(&own.generics, &mut named),
+            item::Kind::Struct(own) => {
+                generics(&own.generics, &mut named);
+                for field in own.fields.iter() {
+                    objects(&field.ty, &mut named);
+                }
+            }
+            item::Kind::Enum(own) => {
+                generics(&own.generics, &mut named);
+                for ty in own
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.payload.iter())
+                {
+                    objects(ty, &mut named);
+                }
+            }
+            item::Kind::Function(own) => {
+                generics(&own.generics, &mut named);
+                signature(own, &mut named);
+            }
             item::Kind::Impl(own) => {
                 generics(&own.generics, &mut named);
                 for function in own.functions.iter() {
                     generics(&function.generics, &mut named);
+                    signature(function, &mut named);
                 }
                 if let Some(item::TraitImpl::User { name, .. }) = &own.trait_ {
                     named.push(name.text.clone());
@@ -310,6 +336,7 @@ pub(crate) fn declarations(
             item::Kind::Trait(own) => {
                 for function in own.functions.iter() {
                     generics(&function.generics, &mut named);
+                    signature(function, &mut named);
                 }
                 named.extend(own.supertraits.1.iter().map(|name| name.text.clone()));
                 for (_, traits) in own.associated_bounds.iter() {
@@ -343,6 +370,33 @@ pub(crate) fn declarations(
         found.insert(name, trait_);
     }
     found
+}
+
+/// The trait of each trait object `ty` holds (`Display` of `Vec<Box<dyn
+/// Display>>`), which a std trait is when the program names no own.
+fn objects(ty: &super::type_ref::Type, named: &mut Vec<crate::ImmutableString>) {
+    use super::type_ref::{Argument, Type};
+    if let Some(name) = ty.dyn_trait()
+        && !super::type_ref::is_native_trait(name)
+    {
+        named.push(name.into());
+    }
+    match ty {
+        Type::Unit(_) => {}
+        Type::Tuple { members, .. } => {
+            for member in members.iter() {
+                objects(member, named);
+            }
+        }
+        Type::Reference { target, .. } => objects(target, named),
+        Type::Path(path) => {
+            for argument in path.arguments.iter() {
+                if let Argument::Type(ty) = argument {
+                    objects(ty, named);
+                }
+            }
+        }
+    }
 }
 
 /// Whether the std trait `definition` has a stable function `name`, as
