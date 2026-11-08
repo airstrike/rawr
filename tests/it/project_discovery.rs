@@ -187,15 +187,15 @@ fn an_unmarked_crate_that_declares_a_marked_module_is_a_rawr_project() {
 }
 
 #[test]
-fn a_crate_without_a_root_source_is_missing_its_main_rs() {
+fn a_package_without_a_target_is_cargos_error() {
     let temp = Temp::new("no-root");
     let manifest = temp.file("empty/Cargo.toml", "[package]\nname = \"empty\"\n");
 
     let error = Target::discover(manifest).unwrap_err();
 
-    assert!(matches!(error, project::Error::MissingSource { .. }));
-    assert!(error.to_string().contains("is missing"));
-    assert!(error.to_string().ends_with("src/main.rs`"));
+    // Cargo describes the package, and says it has no target.
+    assert!(matches!(error, project::Error::Cargo { .. }), "{error}");
+    assert!(error.to_string().contains("no targets specified in the manifest"), "{error}");
 }
 
 #[test]
@@ -389,4 +389,65 @@ fn explicit_source_symlink_uses_its_canonical_target() {
 
     assert_eq!(file.path(), fs::canonicalize(target).unwrap());
     assert_eq!(file.text(), "actual");
+}
+
+/// A package's manifest, its own workspace, with `rest` after `[package]`.
+fn manifest(temp: &Temp, root: &str, rest: &str) -> PathBuf {
+    temp.file(&format!("{root}/Cargo.toml"), format!("[package]\nname = \"{root}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n{rest}\n[workspace]\n"))
+}
+
+/// A package whose only binary is `src/bin/tool.rs` runs from it, as
+/// `cargo run` does (#1116).
+#[test]
+fn a_marked_binary_under_src_bin_is_the_packages_entry() {
+    let temp = Temp::new("src-bin");
+    manifest(&temp, "tools", "");
+    let tool = temp.file("tools/src/bin/tool.rs", "// rawr\nfn main() {}\n");
+
+    let discovered = project(Target::discover(temp.path().join("tools")).unwrap());
+
+    assert_eq!(discovered.source().path(), fs::canonicalize(tool).unwrap());
+    assert_eq!(discovered.package().unwrap().name(), "tools");
+}
+
+/// A file the package lists as a `[[bin]]` is that package's binary,
+/// found by its path, and `--bin` finds it by its name (#1175).
+#[test]
+fn a_bin_target_file_is_its_packages_binary() {
+    let temp = Temp::new("bin-target");
+    manifest(&temp, "exercises", "\n[[bin]]\nname = \"async1\"\npath = \"lessons/async1.rs\"\n\n[[bin]]\nname = \"clippy3\"\npath = \"lessons/clippy3.rs\"\n");
+    let async1 = temp.file("exercises/lessons/async1.rs", "// rawr\nfn main() {}\n");
+    temp.file("exercises/lessons/clippy3.rs", "// rawr\nfn main() {}\n");
+    let lone = temp.file("exercises/lessons/notes.rs", "// rawr\nfn main() {}\n");
+
+    let discovered = project(Target::discover(&async1).unwrap());
+    assert_eq!(discovered.root().as_path(), fs::canonicalize(temp.path().join("exercises")).unwrap());
+    assert_eq!(discovered.source().path(), fs::canonicalize(&async1).unwrap());
+
+    // A file no package lists still runs alone.
+    assert!(matches!(Target::discover(&lone).unwrap(), Target::File(_)));
+
+    let root = temp.path().join("exercises/lessons");
+    assert_eq!(Target::binary(&root, "async1").unwrap(), fs::canonicalize(&async1).unwrap());
+    let error = Target::binary(&root, "async2").unwrap_err();
+    assert!(matches!(error, project::Error::NoBinary { .. }));
+    assert_eq!(error.to_string(), "no bin target named `async2`\navailable bin targets:\n    async1\n    clippy3");
+}
+
+/// With several binaries and no `default-run`, which one runs is not
+/// known, as `cargo run` says; `default-run` picks one.
+#[test]
+fn several_binaries_need_a_default_run() {
+    let temp = Temp::new("several-bins");
+    manifest(&temp, "pair", "");
+    temp.file("pair/src/main.rs", "// rawr\nfn main() {}\n");
+    temp.file("pair/src/bin/other.rs", "// rawr\nfn main() {}\n");
+
+    let error = Target::discover(temp.path().join("pair")).unwrap_err();
+    assert!(matches!(error, project::Error::AmbiguousBinary { .. }), "{error}");
+    assert!(error.to_string().contains("available binaries: other, pair"), "{error}");
+
+    manifest(&temp, "pair", "default-run = \"other\"\n");
+    let discovered = project(Target::discover(temp.path().join("pair")).unwrap());
+    assert_eq!(discovered.source().path(), fs::canonicalize(temp.path().join("pair/src/bin/other.rs")).unwrap());
 }

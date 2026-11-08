@@ -555,7 +555,7 @@ impl<'a> Builder<'a> {
             project::Target::Project(project) => Request {
                 root: project.root().as_path().to_path_buf(),
                 source: project.source().path().to_path_buf(),
-                package: Some(project.package().clone()),
+                package: project.package().cloned(),
             },
         };
         let entry_package = self.load_package(request)?;

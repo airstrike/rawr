@@ -151,6 +151,14 @@ impl fmt::Display for Error {
     }
 }
 
+impl Error {
+    /// Whether Cargo is not installed: the command could not be found.
+    #[must_use]
+    pub fn is_not_installed(&self) -> bool {
+        matches!(self, Self::Spawn { source, .. } if source.kind() == std::io::ErrorKind::NotFound)
+    }
+}
+
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
