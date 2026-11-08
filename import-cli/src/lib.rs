@@ -128,6 +128,10 @@ pub enum Error {
     /// A cache entry the preparation read went stale before it was used.
     /// Preparing again rebuilds it ([`again_while_stale`]).
     Stale(String),
+    /// Cargo failed to build rawr's copy of the program, which is the
+    /// program's error when `cargo check` reports it too, and rawr's bug
+    /// when it doesn't.
+    Copy(rawr_import::location::copy::Failure),
 }
 
 impl Error {
@@ -145,6 +149,15 @@ impl Error {
             Self::other(error)
         }
     }
+
+    /// An importer failure, which is [`Error::Copy`] when Cargo failed to
+    /// build rawr's copy of the program, and otherwise as [`Error::cache`].
+    pub fn import(error: rawr_import::Error) -> Self {
+        match rawr_import::location::copy::Failure::of(error) {
+            Ok(failure) => Self::Copy(failure),
+            Err(error) => Self::cache(error),
+        }
+    }
 }
 
 impl fmt::Display for Error {
@@ -152,6 +165,7 @@ impl fmt::Display for Error {
         match self {
             Self::Rawr(error) => error.fmt(formatter),
             Self::Other(message) | Self::Stale(message) => formatter.write_str(message),
+            Self::Copy(failure) => failure.fmt(formatter),
         }
     }
 }
@@ -160,6 +174,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Rawr(error) => Some(error),
+            Self::Copy(failure) => Some(failure),
             Self::Other(_) | Self::Stale(_) => None,
         }
     }

@@ -36,7 +36,7 @@ pub fn check(
     target: &rawr::project::Target,
     graph: Option<rawr::package::Graph>,
     profile: &dyn crate::Profile,
-) -> Result<(PathBuf, rawr_import::bindings::Settlement), diagnostic::Report> {
+) -> Result<(PathBuf, rawr_import::bindings::Settlement), Unchecked> {
     same_build(target)?;
     let source = target.source().path().to_path_buf();
     let fallback = fallback(target)?;
@@ -50,8 +50,58 @@ pub fn check(
             revision,
             &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
         )
-        .map_err(|error| import(error, fallback))?;
+        .map_err(|error| match error {
+            crate::Error::Copy(failure) => Unchecked::Copy {
+                failure,
+                source: fallback,
+            },
+            error => Unchecked::Report(import(error, fallback)),
+        })?;
     Ok((source, prepared.take_settlement()))
+}
+
+/// Why a check failed: the program's report, or a failed build of rawr's
+/// copy of the program, whose report waits for `cargo check` to say whose
+/// error it is.
+pub enum Unchecked {
+    /// What the program got wrong, or rawr did.
+    Report(diagnostic::Report),
+    /// Cargo failed to build rawr's copy of the program.
+    Copy {
+        /// What Cargo said.
+        failure: rawr_import::location::copy::Failure,
+        /// The program's entry source, the report's source.
+        source: diagnostic::Source,
+    },
+}
+
+impl Unchecked {
+    /// The report, once `cargo` says how the program checks, or `None`
+    /// when `cargo check` fails too: the program's error is cargo's to
+    /// show, at the program's own paths, and the copy's build shows
+    /// nothing. A failure only the copy has is rawr's bug, reported once
+    /// without the copy's paths or generated names.
+    #[must_use]
+    pub fn report(self, cargo: Option<&rawr_cli::cargo::Status>) -> Option<diagnostic::Report> {
+        match self {
+            Self::Report(report) => Some(report),
+            Self::Copy { .. }
+                if matches!(
+                    cargo,
+                    Some(rawr_cli::cargo::Status::Finished(outcome)) if !outcome.is_clean()
+                ) =>
+            {
+                None
+            }
+            Self::Copy { failure, source } => Some(framework(failure, source)),
+        }
+    }
+}
+
+impl From<diagnostic::Report> for Unchecked {
+    fn from(report: diagnostic::Report) -> Self {
+        Self::Report(report)
+    }
 }
 
 /// Publish, or refuse, the shared bindings a check used or extracted, once
@@ -60,26 +110,30 @@ pub fn check(
 /// on its own, or didn't run, gives no evidence, and the tables stay in the
 /// project. A table whose build scripts gave the nightly other outputs is
 /// checked again, once its stale run is cleaned (D742).
+///
+/// A failed check's report is [`Unchecked::report`]'s, `None` when cargo's
+/// report is the whole of it.
 pub fn settle_checked(
-    mut checked: Result<(PathBuf, rawr_import::bindings::Settlement), diagnostic::Report>,
+    mut checked: Result<(PathBuf, rawr_import::bindings::Settlement), Unchecked>,
     cargo: Option<&rawr_cli::cargo::Status>,
     target: &rawr::project::Target,
     profile: &dyn crate::Profile,
-) -> Result<PathBuf, diagnostic::Report> {
+) -> Result<PathBuf, Option<diagnostic::Report>> {
+    let reported = |unchecked: Unchecked| unchecked.report(cargo);
     let Some(rawr_cli::cargo::Status::Finished(outcome)) = cargo else {
-        return checked.map(|(source, _)| source);
+        return checked.map(|(source, _)| source).map_err(reported);
     };
     if outcome.failure.is_some() {
-        return checked.map(|(source, _)| source);
+        return checked.map(|(source, _)| source).map_err(reported);
     }
     let messages = outcome.build_scripts.join("\n");
     let mut restarts = crate::Restarts::default();
     loop {
-        let (source, settlement) = checked?;
+        let (source, settlement) = checked.map_err(reported)?;
         match settlement.settle_checked(messages.as_bytes()) {
             Ok(()) => return Ok(source),
             Err(error) if restarts.again(&error) => checked = check(target, None, profile),
-            Err(error) => return Err(framework(error, fallback(target).ok())),
+            Err(error) => return Err(Some(framework(error, fallback(target).ok()))),
         }
     }
 }

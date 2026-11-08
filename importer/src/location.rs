@@ -9,6 +9,8 @@
 //! embedded host sources, the runtime, the bindings, and the pinned
 //! nightly's check build directory (D700), which `rawr cache clean` reaches.
 
+pub mod copy;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
