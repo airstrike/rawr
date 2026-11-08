@@ -107,7 +107,8 @@
         {"text":"A native trait's `&self` method can return a borrow of the marked value, as `fn label(&self) -> &str` or `fn items(&self) -> &[String]`; native code reads it after the call, and calling a `&mut self` method while it is still in use is rustc's E0502, as under cargo.","issues":[1305]},
         {"text":"`rawr check` on a marked type that lacks a native trait's supertrait shows only cargo's error at the program's own paths, not a failed build of rawr's copy of the crate with generated names.","issues":[1310]},
         {"text":"A `&mut` that a crate method returns, such as image's `get_pixel_mut(x, y)`, is a place: `.0 = v`, `*p = v`, `.0[3] += 1` and passing it on to another crate call change the crate's own value, as in Rust.","issues":[1318]},
-        {"text":"`use m::badge::{self, badge};` binds the module and the function of one name, as Rust does: `badge::Secondary` goes through the module and `badge(\"..\")` calls the function. Two `use` lines and a glob beside the module's import do the same. Two imports of one name in one namespace are rustc's E0252.","issues":[1319]}
+        {"text":"`use m::badge::{self, badge};` binds the module and the function of one name, as Rust does: `badge::Secondary` goes through the module and `badge(\"..\")` calls the function. Two `use` lines and a glob beside the module's import do the same. Two imports of one name in one namespace are rustc's E0252.","issues":[1319]},
+        {"text":"A crate macro that converts its children with `Into::<Slot<'_, _>>::into(child)`, as a component crate's `badge!` and `row!` do, now takes a string literal through the crate's `From<&'a str>` and a `String` through its `From<String>`, as cargo does. So do `\"x\".into()`, `From::from(\"x\")` and `<T as From<_>>::from(..)` wherever the target type is known.","issues":[1326]}
       ]
     },
     "releases": [
@@ -3041,8 +3042,11 @@
     {"issue":1323,"title":"rawr run shows only cargo's error when rawr's copy of the crate fails to build for the same reason","state":"open","category":"Divergences from rustc"},
     {"issue":1324,"title":"A crate signature with `&mut [T; N]` (or another array type) can be used","state":"open","category":"Divergences from rustc"},
     {"issue":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"open","category":"Divergences from rustc"},
-    {"issue":1326,"title":"`Into::<Slot<'_, _>>::into(\"text\")` in a crate macro: a literal doesn't take the crate's From<&str>/From<String>","state":"open","category":"Divergences from rustc"},
-    {"issue":1327,"title":"A program's own unit struct is a value through a module path","state":"open","category":"Divergences from rustc"}
+    {"issue":1326,"title":"`Into::<Slot<'_, _>>::into(\"text\")` in a crate macro: a literal doesn't take the crate's From<&str>/From<String>","state":"closed","category":"Divergences from rustc"},
+    {"issue":1327,"title":"A program's own unit struct is a value through a module path","state":"open","category":"Divergences from rustc"},
+    {"issue":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"open","category":"Divergences from rustc"},
+    {"issue":1329,"title":"Crate values lent by two scope frames passed to one call","state":"open","category":"Divergences from rustc"},
+    {"issue":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3603,7 +3607,10 @@
             {"number":1317,"title":"A crate's unit struct used as a value (`badge::Secondary`), through a re-export, with its From conversion at a call","state":"closed"},
             {"number":1319,"title":"`use m::{self, f}` binds both a module and its same-named function","state":"closed"},
             {"number":1320,"title":"A struct's constructor is no separate rejected export","state":"open"},
-            {"number":1326,"title":"`Into::<Slot<'_, _>>::into(\"text\")` in a crate macro: a literal doesn't take the crate's From<&str>/From<String>","state":"open"}
+            {"number":1326,"title":"`Into::<Slot<'_, _>>::into(\"text\")` in a crate macro: a literal doesn't take the crate's From<&str>/From<String>","state":"closed"},
+            {"number":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"open"},
+            {"number":1329,"title":"Crate values lent by two scope frames passed to one call","state":"open"},
+            {"number":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"open"}
           ],
           "milestone": "0.4"
         },
