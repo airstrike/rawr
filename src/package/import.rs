@@ -613,6 +613,11 @@ pub(crate) fn admit_applications(
 ) -> Result<(), Error> {
     for application in applications {
         let signature = application.signature();
+        // An application names no type parameter (#1278).
+        let named = signature.inputs().iter().chain([signature.output()]);
+        if Undeclared::first(named, &[]).is_some() {
+            continue;
+        }
         let mut builder = host::signature::Builder::new();
         for input in signature.inputs() {
             builder.try_parameter(Types::convert_charged(input, &[])?)?;
@@ -1235,7 +1240,7 @@ impl<'contract> ImportedPaths<'contract> {
                 matches!(
                     entry.outcome.representability(),
                     Representability::Struct(_) | Representability::Enum(_)
-                )
+                ) && undeclared(entry.outcome).is_none()
             })
             .filter_map(|entry| entry.outcome.identity().definition())
             .collect()
@@ -1878,7 +1883,7 @@ fn install(
                     matches!(
                         entry.outcome.representability(),
                         Representability::Struct(_) | Representability::Enum(_)
-                    )
+                    ) && undeclared(entry.outcome).is_none()
                 })
                 .map(|entry| entry.definition)
                 .chain(
@@ -2096,6 +2101,23 @@ fn build(
         type_entries.insert(entry_index, (entry.definition, index));
     }
     let types = Types;
+    // An item left out for naming a type parameter it doesn't declare is
+    // reported under `RAWR_VERBOSE=1`, its crate types named by the
+    // facade's paths to them.
+    let type_paths = |definition: &rawr_import::surface::identity::Definition| {
+        facade
+            .entries
+            .iter()
+            .find(|entry| entry.definition == *definition)
+            .map(|entry| format!("{}::{}", facade.root, entry.relative))
+    };
+    let left_out = |path: &str, outcome: rawr_import::classify::Outcome<'_>| {
+        let undeclared = undeclared(outcome);
+        if let Some(undeclared) = &undeclared {
+            report_undeclared(facade.root, path, undeclared, &type_paths);
+        }
+        undeclared.is_some()
+    };
     let abi = host::facade::Abi::new(1)?;
     let mut builder = host::facade::Builder::new_imported(facade.root, abi, allocation)?;
     let mut modules = Vec::new();
@@ -2186,6 +2208,11 @@ fn build(
         opaque_paths.insert(path);
     }
     for entry in &facade.entries {
+        // A type whose fields, target or defaults name a parameter it
+        // doesn't declare is left out, and reported below with the items.
+        if undeclared(entry.outcome).is_some() {
+            continue;
+        }
         let (parameters, defaults, implemented) = match entry.outcome.representability() {
             Representability::Struct(plan) => (
                 names(plan.parameters(), allocation)?,
@@ -2363,10 +2390,22 @@ fn build(
     }
 
     for entry in &facade.entries {
+        // A type left out above has no members either.
+        let left = left_out(&entry.relative, entry.outcome);
+        if left
+            && matches!(
+                entry.outcome.representability(),
+                Representability::Struct(_)
+                    | Representability::Enum(_)
+                    | Representability::Value(_)
+            )
+        {
+            continue;
+        }
         // The values form stands alone where no closure fills the callable
         // form, as iced's `selector::find(S)` takes a widget `Id` through
         // `Selector`, which iced also implements for `FnMut` closures.
-        if names_declared(entry.outcome, resolved) {
+        if !left && names_declared(entry.outcome, resolved) {
             let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
             if let Some(item) = item {
                 builder.imported_item(item)?;
@@ -2415,7 +2454,7 @@ fn build(
             // type's associated functions, as `widget::Text::new`; its
             // methods are reached through the type's values.
             let alias = matches!(entry.outcome.representability(), Representability::Value(_));
-            let item = if names_declared(associated, resolved) {
+            let item = if !left_out(&path, associated) && names_declared(associated, resolved) {
                 imported_item(&types, &path, associated, allocation)?
             } else {
                 None
@@ -2442,8 +2481,11 @@ fn build(
                 .implementations()
                 .flat_map(rawr_import::classify::ImplementationOutcome::associated)
                 .filter(|_| opaque_paths.contains(&opaque));
-            for member in members.filter(|member| names_declared(*member, resolved)) {
+            for member in members {
                 let path = format!("{opaque}::{}", member.name());
+                if left_out(&path, member) || !names_declared(member, resolved) {
+                    continue;
+                }
                 if let Some(item) = imported_item(&types, &path, member, allocation)? {
                     builder.imported_item(item)?;
                     if let Some(values) = imported_values(&types, &path, member, allocation)? {
@@ -2456,7 +2498,7 @@ fn build(
     // A member of the opaque type a trait's method over its `Self` gives,
     // as a function's member is (`surface::opaque`).
     for (path, member) in &facade.opaque_members {
-        if !names_declared(*member, resolved) {
+        if left_out(path, *member) || !names_declared(*member, resolved) {
             continue;
         }
         if let Some(item) = imported_item(&types, path, *member, allocation)? {
@@ -2477,6 +2519,7 @@ fn build(
         if plan.receiver()
             != Some(rawr_import::classify::representability::ownership::Receiver::Owned)
             || !writes_declared(plan.signature(), None, &[])
+            || left_out(path, *associated)
             || !names_declared(*associated, resolved)
         {
             continue;
@@ -2519,6 +2562,7 @@ fn build(
             continue;
         };
         if !writes_declared(plan.signature(), plan.call(), plan.crossings())
+            || left_out(path, *associated)
             || !names_declared(*associated, resolved)
         {
             continue;
@@ -2563,6 +2607,12 @@ fn build(
         &facade.trait_identities,
     );
     for header in trait_headers {
+        if let Some(undeclared) =
+            Undeclared::first(header.defaults.iter().flatten(), &header.parameters)
+        {
+            report_undeclared(facade.root, &header.path, &undeclared, &type_paths);
+            continue;
+        }
         let defaults = header
             .defaults
             .iter()
@@ -2588,8 +2638,38 @@ fn build(
         )?;
     }
     for header in impl_headers {
+        // A type naming a parameter the impl doesn't declare is left out,
+        // as one the facade can't write is.
+        let bounds = header
+            .bounds
+            .iter()
+            .flat_map(|bound| std::iter::once(&bound.ty).chain(&bound.arguments));
+        let projections = header.projections.iter().flat_map(|projection| {
+            [&projection.ty, &projection.value].into_iter().chain(
+                projection
+                    .cases
+                    .iter()
+                    .flat_map(|(this, value)| [this, value]),
+            )
+        });
+        let named = header
+            .arguments
+            .iter()
+            .chain([&header.self_type])
+            .chain(bounds)
+            .chain(projections);
+        if let Some(undeclared) = Undeclared::first(named, &header.parameters) {
+            let path = format!(
+                "impl for {}",
+                written(&header.self_type, &header.parameters, &type_paths)
+            );
+            report_undeclared(facade.root, &path, &undeclared, &type_paths);
+        }
         let mut convert = |ty: &representability::convert::Type| {
-            types.convert(ty, &header.parameters, allocation).ok()
+            undeclared_parameter(ty, &header.parameters)
+                .is_none()
+                .then(|| types.convert(ty, &header.parameters, allocation).ok())
+                .flatten()
         };
         let Some(arguments) = header
             .arguments
@@ -2982,24 +3062,25 @@ fn imported_values(
     ))
 }
 
-/// Whether every imported type the outcome's signature names is declared.
+/// Whether every imported type the outcome's signature names is declared,
+/// and every type parameter its binding names is one it declares, not
+/// another item's (#1278).
 fn names_declared(
     outcome: rawr_import::classify::Outcome<'_>,
     declared: &std::collections::BTreeSet<rawr_import::surface::identity::Definition>,
 ) -> bool {
+    if undeclared(outcome).is_some() {
+        return false;
+    }
     let (signature, call, crossings) = match outcome.representability() {
         Representability::Function(plan) => (plan.signature(), None, &[][..]),
         Representability::Method(plan) => (plan.signature(), None, &[][..]),
         Representability::FunctionItem(plan) => (plan.signature(), plan.call(), plan.crossings()),
         Representability::Invocation(plan) => (plan.signature(), plan.call(), plan.crossings()),
-        Representability::Constant(plan) => {
-            return ty_ok(plan.ty(), declared) && parameters_declared(plan.ty(), &[]);
-        }
+        Representability::Constant(plan) => return ty_ok(plan.ty(), declared),
         _ => return true,
     };
-    // Each type parameter it names is one it declares, not another item's
-    // (#1278).
-    let ok = |ty| ty_ok(ty, declared) && parameters_declared(ty, signature.parameters());
+    let ok = |ty| ty_ok(ty, declared);
     // What a callable it takes is given and gives, as `Cache::draw`'s
     // `&mut Frame<Renderer>`, is named in the bridge too.
     signature.inputs().iter().all(ok)
@@ -3010,33 +3091,220 @@ fn names_declared(
             .all(|callable| callable.inputs().iter().all(ok) && ok(callable.output()))
 }
 
-/// Whether each type parameter `ty` names is among `parameters`.
-fn parameters_declared(
+/// The first type parameter `ty` names that isn't among `parameters`,
+/// walked as `type_usage` walks it, which needs each one declared.
+fn undeclared_parameter(
     ty: &representability::convert::Type,
     parameters: &[representability::signature::Parameter],
-) -> bool {
+) -> Option<u32> {
     use representability::convert::Type;
-    let declared = |ty| parameters_declared(ty, parameters);
+    let undeclared = |ty| undeclared_parameter(ty, parameters);
     match ty {
-        Type::Parameter(index) => parameters
-            .iter()
-            .any(|parameter| parameter.index() == *index),
+        Type::Parameter(index) => {
+            let declared = parameters
+                .iter()
+                .any(|parameter| parameter.index() == *index);
+            (!declared).then_some(*index)
+        }
         Type::Nominal { arguments, .. }
         | Type::Tuple(arguments)
-        | Type::Script { arguments, .. } => arguments.iter().all(declared),
+        | Type::Script { arguments, .. } => arguments.iter().find_map(undeclared),
         Type::Option(element)
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
         | Type::Sequence { element, .. }
         | Type::ProfileMessage {
             payload: element, ..
-        } => declared(element),
+        } => undeclared(element),
         Type::Result(first, second)
         | Type::FunctionItem {
             input: first,
             output: second,
-        } => declared(first) && declared(second),
-        Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => true,
+        } => undeclared(first).or_else(|| undeclared(second)),
+        Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => None,
+    }
+}
+
+/// A type a binding names with a type parameter its declaration doesn't
+/// have: the type, the parameter's index, and the declaration's parameters.
+struct Undeclared<'a> {
+    ty: &'a representability::convert::Type,
+    index: u32,
+    parameters: &'a [representability::signature::Parameter],
+}
+
+impl<'a> Undeclared<'a> {
+    /// The first of `types` that names a parameter `parameters` lacks.
+    fn first(
+        types: impl IntoIterator<Item = &'a representability::convert::Type>,
+        parameters: &'a [representability::signature::Parameter],
+    ) -> Option<Self> {
+        types.into_iter().find_map(|ty| {
+            undeclared_parameter(ty, parameters).map(|index| Self {
+                ty,
+                index,
+                parameters,
+            })
+        })
+    }
+
+    /// The first type of `signature`'s inputs and output, and of the
+    /// callables `calls` it takes, that names one it lacks.
+    fn signature(
+        signature: &'a representability::signature::Signature,
+        calls: impl Iterator<Item = &'a representability::callable::Call>,
+    ) -> Option<Self> {
+        let calls = calls.flat_map(|call| call.inputs().iter().chain([call.output()]));
+        Self::first(
+            signature
+                .inputs()
+                .iter()
+                .chain([signature.output()])
+                .chain(calls),
+            signature.parameters(),
+        )
+    }
+
+    /// An item's, or its values form's.
+    fn item(item: &'a representability::callable::Item) -> Option<Self> {
+        let form = |item: &'a representability::callable::Item| {
+            Self::signature(
+                item.signature(),
+                item.call().into_iter().chain(item.crossings()),
+            )
+        };
+        form(item).or_else(|| item.values().and_then(form))
+    }
+}
+
+/// The first type the facade build converts for `outcome` that names a type
+/// parameter its declaration doesn't have: one its signature, its
+/// callables or its values form name, a constant's type, or a type's
+/// fields, target or parameters' defaults. The outcome is left out (#1278).
+fn undeclared(outcome: rawr_import::classify::Outcome<'_>) -> Option<Undeclared<'_>> {
+    use representability::signature::Parameter;
+    fn defaults(
+        parameters: &[Parameter],
+    ) -> impl Iterator<Item = &representability::convert::Type> {
+        parameters.iter().filter_map(Parameter::default)
+    }
+    match outcome.representability() {
+        Representability::Function(plan) => {
+            Undeclared::signature(plan.signature(), std::iter::empty())
+        }
+        Representability::Method(plan) => {
+            Undeclared::signature(plan.signature(), std::iter::empty())
+        }
+        Representability::FunctionItem(plan) => Undeclared::item(plan),
+        Representability::Invocation(plan) => Undeclared::item(plan.item()),
+        Representability::Constant(plan) => Undeclared::first([plan.ty()], &[]),
+        Representability::Value(plan) => Undeclared::first(
+            std::iter::once(plan.ty()).chain(defaults(plan.parameters())),
+            plan.parameters(),
+        ),
+        Representability::Struct(plan) => Undeclared::first(
+            plan.fields()
+                .iter()
+                .map(representability::structure::Field::ty)
+                .chain(defaults(plan.parameters())),
+            plan.parameters(),
+        ),
+        Representability::Enum(plan) => Undeclared::first(
+            plan.variants()
+                .iter()
+                .flat_map(representability::enumeration::Variant::fields)
+                .map(representability::structure::Field::ty)
+                .chain(defaults(plan.parameters())),
+            plan.parameters(),
+        ),
+        Representability::Excluded(_) | Representability::Rejected(_) => None,
+    }
+}
+
+/// Under `RAWR_VERBOSE=1`, one line on stderr saying why `path` of `krate`
+/// is left out: the parameter index its type names, how many parameters its
+/// declaration has, and the type as Rust writes it (#1278).
+fn report_undeclared(
+    krate: &str,
+    path: &str,
+    undeclared: &Undeclared<'_>,
+    names: &dyn Fn(&rawr_import::surface::identity::Definition) -> Option<String>,
+) {
+    if std::env::var_os("RAWR_VERBOSE").is_none_or(|verbose| verbose != "1") {
+        return;
+    }
+    eprintln!(
+        "rawr: {krate}: `{path}` left out: it names type parameter {} and declares {} \
+         parameters, in `{}`",
+        undeclared.index,
+        undeclared.parameters.len(),
+        written(undeclared.ty, undeclared.parameters, names),
+    );
+}
+
+/// `ty` as Rust writes it, for `report_undeclared`: a parameter the
+/// declaration lacks is `?index`, and a crate type `names` has no path for
+/// is `#` and its definition's first bytes.
+fn written(
+    ty: &representability::convert::Type,
+    parameters: &[representability::signature::Parameter],
+    names: &dyn Fn(&rawr_import::surface::identity::Definition) -> Option<String>,
+) -> String {
+    use representability::convert::Type;
+    let write = |ty: &Type| written(ty, parameters, names);
+    let list = |types: &[Type]| types.iter().map(write).collect::<Vec<_>>().join(", ");
+    match ty {
+        Type::Unit => "()".into(),
+        Type::Never => "!".into(),
+        Type::Inferred => "_".into(),
+        Type::Builtin(builtin) => builtin
+            .rust_name()
+            .map_or_else(|| format!("{builtin:?}"), Into::into),
+        Type::Parameter(index) => parameters
+            .iter()
+            .find(|parameter| parameter.index() == *index)
+            .map_or_else(|| format!("?{index}"), |parameter| parameter.name().into()),
+        Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            let name = names(definition).unwrap_or_else(|| {
+                let prefix = definition.as_bytes()[..4]
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                format!("#{prefix}")
+            });
+            if arguments.is_empty() {
+                name
+            } else {
+                format!("{name}<{}>", list(arguments))
+            }
+        }
+        Type::Script { path, arguments } if arguments.is_empty() => path.to_string(),
+        Type::Script { path, arguments } => format!("{path}<{}>", list(arguments)),
+        Type::Tuple(members) => format!("({})", list(members)),
+        Type::Option(element) => format!("Option<{}>", write(element)),
+        Type::Result(ok, err) => format!("Result<{}, {}>", write(ok), write(err)),
+        Type::Borrowed { mutable, ty } => {
+            format!("&{}{}", if *mutable { "mut " } else { "" }, write(ty))
+        }
+        Type::Range(element) => format!("Range<{}>", write(element)),
+        Type::Sequence {
+            element,
+            length: Some(length),
+            ..
+        } => format!("[{}; {length}]", write(element)),
+        Type::Sequence {
+            element,
+            owned: true,
+            ..
+        } => format!("Vec<{}>", write(element)),
+        Type::Sequence { element, .. } => format!("&[{}]", write(element)),
+        Type::FunctionItem { input, output } => {
+            format!("fn({}) -> {}", write(input), write(output))
+        }
+        Type::ProfileMessage { payload, .. } => write(payload),
     }
 }
 
@@ -3843,6 +4111,9 @@ fn converted_pattern(
         | Type::Sequence {
             length: Some(_), ..
         } if !names_impl_parameter(ty) => {
+            if undeclared_parameter(ty, parameters).is_some() {
+                return None;
+            }
             Pattern::Type(Types::convert_charged(ty, parameters).ok()?)
         }
         // A crate type that names the impl's own parameters, as `Text<'a,
@@ -3858,6 +4129,9 @@ fn converted_pattern(
                     host::signature::case_variable(index & !IMPL_PARAMETER).into(),
                     representability::signature::Kind::Type,
                 ));
+            }
+            if undeclared_parameter(ty, &named).is_some() {
+                return None;
             }
             Pattern::Generic(Types::convert_charged(ty, &named).ok()?)
         }
