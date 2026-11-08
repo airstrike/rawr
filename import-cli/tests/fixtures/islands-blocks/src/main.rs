@@ -25,4 +25,17 @@ fn main() {
         std::ptr::eq(page.blocks(), badge::BLOCKS),
         std::ptr::eq(page.state(), page.state())
     );
+    // Each `&self` call is a shared borrow, which coexists with the
+    // `&State` and the preview others lent.
+    let state = page.state();
+    let preview = page.preview();
+    let id = page.scrollable_id();
+    println!(
+        "{} {id:?} {:?} {}",
+        preview.text(),
+        page.scrollable_id(),
+        std::ptr::eq(state, page.state())
+    );
+    state.show();
+    println!("{}", page.preview().text());
 }

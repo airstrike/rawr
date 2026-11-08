@@ -36,12 +36,14 @@ pub static META: page::Meta = page::Meta {
 /// The badge's page, which native code holds as a `Box<dyn page::Page>`.
 pub struct BadgePage {
     state: page::State,
+    label: String,
 }
 
 impl BadgePage {
     pub fn new(page_index: usize) -> Box<dyn page::Page> {
         Box::new(Self {
             state: page::State::new(page_index, BLOCKS),
+            label: format!("badge {page_index}"),
         })
     }
 }
@@ -58,6 +60,12 @@ impl page::Page for BadgePage {
     }
     fn page_index(&self) -> usize {
         self.state.page_index
+    }
+    fn scrollable_id(&self) -> page::Id {
+        self.state.scrollable_id.clone()
+    }
+    fn preview(&self) -> page::Preview<'_> {
+        page::preview(&self.label)
     }
 }
 

@@ -594,8 +594,11 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// pattern and a group's `children`, indexed, walked and lent (#1291). A
 /// marked page native code holds as a `Box<dyn Page>` gives back its
 /// `&'static Meta` and `&'static [Block]` statics themselves and a `&State`
-/// of its own field, lent in place (#1442). `rawr check` passes as `cargo check` does, and `rawr run` prints what
-/// `cargo run` prints.
+/// of its own field, lent in place (#1442). Each `&self` call is a shared
+/// borrow: while native code holds that `&State` and a preview that
+/// borrows the page, `scrollable_id()` clones a field of the lent state,
+/// which stays whole (#1445). `rawr check` passes as `cargo check` does,
+/// and `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_marked_static_of_native_blocks_is_read_by_native_code() {
     const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");
@@ -634,7 +637,12 @@ fn a_marked_static_of_native_blocks_is_read_by_native_code() {
              \x20 example demo \"\" None \"\"\n  md A badge marks a count.\n\
              \x20 group Examples\n\
              \x20   example dot \"Dot\" Some(\"A badge with no count.\") \"badge()\"\n\
-             \x20   md Counts past 99 show 99+.\nindex 7\ntrue true true\n"
+             \x20   md Counts past 99 show 99+.\nindex 7\ntrue true true\n\
+             badge 7 Id(\"page-7\") Id(\"page-7\") true\npage 7 of 3 blocks\n\
+             \x20 example demo \"\" None \"\"\n  md A badge marks a count.\n\
+             \x20 group Examples\n\
+             \x20   example dot \"Dot\" Some(\"A badge with no count.\") \"badge()\"\n\
+             \x20   md Counts past 99 show 99+.\nbadge 7\n"
         ),
         "{printed}"
     );
