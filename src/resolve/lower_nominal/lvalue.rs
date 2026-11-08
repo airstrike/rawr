@@ -3,7 +3,7 @@
 
 use super::op::{Op, PreludeOp};
 use super::ty::Ty;
-use super::{field_place, origin, BindingKind, ParsedExpr, Parser};
+use super::{origin, BindingKind, ParsedExpr, Parser};
 use crate::resolve::Error;
 use crate::tokenizer::Token;
 use crate::{type_def, ImmutableString, Span};
@@ -464,4 +464,170 @@ impl<'a> Parser<'a> {
             Lvalue::Nested(nested) => self.store_nested(nested, replacement),
         })
     }
+}
+
+/// `lvalue` (a field, a local's element or a nested place) followed by
+/// `step`: a nested place of type `ty`.
+pub(super) fn nested_step(lvalue: &Lvalue, step: PlaceStep, ty: Ty) -> Lvalue {
+    let mut nested = match lvalue {
+        Lvalue::Nested(nested) => (**nested).clone(),
+        Lvalue::Field(field) => Nested {
+            binding: field.binding.clone(),
+            base: origin::Fragment::plain(field.binding.to_string()),
+            steps: vec![PlaceStep::Field { slot: field.slot }],
+            ty: field.ty.clone(),
+        },
+        Lvalue::Place { binding, place, .. } => Nested {
+            binding: binding.clone(),
+            base: place.clone(),
+            steps: Vec::new(),
+            ty: ty.clone(),
+        },
+        Lvalue::Binding { .. } | Lvalue::Slice(_) => {
+            unreachable!("only fields, elements and nested places extend")
+        }
+    };
+    nested.steps.push(step);
+    nested.ty = ty;
+    Lvalue::Nested(Box::new(nested))
+}
+
+/// The field at `slot` of the struct `base` is, as the runtime reaches it in
+/// place: `base[slot]`. A local or a chain of parts below one stays a chain,
+/// so `s.a.b` is the place `s[0][1]`; any other value is indexed as a
+/// temporary, `(base)[slot]`.
+pub(super) fn field_place(base: origin::Fragment, slot: usize) -> origin::Fragment {
+    let mut place = if is_place_chain(base.as_str()) {
+        base
+    } else {
+        base.surrounded("(", ")")
+    };
+    place.push_text(format!("[{slot}]"));
+    place
+}
+
+/// The place `value` reads, as the runtime reaches it where it is: a local
+/// by its name, an element (`v[i]`), a field (`s[1]`), or a chain of fields,
+/// members and elements below a local. `None` for any other value, or for
+/// one read through a prelude.
+pub(super) fn in_place(value: &ParsedExpr) -> Option<origin::Fragment> {
+    if !value.prelude.is_empty() {
+        return None;
+    }
+    match value.lvalue.as_ref()? {
+        Lvalue::Binding { binding, .. } => {
+            (value.source.as_str() == binding.as_str()).then(|| value.source.clone())
+        }
+        Lvalue::Place { place, .. } => Some(place.clone()),
+        Lvalue::Field(field) => Some(field.place()),
+        Lvalue::Nested(nested) => {
+            let mut place = nested.base.clone();
+            for step in &nested.steps {
+                match step {
+                    PlaceStep::Field { slot } => place = field_place(place, *slot),
+                    PlaceStep::Index(index) => {
+                        place.push_text("[");
+                        place.push(index.clone());
+                        place.push_text("]");
+                    }
+                    PlaceStep::Member(member) => place.push_text(format!("[{member}]")),
+                    _ => return None,
+                }
+            }
+            Some(place)
+        }
+        Lvalue::Slice(_) => None,
+    }
+}
+
+/// The local and the place of `value` when it is a chain of fields and
+/// members below a local (`s.a.0` is `s[0][0]`), each slot a literal.
+pub(super) fn fields_below_local(
+    value: &ParsedExpr,
+) -> Option<(ImmutableString, origin::Fragment)> {
+    match value.lvalue.as_ref()? {
+        Lvalue::Field(field) => Some((field.binding.clone(), field.place())),
+        Lvalue::Nested(nested)
+            if nested
+                .steps
+                .iter()
+                .all(|step| matches!(step, PlaceStep::Field { .. } | PlaceStep::Member(_))) =>
+        {
+            let base = nested.base.as_str();
+            if !is_place_chain(base) {
+                return None;
+            }
+            let root = base.trim_start_matches('(');
+            let root = &root[..root
+                .find(|character: char| character != '_' && !character.is_alphanumeric())
+                .unwrap_or(root.len())];
+            Some((root.into(), in_place(value)?))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `source` is a local's name followed by indexes only:
+/// `s`, `this`, `s[0][i + 1]`, `(s)[0]`.
+pub(super) fn is_place_chain(source: &str) -> bool {
+    // `(s)` reads as `s`.
+    let (name, rest) = match source.strip_prefix('(') {
+        Some(inner) => match inner.split_once(')') {
+            Some(parts) => parts,
+            None => return false,
+        },
+        None => source.split_at(
+            source
+                .find(|character: char| character != '_' && !character.is_alphanumeric())
+                .unwrap_or(source.len()),
+        ),
+    };
+    if name.is_empty()
+        || name.starts_with(|character: char| character.is_ascii_digit())
+        || variable_name(name).is_none()
+    {
+        return false;
+    }
+    let mut depth = 0usize;
+    for character in rest.chars() {
+        match character {
+            '[' => depth += 1,
+            ']' => match depth.checked_sub(1) {
+                Some(outer) => depth = outer,
+                None => return false,
+            },
+            '"' | '\'' => return false,
+            _ if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+pub(super) fn variable_name(source: &str) -> Option<ImmutableString> {
+    source
+        .chars()
+        .all(|character| character == '_' || character.is_alphanumeric())
+        .then(|| source.into())
+}
+
+/// The place an assignment's text `text` assigns: `g.c[0]` of
+/// `g.c[0] += 2`.
+pub(super) fn assigned_place(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let assignment = (0..bytes.len()).find(|&index| {
+        bytes[index] == b'='
+            && bytes.get(index + 1) != Some(&b'=')
+            && !matches!(
+                index.checked_sub(1).map(|before| bytes[before]),
+                Some(b'=' | b'!' | b'<' | b'>')
+            )
+    });
+    let Some(assignment) = assignment else {
+        return text.trim();
+    };
+    text[..assignment]
+        .trim_end()
+        .trim_end_matches(['+', '-', '*', '/', '%', '^', '&', '|', '<', '>'])
+        .trim_end()
 }
