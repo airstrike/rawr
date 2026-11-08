@@ -5,7 +5,7 @@ use super::lvalue::Lvalue;
 use super::ty::{Float, HostTyProof, Int, Ty};
 use super::{
     assignment_token, contains_inference, drops, origin, pattern, places, point_span, span,
-    text_end, Binding, BindingKind, ParsedExpr, Parser, ASYNC_RESUME, CORE_ASYNC, SELF_CAPTURE,
+    text_end, Binding, BindingKind, ParsedExpr, Parser,
 };
 use crate::resolve::borrowck::record;
 use crate::resolve::borrowck::record::ScopeEnd;
@@ -1294,3 +1294,14 @@ impl<'a> Parser<'a> {
         self.parse_primary()
     }
 }
+
+/// The last parameter of an async body's step function: `()` to start, or
+/// the frame it resumes from.
+pub(super) const ASYNC_RESUME: &str = "__rawr_resume";
+
+/// The core's function an async body's step function is passed to, where
+/// no host's `Task` runs futures.
+pub(super) const CORE_ASYNC: &str = "rawr::future::script";
+
+/// The local a closure reads `self` through.
+pub(super) const SELF_CAPTURE: &str = "__rawr_self";

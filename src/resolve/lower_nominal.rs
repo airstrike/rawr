@@ -126,6 +126,7 @@ use crate::{
     calc_fn_hash, capability, method, receiver, type_def, Dynamic, Engine, EvalAltResult,
     ImmutableString, Module, Position, RawrResult, Scope, Shared, Span, AST, INT,
 };
+use closure::SELF_CAPTURE;
 use compare::Shape;
 use coverage::{
     bool_literals, field_order, reject_empty_range, scalar_text, tuple_members, Scalar,
@@ -164,8 +165,6 @@ use naming::{
     trait_dispatcher_name, witness_placeholder, witness_variable, CLOSURE_SENTINEL,
     DEFAULT_DISPATCHER, FALLBACK_INSTANCE, METHOD_SENTINEL, NATIVE_ONLY, PRIVATE_PREFIX, SENTINEL,
 };
-/// The last parameter of an async body's step function: `()` to start, or
-/// the frame it resumes from.
 pub(crate) use naming::{
     function_display_name, private_function_name, DEBUG_DISPATCHER, DEBUG_GENERIC,
 };
@@ -213,10 +212,6 @@ use wide::{
     PendingFloatKind, PendingWide, Wide,
 };
 pub(crate) use wide::{wide_operator, wide_range};
-const ASYNC_RESUME: &str = "__rawr_resume";
-/// The core's function an async body's step function is passed to, where
-/// no host's `Task` runs futures.
-const CORE_ASYNC: &str = "rawr::future::script";
 /// Why a crate call can't take the program's function that builds its
 /// message, as `Message::Changed` given to iced's `on_input`, here.
 #[cfg(feature = "rust-import")]
@@ -2976,9 +2971,6 @@ struct LoopFrame {
     /// goes to this `while`.
     condition: Option<bool>,
 }
-
-/// The local a closure reads `self` through.
-const SELF_CAPTURE: &str = "__rawr_self";
 
 /// `lvalue` (a field, a local's element or a nested place) followed by
 /// `step`: a nested place of type `ty`.
