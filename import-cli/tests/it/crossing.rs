@@ -766,7 +766,11 @@ fn mutable_buffers_are_lent_in_place() {
 /// and the reference lent on to another crate call write the crate's own
 /// pixel, and the crate reads them back. The method is called once per
 /// statement or binding, as rustc holds the reference it gives (#1325):
-/// the crate counts 11 calls, as under `cargo run`. The output is
+/// the crate counts 13 calls, as under `cargo run`. So is an `Option<&mut
+/// Pixel>` a getter gives, as pane_grid's `state.get_mut(pane)`, tested and
+/// written through one call (#1334), and the `&mut` and `Option<&mut>` of
+/// a strip a scope frame's region holds, as quick-xml's
+/// `reader.config_mut()` (#1333): the strip counts 4 calls. The output is
 /// `cargo run`'s. The reference pins the buffer while it lives: reading
 /// the buffer before its last use is rustc's E0502.
 #[test]
@@ -774,7 +778,13 @@ fn a_mutable_reference_a_crate_method_returns_is_a_place() {
     let (rawr, cargo) = both_printed("painted.rs", "");
     assert_eq!(rawr, cargo);
     assert!(rawr.starts_with("Pixel([5, 6, 7, 9])"), "{rawr}");
-    assert!(rawr.ends_with("lent 11 times"), "{rawr}");
+    assert!(
+        rawr.contains(
+            "strip [Pixel([2, 0, 0, 0]), Pixel([0, 5, 6, 0]), Pixel([0, 0, 0, 21])] lent 4"
+        ),
+        "{rawr}"
+    );
+    assert!(rawr.ends_with("lent 13 times"), "{rawr}");
     let stderr = rejected_as_cargo("painted_pinned.rs", "E0502");
     assert!(stderr.contains("main.rs:7:"), "{stderr}");
 }

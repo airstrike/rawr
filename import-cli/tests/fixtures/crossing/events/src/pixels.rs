@@ -29,7 +29,14 @@ impl Buffer {
         &mut self.pixels[index]
     }
 
-    /// How often `get_mut` and `pixel_mut` were called.
+    /// The pixel at `index`, lent mutably, if there is one, as pane_grid's
+    /// `State::get_mut`.
+    pub fn pixel(&mut self, index: usize) -> Option<&mut Pixel> {
+        self.lent += 1;
+        self.pixels.get_mut(index)
+    }
+
+    /// How often `get_mut`, `pixel` and `pixel_mut` were called.
     pub fn lent(&self) -> usize {
         self.lent
     }
@@ -56,6 +63,45 @@ impl Image for Buffer {
     fn pixel_mut(&mut self, index: usize) -> &mut Pixel {
         self.lent += 1;
         &mut self.pixels[index]
+    }
+}
+
+/// Pixels under a name they borrow, as quick-xml's `Reader<&[u8]>` borrows
+/// its input: a value of a scope frame's region.
+#[derive(Debug)]
+pub struct Strip<'a> {
+    name: &'a str,
+    buffer: Buffer,
+}
+
+impl<'a> Strip<'a> {
+    /// `count` transparent pixels named `name`.
+    pub fn new(name: &'a str, count: usize) -> Self {
+        Self {
+            name,
+            buffer: Buffer::new(count),
+        }
+    }
+
+    /// The pixel at `index`, lent mutably.
+    pub fn get_mut(&mut self, index: usize) -> &mut Pixel {
+        self.buffer.get_mut(index)
+    }
+
+    /// The pixel at `index`, lent mutably, if there is one.
+    pub fn pixel(&mut self, index: usize) -> Option<&mut Pixel> {
+        self.buffer.pixel(index)
+    }
+
+    /// The strip's name and every pixel's channels, as the crate reads
+    /// them, and how often a pixel was lent.
+    pub fn describe(&self) -> String {
+        format!(
+            "{} {} lent {}",
+            self.name,
+            self.buffer.describe(),
+            self.buffer.lent()
+        )
     }
 }
 
