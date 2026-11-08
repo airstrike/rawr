@@ -1365,3 +1365,251 @@ impl<'a> Parser<'a> {
         })
     }
 }
+
+/// Rust's `PartialOrd` of builtin values: numbers, strings, chars, bools
+/// and `()`, `Option` (`None` first) and arrays and tuples element by
+/// element, and of script types deriving it. `None` when unordered: a NaN, or values Rawr's checks never
+/// let reach here.
+pub(super) fn compare_value(
+    lhs: &Dynamic,
+    rhs: &Dynamic,
+    models: &Models,
+) -> Option<std::cmp::Ordering> {
+    // Element by element, as Rust's derive and slices compare.
+    let lexicographic = |lhs: &[Dynamic], rhs: &[Dynamic]| {
+        for (lhs, rhs) in lhs.iter().zip(rhs) {
+            match compare_value(lhs, rhs, models)? {
+                std::cmp::Ordering::Equal => {}
+                ordering => return Some(ordering),
+            }
+        }
+        Some(lhs.len().cmp(&rhs.len()))
+    };
+    if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
+        return match (lhs, rhs) {
+            (Some(lhs), Some(rhs)) => compare_value(&lhs, &rhs, models),
+            (lhs, rhs) => Some(lhs.is_some().cmp(&rhs.is_some())),
+        };
+    }
+    // `Ok` before `Err`, then their values, as std's derive orders them.
+    if let (Some(lhs), Some(rhs)) = (crate::result::read(lhs), crate::result::read(rhs)) {
+        return match (lhs, rhs) {
+            (Ok(lhs), Ok(rhs)) | (Err(lhs), Err(rhs)) => compare_value(&lhs, &rhs, models),
+            (lhs, rhs) => Some(lhs.is_err().cmp(&rhs.is_err())),
+        };
+    }
+    if let (Some(lhs), Some(rhs)) = (
+        lhs.read_lock::<std::time::Duration>(),
+        rhs.read_lock::<std::time::Duration>(),
+    ) {
+        return Some(lhs.cmp(&rhs));
+    }
+    if let (Some(lhs), Some(rhs)) = (
+        lhs.read_lock::<crate::Instant>(),
+        rhs.read_lock::<crate::Instant>(),
+    ) {
+        return Some(lhs.cmp(&rhs));
+    }
+    if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
+        return compare_value(&lhs, &rhs, models);
+    }
+    if let (Some(lhs), Some(rhs)) = (counted::value(lhs), counted::value(rhs)) {
+        return compare_value(&lhs, &rhs, models);
+    }
+    // `Reverse(a) < Reverse(b)` when `b < a`.
+    if let (Some(lhs), Some(rhs)) = (
+        lhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
+        rhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
+    ) {
+        return compare_value(&rhs.0, &lhs.0, models);
+    }
+    // A `Cow` orders as what it derefs to.
+    if let (Some(lhs), Some(rhs)) = (cow::payload(lhs), cow::payload(rhs)) {
+        return compare_value(&lhs, &rhs, models);
+    }
+    // An `i128` or a `u128` past `i64`, boxed.
+    if (matches!(lhs.0, Union::Variant(..)) || matches!(rhs.0, Union::Variant(..)))
+        && let Some(ordering) = wide_order(lhs, rhs)
+    {
+        return Some(ordering);
+    }
+    match (&lhs.0, &rhs.0) {
+        (Union::Unit(..), Union::Unit(..)) => Some(std::cmp::Ordering::Equal),
+        (Union::Bool(lhs, ..), Union::Bool(rhs, ..)) => Some(lhs.cmp(rhs)),
+        (Union::Char(lhs, ..), Union::Char(rhs, ..)) => Some(lhs.cmp(rhs)),
+        // A `u64` a generic parameter holds is tagged as one.
+        (Union::Int(lhs, tag, ..), Union::Int(rhs, other, ..))
+            if *tag == crate::types::dynamic::UNSIGNED_TAG
+                || *other == crate::types::dynamic::UNSIGNED_TAG =>
+        {
+            Some((*lhs as u64).cmp(&(*rhs as u64)))
+        }
+        (Union::Int(lhs, ..), Union::Int(rhs, ..)) => Some(lhs.cmp(rhs)),
+        (Union::Str(lhs, ..), Union::Str(rhs, ..)) => Some(lhs.as_str().cmp(rhs.as_str())),
+        (Union::Float(lhs, ..), Union::Float(rhs, ..)) => (**lhs).partial_cmp(&**rhs),
+        (Union::Array(lhs, ..), Union::Array(rhs, ..)) => lexicographic(lhs, rhs),
+        // An imported value keying a hashed collection.
+        (Union::Variant(..), Union::Variant(..)) => crate::host::value::host_compare(lhs, rhs),
+        // A derived `PartialOrd`: fields in declaration order; an enum's
+        // variants by declaration order, then their payloads.
+        (Union::Struct(lhs, ..), Union::Struct(rhs, ..)) if lhs.identity() == rhs.identity() => {
+            match models.by_identity.get(lhs.identity()) {
+                Some(Nominal::Struct { item, .. }) => typed_lexicographic(
+                    lhs.fields(),
+                    rhs.fields(),
+                    item.fields.iter().map(|field| &field.ty),
+                    models,
+                ),
+                _ => lexicographic(lhs.fields(), rhs.fields()),
+            }
+        }
+        (Union::Enum(lhs, ..), Union::Enum(rhs, ..)) if lhs.identity() == rhs.identity() => {
+            let Some(Nominal::Enum { item, .. }) = models.by_identity.get(lhs.identity()) else {
+                return None;
+            };
+            let index = |name: &str| {
+                item.variants
+                    .iter()
+                    .position(|variant| variant.name.text == name)
+            };
+            let variant = index(lhs.variant().name())?;
+            match variant.cmp(&index(rhs.variant().name())?) {
+                std::cmp::Ordering::Equal => typed_lexicographic(
+                    lhs.payload(),
+                    rhs.payload(),
+                    item.variants[variant].payload.iter(),
+                    models,
+                ),
+                ordering => Some(ordering),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Fields or payloads compared in order, a `u64` or `usize` one as the
+/// unsigned number its bits are.
+pub(super) fn typed_lexicographic<'t>(
+    lhs: &[Dynamic],
+    rhs: &[Dynamic],
+    types: impl Iterator<Item = &'t type_ref::Type>,
+    models: &Models,
+) -> Option<std::cmp::Ordering> {
+    for ((lhs, rhs), ty) in lhs.iter().zip(rhs).zip(types) {
+        let ordering = match (ty, &lhs.0, &rhs.0) {
+            (type_ref::Type::Path(path), Union::Int(lhs, ..), Union::Int(rhs, ..))
+                if path.target == type_ref::Target::Builtin
+                    && matches!(path.name.as_str(), "u64" | "usize") =>
+            {
+                (*lhs as u64).cmp(&(*rhs as u64))
+            }
+            _ => compare_value(lhs, rhs, models)?,
+        };
+        if ordering != std::cmp::Ordering::Equal {
+            return Some(ordering);
+        }
+    }
+    Some(lhs.len().cmp(&rhs.len()))
+}
+
+pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
+    if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
+        return equal_value(&lhs, &rhs);
+    }
+    if let (Some(lhs), Some(rhs)) = (counted::value(lhs), counted::value(rhs)) {
+        return equal_value(&lhs, &rhs);
+    }
+    if let (Some(lhs), Some(rhs)) = (
+        lhs.read_lock::<std::time::Duration>(),
+        rhs.read_lock::<std::time::Duration>(),
+    ) {
+        return *lhs == *rhs;
+    }
+    if let (Some(lhs), Some(rhs)) = (
+        lhs.read_lock::<crate::Instant>(),
+        rhs.read_lock::<crate::Instant>(),
+    ) {
+        return *lhs == *rhs;
+    }
+    if let (Some(lhs), Some(rhs)) = (
+        lhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
+        rhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
+    ) {
+        return equal_value(&lhs.0, &rhs.0);
+    }
+    // A `Cow` compares what it derefs to, `Borrowed` or `Owned`.
+    if let (Some(lhs), Some(rhs)) = (cow::payload(lhs), cow::payload(rhs)) {
+        return equal_value(&lhs, &rhs);
+    }
+    if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
+        return match (lhs, rhs) {
+            (Some(lhs), Some(rhs)) => equal_value(&lhs, &rhs),
+            (lhs, rhs) => lhs.is_none() && rhs.is_none(),
+        };
+    }
+    if let (Some(lhs), Some(rhs)) = (crate::result::read(lhs), crate::result::read(rhs)) {
+        return match (lhs, rhs) {
+            (Ok(lhs), Ok(rhs)) | (Err(lhs), Err(rhs)) => equal_value(&lhs, &rhs),
+            _ => false,
+        };
+    }
+    match (&lhs.0, &rhs.0) {
+        (Union::Unit(..), Union::Unit(..)) => true,
+        (Union::Bool(lhs, ..), Union::Bool(rhs, ..)) => lhs == rhs,
+        (Union::Char(lhs, ..), Union::Char(rhs, ..)) => lhs == rhs,
+        (Union::Int(lhs, ..), Union::Int(rhs, ..)) => lhs == rhs,
+        (Union::Str(lhs, ..), Union::Str(rhs, ..)) => lhs == rhs,
+        (Union::Float(lhs, ..), Union::Float(rhs, ..)) => lhs == rhs,
+        (Union::Struct(lhs, ..), Union::Struct(rhs, ..)) => {
+            lhs.identity() == rhs.identity()
+                && lhs.schema() == rhs.schema()
+                && lhs.fields().len() == rhs.fields().len()
+                && lhs
+                    .fields()
+                    .iter()
+                    .zip(rhs.fields())
+                    .all(|(lhs, rhs)| equal_value(lhs, rhs))
+        }
+        (Union::Enum(lhs, ..), Union::Enum(rhs, ..)) => {
+            lhs.identity() == rhs.identity()
+                && lhs.schema() == rhs.schema()
+                && lhs.variant() == rhs.variant()
+                && lhs.payload().len() == rhs.payload().len()
+                && lhs
+                    .payload()
+                    .iter()
+                    .zip(rhs.payload())
+                    .all(|(lhs, rhs)| equal_value(lhs, rhs))
+        }
+        // Vectors, arrays and tuples compare element by element.
+        (Union::Array(lhs, ..), Union::Array(rhs, ..)) => {
+            lhs.len() == rhs.len()
+                && lhs
+                    .iter()
+                    .zip(rhs.iter())
+                    .all(|(lhs, rhs)| equal_value(lhs, rhs))
+        }
+        // An `i128` or a `u128` past `i64`, boxed.
+        (Union::Variant(..), Union::Variant(..) | Union::Int(..))
+        | (Union::Int(..), Union::Variant(..))
+            if let Some(ordering) = wide_order(lhs, rhs) =>
+        {
+            ordering == std::cmp::Ordering::Equal
+        }
+        (Union::Variant(..), Union::Variant(..)) => {
+            crate::host::value::host_equal(lhs, rhs).unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+pub(super) const COMPARISON: u8 = 3;
+
+/// Whether `ty` is one of `allowed`, any integer or float kind standing for
+/// every kind of its class.
+pub(super) fn allowed_type(allowed: &[Ty], ty: &Ty) -> bool {
+    allowed.iter().any(|allowed| match (allowed, ty) {
+        (Ty::Int(_), Ty::Int(_)) | (Ty::Float(_), Ty::Float(_)) => true,
+        (allowed, ty) => allowed == ty,
+    })
+}
