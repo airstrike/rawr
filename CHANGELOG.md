@@ -108,6 +108,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `#[cfg(..)]` and `#[cfg_attr(..)]` on a struct expression's field, a match arm, an array or tuple element or a call argument leave it out where they don't hold, as in rustc. This covers crate structs such as iced's `window::Settings { #[cfg(target_os = "macos")] platform_specific: .., ..Default::default() }`. `target_os`, `unix`, `debug_assertions` and every other cfg follow `rustc --print cfg` for the target and profile Cargo builds with. (#1331)
 - A crate function's array types work as in Rust: `[T; N]` by value with a const-generic `N` taken from the array you pass (`Row::with_children([a, b])`), `&[T; N]`, `&mut [T; N]` whose writes reach your array or a crate struct's field (`fill(&mut pixel.0, 7)`), and `-> [u8; 4]` results. (#1330, #1324)
 - A crate macro's children convert through the crate's From impl for their own full type, as rustc selects it: a widget crate's generic Text whose theme only the impl fixes, the crate's own builders, a program's own From impl, and a type reached through a re-export. A child no impl takes gets rustc's E0277 with the types the impls take, never "unknown member". (#1336)
+- A crate method's `&mut` of a value a scope frame's region holds, and an `Option<&mut T>` a crate method returns (as pane_grid's `state.get_mut(pane)`), are now called once and held for the statement or binding, as rustc holds them. Such methods are now places whatever their other inputs are. (#1333, #1334)
 
 ## 0.3.171 (2026-11-07)
 
