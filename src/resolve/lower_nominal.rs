@@ -45,6 +45,7 @@ mod models;
 mod moves;
 mod mutability;
 mod names;
+mod naming;
 mod op;
 mod operator;
 mod origin;
@@ -156,6 +157,18 @@ use models::ScriptTraitImpl;
 #[cfg(test)]
 use models::{model_clones, reset_model_clones};
 use models::{Models, Nominal, ScriptFunction};
+use naming::{
+    conversion_placeholder, function_name, instance_dispatcher_name, instance_placeholder,
+    instance_text, method_name, pattern_name, private_method_name, static_dispatcher_name,
+    static_instance_dispatcher_name, static_instance_placeholder, text_into_placeholder,
+    trait_dispatcher_name, witness_placeholder, witness_variable, CLOSURE_SENTINEL,
+    DEFAULT_DISPATCHER, FALLBACK_INSTANCE, METHOD_SENTINEL, NATIVE_ONLY, PRIVATE_PREFIX, SENTINEL,
+};
+/// The last parameter of an async body's step function: `()` to start, or
+/// the frame it resumes from.
+pub(crate) use naming::{
+    function_display_name, private_function_name, DEBUG_DISPATCHER, DEBUG_GENERIC,
+};
 #[cfg(test)]
 use op::builtin_type_key;
 #[cfg(feature = "rust-import")]
@@ -200,32 +213,10 @@ use wide::{
     PendingFloatKind, PendingWide, Wide,
 };
 pub(crate) use wide::{wide_operator, wide_range};
-
-const SENTINEL: &str = "__rawr_nominal_op_";
-const METHOD_SENTINEL: &str = "__rawr_nominal_method_";
-const FUNCTION_SENTINEL: &str = "__rawr_nominal_function_";
-/// A rewrite's target for a script function's own name where the lowered
-/// text calls something else by it: the call reaches only the runtime's
-/// functions (`rewrite_call`).
-const NATIVE_ONLY: &str = "\0rawr.native-only";
-const DISPATCH_SENTINEL: &str = "__rawr_nominal_dispatch_";
-/// The program's dispatcher of `Debug::fmt`, present when it has a
-/// hand-written `Debug` impl; it falls back to [`DEBUG_GENERIC`].
-pub(crate) const DEBUG_DISPATCHER: &str = "__rawr_nominal_dispatch_Debug__fmt";
-/// The `Debug` text of any value: a derive's, a builtin's or a crate
-/// type's. Present when the program formats with `Debug` or a debugger is
-/// registered while it compiles.
-pub(crate) const DEBUG_GENERIC: &str = "\0rawr.generic.debug";
-/// The generated function from a type witness to that type's default.
-const DEFAULT_DISPATCHER: &str = "__rawr_nominal_default";
-const CLOSURE_SENTINEL: &str = "__rawr_nominal_closure_";
-/// The last parameter of an async body's step function: `()` to start, or
-/// the frame it resumes from.
 const ASYNC_RESUME: &str = "__rawr_resume";
 /// The core's function an async body's step function is passed to, where
 /// no host's `Task` runs futures.
 const CORE_ASYNC: &str = "rawr::future::script";
-const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
 /// Why a crate call can't take the program's function that builds its
 /// message, as `Message::Changed` given to iced's `on_input`, here.
 #[cfg(feature = "rust-import")]
@@ -848,30 +839,6 @@ fn method_copied(definition: &method::Definition, _models: &Models) -> Vec<usize
     copied_parameters(definition.parameters(), None, definition.formatter())
 }
 
-fn method_name(id: method::Id) -> String {
-    format!("{METHOD_SENTINEL}{}", id.index())
-}
-
-fn function_name(id: crate::item::Id) -> String {
-    format!("{FUNCTION_SENTINEL}{}", id.index())
-}
-
-pub(crate) fn private_function_name(key: &crate::item::Key) -> ImmutableString {
-    format!("{PRIVATE_FUNCTION}{key}").into()
-}
-
-const PRIVATE_FUNCTION: &str = "\0rawr.function.";
-
-/// A function's name as a user reads it: a private function's path in its
-/// crate (`main::geometry::area`), and any other name as it is.
-pub(crate) fn function_display_name(name: &str) -> &str {
-    name.strip_prefix(PRIVATE_FUNCTION).unwrap_or(name)
-}
-
-fn private_method_name(definition: &method::Definition) -> String {
-    definition.symbol().into()
-}
-
 /// A path naming a free value and free functions, as a Rust `fn` item: the
 /// value where it is not called, the functions where it is.
 /// A facade path may name a macro and a value independently, as in Rust:
@@ -937,10 +904,6 @@ fn field_or_builder(
         .into_iter()
         .filter(|item| reader(item) == field)
         .collect()
-}
-
-fn pattern_name(index: usize) -> String {
-    format!("{NOMINAL_MATCH_SENTINEL}{index}")
 }
 
 /// The path of each trait object type the program's sources write, by its
@@ -1321,14 +1284,6 @@ struct TextInto {
     placeholder: String,
 }
 
-/// The placeholder of the `text.into()` numbered `index`.
-fn text_into_placeholder(index: usize) -> String {
-    // One more than any helper name, for the `(` written after it.
-    let head = format!("__rawr_nominal_text_into_{index:010}");
-    let width = head.len() + 1;
-    format!("{head:_<width$}")
-}
-
 struct PendingConversion {
     placeholder: String,
     source: Ty,
@@ -1578,29 +1533,6 @@ fn without_reference(mut tokens: Vec<(Token, Position)>) -> Vec<(Token, Position
     tokens
 }
 
-/// The text of a generic trait's argument list: `i64, String`.
-fn instance_text(arguments: &[type_ref::Type]) -> String {
-    arguments
-        .iter()
-        .map(crate::resolve::full_type_name)
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The dispatcher of `trait_name::method` for the trait's instance
-/// `index` of a generic trait; `FALLBACK_INSTANCE` dispatches by the
-/// receiver's type alone. Same length as `instance_placeholder`.
-fn instance_dispatcher_name(trait_name: &str, method: &str, index: usize) -> String {
-    format!("{DISPATCH_SENTINEL}{trait_name}__{method}__{index:08}")
-}
-
-/// A call's dispatcher before inference fixes its trait arguments.
-fn instance_placeholder(trait_name: &str, method: &str, pending: usize) -> String {
-    format!("{DISPATCH_SENTINEL}{trait_name}__{method}__p{pending:07}")
-}
-
-const FALLBACK_INSTANCE: usize = 99_999_999;
-
 /// Each generic parameter's generic trait bounds' arguments:
 /// `(U, Convert)` to `[[i64]]` for `U: Convert<i64>`, and to
 /// `[[i64], [String]]` for `U: Convert<i64> + Convert<String>`.
@@ -1654,33 +1586,6 @@ fn static_trait(models: &Models, name: &str) -> bool {
             .iter()
             .any(|function| function.receiver.is_none())
     })
-}
-
-/// The generated function that runs `trait_name::function`, a function
-/// without `self`, for the type a witness names.
-fn static_dispatcher_name(trait_name: &str, function: &str) -> String {
-    format!("{DISPATCH_SENTINEL}static_{trait_name}__{function}")
-}
-
-/// The static dispatcher of a generic trait's function without `self` for
-/// the trait's instance `index`, as `instance_dispatcher_name`.
-fn static_instance_dispatcher_name(trait_name: &str, function: &str, index: usize) -> String {
-    format!("{DISPATCH_SENTINEL}static_{trait_name}__{function}__{index:08}")
-}
-
-/// A static call's dispatcher before inference fixes its trait arguments.
-fn static_instance_placeholder(trait_name: &str, function: &str, pending: usize) -> String {
-    format!("{DISPATCH_SENTINEL}static_{trait_name}__{function}__p{pending:07}")
-}
-
-/// The hidden parameter carrying the witness of the generic `name`.
-fn witness_variable(name: &str) -> String {
-    format!("__rawr_witness_{name}")
-}
-
-/// A placeholder long enough for any witness it becomes.
-fn witness_placeholder(index: usize) -> String {
-    format!("__rawr_nominal_witness_{index:024}")
 }
 
 /// Every generic parameter list an item declares.
@@ -1764,12 +1669,6 @@ fn generic_traits(generics: &[item::Generic]) -> BTreeMap<ImmutableString, Box<[
         .collect()
 }
 
-/// The generated function that runs `trait_name::method` for a value by its
-/// runtime type.
-fn trait_dispatcher_name(trait_name: &str, method: &str) -> String {
-    format!("{DISPATCH_SENTINEL}{trait_name}__{method}")
-}
-
 /// The capabilities a bound set names.
 fn bound_kinds(bounds: capability::Set) -> impl Iterator<Item = capability::Kind> {
     [
@@ -1784,11 +1683,6 @@ fn bound_kinds(bounds: capability::Set) -> impl Iterator<Item = capability::Kind
     ]
     .into_iter()
     .filter(move |kind| bounds.contains(*kind))
-}
-
-/// A placeholder long enough for any method helper name it becomes.
-fn conversion_placeholder(index: usize) -> String {
-    format!("__rawr_nominal_conversion_{index:010}")
 }
 
 /// The head `dispatcher(witness, ` of `T::from(x)` for a generic target
