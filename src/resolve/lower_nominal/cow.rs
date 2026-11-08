@@ -473,7 +473,7 @@ impl Parser<'_> {
             store,
         };
         let lvalue = match &lvalue {
-            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(NestedLvalue {
+            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(lvalue::Nested {
                 binding: binding.clone(),
                 base: origin::Fragment::plain(binding.to_string()),
                 steps: vec![step],

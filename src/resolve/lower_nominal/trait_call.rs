@@ -1192,7 +1192,7 @@ impl<'a> Parser<'a> {
             place = match &value.lvalue {
                 Some(Lvalue::Place { place, .. }) => Some(place.clone()),
                 Some(Lvalue::Field(field)) => {
-                    let nested = NestedLvalue {
+                    let nested = lvalue::Nested {
                         binding: field.binding.clone(),
                         base: origin::Fragment::plain(field.binding.to_string()),
                         steps: vec![PlaceStep::Field { slot: field.slot }],

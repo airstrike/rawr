@@ -498,7 +498,7 @@ impl Parser<'_> {
                             kind: BindingKind::Local,
                         },
                     );
-                    expression.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
+                    expression.lvalue = Some(Lvalue::Nested(Box::new(lvalue::Nested {
                         binding: place.as_str().into(),
                         base: borrow.clone(),
                         steps: vec![PlaceStep::Cell {
@@ -719,7 +719,7 @@ impl Parser<'_> {
             at,
         );
         if mutable {
-            value.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
+            value.lvalue = Some(Lvalue::Nested(Box::new(lvalue::Nested {
                 binding: name.clone(),
                 base: origin::Fragment::plain(guard),
                 steps: vec![PlaceStep::Cell {

@@ -6,7 +6,7 @@ use super::{field_place, origin};
 use crate::{type_def, ImmutableString};
 
 #[derive(Clone)]
-pub(super) struct FieldLvalue {
+pub(super) struct Field {
     pub(super) binding: ImmutableString,
     pub(super) definition: type_def::Definition,
     pub(super) slot: usize,
@@ -15,7 +15,7 @@ pub(super) struct FieldLvalue {
     pub(super) ty: Ty,
 }
 
-impl FieldLvalue {
+impl Field {
     /// The field itself, `binding[slot]`, which the runtime reads, assigns
     /// and calls methods on where it is.
     pub(super) fn place(&self) -> origin::Fragment {
@@ -29,7 +29,7 @@ pub(super) enum Lvalue {
         binding: ImmutableString,
         ty: Ty,
     },
-    Field(FieldLvalue),
+    Field(Field),
     /// An element of a local array: `binding[index]`.
     Place {
         binding: ImmutableString,
@@ -38,15 +38,15 @@ pub(super) enum Lvalue {
     },
     /// `place[low..high]` of a local's array (`base`): changed through a
     /// copy stored back over the range (`slice_copy`).
-    Slice(Box<SliceLvalue>),
+    Slice(Box<Slice>),
     /// A place through at least one field below a local or its element:
     /// `s.cells[i]`, `v[0].cells[j]`, `s.a.b`, changed through a copy of
     /// each field on the way, stored back (`nested_parts`).
-    Nested(Box<NestedLvalue>),
+    Nested(Box<Nested>),
 }
 
 #[derive(Clone)]
-pub(super) struct NestedLvalue {
+pub(super) struct Nested {
     /// The root binding, whose mutability the place needs.
     pub(super) binding: ImmutableString,
     /// The place the runtime assigns directly: the binding or an element
@@ -101,7 +101,7 @@ pub(super) enum PlaceStep {
 
 /// Whether `op=` on `nested` opens it ([`Parser::open_compound`]): it
 /// passes through a `RefCell` borrow or a borrow guard.
-pub(super) fn opens_compound(nested: &NestedLvalue) -> bool {
+pub(super) fn opens_compound(nested: &Nested) -> bool {
     // A place a call returns (`*c.slot(1) += 5`) calls it once too.
     nested.steps.iter().any(|step| {
         matches!(
@@ -135,7 +135,7 @@ impl OpenedPlace {
 }
 
 #[derive(Clone)]
-pub(super) struct SliceLvalue {
+pub(super) struct Slice {
     pub(super) binding: ImmutableString,
     pub(super) ty: Ty,
     pub(super) base: origin::Fragment,

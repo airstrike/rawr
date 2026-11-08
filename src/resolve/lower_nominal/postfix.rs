@@ -1388,7 +1388,7 @@ impl<'a> Parser<'a> {
                     Some(nested_step(lvalue, PlaceStep::Field { slot }, ty.clone()))
                 }
                 _ => variable_name(value.source.as_str()).map(|binding| {
-                    Lvalue::Field(FieldLvalue {
+                    Lvalue::Field(lvalue::Field {
                         binding,
                         definition: definition.clone(),
                         slot,
@@ -1399,7 +1399,7 @@ impl<'a> Parser<'a> {
             };
             let lvalue = match (lvalue, &value.lvalue) {
                 (None, Some(Lvalue::Binding { binding, .. })) if self.drops() => {
-                    Some(Lvalue::Field(FieldLvalue {
+                    Some(Lvalue::Field(lvalue::Field {
                         binding: binding.clone(),
                         definition: definition.clone(),
                         slot,
@@ -2017,7 +2017,7 @@ impl<'a> Parser<'a> {
             _ => None,
         }
         .map(|(binding, base)| {
-            Lvalue::Slice(Box::new(SliceLvalue {
+            Lvalue::Slice(Box::new(lvalue::Slice {
                 binding,
                 ty: ty.clone(),
                 base,

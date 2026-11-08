@@ -119,10 +119,7 @@ use imported::{ImplArguments, ImplUse};
 use inference::{inference_metrics, reset_inference_metrics};
 use inference::{Checkpoint, Inference, Patch};
 use keyed::keyed_query;
-use lvalue::{
-    opens_compound, FieldLvalue, Lvalue, NestedLvalue, OpenedPlace, PlaceStep, SliceLvalue,
-    Writeback,
-};
+use lvalue::{opens_compound, Lvalue, OpenedPlace, PlaceStep, Writeback};
 #[cfg(feature = "rust-import")]
 use models::ScriptTraitImpl;
 #[cfg(test)]
@@ -13026,7 +13023,7 @@ impl<'a> Parser<'a> {
             store,
         };
         let lvalue = match &lvalue {
-            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(NestedLvalue {
+            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(lvalue::Nested {
                 binding: binding.clone(),
                 base: origin::Fragment::plain(binding.to_string()),
                 steps: vec![step],
@@ -13094,7 +13091,7 @@ impl<'a> Parser<'a> {
             store,
         };
         let lvalue = match &lvalue {
-            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(NestedLvalue {
+            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(lvalue::Nested {
                 binding: binding.clone(),
                 base: origin::Fragment::plain(binding.to_string()),
                 steps: vec![step],
@@ -13631,7 +13628,7 @@ impl<'a> Parser<'a> {
                 kind: BindingKind::Local,
             },
         );
-        expression.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
+        expression.lvalue = Some(Lvalue::Nested(Box::new(lvalue::Nested {
             binding: place.as_str().into(),
             base: borrow.clone(),
             steps: vec![PlaceStep::Cell {
@@ -13732,7 +13729,7 @@ impl<'a> Parser<'a> {
         let mut parsed = self.operator_expr(source.surrounded("(", ")"), ty, call);
         parsed.outcome = value.outcome;
         parsed.evaluation = value.evaluation;
-        parsed.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
+        parsed.lvalue = Some(Lvalue::Nested(Box::new(lvalue::Nested {
             binding: slot.as_str().into(),
             base: place,
             steps: vec![PlaceStep::Cell {
@@ -14734,7 +14731,7 @@ impl<'a> Parser<'a> {
     /// local is partially moved. A later use of the field, or of the
     /// whole local, is rustc's E0382. The other fields stay usable, and
     /// assigning the field makes it usable again.
-    fn move_field(&mut self, value: &mut ParsedExpr, field: &FieldLvalue) -> Result<(), Error> {
+    fn move_field(&mut self, value: &mut ParsedExpr, field: &lvalue::Field) -> Result<(), Error> {
         let Some(binding) = self.bindings.get(field.binding.as_str()) else {
             return Ok(());
         };
@@ -15537,7 +15534,7 @@ impl<'a> Parser<'a> {
                 };
                 match lvalue {
                     Lvalue::Binding { binding, .. } => {
-                        Some(Lvalue::Nested(Box::new(NestedLvalue {
+                        Some(Lvalue::Nested(Box::new(lvalue::Nested {
                             binding: binding.clone(),
                             base: origin::Fragment::plain(binding.to_string()),
                             steps: vec![step],
@@ -21873,7 +21870,7 @@ impl<'a> Parser<'a> {
     /// into a local, the leaf set, and the fields stored back.
     fn store_nested(
         &mut self,
-        nested: &NestedLvalue,
+        nested: &lvalue::Nested,
         replacement: origin::Fragment,
     ) -> origin::Fragment {
         let (read, place, store) = self.nested_parts_with(nested, true, None);
@@ -21896,7 +21893,7 @@ impl<'a> Parser<'a> {
     /// guard's method is called once to read, change and store the value.
     fn open_compound(
         &mut self,
-        nested: &NestedLvalue,
+        nested: &lvalue::Nested,
         at: Span,
         replacement: &mut ParsedExpr,
     ) -> (ParsedExpr, OpenedPlace) {
@@ -21939,7 +21936,7 @@ impl<'a> Parser<'a> {
     /// place, and the statements storing the fields back, innermost first.
     fn nested_parts(
         &mut self,
-        nested: &NestedLvalue,
+        nested: &lvalue::Nested,
     ) -> (origin::Fragment, origin::Fragment, origin::Fragment) {
         self.nested_parts_with(nested, false, None)
     }
@@ -21952,7 +21949,7 @@ impl<'a> Parser<'a> {
     /// ([`Self::cell_update_step`]).
     fn nested_parts_with(
         &mut self,
-        nested: &NestedLvalue,
+        nested: &lvalue::Nested,
         overwrite: bool,
         updates: Option<&str>,
     ) -> (origin::Fragment, origin::Fragment, origin::Fragment) {
@@ -22044,7 +22041,7 @@ impl<'a> Parser<'a> {
     /// A nested place changed by the statement being read (a method on it,
     /// `push`): its fields copied out before the statement and stored back
     /// after it (`field_entries`); the leaf's place.
-    fn nested_place(&mut self, nested: &NestedLvalue) -> origin::Fragment {
+    fn nested_place(&mut self, nested: &lvalue::Nested) -> origin::Fragment {
         let (read, place, store) = self.nested_parts(nested);
         self.field_entries.push((read, store));
         place
@@ -36758,13 +36755,13 @@ const SELF_CAPTURE: &str = "__rawr_self";
 fn nested_step(lvalue: &Lvalue, step: PlaceStep, ty: Ty) -> Lvalue {
     let mut nested = match lvalue {
         Lvalue::Nested(nested) => (**nested).clone(),
-        Lvalue::Field(field) => NestedLvalue {
+        Lvalue::Field(field) => lvalue::Nested {
             binding: field.binding.clone(),
             base: origin::Fragment::plain(field.binding.to_string()),
             steps: vec![PlaceStep::Field { slot: field.slot }],
             ty: field.ty.clone(),
         },
-        Lvalue::Place { binding, place, .. } => NestedLvalue {
+        Lvalue::Place { binding, place, .. } => lvalue::Nested {
             binding: binding.clone(),
             base: place.clone(),
             steps: Vec::new(),
