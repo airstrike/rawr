@@ -2801,3 +2801,16 @@ pub(super) fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
     };
     Ok(result)
 }
+
+pub(super) fn default_value(
+    model: &Nominal,
+    models: &Models,
+    _stack: &mut Vec<type_def::Id>,
+) -> Option<Dynamic> {
+    let definition = model.definition();
+    let identity = type_def::Identity::Script(definition.key().clone());
+    models
+        .runtime
+        .materialize_default(&identity, definition.schema())
+        .ok()
+}

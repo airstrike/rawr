@@ -123,6 +123,7 @@ use crate::{
     capability, method, receiver, type_def, Dynamic, Engine, EvalAltResult, ImmutableString,
     Position, RawrResult, Scope, Shared, Span, INT,
 };
+use builtin_method::default_value;
 pub(crate) use builtin_method::slice_window;
 use builtin_method::{
     char_method, int_method, primitive_size, slice_value, str_change, str_method, str_pieces,
@@ -1259,19 +1260,6 @@ impl<'a> Parser<'a> {
             );
         }
     }
-}
-
-fn default_value(
-    model: &Nominal,
-    models: &Models,
-    _stack: &mut Vec<type_def::Id>,
-) -> Option<Dynamic> {
-    let definition = model.definition();
-    let identity = type_def::Identity::Script(definition.key().clone());
-    models
-        .runtime
-        .materialize_default(&identity, definition.schema())
-        .ok()
 }
 pub(crate) use cell::{cell_held, cell_lock, cell_new, is_cell};
 use conversion::{HostInto, PendingConversion, TextInto};
