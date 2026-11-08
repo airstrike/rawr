@@ -5,6 +5,7 @@
 
 use crate::page::{self, Message, Task};
 
+#[derive(Clone, Debug)]
 pub struct BadgePage {
     page_index: usize,
     count: usize,
@@ -32,6 +33,12 @@ impl page::Page for BadgePage {
 
     fn view(&self) -> String {
         format!("{} {}", self.label, self.count)
+    }
+
+    // The shown page at `index` may be this one: its `title` runs while
+    // this call does, sharing the page.
+    fn summary(&self, index: usize) -> String {
+        format!("{} sees {}", self.view(), page::title_of(index))
     }
 }
 

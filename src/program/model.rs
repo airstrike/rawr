@@ -103,6 +103,9 @@ struct Names {
     fields: Option<Box<[ImmutableString]>>,
     /// Each struct variant's fields.
     variants: BTreeMap<nominal::variant::Id, Box<[ImmutableString]>>,
+    /// An enum's variants in declaration order, which a derived
+    /// `PartialOrd` orders them by.
+    order: Box<[nominal::variant::Id]>,
 }
 
 #[derive(Clone)]
@@ -148,6 +151,7 @@ impl Model {
                             .collect()
                     }),
                     variants: BTreeMap::new(),
+                    order: Box::default(),
                 },
                 item::Kind::Enum(item) => Names {
                     name: item.name.text.clone(),
@@ -162,6 +166,11 @@ impl Model {
                                 fields.iter().map(|field| field.text.clone()).collect(),
                             ))
                         })
+                        .collect(),
+                    order: item
+                        .variants
+                        .iter()
+                        .map(|variant| nominal::variant::Id::from_name(&variant.name))
                         .collect(),
                 },
                 _ => continue,
