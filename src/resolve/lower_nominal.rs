@@ -4044,32 +4044,6 @@ impl<'a> Parser<'a> {
         found
     }
 
-    /// rustc's `overflowing_literals` error for the integer literal at
-    /// `at`, whose number `value` `kind` can't hold: the literal as the
-    /// program writes it, suffix included.
-    fn overflowing(&self, kind: Int, value: Wide, at: Span) -> Error {
-        let written = self
-            .written_from(at.start())
-            .map(|line| {
-                let mut chars = line.char_indices();
-                let start = usize::from(line.starts_with('-'));
-                let end = chars
-                    .find(|&(index, character)| {
-                        index >= start && !(character.is_alphanumeric() || character == '_')
-                    })
-                    .map_or(line.len(), |(index, _)| index);
-                line[..end].to_string()
-            })
-            .filter(|written| {
-                written
-                    .trim_start_matches('-')
-                    .starts_with(|c: char| c.is_ascii_digit())
-            })
-            .unwrap_or_else(|| value.to_string());
-        let literal = span(at.start(), text_end(at.start(), &written));
-        overflow::error(kind, value, &written, literal)
-    }
-
     fn private_call(
         &mut self,
         helper: &str,

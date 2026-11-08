@@ -1,7 +1,10 @@
 //! rustc's deny-by-default `overflowing_literals` lint: an integer literal
 //! its type can't hold is an error, "literal out of range for `u8`".
 
-use super::{Error, Int, Wide};
+use super::ty::Int;
+use super::wide::Wide;
+use super::{span, text_end, Parser};
+use crate::resolve::Error;
 use crate::Span;
 
 /// The lint's error for the literal `written`, whose number is `value`, of
@@ -78,5 +81,33 @@ fn wrapped(kind: Int, value: Wide) -> String {
         (((pattern << shift) as i128) >> shift).to_string()
     } else {
         pattern.to_string()
+    }
+}
+
+impl<'a> Parser<'a> {
+    /// rustc's `overflowing_literals` error for the integer literal at
+    /// `at`, whose number `value` `kind` can't hold: the literal as the
+    /// program writes it, suffix included.
+    pub(super) fn overflowing(&self, kind: Int, value: Wide, at: Span) -> Error {
+        let written = self
+            .written_from(at.start())
+            .map(|line| {
+                let mut chars = line.char_indices();
+                let start = usize::from(line.starts_with('-'));
+                let end = chars
+                    .find(|&(index, character)| {
+                        index >= start && !(character.is_alphanumeric() || character == '_')
+                    })
+                    .map_or(line.len(), |(index, _)| index);
+                line[..end].to_string()
+            })
+            .filter(|written| {
+                written
+                    .trim_start_matches('-')
+                    .starts_with(|c: char| c.is_ascii_digit())
+            })
+            .unwrap_or_else(|| value.to_string());
+        let literal = span(at.start(), text_end(at.start(), &written));
+        error(kind, value, &written, literal)
     }
 }
