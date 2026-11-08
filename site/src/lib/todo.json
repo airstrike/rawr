@@ -84,7 +84,8 @@
         {"text":"A method of an opaque output that gives another opaque output of the same method, as `explain(..).explain(..)` does, can be used again. The fix for #1262 had left it unusable at `rawr check`.","issues":[1270]},
         {"text":"A marked module names a native module's trait by path (`Box<dyn page::Page>`, `use crate::page::Page;`) and takes, keeps and returns its objects.","issues":[1263]},
         {"text":"A path into a dependency none of whose items rawr can use yet names the item and says why, as it does for a crate with other items, instead of rustc's \"cannot find module or crate\".","issues":[1267]},
-        {"text":"A crate's function that gives a thread's `JoinHandle`, as `open::that_in_background` does, runs: the program can ignore the handle or `.join()` it for what the thread gave.","issues":[1266]}
+        {"text":"A crate's function that gives a thread's `JoinHandle`, as `open::that_in_background` does, runs: the program can ignore the handle or `.join()` it for what the thread gave.","issues":[1266]},
+        {"text":"A marked crate with Rust dependencies follows Cargo's features: `cfg(feature)` in marked code and in native modules holds as under `cargo run`, with `--features`, `--no-default-features` and `--all-features`.","issues":[1268]}
       ]
     },
     "releases": [
@@ -2960,7 +2961,7 @@
     {"issue":1265,"title":"The iced reference page is removed: it hedged about special cases rawr never had and named a nonexistent #[widget]","state":"open","category":"Health"},
     {"issue":1266,"title":"iced tour: `open::that_in_background(..)` gives E0433 cannot find module or crate `open`; cargo check passes","state":"closed","category":"Divergences from rustc"},
     {"issue":1267,"title":"A dependency whose every item is left out reads as an unknown crate (E0433) instead of naming the unsupported item","state":"closed","category":"Divergences from rustc"},
-    {"issue":1268,"title":"rawr-import's runner and generated crate don't get the package's features","state":"open","category":"Divergences from rustc"},
+    {"issue":1268,"title":"rawr-import's runner and generated crate don't get the package's features","state":"closed","category":"Divergences from rustc"},
     {"issue":1269,"title":"A closure on another thread giving a non-Send crate value, or a tuple mixing crate and program values, still panics","state":"open","category":"Divergences from rustc"},
     {"issue":1270,"title":"An opaque type's supertrait binding to Self is dropped, not read as the opaque type","state":"closed","category":"Divergences from rustc"},
     {"issue":1271,"title":"An opaque type's Add, as impl Number gets it through a supertrait, gives the + operator","state":"open","category":"Divergences from rustc"},
@@ -2968,7 +2969,9 @@
     {"issue":1273,"title":"A native module's unit struct used as a value (`page::Home`) can't be used yet","state":"open","category":"Divergences from rustc"},
     {"issue":1274,"title":"A crate's JoinHandle nested in an output (Option, Result, a tuple) or taken as an input crosses","state":"open","category":"Divergences from rustc"},
     {"issue":1275,"title":"A crate's JoinHandle<T> of a T that holds crate values crosses","state":"open","category":"Divergences from rustc"},
-    {"issue":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"open","category":"Divergences from rustc"}
+    {"issue":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"open","category":"Divergences from rustc"},
+    {"issue":1277,"title":"rawr-import: a dependency's feature named on the command line (`--features dep/feat`) reaches the dependency","state":"open","category":"Divergences from rustc"},
+    {"issue":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3822,9 +3825,11 @@
             {"number":1262,"title":"rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"closed"},
             {"number":1263,"title":"A marked module can't name a native non-root module's trait or type by path (`page::Page`): E0425","state":"closed"},
             {"number":1264,"title":"A marked type implements a native trait and crosses to native code as `Box<dyn Trait>`, whose methods native code calls","state":"open"},
-            {"number":1268,"title":"rawr-import's runner and generated crate don't get the package's features","state":"open"},
+            {"number":1268,"title":"rawr-import's runner and generated crate don't get the package's features","state":"closed"},
             {"number":1272,"title":"A marked pub fn whose argument is a native alias of a wire type (`type Width = usize`) gets a native handle at the call","state":"open"},
-            {"number":1273,"title":"A native module's unit struct used as a value (`page::Home`) can't be used yet","state":"open"}
+            {"number":1273,"title":"A native module's unit struct used as a value (`page::Home`) can't be used yet","state":"open"},
+            {"number":1277,"title":"rawr-import: a dependency's feature named on the command line (`--features dep/feat`) reaches the dependency","state":"open"},
+            {"number":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"open"}
           ]
         }
       ]

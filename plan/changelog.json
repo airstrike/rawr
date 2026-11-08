@@ -77,7 +77,8 @@
       {"text":"A method of an opaque output that gives another opaque output of the same method, as `explain(..).explain(..)` does, can be used again. The fix for #1262 had left it unusable at `rawr check`.","issues":[1270]},
       {"text":"A marked module names a native module's trait by path (`Box<dyn page::Page>`, `use crate::page::Page;`) and takes, keeps and returns its objects.","issues":[1263]},
       {"text":"A path into a dependency none of whose items rawr can use yet names the item and says why, as it does for a crate with other items, instead of rustc's \"cannot find module or crate\".","issues":[1267]},
-      {"text":"A crate's function that gives a thread's `JoinHandle`, as `open::that_in_background` does, runs: the program can ignore the handle or `.join()` it for what the thread gave.","issues":[1266]}
+      {"text":"A crate's function that gives a thread's `JoinHandle`, as `open::that_in_background` does, runs: the program can ignore the handle or `.join()` it for what the thread gave.","issues":[1266]},
+      {"text":"A marked crate with Rust dependencies follows Cargo's features: `cfg(feature)` in marked code and in native modules holds as under `cargo run`, with `--features`, `--no-default-features` and `--all-features`.","issues":[1268]}
     ]
   },
   "releases": [

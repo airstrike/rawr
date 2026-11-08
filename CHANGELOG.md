@@ -78,6 +78,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked module names a native module's trait by path (`Box<dyn page::Page>`, `use crate::page::Page;`) and takes, keeps and returns its objects. (#1263)
 - A path into a dependency none of whose items rawr can use yet names the item and says why, as it does for a crate with other items, instead of rustc's "cannot find module or crate". (#1267)
 - A crate's function that gives a thread's `JoinHandle`, as `open::that_in_background` does, runs: the program can ignore the handle or `.join()` it for what the thread gave. (#1266)
+- A marked crate with Rust dependencies follows Cargo's features: `cfg(feature)` in marked code and in native modules holds as under `cargo run`, with `--features`, `--no-default-features` and `--all-features`. (#1268)
 
 ## 0.3.171 (2026-11-07)
 
