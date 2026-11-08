@@ -1347,6 +1347,8 @@
     {"t":"T1344","issue":1344,"title":"T1344: A file without `mod` items resolves `crate::`, `self::` and `super::` paths","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1345","issue":1345,"title":"T1345: `pub use Enum::Variant;` re-exports a crate enum's variant","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1346","issue":1346,"title":"T1346: The file watcher fails to start on a large project: `unable to start FSEvent stream`; watch the inputs, not the tree","state":"open","category":"Health","labels":["health"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
-    {"t":"T1347","issue":1347,"title":"T1347: One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open","category":"Health","labels":["health"],"gantt":{"group":"ship","row":"example-sweeps"},"decisions":[],"commit":null,"release":null}
+    {"t":"T1347","issue":1347,"title":"T1347: One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open","category":"Health","labels":["health"],"gantt":{"group":"ship","row":"example-sweeps"},"decisions":[],"commit":null,"release":null},
+    {"t":"T1348","issue":1348,"title":"T1348: In a single file with modules, a top-level statement such as `picks::Count(2)` or…","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1349","issue":1349,"title":"T1349: `pub use inner::*;` inside a module binds inner's names only within that module; rustc…","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

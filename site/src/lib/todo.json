@@ -3074,7 +3074,9 @@
     {"issue":1344,"title":"A file without `mod` items resolves `crate::`, `self::` and `super::` paths","state":"open","category":"Divergences from rustc"},
     {"issue":1345,"title":"`pub use Enum::Variant;` re-exports a crate enum's variant","state":"open","category":"Divergences from rustc"},
     {"issue":1346,"title":"The file watcher fails to start on a large project: `unable to start FSEvent stream`; watch the inputs, not the tree","state":"open","category":"Health"},
-    {"issue":1347,"title":"One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open","category":"Health"}
+    {"issue":1347,"title":"One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open","category":"Health"},
+    {"issue":1348,"title":"In a single file with modules, a top-level statement such as `picks::Count(2)` or…","state":"open","category":"Divergences from rustc"},
+    {"issue":1349,"title":"`pub use inner::*;` inside a module binds inner's names only within that module; rustc…","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
