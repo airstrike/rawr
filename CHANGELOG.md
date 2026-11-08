@@ -116,6 +116,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A single-file program names its own items through `crate::`, `self::` and `super::` as rustc does, in types, values, calls, patterns and `use`, with rustc's error for `super::` at the root. (#1344)
 - `pub use` of an enum variant, by name or by glob, re-exports it from its module, for the program's enums and a crate's. (#1345)
 - `rawr run` watches the program's inputs, not the project tree: nothing under `target/` reaches the file watcher, so rawr's own builds no longer count as saves, and a project with a huge `target/` starts its watcher. If macOS refuses the watcher's stream, the error says so and lists the paths rawr asked for. (#1346; part of #1222)
+- `clock.strftime("%H:%M")` fills `F: ?Sized` with the unsized `str`; instance_surface_type had no case for that type, so the call carried no instance key and fell back to the item's shared binding, the adapter of whichever instance registered first, in an order set by hashes. New crates in the crate-shapes fixture flipped that order and the literal reached the `[u8]` adapter: the 'a value reached an adapter as a type its signature doesn't take' panic, deterministic in one lane and absent in another, which is also the shape of the #1087 flake. Ty::UnsizedStr now keys as Builtin::Str, as the adapter generator names it. Merged in 1777280a7. (#1352; part of #1087)
 
 ## 0.3.171 (2026-11-07)
 
