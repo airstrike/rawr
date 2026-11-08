@@ -90,8 +90,28 @@ pub(super) struct RawSpec {
     pub(super) kind: Kind,
 }
 
+/// Why a placeholder's `format_spec` is not one std::fmt reads.
+#[derive(Debug, PartialEq)]
+pub(super) enum InvalidSpec {
+    /// A `.` with no precision after it.
+    MissingPrecision,
+    /// The trait letters after the spec's counts, which name no trait.
+    UnknownTrait(String),
+}
+
+impl std::fmt::Display for InvalidSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingPrecision => {
+                f.write_str("invalid format string: expected a precision after `.`")
+            }
+            Self::UnknownTrait(name) => write!(f, "unknown format trait `{name}`"),
+        }
+    }
+}
+
 impl RawSpec {
-    pub(super) fn parse(spec: &str) -> Result<Self, String> {
+    pub(super) fn parse(spec: &str) -> Result<Self, InvalidSpec> {
         let chars: Vec<char> = spec.chars().collect();
         let mut at = 0;
         let mut fill = ' ';
@@ -162,9 +182,7 @@ impl RawSpec {
                 at += 1;
                 Some(CountRef::Star)
             } else {
-                Some(count(&mut at).ok_or_else(|| {
-                    "invalid format string: expected a precision after `.`".to_string()
-                })?)
+                Some(count(&mut at).ok_or(InvalidSpec::MissingPrecision)?)
             }
         } else {
             None
@@ -180,7 +198,7 @@ impl RawSpec {
             "X?" => Kind::HexDebug(-16),
             "e" => Kind::Exp { upper: false },
             "E" => Kind::Exp { upper: true },
-            other => return Err(format!("unknown format trait `{other}`")),
+            other => return Err(InvalidSpec::UnknownTrait(other.to_string())),
         };
         Ok(Self {
             fill,
@@ -940,7 +958,7 @@ impl<'a> Parser<'a> {
                         Some((name, spec)) => (name.trim().to_string(), spec.to_string()),
                         None => (written.trim().to_string(), String::new()),
                     };
-                    let spec = RawSpec::parse(&raw).map_err(invalid)?;
+                    let spec = RawSpec::parse(&raw).map_err(|error| invalid(error.to_string()))?;
                     // Each `{}`/`{:.*}` takes the next positional argument;
                     // `.*` takes one for the precision first.
                     let take_positional = |next: &mut usize| {
