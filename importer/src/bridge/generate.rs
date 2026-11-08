@@ -16054,11 +16054,19 @@ fn render_take_field(
     let kept = matches!(lent.as_ref(), convert::Type::Sequence { element, length: None, .. }
         if matches!(**element, convert::Type::Builtin(builtin) if builtin.rust_name().is_some()))
         || **lent == convert::Type::Builtin(convert::Builtin::Str);
-    if !kept {
+    let mut converted = String::new();
+    if kept {
+        render_from_dynamic(ty, "value", 0, &mut converted)?;
+    } else if matches!(lent.as_ref(), convert::Type::Sequence { length: None, .. }) {
+        // A slice of other values, as a page's `children: &'static
+        // [Block]` that a literal `&[Block::Md(".."), ..]` fills (#1283):
+        // the values, moved into a slice kept for as long as the runner
+        // lives, as rustc keeps a promoted literal's.
+        render_from_dynamic(lent, "value", 0, &mut converted)?;
+        converted = format!("({converted}).map(|values| &*Vec::leak(values))");
+    } else {
         return render_take(local, index, ty, output);
     }
-    let mut converted = String::new();
-    render_from_dynamic(ty, "value", 0, &mut converted)?;
     writeln!(
         output,
         "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
@@ -16978,6 +16986,24 @@ fn render_to_dynamic(
                 write!(output, "({converted})?, ").map_err(request::unwritable)?;
             }
             write!(output, "])) }})()")
+        }
+        // A `&[T]` of crate values a field borrows, as a page's `children:
+        // &'static [Block]` (#1283): each element copied by its type's
+        // `Clone` where it has one, and else the read is refused, as rustc
+        // refuses to move out of a borrow (E0507).
+        convert::Type::Borrowed { mutable: false, ty: lent }
+            if let convert::Type::Sequence { element, length: None, .. } = lent.as_ref()
+                && matches!(**element, convert::Type::Nominal { .. })
+                && holds_native(element)
+                && !carries_lifetime(element) =>
+        {
+            let inner = format!("inner_{depth}");
+            let mut converted = String::new();
+            render_to_dynamic(element, &inner, depth + 1, &mut converted)?;
+            write!(
+                output,
+                "{value}.iter().map(|{inner}| guard_copy!({inner})).collect::<Result<Vec<_>, Error>>().and_then(|items| items.into_iter().map(|{inner}| {converted}).collect::<Result<Vec<Dynamic>, Error>>()).map(Dynamic::from_array)"
+            )
         }
         // A `&[T]` a method lends: a copy, as Rawr's array.
         convert::Type::Borrowed { mutable: false, ty: lent }
