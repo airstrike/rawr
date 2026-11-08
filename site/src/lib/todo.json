@@ -147,7 +147,8 @@
         {"text":"A crate value passed to `impl Into<T>` where it already is a `T`, as a component crate's `badge!` passes its `Slot::new(row)` to `badge(content: impl Into<Slot<'a, Message>>)`, takes the target's type arguments, so a later use fixes the row's message as rustc does. A crate value whose type nothing settles is rustc's E0282 at its `let` instead of a runner cargo refuses.","issues":[1404]},
         {"text":"A crate that calls your function with a `&` or `&mut` of its own value, as a simulation's `update(&mut self, message, building: &Building)` does, lends you that value for the call: its type needs no `Clone`, nothing is copied, and each call sees the value as the crate holds it then. Its methods, its fields, `{}`, `{:?}` and `==` reach it where it is, and you can pass it on to the crate's functions that take `&Building`, as a view's `draw(building)` does.","issues":[1405,1406]},
         {"text":"The ?play universe runner builds again: a widget made from a borrowed `&str`, as iced's `button(label)` gives a `Button<'_, Message, &str>`, no longer fails E0597 in its generated adapter, and the generated runner compiles without warnings.","issues":[1396]},
-        {"text":"Running one workspace member after another no longer fails with E0463 (\"can't find crate for `rawr`\"). Each member's runner is now its own Cargo unit in the workspace's build directory, so one member never reuses another member's build script and the shared runtime it names.","issues":[1421]}
+        {"text":"Running one workspace member after another no longer fails with E0463 (\"can't find crate for `rawr`\"). Each member's runner is now its own Cargo unit in the workspace's build directory, so one member never reuses another member's build script and the shared runtime it names.","issues":[1421]},
+        {"text":"`rawr::universe` loads a marked file against a binary's linked generated bindings and runs it in that process. `call(name, args)` or `run()` executes it, and `reload()` or `replace(text)` on any thread reports unchanged, queued, swapped, failed or restarting. ?play's universe runner serves its snippets through it.","issues":[1424],"refs":[1387]}
       ]
     },
     "releases": [
@@ -3178,7 +3179,10 @@
     {"issue":1420,"title":"A test checks that a generated runner compiles without warnings; rawr shows cargo's warnings…","state":"open","category":"Health"},
     {"issue":1421,"title":"Regression: a runner whose runtime is compiled in-project can't find crate `rawr` (E0463); every…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1422,"title":"A fn's declared return type fixes a conversion's open argument through `.into()` and macros down…","state":"open","category":"No glue (D593)"},
-    {"issue":1423,"title":"A failed runner build is explained as build-script drift even when the failure has nothing to do…","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1423,"title":"A failed runner build is explained as build-script drift even when the failure has nothing to do…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1424,"title":"rawr::universe loads a marked file against a binary's linked generated bindings and reloads it in process","state":"open","category":"Importer"},
+    {"issue":1425,"title":"rawr-import generates a runner's sources without building it, for a build script to compile as…","state":"open","category":"Importer"},
+    {"issue":1426,"title":"The generator emits a runner as a module of a host crate, and a `rawr_build::bindings()` for…","state":"open","category":"Importer"}
   ],
   "groups": [
     {
