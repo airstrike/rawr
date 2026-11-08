@@ -159,7 +159,8 @@
         {"text":"A crate value generic over a program's types can call a script function it kept, such as elevato's `Simulation::frame` calling the program's `update`, and that function can make crate values like a `Task` and give them back. Before, the program panicked with `Stale`.","issues":[1432]},
         {"text":"A view whose message type only its declared return type fixes, as `fn view(..) -> Slot<'static, Message> { match id { .. => row![badge![..].style(..)].into() } }`, runs instead of failing with E0282 at the badge when the crate's Slot is also an Element. A crate type with `From` impls for several generic targets, as a badge that is both a Slot and an Element, converts with `.into()` instead of failing at start with \"the bindings have no item\".","issues":[1422]},
         {"text":"A function bounded by a trait with more than 64 impls, such as icedxdy's `badge(content: impl Into<Slot<'a, Message>>)`, now ties its argument's types to the callee's, so `badge![icon, \"Verified\"]` no longer reports E0282.","issues":[1435]},
-        {"text":"A native function that keeps the blocks it is given, such as `State::new(page_index, blocks: &'static [Block])`, takes a marked module's `static BLOCKS`, a range of it, or a slice literal, as Rust does. Before, the generated runner failed to compile with E0713/E0521.","issues":[1437]}
+        {"text":"A native function that keeps the blocks it is given, such as `State::new(page_index, blocks: &'static [Block])`, takes a marked module's `static BLOCKS`, a range of it, or a slice literal, as Rust does. Before, the generated runner failed to compile with E0713/E0521.","issues":[1437]},
+        {"text":"A marked type that native code holds as a `Box<dyn Trait>` can return references: a `&'static Meta` or `&'static [Block]` that is a static gives native code the static itself, and `&self.state` is lent where the value holds it. A reference result rawr can't give yet is an error at `rawr check` instead of a panic at the call.","issues":[1442]}
       ]
     },
     "releases": [
@@ -3209,7 +3210,10 @@
     {"issue":1439,"title":"A static block's `&'static [T]` field (`children`) can't fill a `&'static [T]` parameter","state":"open","category":"No glue (D593)"},
     {"issue":1440,"title":"A crate's `&'static T` parameter of a single native value gets a lent reborrow, not the marked…","state":"open","category":"No glue (D593)"},
     {"issue":1441,"title":"A marked function returning `[NativeType; N]` to native code fails: the interpreter's answer is…","state":"open","category":"No glue (D593)"},
-    {"issue":1442,"title":"A native trait method a marked type implements can't return a reference (`&'static Meta`…","state":"open","category":"No glue (D593)"}
+    {"issue":1442,"title":"A native trait method a marked type implements can't return a reference (`&'static Meta`…","state":"closed","category":"No glue (D593)"},
+    {"issue":1443,"title":"A stand-in's `&[T]` result of native elements borrowed from self (`&self.rows`) is refused; lend…","state":"open","category":"Divergences from rustc"},
+    {"issue":1444,"title":"A `&'static T` result that is an element or field of a static (`&BLOCKS[0]`, `&META.inner`)…","state":"open","category":"No glue (D593)"},
+    {"issue":1445,"title":"A value a stand-in lent in place (`&self.state`) can't also be shared by a view in the same…","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
