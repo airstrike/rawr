@@ -1292,7 +1292,10 @@ fn imported_paths<'contract>(
                 .associated()
                 .map(move |associated| (implementation.identity(), associated))
         }) {
-            let sibling = seen.iter().filter(|name| **name == associated.name()).count();
+            let sibling = seen
+                .iter()
+                .filter(|name| **name == associated.name())
+                .count();
             seen.push(associated.name());
             // A trait's method over its `Self` is reached beside the trait
             // (`surface::member`).
@@ -2389,7 +2392,10 @@ fn build(
             .implementations()
             .flat_map(rawr_import::classify::ImplementationOutcome::associated)
         {
-            let sibling = seen.iter().filter(|name| **name == associated.name()).count();
+            let sibling = seen
+                .iter()
+                .filter(|name| **name == associated.name())
+                .count();
             seen.push(associated.name());
             let path_bytes = owner
                 .len()
@@ -3156,7 +3162,10 @@ fn opaque_types(
             .implementations()
             .flat_map(rawr_import::classify::ImplementationOutcome::associated)
         {
-            let sibling = seen.iter().filter(|name| **name == associated.name()).count();
+            let sibling = seen
+                .iter()
+                .filter(|name| **name == associated.name())
+                .count();
             seen.push(associated.name());
             visit(
                 &rawr_import::surface::opaque::inherent_owner(

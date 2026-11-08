@@ -1291,7 +1291,10 @@ impl Plan {
                 .implementations()
                 .flat_map(crate::classify::ImplementationOutcome::associated)
             {
-                let sibling = seen.iter().filter(|name| **name == associated.name()).count();
+                let sibling = seen
+                    .iter()
+                    .filter(|name| **name == associated.name())
+                    .count();
                 seen.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                 seen.push(associated.name());
                 // An impl that fixes some of its type's arguments is
