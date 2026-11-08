@@ -3925,7 +3925,7 @@ impl SupportLedger {
                 ) if definition == expected_definition
                     && provenance == expected_provenance
                     && reason == *expected_reason
-                    && span == *expected_span =>
+                    && span.same_place(expected_span) =>
                 {
                     (
                         definition,

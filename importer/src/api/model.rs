@@ -2086,8 +2086,8 @@ impl Implementation {
             && self.const_impl == other.const_impl
             && self.default_impl == other.default_impl
             && self.generics == other.generics
-            && self.span == other.span
-            && self.origin == other.origin
+            && self.span.same_place(&other.span)
+            && self.origin.same_place(&other.origin)
     }
 
     /// Consume the set-valued evidence from another structurally identical
