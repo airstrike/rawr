@@ -12435,9 +12435,20 @@ fn render_scoped_guard(
         container_parameters,
         &mut method,
     )?;
-    method.write_all(b"(").map_err(encoding)?;
-    argument_list(signature.inputs().len(), 1, &mut method)?;
-    method.write_all(b")").map_err(encoding)?;
+    // The inputs as they were taken, or, for a place, which reaches its
+    // target again with each access, copies of them (#1318).
+    let inputs = signature.inputs().len();
+    if matches!(guard, Guard::Mutable) {
+        let copies = (0..inputs)
+            .map(|input| format!("Clone::clone(&argument_{input})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(method, "({copies})").map_err(encoding)?;
+    } else {
+        method.write_all(b"(").map_err(encoding)?;
+        argument_list(inputs, 1, &mut method)?;
+        method.write_all(b")").map_err(encoding)?;
+    }
     let method = String::from_utf8(method).map_err(request::unwritable)?;
     // The guard on the receiver in its region, inside `with`.
     let reach = format!(
@@ -12467,8 +12478,9 @@ fn render_scoped_guard(
         )
         .map_err(encoding),
         Guard::Mutable => {
+            // The stored value is the local after the inputs.
             let mut take = Vec::new();
-            render_take(0, 0, &target, &mut take)?;
+            render_take(inputs, 0, &target, &mut take)?;
             let take = String::from_utf8(take).map_err(request::unwritable)?;
             let give = format!(
                 "let read: Result<Dynamic, Error> = {{\n{give}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))"
@@ -12498,7 +12510,7 @@ fn render_scoped_guard(
                             let mut values = [&mut stored];
                             let arguments = &mut Arguments {{ values: &mut values, arena }};
                             {take}
-                            *guard = argument_0;
+                            *guard = argument_{inputs};
                             Ok(Ok(Dynamic::UNIT))
                         {close}
                     }})
@@ -12514,7 +12526,7 @@ fn render_scoped_guard(
                         {give}
                     }} else {{
                         {take}
-                        *guard = argument_0;
+                        *guard = argument_{inputs};
                         Ok(Dynamic::UNIT)
                     }}
                 {close}
@@ -12646,11 +12658,23 @@ fn render_guard(
         );
     }
     let copy = copy_macro(&target);
+    // The method's inputs, given as they were taken, or copies of them,
+    // so a place reaches its target again with each access (#1318).
+    let inputs = signature.inputs().len();
+    let mut taken = Vec::new();
+    argument_list(inputs, 1, &mut taken)?;
+    let taken = String::from_utf8(taken).map_err(request::unwritable)?;
+    let copies = (0..inputs)
+        .map(|input| format!("Clone::clone(&argument_{input})"))
+        .collect::<Vec<_>>()
+        .join(", ");
     // `arena.shared::<Receiver, _>(handle, |receiver| { let mut guard =
-    // receiver.method(..); ` through `access`, whose closure takes `taking`.
+    // receiver.method(given); ` through `access`, whose closure takes
+    // `taking`.
     let call = |access: &str,
                 handle: &str,
                 taking: &str,
+                given: &str,
                 output: &mut Vec<u8>|
      -> Result<(), request::Error> {
         write!(output, "{access}::<").map_err(encoding)?;
@@ -12676,11 +12700,7 @@ fn render_guard(
             container_parameters,
             output,
         )?;
-        output.write_all(b"(").map_err(encoding)?;
-        argument_list(signature.inputs().len(), 1, output)?;
-        output
-            .write_all(b"); let _ = &mut guard; ")
-            .map_err(encoding)
+        write!(output, "({given}); let _ = &mut guard; ").map_err(encoding)
     };
     let indented = |lines: &[u8], indent: &str, output: &mut Vec<u8>| {
         for line in String::from_utf8_lossy(lines).lines() {
@@ -12790,7 +12810,7 @@ fn render_guard(
     match guard {
         Guard::Shared => {
             output.write_all(b"    let output = ").map_err(encoding)?;
-            call(borrow, "receiver", "receiver", output)?;
+            call(borrow, "receiver", "receiver", &taken, output)?;
             output
                 .write_all(format!("{copy}!(&*guard) }})??;\n").as_bytes())
                 .map_err(encoding)?;
@@ -12799,7 +12819,7 @@ fn render_guard(
         // `Some` of a copy of the target, or `None`.
         Guard::OptionShared => {
             output.write_all(b"    let output = ").map_err(encoding)?;
-            call(borrow, "receiver", "receiver", output)?;
+            call(borrow, "receiver", "receiver", &taken, output)?;
             output
                 .write_all(
                     format!("guard.map(|target| {copy}!(&*target)).transpose() }})??;\n")
@@ -12917,11 +12937,6 @@ fn render_guard(
                 .map_err(encoding)
         }
         Guard::Mutable => {
-            if !signature.inputs().is_empty() {
-                return Err(request::drift(
-                    "a mutable borrow guard's method takes inputs",
-                ));
-            }
             let mut given = Vec::new();
             render_give(&target, "output", &mut given)?;
             let given = String::from_utf8(given).map_err(request::unwritable)?;
@@ -12931,7 +12946,8 @@ fn render_guard(
             )
             .into_bytes();
             let mut take = Vec::new();
-            render_take(0, 0, &target, &mut take)?;
+            // The stored value is the local after the inputs.
+            render_take(inputs, 0, &target, &mut take)?;
             output
                 .write_all(
                     b"    let witness = output_witness();\n    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {
@@ -12944,7 +12960,13 @@ fn render_guard(
                     ",
                 )
                 .map_err(encoding)?;
-            call("arena.held", "receiver.clone()", "arena, receiver", output)?;
+            call(
+                "arena.held",
+                "receiver.clone()",
+                "arena, receiver",
+                &copies,
+                output,
+            )?;
             output
                 .write_all(
                     format!(
@@ -12974,21 +12996,24 @@ fn render_guard(
             indented(&take, "                    ", output)?;
             output
                 .write_all(
-                    b"                        *guard = argument_0;
+                    format!(
+                        "                        *guard = argument_{inputs};
                         Ok(Ok(Dynamic::UNIT))
-                    })?
-                })
+                    }})?
+                }})
                 .map_err(runtime_error)?;
-            }
-        };
-        with_arena(|arena| {
+            }}
+        }};
+        with_arena(|arena| {{
             let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
-            let arguments = &mut Arguments { values: values.as_mut_slice(), arena };
-            if arguments.values.is_empty() {
-                let output = ",
+            let arguments = &mut Arguments {{ values: values.as_mut_slice(), arena }};
+            if arguments.values.is_empty() {{
+                let output = "
+                    )
+                    .as_bytes(),
                 )
                 .map_err(encoding)?;
-            call(borrow, "receiver.clone()", "receiver", output)?;
+            call(borrow, "receiver.clone()", "receiver", &copies, output)?;
             output
                 .write_all(format!("{copy}!(&*guard) }})??;\n").as_bytes())
                 .map_err(encoding)?;
@@ -12998,17 +13023,20 @@ fn render_guard(
                 .map_err(encoding)?;
             indented(&take, "            ", output)?;
             output.write_all(b"                ").map_err(encoding)?;
-            call(borrow, "receiver.clone()", "receiver", output)?;
+            call(borrow, "receiver.clone()", "receiver", &copies, output)?;
             output
                 .write_all(
-                    b"*guard = argument_0; })?;
+                    format!(
+                        "*guard = argument_{inputs}; }})?;
                 Ok(Dynamic::UNIT)
-            }
-        })
+            }}
+        }})
         .map_err(runtime_error)
-    });
+    }});
     Ok(Dynamic::from(place))
-",
+"
+                    )
+                    .as_bytes(),
                 )
                 .map_err(encoding)
         }

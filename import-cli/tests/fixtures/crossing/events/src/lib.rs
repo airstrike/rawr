@@ -23,6 +23,7 @@ pub mod named;
 pub mod nested;
 pub mod ordered;
 pub mod paired;
+pub mod pixels;
 pub mod plane;
 pub mod pointers;
 pub mod results;
@@ -1361,7 +1362,9 @@ pub mod widgets {
         }
 
         fn press(&self, label: &str) -> Option<Message> {
-            self.contents.iter().find_map(|content| content.press(label))
+            self.contents
+                .iter()
+                .find_map(|content| content.press(label))
         }
     }
 

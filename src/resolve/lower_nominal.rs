@@ -22666,6 +22666,7 @@ impl<'a> Parser<'a> {
             if !profile_mapper {
                 self.coerce_expr(expected, argument)?;
             }
+            self.lend_guarded_place(expected, argument);
             if item.imported_identity().is_some() && !argument.ty.is_imported_static_operand() {
                 self.consume_imported_value(argument, &item.path(), call)?;
             }
@@ -24158,6 +24159,7 @@ impl<'a> Parser<'a> {
                 };
             }
             self.coerce_expr(expected, argument)?;
+            self.lend_guarded_place(expected, argument);
             if item.imported_identity().is_some() {
                 self.consume_imported_value(argument, &item.path(), call)?;
             }
@@ -24364,6 +24366,34 @@ impl<'a> Parser<'a> {
             native: true,
         });
         expression
+    }
+
+    /// A `&mut T` argument of a host call that is a place a crate method
+    /// lent `&mut` (`guarded_output`), as `fill(buffer.get_mut(0), 7)`
+    /// (#1318): its value is read out of the place before the statement,
+    /// lent to the call, and set back into the place after it, so what
+    /// the call writes reaches the crate's own value.
+    fn lend_guarded_place(&mut self, expected: &Ty, argument: &mut ParsedExpr) {
+        if !matches!(
+            self.inference.resolve(expected),
+            Ty::Reference { mutable: true, .. }
+        ) {
+            return;
+        }
+        let Some(Lvalue::Nested(nested)) = &argument.lvalue else {
+            return;
+        };
+        if !nested
+            .steps
+            .iter()
+            .any(|step| matches!(step, PlaceStep::Cell { native: true, .. }))
+        {
+            return;
+        }
+        let nested = nested.clone();
+        argument.source = self.nested_place(&nested);
+        argument.prelude = origin::Fragment::default();
+        argument.lvalue = None;
     }
 
     /// An imported method's `Option<&mut T>` lent from its receiver, as
@@ -25829,6 +25859,26 @@ impl<'a> Parser<'a> {
                 self.mutable_use(&receiver, member_span);
             }
         }
+        // A place a crate method lends `&mut`, as `buffer.get_mut(0).0 = v`
+        // (#1318): its value is read out of the method's place, changed,
+        // and set back into it, so the crate's own value changes.
+        if let Some(Lvalue::Nested(nested)) = &receiver.lvalue
+            && nested
+                .steps
+                .iter()
+                .any(|step| matches!(step, PlaceStep::Cell { native: true, .. }))
+        {
+            let (read, place, store) = self.nested_parts(nested);
+            let target = nested.ty.clone();
+            let local = self.operator_expr(place, target, receiver.span);
+            let stored = self.store_imported_field(local, definition, fields, true, assigned)?;
+            let operation = stored.span;
+            let mut source = read;
+            source.push(stored.rendered_source());
+            source.push_text("; ");
+            source.push(store);
+            return Ok(self.operator_expr(source.surrounded("{ ", " }"), Ty::Unit, operation));
+        }
         let path: ImmutableString = definition.path().into();
         let crate::host::type_def::Shape::Struct {
             fields: declared, ..
@@ -26091,12 +26141,14 @@ impl<'a> Parser<'a> {
             self.push_imported_op(&path, field.imported_identity(), Some(imported), operation)?;
         // `item.name.push('!')`: a field Rawr holds as its own value, of a
         // place, is a place a method changes, read out and stored back as
-        // `item.name = name` (#1139).
+        // `item.name = name` (#1139). So is an element of one, as
+        // `pixel.0[3] += 1` through a `&mut Pixel` (#1318).
         let lvalue = match &receiver.lvalue {
             Some(lvalue)
                 if shared
-                    && !self.type_provides(&ty, capability::Kind::Copy)
-                    && self.method_follows() =>
+                    && (!self.type_provides(&ty, capability::Kind::Copy)
+                        && self.method_follows()
+                        || matches!(self.peek(), Token::LeftBracket)) =>
             {
                 let place = self.temporary("place");
                 let stored = self.temporary("stored");
@@ -26117,12 +26169,16 @@ impl<'a> Parser<'a> {
                     true,
                     value,
                 )?;
+                // The store changes the value where it is and gives it, so
+                // the step before it sets it back (a borrow guard's place).
+                let mut store = store.rendered_source();
+                store.push_text(format!("; {place}"));
                 let step = PlaceStep::Accessor {
                     place: place.clone(),
                     stored,
                     read: origin::Fragment::call(&helper, [origin::Fragment::plain(place)])
                         .surrounded("{ ", " }"),
-                    store: store.rendered_source().surrounded("{ ", " }"),
+                    store: store.surrounded("{ ", " }"),
                 };
                 match lvalue {
                     Lvalue::Binding { binding, .. } => {
@@ -28513,10 +28569,19 @@ impl<'a> Parser<'a> {
         let deferred = matches!(lvalue, Lvalue::Binding { .. })
             .then(|| self.deferred.get(&binding.declaration).copied())
             .flatten();
-        let immutable = (!binding.mutable && matches!(binding.kind, BindingKind::Local))
-            .then_some(binding.declaration)
-            .filter(|_| binding.available || deferred.is_none())
-            .map(|declaration| deferred.flatten().unwrap_or(declaration));
+        // A place below a `&mut` local is changed through the reference,
+        // which needs no `mut` of its own, as `pixel.0[3] += 1` of a crate
+        // method's `&mut Pixel` (#1318).
+        let through_reference = !matches!(lvalue, Lvalue::Binding { .. })
+            && matches!(
+                self.inference.resolve(&binding.ty),
+                Ty::Reference { mutable: true, .. }
+            );
+        let immutable =
+            (!binding.mutable && !through_reference && matches!(binding.kind, BindingKind::Local))
+                .then_some(binding.declaration)
+                .filter(|_| binding.available || deferred.is_none())
+                .map(|declaration| deferred.flatten().unwrap_or(declaration));
         if !binding.mutable && !matches!(binding.kind, BindingKind::Local) {
             return Err(match &binding.kind {
                 BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {

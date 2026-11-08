@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 134;
+const CLASSIFIER_VERSION: u32 = 135;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -10157,8 +10157,10 @@ impl<P: api::Phase> Context<'_, P> {
     /// it is reached, from rustc's evidence (`model::Guard`): `None` when
     /// the output is no guard or Rawr can't hold its target. A `DerefMut`
     /// guard is a place each read and store reaches by calling the method
-    /// again, so only a method with no inputs besides its receiver is one;
-    /// with inputs it is read through `Deref` alone.
+    /// again with copies of its inputs, so only a method whose inputs
+    /// besides its receiver all clone is one, as image's
+    /// `get_pixel_mut(&mut self, x, y) -> &mut P` (#1318); with other
+    /// inputs it is read through `Deref` alone.
     fn guard_output(
         &self,
         signature: &model::Signature,
@@ -10260,7 +10262,7 @@ impl<P: api::Phase> Context<'_, P> {
         // A store crosses the other way, which a sequence or a tuple
         // doesn't yet.
         let stored = !matches!(target, Type::Sequence { .. } | Type::Tuple(_));
-        let mode = if mutable && inputs.is_empty() && stored {
+        let mode = if mutable && stored && inputs.iter().all(|input| self.clones(input)) {
             representability::signature::Guard::Mutable
         } else {
             representability::signature::Guard::Shared

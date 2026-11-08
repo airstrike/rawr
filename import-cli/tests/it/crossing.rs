@@ -742,6 +742,18 @@ fn mutable_buffers_are_lent_in_place() {
     assert!(rawr.contains("[Basalt] is 6 wide"), "{rawr}");
 }
 
+/// The `&mut Pixel` a crate method returns, inherent or of a trait as
+/// image's `GenericImage::get_pixel_mut`, is a place (#1318): `.0 = [..]`,
+/// `*p = Pixel(..)`, `.0[3] += 1`, the same through a local that keeps it,
+/// and the reference lent on to another crate call write the crate's own
+/// pixel, and the crate reads them back. The output is `cargo run`'s.
+#[test]
+fn a_mutable_reference_a_crate_method_returns_is_a_place() {
+    let (rawr, cargo) = both_printed("painted.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.starts_with("Pixel([5, 6, 7, 9])"), "{rawr}");
+}
+
 #[test]
 fn generic_struct_fields_and_a_borrowed_field_store_match_rust() {
     let (rawr, cargo) = both_printed("fields.rs", "");
