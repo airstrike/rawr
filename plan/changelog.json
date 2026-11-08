@@ -127,7 +127,8 @@
       {"text":"The docs are grouped as Get started, Guides, Reference and Tools. On desktop they show a sidebar tree; on phones a drawer opens from the bar's Docs control. Every page has breadcrumbs, and every heading on the site links to its own anchor. /docs opens with four reader paths. The iced, iced reload and ratatui pages are now worked examples in Apps and libraries, rewritten as plain documentation, and previews moved to Tools as Editor previews. Old docs URLs no longer redirect.","issues":[1378]},
       {"text":"A push to main that changes `play/universe`, the bot's code or `play/Dockerfile` builds the ?play image and deploys it by itself. A snippet on the site that needs a crate the universe gained no longer waits for the release workflow. Every other change to the site or the docs deploys on push, as before.","issues":[1380]},
       {"text":"`rawr run` starts its file watcher on apps with a thousand dependencies: the OS watches the project's source directories, each path dependency's and each manifest's directory, never every dependency file, and registry and git dependencies get no watch, since a changed one arrives through `Cargo.lock`.","issues":[1375]},
-      {"text":"Installing a contract counted its facade roots by rescanning every prior outcome for each outcome, which took minutes on a workspace of a thousand packages. The roots are collected once.","issues":[1383]}
+      {"text":"Installing a contract counted its facade roots by rescanning every prior outcome for each outcome, which took minutes on a workspace of a thousand packages. The roots are collected once.","issues":[1383]},
+      {"text":"`#[widget]` / `#[rawr::widget]` is gone from rawr-macros and from rawr's parser. It did nothing; `#[preview]` is the one Rawr attribute.","issues":[1379]}
     ]
   },
   "releases": [
