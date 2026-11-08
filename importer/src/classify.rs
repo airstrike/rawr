@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 142;
+const CLASSIFIER_VERSION: u32 = 143;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7787,8 +7787,20 @@ impl<P: api::Phase> Context<'_, P> {
     /// A slice of crate values without `Clone` that borrow nothing, as a
     /// page's `pub static BLOCKS: &[Block]`, is lent where it is: Rawr
     /// reads its elements in place, as Rust does, and copies none (#1291).
+    /// So is a crate value that borrows nothing, as a page's `pub static
+    /// META: Meta`, which a `&'static Meta` result gives itself (#1442).
     fn statik(&self, ty: &model::Type) -> Result<representability::constant::Plan, Failure> {
         use representability::convert::Type;
+        if !names_early_lifetime(ty)
+            && !names_late_lifetime(ty)
+            && let Ok(value) = self.convert(ty)
+            // One of std's types Rawr holds as its own value is read as
+            // that value.
+            && matches!(&value, Type::Nominal { definition, .. }
+                if crate::surface::identity::Definition::std_path(definition.as_bytes()).is_none())
+        {
+            return Ok(representability::constant::Plan::lasting(value));
+        }
         if let model::Type::Reference {
             mutability: model::Mutability::Shared,
             ty: target,

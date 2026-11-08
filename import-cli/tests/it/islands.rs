@@ -591,8 +591,10 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// a native function, give one to it by value and read `BLOCKS` themselves
 /// (#1283). Marked code reads native code's `BLOCKS` where it is: its
 /// length, a range of it lent to native code, each block through a
-/// pattern and a group's `children`, indexed, walked and lent (#1291).
-/// `rawr check` passes as `cargo check` does, and `rawr run` prints what
+/// pattern and a group's `children`, indexed, walked and lent (#1291). A
+/// marked page native code holds as a `Box<dyn Page>` gives back its
+/// `&'static Meta` and `&'static [Block]` statics themselves and a `&State`
+/// of its own field, lent in place (#1442). `rawr check` passes as `cargo check` does, and `rawr run` prints what
 /// `cargo run` prints.
 #[test]
 fn a_marked_static_of_native_blocks_is_read_by_native_code() {
@@ -624,7 +626,15 @@ fn a_marked_static_of_native_blocks_is_read_by_native_code() {
              \x20 group Examples\n\
              \x20   example dot \"Dot\" Some(\"A badge with no count.\") \"badge()\"\n\
              \x20   md Counts past 99 show 99+.\npage 5 of 1 blocks\n\
-             \x20 md A badge marks a count.\npage 6 of 1 blocks\n  md promoted\n"
+             \x20 md A badge marks a count.\npage 6 of 1 blocks\n  md promoted\n\
+             Badge: Displays a badge.\nexample demo \"\" None \"\"\n\
+             md A badge marks a count.\ngroup Examples\n\
+             \x20 example dot \"Dot\" Some(\"A badge with no count.\") \"badge()\"\n\
+             \x20 md Counts past 99 show 99+.\npage 7 of 3 blocks\n\
+             \x20 example demo \"\" None \"\"\n  md A badge marks a count.\n\
+             \x20 group Examples\n\
+             \x20   example dot \"Dot\" Some(\"A badge with no count.\") \"badge()\"\n\
+             \x20   md Counts past 99 show 99+.\nindex 7\ntrue true true\n"
         ),
         "{printed}"
     );

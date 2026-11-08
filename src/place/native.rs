@@ -33,6 +33,9 @@ impl<P: Policy> crate::scope::Family for Family<P> {
 enum Source<P: Policy> {
     Borrowed(crate::scope::Nonce),
     Owned(<P::Owner as Owner<P::Value>>::Stored),
+    /// A `static` of native code's, which lives as long as the program
+    /// (#1442): reached where it is, never written.
+    Static(fn() -> &'static P::Value),
 }
 
 impl<P: Policy> Source<P> {
@@ -42,6 +45,10 @@ impl<P: Policy> Source<P> {
         visit: impl FnOnce(Access<'_, P::Value>) -> RawrResultOf<R>,
     ) -> RawrResultOf<R> {
         match self {
+            Self::Static(_) if mutable => {
+                Err(failure("cannot borrow a static item as mutable (E0596)"))
+            }
+            Self::Static(value) => visit(Access::Shared(value())),
             Self::Borrowed(nonce) if mutable => {
                 crate::scope::with::<Family<P>, _>(*nonce, |value| visit(Access::Mutable(value)))
                     .map_err(|error| failure(error.to_string()))?
@@ -107,6 +114,14 @@ impl<P: Policy> Storage for Source<P> {
 
     fn copies(&self, path: &[usize]) -> bool {
         P::copies_at(path)
+    }
+
+    fn lasting(&self) -> Option<Box<dyn Any>> {
+        let Self::Static(value) = self else {
+            return None;
+        };
+        let value: *const dyn Any = value();
+        Some(Box::new(value))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -191,6 +206,13 @@ pub fn borrow_ref<P: Policy, R>(
     })
 }
 
+/// The `static` `value` gives, which lives as long as the program: a place
+/// marked code reads where it is, and that a `&'static T` result gives
+/// itself (#1442).
+pub fn lasting<P: Policy>(witness: &Witness, value: fn() -> &'static P::Value) -> RawrResult {
+    checked(Source::<P>::Static(value), witness, false).map(Dynamic::from)
+}
+
 /// Transfer a native value into owned storage without changing its allocation.
 pub fn owned<P: Policy>(value: P::Value, witness: &Witness) -> RawrResult {
     checked(Source::<P>::Owned(P::Owner::store(value)?), witness, true).map(Dynamic::from)
@@ -222,6 +244,7 @@ pub fn take<P: Policy>(value: &Place, witness: &Witness) -> RawrResultOf<P::Valu
         Source::Borrowed(_) => Err(failure(
             "cannot move a native value out of its borrowed place",
         )),
+        Source::Static(_) => Err(failure("cannot move out of a static item (E0507)")),
         Source::Owned(value) => P::Owner::take(value),
     }
 }
@@ -242,7 +265,7 @@ pub fn restore<P: Policy>(value: &Place, witness: &Witness, owned: P::Value) -> 
         .ok_or_else(|| failure("a restored native value has the wrong concrete type"))?;
     match source {
         Source::Owned(stored) => P::Owner::restore(stored, owned),
-        Source::Borrowed(_) => Err(failure(
+        Source::Borrowed(_) | Source::Static(_) => Err(failure(
             "cannot restore a native value into its borrowed place",
         )),
     }

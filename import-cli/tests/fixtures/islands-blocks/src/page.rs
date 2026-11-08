@@ -62,3 +62,26 @@ impl State {
         lay_out(self.blocks, 1);
     }
 }
+
+/// What a page is about.
+pub struct Meta {
+    pub title: &'static str,
+    pub description: &'static str,
+}
+
+/// A component's page, as native code holds it: a `Box<dyn Page>`.
+pub trait Page {
+    fn meta(&self) -> &'static Meta;
+    fn blocks(&self) -> &'static [Block];
+    fn state(&self) -> &State;
+    fn page_index(&self) -> usize;
+}
+
+/// Shows `page` through each of its methods.
+pub fn describe(page: &dyn Page) {
+    let meta = page.meta();
+    println!("{}: {}", meta.title, meta.description);
+    lay_out(page.blocks(), 0);
+    page.state().show();
+    println!("index {}", page.page_index());
+}

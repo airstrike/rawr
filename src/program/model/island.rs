@@ -55,6 +55,12 @@ pub(crate) const OWNED: u8 = 1;
 /// The first byte of a call's header: the result is a `&str` that borrows
 /// the stand-in's receiver, which comes back [`PINNED`].
 pub(crate) const BORROWS: u8 = 2;
+/// The first byte of a call's header: the result is a reference to a
+/// native value, which comes back where the value is (#1442).
+pub(crate) const IN_PLACE: u8 = 4;
+/// With [`IN_PLACE`]: the reference is a `&'static`, which only a value
+/// that lives as long as the program fills.
+pub(crate) const LASTING: u8 = 8;
 
 /// Nesting deeper than this does not cross.
 const DEPTH: usize = 256;

@@ -175,6 +175,57 @@ trait Homed: Any {
     }
     /// The value back for its slot, once nothing borrows it from the home.
     fn settle(self: Box<Self>) -> Result<Box<dyn Any>, Box<dyn Homed>>;
+    /// Where the value is, and a count that keeps it there while held, for
+    /// native code to borrow it in place (#1442); `None` where the home
+    /// can't keep it still.
+    fn lend(&self) -> Option<(std::rc::Rc<dyn Any>, *const dyn Any)> {
+        None
+    }
+}
+
+/// A native value native code borrows where it is, as a stand-in's `fn
+/// state(&self) -> &State` lends the receiver's field (#1442): its slot
+/// reaches it here, in its own allocation, and takes it back once no pins
+/// hold `lent`.
+#[allow(dead_code)]
+struct InPlace {
+    value: Box<dyn Any>,
+    lent: std::rc::Rc<()>,
+}
+
+impl Homed for InPlace {
+    fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error> {
+        call(&*self.value);
+        Ok(())
+    }
+
+    /// Native code still borrows it, as rustc's E0502 says of a `&mut`
+    /// while a shared borrow lives.
+    fn mutable(&self, _call: &mut dyn FnMut(&mut dyn Any)) -> Result<(), Error> {
+        Err(Error::Home(
+            "cannot borrow this value as mutable because native code still borrows it (E0502)".into(),
+        ))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn value(&self) -> Option<&dyn Any> {
+        Some(&*self.value)
+    }
+
+    fn settle(self: Box<Self>) -> Result<Box<dyn Any>, Box<dyn Homed>> {
+        if std::rc::Rc::strong_count(&self.lent) == 1 {
+            Ok(self.value)
+        } else {
+            Err(self)
+        }
+    }
+
+    fn lend(&self) -> Option<(std::rc::Rc<dyn Any>, *const dyn Any)> {
+        Some((self.lent.clone(), &*self.value))
+    }
 }
 
 /// A native value a view's widget borrows past its call, as `qr_code(&self.
@@ -211,6 +262,12 @@ impl<T: 'static> Homed for Viewed<T> {
         std::rc::Rc::try_unwrap(self.0)
             .map(|value| Box::new(value) as Box<dyn Any>)
             .map_err(|shared| Box::new(Viewed(shared)) as Box<dyn Homed>)
+    }
+
+    fn lend(&self) -> Option<(std::rc::Rc<dyn Any>, *const dyn Any)> {
+        let keeper: std::rc::Rc<dyn Any> = self.0.clone();
+        let pointer: *const dyn Any = std::rc::Rc::as_ptr(&keeper);
+        Some((keeper, pointer))
     }
 }
 
@@ -1823,6 +1880,27 @@ impl Arena {
         Ok(shared)
     }
 
+    /// Where the value of `handle` is, lent to native code in place for as
+    /// long as `pins` hold it (#1442): it moves into a home of its own
+    /// allocation ([`InPlace`]) the first time, and isn't copied. A value a
+    /// view already shares stays in its `Rc`.
+    #[allow(dead_code)]
+    fn lend_in_place(&mut self, handle: &NativeHandle, pins: &__rawr_internal::scope::Pins) -> Result<*const dyn Any, Error> {
+        self.settle(handle);
+        if let Some(homed) = self.homed(handle) {
+            let (keeper, pointer) = homed.lend().ok_or(Error::Leased)?;
+            pins.keep(keeper);
+            return Ok(pointer);
+        }
+        let index = self.index_where(handle, |_| true)?;
+        let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        let pointer: *const dyn Any = &*value;
+        let lent = std::rc::Rc::new(());
+        pins.keep(lent.clone());
+        self.slots[index].homed = Some(Box::new(InPlace { value, lent }));
+        Ok(pointer)
+    }
+
     /// The crate's own `Rc` or `Arc` the value of `handle` is in (#775): its
     /// home, where the value moves the first time it crosses as one, and
     /// isn't copied.
@@ -2359,6 +2437,28 @@ fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     )
 }
 
+/// Where the native value `value` holds is, lent to native code that
+/// called a marked function for as long as `pins` hold it (#1442). Without
+/// pins the call asked for a `&'static`, which a value of the arena can't
+/// give.
+fn lent_in_place(
+    value: &Dynamic,
+    pins: Option<&__rawr_internal::scope::Pins>,
+) -> Option<Result<*const dyn Any, String>> {
+    let handle = value.read_lock::<NativeHandle>()?;
+    let Some(pins) = pins else {
+        return Some(Err(
+            "it returns a reference to a value it owns, which lives only as long as the program \
+             value, not for `'static` (E0515)"
+                .to_owned(),
+        ));
+    };
+    Some(
+        arena_access(|arena| arena.lend_in_place(&handle, pins).map_err(|error| format!("{:?}", error.reported())))
+            .unwrap_or_else(|| Err("a native value can't be lent from another thread's arena".to_owned())),
+    )
+}
+
 /// The script value that holds a native value native code gave a marked
 /// function by value (#1139), kept in this thread's arena with what its
 /// trampoline found of its type, as a value the runner made is.
@@ -2389,6 +2489,7 @@ fn lodge(
 
 fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::island::moves(moved);
+    __rawr_internal::island::lends(lent_in_place);
     __rawr_internal::island::lodges(lodge);
     __rawr_internal::host::debug::register::<NativeHandle>();
     __rawr_internal::host::display::register::<NativeHandle>();
@@ -11242,7 +11343,12 @@ fn render_adapter_body(
                 }
             }
         }
-        Operation::Constant { ty, associated, .. } => {
+        Operation::Constant {
+            ty,
+            associated,
+            lasting,
+            ..
+        } => {
             let constant = if *associated {
                 format!("{path}::{}", plan.name())
             } else {
@@ -11258,6 +11364,19 @@ fn render_adapter_body(
                     output,
                     "    let witness = output_witness().ok_or(Error::Stale)?;
     __rawr_internal::place::slice::lasting::<{policy}>(&witness, || {constant})
+        .map_err(|error| Error::Value(error.to_string()))"
+                )
+                .map_err(request::unwritable)?;
+                return Ok(());
+            }
+            // A static of a crate value (#1442): a native place that reaches
+            // the static itself, which a `&'static T` result gives.
+            if *lasting && place::available(ty) {
+                let policy = place::policy(ty)?;
+                writeln!(
+                    output,
+                    "    let witness = output_witness().ok_or(Error::Stale)?;
+    __rawr_internal::place::lasting::<{policy}>(&witness, || &{constant})
         .map_err(|error| Error::Value(error.to_string()))"
                 )
                 .map_err(request::unwritable)?;
@@ -21649,6 +21768,7 @@ fn producer_inputs(operation: &Operation) -> Option<ProducerInputs<'_>> {
         }
         Operation::Constant {
             ty: convert::Type::Nominal { .. },
+            lasting: false,
             ..
         } => ProducerInputs::Empty,
         Operation::Declaration { .. }

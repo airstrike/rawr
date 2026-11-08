@@ -72,6 +72,49 @@ pub(crate) fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     MOVE.get()?(value)
 }
 
+/// Where the native value a script value holds is, lent to native code in
+/// place for as long as `pins` are kept; `None` when it holds none, and
+/// `Err` when it can't be lent so long. Without pins, only a value that
+/// lives as long as the program may be lent.
+pub type Lend = fn(&Dynamic, Option<&crate::scope::Pins>) -> Option<Result<*const dyn Any, String>>;
+
+/// How the runner lends a native value in place, which [`lends`] names.
+static LEND: OnceLock<Lend> = OnceLock::new();
+
+/// Name how the runner lends native code a native value a script value
+/// holds, where it is (#1442). Set once.
+pub fn lends(lend: Lend) {
+    let _ = LEND.set(lend);
+}
+
+/// The reference a call gives native code to the native value `value` is
+/// (#1442), boxed for its trampoline: a `&'static [T]` of a static slice
+/// of native values, or the place of any other value, a static's or one
+/// `pins` keep where it is. Without `pins` the reference is a `&'static`,
+/// which only a static fills.
+fn in_place(value: &Dynamic, pins: Option<&crate::scope::Pins>) -> Result<Box<dyn Any>, String> {
+    // A `&'static str` is the program's own text, pinned for as long as
+    // the runner lives, once per text.
+    if let Ok(text) = value.flatten_clone().into_immutable_string() {
+        static TEXTS: crate::scope::Pins = crate::scope::Pins::constant();
+        let text: &'static str = TEXTS.pin(text);
+        return Ok(Box::new(text));
+    }
+    if let Some(slice) =
+        crate::place::get(value).and_then(|place| crate::place::lasting_reference(&place))
+    {
+        return Ok(slice);
+    }
+    match LEND.get().and_then(|lend| lend(value, pins)) {
+        Some(Ok(place)) => Ok(Box::new(place)),
+        Some(Err(error)) => Err(error),
+        None => Err(format!(
+            "a `{}` is no native value it can lend in place",
+            value.type_name()
+        )),
+    }
+}
+
 /// What a trampoline finds of a value's type, for the runner to keep it as
 /// it keeps a value it made: its `Debug` and `Display` text, its `Clone`,
 /// `PartialEq`, `Hash` and `PartialOrd`, each when the type has it.
@@ -1223,7 +1266,15 @@ impl Calls {
         };
         let flags = reader.byte().map_err(malformed)?;
         let owned = flags & program::model::island::OWNED != 0;
-        let borrows = flags & program::model::island::BORROWS != 0;
+        let gives = if flags & program::model::island::BORROWS != 0 {
+            Gives::Text
+        } else if flags & program::model::island::IN_PLACE != 0 {
+            Gives::InPlace {
+                lasting: flags & program::model::island::LASTING != 0,
+            }
+        } else {
+            Gives::Value
+        };
         let count = u32::from_le_bytes(reader.array().map_err(malformed)?) as usize;
         let mutable = u64::from_le_bytes(reader.array().map_err(malformed)?);
         let item = self.items.get(&(owned, path.to_owned())).ok_or_else(|| {
@@ -1287,6 +1338,7 @@ impl Calls {
             held,
             references,
             mutable,
+            gives,
         };
         // A `&self` call on a native trait object's program value runs in a
         // region anchored on the value's pins, so what its result borrows,
@@ -1309,7 +1361,7 @@ impl Calls {
         let mut region = crate::scope::Region::anchored(pins);
         let anchored = Anchored {
             region: region.nonce(),
-            pins: borrows.then_some(pins),
+            pins,
         };
         let reply = crate::scope::open_anchored(&mut region, || {
             self.finish(call, made, values, Some(anchored), natives)
@@ -1336,6 +1388,7 @@ impl Calls {
             held,
             references,
             mutable,
+            gives,
         } = made;
         let path = call.path;
         let model = call.model;
@@ -1369,10 +1422,8 @@ impl Calls {
         let unsent = |error: String| {
             format!("rawr: `{path}` gave back a value native code can't take: {error}")
         };
-        match anchored {
-            Some(Anchored {
-                pins: Some(pins), ..
-            }) => {
+        match (gives, anchored) {
+            (Gives::Text, Some(Anchored { pins, .. })) => {
                 // A `&str` that borrows the receiver reads the program's own
                 // text where it is, pinned with the value (#1322).
                 let text = result
@@ -1384,7 +1435,23 @@ impl Calls {
                 reply.extend_from_slice(&(text.as_ptr().expose_provenance() as u64).to_le_bytes());
                 reply.extend_from_slice(&(text.len() as u64).to_le_bytes());
             }
-            _ => model
+            // A reference to a native value is the value where it is: a
+            // static's, or one the receiver holds, lent for as long as
+            // `&self` is borrowed (#1442).
+            (Gives::InPlace { lasting }, anchored) => {
+                let pins = if lasting {
+                    None
+                } else {
+                    Some(anchored.map(|anchored| anchored.pins).ok_or_else(|| {
+                        unsent("a reference it gives borrows no receiver".to_owned())
+                    })?)
+                };
+                let lent = in_place(&result, pins).map_err(unsent)?;
+                reply.push(program::model::island::NATIVE);
+                reply.extend_from_slice(&(natives.len() as u64).to_le_bytes());
+                natives.push(lent);
+            }
+            (Gives::Text | Gives::Value, _) => model
                 .island_write_in(
                     &result,
                     anchored.map(|anchored| anchored.region),
@@ -1561,15 +1628,30 @@ struct Made<'i> {
     held: Vec<(usize, u64, Borrow)>,
     references: Vec<usize>,
     mutable: u64,
+    gives: Gives,
 }
 
-/// The region a `&self` call on a native trait object runs in, and, when
-/// its result is a `&str` that borrows the value, the value's pins it is
-/// pinned in (`Calls::call`).
+/// The region a `&self` call on a native trait object runs in, and the
+/// value's pins, which what its result borrows is pinned in
+/// (`Calls::call`).
 #[derive(Clone, Copy)]
 struct Anchored<'p> {
     region: crate::scope::Nonce,
-    pins: Option<&'p crate::scope::Pins>,
+    pins: &'p crate::scope::Pins,
+}
+
+/// How a call gives its result back, as its header's flags say.
+#[derive(Clone, Copy)]
+enum Gives {
+    /// By the wire format, each native value in it moved.
+    Value,
+    /// A `&str` that borrows the receiver: the program's own text, pinned
+    /// with the value (#1322).
+    Text,
+    /// A reference to a native value, given where the value is (#1442):
+    /// a static's place, which `lasting` asks for, or else one the receiver
+    /// holds, lent for as long as it is borrowed.
+    InPlace { lasting: bool },
 }
 
 /// What a stand-in's std trait gets back (`Calls::ask`).

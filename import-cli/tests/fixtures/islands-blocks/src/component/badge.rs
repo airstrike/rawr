@@ -27,6 +27,40 @@ pub static BLOCKS: &[page::Block] = &[
     },
 ];
 
+/// What the badge's page is about, kept where native code put it.
+pub static META: page::Meta = page::Meta {
+    title: "Badge",
+    description: "Displays a badge.",
+};
+
+/// The badge's page, which native code holds as a `Box<dyn page::Page>`.
+pub struct BadgePage {
+    state: page::State,
+}
+
+impl BadgePage {
+    pub fn new(page_index: usize) -> Box<dyn page::Page> {
+        Box::new(Self {
+            state: page::State::new(page_index, BLOCKS),
+        })
+    }
+}
+
+impl page::Page for BadgePage {
+    fn meta(&self) -> &'static page::Meta {
+        &META
+    }
+    fn blocks(&self) -> &'static [page::Block] {
+        BLOCKS
+    }
+    fn state(&self) -> &page::State {
+        &self.state
+    }
+    fn page_index(&self) -> usize {
+        self.state.page_index
+    }
+}
+
 /// A block built from literals, given by value.
 pub fn note() -> page::Block {
     page::Block::Group {

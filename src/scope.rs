@@ -1558,6 +1558,27 @@ impl Pins {
         unsafe { &*pointer }
     }
 
+    /// `keeper`, held for as long as these pins are: a runner's count on a
+    /// native value native code borrows where it is, as a stand-in's `fn
+    /// state(&self) -> &State` borrows the receiver's field (#1442). Held
+    /// once however often it is kept.
+    pub fn keep(&self, keeper: std::rc::Rc<dyn std::any::Any>) {
+        let thread = std::thread::current().id();
+        let mut kept = self
+            .values
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !kept
+            .iter()
+            .any(|held| held.thread == thread && std::rc::Rc::ptr_eq(&held.value, &keeper))
+        {
+            kept.push(Kept {
+                thread,
+                value: std::mem::ManuallyDrop::new(keeper),
+            });
+        }
+    }
+
     /// `texts`, each pinned ([`Pins::pin`]), as one `&'static [&'static
     /// str]` a crate takes: serde's `deserialize_struct(name, FIELDS,
     /// visitor)` takes the field names so. Only pins that live as long as

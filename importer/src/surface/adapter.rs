@@ -113,6 +113,9 @@ pub(crate) enum Operation {
         ty: convert::Type,
         value: Option<convert::Constant>,
         associated: bool,
+        /// A `static` of a crate value, read where it is (#1442).
+        #[serde(default)]
+        lasting: bool,
     },
     Builder {
         steps: Box<[BuilderStep]>,
@@ -899,6 +902,7 @@ fn clone_operation(
             ty: clone_type(plan.ty())?,
             value: plan.value().map(clone_constant).transpose()?,
             associated: matches!(selector, identity::Selector::AssociatedConstant { .. }),
+            lasting: plan.is_lasting(),
         }),
         (
             representability::Representability::Value(_)

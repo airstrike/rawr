@@ -328,6 +328,10 @@ impl<E: Policy> Storage for Lasting<E> {
         })))
     }
 
+    fn lasting(&self) -> Option<Box<dyn Any>> {
+        Some(Box::new(self.read(false).ok()?))
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
