@@ -8677,6 +8677,39 @@ fn byte_slice(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), request::Error> 
     output.write_all(b"]").map_err(request::unwritable)
 }
 
+/// `body`, a call's body that takes `lent` (`lent_inputs`), run with each
+/// argument native code lent reached where it is for the call, as an
+/// adapter reaches it, never moved out of its borrowed place (#913).
+fn within_lent(lent: &[(usize, bool, String)], body: String) -> String {
+    if lent.is_empty() {
+        return body;
+    }
+    let reach = lent
+        .iter()
+        .map(|(index, mutable, rust)| format!("({index}, {mutable}, {rust} as Reach)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "    with_lent_arguments(arguments, &[{reach}], &mut |arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>| -> Result<Dynamic, Error> {{\n    let _ = &mut *lent;\n{body}\n    }})"
+    )
+}
+
+/// The calls that are plain enough to reach what native code lent where it
+/// is (`lent_inputs`): neither a method that sends a message nor a replay.
+fn lent_inputs_of(
+    plan: &Plan,
+    cohort: &[Plan],
+    profile: &crate::profile::Proof,
+    facade: Option<&crate::surface::facade::Plan>,
+) -> Result<Vec<(usize, bool, String)>, request::Error> {
+    if method_message(plan, cohort, profile, facade)?.is_none() && replay(plan, profile)?.is_none()
+    {
+        lent_inputs(plan)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
 /// The receiver of an opaque type's method in a region (`family`): its
 /// family, and the call of it when the region holds it boxed, through its
 /// trait's method.
@@ -8694,6 +8727,7 @@ fn region_operand(
     plan: &Plan,
     operand: &convert::Type,
     consumer: usize,
+    lent: &[(usize, bool, String)],
 ) -> Result<String, request::Error> {
     let (signature, substitutions, constants, container_parameters) = match plan.operation() {
         Operation::Method {
@@ -8752,6 +8786,7 @@ fn region_operand(
     {
         let _region = InRegion::enter();
         let _arguments = RegionArguments::enter();
+        let _lent = LentArguments::enter(!lent.is_empty());
         match plan.operation() {
             Operation::Function { .. } => {
                 for (position, input) in signature.inputs().iter().enumerate().skip(1) {
@@ -8780,11 +8815,13 @@ fn region_operand(
             &mut body,
         )?;
     }
-    let body = String::from_utf8(body).map_err(request::unwritable)?;
+    let mut body = String::from_utf8(body).map_err(request::unwritable)?;
+    body.push_str("    Err(Error::TypeMismatch)");
+    let body = within_lent(lent, body);
     Ok(format!(
         "\n    if let Some(scoped) = scoped_value(arguments, 0) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
-{body}    Err(Error::TypeMismatch)
+{body}
         }})
         .map_err(|error| Error::Lent(scoped.name(), error))?;
     }}"
@@ -8841,7 +8878,8 @@ fn render_adapter(
             .map_err(encoding);
         }
         let scoped = if position == 0 {
-            region_operand(plan, &operand, index)?
+            let lent = lent_inputs_of(plan, cohort, profile, facade)?;
+            region_operand(plan, &operand, index, &lent)?
         } else {
             String::new()
         };
@@ -9426,13 +9464,7 @@ fn opaque_table_source(
         } else {
             None
         };
-        let lent = if method_message(consumer, cohort, profile, facade)?.is_none()
-            && replay(consumer, profile)?.is_none()
-        {
-            lent_inputs(consumer)?
-        } else {
-            Vec::new()
-        };
+        let lent = lent_inputs_of(consumer, cohort, profile, facade)?;
         let body = {
             let _lent = LentArguments::enter(!lent.is_empty());
             let _producing = OpaqueProducing::enter(inner);
@@ -9475,24 +9507,8 @@ fn opaque_table_source(
         };
         // Each argument native code lent, as the `&mut Vec<String>` a
         // program's impl of `labels` delegates to the value it holds, is
-        // reached where it is for the call, as an adapter reaches it
-        // (`lent_inputs`), never moved out of its borrowed place (#913).
-        let body = match &lent {
-            lent if lent.is_empty() => body,
-            lent => {
-                let reach = lent
-                    .iter()
-                    .map(|(index, mutable, rust)| format!("({index}, {mutable}, {rust} as Reach)"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!(
-                    "    with_lent_arguments(arguments, &[{reach}], &mut |arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>| -> Result<Dynamic, Error> {{
-    let _ = &mut *lent;
-{body}
-    }})"
-                )
-            }
-        };
+        // reached where it is for the call (#913).
+        let body = within_lent(&lent, body);
         // A call that takes the value itself, where it doesn't implement
         // its trait through its proxy, can't take it from beside what it
         // borrows.
