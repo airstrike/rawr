@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 140;
+const CLASSIFIER_VERSION: u32 = 141;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2081,8 +2081,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         projected: &[Projected],
     ) -> Result<Vec<representability::signature::Relation>, Failure> {
         use representability::signature::{Case, Relation};
-        /// More implementations than this are not read as cases.
-        const CASES: usize = 64;
         let mut relations = Vec::new();
         for projection in projected {
             let Some((first, rest)) = projection.hops.split_first() else {
@@ -2126,18 +2124,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     continue;
                 }
                 cases.push(Case::new(this, Box::new([value])));
-                if cases.len() > CASES {
-                    break;
-                }
             }
             // A generic implementation at each type only a crate's alias
             // names, as `impl<A, B> geometry::Renderer for Renderer<A, B>`
             // is at iced's `Renderer`, whose `Geometry` is then canvas's
             // `Geometry` (T318).
             for index in self.instance_aliases() {
-                if cases.len() > CASES {
-                    break;
-                }
                 let Some(model::Kind::TypeAlias { ty: instance, .. }) = self
                     .graph
                     .definitions()
@@ -2162,9 +2154,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     continue;
                 }
                 cases.push(Case::new(this, Box::new([value])));
-            }
-            if cases.len() > CASES {
-                cases.clear();
             }
             // Without a case, the relation still names the associated type,
             // which an opaque type that fills the parameter gives from its
@@ -2496,8 +2485,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 other => other,
             }
         }
-        /// More implementations than this are not read as cases.
-        const CASES: usize = 64;
         let mut relations = Vec::new();
         for predicate in generics.predicates() {
             let model::Predicate::Bound {
@@ -2546,7 +2533,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         }
                         _ => None,
                     })
-                    .take(CASES)
                     .collect::<Vec<_>>();
                 if !cases.is_empty() {
                     self.retain_array::<Case>(cases.len())?;
@@ -2648,9 +2634,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         Case::new(marked(source), Box::new([marked(target)]))
                             .with_projections(self.case_projections(implementation, marked)),
                     );
-                    if cases.len() > CASES {
-                        break;
-                    }
                 }
             }
             for implementation in self.graph.implementations_of(trait_id) {
@@ -2693,13 +2676,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     Case::new(marked(this), implemented)
                         .with_projections(self.case_projections(implementation, marked)),
                 );
-                if cases.len() > CASES {
-                    break;
-                }
             }
-            if cases.len() > CASES {
-                continue;
-            }
+            // Every impl is a case, however many the crate has, as rustc
+            // never forgets a bound: icedxdy_widget's hundred `From<_> for
+            // Slot` impls still leave the reflexive one to tie a slot's
+            // message to `badge(impl Into<Slot<'a, Message>>)`'s (#1435).
             // With no case, the trait's impl headers may still fix the
             // bound's arguments (D604).
             self.retain_array::<Case>(cases.len())?;
@@ -2785,8 +2766,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         target: &representability::convert::Type,
     ) -> Result<Box<[representability::signature::Case]>, Failure> {
         use representability::signature::Case;
-        /// More implementations than this are not read as cases.
-        const CASES: usize = 64;
         let mut cases = Vec::<Case>::new();
         for implementation in self.core_implementations("From") {
             let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
@@ -2825,9 +2804,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }
             let case = Case::new(source, Box::new([target.clone()]));
             if !cases.contains(&case) {
-                if cases.len() == CASES {
-                    return Ok(Box::default());
-                }
                 cases.try_reserve(1).map_err(|_| Error::Allocation)?;
                 cases.push(case);
             }

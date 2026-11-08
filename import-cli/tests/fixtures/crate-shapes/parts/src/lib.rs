@@ -200,3 +200,33 @@ impl<'a, Message, T, R> Compose<Message, T, R> for widgets::Element<'a, Message,
         format!("element {}", self.describe)
     }
 }
+
+/// As many widgets as a component crate has, each a slot by `From` and a
+/// `Compose` implementor, as icedxdy_widget's hundred are: a bound's
+/// relation keeps every one of its cases, as rustc keeps the bound (#1435).
+macro_rules! widgets {
+    ($($name:ident)*) => {
+        $(
+            pub struct $name;
+
+            impl<'a, Message: 'a> From<$name> for Slot<'a, Message> {
+                fn from(_: $name) -> Self {
+                    Slot::labeled(stringify!($name).to_owned())
+                }
+            }
+
+            impl<'a, Message: 'a> Compose<Message> for $name {
+                fn compose(&self) -> String {
+                    stringify!($name).to_owned()
+                }
+            }
+        )*
+    };
+}
+
+widgets! {
+    W00 W01 W02 W03 W04 W05 W06 W07 W08 W09 W10 W11 W12 W13 W14 W15
+    W16 W17 W18 W19 W20 W21 W22 W23 W24 W25 W26 W27 W28 W29 W30 W31
+    W32 W33 W34 W35 W36 W37 W38 W39 W40 W41 W42 W43 W44 W45 W46 W47
+    W48 W49 W50 W51 W52 W53 W54 W55 W56 W57 W58 W59 W60 W61 W62 W63
+}

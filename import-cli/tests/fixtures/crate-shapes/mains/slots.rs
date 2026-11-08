@@ -83,6 +83,14 @@ fn view(id: &str) -> Slot<'static, page::Message> {
     }
 }
 
+/// A badge of a slot a local holds, as icedxdy's `badge(content: impl
+/// Into<Slot<'a, Message>>)` takes one: the reflexive `From<T> for T` ties
+/// the slot's message to the badge's however many slots the crate has.
+fn verified() -> Slot<'static, page::Message> {
+    let content = Slot::from("Verified");
+    badge::composed(content).into()
+}
+
 fn main() {
     let name = String::from("Verified");
     let row: Row<'_, ()> = slots![compose::icon().size(12), "Verified", name];
@@ -147,6 +155,8 @@ fn main() {
     let row: Row<page::Message> =
         Row::with_children([view("demo"), view("icon"), view("link"), view("other")]);
     println!("{} {:?}", row.draw(), page::Message::Noop);
+    let row: Row<page::Message> = Row::with_children([verified()]);
+    println!("{}", row.draw());
     let mut many = Vec::new();
     for _ in 0..1000 {
         let view: Slot<()> = slots![

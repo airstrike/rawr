@@ -541,6 +541,7 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
          string badge secondary 2 [composed row 2 [text check 12 | str Verified]]] | \
          row 8 [string pill default 2 pressed [composed row 4 [str Open Link | icon 12]]] | \
          row 8 [string badge default 2 [composed row 2 [text check 12 | str Verified]]] Noop\n\
+         string badge default 2 [str Verified]\n\
          107997\n",
     );
     let program = "// rawr\nuse natives::compose::{self, Row, Theme};\nuse natives::slots;\n\n\
