@@ -2,7 +2,7 @@
 use std::borrow::Cow;
 
 use natives::compose::{self, Row, Slot, Theme};
-use natives::{badge, component, slots};
+use natives::{badge, component, pill, slots};
 
 struct Mine(u32);
 
@@ -39,6 +39,48 @@ fn components<'a>() -> Slot<'a, ()> {
     ]
     .spacing(8)
     .into()
+}
+
+mod page {
+    #[derive(Debug, Clone, Copy)]
+    pub enum Message {
+        Noop,
+    }
+}
+
+mod icon {
+    pub fn badge_check<'a, Theme>() -> natives::compose::Text<'a, Theme> {
+        natives::compose::text("check")
+    }
+}
+
+/// A preview's view, as a component crate's page writes one: a match arm's
+/// row of badges whose message only the function's declared return type
+/// fixes, through the row's `.into()` down to each child's conversion.
+fn view(id: &str) -> Slot<'static, page::Message> {
+    match id {
+        "demo" => slots![
+            badge::pill("Badge"),
+            badge::pill("Secondary").style(badge::Secondary)
+        ]
+        .spacing(8)
+        .into(),
+        "icon" => slots![
+            pill![icon::badge_check().size(12), "Verified"].style(badge::Secondary),
+            pill!["Bookmark", compose::icon().size(12)].style(badge::Ghost),
+            component![check().size(12), "Verified"].style(badge::Secondary)
+        ]
+        .spacing(8)
+        .into(),
+        "link" => {
+            slots![pill!["Open Link", compose::icon().size(12)].on_press(page::Message::Noop)]
+                .spacing(8)
+                .into()
+        }
+        _ => slots![component![check().size(12), "Verified"]]
+            .spacing(8)
+            .into(),
+    }
 }
 
 fn main() {
@@ -102,6 +144,9 @@ fn main() {
     let wrapped: Slot<()> = compose::wrap(Row::with_children([Slot::from("w")]));
     let row: Row<()> = Row::with_children([wrapped]);
     println!("{}", row.draw());
+    let row: Row<page::Message> =
+        Row::with_children([view("demo"), view("icon"), view("link"), view("other")]);
+    println!("{} {:?}", row.draw(), page::Message::Noop);
     let mut many = Vec::new();
     for _ in 0..1000 {
         let view: Slot<()> = slots![

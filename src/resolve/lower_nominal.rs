@@ -22079,7 +22079,12 @@ impl<'a> Parser<'a> {
     /// for T` behind `impl Into<Slot<'a, Message>>`, fits every argument by
     /// its self type, so rustc selects it by the whole trait reference: it
     /// fits only an argument that unifies with the bound's (#1404). Any
-    /// other case is chosen by its self type.
+    /// other case fits by its self type unless an argument it implements
+    /// is one the bound's can't be, as a component crate's `impl Into<
+    /// Element<..>> for Slot<..>` is no case of `impl Into<Slot<'a,
+    /// Message>>` for a slot: rustc matches the whole trait reference of
+    /// every impl, and only the reflexive one ties the slot's message to
+    /// the bound's (#1422).
     fn case_arguments_fit(
         &mut self,
         case: &crate::host::signature::Case,
@@ -22088,11 +22093,11 @@ impl<'a> Parser<'a> {
         parameters: &BTreeMap<ImmutableString, Ty>,
         (item_path, owner): (&str, Option<&crate::host::facade::Dependency>),
     ) -> bool {
-        if !matches!(case.this(), crate::host::signature::Pattern::Variable(_)) {
-            return true;
-        }
+        // A case whose self type fits every argument needs its arguments
+        // read to fit; any other only needs them not to contradict.
+        let variable = matches!(case.this(), crate::host::signature::Pattern::Variable(_));
         if case.arguments().len() != relation.arguments().len() {
-            return false;
+            return !variable;
         }
         let checkpoint = self.inference.checkpoint();
         let mut bindings = bindings.clone();
@@ -22104,8 +22109,10 @@ impl<'a> Parser<'a> {
                 self.pattern_type(implemented, &mut bindings, &mut parameters, at, owner);
             let declared =
                 self.pattern_type(declared, &mut BTreeMap::new(), &mut parameters, at, owner);
-            fits = matches!((implemented, declared), (Ok(implemented), Ok(declared))
-                if self.unify_type(&declared, &implemented));
+            fits = match (implemented, declared) {
+                (Ok(implemented), Ok(declared)) => self.unify_type(&declared, &implemented),
+                _ => !variable,
+            };
             if !fits {
                 break;
             }
