@@ -2924,7 +2924,7 @@
     {"issue":1236,"title":"A program can't call an inherent method that several impls of a generic type give, as `Setting::<u16>::parse_list`","state":"open","category":"Divergences from rustc"},
     {"issue":1237,"title":"A lent cell's value can't move into a by-value method of a trait with arguments (changelog's markdown::view(..).map(..))","state":"open","category":"Divergences from rustc"},
     {"issue":1238,"title":"In iced's changelog the view's renderer doesn't reach an element boxed through row![..]","state":"open","category":"Divergences from rustc"},
-    {"issue":1239,"title":"tour: rawr check stops at a host item of cosmic_text's opaque FontRef::fonts whose owner type isn't declared","state":"open","category":"Divergences from rustc"},
+    {"issue":1239,"title":"tour: rawr check stops at a host item of cosmic_text's opaque FontRef::fonts whose owner type isn't declared","state":"closed","category":"Divergences from rustc"},
     {"issue":1240,"title":"Keep Cargo's unit-graph answer across processes","state":"open","category":"Health"},
     {"issue":1241,"title":"A target-table dependency whose library name differs from its key isn't linked by name","state":"open","category":"Divergences from rustc"},
     {"issue":1242,"title":"Profile settings beyond panic: overflow-checks and debug-assertions","state":"open","category":"Divergences from rustc"},
@@ -2950,7 +2950,9 @@
     {"issue":1262,"title":"rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"open","category":"Health"},
     {"issue":1263,"title":"A marked module can't name a native non-root module's trait or type by path (`page::Page`): E0425","state":"open","category":"Divergences from rustc"},
     {"issue":1264,"title":"A marked type implements a native trait and crosses to native code as `Box<dyn Trait>`, whose methods native code calls","state":"open","category":"Divergences from rustc"},
-    {"issue":1265,"title":"The iced reference page is removed: it hedged about special cases rawr never had and named a nonexistent #[widget]","state":"open","category":"Health"}
+    {"issue":1265,"title":"The iced reference page is removed: it hedged about special cases rawr never had and named a nonexistent #[widget]","state":"open","category":"Health"},
+    {"issue":1266,"title":"iced tour: `open::that_in_background(..)` gives E0433 cannot find module or crate `open`; cargo check passes","state":"open","category":"Divergences from rustc"},
+    {"issue":1267,"title":"A dependency whose every item is left out reads as an unknown crate (E0433) instead of naming the unsupported item","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3502,7 +3504,9 @@
             {"number":1129,"title":"progress_bar: a transition moved into a row! in one branch and a column! in the other fails with a lent-value mismatch","state":"closed"},
             {"number":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"closed"},
             {"number":1213,"title":"After the projection work for #1099, gallery has 50 x E0271 <Renderer as…","state":"closed"},
-            {"number":1218,"title":"A generic program function's type parameter isn't inferred through an impl Trait argument's bound, nor taken from a t...","state":"open"}
+            {"number":1218,"title":"A generic program function's type parameter isn't inferred through an impl Trait argument's bound, nor taken from a t...","state":"open"},
+            {"number":1266,"title":"iced tour: `open::that_in_background(..)` gives E0433 cannot find module or crate `open`; cargo check passes","state":"open"},
+            {"number":1267,"title":"A dependency whose every item is left out reads as an unknown crate (E0433) instead of naming the unsupported item","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3538,7 +3542,7 @@
             {"number":1235,"title":"A crate call whose closure gives a value holding an opaque type counts as that type's producer","state":"open"},
             {"number":1236,"title":"A program can't call an inherent method that several impls of a generic type give, as `Setting::<u16>::parse_list`","state":"open"},
             {"number":1237,"title":"A lent cell's value can't move into a by-value method of a trait with arguments (changelog's markdown::view(..).map(..))","state":"open"},
-            {"number":1239,"title":"tour: rawr check stops at a host item of cosmic_text's opaque FontRef::fonts whose owner type isn't declared","state":"open"}
+            {"number":1239,"title":"tour: rawr check stops at a host item of cosmic_text's opaque FontRef::fonts whose owner type isn't declared","state":"closed"}
           ]
         }
       ]
