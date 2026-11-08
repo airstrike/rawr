@@ -11,7 +11,7 @@ pub(crate) mod cached;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 52;
+const SCHEMA: u32 = 53;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
