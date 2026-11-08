@@ -1951,7 +1951,9 @@ impl Engine {
 
                     let context =
                         need_context.then(|| (self, name.as_str(), None, &*global, pos).into());
-                    return func(context, &mut [&mut lhs, &mut rhs]);
+                    // A panic, as `10 / 0`'s, is at the operator.
+                    return func(context, &mut [&mut lhs, &mut rhs])
+                        .map_err(|error| error.fill_position(pos));
                 }
             }
 

@@ -532,23 +532,11 @@ impl Engine {
         let len = array.len();
         let low = usize::try_from(low).unwrap_or(usize::MAX);
         let high = match high {
-            -1 => len,
-            high => usize::try_from(high).unwrap_or(usize::MAX),
+            -1 => None,
+            high => Some(usize::try_from(high).unwrap_or(usize::MAX)),
         };
-        let high = if inclusive {
-            high.saturating_add(1)
-        } else {
-            high
-        };
-        let fail = |message: String| Err(ERR::ErrorRuntime(message.into(), expr.position()).into());
-        if high > len {
-            return fail(format!(
-                "range end index {high} out of range for slice of length {len}"
-            ));
-        }
-        if low > high {
-            return fail(format!("slice index starts at {low} but ends at {high}"));
-        }
+        let (low, high) = crate::resolve::lower_nominal::slice_window(low, high, inclusive, len)
+            .map_err(|message| ERR::ErrorRuntime(message.into(), expr.position()))?;
         let collected = &mut Collected { bindings, path };
         Ok(collect_window(&array[low..high], low, pattern, collected))
     }

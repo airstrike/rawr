@@ -897,3 +897,72 @@ fn language_a_slice_index_panics_at_the_expression_start() {
         "thread 'main' panicked at main.rs:5:20:\nindex out of bounds: the len is 3 but the index is 5"
     );
 }
+
+/// Integer division and remainder by zero, and their overflow, panic with
+/// rustc's message at the expression's start, as `cargo run` prints them
+/// (#37), as do a slice range out of bounds (at its `[`), an integer
+/// `pow` that overflows and an integer `clamp` whose bounds are reversed.
+#[test]
+fn language_division_by_zero_panics_as_rustc_words_and_places_it() {
+    let prelude = "fn main() {\n    let d: i32 = \"0\".parse().unwrap();\n    let n: i64 = \
+                   \"0\".parse().unwrap();\n    let v = vec![1, 2, 3];\n    let start: usize = \
+                   \"5\".parse().unwrap();\n    let hi: i32 = \"1\".parse().unwrap();\n";
+    for (line, at, message) in [
+        (
+            "println!(\"{}\", 10 / d);",
+            "7:20",
+            "attempt to divide by zero",
+        ),
+        (
+            "println!(\"{}\", 10 % d);",
+            "7:20",
+            "attempt to calculate the remainder with a divisor of zero",
+        ),
+        (
+            "println!(\"{}\", 10i64 / n);",
+            "7:20",
+            "attempt to divide by zero",
+        ),
+        (
+            "println!(\"{}\", 10i64 % n);",
+            "7:20",
+            "attempt to calculate the remainder with a divisor of zero",
+        ),
+        (
+            "let mut x = 10;\n    x /= d;",
+            "8:5",
+            "attempt to divide by zero",
+        ),
+        (
+            "println!(\"{}\", i32::MIN % (d - 1));",
+            "7:20",
+            "attempt to calculate the remainder with overflow",
+        ),
+        (
+            "println!(\"{}\", i64::MIN / (n - 1));",
+            "7:20",
+            "attempt to divide with overflow",
+        ),
+        (
+            "println!(\"{:?}\", &v[start..]);",
+            "7:24",
+            "range start index 5 out of range for slice of length 3",
+        ),
+        (
+            "println!(\"{:?}\", &v[1..=start]);",
+            "7:24",
+            "range end index 5 out of range for slice of length 3",
+        ),
+        (
+            "println!(\"{}\", 3.clamp(5, hi));",
+            "7:22",
+            "min > max. min = 5, max = 1",
+        ),
+    ] {
+        assert_eq!(
+            panicked(&format!("{prelude}    {line}\n}}\n")),
+            format!("thread 'main' panicked at main.rs:{at}:\n{message}"),
+            "{line}"
+        );
+    }
+}

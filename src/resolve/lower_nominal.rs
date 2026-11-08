@@ -36584,6 +36584,24 @@ impl<'a> Parser<'a> {
                 return Ok(self.binary(lhs, symbol, rhs, Ty::Bool));
             }
         }
+        // `/` and `%` of a kind narrower than the runtime's `i64` panic as
+        // debug Rust's do, by zero and at `MIN / -1` and `MIN % -1`, which
+        // the runtime's `i64` computes.
+        if output.is_none()
+            && matches!(symbol, "/" | "%")
+            && let Ty::Int(kind) = ty
+            && kind.checked()
+        {
+            let expression = span(lhs.span.start(), rhs.span.end());
+            let source = self.int_op(
+                symbol,
+                lhs.rendered_source(),
+                rhs.rendered_source(),
+                &ty,
+                &ty,
+            );
+            return Ok(self.operator_expr(source, ty, expression));
+        }
         let Some(output) = output else {
             let value = self.binary(lhs, symbol, rhs, ty.clone());
             return Ok(self.checked_arithmetic(value, symbol));
@@ -36689,6 +36707,7 @@ impl<'a> Parser<'a> {
             "*" => "multiply",
             "/" => "divide",
             "%" => "calculate the remainder",
+            "pow" => "exponentiate",
             _ => "negate",
         };
         let source = std::mem::take(&mut value.source);
@@ -38547,9 +38566,16 @@ impl<'a> Parser<'a> {
             _ => {
                 let bounds = compare(self, &y, &z).expect("the type is ordered");
                 let above = compare(self, &x, &z).expect("the type is ordered");
+                // An integer's `clamp` names its bounds; `Ord`'s asserts.
+                let failed = match self.inference.resolve(&ty) {
+                    Ty::Int(kind) if !kind.wide() => {
+                        format!("\"min > max. min = \" + {second} + \", max = \" + {third}")
+                    }
+                    _ => "\"assertion failed: min <= max\"".to_string(),
+                };
                 source.push_text("if !(");
                 source.push(bounds);
-                source.push_text(" <= 0) { __rawr_throw \"assertion failed: min <= max\"; } if ");
+                source.push_text(format!(" <= 0) {{ __rawr_throw {failed}; }} if "));
                 source.push(ordered);
                 source.push_text(format!(" < 0 {{ {second} }} else if "));
                 source.push(above);
@@ -39098,7 +39124,7 @@ impl<'a> Parser<'a> {
         source.push(argument.rendered_source());
         source.push_text("))");
         let value = self.operator_expr(source, number, span(value.span.start(), end));
-        Ok(self.checked_arithmetic(value, "*"))
+        Ok(self.checked_arithmetic(value, "pow"))
     }
 
     /// An integer method of `INT_METHODS` on `value` of `kind`.
@@ -61033,21 +61059,11 @@ fn vec_method(context: Option<&NativeCallContext<'_>>, args: &mut FnCallArgs) ->
             Ok(Dynamic::UNIT)
         }
         Some("drain") => {
-            let high = if b == usize::MAX { len } else { b };
-            let high = if inclusive {
-                high.saturating_add(1)
-            } else {
-                high
-            };
-            if high > len {
-                return fail(format!(
-                    "range end index {high} out of range for slice of length {len}"
-                ));
+            let high = (b != usize::MAX).then_some(b);
+            match drain_window(a, high, inclusive, len) {
+                Ok((low, high)) => Ok(Dynamic::from_array(array.drain(low..high).collect())),
+                Err(message) => fail(message),
             }
-            if a > high {
-                return fail(format!("slice index starts at {a} but ends at {high}"));
-            }
-            Ok(Dynamic::from_array(array.drain(a..high).collect()))
         }
         _ => Err(invariant("an unknown `Vec` method")),
     }
@@ -61485,23 +61501,13 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
     } else {
         let low = at(args[1]).unwrap_or(usize::MAX);
         let high = match args[2].as_int().unwrap_or(-1) {
-            -1 => len,
-            high => usize::try_from(high).unwrap_or(usize::MAX),
+            -1 => None,
+            high => Some(usize::try_from(high).unwrap_or(usize::MAX)),
         };
-        let high = if args[3].as_bool().unwrap_or(false) {
-            high.saturating_add(1)
-        } else {
-            high
-        };
-        if high > len {
-            return fail(format!(
-                "range end index {high} out of range for slice of length {len}"
-            ));
+        match slice_window(low, high, args[3].as_bool().unwrap_or(false), len) {
+            Ok(window) => window,
+            Err(message) => return fail(message),
         }
-        if low > high {
-            return fail(format!("slice index starts at {low} but ends at {high}"));
-        }
-        (low, high)
     };
     if let Some(place) = place {
         let window = |range: std::ops::Range<usize>| {
@@ -61640,6 +61646,63 @@ fn int_method_code(name: &str) -> Option<usize> {
         .position(|(method, operand, _)| *method == name && *operand != 'x' && *method != "!")
 }
 
+/// std's panic for a range of a slice of `len` from `start` to `end`, in
+/// the order `SliceIndex`'s checks find it.
+fn slice_index_fail(start: usize, end: usize, len: usize) -> String {
+    if start > len {
+        format!("range start index {start} out of range for slice of length {len}")
+    } else if start > end && end <= len {
+        format!("slice index starts at {start} but ends at {end}")
+    } else {
+        format!("range end index {end} out of range for slice of length {len}")
+    }
+}
+
+/// The elements `low..high` of a slice of `len` that `s[low..high]`,
+/// `s[low..=high]` (`inclusive`) or `s[low..]` (`high` `None`) takes, or
+/// std's panic for the range, as `Index` on a slice checks it.
+pub(crate) fn slice_window(
+    low: usize,
+    high: Option<usize>,
+    inclusive: bool,
+    len: usize,
+) -> Result<(usize, usize), String> {
+    let (end, fits) = match high {
+        None => (len, low <= len),
+        Some(high) if inclusive && high < len => (high + 1, low <= high + 1),
+        Some(high) if inclusive => (high, false),
+        Some(high) => (high, low <= high && high <= len),
+    };
+    if fits {
+        Ok((low, end))
+    } else {
+        Err(slice_index_fail(low, end, len))
+    }
+}
+
+/// The elements `Vec::drain` takes of a `Vec` of `len`, or std's panic,
+/// which checks the range's end before its start.
+fn drain_window(
+    low: usize,
+    high: Option<usize>,
+    inclusive: bool,
+    len: usize,
+) -> Result<(usize, usize), String> {
+    let end = match high {
+        None => len,
+        Some(high) if inclusive && high >= len || !inclusive && high > len => {
+            return Err(slice_index_fail(0, high, len));
+        }
+        Some(high) if inclusive => high + 1,
+        Some(high) => high,
+    };
+    if low > end {
+        Err(slice_index_fail(low, end, len))
+    } else {
+        Ok((low, end))
+    }
+}
+
 /// `INT_METHODS[code]` on `value` of the kind `kinds[0]` (`Int::KINDS`
 /// index), its operand of the kind `kinds[1]`, as debug Rust computes it:
 /// in `i128`, a `u64`/`usize` read from its bits, the result truncated to
@@ -61738,6 +61801,7 @@ fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
                     "sub" => "subtract",
                     "div" => "divide",
                     "rem" => "calculate the remainder",
+                    "pow" => "exponentiate",
                     _ => "multiply",
                 };
                 return panic(&format!("attempt to {verb} with overflow"));
