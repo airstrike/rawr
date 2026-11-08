@@ -1579,17 +1579,19 @@ fn install(
             )
         })
         .count();
-    // A facade for each root, whose items may all be left out (#1267).
-    let facade_count = contract
-        .outcomes()
-        .enumerate()
-        .filter(|(index, outcome)| {
-            !contract
-                .outcomes()
-                .take(*index)
-                .any(|prior| prior.export().root_alias() == outcome.export().root_alias())
-        })
-        .count();
+    // A facade for each root, whose items may all be left out (#1267). The
+    // roots are counted once over the outcomes, sorted, since a pass over the
+    // prior outcomes for each one is quadratic (minutes on a thousand-package
+    // workspace).
+    let mut roots = Vec::<&str>::new();
+    for outcome in contract.outcomes() {
+        let root = outcome.export().root_alias();
+        if let Err(index) = roots.binary_search(&root) {
+            roots.try_reserve(1).map_err(|_| Error::Allocation)?;
+            roots.insert(index, root);
+        }
+    }
+    let facade_count = roots.len();
     allocation.retain_checked(
         retained.checked_add(facade_count),
         retained
