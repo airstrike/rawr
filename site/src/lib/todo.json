@@ -86,7 +86,8 @@
         {"text":"A path into a dependency none of whose items rawr can use yet names the item and says why, as it does for a crate with other items, instead of rustc's \"cannot find module or crate\".","issues":[1267]},
         {"text":"A crate's function that gives a thread's `JoinHandle`, as `open::that_in_background` does, runs: the program can ignore the handle or `.join()` it for what the thread gave.","issues":[1266]},
         {"text":"A marked crate with Rust dependencies follows Cargo's features: `cfg(feature)` in marked code and in native modules holds as under `cargo run`, with `--features`, `--no-default-features` and `--all-features`.","issues":[1268]},
-        {"text":"A crate whose generic trait has a provided method giving an opaque type, where that type's supertrait binds an associated type to Self (as `Add<Output = Self>` does), no longer panics rawr check while building its API. An item whose signature names another item's type parameter is left out with a can't-be-used-yet note.","issues":[1278]}
+        {"text":"A crate whose generic trait has a provided method giving an opaque type, where that type's supertrait binds an associated type to Self (as `Add<Output = Self>` does), no longer panics rawr check while building its API. An item whose signature names another item's type parameter is left out with a can't-be-used-yet note.","issues":[1278]},
+        {"text":"A std trait works as a trait object, as in Rust. `Box<dyn Error>` with `?` from `parse`, `&dyn Debug` of a derived or builtin value, `&dyn Display` of the program's own impl, and `Vec<Box<dyn Display>>` of mixed values all work, with no `impl Error` needed in the program. Formatting, `to_string()` and the trait's methods call the value's own impl.","issues":[1251]}
       ]
     },
     "releases": [
@@ -2945,7 +2946,7 @@
     {"issue":1248,"title":"rawr-web prints u128 and i128 values as their type names","state":"open","category":"Divergences from rustc"},
     {"issue":1249,"title":"A native root can't name a marked module's types: `Program::new(..) -> (Program, Task<Message>)` from native main","state":"open","category":"Divergences from rustc"},
     {"issue":1250,"title":"The reference pages say what the current tree does: stale gaps removed, wrong errors and limits corrected","state":"open","category":"Health"},
-    {"issue":1251,"title":"A program using Box<dyn Error> or another std trait object fails with E0425 unless it implements the trait itself","state":"open","category":"Divergences from rustc"},
+    {"issue":1251,"title":"A program using Box<dyn Error> or another std trait object fails with E0425 unless it implements the trait itself","state":"closed","category":"Divergences from rustc"},
     {"issue":1252,"title":"print(\"hi\") says rawr doesn't run `print` yet instead of rustc's error","state":"closed","category":"Divergences from rustc"},
     {"issue":1253,"title":"std::rc::Rc::new by its full path says rawr doesn't run it, while Rc::new after a use runs","state":"open","category":"Divergences from rustc"},
     {"issue":1254,"title":"std::fs::File and std::sync::RwLock fail with unknown-member errors that name the wrong type","state":"open","category":"Divergences from rustc"},
@@ -2977,7 +2978,10 @@
     {"issue":1280,"title":"A generic type's `&self` method giving an opaque type that borrows it fails in the generated runner (E0521)","state":"open","category":"Divergences from rustc"},
     {"issue":1281,"title":"The opaque type of a method reached through a sole type alias has no members","state":"open","category":"Divergences from rustc"},
     {"issue":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"open","category":"Divergences from rustc"}
+    {"issue":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"open","category":"Divergences from rustc"},
+    {"issue":1284,"title":"`dyn Any`: coercion and `downcast_ref`/`is`","state":"open","category":"Divergences from rustc"},
+    {"issue":1285,"title":"A literal passed to a trait-object parameter coerces each element","state":"open","category":"Divergences from rustc"},
+    {"issue":1286,"title":"A declared std trait sends a std receiver's method through the program dispatcher","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
