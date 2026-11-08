@@ -1436,6 +1436,7 @@
     {"t":"T1433","issue":1433,"title":"T1433: A selected target that isn't installed fails with rawr's error, not rustc's E0463 with its…","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1434","issue":1434,"title":"T1434: A native value keeping a script closure under a non-generic type doesn't lend the arena when its…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1435","issue":1435,"title":"T1435: A bound with more than 64 impls loses its relation, so badge(impl Into<Slot>) ties no message…","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":"0b5cd6d9e","release":null},
-    {"t":"T1436","issue":1436,"title":"T1436: An unused `use crate::module;` in a marked file is refused with E0432 where rustc only warns","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1436","issue":1436,"title":"T1436: An unused `use crate::module;` in a marked file is refused with E0432 where rustc only warns","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1437","issue":1437,"title":"T1437: A native fn's `&'static [T]` parameter gets a lent slice, so the runner fails E0713/E0521…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

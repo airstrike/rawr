@@ -3202,7 +3202,8 @@
     {"issue":1433,"title":"A selected target that isn't installed fails with rawr's error, not rustc's E0463 with its…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1434,"title":"A native value keeping a script closure under a non-generic type doesn't lend the arena when its…","state":"open","category":"No glue (D593)"},
     {"issue":1435,"title":"A bound with more than 64 impls loses its relation, so badge(impl Into<Slot>) ties no message…","state":"closed","category":"Importer"},
-    {"issue":1436,"title":"An unused `use crate::module;` in a marked file is refused with E0432 where rustc only warns","state":"open","category":"Divergences from rustc"}
+    {"issue":1436,"title":"An unused `use crate::module;` in a marked file is refused with E0432 where rustc only warns","state":"open","category":"Divergences from rustc"},
+    {"issue":1437,"title":"A native fn's `&'static [T]` parameter gets a lent slice, so the runner fails E0713/E0521…","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
