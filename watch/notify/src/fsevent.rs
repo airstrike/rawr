@@ -512,7 +512,9 @@ impl FsEventWatcher {
                     if !start(stream.0) {
                         fs::FSEventStreamInvalidate(stream.0);
                         stop.detach();
-                        let _ = rl_tx.send(Err(Error::generic("unable to start FSEvent stream")));
+                        let _ = rl_tx.send(Err(Error::generic(
+                            "macOS refused to start the FSEvents stream (FSEventStreamStart gives no reason)",
+                        )));
                         return;
                     }
                     thread_delivery.started(stream.0);

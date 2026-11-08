@@ -54,6 +54,31 @@ pub fn build_directory(project: &Path, environment: &crate::cargo::config::Envir
     )
 }
 
+/// The directories builds write for `project`, under the process's own
+/// environment: its Cargo target directory, which holds `<target>/rawr`,
+/// and its build directory when Cargo keeps intermediates elsewhere.
+/// Nothing under them is a program input: a change there is a build's own
+/// write, never a save.
+#[must_use]
+pub fn outputs_here(project: &Path) -> Box<[PathBuf]> {
+    let project = fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
+    let environment = crate::cargo::config::Environment::capture().ok();
+    let value = |key: &str| environment.as_ref().and_then(|env| env.value_of(key));
+    let cargo_home = environment
+        .as_ref()
+        .and_then(|env| env.cargo_home().ok().flatten());
+    let target = rawr_location::target_directory(&project, value, cargo_home.as_deref());
+    let build = rawr_location::build_directory(&project, value, cargo_home.as_deref());
+    let mut outputs = vec![target];
+    if !build.starts_with(&outputs[0]) {
+        outputs.push(build);
+    }
+    // A project kept inside a configured target directory is still its
+    // own input.
+    outputs.retain(|output| !project.starts_with(output));
+    outputs.into_boxed_slice()
+}
+
 /// The target triple `cargo build` builds `project` for when none is named,
 /// `None` for the host without one.
 #[must_use]

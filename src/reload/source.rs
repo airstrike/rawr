@@ -237,6 +237,58 @@ impl Inputs {
         Self::from_paths(paths, trees)
     }
 
+    /// These inputs less what lies under `outputs`, the directories builds
+    /// write ([`rawr_import::location::outputs_here`]): a change there is a
+    /// build's own write, rawr's copies of the marked files among them,
+    /// never a save. A tree that holds an output is watched as its entries
+    /// beside the path down to it, so the watcher never covers the output.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn outside(self, outputs: &[PathBuf]) -> Self {
+        let output = |path: &Path| outputs.iter().any(|output| path.starts_with(output));
+        let mut paths = self
+            .paths
+            .into_vec()
+            .into_iter()
+            .filter(|path| !output(path))
+            .collect::<BTreeSet<_>>();
+        let mut trees = BTreeSet::new();
+        let mut pending = self.trees.into_vec();
+        while let Some(tree) = pending.pop() {
+            if output(&tree) {
+                continue;
+            }
+            if !outputs.iter().any(|output| output.starts_with(&tree)) {
+                trees.insert(tree);
+                continue;
+            }
+            // A tree that cannot be read is watched whole.
+            let Ok(entries) = fs::read_dir(&tree) else {
+                trees.insert(tree);
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    paths.insert(path);
+                }
+            }
+        }
+        let sources = self
+            .sources
+            .into_vec()
+            .into_iter()
+            .filter(|source| !output(source))
+            .collect();
+        Self {
+            sources,
+            ..Self::from_paths(paths, trees)
+        }
+    }
+
     /// Extend Rawr inputs with [`Self::imported`] native inputs. Each parent
     /// derives its directory alone, so the union's directories are the union
     /// of both; a native identity takes the Rawr source role away.
