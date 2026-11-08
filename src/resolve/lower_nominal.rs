@@ -252,42 +252,6 @@ use wide::{
 };
 pub(crate) use wide::{wide_operator, wide_range};
 
-/// A `text.into()` whose target the use site gives once inference has it:
-/// a `String`, or a std type of std's `From` of text (`Cow<str>`), written
-/// over the placeholder before the text's `(text)`.
-struct TextInto {
-    span: Span,
-    source: Ty,
-    target: Ty,
-    placeholder: String,
-}
-
-struct PendingConversion {
-    placeholder: String,
-    source: Ty,
-    target: Ty,
-    span: Span,
-    /// A facade value's `.into()`: its type's own `into` forms, chosen by
-    /// their output, or the target's `from` of it.
-    host: Option<HostInto>,
-    /// `.try_into()`: the error type of the `Result` it gives, the target's
-    /// `TryFrom::Error` (#757).
-    try_from: Option<Ty>,
-}
-
-/// The `into` forms of a facade value's type, and the value's span.
-/// A library type's `from` functions and the dependency that owns them.
-type FromItems = (
-    Vec<crate::host::item::Definition>,
-    Option<crate::host::facade::Dependency>,
-);
-
-struct HostInto {
-    forms: Vec<crate::host::item::Definition>,
-    owner: Option<crate::host::facade::Dependency>,
-    receiver: Span,
-}
-
 struct Parser<'a> {
     marker: std::marker::PhantomData<&'a ()>,
     /// The source the tokens were read from, where a diagnostic finds
@@ -1309,6 +1273,7 @@ fn default_value(
         .ok()
 }
 pub(crate) use cell::{cell_held, cell_lock, cell_new, is_cell};
+use conversion::{HostInto, PendingConversion, TextInto};
 pub(super) use entry::runtime_entry;
 use expr::ParsedExpr;
 use host_call::{host_number_accepts, macro_or_value, value_or_call, HostCheck};

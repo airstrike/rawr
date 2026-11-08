@@ -1353,3 +1353,39 @@ impl<'a> Parser<'a> {
         Ok(value.retain_origin())
     }
 }
+
+/// A `text.into()` whose target the use site gives once inference has it:
+/// a `String`, or a std type of std's `From` of text (`Cow<str>`), written
+/// over the placeholder before the text's `(text)`.
+pub(super) struct TextInto {
+    pub(super) span: Span,
+    pub(super) source: Ty,
+    pub(super) target: Ty,
+    pub(super) placeholder: String,
+}
+
+pub(super) struct PendingConversion {
+    pub(super) placeholder: String,
+    pub(super) source: Ty,
+    pub(super) target: Ty,
+    pub(super) span: Span,
+    /// A facade value's `.into()`: its type's own `into` forms, chosen by
+    /// their output, or the target's `from` of it.
+    pub(super) host: Option<HostInto>,
+    /// `.try_into()`: the error type of the `Result` it gives, the target's
+    /// `TryFrom::Error` (#757).
+    pub(super) try_from: Option<Ty>,
+}
+
+/// The `into` forms of a facade value's type, and the value's span.
+/// A library type's `from` functions and the dependency that owns them.
+pub(super) type FromItems = (
+    Vec<crate::host::item::Definition>,
+    Option<crate::host::facade::Dependency>,
+);
+
+pub(super) struct HostInto {
+    pub(super) forms: Vec<crate::host::item::Definition>,
+    pub(super) owner: Option<crate::host::facade::Dependency>,
+    pub(super) receiver: Span,
+}
