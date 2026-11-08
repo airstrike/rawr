@@ -774,11 +774,12 @@ fn app_library(entry: &super::graph::Package, module_root: &std::path::Path) -> 
         module_root.display().to_string(),
     );
     render(&root, 1, &mut text);
+    text.push_str("}\n");
+    // A package with no `.rs` modules re-exports none.
     let names = root.children.keys().cloned().collect::<Vec<_>>();
-    text.push_str(&format!(
-        "}}\npub use __rawr_src::{{{}}};\n",
-        names.join(", ")
-    ));
+    if !names.is_empty() {
+        text.push_str(&format!("pub use __rawr_src::{{{}}};\n", names.join(", ")));
+    }
     text
 }
 

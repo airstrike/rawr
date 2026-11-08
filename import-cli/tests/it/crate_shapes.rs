@@ -285,6 +285,17 @@ fn an_output_borrows_a_formats_early_bound_lifetime() {
     runs_as_cargo_does("strftime", "09:05\nat 09 h\n05 past\n0905\n");
 }
 
+/// A widget generic over a script message and the `&str` content it holds,
+/// invariant in its lifetime, made from a program's `String`, as iced's
+/// `button(label)` makes a `Button<'_, Message, &str>`, and by a function
+/// whose own signature borrows the label, which opens a scope frame: both
+/// adapters compile, so the pins a lent widget borrows outlive the widget
+/// (#1396).
+#[test]
+fn a_widget_lent_a_programs_string_drops_before_its_pins() {
+    runs_as_cargo_does("pressable", "Delete off 1\nKeep off 1\ndeleted\nkept\n");
+}
+
 /// The format stays borrowed while what `strftime` gives lives, as rustc
 /// reads its signature: rawr's own check refuses a change to it with
 /// rustc's E0502 before anything runs.
