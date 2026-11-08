@@ -74,6 +74,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked crate's `cfg!(feature = "..")`, `#[cfg(feature = "..")]` and `#[cfg_attr(..)]` follow the features Cargo enables for it, and `rawr run`, `rawr check` and `rawr test` take `--features`, `--no-default-features` and `--all-features` as `cargo run` does. (#1259)
 - A message that a closure gives on iced's executor thread, such as `keyboard::listen().filter_map(..)`'s `Some(Message::SplitFocused(Axis::Vertical))`, keeps the crate values it holds. pane_grid's hotkeys no longer panic. (#1234)
 - A crate function returning `impl Trait`, where the trait has a supertrait like `Add<Output = Self>` (as num-traits' `Num` does), now imports. Before, rawr-import overflowed its stack on it. (#1262)
+- A method of an opaque output that gives another opaque output of the same method, as `explain(..).explain(..)` does, can be used again. The fix for #1262 had left it unusable at `rawr check`. (#1270)
 
 ## 0.3.171 (2026-11-07)
 
