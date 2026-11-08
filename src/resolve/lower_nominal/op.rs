@@ -9,14 +9,13 @@ use super::wide::{integer_text, wide_value, Wide};
 #[cfg(feature = "rust-import")]
 use super::without_references;
 use super::{
-    cast_value, cell, char_method, collect_try, compare, construction_invariant, counted, cow,
-    drops, error_object, instantiate, int_method, invariant, keyed_query, matches_runtime_type,
-    origin, parse_text, places, sequence, slice_value, str_change, str_method, str_pieces, thread,
-    time_method, validate_dynamic, vec_method, Models, Nominal, ParsedExpr, CHAR_METHODS,
-    COLLECT_OPTION, COLLECT_RESULT, PRIVATE_PREFIX, SLICE_CHUNKS,
+    cast_value, cell, char_method, collect_try, compare, counted, cow, drops, error_object,
+    instantiate, int_method, keyed_query, origin, parse_text, places, sequence, slice_value,
+    str_change, str_method, str_pieces, thread, time_method, vec_method, Models, Nominal,
+    ParsedExpr, CHAR_METHODS, COLLECT_OPTION, COLLECT_RESULT, PRIVATE_PREFIX, SLICE_CHUNKS,
 };
 use crate::func::{FnCallArgs, NativeCallContext, RawrFunc};
-use crate::resolve::{intrinsic, item};
+use crate::resolve::{intrinsic, item, type_ref};
 use crate::types::dynamic::Union;
 use crate::types::nominal;
 use crate::{
@@ -2650,4 +2649,51 @@ pub(super) fn register(
     FuncRegistration::new(name)
         .in_internal_namespace()
         .set_into_module_raw(module, arg_types, func);
+}
+
+pub(super) fn invariant(message: &str) -> Box<EvalAltResult> {
+    EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into()
+}
+
+pub(super) fn construction_invariant(
+    error: crate::program::construction::Error,
+) -> Box<EvalAltResult> {
+    invariant(&error.to_string())
+}
+
+pub(super) fn validate_dynamic(
+    value: &Dynamic,
+    definition: &type_def::Definition,
+    models: &Models,
+) -> Result<(), Box<EvalAltResult>> {
+    let identity = type_def::Identity::Script(definition.key().clone());
+    models
+        .runtime
+        .validate_value(value, &identity, definition.schema())
+        .map_err(construction_invariant)
+}
+
+pub(super) fn matches_runtime_type(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> bool {
+    let type_ref::Type::Path(path) = ty else {
+        return nominal::matches_type(value, ty);
+    };
+    let type_ref::Target::Script { definition, .. } = &path.target else {
+        return nominal::matches_type(value, ty);
+    };
+    let definition = models.definition(*definition).definition();
+    let identity = type_def::Identity::Script(definition.key().clone());
+    models
+        .runtime
+        .validate_value(value, &identity, definition.schema())
+        .is_ok()
+}
+
+#[cfg(test)]
+pub(super) fn matches_runtime_model(value: &Dynamic, model: &Nominal, models: &Models) -> bool {
+    let expected = model.definition();
+    let identity = type_def::Identity::Script(expected.key().clone());
+    models
+        .runtime
+        .validate_value(value, &identity, expected.schema())
+        .is_ok()
 }

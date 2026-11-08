@@ -117,7 +117,7 @@ use super::{intrinsic, item, type_ref, BindingSite, Callee, Error, MoveCause, Un
 use crate::ast::{NominalPattern, NominalPayloadType, NOMINAL_MATCH_SENTINEL};
 use crate::func::{FnCallArgs, NativeCallContext};
 use crate::tokenizer::{is_valid_identifier, Token};
-use crate::types::{dynamic::Union, nominal};
+use crate::types::dynamic::Union;
 use crate::{
     capability, method, receiver, type_def, Dynamic, Engine, EvalAltResult, ImmutableString,
     Position, RawrResult, Scope, Shared, Span, INT,
@@ -261,51 +261,6 @@ type LoopElement = (
     Vec<(borrowck::Path, borrowck::Path)>,
     Vec<super::borrowck::Local>,
 );
-
-fn invariant(message: &str) -> Box<EvalAltResult> {
-    EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into()
-}
-
-fn construction_invariant(error: crate::program::construction::Error) -> Box<EvalAltResult> {
-    invariant(&error.to_string())
-}
-
-fn validate_dynamic(
-    value: &Dynamic,
-    definition: &type_def::Definition,
-    models: &Models,
-) -> Result<(), Box<EvalAltResult>> {
-    let identity = type_def::Identity::Script(definition.key().clone());
-    models
-        .runtime
-        .validate_value(value, &identity, definition.schema())
-        .map_err(construction_invariant)
-}
-
-fn matches_runtime_type(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> bool {
-    let type_ref::Type::Path(path) = ty else {
-        return nominal::matches_type(value, ty);
-    };
-    let type_ref::Target::Script { definition, .. } = &path.target else {
-        return nominal::matches_type(value, ty);
-    };
-    let definition = models.definition(*definition).definition();
-    let identity = type_def::Identity::Script(definition.key().clone());
-    models
-        .runtime
-        .validate_value(value, &identity, definition.schema())
-        .is_ok()
-}
-
-#[cfg(test)]
-fn matches_runtime_model(value: &Dynamic, model: &Nominal, models: &Models) -> bool {
-    let expected = model.definition();
-    let identity = type_def::Identity::Script(expected.key().clone());
-    models
-        .runtime
-        .validate_value(value, &identity, expected.schema())
-        .is_ok()
-}
 
 #[derive(Clone)]
 struct Binding {
@@ -1722,6 +1677,9 @@ pub(super) use entry::runtime_entry;
 use host_call::{host_number_accepts, macro_or_value, value_or_call, HostCheck};
 #[cfg(feature = "rust-import")]
 use host_call::{names_variant, unsupported_field, ImportedContext, UNSUPPORTED_MESSAGE_FUNCTION};
+use op::invariant;
+#[cfg(test)]
+use op::matches_runtime_model;
 pub(crate) use tokens::lex_rust;
 
 /// `=` or a compound assignment.
