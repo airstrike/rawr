@@ -13,7 +13,7 @@ const RECORD_SCHEMA: u16 = 4;
 /// Bundle records: schema 4 plus the sealed logical-geometry commitment.
 const BUNDLE_RECORD_SCHEMA: u16 = 5;
 /// The store's format. Any other value is a clean miss: the store is rebuilt.
-const LEDGER_SCHEMA: u16 = 6;
+const LEDGER_SCHEMA: u16 = 7;
 const LEDGER_HEADER_BYTES: usize = 64;
 const RESERVATION_BYTES: usize = 136;
 const ALLOCATION_BYTES: usize = 96;

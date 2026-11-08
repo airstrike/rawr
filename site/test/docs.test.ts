@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { PAGES, anchors, decode, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Runs } from "../src/lib/docs.ts";
+import { NEXT_IMAGE, PAGES, anchors, decode, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Runs } from "../src/lib/docs.ts";
 import type { Result } from "../src/lib/output.ts";
 import { highlightRust, highlightToml } from "../src/lib/highlight.ts";
 
@@ -91,6 +91,31 @@ test("the build runs each snippet and writes its output as a Run shows it", asyn
   assert.equal(out("e"), '<img src="data:image/png;base64,AAAA" alt="What the program drew" style="display: block; max-width: 100%;">', "what an iced program drew");
   assert.equal(out("f"), out("a"));
   assert.deepEqual(ran, ['web println!("a<b");', "web bad", "web fails", "server thread", "web draw"], "each source runs once, and only a server block on the server");
+});
+
+test("a server block that waits for the next image says so while the live server can't compile it, then shows its run", async () => {
+  const { runs } = standIn({
+    "ratatui": { kind: "error", text: "error[E0432]: unresolved import `ratatui::buffer`\n" },
+    "iced": { kind: "text", status: 0, output: [{ stream: "stdout", text: "drawn\n" }] },
+  });
+  const next = ' data-where="server" data-image="next"';
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = (message: string) => warnings.push(message);
+  let html: string;
+  try {
+    html = await runOutputs(block("a", "ratatui", next) + block("b", "iced", next), runs);
+  } finally {
+    console.warn = warn;
+  }
+  const out = (id: string) => new RegExp(`<span id="out-${id}" aria-live="polite">(.*?)</span></div>`, "s").exec(html)?.[1];
+  assert.equal(out("a"), NEXT_IMAGE, "no compile error, so the smoke test doesn't expect one");
+  assert.match(out("a")!, /class="next"/);
+  assert.equal(out("b"), "<span>drawn</span>", "once the live server runs it, its output is the run's");
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /a\.rs needs the server's next image/);
+  assert.match(warnings[1], /b\.rs runs on the live server/);
+  await assert.rejects(runOutputs(block("c", "iced", ' data-image="next"'), runs), /c\.rs waits for the server's next image, so it is marked data-where="server"/);
 });
 
 test("the build refuses an output written by hand, a snippet rawr-web can't run and a run a limit stopped", async () => {

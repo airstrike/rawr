@@ -74,6 +74,9 @@ pub(crate) struct Sharing {
     /// (`crate::bindings::stage`): a later demand of the same resolution
     /// replays them with no nightly build or probe.
     pub(crate) staged: Option<PathBuf>,
+    /// The settled table of each key that `seed` named for the driver, by
+    /// key: the driver reads that copy, and none is made.
+    pub(crate) kept: BTreeMap<Box<str>, PathBuf>,
     /// Every crate the probe loaded, the selected crates' whole closure,
     /// bound to this graph's units: a table's later demand may name any of
     /// them, and replays only with each bound.
@@ -628,7 +631,7 @@ impl Plan {
             .ok()?;
             let body = extracted.body().ok()?;
             let entry_root = bindings.join(shared.key.as_ref());
-            let artifact = entry_root.join("table.json").to_str()?.to_owned();
+            let artifact = read.path.to_str()?.to_owned();
             let profile = graph
                 .artifacts()
                 .iter()
@@ -815,7 +818,7 @@ impl Plan {
     }
 
     pub(crate) fn seal(
-        self,
+        mut self,
         native: &impl crate::process::ProductionReplay,
         build: &crate::input::build::Build,
         graph: &unit::BuildGraph,
@@ -823,7 +826,7 @@ impl Plan {
         limits: &cargo::Limits,
     ) -> Result<Capture> {
         if let Some(reuse) = &self.reuse {
-            seed(reuse, &self.sharing, &build.binding_scripts());
+            seed(reuse, &mut self.sharing, &build.binding_scripts());
         }
         self.bind(build, graph, limits)?
             .run(native, limits)?
@@ -1467,42 +1470,25 @@ impl Probe {
     }
 }
 
-/// Name each shared crate's key for the driver, and give it the table the
-/// home keeps. The driver reads the table of a crate from registries and
-/// git commits whichever nightly artifact it came from (#672), so a table
-/// is kept only under the build-script outputs it was made under: this
-/// nightly's, which `<key>.scripts` records beside it. A table made under
-/// others is dropped, and the home's is seeded only when its entry was made
-/// under these. Best effort: a table that is not there is extracted.
+/// Name each shared crate's key for the driver, and the settled table it
+/// reads in place: the home's for a crate from registries and git commits,
+/// the project's bindings for a path closure. The driver reads the table of
+/// a crate from registries and git commits whichever nightly artifact it
+/// came from (#672), so a table is read only under the build-script outputs
+/// it was made under: this nightly's, which `<key>.scripts` records beside
+/// a table the driver wrote. A table made under others is dropped, and a
+/// settled one is named only when its entry was made under these. Nothing
+/// is copied. Best effort: a table that is not there is extracted.
 fn seed(
     reuse: &Path,
-    sharing: &Sharing,
+    sharing: &mut Sharing,
     nightly: &BTreeMap<String, Option<Vec<crate::bindings::Script>>>,
 ) {
     if sharing.keys.is_empty() {
         return;
     }
-    let keys = sharing
-        .keys
-        .iter()
-        .map(|(correlation, shared)| {
-            (
-                correlation.as_ref(),
-                serde_json::json!({ "key": shared.key.as_ref(), "local": shared.local }),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    if let Ok(bytes) = serde_json::to_vec(&keys) {
-        let _ = fs::write(reuse.join("keys.json"), bytes);
-    }
+    let mut kept = BTreeMap::new();
     for shared in sharing.keys.values() {
-        // A path closure's table keeps its crate hash, which the driver
-        // checks; its key never enters the home.
-        if shared.local {
-            continue;
-        }
-        let local = reuse.join(shared.key.as_ref());
-        let record = reuse.join(format!("{}.scripts", shared.key));
         let outputs = shared
             .scripts
             .iter()
@@ -1513,35 +1499,53 @@ fn seed(
                 ))
             })
             .collect::<Option<BTreeMap<_, _>>>();
-        let recorded = fs::read(&record)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        if outputs.is_none() || recorded != outputs {
-            let _ = fs::remove_file(&local);
-            let _ = fs::remove_file(reuse.join(format!("{}.served", shared.key)));
-            let _ = fs::remove_file(&record);
-        }
-        let Some(outputs) = outputs else {
-            continue;
-        };
-        if let Ok(bytes) = serde_json::to_vec(&outputs) {
-            let _ = fs::write(&record, bytes);
-        }
-        if local.exists() {
-            continue;
-        }
-        let Some(bindings) = &sharing.bindings else {
-            continue;
-        };
-        if let Some(entry) = crate::bindings::read(bindings, &shared.key)
-            && entry.meta.scripts == outputs
-        {
-            let temporary = reuse.join(format!(".{}.seed-{}", shared.key, std::process::id()));
-            if fs::write(&temporary, &entry.table).is_ok() {
-                let _ = fs::rename(&temporary, &local);
+        // A path closure's table keeps its crate hash, which the driver
+        // checks; its key never enters the home.
+        if !shared.local {
+            let record = reuse.join(format!("{}.scripts", shared.key));
+            let recorded = fs::read(&record)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+            if outputs.is_none() || recorded != outputs {
+                let _ = fs::remove_file(reuse.join(shared.key.as_ref()));
+                let _ = fs::remove_file(reuse.join(format!("{}.served", shared.key)));
+                let _ = fs::remove_file(&record);
+            }
+            if let Some(outputs) = &outputs
+                && let Ok(bytes) = serde_json::to_vec(outputs)
+            {
+                let _ = fs::write(&record, bytes);
             }
         }
+        let (Some(outputs), Some(bindings)) = (outputs, sharing.directory(shared)) else {
+            continue;
+        };
+        if crate::bindings::meta(bindings, &shared.key).is_some_and(|meta| meta.scripts == outputs)
+        {
+            kept.insert(
+                shared.key.clone(),
+                crate::bindings::table(bindings, &shared.key),
+            );
+        }
     }
+    let keys = sharing
+        .keys
+        .iter()
+        .map(|(correlation, shared)| {
+            (
+                correlation.as_ref(),
+                serde_json::json!({
+                    "key": shared.key.as_ref(),
+                    "local": shared.local,
+                    "table": kept.get(&shared.key),
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if let Ok(bytes) = serde_json::to_vec(&keys) {
+        let _ = fs::write(reuse.join("keys.json"), bytes);
+    }
+    sharing.kept = kept;
 }
 
 /// Counts encoded bytes; only checked-arithmetic overflow stops the writer.
@@ -1766,16 +1770,22 @@ impl Capture {
             let Some(bindings) = self.sharing.directory(shared) else {
                 continue;
             };
-            let table = reuse.join(shared.key.as_ref());
             let Some(handshake) = handshakes
                 .iter()
                 .find(|handshake| handshake.unit_correlation == correlation.as_ref())
             else {
                 continue;
             };
-            if !table.is_file() {
-                continue;
-            }
+            // The table the driver wrote, or the settled one it read.
+            let extracted = reuse.join(shared.key.as_ref());
+            let table = if extracted.is_file() {
+                extracted
+            } else {
+                match self.sharing.kept.get(&shared.key) {
+                    Some(kept) if kept.is_file() => kept.clone(),
+                    _ => continue,
+                }
+            };
             settled.push(crate::bindings::Settled::Extracted {
                 key: shared.key.to_string(),
                 packages: shared.scripts.iter().map(ToString::to_string).collect(),
@@ -1811,6 +1821,15 @@ impl Capture {
     /// Where this project's unsettled tables wait (`Sharing::staged`).
     pub(crate) fn staged(&self) -> Option<&Path> {
         self.sharing.staged.as_deref()
+    }
+
+    /// The key of every shared table this plan names.
+    pub(crate) fn shared_keys(&self) -> Vec<&str> {
+        self.sharing
+            .keys
+            .values()
+            .map(|shared| shared.key.as_ref())
+            .collect()
     }
 
     /// Each sidecar's handshake, read again; one that changed is left out.

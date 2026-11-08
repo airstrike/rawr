@@ -47,6 +47,15 @@
 <p>A member of a Cargo workspace builds the same way. Its toolchain and config are the workspace&rsquo;s, and it builds in the workspace&rsquo;s <code>target/</code>.</p>
 <p>A cargo script with dependencies builds the same way too, from its own directory in rawr&rsquo;s home. Every script shares one build directory there. <a href="/docs/run#scripts">Run</a> explains it.</p>
 <p>rawr keeps what it makes for a crate in <code>target/rawr</code>. For a workspace member, that is <code>target/rawr/members/&lt;path&gt;</code> in the workspace&rsquo;s <code>target/</code>, where <code>&lt;path&gt;</code> is the member&rsquo;s directory. <code>cargo clean</code> removes it.</p>
+<p>rawr keeps one copy of each crate&rsquo;s bindings. A shared crate&rsquo;s copy is its entry in rawr&rsquo;s home. A path crate&rsquo;s copy settles in <code>target/rawr/bindings</code>. Bindings that haven&rsquo;t settled stay in <code>target/rawr/extraction</code>, where the nightly compiler wrote them. <code>target/rawr/staged</code> holds only a small record for each of them, and the record names that file. A run whose bindings are unchanged writes none of them again. <code>staged</code> keeps records for the crates of the last four resolutions that ran the nightly compiler. After each such run, the other records go, unless a run is reading them.</p>
+<h3 id="target-rawr">What target/rawr holds</h3>
+<ul>
+  <li><code>store/</code> holds what rawr derived for the project: its resolutions, the crates&rsquo; API, the generic contract, the facade, the profiles, the checks, the overlays and the runners. Each is keyed by what it was made from.</li>
+  <li><code>store.parts/</code> holds the large ones, cut into parts of about 80&nbsp;KB. That covers the API, the generic contract, the facade, the overlay and a runner&rsquo;s generated sources. Each part is kept once, and the store keeps the list of parts of each one. An edit changes a few regions of these, so its generation writes only the parts it changed.</li>
+  <li><code>store.sessions/</code> holds one lease for each project that uses the store.</li>
+  <li><code>runner/</code> is where your <code>cargo</code> builds the runner.</li>
+</ul>
+<p>A project keeps its four newest runners, resolutions and native builds, and the runner that is live and the last good one. A runner&rsquo;s generation is everything the project made for it. When a runner goes, its generation goes with it, apart from what a kept generation still uses. A part goes with the last thing that lists it. So an undo to any of the four newest generations finds all of it and rebuilds nothing.</p>
 
 <h2 id="use">Use a dependency</h2>
 <p>Declare the dependency in <code>Cargo.toml</code> and import its items with <code>use</code>. You write no bindings.</p>

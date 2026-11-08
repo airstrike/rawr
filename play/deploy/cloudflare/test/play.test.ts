@@ -237,10 +237,21 @@ test("the landing page's runnable sources are its files, exactly", async () => {
   assert.ok(blocks.length > 0, "the landing page has a run block");
   assert.equal(sources.length, blocks.length);
   // What the page shows (and its Run button sends) is the examples/scripts
-  // file its block names, marked as a program.
+  // file its block names, marked as a program. A library's snippet is one of
+  // the server universe's programs instead (play/universe), so the server
+  // runs it as that program: the iced tab is iced's counter, which
+  // examples.txt names, and the ratatui tab is programs/ui.rs.
+  const universe = (path: string) => readFileSync(new URL(`play/universe/${path}`, root), "utf8");
+  const icedExamples = universe("examples.txt").replace(/#.*/g, "").split(/\s+/);
   for (const [i, block] of blocks.entries()) {
     assert.ok(block.name, `landing block ${i} names its file`);
-    const file = readFileSync(new URL(`examples/scripts/${block.name}`, root), "utf8").trimEnd();
+    if (block.name === "main.rs") {
+      assert.ok(icedExamples.includes("counter"), "the universe holds iced's counter");
+      assert.match(sources[i], /^\/\/ rawr\n[\s\S]*iced::run\(Counter::update, Counter::view\)/);
+      continue;
+    }
+    const path = block.name === "ui.rs" ? `play/universe/programs/${block.name}` : `examples/scripts/${block.name}`;
+    const file = readFileSync(new URL(path, root), "utf8").trimEnd();
     assert.equal(sources[i], "// rawr\n" + file, block.name);
   }
   assert.equal(decodeHtml("&amp;self &lt;T&gt; &rsquo; &#39; &#x41;"), "&self <T> ’ ' A");

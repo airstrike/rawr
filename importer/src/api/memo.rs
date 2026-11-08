@@ -73,7 +73,11 @@ pub(crate) fn load(context: &crate::context::Context, key: &[u8; 32]) -> Option<
     if node::content_digest::<Product>(&bytes) != digest {
         return None;
     }
-    Product::decode_owned(bytes.into_boxed_slice()).ok()
+    Product::decode_parts(
+        bytes.into_boxed_slice(),
+        &crate::store::parts::directory(store.root()),
+    )
+    .ok()
 }
 
 /// Remember the content these inputs produced; a failure only costs a miss.

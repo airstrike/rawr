@@ -318,6 +318,11 @@ impl Attempt {
         self.root().join("generated")
     }
 
+    /// Where the store keeps the parts this bundle's index names.
+    pub(crate) fn parts(&self) -> PathBuf {
+        super::parts::directory(&self.store)
+    }
+
     pub(crate) fn build(&self) -> PathBuf {
         self.root().join("build")
     }

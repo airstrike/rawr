@@ -8,7 +8,8 @@
 //!
 //! The importer names the key of each crate it shares per machine
 //! (`extract::shared`) in `keys.json`, by unit correlation; such a crate's
-//! table is kept under that key, which the importer publishes.
+//! table is kept under that key, which the importer publishes, and a
+//! settled one is read where the importer names it, with no copy here.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -36,11 +37,15 @@ struct Shared {
     /// sources out, so its crate hash still says which build its table
     /// came from.
     local: bool,
+    /// Where the crate's settled table is, read in place when this
+    /// directory holds none of its own.
+    #[serde(default)]
+    table: Option<PathBuf>,
 }
 
 /// What a table holds, beside it in `<key>.served`: the demands of one
 /// session it was made from alone. A table with no such record, as one
-/// seeded from rawr's home, holds units of demands nobody here knows.
+/// read from rawr's home, holds units of demands nobody here knows.
 #[derive(Clone, Deserialize, Serialize)]
 pub(super) struct Served {
     session: String,
@@ -193,7 +198,10 @@ impl Tables {
         used: &mut Vec<String>,
     ) -> Option<Memo> {
         used.push(key.to_owned());
-        let bytes = fs::read(self.directory.join(key)).ok()?;
+        let bytes = fs::read(self.directory.join(key)).ok().or_else(|| {
+            let shared = self.shared.values().find(|shared| shared.key == key)?;
+            fs::read(shared.table.as_ref()?).ok()
+        })?;
         let table: Table = serde_json::from_slice(&bytes).ok()?;
         let shared = self
             .shared
@@ -322,7 +330,7 @@ mod tests {
         assert!(tables.outgrown(&key, "s", &first, &mut used).is_none());
         assert!(tables.outgrown(&key, "t", &grown, &mut used).is_none());
         assert!(tables.outgrown(&key, "s", &grown[1..], &mut used).is_none());
-        // A table with no record, as one seeded from rawr's home, is read.
+        // A table with no record, as one read from rawr's home, is read.
         tables.store(&key, &root, "hash", &memo, None);
         drop(tables);
         let tables = Tables::open(&directory).unwrap();
@@ -428,6 +436,48 @@ mod tests {
         assert!(tables
             .load(&local, &root, "second-project", &mut used)
             .is_none());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A settled table the importer names is read where it settled, with
+    /// no copy beside the driver's own; one the driver wrote comes first.
+    #[test]
+    fn a_named_settled_table_is_read_in_place() {
+        let directory =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
+                .join(format!("rawr-named-table-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let extraction = directory.join("extraction");
+        let settled = directory.join("settled");
+        let key = "c".repeat(64);
+        let root = Root {
+            module: [3; 16],
+            krate: "crate".to_owned(),
+        };
+        let whole = Memo {
+            whole: true,
+            ..Memo::default()
+        };
+        Tables::open(&settled)
+            .unwrap()
+            .store(&key, &root, "hash", &whole, None);
+        std::fs::create_dir_all(&extraction).unwrap();
+        std::fs::write(
+            extraction.join(super::KEYS),
+            serde_json::json!({
+                "shared": { "key": key, "local": false, "table": settled.join(&key) },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let tables = Tables::open(&extraction).unwrap();
+        let mut used = Vec::new();
+        assert!(tables
+            .load(&key, &root, "hash", &mut used)
+            .is_some_and(|memo| memo.whole));
+        assert!(!extraction.join(&key).exists());
+        tables.store(&key, &root, "hash", &Memo::default(), None);
+        assert!(!tables.load(&key, &root, "hash", &mut used).unwrap().whole);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

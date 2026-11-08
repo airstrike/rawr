@@ -102,11 +102,11 @@ impl<'a> Batch<'a> {
                     None,
                     || {
                         sink.node(K::KIND.metric(), crate::metrics::NodeEvent::ExecutedMiss);
-                        let bytes = execute()?.into_encoded()?;
+                        let payload = execute()?.into_payload()?;
                         Ok(Reserved::Publish {
                             result: (),
                             recipe: recipe.clone(),
-                            bytes,
+                            payload,
                             bundle: None,
                         })
                     },

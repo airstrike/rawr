@@ -297,7 +297,7 @@ fn replayed_output_cannot_stage_with_a_replacement_graph() {
     let bytes = Owned.encode().expect("encode fixture");
     let envelope = Envelope::direct(&current, content_digest::<Owned>(&bytes), bytes.len())
         .expect("bind fixture envelope");
-    let replayed = Stored::new(envelope, bytes, false)
+    let replayed = Stored::new(envelope, bytes, false, None)
         .inspect(&graph)
         .expect("decode fixture");
     let witness = Witness::direct(&current, replayed.content(), false);

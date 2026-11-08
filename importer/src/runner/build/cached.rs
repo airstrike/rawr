@@ -254,7 +254,7 @@ fn compile<B>(
     before_cargo: impl FnOnce() -> Result<(), node::Error>,
 ) -> Result<node::Bundled<Product>, node::Error> {
     let generated = attempt.generated();
-    materialize(manifest, &generated)?;
+    materialize(manifest, &attempt)?;
     let target = attempt.target();
     let project_build = crate::location::build_directory(context.project(), context.environment());
     let build = crate::deps::directory(&project_build).map_err(|source| node::Error::Io {
@@ -571,18 +571,29 @@ fn settled_lock(work: &Path, sources: &[(&str, std::borrow::Cow<'_, [u8]>)]) -> 
     crate::runner::runtime::Runtime::settled_lock(work, file("Cargo.toml")?, file("Cargo.lock")?)
 }
 
+/// Keep the generated sources in the bundle as the manifests of their parts,
+/// which repeat the last generation's and the facade's, and the carrier
+/// whole. Cargo builds the work directory's copy (`work_directory`).
 fn materialize<B>(
     manifest: &super::super::Manifest<super::super::Generated, B>,
-    generated: &Path,
+    attempt: &crate::store::bundle::Attempt,
 ) -> Result<(), node::Error> {
+    let generated = attempt.generated();
+    let parts = attempt.parts();
     for file in &manifest.files {
-        let path = joined(generated, file.path())?;
-        let parent = path
-            .parent()
-            .ok_or_else(|| node::Error::Shape(path.clone()))?;
-        create_directories(generated, parent)?;
-        write_new(&path, file.bytes())?;
+        joined(&generated, file.path())?;
     }
+    // Until the index is in the bundle, nothing else names its parts.
+    let hold = crate::store::parts::Hold::take(&parts)?;
+    let index = crate::store::parts::sources::write(
+        &parts,
+        manifest
+            .files
+            .iter()
+            .map(|file| (file.path(), file.bytes(), *file.digest())),
+    )?;
+    write_new(&generated.join(crate::store::parts::sources::FILE), &index)?;
+    drop(hold);
     let carrier = manifest
         .generated
         .carrier()
@@ -641,9 +652,21 @@ impl Inputs {
 
     fn validate(&self, root: &Path) -> Result<(), node::Error> {
         let generated = crate::store::bundle::path(root, Path::new("generated"))?;
-        for file in &self.files {
-            let path = crate::store::bundle::path(&generated, Path::new(&*file.path))?;
-            validate_file(&path, file.bytes, file.digest)?;
+        let path =
+            crate::store::bundle::path(&generated, Path::new(crate::store::parts::sources::FILE))?;
+        let index = crate::store::read_whole(&path)?;
+        let entries = crate::store::parts::sources::entries(&index)?;
+        let same = entries.len() == self.files.len()
+            && entries.iter().zip(&self.files).all(|(entry, file)| {
+                entry.path == &*file.path
+                    && usize::try_from(entry.length).is_ok_and(|length| length == file.bytes)
+                    && entry.digest == file.digest
+            });
+        if !same {
+            return Err(node::Error::Corrupt {
+                path,
+                reason: "runner bundle generated input changed",
+            });
         }
         validate_file(
             &crate::store::bundle::path(&generated, Path::new("rawr-generated-manifest.carrier"))?,
@@ -1014,41 +1037,6 @@ fn joined(root: &Path, relative: &str) -> Result<PathBuf, node::Error> {
         return Err(node::Error::OutsideRoot(relative.to_path_buf()));
     }
     Ok(root.join(relative))
-}
-
-fn create_directories(root: &Path, target: &Path) -> Result<(), node::Error> {
-    let relative = target
-        .strip_prefix(root)
-        .map_err(|_| node::Error::OutsideRoot(target.to_path_buf()))?;
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        let Component::Normal(component) = component else {
-            return Err(node::Error::OutsideRoot(target.to_path_buf()));
-        };
-        current.push(component);
-        match fs::create_dir(&current) {
-            Ok(()) => {}
-            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
-                let metadata =
-                    fs::symlink_metadata(&current).map_err(|source| node::Error::Io {
-                        operation: "inspect generated runner directory",
-                        path: current.clone(),
-                        source,
-                    })?;
-                if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                    return Err(node::Error::Shape(current));
-                }
-            }
-            Err(source) => {
-                return Err(node::Error::Io {
-                    operation: "create generated runner directory",
-                    path: current,
-                    source,
-                });
-            }
-        }
-    }
-    Ok(())
 }
 
 /// macOS assesses a newly written executable on its first exec, about 0.9 s

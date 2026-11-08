@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-const TABLE: &str = "table.json";
+pub(crate) const TABLE: &str = "table.json";
 const GENERATION: &str = ".generation";
 
 /// A hold on the exact publication whose files a reader consumes.
@@ -79,14 +79,43 @@ fn touch(bindings: &Path, key: &str) {
 /// Publish all files as one generation. A reader of this key makes the
 /// publication return WouldBlock; the existing entry remains unchanged.
 pub(crate) fn publish(bindings: &Path, key: &str, files: &[(&str, &[u8])]) -> io::Result<()> {
+    publish_with(bindings, key, None, files)
+}
+
+/// Publish `files` with the table at `table` moved in as the entry's own,
+/// so the entry holds the only copy. A table on another file system is
+/// copied, and its source removed once the entry is in place; a failed
+/// publication leaves it where it was.
+pub(crate) fn publish_moving(
+    bindings: &Path,
+    key: &str,
+    table: &Path,
+    files: &[(&str, &[u8])],
+) -> io::Result<()> {
+    publish_with(bindings, key, Some(table), files)
+}
+
+fn publish_with(
+    bindings: &Path,
+    key: &str,
+    table: Option<&Path>,
+    files: &[(&str, &[u8])],
+) -> io::Result<()> {
     fs::create_dir_all(bindings)?;
     let lock = guard(bindings, key)?;
     lock.try_lock().map_err(io::Error::from)?;
     let id = unique();
     let staging = bindings.join(format!(".staging-{key}.{id}"));
+    let mut moved = false;
     let written = (|| -> io::Result<()> {
         fs::create_dir(&staging)?;
         fs::write(staging.join(GENERATION), &id)?;
+        if let Some(table) = table {
+            moved = fs::rename(table, staging.join(TABLE)).is_ok();
+            if !moved {
+                fs::copy(table, staging.join(TABLE))?;
+            }
+        }
         for (name, bytes) in files {
             let mut file = io::BufWriter::new(File::create(staging.join(name))?);
             file.write_all(bytes)?;
@@ -98,6 +127,15 @@ pub(crate) fn publish(bindings: &Path, key: &str, files: &[(&str, &[u8])]) -> io
             &bindings.join(format!(".retired-{key}.{id}")),
         )
     })();
+    match (&written, table) {
+        (Ok(()), Some(table)) if !moved => {
+            let _ = fs::remove_file(table);
+        }
+        (Err(_), Some(table)) if moved => {
+            let _ = fs::rename(staging.join(TABLE), table);
+        }
+        _ => {}
+    }
     if written.is_err() {
         let _ = fs::remove_dir_all(&staging);
     }

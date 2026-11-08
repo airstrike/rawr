@@ -22,7 +22,10 @@ mod eviction;
 mod index;
 mod lease;
 pub(crate) use lease::Ownership;
+pub(crate) mod parts;
 pub(crate) mod path;
+mod payload;
+pub use payload::Payload;
 mod pins;
 mod recovery;
 mod session;
@@ -213,9 +216,12 @@ fn remove_tree(root: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Empty a store root another format wrote, so it bootstraps fresh.
+/// Empty a store root another format wrote, so it bootstraps fresh. Its
+/// parts go with it, as do those of the API's earlier `api-parts` directory.
 fn clear(root: &Path) -> Result<(), Error> {
-    remove_tree(root)
+    remove_tree(&parts::directory(root))
+        .and_then(|()| remove_tree(&root.with_file_name("api-parts")))
+        .and_then(|()| remove_tree(root))
         .and_then(|()| fs::create_dir(root))
         .map_err(|source| Error::Io {
             operation: "clear a damaged typed store or one of another format",
@@ -250,7 +256,7 @@ pub(crate) enum Reserved<K, T> {
     Publish {
         result: T,
         recipe: Direct<K>,
-        bytes: Box<[u8]>,
+        payload: Payload,
         bundle: Option<bundle::Pending>,
     },
 }
@@ -464,6 +470,22 @@ impl Store {
         Ok(retired)
     }
 
+    /// Retire what a project keeps beyond its kept units, as each
+    /// reservation does first.
+    #[cfg(test)]
+    pub(crate) fn fixture_retire_kept(&self) -> Result<usize, Error> {
+        let mut retired = 0;
+        while eviction::recover_excess(
+            &self.root,
+            self.project,
+            &eviction::KEPT,
+            &mut recovery::Budget::new(),
+        )? {
+            retired += 1;
+        }
+        Ok(retired)
+    }
+
     #[cfg(test)]
     /// Make room for a write as large as the whole installation target.
     pub(crate) fn fixture_make_room(&self) -> Result<(), Error> {
@@ -532,8 +554,14 @@ impl Store {
                 let (_project, reservation) =
                     self.reserve_node(key, estimate, K::KIND, K::SCHEMA, &mut recovery)?;
                 lease::with_publication(&self.root, |_publication| {
-                    self.publish_reserved(_publication, recipe, bytes, &reservation, None)
-                        .map(|_| ())
+                    self.publish_reserved(
+                        _publication,
+                        recipe,
+                        Payload::Whole(bytes.into()),
+                        &reservation,
+                        None,
+                    )
+                    .map(|_| ())
                 })
             })
         })
@@ -624,17 +652,19 @@ impl Store {
             envelope.content,
             Some(budget),
         )?;
-        decode(Stored::new(envelope, bytes, bundled)).map(Some)
+        decode(Stored::new(envelope, bytes, bundled, self.parts::<K>())).map(Some)
     }
 
     fn publish_reserved<K: Value>(
         &self,
         publication: &lease::Publication<'_>,
         recipe: &Direct<K>,
-        bytes: &[u8],
+        payload: Payload,
         reservation: &accounting::Reservation,
         mut bundle: Option<&mut bundle::Pending>,
     ) -> Result<Box<[accounting::Record]>, Error> {
+        let bytes = payload.stored(&parts::directory(&self.root))?;
+        let bytes = &*bytes;
         let digest = content_digest::<K>(bytes);
         let envelope = Envelope::direct(recipe, digest, bytes.len())?.encode()?;
         // Every caller publishes after a miss recheck under the action's or
@@ -990,7 +1020,7 @@ impl Store {
                     Ok(Reserved::Publish {
                         result,
                         recipe,
-                        bytes,
+                        payload,
                         mut bundle,
                     }) => {
                         let Some(mut bundle) = bundle.take() else {
@@ -1002,7 +1032,7 @@ impl Store {
                             let records = self.publish_reserved(
                                 publication,
                                 &recipe,
-                                &bytes,
+                                payload,
                                 &reservation,
                                 Some(&mut bundle),
                             )?;
@@ -1069,14 +1099,14 @@ impl Store {
                 Ok(Reserved::Publish {
                     result,
                     recipe,
-                    bytes,
+                    payload,
                     mut bundle,
                 }) => {
                     lease::with_publication(&self.root, |publication| {
                         let records = self.publish_reserved(
                             publication,
                             &recipe,
-                            &bytes,
+                            payload,
                             &reservation,
                             bundle.as_mut(),
                         )?;
@@ -1671,7 +1701,7 @@ impl Store {
             });
         }
         let bundled = accounting::registered_action(&self.root, &action_record, &content_record)?;
-        Stored::new(envelope, bytes, bundled)
+        Stored::new(envelope, bytes, bundled, self.parts::<K>())
             .inspect(budget)
             .map(Some)
     }
@@ -1972,6 +2002,11 @@ impl Store {
 
     fn content_relative<K: Value>(&self, digest: crate::node::Digest) -> PathBuf {
         content_relative(K::KIND, K::SCHEMA, digest)
+    }
+
+    /// Where a parted value's parts are kept; `None` for a whole one.
+    fn parts<K: Value>(&self) -> Option<PathBuf> {
+        K::PARTS.then(|| parts::directory(&self.root))
     }
 }
 

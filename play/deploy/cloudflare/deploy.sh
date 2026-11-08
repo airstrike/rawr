@@ -137,6 +137,11 @@ node --input-type=module -e '
   // then. Its output must also be what the server just deployed answers.
   const { outputHtml } = await import(process.argv[3] + "/site/src/lib/output.ts");
   const shown = new Map();
+  // A block whose page says it waits for the next image (class="next",
+  // docs.ts'"'"'s NEXT_IMAGE) was built while the live server lacked a crate
+  // it needs. The image just deployed must run it; the page shows its output
+  // from the site'"'"'s next build.
+  const waiting = new Set();
   for (const path of pages) {
     const page = await (await fetch(process.argv[1] + path)).text();
     const found = [...page.matchAll(/<code([^>]*data-run[^>]*)>([\s\S]*?)<\/code>/g)];
@@ -148,8 +153,9 @@ node --input-type=module -e '
       const after = page.slice(match.index + whole.length);
       const strip = after.slice(0, after.indexOf("</div>", after.indexOf("<div class=\"run\"")));
       const body = JSON.stringify({ code: text(html) });
-      if (strip.includes("class=\"err\"")) failing.add(body);
-      if (attributes.includes("data-where=\"server\"")) shown.set(body, strip.slice(strip.indexOf("aria-live=\"polite\">") + 19, strip.lastIndexOf("</span>")));
+      if (strip.includes("class=\"next\"")) waiting.add(body);
+      else if (strip.includes("class=\"err\"")) failing.add(body);
+      if (attributes.includes("data-where=\"server\"") && !waiting.has(body)) shown.set(body, strip.slice(strip.indexOf("aria-live=\"polite\">") + 19, strip.lastIndexOf("</span>")));
       sources.add(body);
     }
   }
@@ -203,6 +209,7 @@ node --input-type=module -e '
         throw new Error("run failed: a limit stopped it after " + seconds() + " s on the snippet starting " + JSON.stringify(first));
       }
       if (shown.has(body)) same(JSON.parse(ran));
+      if (waiting.has(body)) console.log("ran a snippet its page shows as waiting for this image; build and deploy the site again to show its output");
       console.log("ran a site snippet in " + seconds() + " s (" + (response.headers.get("x-run") ?? "?") + "):", response.headers.get("content-type"));
       break;
     }
