@@ -1767,6 +1767,25 @@ fn a_boxed_region_value_takes_another_value_of_its_region() {
     );
 }
 
+/// iced's pane_grid (#1191, #1082): `Panes::new(&self.board, |index,
+/// tile, last| ..)` calls its closure while the view's region is open, and
+/// the closure gives a `Pane<'a, ..>` at the panes' own lifetime,
+/// invariant in it. The closure's call runs in a region of its own,
+/// anchored on the pins of the region the call is made in, and its pane
+/// comes out of it at that lifetime; its `title_bar` takes a container of
+/// the same region. The output is `cargo run`'s.
+#[test]
+fn a_closure_gives_a_value_at_its_calls_lifetime_from_a_region_of_its_own() {
+    let (rawr, cargo) = both_printed("board.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with(
+            "last view panes 2 pane container 4 0@16 [Decrement] pane container 4 1@16 [Pane] pane container 4 2@16 [Pane] pane container 4 3@16 [Increment]"
+        ),
+        "{rawr}"
+    );
+}
+
 /// iced's lazy (#328, #1081): `lazy(self.version, |_| ..)` is a widget only
 /// where what its closure gives is `'static`, as its impl's `W: Widget +
 /// 'static` says, and a container and `column!` take it. The widgets the

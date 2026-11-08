@@ -10402,11 +10402,7 @@ fn render_adapter_body(
                         // `title_bar` takes, is the region's or none.
                         let invariant = REGION_ARGUMENTS.get()
                             && !lifetime_free
-                            && signature
-                                .instance()
-                                .map(|instance| substituted(instance, signature, substitutions))
-                                .transpose()?
-                                .is_some_and(|instance| !shortens(&instance));
+                            && !container_shortens(&path, &container);
                         let taken = if invariant {
                             format!(
                                 "Err(Error::Value({:?}.to_owned()))",
@@ -11447,6 +11443,21 @@ fn render_scoped_receiver(
             pinned.push_str(&format!(
                 "\n        let argument_{position} = region.pins().ok_or(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch))?.pin(argument_{position}_owned.clone());"
             ));
+        }
+    }
+    // Out of the region, the arguments are the arena's, at `'static`: one
+    // of a type invariant in its lifetime can't join a receiver of the
+    // region, so a call of the two is the region branch's alone
+    // (`region_inputs`), as pane_grid's `content.title_bar(title_bar)` is.
+    if !REGION_ARGUMENTS.get() {
+        for input in signature.inputs().iter().skip(skip) {
+            let ty = substituted(input, signature, substitutions)?;
+            if matches!(ty, convert::Type::Nominal { .. })
+                && carries_lifetime(&ty)
+                && !shortens(&ty)
+            {
+                return Ok(());
+            }
         }
     }
     // In the region the adapter's body already runs in, which an argument
@@ -18544,6 +18555,19 @@ fn shortens(ty: &convert::Type) -> bool {
             .get(definition.as_bytes())
             .is_some_and(|lifetimes| lifetimes.covariant)
     }) && !arguments.iter().any(carries_lifetime)
+}
+
+/// [`shortens`] of a method's container, the type at `path` spelled
+/// `container`: covariant in its own lifetimes, with no other lifetime or
+/// borrow among its arguments.
+fn container_shortens(path: &str, container: &str) -> bool {
+    let Some(lifetimes) = SCOPED_PATHS.with_borrow(|paths| paths.get(path).copied()) else {
+        return true;
+    };
+    let rest = container.strip_prefix(path).unwrap_or(container);
+    lifetimes.covariant
+        && rest.matches('\'').count() <= lifetimes.count as usize
+        && !rest.contains('&')
 }
 
 fn carries_lifetime(ty: &convert::Type) -> bool {
