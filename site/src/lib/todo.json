@@ -118,7 +118,8 @@
         {"text":"A crate method's `&mut` of a value a scope frame's region holds, and an `Option<&mut T>` a crate method returns (as pane_grid's `state.get_mut(pane)`), are now called once and held for the statement or binding, as rustc holds them. Such methods are now places whatever their other inputs are.","issues":[1333,1334]},
         {"text":"A program's unit struct named by a module path is its value in a `match` scrutinee and an `if let` value too, as `match badge::Secondary { badge::Secondary => .. }`.","issues":[1327]},
         {"text":"A program's generic `impl<'a, M> From<Mine> for Slot<'a, M>` of a crate type can pass its own `M` to the crate in its body: the impl is compiled for each type its conversions take, as rustc monomorphises it.","issues":[1341]},
-        {"text":"A leading `self::` in a path names the current module, as rustc reads it: in values, calls, patterns, types, `use` lists and `self::super::`. `self` after a path's first segment is rustc's E0433.","issues":[1342]}
+        {"text":"A leading `self::` in a path names the current module, as rustc reads it: in values, calls, patterns, types, `use` lists and `self::super::`. `self` after a path's first segment is rustc's E0433.","issues":[1342]},
+        {"text":"A native crate root's `mod` declarations are read under the `cfg`s Cargo builds the package with for this target, `cfg_attr` included: `#[cfg(windows)] mod x;` on macOS is no longer scanned, loaded or built, and a `#[path]` applied by `#[cfg_attr(..)]` resolves as rustc resolves it.","issues":[1337]}
       ]
     },
     "releases": [
@@ -3063,7 +3064,7 @@
     {"issue":1334,"title":"An `Option<&mut T>` a crate method lends calls the method once","state":"closed","category":"Divergences from rustc"},
     {"issue":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"open","category":"Divergences from rustc"},
     {"issue":1336,"title":"Selecting among many generic From impls by the argument's type: `Into::<Slot<'_, _>>::into(icon().size(12))`","state":"closed","category":"Divergences from rustc"},
-    {"issue":1337,"title":"Native-module scanning reads target cfgs from rustc's cfg set","state":"open","category":"Divergences from rustc"},
+    {"issue":1337,"title":"Native-module scanning reads target cfgs from rustc's cfg set","state":"closed","category":"Divergences from rustc"},
     {"issue":1338,"title":"cfg: RUSTFLAGS --cfg values and a disabled multi-parameter closure argument","state":"open","category":"Divergences from rustc"},
     {"issue":1339,"title":"A crate function whose output is `[T; N]` of a const parameter only the output fixes is refused","state":"open","category":"Divergences from rustc"},
     {"issue":1340,"title":"`&mut [T; N]` of crate values crosses as a lent place, not a copy","state":"open","category":"Divergences from rustc"},
@@ -3976,7 +3977,7 @@
             {"number":1324,"title":"A crate signature with `&mut [T; N]` (or another array type) can be used","state":"closed"},
             {"number":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"closed"},
             {"number":1331,"title":"`#[cfg(..)]` on a struct-literal field, a match arm, an array element or an expression statement","state":"closed"},
-            {"number":1337,"title":"Native-module scanning reads target cfgs from rustc's cfg set","state":"open"},
+            {"number":1337,"title":"Native-module scanning reads target cfgs from rustc's cfg set","state":"closed"},
             {"number":1338,"title":"cfg: RUSTFLAGS --cfg values and a disabled multi-parameter closure argument","state":"open"}
           ]
         }
