@@ -115,6 +115,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A native crate root's `mod` declarations are read under the `cfg`s Cargo builds the package with for this target, `cfg_attr` included: `#[cfg(windows)] mod x;` on macOS is no longer scanned, loaded or built, and a `#[path]` applied by `#[cfg_attr(..)]` resolves as rustc resolves it. (#1337)
 - A single-file program names its own items through `crate::`, `self::` and `super::` as rustc does, in types, values, calls, patterns and `use`, with rustc's error for `super::` at the root. (#1344)
 - `pub use` of an enum variant, by name or by glob, re-exports it from its module, for the program's enums and a crate's. (#1345)
+- `rawr run` watches the program's inputs, not the project tree: nothing under `target/` reaches the file watcher, so rawr's own builds no longer count as saves, and a project with a huge `target/` starts its watcher. If macOS refuses the watcher's stream, the error says so and lists the paths rawr asked for. (#1346; part of #1222)
 
 ## 0.3.171 (2026-11-07)
 
