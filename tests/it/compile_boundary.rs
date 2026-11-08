@@ -84,7 +84,7 @@ fn a_function_named_new_remains_callable() {
 #[test]
 fn an_import_of_rawr_attributes_is_neither_item_nor_script() {
     let engine = Engine::new();
-    let unit = engine.parse_unit("use rawr::{preview, widget};\n40 + 2").unwrap();
+    let unit = engine.parse_unit("use rawr::{preview};\n40 + 2").unwrap();
 
     assert!(unit.items().is_empty());
     let ast = engine.compile("use rawr::preview;\n40 + 2").unwrap();

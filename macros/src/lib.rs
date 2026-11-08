@@ -1,10 +1,10 @@
-//! Rawr's attributes, for the cargo build of a crate whose files are marked
-//! `// rawr`.
+//! Rawr's `#[preview]` attribute, for the cargo build of a crate whose files
+//! are marked `// rawr`.
 //!
-//! Rawr reads these attributes itself when it runs the crate. Under cargo
-//! each one leaves its item as written, so a release build carries nothing
-//! of Rawr. The one exception is that `#[rawr::preview]` keeps cargo from
-//! warning about functions that only previews use.
+//! Rawr reads the attribute itself when it runs the crate. Under cargo it
+//! leaves its item as written, so a release build carries nothing of Rawr,
+//! except that it keeps cargo from warning about functions that only
+//! previews use.
 //!
 //! ```toml
 //! [dependencies]
@@ -57,13 +57,6 @@ pub fn preview(arguments: TokenStream, item: TokenStream) -> TokenStream {
     let mut output: TokenStream = "#[allow(dead_code)]".parse().expect("an attribute");
     output.extend(tokens);
     output
-}
-
-/// A widget whose lifecycle an inherent impl defines, which `rawr run`
-/// drives. Under cargo the impl is left as written.
-#[proc_macro_attribute]
-pub fn widget(_arguments: TokenStream, item: TokenStream) -> TokenStream {
-    item
 }
 
 /// The values of the `seed`, `update`, `theme` and `themes` arguments, as

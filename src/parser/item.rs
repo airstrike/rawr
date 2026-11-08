@@ -127,12 +127,9 @@ pub(super) fn parse(engine: &Engine, features: &Enabled, source: &str) -> ParseR
     })
 }
 
-/// The attributes of the `rawr` crate, which marked `.rs` files name so
-/// that rustc accepts them: `#[preview]` and `#[widget]`.
-const ATTRIBUTES: [&str; 2] = ["preview", "widget"];
-
-/// Whether `item` is a `use` of the `rawr` crate's attributes and nothing
-/// else: `use rawr::preview;` or `use rawr::{preview, widget};`.
+/// Whether `item` is a `use` of the `rawr` crate's attribute and nothing
+/// else: `use rawr::preview;`, which marked `.rs` files write so that rustc
+/// accepts `#[preview]`.
 pub(crate) fn is_attribute_import(item: &crate::item::Parsed) -> bool {
     let crate::item::Parsed::Use(used) = item else {
         return false;
@@ -141,7 +138,7 @@ pub(crate) fn is_attribute_import(item: &crate::item::Parsed) -> bool {
     !bindings.is_empty()
         && bindings.iter().all(|(_, path)| {
             matches!(path.as_ref(), [krate, name]
-                if krate.as_str() == "rawr" && ATTRIBUTES.contains(&name.as_str()))
+                if krate.as_str() == "rawr" && name.as_str() == "preview")
         })
 }
 

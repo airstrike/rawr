@@ -1527,7 +1527,7 @@ fn slice(text: &str, span: Span) -> &str {
 }
 
 /// `text` without the attributes only Rawr reads (`#[preview]`,
-/// `#[widget]`, `#[rawr::…]`).
+/// `#[rawr::…]`).
 fn without_rawr_attributes(text: &str) -> String {
     let mut kept = String::with_capacity(text.len());
     let mut rest = text;
@@ -1539,9 +1539,7 @@ fn without_rawr_attributes(text: &str) -> String {
             return kept;
         };
         let inner = attribute[2..close].trim();
-        let rawr = inner.starts_with("rawr::")
-            || inner.starts_with("preview")
-            || inner.starts_with("widget");
+        let rawr = inner.starts_with("rawr::") || inner.starts_with("preview");
         if rawr {
             rest = attribute[close + 1..].trim_start_matches([' ', '\t']);
             rest = rest.strip_prefix('\n').unwrap_or(rest);
