@@ -210,6 +210,9 @@ pub fn application(choice: u8) -> iced::Result {
     }
 }
 
+/// tokio's own calls, on the server. A page has one thread and no
+/// blocking pool, so the browser's universe makes none of them.
+#[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() {
     tokio::spawn(async { println!("ran") });
@@ -220,3 +223,6 @@ async fn main() {
     let _blocking = tokio::task::spawn_blocking(|| println!("blocking ran"));
     tokio::time::sleep(Duration::from_millis(50)).await;
 }
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

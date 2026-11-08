@@ -11,6 +11,7 @@ use toml_edit::{Document, Item};
 
 use super::features::Features;
 use super::{byte_span, item_span, rust, Error};
+use crate::project::cargo::features::{Enabled, Operator};
 use crate::{Position, Span};
 
 /// A validated Cargo package manifest at a Rawr project root.
@@ -50,6 +51,8 @@ pub(crate) struct Cargo {
 /// which hosts the platform holds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Targeted {
+    /// The table's key: a `cfg(..)` or a target triple.
+    pub(crate) platform: Box<str>,
     pub(crate) dependencies: Box<[rust::Dependency]>,
     pub(crate) build_dependencies: Box<[rust::Dependency]>,
 }
@@ -199,7 +202,10 @@ impl Cargo {
 
     /// The manifest with each `[target.'<platform>']` dependency that holds
     /// on `host` joined to its kind's list, as Cargo builds the package
-    /// there. A key the list already has keeps its first entry.
+    /// there. A table whose `cfg(..)` doesn't hold for the target Cargo
+    /// builds for joins nothing, so a dependency two tables declare for
+    /// two targets is the one its target's table gives (#1395). A key the
+    /// list already has keeps its first entry.
     #[must_use]
     pub(crate) fn on_host(mut self, host: Host<'_>) -> Self {
         let (crates, build_crates) = match host {
@@ -207,6 +213,11 @@ impl Cargo {
             Host::Unasked => (None, None),
         };
         for target in std::mem::take(&mut self.targets) {
+            if let Host::Built(unit) = host
+                && platform_holds(&target.platform, unit.features()) == Some(false)
+            {
+                continue;
+            }
             join(&mut self.dependencies, &target.dependencies, crates);
             join(
                 &mut self.build_dependencies,
@@ -235,7 +246,7 @@ pub(super) fn targets(
     build: Option<&BTreeMap<String, rust::Dependency>>,
 ) -> Result<Box<[Targeted]>, Error> {
     let mut targets = Vec::new();
-    for (_, target) in table
+    for (platform, target) in table
         .get("target")
         .and_then(Item::as_table_like)
         .into_iter()
@@ -243,6 +254,7 @@ pub(super) fn targets(
     {
         let kind = |kind: &str| target.as_table_like().and_then(|target| target.get(kind));
         targets.push(Targeted {
+            platform: platform.into(),
             dependencies: rust::cargo_dependencies(text, root, kind("dependencies"), normal)?,
             build_dependencies: rust::cargo_dependencies(
                 text,
@@ -253,6 +265,51 @@ pub(super) fn targets(
         });
     }
     Ok(targets.into_boxed_slice())
+}
+
+/// Whether a `[target.'<platform>']` key holds where `features` were
+/// enabled: its `cfg(..)` read as Cargo reads it. `None` for a target
+/// triple, which only the crates Cargo links decide.
+fn platform_holds(platform: &str, features: &Enabled) -> Option<bool> {
+    let mut rest = platform.trim().strip_prefix("cfg(")?.strip_suffix(')')?;
+    let held = predicate(&mut rest, features)?;
+    rest.trim().is_empty().then_some(held)
+}
+
+/// The `cfg` predicate at the start of `rest`, which it consumes: `name`,
+/// `name = "value"`, or `not`, `all` or `any` of predicates.
+fn predicate(rest: &mut &str, features: &Enabled) -> Option<bool> {
+    let text = rest.trim_start();
+    let end = text
+        .find(|letter: char| !(letter.is_alphanumeric() || letter == '_'))
+        .unwrap_or(text.len());
+    let (name, tail) = text.split_at(end);
+    if name.is_empty() {
+        return None;
+    }
+    let tail = tail.trim_start();
+    if let Some(mut tail) = tail.strip_prefix('(') {
+        let operator = Operator::named(name)?;
+        let mut values = Vec::new();
+        loop {
+            tail = tail.trim_start();
+            if let Some(after) = tail.strip_prefix(')') {
+                *rest = after;
+                return Some(operator.holds(&values));
+            }
+            values.push(predicate(&mut tail, features)?);
+            tail = tail.trim_start();
+            tail = tail.strip_prefix(',').unwrap_or(tail);
+        }
+    }
+    if let Some(tail) = tail.strip_prefix('=') {
+        let value = tail.trim_start().strip_prefix('"')?;
+        let close = value.find('"')?;
+        *rest = &value[close + 1..];
+        return Some(features.cfg(name, Some(&value[..close]), false));
+    }
+    *rest = tail;
+    Some(features.cfg(name, None, false))
 }
 
 /// `more` joined to `list`: each whose name is one of `crates`, the names
@@ -326,6 +383,48 @@ console_log = "1.0"
         assert_eq!(
             aliases(&cargo.on_host(super::Host::Unasked)),
             ["iced", "tracing_subscriber", "open", "console_log"]
+        );
+    }
+
+    /// A dependency two `[target.'cfg(..)']` tables declare for two targets
+    /// is the one whose `cfg` holds for the target Cargo builds for (#1395).
+    #[test]
+    fn a_dependency_declared_per_target_is_its_target_s() {
+        let text = r#"
+[package]
+name = "universe"
+version = "0.1.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[target.'cfg(all(target_arch = "wasm32", not(unix)))'.dependencies]
+tokio = { version = "1", features = ["rt"] }
+"#;
+        let cargo = Cargo::parse(
+            PathBuf::from("/universe/Cargo.toml"),
+            text.to_owned(),
+            Path::new("/universe"),
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        let features = |lines: &[&str]| {
+            let unit = crate::project::cargo::Unit::linking_for(&["tokio"], lines);
+            let cargo = cargo.clone().on_host(super::Host::Built(&unit));
+            let [tokio] = &*cargo.dependencies else {
+                panic!("one tokio: {:?}", cargo.dependencies);
+            };
+            tokio
+                .features
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(features(&["target_arch=\"wasm32\""]), ["rt"]);
+        assert_eq!(
+            features(&["target_arch=\"aarch64\"", "unix"]),
+            ["rt-multi-thread"]
         );
     }
 

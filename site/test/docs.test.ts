@@ -93,6 +93,13 @@ test("the build runs each snippet and writes its output as a Run shows it", asyn
   assert.deepEqual(ran, ['web println!("a<b");', "web bad", "web fails", "server thread", "web draw"], "each source runs once, and only a server block on the server");
 });
 
+test("a universe block's output before Run is the frame the server drew", async () => {
+  const { runs, ran } = standIn({ "counter": { kind: "text", status: 0, output: [], frame: { type: "image/png", data: "AAAA" } } });
+  const html = await runOutputs(block("a", "counter", ' data-where="universe"'), runs);
+  assert.match(html, /<span id="out-a" aria-live="polite"><img src="data:image\/png;base64,AAAA"/);
+  assert.deepEqual(ran, ["server counter"]);
+});
+
 test("a server block that waits for the next image says so while the live server can't compile it, then shows its run", async () => {
   const { runs } = standIn({
     "ratatui": { kind: "error", text: "error[E0432]: unresolved import `ratatui::buffer`\n" },

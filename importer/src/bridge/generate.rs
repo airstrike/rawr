@@ -4293,7 +4293,13 @@ fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package
 /// Under `rawr mcp`, the socket it named in `RAWR_MCP_INSPECT`, where a
 /// tool reads the running program's values (D675). Bound once; each engine
 /// this runner compiles a generation on answers on it. A plain `rawr run`
-/// names none, and no debugger is registered.
+/// names none, and no debugger is registered. A browser's has no socket.
+#[cfg(not(unix))]
+fn inspector() -> Option<&'static __rawr_internal::inspect::Inspector> {
+    None
+}
+
+#[cfg(unix)]
 fn inspector() -> Option<&'static __rawr_internal::inspect::Inspector> {
     static INSPECTOR: std::sync::OnceLock<Option<__rawr_internal::inspect::Inspector>> =
         std::sync::OnceLock::new();
@@ -4838,15 +4844,6 @@ fn next_frame(frames: &std::sync::mpsc::Receiver<__RawrFrame>) -> std::io::Resul
         .unwrap_or_else(|_| Err(std::io::Error::other("protocol reader stopped")))
 }
 
-/// What starting the program left this thread to do.
-enum Started {
-    /// The program ended with this status.
-    Exit(i32),
-    /// The entry the program registered, for this thread to run: its
-    /// native `main` (D501), or an async `main`'s runtime entry (D513.4).
-    Entry(fn() -> i32),
-}
-
 fn exit(status: i32) -> ! {
     use std::io::Write as _;
     let _ = std::io::stdout().flush();
@@ -5032,18 +5029,6 @@ fn serve_hot(
     Ok(true)
 }
 
-/// A generation the owner thread admitted: the owner said `queued` when it
-/// committed (D553.3), and says `swapped` to the program and to a `rawr
-/// mcp` that supervises the run once this writes it to the reload stream.
-fn admitted() {
-    use std::io::Write as _;
-    let Some(path) = std::env::var_os("RAWR_RELOAD_EVENTS").filter(|path| !path.is_empty()) else {
-        return;
-    };
-    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) {
-        let _ = stream.write_all(b"{\"event\":\"swapped\"}\n");
-    }
-}
 
 /// The protocol while the program's own code runs on the owner thread: an
 /// async `main`'s runtime entry, which asks for no refresh, carries no
@@ -5406,35 +5391,6 @@ fn finish(result: std::io::Result<()>) -> ! {
     }
 }
 
-/// This runner's generated bindings, as `rawr::universe` installs them in
-/// an engine and binds their runtime (#1387). Its name is one no script
-/// type takes.
-struct __RawrBindings;
-
-impl __rawr_internal::universe::Bindings for __RawrBindings {
-    fn engine(
-        &self,
-        access: __rawr_internal::Access,
-    ) -> std::io::Result<(
-        __rawr_internal::Shared<__rawr_internal::Engine>,
-        Box<[__rawr_internal::host::facade::Definition]>,
-    )> {
-        install_arena([0; 32]);
-        let native = __rawr_internal::package::import::runner::account::Native::decode(GENERATED_MANIFEST)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let (engine, bindings, _) = prepare_engine(native, access, &mut |_| Ok(()))?;
-        Ok((engine, bindings))
-    }
-
-    fn runtime(
-        &self,
-        engine: &__rawr_internal::Engine,
-        definitions: &[__rawr_internal::host::facade::Definition],
-    ) -> Result<__rawr_internal::host::runtime::Registry, __rawr_internal::host::runtime::Error> {
-        imported_runtime(engine, definitions)
-    }
-}
-
 /// `?play`'s entry in a universe runner (#434, #436, #515): a server on the
 /// socket `RAWR_PLAY_SOCKET` names. What every snippet needs is made once,
 /// here: a universe of the runner's bindings (`rawr::universe`). Each
@@ -5510,6 +5466,85 @@ pub(super) fn main() {
         Err(error) => finish(Err(error)),
     };
     finish(run_protocol(stream, key, first))
+}
+"#;
+/// What every runner's module holds beside its owner's protocol, which
+/// runs the program on unix in its own `owner` module: its bindings as
+/// `rawr::universe` takes them, and its `main` on each target. In a
+/// browser (#1395), `main` serves the bindings to `rawr::universe`'s
+/// browser entry, which the page calls to compile and run one snippet in
+/// this module instance.
+const SHELL_SOURCE: &[u8] = br#"
+/// This runner's generated bindings, as `rawr::universe` installs them in
+/// an engine and binds their runtime (#1387). Its name is one no script
+/// type takes.
+struct __RawrBindings;
+
+impl __rawr_internal::universe::Bindings for __RawrBindings {
+    fn engine(
+        &self,
+        access: __rawr_internal::Access,
+    ) -> std::io::Result<(
+        __rawr_internal::Shared<__rawr_internal::Engine>,
+        Box<[__rawr_internal::host::facade::Definition]>,
+    )> {
+        install_arena([0; 32]);
+        let native = __rawr_internal::package::import::runner::account::Native::decode(GENERATED_MANIFEST)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let (engine, bindings, _) = prepare_engine(native, access, &mut |_| Ok(()))?;
+        Ok((engine, bindings))
+    }
+
+    fn runtime(
+        &self,
+        engine: &__rawr_internal::Engine,
+        definitions: &[__rawr_internal::host::facade::Definition],
+    ) -> Result<__rawr_internal::host::runtime::Registry, __rawr_internal::host::runtime::Error> {
+        imported_runtime(engine, definitions)
+    }
+}
+
+/// What starting the program left this thread to do.
+enum Started {
+    /// The program ended with this status.
+    Exit(i32),
+    /// The entry the program registered, for this thread to run: its
+    /// native `main` (D501), or an async `main`'s runtime entry (D513.4).
+    Entry(fn() -> i32),
+}
+
+/// A generation the owner thread admitted: the owner said `queued` when it
+/// committed (D553.3), and says `swapped` to the program and to a `rawr
+/// mcp` that supervises the run once this writes it to the reload stream.
+/// A browser's run has neither.
+fn admitted() {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        let Some(path) = std::env::var_os("RAWR_RELOAD_EVENTS").filter(|path| !path.is_empty()) else {
+            return;
+        };
+        if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) {
+            let _ = stream.write_all(b"{\"event\":\"swapped\"}\n");
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(super) fn main() {
+    owner::main()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) fn main() {
+    register_native_sequences();
+    for adapter in adapters() {
+        let _ = (adapter.identity, adapter.signature, adapter.invoke);
+    }
+    if UNIVERSE {
+        __rawr_internal::crossing::universe();
+    }
+    __rawr_internal::universe::browser::serve(&__RawrBindings);
 }
 "#;
 const PROFILE_RUNNER_MAIN: &[u8] = br#"
@@ -7474,7 +7509,14 @@ fn render_source(
     } else {
         RUNNER_MAIN
     };
+    output
+        .write_all(b"\n#[cfg(unix)]\nmod owner {\n#[allow(unused_imports)]\nuse super::*;\n")
+        .map_err(request::unwritable)?;
     output.write_all(runner).map_err(request::unwritable)?;
+    output.write_all(b"}\n").map_err(request::unwritable)?;
+    output
+        .write_all(SHELL_SOURCE)
+        .map_err(request::unwritable)?;
     output.write_all(b"\n").map_err(request::unwritable)?;
     for module in modules.keys() {
         writeln!(output, "mod {module};").map_err(request::unwritable)?;

@@ -122,6 +122,36 @@ PLAY_UNIVERSE_RUNNER=$PWD/play/universe/target/rawr/runner/target/debug/play \
   cargo run -p rawr-play -- snippet.rs -o -
 ```
 
+## The browser's universe
+
+The same universe runs in a browser (#1395). `play/universe/web.sh`
+builds a copy of it in `target/wasm/universe` for wasm32, as Cargo builds
+the copy for `CARGO_BUILD_TARGET=wasm32-unknown-unknown`, and rawr-import
+reads, extracts and generates for that target (#1394). The manifest
+declares each crate's browser features under
+`[target.'cfg(target_arch = "wasm32")'.dependencies]`: iced on its own web
+shell, drawing with WebGPU or WebGL2 and its embedded Fira Sans, and tokio
+without threads. The copy leaves out the `[patch]` of iced's headless
+shell, so iced's `run` hands a program to iced_winit, which draws into a
+canvas on the page. The universe program's tokio calls are the server's
+only (`#[cfg(not(target_arch = "wasm32"))]`): a page has one thread and no
+blocking pool.
+
+Its runner links rawr built for wasm32 in the copy, beside the bindings,
+since rawr's shared runtime is the host's. On wasm32 the runner's `main`
+hands its bindings to `rawr::universe::browser`, which exports `prepare`,
+`run(manifest, source)` and `panic_message` to the page. `run` compiles
+the snippet beside the universe's `Cargo.toml` against those bindings, as
+the server's fork does, runs `main`, and answers with the server's text
+result. A program that hands its loop to the page, as iced's `run` does,
+keeps running in that module instance after `main` returns.
+
+`web/build.sh` packs it beside rawr-web as `universe.js`,
+`universe_bg.wasm` (with its `.br`) and `universe.toml`. The site
+(`site/src/scripts/universe.ts`) compiles the module once and gives each
+run an instance of its own in a frame in place of the run strip's output:
+winit allows one event loop per instance.
+
 ## CLI
 
 ```sh

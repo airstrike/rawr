@@ -519,6 +519,16 @@ impl Unit {
         }
     }
 
+    /// A unit that links `crates` for the target whose `rustc --print cfg`
+    /// gives `lines`, as a test's Cargo answer.
+    #[cfg(test)]
+    pub(crate) fn linking_for(crates: &[&str], lines: &[&str]) -> Self {
+        Self {
+            features: features::Enabled::of_lines(lines.iter().copied()),
+            ..Self::linking(crates)
+        }
+    }
+
     /// The features Cargo enables for the target.
     #[must_use]
     pub const fn features(&self) -> &features::Enabled {

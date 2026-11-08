@@ -163,7 +163,7 @@ export interface Web {
 export interface Runs {
   /** A fresh rawr-web, so no run sees another's state. */
   web(): Promise<Web>;
-  /** A `data-where="server"` block's run on rawr's server. */
+  /** A `data-where="server"` or `"universe"` block's run on rawr's server. */
   server(code: string): Promise<Result>;
 }
 
@@ -195,7 +195,9 @@ export const NEXT_IMAGE = '<span class="next">This runs once rawr&rsquo;s server
 /**
  * Fills each run strip's output with what its snippet prints. A snippet runs
  * in rawr-web, or on the server when it is marked `data-where="server"`, as
- * its Run button runs it. The source leaves each output empty: an output
+ * its Run button runs it. A block marked `data-where="universe"` runs on the
+ * server too: its Run runs it in the browser's universe, interactively, and
+ * its output before Run is the frame the server drew. The source leaves each output empty: an output
  * written by hand, a button with no snippet, a run that rawr-web can't finish
  * and a run a limit stopped all fail the build.
  *
@@ -211,9 +213,11 @@ export async function runOutputs(html: string, runs: Runs): Promise<string> {
     const id = /\bid="([^"]+)"/.exec(attributes)?.[1];
     const name = /\bdata-run="([^"]*)"/.exec(attributes)?.[1] || "this snippet";
     if (!id) throw new Error(`the run block ${name} has no id`);
-    const server = /\bdata-where="server"/.test(attributes);
+    // A universe block runs in the browser's universe at Run; its output
+    // before Run is the frame the server's universe drew.
+    const server = /\bdata-where="(server|universe)"/.test(attributes);
     const next = /\bdata-image="next"/.test(attributes);
-    if (next && !server) throw new Error(`${name} waits for the server's next image, so it is marked data-where="server"`);
+    if (next && !server) throw new Error(`${name} waits for the server's next image, so it is marked data-where="server" or "universe"`);
     blocks.set(id, { name, code: decode(text), server, next });
   }
   const filled = new Map<string, string>();

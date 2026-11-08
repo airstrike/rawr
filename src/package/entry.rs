@@ -20,9 +20,13 @@ pub(crate) const MODULE: &str = "__rawr_entry";
 /// `#[async_std::main]`, `#[tokio::main(flavor = "current_thread")]`). An
 /// attribute may span lines. When its path starts at a name a top-level
 /// `use .. as name;` binds, as `use tokio as rt; #[rt::main]` does, that
-/// `use` comes first, so the shadow crate's entry resolves it too.
+/// `use` comes first, so the shadow crate's entry resolves it too. Before
+/// both, each `#[cfg(..)]` on that `main`, one to a line: the entry is
+/// built where `main` is, so a `main` for another target has none there
+/// (#1395).
 pub(crate) fn attribute(text: &str) -> Option<String> {
     let mut attribute: Option<(std::ops::Range<usize>, &str)> = None;
+    let mut cfgs: Vec<String> = Vec::new();
     let mut offset = 0;
     // The end of an attribute that spans lines: lines before it are its own.
     let mut within = 0;
@@ -38,11 +42,14 @@ pub(crate) fn attribute(text: &str) -> Option<String> {
             let end = matching_bracket(&text[start..]).map(|end| start + end + 1);
             if let Some(end) = end {
                 within = end;
-                if let Some(path) = text[start + 2..end - 1].split(['(', ']', ' ', '\n']).next()
+                let path = text[start + 2..end - 1].split(['(', ']', ' ', '\n']).next();
+                if let Some(path) = path
                     && path.contains("::")
                     && path.rsplit("::").next() == Some("main")
                 {
                     attribute = Some((start..end, path));
+                } else if path == Some("cfg") {
+                    cfgs.push(text[start..end].replace('\n', " "));
                 }
             }
         } else if indent == 0 {
@@ -52,13 +59,17 @@ pub(crate) fn attribute(text: &str) -> Option<String> {
             {
                 let (range, path) = attribute?;
                 let first = path.split("::").next().unwrap_or_default();
-                return Some(match alias(text, first) {
+                let written = match alias(text, first) {
                     Some(binding) => format!("{binding}\n    {}", &text[range]),
                     None => text[range].to_owned(),
-                });
+                };
+                let mut found: String = cfgs.iter().map(|cfg| format!("{cfg}\n")).collect();
+                found.push_str(&written);
+                return Some(found);
             }
             if !trimmed.is_empty() && !trimmed.starts_with("//") {
                 attribute = None;
+                cfgs.clear();
             }
         }
     }
@@ -97,16 +108,23 @@ fn matching_bracket(text: &str) -> Option<usize> {
     None
 }
 
-/// The shadow crate's entry module, with `attribute` as written.
+/// The shadow crate's entry module, with `attribute` as written: its
+/// `#[cfg(..)]` lines on the module, the rest on its `main`.
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) fn source(attribute: &str) -> String {
+    let split = attribute
+        .split_inclusive('\n')
+        .take_while(|line| line.starts_with("#[cfg("))
+        .map(str::len)
+        .sum::<usize>();
+    let (cfgs, attribute) = attribute.split_at(split);
     format!(
         r#"
 /// The program's entry under `rawr run` (D513.4): its own runtime attribute
 /// around the Rawr `main`'s future.
 #[doc(hidden)]
 #[allow(unsafe_code)]
-pub mod {MODULE} {{
+{cfgs}pub mod {MODULE} {{
     unsafe extern "Rust" {{
         fn __rawr_island_start_v1(entry: fn() -> i32);
         fn __rawr_island_main_v1()
@@ -185,6 +203,28 @@ mod tests {
         assert_eq!(
             attribute("#[tokio::main]\nfn other() {}\nasync fn main() {}\n"),
             None
+        );
+    }
+
+    /// A `main` for some targets only has its entry on those (#1395): the
+    /// entry module carries its `#[cfg(..)]`.
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn an_entry_is_built_where_its_main_is() {
+        let text = "// rawr\n#[cfg(not(target_arch = \"wasm32\"))]\n#[tokio::main]\nasync fn main() {}\n\n#[cfg(target_arch = \"wasm32\")]\nfn main() {}\n";
+        let found = attribute(text).unwrap();
+        assert_eq!(
+            found,
+            "#[cfg(not(target_arch = \"wasm32\"))]\n#[tokio::main]"
+        );
+        let source = super::source(&found);
+        assert!(
+            source.contains("#[cfg(not(target_arch = \"wasm32\"))]\npub mod __rawr_entry {"),
+            "{source}"
+        );
+        assert!(
+            source.contains("    #[tokio::main]\n    async fn main() -> i32 {"),
+            "{source}"
         );
     }
 }

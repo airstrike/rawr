@@ -2,15 +2,13 @@
 //!
 //! iced's solar_system example, with circles in place of its images.
 use iced::mouse;
-use iced::widget::canvas::stroke::{self, Stroke};
 use iced::widget::canvas;
+use iced::widget::canvas::stroke::{self, Stroke};
 use iced::widget::canvas::{Geometry, Path};
 use iced::window;
-use iced::{
-    Color, Fill, Point, Rectangle, Renderer, Size, Subscription, Theme, Vector, Widget,
-};
+use iced::{Color, Fill, Point, Rectangle, Renderer, Size, Subscription, Theme, Vector, Widget};
 
-use std::time::Instant;
+use iced::time::Instant;
 
 pub fn main() -> iced::Result {
     iced::application::timed(

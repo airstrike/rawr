@@ -9,7 +9,8 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-[dependencies]
+# The native universe, ?play's server's, whose iced has no window.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # tokio is iced's executor, as iced's stopwatch and clock enable it: it
 # gives them `time::every` (#889). canvas is the examples' that draw
 # (#1000).
@@ -19,6 +20,15 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"
 # The landing page's ratatui snippet (programs/ui.rs), at the version the
 # repository's examples/tui uses.
 ratatui = "0.30"
+
+# The browser's universe (#1395), which web.sh builds for wasm32: iced on
+# its own web shell, drawing with WebGPU or WebGL2 (tiny-skia when the page
+# has neither) and its embedded font, tokio on the page's one thread, and
+# ratatui without a terminal backend of its own.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["canvas", "wgpu", "tiny-skia", "webgl", "fira-sans", "crisp", "web-colors"] }
+tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
+ratatui = { version = "0.30", default-features = false }
 
 # Its own workspace: it is not a member of Rawr's.
 [workspace]

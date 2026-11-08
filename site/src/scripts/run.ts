@@ -10,6 +10,12 @@
 // such as spawning a thread. The server also runs a snippet when rawr-web
 // doesn't load or stops.
 //
+// A block marked `data-where="universe"` uses crates (iced, ratatui): it
+// runs in the browser's universe (universe.ts), in a frame of its own in
+// place of its output, and stays interactive there. Its output before Run
+// is the frame the server drew, as the build wrote it. The server runs it
+// when the universe doesn't load.
+//
 // On the server, the site's own text goes to POST /play/run, which accepts
 // only the exact sources on the site's pages and caches their results. Edited
 // text goes to POST /play/render, the playground's endpoint, with the
@@ -28,10 +34,17 @@
 // loses focus, by the build's highlighter, loaded only then.
 
 import { outputHtml } from "../lib/output.ts";
+import type { Frame } from "./universe.ts";
 
 /** rawr-web's API (web/src/lib.rs), as the playground uses it. */
 export interface Web {
   run_text(code: string): string;
+}
+
+/** The browser's universe (universe.ts), as a run strip uses it. */
+export interface Universe {
+  frame(parent: Element): Promise<Frame>;
+  run(frame: Frame, code: string): Promise<any>;
 }
 
 /** What the script touches, so a test can hand it a stand-in DOM. */
@@ -41,9 +54,14 @@ export interface Env {
   fetch: typeof fetch;
   /** Imports rawr-web and initializes it. Without it every run goes to the server. */
   web?: () => Promise<Web>;
+  /** The browser's universe. Without it a universe block runs on the server. */
+  universe?: Universe;
   /** Warm the snippets once the page has loaded, so Run answers at once. */
   warm?: boolean;
 }
+
+/** The fewest pixels a universe block's frame is tall: iced's counter, or fourteen rows of text. */
+const FRAME_HEIGHT = 400;
 
 const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
@@ -64,7 +82,7 @@ export function ahead(run: () => Promise<any>): { warm(): Promise<any>; take(): 
   };
 }
 
-export function setup({ document, window, fetch, web, warm = false }: Env): void {
+export function setup({ document, window, fetch, web, universe, warm = false }: Env): void {
   const SVG = "http://www.w3.org/2000/svg";
   const icon = (cls: string, d: string) => {
     const svg = document.createElementNS(SVG, "svg");
@@ -185,6 +203,7 @@ export function setup({ document, window, fetch, web, warm = false }: Env): void
     const strip = out.closest(".run")!;
     const name = source.dataset.run || "this snippet";
     const onServer = source.dataset.where === "server";
+    const inUniverse = source.dataset.where === "universe";
     const label = button.getAttribute("aria-label") || `Run ${name}`;
     const original = source.textContent ?? "";
     const originalHtml = source.innerHTML;
@@ -263,10 +282,16 @@ export function setup({ document, window, fetch, web, warm = false }: Env): void
       highlighted = true;
       reset.hidden = true;
     };
+    // A universe block's next frame, made ahead of its Run by warming, and
+    // again after each run is cleared, so a Run only compiles and runs.
+    let ready: Promise<Frame> | null = null;
+    const nextFrame = () => (ready ??= universe!.frame(out));
     const clear = () => {
       out.replaceChildren(...staticOut.map((node) => node.cloneNode(true)));
       out.className = staticClass;
       out.classList.add("pending");
+      ready = null;
+      if (inUniverse && universe && warm) nextFrame().catch(() => {});
     };
 
     source.addEventListener("input", () => {
@@ -296,13 +321,49 @@ export function setup({ document, window, fetch, web, warm = false }: Env): void
     };
     const fail = (message: string) => show(outputHtml({ kind: "error", text: message }));
 
+    // Run `code` in a universe frame in place of the output, as tall as the
+    // output it replaces: what it prints follows the frame. A compile error
+    // replaces the frame.
+    const runFrame = async (code: string) => {
+      const frame = await nextFrame();
+      ready = null;
+      out.classList.add("framed");
+      const height = Math.max(out.getBoundingClientRect().height, FRAME_HEIGHT);
+      for (const node of [...out.childNodes]) if (node !== frame.element) node.remove();
+      out.classList.remove("pending", "quiet");
+      frame.element.style.height = `${height}px`;
+      const result = await universe!.run(frame, code);
+      if (result.kind === "error") {
+        frame.element.remove();
+        show(outputHtml(result));
+        return;
+      }
+      if ((result.output ?? []).length > 0 || result.status !== 0) {
+        const live = document.createElement("span");
+        live.className = "live";
+        live.innerHTML = outputHtml({ ...result, frame: undefined });
+        out.append(live);
+      }
+    };
+
     const run = async () => {
       setState("running");
       // In a compare slider the output is on the right-hand file, so show it.
       button.closest(".compare")?.querySelector<HTMLButtonElement>('.tabs button[data-to="0"]')?.click();
       const code = text();
+      if (inUniverse && universe) {
+        try {
+          await runFrame(code);
+          setState("done");
+          return;
+        } catch (error) {
+          // The universe didn't load: the server runs it.
+          console.warn("rawr: the browser's universe could not run this snippet;", error);
+          clear();
+        }
+      }
       try {
-        let result = edited() ? (onServer ? null : await browser(code)) : await early.take();
+        let result = edited() ? (onServer || inUniverse ? null : await browser(code)) : await early.take();
         if (!result) result = edited() ? await answer(await render(code, strip)) : await siteRun(code);
         if (result.failed !== undefined) {
           fail("The code could not run. " + result.failed);
@@ -319,8 +380,13 @@ export function setup({ document, window, fetch, web, warm = false }: Env): void
     };
 
     // The unedited snippet's run, which warming starts ahead of its Run.
-    const early = ahead(() => (onServer ? siteRun(original) : browser(original)));
-    warmups.push(async () => void (edited() || (await early.warm())));
+    const early = ahead(() => (onServer || inUniverse ? siteRun(original) : browser(original)));
+    // A universe block warms its frame: the module compiled and an
+    // instance made, with its bindings installed.
+    warmups.push(async () => {
+      if (inUniverse && universe) await nextFrame();
+      else if (!edited()) await early.warm();
+    });
 
     button.addEventListener("click", () => {
       if (state === "running") return;
