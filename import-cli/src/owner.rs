@@ -50,13 +50,7 @@ pub fn check(
             revision,
             &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
         )
-        .map_err(|error| match error {
-            crate::Error::Copy(failure) => Unchecked::Copy {
-                failure,
-                source: fallback,
-            },
-            error => Unchecked::Report(import(error, fallback)),
-        })?;
+        .map_err(|error| unchecked(error, fallback))?;
     Ok((source, prepared.take_settlement()))
 }
 
@@ -84,18 +78,51 @@ impl Unchecked {
     #[must_use]
     pub fn report(self, cargo: Option<&rawr_cli::cargo::Status>) -> Option<diagnostic::Report> {
         match self {
-            Self::Report(report) => Some(report),
-            Self::Copy { .. }
-                if matches!(
-                    cargo,
-                    Some(rawr_cli::cargo::Status::Finished(outcome)) if !outcome.is_clean()
-                ) =>
-            {
-                None
-            }
-            Self::Copy { failure, source } => Some(framework(failure, source)),
+            Self::Copy { .. } if failing(cargo).is_some() => None,
+            unchecked => Some(unchecked.into_report()),
         }
     }
+
+    /// The report with no word from `cargo check`: a failed build of the
+    /// copy is rawr's.
+    #[must_use]
+    pub fn into_report(self) -> diagnostic::Report {
+        match self {
+            Self::Report(report) => report,
+            Self::Copy { failure, source } => framework(failure, source),
+        }
+    }
+
+    /// Whether this waits for `cargo check` to say whose error it is.
+    const fn is_copy(&self) -> bool {
+        matches!(self, Self::Copy { .. })
+    }
+}
+
+/// What a `cargo check` that failed said.
+fn failing(cargo: Option<&rawr_cli::cargo::Status>) -> Option<&rawr_cli::cargo::Outcome> {
+    match cargo {
+        Some(rawr_cli::cargo::Status::Finished(outcome)) if !outcome.is_clean() => Some(outcome),
+        _ => None,
+    }
+}
+
+/// A failed preparation: a failed build of rawr's copy of the program
+/// waits for `cargo check`.
+fn unchecked(error: crate::Error, source: diagnostic::Source) -> Unchecked {
+    match error {
+        crate::Error::Copy(failure) => Unchecked::Copy { failure, source },
+        error => Unchecked::Report(import(error, source)),
+    }
+}
+
+/// `cargo check` of the program at `location` as it is on disk now, run
+/// when rawr's copy of it failed to build. `None` when it is no Cargo
+/// crate or doesn't load.
+fn checked_now(location: &Path) -> Option<rawr_cli::cargo::Status> {
+    let target = rawr::project::Target::discover(location).ok()?;
+    let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target).ok()?;
+    rawr_cli::cargo::begin(&graph).map(rawr_cli::cargo::Pending::finish)
 }
 
 impl From<diagnostic::Report> for Unchecked {
@@ -148,17 +175,26 @@ pub fn run(
     lifecycle: rawr_import::process::Lifecycle,
     profile: &dyn crate::Profile,
 ) -> Result<bool, diagnostic::Report> {
-    let ran = session(target, graph, lifecycle, profile, None);
-    events(&ran);
+    let ran = session(target, graph, lifecycle, profile, None).map_err(Unchecked::into_report);
+    events(ran.as_ref().map_err(Some), None);
     ran.map(|ended| matches!(ended, Ended::Exit(0) | Ended::Restart(_)))
 }
 
-/// Tell a supervising `rawr mcp` how a session ended (D537.4).
-fn events(ran: &Result<Ended, diagnostic::Report>) {
+/// Tell a supervising `rawr mcp` how a session ended (D537.4). A failure
+/// without a report is `cargo`'s.
+fn events(
+    ran: Result<&Ended, Option<&diagnostic::Report>>,
+    cargo: Option<&rawr_cli::cargo::Status>,
+) {
     match ran {
         Ok(Ended::Exit(code)) => rawr_cli::events::ended(*code),
         Ok(Ended::Restart(_)) => {}
-        Err(report) => rawr_cli::events::failed(report),
+        Err(Some(report)) => rawr_cli::events::failed(report),
+        Err(None) => {
+            if let Some(outcome) = failing(cargo) {
+                rawr_cli::events::failed_cargo(outcome);
+            }
+        }
     }
 }
 
@@ -168,14 +204,16 @@ fn events(ran: &Result<Ended, diagnostic::Report>) {
 /// when stdin is a terminal; otherwise, or when Ctrl-C ended it, this
 /// returns its exit status.
 ///
-/// `cargo`'s errors are printed when the program first ends.
+/// `cargo`'s errors are printed when the program first ends. A program
+/// whose copy fails to build as `cargo check` fails shows cargo's errors
+/// alone, and fails with no report of its own (`Err(None)`).
 pub fn run_program(
     target: &rawr::project::Target,
     graph: Option<rawr::package::Graph>,
     profile: &dyn crate::Profile,
     arguments: &[std::ffi::OsString],
     mut cargo: Option<rawr_cli::cargo::Pending>,
-) -> Result<i32, diagnostic::Report> {
+) -> Result<i32, Option<diagnostic::Report>> {
     // Ctrl-C at the terminal ends the program with SIGINT, as a shell
     // reports it.
     const INTERRUPTED: i32 = 128 + 2;
@@ -205,22 +243,38 @@ pub fn run_program(
     let mut watcher = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open);
     let mut ran = session(target, graph, lifecycle, profile, Some(&program));
     loop {
-        events(&ran);
-        let restarted = match &ran {
-            Ok(Ended::Restart(reason)) => Some(reason.as_str()),
-            _ => None,
+        let restarted = matches!(ran, Ok(Ended::Restart(_)));
+        // A session that ended hears from `cargo check`: the one started
+        // with the run, or, for a later copy that failed to build, one of
+        // the program as it is now.
+        let checked = if restarted {
+            None
+        } else {
+            let pending = cargo.take().map(rawr_cli::cargo::Pending::finish);
+            match &ran {
+                Err(unchecked) if unchecked.is_copy() && pending.is_none() => {
+                    checked_now(&location(target))
+                }
+                _ => pending,
+            }
         };
+        let settled = ran.map_err(|unchecked| unchecked.report(checked.as_ref()));
+        events(settled.as_ref().map_err(Option::as_ref), checked.as_ref());
         if let Some(reload) = &reload {
-            reload.starting(restarted);
+            reload.starting(match &settled {
+                Ok(Ended::Restart(reason)) => Some(reason.as_str()),
+                _ => None,
+            });
         }
-        if restarted.is_none() {
-            rawr_cli::cargo::after_run(cargo.take());
-            match ran {
+        if !restarted {
+            rawr_cli::cargo::after_run(checked);
+            match settled {
                 Ok(Ended::Exit(101)) if abort && !interactive => return Ok(ABORTED),
                 Ok(Ended::Exit(code)) if !interactive || code == INTERRUPTED => return Ok(code),
                 Ok(_) => eprintln!("rawr: the program ended; a save runs it again"),
                 Err(report) if !interactive || watcher.is_none() => return Err(report),
-                Err(report) => rawr_import::process::say(diagnostic::render(&report)),
+                Err(Some(report)) => rawr_import::process::say(diagnostic::render(&report)),
+                Err(None) => {}
             }
             let Some(waiting) = watcher.as_ref() else {
                 return Ok(0);
@@ -243,7 +297,7 @@ pub fn run_program(
         let next = match rawr::project::Target::discover(location(target)) {
             Ok(next) => next,
             Err(error) => {
-                ran = Err(diagnostic::Report::from_project(&error));
+                ran = Err(diagnostic::Report::from_project(&error).into());
                 continue;
             }
         };
@@ -297,7 +351,7 @@ fn session(
     lifecycle: rawr_import::process::Lifecycle,
     profile: &dyn crate::Profile,
     program: Option<&rawr_import::process::Arguments>,
-) -> Result<Ended, diagnostic::Report> {
+) -> Result<Ended, Unchecked> {
     same_build(target)?;
     // Each save that changes Rawr source rebuilds the same API graph.
     rawr_import::api::keep_graphs();
@@ -714,9 +768,9 @@ fn session(
         // A program that ended as its owner asked its runner something
         // ended the run: its status stands, not the ask's failure.
         Err(report) if lane.exited() => {
-            reaped(&mut lane, swapped_marked, lifecycle, &source)?.ok_or(report)
+            Ok(reaped(&mut lane, swapped_marked, lifecycle, &source)?.ok_or(report)?)
         }
-        ran => ran,
+        ran => Ok(ran?),
     }
 }
 
@@ -767,7 +821,8 @@ pub fn initial(
         snapshot,
         inputs,
         manifests: _,
-    } = prepare_on_lane(&mut lane, target, graph, profile, &source)?;
+    } = prepare_on_lane(&mut lane, target, graph, profile, &source)
+        .map_err(Unchecked::into_report)?;
     let installed = if started {
         lane.replace_built_started(built, snapshot)
     } else {
@@ -798,6 +853,7 @@ pub fn initial_watched(
     diagnostic::Report,
 > {
     initial_watched_program(target, graph, target_path, lifecycle, profile, None)
+        .map_err(Unchecked::into_report)
 }
 
 #[allow(clippy::type_complexity)]
@@ -815,7 +871,7 @@ fn initial_watched_program(
         resident::Manifests,
         rawr_watch::native::Baseline,
     ),
-    diagnostic::Report,
+    Unchecked,
 > {
     let source = fallback(target)?;
     let mut lane = open_lane(target, lifecycle, program, &source)?;
@@ -824,7 +880,7 @@ fn initial_watched_program(
         Ok(adapter) => adapter,
         Err(error) => {
             drop(lane.shutdown());
-            return Err(framework(error, source));
+            return Err(framework(error, source).into());
         }
     };
 
@@ -833,14 +889,14 @@ fn initial_watched_program(
             Ok(staged) => staged,
             Err(error) => {
                 drop(lane.shutdown());
-                return Err(framework(error, source));
+                return Err(framework(error, source).into());
             }
         };
         let checkpoint = match adapter.checkpoint() {
             Ok(checkpoint) => checkpoint,
             Err(error) => {
                 drop(lane.shutdown());
-                return Err(framework(error, source));
+                return Err(framework(error, source).into());
             }
         };
         let native_baseline = adapter.native_baseline();
@@ -857,7 +913,7 @@ fn initial_watched_program(
             Err(error) => {
                 drop(staged);
                 drop(lane.shutdown());
-                return Err(framework(error, source));
+                return Err(framework(error, source).into());
             }
         }
         let observation = initial
@@ -896,7 +952,7 @@ fn initial_watched_program(
             Err(error) => {
                 drop(staged);
                 drop(lane.shutdown());
-                return Err(framework(error, source));
+                return Err(framework(error, source).into());
             }
         }
     }
@@ -924,7 +980,7 @@ fn prepare_on_lane(
     mut graph: Option<rawr::package::Graph>,
     profile: &dyn crate::Profile,
     source: &diagnostic::Source,
-) -> Result<Initial, diagnostic::Report> {
+) -> Result<Initial, Unchecked> {
     // A save while the runner builds (D531.9): the build is kept, and the
     // program is prepared again from the saved files.
     let mut saved = None;
@@ -947,7 +1003,7 @@ fn prepare_on_lane(
                 saved = Some(discover(target)?);
                 continue;
             }
-            Err(error) => return Err(import(error, source.clone())),
+            Err(error) => return Err(unchecked(error, source.clone())),
         };
         let manifests = prepared.manifests.clone();
         let mut prepared = prepared;
@@ -956,7 +1012,7 @@ fn prepare_on_lane(
         let generated = match request.generate() {
             Ok(generated) => generated,
             Err(error) if restarts.again(&error) => continue,
-            Err(error) => return Err(framework(error, source.clone())),
+            Err(error) => return Err(framework(error, source.clone()).into()),
         };
         // The API phase has ended; hand its freed allocator pages back before the build.
         crate::release::freed_memory();
@@ -972,7 +1028,8 @@ fn prepare_on_lane(
                     Err(rerun) => framework(format!("{rerun}\n\n{error}"), source.clone()),
                     Ok(Some(drift)) => framework(format!("{drift}\n\n{error}"), source.clone()),
                     Ok(None) => framework(error, source.clone()),
-                });
+                }
+                .into());
             }
         };
         // Shared bindings are published, or refused, once the project's
@@ -981,7 +1038,7 @@ fn prepare_on_lane(
         match settlement.settle() {
             Ok(()) => {}
             Err(error) if restarts.again(&error) => continue,
-            Err(error) => return Err(framework(error, source.clone())),
+            Err(error) => return Err(framework(error, source.clone()).into()),
         }
         match built.retain_startup(&snapshot) {
             Ok(()) => {
@@ -994,7 +1051,7 @@ fn prepare_on_lane(
             }
             Err(rawr_import::node::Error::SourceChanged(_)) => saved = Some(discover(target)?),
             Err(error) if restarts.again(&error) => {}
-            Err(error) => return Err(framework(error, source.clone())),
+            Err(error) => return Err(framework(error, source.clone()).into()),
         }
     }
 }
@@ -1010,7 +1067,7 @@ fn refresh_initial(
     target_path: &Path,
     profile: &dyn crate::Profile,
     source: &diagnostic::Source,
-) -> Result<Initial, diagnostic::Report> {
+) -> Result<Initial, Unchecked> {
     let target = rawr::project::Target::discover(target_path)
         .map_err(|error| rawr::diagnostic::Report::from_project(&error))?;
     prepare_on_lane(lane, &target, None, profile, source)
