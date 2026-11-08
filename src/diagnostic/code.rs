@@ -133,6 +133,7 @@ codes!(Resolve;
     (RESOLVE_CAPABILITY, "E0277", "A type that doesn't implement a trait an operation needs, as rustc reports it."),
     (RESOLVE_MATCH, "RAWR-RESOLVE-MATCH", "Invalid nominal match."),
     (RESOLVE_NON_EXHAUSTIVE, "E0004", "A `match` whose arms miss some values of its scrutinee, as rustc reports it."),
+    (RESOLVE_REFUTABLE, "E0005", "A `let`, `for` or parameter pattern that misses some values, as rustc reports it."),
     (RESOLVE_UNSUPPORTED_SYNTAX, "RAWR-RESOLVE-UNSUPPORTED-SYNTAX", "A construct that isn't supported yet."),
     (RESOLVE_JUMP_IN_WHILE_CONDITION, "E0590", "A `break` or `continue` with no label in a `while` condition, as rustc reports it."),
     (RESOLVE_ASYNC_MAIN, "E0752", "An `async fn main` with no runtime's entry, as rustc reports it."),

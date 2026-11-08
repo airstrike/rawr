@@ -79,6 +79,9 @@ pub enum Category {
     /// A `match` whose arms miss some values of its scrutinee, as rustc's
     /// E0004.
     NonExhaustive,
+    /// A `let`, `for` or parameter pattern that misses some values of what
+    /// it binds, as rustc's E0005.
+    Refutable,
     /// Source combines nominal operations with syntax not lowered in this phase.
     UnsupportedNominalSyntax,
     /// Syntax Rust does not have, as rustc reports it.
@@ -154,6 +157,7 @@ impl fmt::Display for Category {
             Self::MissingCapability => formatter.write_str("missing capability"),
             Self::InvalidMatch => formatter.write_str("invalid match"),
             Self::NonExhaustive => formatter.write_str("non-exhaustive patterns"),
+            Self::Refutable => formatter.write_str("refutable pattern"),
             Self::UnsupportedNominalSyntax => formatter.write_str("unsupported nominal syntax"),
             Self::Syntax => formatter.write_str("syntax error"),
             Self::UnlabeledJumpInWhileCondition => {
@@ -745,6 +749,19 @@ pub enum Error {
         /// The scrutinee.
         scrutinee: Span,
     },
+    /// A pattern that must match every value, in a `let` without `else`, a
+    /// `for` or a parameter, which misses some, which rustc refuses
+    /// (E0005).
+    Refutable {
+        /// The patterns of the values it misses, as rustc writes them.
+        witnesses: Box<[ImmutableString]>,
+        /// The matched value's type.
+        ty: ImmutableString,
+        /// Where the pattern is.
+        site: BindingSite,
+        /// The pattern.
+        pattern: Span,
+    },
     /// A nominal script reaches syntax deliberately deferred to a later step.
     UnsupportedNominalSyntax {
         /// Stable description of the unsupported construct.
@@ -1002,6 +1019,7 @@ impl Error {
             Self::MissingCapability { .. } => Category::MissingCapability,
             Self::InvalidMatch { .. } => Category::InvalidMatch,
             Self::NonExhaustive { .. } => Category::NonExhaustive,
+            Self::Refutable { .. } => Category::Refutable,
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
@@ -1046,7 +1064,7 @@ impl Error {
             | Self::InvalidConstruction { owner, .. }
             | Self::MissingCapability { owner, .. }
             | Self::InvalidMatch { owner, .. } => owner.as_str(),
-            Self::NonExhaustive { ty, .. } => ty.as_str(),
+            Self::NonExhaustive { ty, .. } | Self::Refutable { ty, .. } => ty.as_str(),
             Self::TypeMismatch { expected, .. } | Self::IfWithoutElse { expected, .. } => {
                 expected.as_str()
             }
@@ -1119,6 +1137,7 @@ impl Error {
             Self::MissingCapability { operation, .. } => *operation,
             Self::InvalidMatch { pattern, .. } => *pattern,
             Self::NonExhaustive { scrutinee, .. } => *scrutinee,
+            Self::Refutable { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::AsyncMain { at } => *at,
             Self::StdPath { reference, .. } | Self::NotYet { reference, .. } => *reference,
@@ -1187,6 +1206,7 @@ impl Error {
             | Self::MissingCapability { .. }
             | Self::InvalidMatch { .. }
             | Self::NonExhaustive { .. }
+            | Self::Refutable { .. }
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
@@ -1268,6 +1288,90 @@ impl fmt::Display for NonExhaustive<'_> {
             "non-exhaustive patterns: {} not covered",
             self.uncovered()
         )
+    }
+}
+
+/// Where a pattern that must match every value is written, as rustc names
+/// it in E0005.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum BindingSite {
+    /// `let pattern = value;`: the statement as written, without its `;`,
+    /// when it is on one line, and whether the pattern binds a name.
+    Local {
+        /// `let pattern = value`.
+        statement: Option<ImmutableString>,
+        /// Whether the pattern binds a name, which `let else` keeps.
+        binds: bool,
+    },
+    /// `for pattern in values`.
+    ForLoop,
+    /// A function's parameter.
+    Argument,
+}
+
+/// rustc's E0005 for a pattern at `site` that misses the values of
+/// `witnesses`: `refutable pattern in local binding`.
+pub(crate) struct Refutable<'a> {
+    pub(crate) witnesses: &'a [ImmutableString],
+    pub(crate) site: &'a BindingSite,
+}
+
+impl Refutable<'_> {
+    /// rustc's label on the pattern: `pattern `None` not covered`.
+    pub(crate) fn label(&self) -> String {
+        NonExhaustive(self.witnesses).label()
+    }
+
+    /// rustc's notes on what a `let` requires, before the matched type's.
+    pub(crate) fn notes(&self) -> &'static [&'static str] {
+        match self.site {
+            BindingSite::Local { .. } => &[
+                "`let` bindings require an \"irrefutable pattern\", like a `struct` or an \
+                 `enum` with only one variant",
+                "for more information, visit \
+                 https://doc.rust-lang.org/book/ch19-02-refutability.html",
+            ],
+            BindingSite::ForLoop | BindingSite::Argument => &[],
+        }
+    }
+
+    /// rustc's help for a `let`: `let else` when the pattern binds a name,
+    /// `if let` when it binds none, with the statement rewritten.
+    pub(crate) fn help(&self) -> Option<String> {
+        let BindingSite::Local {
+            statement: Some(statement),
+            binds,
+        } = self.site
+        else {
+            return None;
+        };
+        let variants = if self.witnesses.len() == 1 {
+            "variant that isn't"
+        } else {
+            "variants that aren't"
+        };
+        Some(if *binds {
+            format!(
+                "you might want to use `let else` to handle the {variants} matched: \
+                 `{statement} else {{ todo!() }};`"
+            )
+        } else {
+            format!(
+                "you might want to use `if let` to ignore the {variants} matched: \
+                 `if {statement} {{ todo!() }}`"
+            )
+        })
+    }
+}
+
+impl fmt::Display for Refutable<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let origin = match self.site {
+            BindingSite::Local { .. } => "local binding",
+            BindingSite::ForLoop => "`for` loop binding",
+            BindingSite::Argument => "function argument",
+        };
+        write!(formatter, "refutable pattern in {origin}")
     }
 }
 
@@ -1703,6 +1807,17 @@ impl fmt::Display for Written<'_> {
                 scrutinee,
                 ..
             } => write!(formatter, "{} at {scrutinee} (E0004)", NonExhaustive(witnesses)),
+            Error::Refutable {
+                witnesses,
+                site,
+                pattern,
+                ..
+            } => write!(
+                formatter,
+                "{}: {} at {pattern} (E0005)",
+                Refutable { witnesses, site },
+                NonExhaustive(witnesses).label()
+            ),
             Error::UnsupportedNominalSyntax { construct, source } => {
                 write!(formatter, "{} at {source}", Unsupported(construct))
             }

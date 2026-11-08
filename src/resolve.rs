@@ -20,10 +20,10 @@ pub(crate) mod type_ref;
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub(crate) use error::{
     derivable, ArgumentCount, ArgumentSignature, AssignTwice, CannotCompare, Described,
-    NonExhaustive, NotFound, Qualified, TypeNeeded, Uninitialized, Unsatisfied, Unsupported,
-    ASYNC_MAIN, IF_WITHOUT_ELSE, RETURN_WITHOUT_VALUE,
+    NonExhaustive, NotFound, Qualified, Refutable, TypeNeeded, Uninitialized, Unsatisfied,
+    Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, RETURN_WITHOUT_VALUE,
 };
-pub use error::{Callee, Category, Error, Expansion, MacroScope, MoveCause, Private};
+pub use error::{BindingSite, Callee, Category, Error, Expansion, MacroScope, MoveCause, Private};
 use std::collections::BTreeMap;
 
 pub(crate) struct LocatedError {

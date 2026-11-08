@@ -498,6 +498,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::NonExhaustive { witnesses, .. } => {
                     write!(f, "{}", crate::resolve::NonExhaustive(witnesses))
                 }
+                crate::resolve::Error::Refutable {
+                    witnesses, site, ..
+                } => write!(f, "{}", crate::resolve::Refutable { witnesses, site }),
                 crate::resolve::Error::NotYet { path, .. } => {
                     write!(f, "rawr doesn't run `{path}` yet")
                 }
