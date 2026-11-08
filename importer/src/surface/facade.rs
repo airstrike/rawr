@@ -1303,18 +1303,6 @@ impl Plan {
                 // The members of the opaque type an inherent method gives,
                 // in its owner's module, as Rawr declares them.
                 let opaque = super::opaque::path(&format!("{owner}__{}", associated.name()), 0);
-                // One name for the opaque types of one method in two impls,
-                // as swash's `Setting<u16>::parse_list` and `Setting<f32>::
-                // parse_list` give: the first impl's is the one declared at
-                // it (`types`), and so are only its members.
-                let members = format!("{opaque}::");
-                if facade
-                    .items
-                    .iter()
-                    .any(|known| known.path.starts_with(&members))
-                {
-                    continue;
-                }
                 for member in associated
                     .implementations()
                     .flat_map(crate::classify::ImplementationOutcome::associated)
