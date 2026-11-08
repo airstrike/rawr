@@ -13,7 +13,7 @@
 //! survives that run is drift between the toolchains, which leaves the table
 //! local and says why, as missing evidence does.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -220,6 +220,9 @@ impl Meta {
 pub(crate) struct Entry {
     pub(crate) meta: Meta,
     pub(crate) table: Vec<u8>,
+    /// Where the table is: the entry's own, or the copy a staged entry
+    /// names.
+    pub(crate) path: PathBuf,
     _lease: home::Lease,
 }
 
@@ -229,16 +232,99 @@ impl Entry {
     }
 }
 
-/// Read `key`'s entry from the home, leased while this run holds it.
+/// Beside a staged entry's metadata, the one copy of its table: the file
+/// the driver wrote, by its length, modification time and digest.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Copy {
+    path: PathBuf,
+    length: u64,
+    modified: (u64, u32),
+    digest: String,
+}
+
+impl Copy {
+    /// The record of the table at `path`. An unchanged file keeps
+    /// `previous`'s digest: the driver replaces a table whole, which
+    /// changes its time.
+    fn of(path: &Path, previous: Option<&Self>) -> Option<Self> {
+        let metadata = fs::metadata(path).ok()?;
+        let modified = metadata
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        let length = metadata.len();
+        let modified = (modified.as_secs(), modified.subsec_nanos());
+        let digest = match previous {
+            Some(previous)
+                if previous.path == path
+                    && previous.length == length
+                    && previous.modified == modified =>
+            {
+                previous.digest.clone()
+            }
+            _ => digest(path)?,
+        };
+        Some(Self {
+            path: path.to_path_buf(),
+            length,
+            modified,
+            digest,
+        })
+    }
+}
+
+/// Beside a staged entry's metadata, what names its table's copy.
+const COPY: &str = "copy.json";
+
+/// The digest of the file at `path`, read in pieces.
+fn digest(path: &Path) -> Option<String> {
+    let mut digest = Sha256::new();
+    std::io::copy(&mut fs::File::open(path).ok()?, &mut digest).ok()?;
+    Some(crate::extract::engine::hex(&digest.finalize()))
+}
+
+/// Where the entry for `key` keeps its own table.
+pub(crate) fn table(bindings: &Path, key: &str) -> PathBuf {
+    bindings.join(key).join(home::TABLE)
+}
+
+fn meta_in(entry: &Path) -> Option<Meta> {
+    let meta = serde_json::from_slice::<Meta>(&fs::read(entry.join(META)).ok()?).ok()?;
+    (meta.schema == META_SCHEMA).then_some(meta)
+}
+
+/// Read `key`'s entry from the home, leased while this run holds it. A
+/// staged entry's table is the copy it names, read only while that copy
+/// is still the one it named.
 pub(crate) fn read(bindings: &Path, key: &str) -> Option<Entry> {
-    let (lease, table) = home::read(bindings, key)?;
-    let meta = fs::read(bindings.join(key).join(META)).ok()?;
-    let meta = serde_json::from_slice::<Meta>(&meta).ok()?;
-    (meta.schema == META_SCHEMA).then_some(Entry {
+    let lease = home::hold(bindings, key)?;
+    let entry = bindings.join(key);
+    let meta = meta_in(&entry)?;
+    let own = entry.join(home::TABLE);
+    let (path, table) = match fs::read(&own) {
+        Ok(table) => (own, table),
+        Err(_) => {
+            let copy = serde_json::from_slice::<Copy>(&fs::read(entry.join(COPY)).ok()?).ok()?;
+            let table = fs::read(&copy.path).ok()?;
+            let digest = crate::extract::engine::hex(&Sha256::digest(&table));
+            (table.len() as u64 == copy.length && digest == copy.digest)
+                .then_some((copy.path, table))?
+        }
+    };
+    Some(Entry {
         meta,
         table,
+        path,
         _lease: lease,
     })
+}
+
+/// `key`'s metadata, read under its lease without its table.
+pub(crate) fn meta(bindings: &Path, key: &str) -> Option<Meta> {
+    let _lease = home::hold(bindings, key)?;
+    meta_in(&bindings.join(key))
 }
 
 /// The bindings directory under the home that `cargo_home` gives.
@@ -258,8 +344,17 @@ pub(crate) fn staged(rawr: &Path) -> PathBuf {
 /// staged table only spares the run its nightly build and probe. The
 /// external crates every probe named are kept together, as settling keeps
 /// them. `inputs` are what the replay checks first, which may name the
-/// project's own sources. Best effort: a table not staged is probed again.
-pub(crate) fn stage(directory: &Path, settled: &[(&Settled, crate::input::bindings::Inputs)]) {
+/// project's own sources. A staged entry keeps only that metadata and names
+/// the table the driver wrote, which stays the one copy; an entry whose
+/// metadata and table are unchanged is not written. `keys` are every key
+/// the plan names: after staging, the entries no kept plan names go
+/// (`retire`). Best effort: a table not staged is probed again.
+pub(crate) fn stage(
+    directory: &Path,
+    keys: &[&str],
+    settled: &[(&Settled, crate::input::bindings::Inputs)],
+) {
+    let kept = plans(directory, keys);
     for (entry, inputs) in settled {
         let Settled::Extracted {
             key,
@@ -270,25 +365,107 @@ pub(crate) fn stage(directory: &Path, settled: &[(&Settled, crate::input::bindin
         else {
             continue;
         };
-        let Ok(table) = fs::read(&publish.table) else {
+        // A table the driver read where it settled is read there again.
+        if publish.table == table(&publish.bindings, key) {
             continue;
-        };
+        }
         let mut meta = publish.meta.clone();
         meta.scripts = nightly.clone();
         meta.inputs = Some(inputs.clone());
-        if let Some(kept) = read(directory, key)
-            && kept.meta.crate_hash == meta.crate_hash
+        let (kept_meta, kept_copy) = home::hold(directory, key)
+            .map(|_lease| {
+                let entry = directory.join(key);
+                let copy = fs::read(entry.join(COPY))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Copy>(&bytes).ok());
+                (meta_in(&entry), copy)
+            })
+            .unwrap_or_default();
+        if let Some(kept) = &kept_meta
+            && kept.crate_hash == meta.crate_hash
         {
-            for external in kept.meta.externals {
-                if !meta.externals.contains(&external) {
-                    meta.externals.push(external);
+            for external in &kept.externals {
+                if !meta.externals.contains(external) {
+                    meta.externals.push(external.clone());
                 }
             }
         }
-        let Ok(bytes) = serde_json::to_vec(&meta) else {
+        let Some(copy) = Copy::of(&publish.table, kept_copy.as_ref()) else {
             continue;
         };
-        let _ = home::publish(directory, key, &[("table.json", &table), (META, &bytes)]);
+        if kept_meta.as_ref() == Some(&meta) && kept_copy.as_ref() == Some(&copy) {
+            continue;
+        }
+        let (Ok(meta), Ok(copy)) = (serde_json::to_vec(&meta), serde_json::to_vec(&copy)) else {
+            continue;
+        };
+        let _ = home::publish(directory, key, &[(META, &meta), (COPY, &copy)]);
+    }
+    retire(directory, &kept);
+}
+
+/// Where staged/ records the keys of each plan it staged for.
+const PLANS: &str = ".plans";
+/// The plans whose keys staged/ keeps, as the project keeps the Cargo
+/// outputs of its four latest requests.
+const KEPT_PLANS: usize = 4;
+
+/// Record `keys` as the newest plan's, and answer every key a kept plan
+/// names. Older records go.
+fn plans(directory: &Path, keys: &[&str]) -> BTreeSet<String> {
+    let mut named = keys.iter().map(|key| (*key).to_owned()).collect::<Vec<_>>();
+    named.sort_unstable();
+    named.dedup();
+    let records = directory.join(PLANS);
+    if let Ok(bytes) = serde_json::to_vec(&named) {
+        let record = records.join(crate::extract::engine::hex(&Sha256::digest(&bytes)));
+        if fs::read(&record).is_ok_and(|kept| kept == bytes) {
+            let _ = fs::File::open(&record)
+                .and_then(|file| file.set_modified(std::time::SystemTime::now()));
+        } else {
+            let temporary = records.join(format!(".plan.{}", std::process::id()));
+            let _ = fs::create_dir_all(&records)
+                .and_then(|()| fs::write(&temporary, &bytes))
+                .and_then(|()| fs::rename(&temporary, &record));
+        }
+    }
+    let mut recorded = fs::read_dir(&records)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
+        .collect::<Vec<_>>();
+    recorded.sort_unstable_by(|left, right| right.cmp(left));
+    let mut kept = named.into_iter().collect::<BTreeSet<_>>();
+    for (index, (_, record)) in recorded.into_iter().enumerate() {
+        if index >= KEPT_PLANS {
+            let _ = fs::remove_file(record);
+        } else if let Some(keys) = fs::read(&record)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
+        {
+            kept.extend(keys);
+        }
+    }
+    kept
+}
+
+/// Retire the staged entries whose key no kept plan names, as the driver
+/// retires the tables a probe did not ask for. A leased entry stays, and no
+/// lock is waited for (D608.7).
+fn retire(directory: &Path, kept: &BTreeSet<String>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with('.') && !kept.contains(name) {
+            home::evict(directory, name);
+        }
     }
 }
 
@@ -648,7 +825,7 @@ impl Settlement {
                         continue;
                     }
                     publish.meta.scripts = nightly;
-                    publish_entry(&key, &publish);
+                    publish_entry(&key, &publish, &staged);
                 }
                 Settled::Read {
                     directory,
@@ -825,16 +1002,44 @@ fn runner_scripts(rawr: &Path) -> Option<BTreeMap<String, Vec<Script>>> {
     serde_json::from_slice(&bytes).ok()
 }
 
-fn publish_entry(key: &str, publish: &Publish) {
-    let (Ok(table), Ok(meta)) = (fs::read(&publish.table), serde_json::to_vec(&publish.meta))
-    else {
+/// Publish `publish`'s table where it settles, as that entry's own and only
+/// copy: the driver's copy moves in, or goes when the entry already holds
+/// the same bytes. An entry whose table and metadata are unchanged is not
+/// written. A settled table is no longer staged.
+fn publish_entry(key: &str, publish: &Publish, staged: &Path) {
+    let Ok(bytes) = serde_json::to_vec(&publish.meta) else {
         return;
     };
-    let _ = home::publish(
-        &publish.bindings,
-        key,
-        &[("table.json", &table), (META, &meta)],
-    );
+    let kept = table(&publish.bindings, key);
+    let own = publish.table == kept;
+    // What the entry holds now, under a lease released before publishing.
+    let (same_meta, same_table) =
+        home::hold(&publish.bindings, key).map_or((false, false), |_lease| {
+            (
+                meta_in(&publish.bindings.join(key)).as_ref() == Some(&publish.meta),
+                own || same_bytes(&publish.table, &kept),
+            )
+        });
+    let published = match (same_table, same_meta) {
+        (true, true) => Ok(()),
+        (true, false) => home::publish_moving(&publish.bindings, key, &kept, &[(META, &bytes)]),
+        (false, _) => {
+            home::publish_moving(&publish.bindings, key, &publish.table, &[(META, &bytes)])
+        }
+    };
+    if published.is_ok() {
+        if !own {
+            let _ = fs::remove_file(&publish.table);
+        }
+        home::evict(staged, key);
+    }
+}
+
+/// Whether the files at `left` and `right` hold the same bytes.
+fn same_bytes(left: &Path, right: &Path) -> bool {
+    let length = |path: &Path| fs::metadata(path).map(|metadata| metadata.len()).ok();
+    length(left).is_some_and(|bytes| length(right) == Some(bytes))
+        && digest(left).is_some_and(|bytes| digest(right) == Some(bytes))
 }
 
 /// A package's name, from its cargo package id: `…#name@version`, or
@@ -1197,6 +1402,154 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// A table the driver wrote under `extraction`, settling in `bindings`
+    /// under no build scripts.
+    fn driver_table(extraction: &Path, bindings: &Path, key: &str, bytes: &[u8]) -> Settled {
+        fs::create_dir_all(extraction).unwrap();
+        let table = extraction.join(key);
+        let temporary = extraction.join(format!(".{key}.tmp"));
+        fs::write(&temporary, bytes).unwrap();
+        fs::rename(&temporary, &table).unwrap();
+        extracted(bindings, key, table)
+    }
+
+    /// The table at `table`, settling in `bindings` under no build scripts.
+    fn extracted(bindings: &Path, key: &str, table: PathBuf) -> Settled {
+        Settled::Extracted {
+            key: key.to_owned(),
+            packages: Vec::new(),
+            inputs_packages: Vec::new(),
+            nightly: Some(BTreeMap::new()),
+            publish: Box::new(Publish {
+                bindings: bindings.to_path_buf(),
+                table,
+                meta: meta(BTreeMap::new()),
+            }),
+        }
+    }
+
+    fn modified(path: &Path) -> SystemTime {
+        fs::metadata(path).unwrap().modified().unwrap()
+    }
+
+    /// staged/ keeps the entries of the plans it staged for last, as the
+    /// driver keeps one probe's tables: an entry no kept plan names goes,
+    /// as one of an older protocol does, unless a reader holds it (#1354).
+    #[test]
+    fn staging_retires_the_entries_no_kept_plan_names_and_skips_a_leased_one() {
+        if !home::alone("bindings::tests::staging_retires_the_entries_no_kept_plan_names_and_skips_a_leased_one") {
+            return;
+        }
+        let root = scratch("retire");
+        let staged = root.join("staged");
+        let extraction = root.join("extraction");
+        let bindings = root.join("bindings");
+        let inputs = crate::input::bindings::Inputs::fixture;
+        let meta = serde_json::to_vec(&meta(BTreeMap::new())).unwrap();
+        home::publish(
+            &staged,
+            "older-protocol",
+            &[("table.json", b"units"), ("meta.json", &meta)],
+        )
+        .unwrap();
+        let present = |key: &str| staged.join(key).exists();
+        // Each plan is older than the next.
+        let age = || {
+            for record in fs::read_dir(staged.join(super::PLANS)).unwrap().flatten() {
+                let file = fs::File::open(record.path()).unwrap();
+                let modified = file.metadata().unwrap().modified().unwrap();
+                file.set_modified(modified - Duration::from_secs(60 * 60))
+                    .unwrap();
+            }
+        };
+        for key in ["a", "b", "c", "d"] {
+            let entry = driver_table(&extraction, &bindings, key, key.as_bytes());
+            super::stage(&staged, &[key], &[(&entry, inputs())]);
+            age();
+        }
+        assert!(["a", "b", "c", "d"].into_iter().all(present));
+        assert!(!present("older-protocol"));
+        // A fifth plan leaves the first unnamed, but its reader keeps it.
+        let reader = super::read(&staged, "a").unwrap();
+        let entry = driver_table(&extraction, &bindings, "e", b"e");
+        super::stage(&staged, &["e"], &[(&entry, inputs())]);
+        assert!(["a", "b", "c", "d", "e"].into_iter().all(present));
+        drop(reader);
+        super::stage(&staged, &["e"], &[(&entry, inputs())]);
+        assert!(!present("a"));
+        assert!(["b", "c", "d", "e"].into_iter().all(present));
+        let records = fs::read_dir(staged.join(super::PLANS)).unwrap().count();
+        assert_eq!(records, super::KEPT_PLANS);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// One copy per key (#1355): staged/ keeps metadata naming the table
+    /// the driver wrote, staging it again unchanged writes nothing, and
+    /// settling moves it into its entry, after which an unchanged table
+    /// and metadata are not published again.
+    #[test]
+    fn a_second_staging_or_settling_of_unchanged_tables_writes_nothing() {
+        if !home::alone(
+            "bindings::tests::a_second_staging_or_settling_of_unchanged_tables_writes_nothing",
+        ) {
+            return;
+        }
+        let root = scratch("unchanged");
+        let rawr = runner(&root, &BTreeMap::new());
+        let staged = super::staged(&rawr);
+        let extraction = rawr.join("extraction");
+        let bindings = root.join("bindings");
+        let inputs = crate::input::bindings::Inputs::fixture;
+        let entry = driver_table(&extraction, &bindings, "demo", b"units");
+        super::stage(&staged, &["demo"], &[(&entry, inputs())]);
+        assert!(!staged.join("demo").join("table.json").exists());
+        let read = super::read(&staged, "demo").unwrap();
+        assert_eq!(read.table, b"units");
+        assert_eq!(read.path, extraction.join("demo"));
+        drop(read);
+        let generation = home::generation(&staged, "demo").unwrap();
+        let written = modified(&staged.join("demo").join("meta.json"));
+        super::stage(&staged, &["demo"], &[(&entry, inputs())]);
+        assert_eq!(home::generation(&staged, "demo").unwrap(), generation);
+        assert_eq!(modified(&staged.join("demo").join("meta.json")), written);
+        // A table the driver wrote again is staged again; one changed
+        // behind staging's back is not read.
+        let entry = driver_table(&extraction, &bindings, "demo", b"more units");
+        super::stage(&staged, &["demo"], &[(&entry, inputs())]);
+        assert_ne!(home::generation(&staged, "demo").unwrap(), generation);
+        assert_eq!(super::read(&staged, "demo").unwrap().table, b"more units");
+        fs::write(extraction.join("demo"), b"other units").unwrap();
+        assert!(super::read(&staged, "demo").is_none());
+        let settle = |entry: Settled| {
+            Settlement {
+                entries: vec![entry],
+                bindings: Some(bindings.clone()),
+                rawr: Some(rawr.clone()),
+                nightly: None,
+            }
+            .settle()
+            .unwrap();
+        };
+        // Settling moves the driver's table into the entry, and the table
+        // is staged no more.
+        settle(driver_table(&extraction, &bindings, "demo", b"units"));
+        assert_eq!(super::read(&bindings, "demo").unwrap().table, b"units");
+        assert!(!extraction.join("demo").exists());
+        assert!(!staged.join("demo").exists());
+        let generation = home::generation(&bindings, "demo").unwrap();
+        let kept = super::table(&bindings, "demo");
+        let written = modified(&kept);
+        // The driver read the settled table, or wrote the same bytes again:
+        // nothing is published, and its copy goes.
+        settle(extracted(&bindings, "demo", kept.clone()));
+        assert_eq!(home::generation(&bindings, "demo").unwrap(), generation);
+        settle(driver_table(&extraction, &bindings, "demo", b"units"));
+        assert_eq!(home::generation(&bindings, "demo").unwrap(), generation);
+        assert_eq!(modified(&kept), written);
+        assert!(!extraction.join("demo").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn an_extracted_table_is_staged_for_the_next_demand_and_settles_where_it_did() {
         if !home::alone("bindings::tests::an_extracted_table_is_staged_for_the_next_demand_and_settles_where_it_did") {
@@ -1240,13 +1593,13 @@ mod tests {
         // table keeps both, with the nightly's results.
         let inputs = crate::input::bindings::Inputs::fixture;
         let first = extracted("demo", "first", Some(nightly.clone()));
-        super::stage(&staged, &[(&first, inputs())]);
+        super::stage(&staged, &["demo"], &[(&first, inputs())]);
         let second = extracted("demo", "second", Some(nightly.clone()));
-        super::stage(&staged, &[(&second, inputs())]);
+        super::stage(&staged, &["demo"], &[(&second, inputs())]);
         // A table with no nightly results is probed again rather than
         // replayed.
         let unscripted = extracted("no-nightly", "first", None);
-        super::stage(&staged, &[(&unscripted, inputs())]);
+        super::stage(&staged, &["demo"], &[(&unscripted, inputs())]);
         assert!(super::read(&staged, "no-nightly").is_none());
         let entry = super::read(&staged, "demo").unwrap();
         assert_eq!(entry.table, b"units");
@@ -1616,6 +1969,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
         let stale = super::Stale::of(&nightly);
         super::stage(
             &staged,
+            &["demo"],
             &[(
                 &extracted("other"),
                 crate::input::bindings::Inputs::fixture(),
