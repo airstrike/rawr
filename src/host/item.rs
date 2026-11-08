@@ -110,9 +110,10 @@ pub struct Definition {
     /// The output borrows what the call takes: the call opens a scope
     /// frame the statement it is in runs inside (D558 tier 1).
     opens: Option<Frame>,
-    /// The arguments, by bit, that only a `&'static str` fills, as iced's
-    /// `Font::with_name(&'static str)` and `title(impl Title<State>)`
-    /// take: a borrow of a local passed there is rustc's E0597.
+    /// The arguments, by bit, that only a borrow at `'static` fills, as
+    /// iced's `Font::with_name(&'static str)` and `title(impl
+    /// Title<State>)` and `State::new(blocks: &'static [Block])` take: a
+    /// borrow of a local passed there is rustc's E0597.
     lent_static: u32,
     /// The arguments, by bit, whose borrows the output keeps for as long
     /// as it lives, as `view<'a>(items: &'a [Item]) -> impl Show + 'a`
@@ -587,7 +588,7 @@ impl Definition {
         self.opens
     }
 
-    /// The arguments, by bit, that only a `&'static str` fills.
+    /// The arguments, by bit, that only a borrow at `'static` fills.
     #[cfg(feature = "rust-import")]
     pub(crate) fn lending_static(mut self, arguments: u32) -> Self {
         self.lent_static = arguments;
@@ -606,7 +607,7 @@ impl Definition {
         index < 32 && self.lends & (1 << index) != 0
     }
 
-    /// Whether only a `&'static str` fills the argument at `index`.
+    /// Whether only a borrow at `'static` fills the argument at `index`.
     pub(crate) const fn lent_static(&self, index: usize) -> bool {
         index < 32 && self.lent_static & (1 << index) != 0
     }

@@ -729,8 +729,10 @@ impl Parser<'_> {
     ) -> Summary {
         let mut summary = self.host_keeps(item, receiver, output, arguments.len());
         // A string borrowed where only a `&'static str` goes, as iced's
-        // `title(impl Title<State>)` takes one, is borrowed for `'static`:
-        // a literal is, and a borrow of a local is rustc's E0597.
+        // `title(impl Title<State>)` takes one, or a sequence where only a
+        // `&'static [T]` goes, as `State::new(blocks: &'static [Block])`
+        // takes one, is borrowed for `'static`: a literal or a `static` is,
+        // and a borrow of a local is rustc's E0597.
         if let Some(statics) = &mut summary.statics {
             for (index, ty) in arguments.iter().enumerate() {
                 let lent = match self.inference.resolve(ty) {
@@ -738,7 +740,17 @@ impl Parser<'_> {
                     Ty::Reference {
                         mutable: false,
                         target,
-                    } => matches!(*target, Ty::String | Ty::Str),
+                    } => matches!(
+                        *target,
+                        Ty::String
+                            | Ty::Str
+                            | Ty::Array {
+                                kind: sequence::Kind::Array(_)
+                                    | sequence::Kind::Slice
+                                    | sequence::Kind::Vec,
+                                ..
+                            }
+                    ),
                     _ => false,
                 };
                 if lent && item.lent_static(index) {

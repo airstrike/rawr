@@ -661,6 +661,60 @@ fn a_marked_static_of_native_blocks_is_read_by_native_code() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// The blocks app's badge borrowing a local where native code takes a
+/// borrow for `'static`: an array where `State::new(page_index, blocks:
+/// &'static [Block])` takes the page's blocks, and a `String` where
+/// `named(name: impl Into<Cow<'static, str>>)` takes a name. `rawr check`
+/// gives cargo check's E0597 at the borrow, while the fixture's `static`,
+/// its range and a promoted literal pass (#1064).
+#[test]
+fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
+    const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");
+    const NAMED: &str = "\n/// Names a page, for as long as the app runs.\n\
+         pub fn named(name: impl Into<std::borrow::Cow<'static, str>>) -> usize {\n    \
+         name.into().len()\n}\n";
+    const ARRAY: &str = "\n/// A state that keeps a local array.\n\
+         pub fn local() {\n    \
+         let blocks = [page::Block::Md(\"local\")];\n    \
+         page::State::new(8, &blocks).show();\n}\n";
+    const STRING: &str = "\n/// A page named by a local string.\n\
+         pub fn named() -> usize {\n    \
+         let text = String::from(\"local\");\n    \
+         page::named(&text)\n}\n";
+    let root = crate::support::scratch().join("islands-blocks-local");
+    // cargo check's positions: `&blocks` at 142:25, `&text` at 142:17.
+    for (badge, local, at) in [
+        (ARRAY, "`blocks`", "badge.rs:142:25-"),
+        (STRING, "`text`", "badge.rs:142:17-"),
+    ] {
+        let _ = fs::remove_dir_all(root.join("src"));
+        copy(Path::new(BLOCKS), &root);
+        for (file, added) in [("src/page.rs", NAMED), ("src/component/badge.rs", badge)] {
+            let mut text = fs::read_to_string(root.join(file)).unwrap();
+            text.push_str(added);
+            fs::write(root.join(file), text).unwrap();
+        }
+        let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .arg("check")
+            .arg(&root)
+            .env("RAWR_HOME", crate::support::runtime_home())
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&check.stderr);
+        // rawr's own span, which runs to the borrow's end, before cargo
+        // check's report.
+        assert!(
+            !check.status.success()
+                && stderr.starts_with(&format!("error[E0597]: {local} does not live long enough"))
+                && stderr.contains(at),
+            "{stderr}"
+        );
+    }
+}
+
 /// A marked type that implements a native trait but not the trait's
 /// supertrait `Debug` (#1310): `rawr check` fails with `cargo check`'s
 /// E0277 at the program's own path, and with nothing of rawr's copy of the
