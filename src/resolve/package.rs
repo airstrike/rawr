@@ -143,6 +143,8 @@ pub(crate) fn resolve_captured(
 impl<'a> Resolver<'a> {
     fn new(graph: Graph, host: &'a host::Registry) -> Result<Self, Failure> {
         let expanded = graph.expanded();
+        #[cfg(feature = "rust-import")]
+        let statics = graph.native_statics();
         let (packages, sources, parsed, entry_package, entry_source) = graph.into_parts();
         let package = packages[entry_package.index()].name().into();
         let evidence = sources
@@ -154,7 +156,8 @@ impl<'a> Resolver<'a> {
             package_by_name.insert(package.name().to_owned(), package.id());
         }
 
-        let units = parsed
+        #[cfg_attr(not(feature = "rust-import"), allow(unused_mut))]
+        let mut units: Vec<Unit> = parsed
             .into_vec()
             .into_iter()
             .map(|unit| {
@@ -174,6 +177,40 @@ impl<'a> Resolver<'a> {
                 }
             })
             .collect();
+        // A marked static native code holds is native code's item, which
+        // its module reads as if it were `pub use`d from there (#1291). One
+        // whose type the bindings can't give stays a value of the
+        // program's, as a `const` is.
+        #[cfg(feature = "rust-import")]
+        if let Some(app) = packages[entry_package.index()].rust_crate() {
+            for path in &statics {
+                let Some((name, modules)) = path.split_last() else {
+                    continue;
+                };
+                let qualified = std::iter::once(app)
+                    .chain(path.iter().map(ImmutableString::as_str))
+                    .collect::<Vec<_>>()
+                    .join("::");
+                if !matches!(host.entry(&qualified), Some(host::Entry::Item(_))) {
+                    continue;
+                }
+                let found = units.iter_mut().find(|unit| {
+                    unit.context.package == entry_package
+                        && *unit.context.namespace.modules == *modules
+                });
+                let Some(unit) = found else {
+                    continue;
+                };
+                for item in unit.parsed.items_mut() {
+                    if let crate::item::Parsed::Function(function) = item
+                        && function.constant
+                        && function.name.text == *name
+                    {
+                        *item = crate::item::Parsed::Use(native_static(function, app, modules));
+                    }
+                }
+            }
+        }
 
         let mut resolver = Self {
             #[cfg(feature = "rust-import")]
@@ -2147,6 +2184,45 @@ fn path_segments(path: &crate::item::type_ref::Path) -> Box<[ImmutableString]> {
         .iter()
         .map(|segment| segment.name.text.clone())
         .collect()
+}
+
+/// The `pub use app::modules::NAME;` a marked static native code holds
+/// stands for (#1291), written where the static is, so a read of it, by
+/// any path, is a read of native code's item in place.
+#[cfg(feature = "rust-import")]
+fn native_static(
+    function: &crate::item::Function,
+    app: &str,
+    modules: &[ImmutableString],
+) -> crate::item::Use {
+    use crate::item::type_ref::{Path, Segment};
+    let name = &function.name;
+    let segment = |text: ImmutableString| Segment {
+        name: crate::item::Name {
+            text,
+            span: name.span,
+        },
+        arguments: Box::default(),
+        span: name.span,
+    };
+    let segments = std::iter::once(ImmutableString::from(app))
+        .chain(modules.iter().cloned())
+        .chain(std::iter::once(name.text.clone()))
+        .map(segment)
+        .collect();
+    crate::item::Use {
+        scope: None,
+        header: function.header.clone(),
+        tree: crate::item::UseTree::Path(
+            Path {
+                segments,
+                span: name.span,
+                global: false,
+            },
+            None,
+        ),
+        span: function.span,
+    }
 }
 
 fn host_target(

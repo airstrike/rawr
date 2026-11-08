@@ -139,6 +139,18 @@ impl Graph {
         if let (Some(app), Some(_)) = (app, entry.entry()) {
             paths.push(format!("{app}::{}::start", super::entry::MODULE));
         }
+        // Each marked static native code holds, which marked code reads
+        // where it is (#1291).
+        if let Some(app) = app {
+            for path in self.native_statics() {
+                paths.push(
+                    std::iter::once(app)
+                        .chain(path.iter().map(crate::ImmutableString::as_str))
+                        .collect::<Vec<_>>()
+                        .join("::"),
+                );
+            }
+        }
         paths.sort_unstable();
         paths.dedup();
         let qualifies = |short: &str, long: &str| {

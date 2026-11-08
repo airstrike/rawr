@@ -79,6 +79,16 @@ impl<E: Policy> Storage for Source<E> {
             .is_some_and(|(_, path)| E::copies_at(path))
     }
 
+    fn window(&self, root: &Place, range: Range<usize>) -> Option<RawrResult> {
+        Some(window::<E>(root, range, |root, visit| {
+            root.storage
+                .as_any()
+                .downcast_ref::<Self>()
+                .ok_or_else(|| failure("a native slice has another concrete type"))?
+                .access(false, |value| visit(value.read()))
+        }))
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -226,9 +236,64 @@ impl<E: Policy> Storage for Lending<E> {
             .is_some_and(|(_, path)| E::copies_at(path))
     }
 
+    fn window(&self, root: &Place, range: Range<usize>) -> Option<RawrResult> {
+        Some(window::<E>(root, range, |root, visit| {
+            root.storage
+                .as_any()
+                .downcast_ref::<Self>()
+                .ok_or_else(|| failure("a native slice has another concrete type"))?
+                .access(false, visit)
+        }))
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// The elements `range` of the slice `root` (`Place::window`): a slice
+/// that `reach` hands to its visitor at each operation, through `root`,
+/// cut to `range`, so no element is copied and the root's own loan or
+/// lender bounds the window's life.
+#[cfg(feature = "sync")]
+fn window<E: Policy>(
+    root: &Place,
+    range: Range<usize>,
+    reach: impl Fn(&Place, &mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult
+        + Send
+        + Sync
+        + 'static,
+) -> RawrResult {
+    let held = root.clone();
+    lending::<E>(
+        &root.witness,
+        Box::new(move |visit| {
+            reach(&held, &mut |value| {
+                visit(value.get(range.clone()).ok_or_else(out_of_bounds)?)
+            })
+        }),
+    )
+}
+
+/// The elements `range` of the slice `root` (`Place::window`): a slice
+/// that `reach` hands to its visitor at each operation, through `root`,
+/// cut to `range`, so no element is copied and the root's own loan or
+/// lender bounds the window's life.
+#[cfg(not(feature = "sync"))]
+fn window<E: Policy>(
+    root: &Place,
+    range: Range<usize>,
+    reach: impl Fn(&Place, &mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + 'static,
+) -> RawrResult {
+    let held = root.clone();
+    lending::<E>(
+        &root.witness,
+        Box::new(move |visit| {
+            reach(&held, &mut |value| {
+                visit(value.get(range.clone()).ok_or_else(out_of_bounds)?)
+            })
+        }),
+    )
 }
 
 /// The shared slice a native method lends from its receiver (#687), reached

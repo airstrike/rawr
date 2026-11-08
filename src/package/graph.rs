@@ -447,6 +447,25 @@ impl Graph {
         ))
     }
 
+    /// The marked statics of a native root that marked code reads as native
+    /// code's items, by their paths from the crate root
+    /// (`island::native_statics`); none when the root is marked.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn native_statics(&self) -> Vec<Vec<ImmutableString>> {
+        let entry = self.entry_package();
+        let Some(root) = entry.native_root() else {
+            return Vec::new();
+        };
+        super::island::native_statics(
+            self.parsed_units()
+                .filter(|(source, _)| {
+                    source.package() == entry.name()
+                        && !(source.modules().is_empty() && source.path() == root.path())
+                })
+                .map(|(source, unit)| (source.modules(), source.text(), unit.items())),
+        )
+    }
+
     /// Every source with its parse.
     pub(crate) fn parsed_units(&self) -> impl Iterator<Item = (&source::Source, &parse::Unit)> {
         self.units

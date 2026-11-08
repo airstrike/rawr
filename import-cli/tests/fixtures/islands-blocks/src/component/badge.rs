@@ -55,3 +55,32 @@ pub fn count() -> usize {
     page::lay_out(&BLOCKS[1..2], 1);
     BLOCKS.len()
 }
+
+/// The page as marked code walks it: native code's `BLOCKS`, read where it
+/// is, a group's children too.
+pub fn titles() {
+    println!("{} blocks", BLOCKS.len());
+    for block in BLOCKS {
+        match block {
+            page::Block::Md(text) => println!("md {text}"),
+            page::Block::Example { id, title, .. } => println!("example {id} {title:?}"),
+            page::Block::Group { title, children } => {
+                println!("group {title}, {} children", children.len());
+                if let page::Block::Example {
+                    title, description, ..
+                } = &children[0]
+                {
+                    println!("first {title} {description:?}");
+                }
+                for child in children.iter() {
+                    if let page::Block::Md(text) = child {
+                        println!("  md {text}");
+                    }
+                }
+            }
+        }
+    }
+    if let page::Block::Group { children, .. } = &BLOCKS[2] {
+        page::lay_out(children, 2);
+    }
+}

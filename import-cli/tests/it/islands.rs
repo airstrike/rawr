@@ -440,8 +440,11 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// literals: a `pub static BLOCKS` native code reads as a Rust item, and
 /// functions that give a built block back by value, lend built blocks to
 /// a native function, give one to it by value and read `BLOCKS` themselves
-/// (#1283). `rawr check` passes as `cargo check` does, and `rawr run`
-/// prints what `cargo run` prints.
+/// (#1283). Marked code reads native code's `BLOCKS` where it is: its
+/// length, a range of it lent to native code, each block through a
+/// pattern and a group's `children`, indexed, walked and lent (#1291).
+/// `rawr check` passes as `cargo check` does, and `rawr run` prints what
+/// `cargo run` prints.
 #[test]
 fn a_marked_static_of_native_blocks_is_read_by_native_code() {
     const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");
@@ -462,7 +465,13 @@ fn a_marked_static_of_native_blocks_is_read_by_native_code() {
         String::from_utf8_lossy(&native.stderr)
     );
     assert!(
-        printed.ends_with("Count\n3\n  md A badge marks a count.\n3\n"),
+        printed.ends_with(
+            "Count\n3\n  md A badge marks a count.\n3\n3 blocks\nexample demo \"\"\n\
+             md A badge marks a count.\ngroup Examples, 2 children\n\
+             first Dot Some(\"A badge with no count.\")\n  md Counts past 99 show 99+.\n\
+             \x20   example dot \"Dot\" Some(\"A badge with no count.\") \"badge()\"\n\
+             \x20   md Counts past 99 show 99+.\n"
+        ),
         "{printed}"
     );
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))

@@ -192,6 +192,57 @@ struct Mirrored {
     fields: Vec<type_ref::Type>,
 }
 
+/// Each marked `pub static` whose type names none of the marked crate's
+/// own types, by its path from the crate root, as `["component", "badge",
+/// "BLOCKS"]` for a page's `pub static BLOCKS: &[page::Block]` (#1291).
+/// The shadow crate holds it as written ([`Generator::body`]), so it is a
+/// native place: marked code reads native code's item, by reference,
+/// rather than build a value of its own at each read. `sources` are as
+/// [`shadow`] takes them.
+#[cfg(feature = "rust-import")]
+pub(crate) fn native_statics<'a>(
+    sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a str, &'a [item::Parsed])>,
+) -> Vec<Vec<ImmutableString>> {
+    let sources = sources
+        .into_iter()
+        .map(|(modules, text, items)| Source {
+            modules,
+            path: Path::new(""),
+            text,
+            items,
+        })
+        .collect::<Vec<_>>();
+    let generator = Generator::new(&sources);
+    let mut statics = Vec::new();
+    for source in &sources {
+        for item in source.items {
+            let item::Parsed::Function(declared) = item else {
+                continue;
+            };
+            let keyword = slice(
+                source.text,
+                Span::new(declared.span.start(), declared.name.span.start()),
+            );
+            let Some(ty) = declared.output.as_ref() else {
+                continue;
+            };
+            let marked = identifiers(slice(source.text, ty.span()))
+                .into_iter()
+                .any(|name| name == "Self" || generator.types.contains_key(name));
+            if declared.constant
+                && declared.header.visibility.is_some()
+                && keyword.split_whitespace().last() == Some("static")
+                && !marked
+            {
+                let mut path = source.modules.to_vec();
+                path.push(declared.name.text.clone());
+                statics.push(path);
+            }
+        }
+    }
+    statics
+}
+
 /// Generate the shadow files of the marked sources of a crate whose root
 /// is native. `module_root` is the directory of the crate root; `sources`
 /// yields each marked source's module path, file, text and items.

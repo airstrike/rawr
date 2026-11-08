@@ -2862,6 +2862,9 @@ enum Lender {
     Lent(__rawr_internal::scope::Lent),
     /// A field a pattern borrowed from another value (#783).
     Projected(__rawr_internal::scope::Projected),
+    /// An element of a native slice, as one of a `static BLOCKS:
+    /// &[Block]` a pattern reads (#1291).
+    Place(__rawr_internal::place::Place),
 }
 
 #[allow(dead_code)]
@@ -2874,6 +2877,9 @@ impl Lender {
         }
         if let Some(projected) = value.read_lock::<__rawr_internal::scope::Projected>() {
             return Ok(Self::Projected(projected.clone()));
+        }
+        if let Some(place) = __rawr_internal::place::get(value) {
+            return Ok(Self::Place(place));
         }
         value
             .read_lock::<NativeHandle>()
@@ -2945,6 +2951,9 @@ fn reach_lender<T: 'static>(
                 .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
             return result.unwrap_or_else(|| Err(failed(__rawr_internal::scope::Error::Busy)));
         }
+        Lender::Place(place) => {
+            return __rawr_internal::place::reach_as::<T, _>(place, false, |value| visit(value.read()));
+        }
         Lender::Handle(handle) => handle,
     };
     fn claimed<T: 'static>(
@@ -3000,6 +3009,9 @@ fn reach_lender_mut<T: 'static>(
                 .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
             return result.unwrap_or_else(|| Err(failed(__rawr_internal::scope::Error::Busy)));
         }
+        Lender::Place(place) => {
+            return __rawr_internal::place::reach_as::<T, _>(place, true, |mut value| visit(value.write()?));
+        }
         Lender::Handle(handle) => handle,
     };
     let held = with_arena(|arena| {
@@ -3039,6 +3051,28 @@ fn with_lent_arguments(
         })
         .collect();
     nest_lent(arguments, &found, &mut Vec::new(), body)
+}
+
+/// Run `body` with the `&[T]` argument at `index` reached where it is,
+/// when it is a native slice place, as a marked page's `&BLOCKS[1..2]` is
+/// (#1291): the call borrows the elements in place, and none moves or is
+/// copied. `None` for another value, which `body` takes from the arena.
+#[allow(dead_code)]
+fn with_slice_argument<E: __rawr_internal::place::Policy>(
+    arguments: &mut Arguments<'_, '_, '_>,
+    index: usize,
+    body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, Option<&[E::Value]>) -> Result<Dynamic, Error>,
+) -> Result<Dynamic, Error> {
+    let Some(place) = arguments.values.get(index).and_then(|value| __rawr_internal::place::get(value)) else {
+        return body(arguments, None);
+    };
+    let Arguments { values, arena } = arguments;
+    lend(arena, || {
+        __rawr_internal::place::slice::reach::<E, _>(&place, place.witness(), false, |slice| {
+            Ok(with_arena(|arena| body(&mut Arguments { values, arena }, Some(slice.read()))))
+        })
+    })
+    .map_err(|error| Error::Value(error.to_string()))?
 }
 
 #[allow(dead_code)]
@@ -8075,6 +8109,11 @@ fn render_matcher(
         return Ok(());
     };
     let lent = |field: &crate::surface::adapter::Field| lendable(field.ty());
+    // Through `&T`, a slice of crate values, as `children: &'static
+    // [Block]`, is lent where it is too, and a `&str` beside it is copied
+    // (#1291).
+    let shared =
+        |field: &crate::surface::adapter::Field| lent(field) || lent_elements(field.ty()).is_some();
     let path = rust_path(plan);
     // The value's type, at a generic enum's instance.
     let ty = structural_type(plan);
@@ -8084,18 +8123,43 @@ fn render_matcher(
         Matcher::Take if reaches_fields(plan) => {
             return render_moved_fields(plan, name, *form, fields, output);
         }
-        Matcher::Lend | Matcher::LendMut
+        Matcher::Lend
+            if reaches_fields(plan)
+                && fields.iter().any(shared)
+                && fields
+                    .iter()
+                    .all(|field| shared_field(field.ty()) || shared(field)) =>
+        {
+            return render_projected_fields(plan, name, *form, fields, output);
+        }
+        Matcher::LendMut
             if reaches_fields(plan)
                 && fields.iter().any(lent)
                 && fields
                     .iter()
                     .all(|field| plain_value(field.ty()) || lent(field)) =>
         {
-            let mutable = matcher == Matcher::LendMut;
-            return render_lent_fields(plan, name, *form, fields, mutable, output);
+            return render_lent_fields(plan, name, *form, fields, true, output);
         }
         Matcher::Take | Matcher::Lend | Matcher::LendMut => {
             return render_copied_fields(plan, matcher, output);
+        }
+        Matcher::Read(field) | Matcher::Borrow(field)
+            if reaches_fields(plan)
+                && let Some(element) = fields
+                    .get(field as usize)
+                    .and_then(|field| lent_elements(field.ty())) =>
+        {
+            return render_lent_field(
+                plan,
+                matcher,
+                name,
+                *form,
+                fields,
+                field as usize,
+                element,
+                output,
+            );
         }
         Matcher::Borrow(field)
             if reaches_fields(plan)
@@ -8203,9 +8267,11 @@ fn render_matcher(
     }
     // A value native code lent the script function that matches it, as a
     // canvas program's `update` takes `&Event` (D558.3), is reached through
-    // its accessor; any other is in the arena. A lent value of a type with
-    // lifetimes, as quick-xml's `Event<'a>`, lends its fields only for the
-    // accessor's call, so they can't be given out of it.
+    // its accessor, and an element of a native slice, as one of a `static
+    // BLOCKS: &[Block]` (#1291), where the slice is; any other is in the
+    // arena. A lent value of a type with lifetimes, as quick-xml's
+    // `Event<'a>`, lends its fields only for the accessor's call, so they
+    // can't be given out of it.
     if carries_lifetimes(&path) {
         writeln!(
             output,
@@ -8219,9 +8285,14 @@ fn render_matcher(
     } else {
         writeln!(
             output,
-            "    #[allow(unreachable_patterns)]
-    let output = match lent_value(arguments, 0) {{
-        Some(lent) => {{
+            "    let place = arguments.values.first().and_then(|value| __rawr_internal::place::get(value));
+    #[allow(unreachable_patterns)]
+    let output = match (place, lent_value(arguments, 0)) {{
+        (Some(place), _) => {{
+            lend(arguments.arena, || __rawr_internal::place::reach_as::<{ty}, _>(&place, false, |input| Ok(match input.read() {{ {pattern} => Some({cloned}), _ => None }})))
+                .map_err(|error| Error::Value(error.to_string()))?
+        }}
+        (None, Some(lent)) => {{
             let access: fn(u64, &mut dyn FnMut(&{ty})) -> Result<(), u8> = lent
                 .accessor(false)
                 .map_err(|error| Error::Lent(lent.name(), error))?;
@@ -8232,7 +8303,7 @@ fn render_matcher(
             .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
             output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?
         }}
-        None => {{
+        (None, None) => {{
             let handle = native_handle(arguments, 0, false)?;
             arguments.arena.shared::<{ty}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?
         }}
@@ -8435,7 +8506,21 @@ fn render_projected_fields(
     let mut copied = false;
     for (index, field) in fields.iter().enumerate() {
         let ty = field.ty();
-        if lendable(ty) {
+        if let Some(element) = lent_elements(ty) {
+            let lent = lent_field_slice(
+                plan,
+                name,
+                form,
+                fields,
+                index,
+                element,
+                &format!("witness.as_ref().and_then(|witness| witness.argument_witness({index}))"),
+            )?;
+            writeln!(output, "    let lent_{index} = {lent}?;").map_err(request::unwritable)?;
+            values.push_str(&format!(
+                "\n        let value_{index} = lent_{index}.clone();"
+            ));
+        } else if lendable(ty) {
             render_projection(plan, name, form, fields, index, output)?;
             values.push_str(&format!(
                 "\n        let value_{index} = Dynamic::from(__rawr_internal::scope::Projected::new(parent.clone(), &PROJECTION_{index}, witness.as_ref().and_then(|witness| witness.argument_witness({index}))));"
@@ -8475,6 +8560,67 @@ fn render_projected_fields(
     .map_err(unreached)
 }}
 "
+    )
+    .map_err(request::unwritable)
+}
+
+/// The field at `index` of the variant `name` of the value `parent` holds,
+/// a slice of crate values, as `children: &'static [Block]` (#1291): a
+/// native place, of the witness `witness` gives, that reaches the field
+/// through the value at each operation, as a projection does, so the
+/// elements are read where they are and none is copied. An expression of
+/// `Result<Dynamic, Error>`.
+fn lent_field_slice(
+    plan: &Plan,
+    name: &str,
+    form: crate::api::model::FieldForm,
+    fields: &[crate::surface::adapter::Field],
+    index: usize,
+    element: &convert::Type,
+    witness: &str,
+) -> Result<String, request::Error> {
+    let policy = place::policy(element)?;
+    let pattern = field_pattern(&rust_path(plan), name, form, fields, index);
+    let ty = structural_type(plan);
+    Ok(format!(
+        "Lender::of(&parent).and_then(|lender| {{
+        let witness = ({witness}).ok_or(Error::Stale)?;
+        __rawr_internal::place::slice::lent_by::<{policy}>(&witness, move |visit| {{
+            reach_lender::<{ty}>(&lender, &mut |input| {{
+                #[allow(irrefutable_let_patterns)]
+                let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};
+                visit(*field_0)
+            }})
+        }})
+        .map_err(|error| Error::Value(error.to_string()))
+    }})"
+    ))
+}
+
+/// The field at `index` of the variant `name` of the value the first
+/// argument holds, read alone or borrowed as a pattern below the
+/// variant's reads it, when it is a slice of crate values
+/// (`lent_field_slice`).
+#[allow(clippy::too_many_arguments)]
+fn render_lent_field(
+    plan: &Plan,
+    matcher: Matcher,
+    name: &str,
+    form: crate::api::model::FieldForm,
+    fields: &[crate::surface::adapter::Field],
+    index: usize,
+    element: &convert::Type,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let lent = lent_field_slice(plan, name, form, fields, index, element, "output_witness()")?;
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    let parent = (**arguments.values.first().ok_or(Error::MissingArgument)?).clone();
+    {lent}
+}}
+",
+        matcher.name(plan)
     )
     .map_err(request::unwritable)
 }
@@ -9134,10 +9280,44 @@ fn render_adapter(
         Vec::new()
     };
     let _lent = LentArguments::enter(!lent.is_empty());
-    if lent.is_empty() {
+    let slices = if lent.is_empty() {
+        slice_inputs(plan)?
+    } else {
+        Vec::new()
+    };
+    let _slices = SliceArguments::enter(slices.iter().map(|(index, ..)| *index).collect());
+    if lent.is_empty() && slices.is_empty() {
         writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{"
+        )
+        .map_err(encoding)?;
+    } else if lent.is_empty() {
+        // Each `&[T]` argument a native slice place fills is reached where
+        // it is for the call, and the call runs inside them all (#1291).
+        let names = slices
+            .iter()
+            .map(|(index, ..)| format!("slice_{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let parameters = slices
+            .iter()
+            .map(|(index, _, rust)| format!("slice_{index}: Option<&[{rust}]>"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut call = format!("{name}_sliced(arguments, {names})");
+        for (index, policy, rust) in slices.iter().rev() {
+            call = format!(
+                "with_slice_argument::<{policy}>(arguments, {index}, &mut |arguments: &mut Arguments<'_, '_, '_>, slice_{index}: Option<&[{rust}]>| {call})"
+            );
+        }
+        writeln!(
+            output,
+            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    {call}
+}}
+
+fn {name}_sliced(arguments: &mut Arguments<'_, '_, '_>, {parameters}) -> Result<Dynamic, Error> {{"
         )
         .map_err(encoding)?;
     } else {
@@ -9237,6 +9417,27 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
         }
     }
     Ok(lent)
+}
+
+/// The `&[T]` inputs of crate values a call takes (`lent_slice_element`),
+/// which a native slice place may fill, as a marked page's `&BLOCKS[1..2]`
+/// does (#1291): each one's argument index, its element's descriptor and
+/// the element's Rust type.
+fn slice_inputs(plan: &Plan) -> Result<Vec<(usize, String, String)>, request::Error> {
+    let Some((signature, substitutions, offset)) = call_signature(plan) else {
+        return Ok(Vec::new());
+    };
+    let mut slices = Vec::new();
+    for (index, input) in runtime_inputs(signature, offset) {
+        let ty = substituted(input, signature, substitutions)?;
+        if let Some(element) = lent_slice_element(input, &ty)
+            && place::available(element)
+            && let Some(rust) = concrete_type(element)
+        {
+            slices.push((index, place::policy(element)?, rust));
+        }
+    }
+    Ok(slices)
 }
 
 /// The inputs a call takes by value whose type carries a lifetime, so a
@@ -9978,11 +10179,44 @@ fn render_adapter_body(
                 writeln!(output, "    }};\n    }}").map_err(request::unwritable)?;
             }
             if matches!(field.ty(), convert::Type::Borrowed { mutable: false, .. }) {
+                // A slice of crate values, as a page's `children: &'static
+                // [Page]` (#1291): a native place that reaches the field
+                // through the struct at each operation, so its elements are
+                // read where they are.
+                if let Some(element) = lent_elements(field.ty())
+                    && !carries_lifetimes(&path)
+                {
+                    let policy = place::policy(element)?;
+                    writeln!(
+                        output,
+                        "    let parent = (**arguments.values.first().ok_or(Error::MissingArgument)?).clone();
+    let lender = Lender::of(&parent)?;
+    let witness = output_witness().ok_or(Error::Stale)?;
+    __rawr_internal::place::slice::lent_by::<{policy}>(&witness, move |visit| reach_lender::<{path}>(&lender, &mut |input| visit(input.{name})))
+        .map_err(|error| Error::Value(error.to_string()))",
+                        name = field.name()
+                    )
+                    .map_err(request::unwritable)?;
+                    return Ok(());
+                }
                 // A field that borrows for the struct's lifetime, as iced's
                 // `LineDash::segments`: Rawr's copy, made while the struct
-                // is lent.
+                // is lent. A field of an element of a native slice, as a
+                // page's `title: &'static str` (#1291), is read where the
+                // element is.
                 let mut converted = String::new();
                 render_to_dynamic(field.ty(), "output", 0, &mut converted)?;
+                if !carries_lifetimes(&path) {
+                    writeln!(
+                        output,
+                        "    if let Some(place) = arguments.values.first().and_then(|value| __rawr_internal::place::get(value)) {{
+        return lend(arguments.arena, || __rawr_internal::place::reach_as::<{path}, _>(&place, false, |receiver| {{ let output = receiver.read().{name}; Ok({converted}) }}))
+            .map_err(|error| Error::Value(error.to_string()))?;
+    }}",
+                        name = field.name()
+                    )
+                    .map_err(request::unwritable)?;
+                }
                 writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
         let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
             .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
@@ -10747,6 +10981,20 @@ fn render_adapter_body(
             } else {
                 path
             };
+            // A static slice of crate values (#1291): a native place that
+            // reaches the static at each operation, so its elements are read
+            // where they are.
+            if let Some(element) = lent_elements(ty) {
+                let policy = place::policy(element)?;
+                writeln!(
+                    output,
+                    "    let witness = output_witness().ok_or(Error::Stale)?;
+    __rawr_internal::place::slice::lent_by::<{policy}>(&witness, |visit| visit({constant}))
+        .map_err(|error| Error::Value(error.to_string()))"
+                )
+                .map_err(request::unwritable)?;
+                return Ok(());
+            }
             writeln!(output, "    let output = {constant};").map_err(request::unwritable)?;
             render_give(ty, "output", output)?;
         }
@@ -12336,6 +12584,31 @@ fn lent_slice(
         && !is_facade_value(&element)
         && place::available(&element))
     .then_some(*element)
+}
+
+/// The element of a `&[T]` of crate values Rawr reaches in place, as a
+/// page's `static BLOCKS: &[Block]` or a block's `children: &'static
+/// [Block]` (#1291): elements that are neither Rawr's own values nor
+/// borrow anything, which a native place lends one at a time.
+fn lent_elements(ty: &convert::Type) -> Option<&convert::Type> {
+    let convert::Type::Borrowed { mutable: false, ty } = ty else {
+        return None;
+    };
+    let convert::Type::Sequence {
+        element,
+        owned: false,
+        length: None,
+    } = &**ty
+    else {
+        return None;
+    };
+    (matches!(**element, convert::Type::Nominal { .. })
+        && !plain_value(element)
+        && !is_value(element)
+        && !is_duration(element)
+        && !is_facade_value(element)
+        && place::available(element))
+    .then_some(&**element)
 }
 
 /// A `&self` method's `&[T]` lent in place (#687): a native place that
@@ -14822,6 +15095,26 @@ fn render_take_input(
     {
         let item =
             concrete_type(element).ok_or_else(|| request::drift("a lent slice's element type"))?;
+        let take = format!(
+            "{{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let handles = value.into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|item| item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)).collect::<Result<Vec<_>, Error>>()?; lend_slice::<{item}>(arguments.arena, handles)? }}"
+        );
+        // A native slice place, reached where it is for the call
+        // (`with_slice_argument`, #1291).
+        if !VIEWED_ARGUMENTS.get() && SLICE_ARGUMENTS.with_borrow(|slices| slices.contains(&index))
+        {
+            return writeln!(
+                output,
+                "    let argument_{local}_lent;
+    let argument_{local}: &[{item}] = match slice_{index} {{
+        Some(slice) => slice,
+        None => {{
+            argument_{local}_lent = {take};
+            &argument_{local}_lent.items
+        }}
+    }};"
+            )
+            .map_err(request::unwritable);
+        }
         let (name, borrow) = if VIEWED_ARGUMENTS.get() {
             (format!("argument_{local}"), String::new())
         } else {
@@ -14830,11 +15123,7 @@ fn render_take_input(
                 format!("\n    let argument_{local}: &[{item}] = &argument_{local}_lent.items;"),
             )
         };
-        return writeln!(
-            output,
-            "    let {name} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let handles = value.into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|item| item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)).collect::<Result<Vec<_>, Error>>()?; lend_slice::<{item}>(arguments.arena, handles)? }};{borrow}"
-        )
-        .map_err(request::unwritable);
+        return writeln!(output, "    let {name} = {take};{borrow}").map_err(request::unwritable);
     }
     // A borrow of a script value where native generic code takes a Rust
     // type, as `&Square` fills `name_of(shape: &impl Shape)`: a borrow of
@@ -17945,6 +18234,9 @@ thread_local! {
     /// Whether an adapter's body has the arguments native code lent it as
     /// `lent` (`with_lent_arguments`).
     static LENT_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The `&[T]` arguments an adapter's body has as `slice_{index}`, each a
+    /// native slice place's elements or `None` (`with_slice_argument`).
+    static SLICE_ARGUMENTS: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Whether an adapter takes its `&str` arguments pinned for the
     /// runner's life, as its output borrows them (`lends_str_to_output`).
     static PINNED_STRINGS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -18648,6 +18940,22 @@ impl RegionArguments {
 impl Drop for RegionArguments {
     fn drop(&mut self) {
         REGION_ARGUMENTS.set(self.0);
+    }
+}
+
+/// Takes an adapter's `&[T]` arguments at `indices` from `slice_{index}`
+/// first, while it lives (`with_slice_argument`).
+struct SliceArguments(Vec<usize>);
+
+impl SliceArguments {
+    fn enter(indices: Vec<usize>) -> Self {
+        Self(SLICE_ARGUMENTS.replace(indices))
+    }
+}
+
+impl Drop for SliceArguments {
+    fn drop(&mut self) {
+        SLICE_ARGUMENTS.set(std::mem::take(&mut self.0));
     }
 }
 
