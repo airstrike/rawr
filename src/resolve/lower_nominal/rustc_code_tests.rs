@@ -1118,3 +1118,231 @@ fn a_tuple_pattern_of_the_wrong_field_count_is_e0023() {
         );
     }
 }
+
+/// The report rawr renders for `source`, which it refuses.
+fn rendered(source: &str) -> String {
+    let error = Engine::new()
+        .compile(source)
+        .map(|_| ())
+        .expect_err("rawr refuses this program");
+    let evidence = Source::new("main.rs", source).expect("a test source has an identity");
+    render(&Report::from_parse(evidence, &error).expect("the error is in the source"))
+}
+
+/// A `use` in a block is in scope in that block alone: outside it the
+/// names it binds are rustc's E0425 (#7). `cargo run` of the programs
+/// rawr runs prints `true 1 2`.
+#[test]
+fn a_blocks_use_is_out_of_scope_outside_the_block() {
+    let color = "#[derive(PartialEq)]\nenum Color {\n    Red,\n    Green,\n}\n";
+    let outside = format!(
+        "{color}fn inside() -> bool {{\n    use Color::*;\n    Red == Red && Green == Green\n}}\n\
+         fn outside() -> bool {{\n    Red == Color::Red\n}}\nfn main() {{\n    \
+         println!(\"{{}} {{}}\", inside(), outside());\n}}\n"
+    );
+    assert_eq!(
+        refused(&outside),
+        (
+            "E0425".into(),
+            "cannot find value `Red` in this scope".into(),
+            label("not found in this scope")
+        )
+    );
+    assert!(rendered(&outside).contains(" --> main.rs:11:5"));
+    assert_eq!(
+        refused(
+            "mod m {\n    pub fn helper() -> i32 {\n        1\n    }\n}\nfn a() -> i32 {\n    use \
+             m::helper;\n    helper()\n}\nfn b() -> i32 {\n    helper()\n}\nfn main() {}\n"
+        ),
+        (
+            "E0425".into(),
+            "cannot find function `helper` in this scope".into(),
+            label("not found in this scope")
+        )
+    );
+    assert_eq!(
+        refused(
+            "fn a() {\n    use std::collections::HashMap;\n    let _m: HashMap<i32, i32> = \
+             HashMap::new();\n}\nfn b() {\n    let _m: HashMap<i32, i32> = HashMap::new();\n}\nfn \
+             main() {}\n"
+        ),
+        (
+            "E0425".into(),
+            "cannot find type `HashMap` in this scope".into(),
+            label("not found in this scope")
+        )
+    );
+    // In scope in its block, the blocks and items inside it, and in each
+    // block that writes the same `use`.
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    engine
+        .run(&format!(
+            "{color}mod m {{\n    pub fn one() -> i32 {{\n        1\n    }}\n}}\nfn first() -> bool \
+             {{\n    use Color::*;\n    let check = || {{ Red != Green }};\n    fn inner() -> Color \
+             {{\n        Green\n    }}\n    check() && inner() == Green\n}}\nfn second() -> i32 {{\n    \
+             use Color::*;\n    use m::one;\n    {{\n        if Red == Red {{ one() }} else {{ 0 }}\n    \
+             }}\n}}\nfn third() -> i32 {{\n    use m::one;\n    one() + 1\n}}\nfn main() {{\n    \
+             println!(\"{{}} {{}} {{}}\", first(), second(), third());\n}}\nmain();\n"
+        ))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(lines.lock().unwrap().as_str(), "true 1 2\n");
+}
+
+/// Only a box unsizes to a `Box<dyn Error>`: a bare value where one is
+/// expected is rustc's E0308 at the value, with its `Box::new` help for an
+/// error and its `Into::into` help for text (#6). `cargo run` of the
+/// program rawr runs prints `oops oops 5 true`.
+#[test]
+fn a_value_where_a_box_dyn_error_is_expected_is_e0308() {
+    let error = "use std::error::Error;\nuse std::fmt;\n#[derive(Debug)]\nstruct Oops;\nimpl \
+                 fmt::Display for Oops {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result \
+                 {\n        write!(f, \"oops\")\n    }\n}\nimpl Error for Oops {}\nfn take(_: \
+                 Box<dyn Error>) {}\n";
+    let boxed = "  = help: store this in the heap by calling `Box::new`\n  = note: for more on \
+                 the distinction between the stack and the heap, read \
+                 https://doc.rust-lang.org/book/ch15-01-box.html, \
+                 https://doc.rust-lang.org/rust-by-example/std/box.html, and \
+                 https://doc.rust-lang.org/std/boxed/index.html\n";
+    let into = |ty: &str| {
+        format!(
+            "  = help: call `Into::into` on this expression to convert `{ty}` into `Box<dyn \
+             std::error::Error>`\n"
+        )
+    };
+    for (body, at, found, help) in [
+        (
+            "fn fail() -> Box<dyn Error> {\n    Oops\n}\n",
+            "13:5",
+            "`Oops`",
+            boxed.to_string(),
+        ),
+        (
+            "fn main() {\n    let e: Box<dyn Error> = Oops;\n}\n",
+            "13:29",
+            "`Oops`",
+            boxed.to_string(),
+        ),
+        (
+            "fn main() {\n    take(Oops);\n}\n",
+            "13:10",
+            "`Oops`",
+            boxed.to_string(),
+        ),
+        (
+            "fn fail() -> Result<(), Box<dyn Error>> {\n    Err(Oops)\n}\n",
+            "13:9",
+            "`Oops`",
+            boxed.to_string(),
+        ),
+        (
+            "fn main() {\n    let e: Box<dyn Error> = \"x\";\n}\n",
+            "13:29",
+            "`&str`",
+            into("&'static str"),
+        ),
+        (
+            "fn main() {\n    let e: Box<dyn Error> = String::new();\n}\n",
+            "13:29",
+            "`String`",
+            into("String"),
+        ),
+        (
+            "fn main() {\n    let e: Box<dyn Error> = 5;\n}\n",
+            "13:29",
+            "integer",
+            String::new(),
+        ),
+    ] {
+        let source = format!("{error}{body}");
+        let report = rendered(&source);
+        assert!(
+            report.starts_with(&format!(
+                "error[E0308]: mismatched types\n --> main.rs:{at}"
+            )),
+            "{report}"
+        );
+        assert!(
+            report.contains(&format!("expected `Box<dyn Error>`, found {found}\n{help}")),
+            "{report}"
+        );
+        assert!(report.ends_with(&format!("{found}\n{help}")), "{report}");
+    }
+    // A box of an error unsizes, and `?` and `.into()` convert.
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    engine
+        .run(&format!(
+            "{error}fn parse() -> Result<i32, Box<dyn Error>> {{\n    let n: i32 = \"5\".parse()?;\n    \
+             Ok(n)\n}}\nfn fail() -> Result<(), Box<dyn Error>> {{\n    Err(\"bad\".into())\n}}\nfn \
+             main() {{\n    let e: Box<dyn Error> = Box::new(Oops);\n    take(Box::new(Oops));\n    \
+             let r: Result<(), Box<dyn Error>> = Err(Box::new(Oops));\n    println!(\"{{}} {{}} {{}} \
+             {{}}\", e, r.unwrap_err(), parse().unwrap(), fail().is_err());\n}}\nmain();\n"
+        ))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(lines.lock().unwrap().as_str(), "oops oops 5 true\n");
+}
+
+/// `write!` calls the `write_fmt` of a `Write` trait, which is callable
+/// only where the trait is in scope: rustc's E0599 "cannot write into
+/// `String`" at the value written into, with no `use std::fmt::Write;`
+/// in its module or its block (#5).
+#[test]
+fn a_write_with_no_write_trait_in_scope_is_e0599() {
+    let string =
+        "fn main() {\n    let mut s = String::new();\n    write!(s, \"{}\", 1).unwrap();\n}\n";
+    assert_eq!(
+        refused(string),
+        ("E0599".into(), "cannot write into `String`".into(), None)
+    );
+    let report = rendered(string);
+    assert!(report.contains(" --> main.rs:3:12"), "{report}");
+    assert!(
+        report.contains(
+            "  = help: trait `Write` which provides `write_fmt` is implemented but not in \
+             scope; perhaps you want to import it: `use std::fmt::Write;`\n  = note: must \
+             implement `io::Write`, `fmt::Write`, or have a `write_fmt` method\n"
+        ),
+        "{report}"
+    );
+    // `&mut s`, and a `use` in another function's block.
+    let report = rendered(
+        "fn other() {\n    use std::fmt::Write;\n}\nfn main() {\n    let mut s = String::new();\n    \
+         writeln!(&mut s, \"{}\", 1).unwrap();\n}\n",
+    );
+    assert!(
+        report.starts_with("error[E0599]: cannot write into `String`\n --> main.rs:6:14"),
+        "{report}"
+    );
+    // A type of the program's that implements the trait by its path.
+    assert_eq!(
+        refused(
+            "struct W(String);\nimpl std::fmt::Write for W {\n    fn write_str(&mut self, s: &str) \
+             -> std::fmt::Result {\n        self.0.push_str(s);\n        Ok(())\n    }\n}\nfn main() \
+             {\n    let mut w = W(String::new());\n    writeln!(w, \"{}\", 2).unwrap();\n}\n"
+        ),
+        ("E0599".into(), "cannot write into `W`".into(), None)
+    );
+    // In scope from the module, the block, an inline module's `use` and an
+    // anonymous import, rawr writes as rustc does.
+    for source in [
+        "use std::fmt::Write;\nfn main() {\n    let mut s = String::new();\n    write!(s, \"{}\", \
+         1).unwrap();\n}\n",
+        "fn main() {\n    use std::fmt::Write as _;\n    let mut s = String::new();\n    write!(s, \
+         \"{}\", 1).unwrap();\n}\n",
+        "mod m {\n    use std::fmt::Write;\n    pub fn f() -> String {\n        let mut s = \
+         String::new();\n        write!(s, \"x\").unwrap();\n        s\n    }\n}\nfn main() {\n    \
+         m::f();\n}\n",
+        "use std::fmt::{self, Write};\nstruct W(String);\nimpl Write for W {\n    fn write_str(&mut \
+         self, s: &str) -> fmt::Result {\n        self.0.push_str(s);\n        Ok(())\n    }\n}\nfn \
+         main() {\n    let mut w = W(String::new());\n    writeln!(w, \"{}\", 2).unwrap();\n}\n",
+    ] {
+        Engine::new()
+            .compile(source)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}

@@ -80,26 +80,9 @@ pub(super) fn parse(engine: &Engine, features: &Enabled, source: &str) -> ParseR
         let mut all = items.into_vec();
         for item in nested {
             // One import written in several bodies is hoisted once.
-            // A glob binds no names here: its key is its module.
-            let key = |used: &crate::item::Use| {
-                let mut key = used
-                    .bindings()
-                    .into_iter()
-                    .map(|(name, path)| (name.text, path))
-                    .collect::<Vec<_>>();
-                if let crate::item::UseTree::Glob { prefix, .. } = &used.tree {
-                    let path = prefix
-                        .segments
-                        .iter()
-                        .map(|segment| segment.name.text.clone())
-                        .collect();
-                    key.push(("*".into(), path));
-                }
-                key
-            };
             if let crate::item::Parsed::Use(used) = &item
                 && all.iter().any(|existing| {
-                    matches!(existing, crate::item::Parsed::Use(other) if key(other) == key(used))
+                    matches!(existing, crate::item::Parsed::Use(other) if other.hoist_key() == used.hoist_key())
                 })
             {
                 continue;

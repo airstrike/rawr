@@ -627,6 +627,9 @@ fn primary_label(
         ),
         resolve::Error::TypeMismatch {
             expected, actual, ..
+        }
+        | resolve::Error::Unboxed {
+            expected, actual, ..
         } => Some(
             format!(
                 "expected {}, found {}",
@@ -753,6 +756,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::Syntax => code::PARSE_SYNTAX,
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
+        resolve::Category::UnscopedWrite => code::RESOLVE_NO_METHOD,
         resolve::Category::StdPath => match error {
             resolve::Error::StdPath { code, .. } => code::std_path(code),
             _ => unreachable!("a std path's category"),
@@ -841,6 +845,26 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnknownFunction {
             import: Some(path), ..
         } => builder.help(format!("consider importing this function: `use {path};`")),
+        // rustc's help that names the import, after its note.
+        resolve::Error::Unboxed {
+            help: Some(resolve::Boxing::New),
+            ..
+        } => builder
+            .note(resolve::Boxing::HEAP_NOTE)
+            .help("store this in the heap by calling `Box::new`"),
+        resolve::Error::Unboxed {
+            help: Some(resolve::Boxing::Into(from)),
+            ..
+        } => builder.help(format!(
+            "call `Into::into` on this expression to convert `{from}` into `Box<dyn \
+             std::error::Error>`"
+        )),
+        resolve::Error::UnscopedWrite { .. } => builder
+            .note("must implement `io::Write`, `fmt::Write`, or have a `write_fmt` method")
+            .help(
+                "trait `Write` which provides `write_fmt` is implemented but not in scope; \
+                 perhaps you want to import it: `use std::fmt::Write;`",
+            ),
         resolve::Error::UnknownMacro {
             scope: resolve::MacroScope::Elsewhere,
             ..
@@ -1101,7 +1125,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }
-        resolve::Error::TypeMismatch { .. } => "mismatched types".into(),
+        resolve::Error::TypeMismatch { .. } | resolve::Error::Unboxed { .. } => {
+            "mismatched types".into()
+        }
         resolve::Error::IfWithoutElse { .. } => resolve::IF_WITHOUT_ELSE.into(),
         resolve::Error::ReturnWithoutValue { .. } => resolve::RETURN_WITHOUT_VALUE.into(),
         resolve::Error::ImmutableBinding { binding, .. } => {
@@ -1160,6 +1186,7 @@ fn resolution_message(error: &resolve::Error) -> String {
             "`break` or `continue` with no label in the condition of a `while` loop".to_string()
         }
         resolve::Error::AsyncMain { .. } => resolve::ASYNC_MAIN.to_string(),
+        resolve::Error::UnscopedWrite { owner, .. } => format!("cannot write into `{owner}`"),
         resolve::Error::StdPath { message, .. } => message.to_string(),
         resolve::Error::NonExhaustive { witnesses, .. } => {
             resolve::NonExhaustive(witnesses).to_string()

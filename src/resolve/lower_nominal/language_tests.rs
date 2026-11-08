@@ -5791,7 +5791,7 @@ fn language_full_unsigned_range() {
         ),
         (
             "pub fn run() -> i64 { let a: u64 = 2; a.pow(64) as i64 } run()",
-            "attempt to multiply with overflow",
+            "attempt to exponentiate with overflow",
         ),
         (
             "pub fn run() -> i64 { let mut a: usize = 3; a -= 4; a as i64 } run()",

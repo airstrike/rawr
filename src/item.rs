@@ -511,6 +511,14 @@ pub struct UseMember {
 }
 
 impl Use {
+    /// Whether the import is in scope at `at` in its source: a module's
+    /// everywhere, a block's inside the block.
+    #[must_use]
+    pub fn visible_at(&self, at: crate::Position) -> bool {
+        self.scope
+            .is_none_or(|scope| scope.start() <= at && at <= scope.end())
+    }
+
     /// Whether the import starts with `::`, which names an outside crate.
     #[must_use]
     pub fn global(&self) -> bool {
@@ -574,6 +582,27 @@ impl Use {
             // A glob binds the names its module has, which only the resolver knows.
             UseTree::Glob { .. } => Vec::new(),
         }
+    }
+
+    /// What the import binds, apart from where it is written: each name
+    /// with its path, and a glob's module under `*`. One import written in
+    /// several bodies has one key, and is hoisted once.
+    #[must_use]
+    pub fn hoist_key(&self) -> Vec<(ImmutableString, Box<[ImmutableString]>)> {
+        let mut key = self
+            .bindings()
+            .into_iter()
+            .map(|(name, path)| (name.text, path))
+            .collect::<Vec<_>>();
+        if let UseTree::Glob { prefix, .. } = &self.tree {
+            let path = prefix
+                .segments
+                .iter()
+                .map(|segment| segment.name.text.clone())
+                .collect();
+            key.push(("*".into(), path));
+        }
+        key
     }
 }
 

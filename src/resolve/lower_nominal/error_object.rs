@@ -151,6 +151,57 @@ impl Parser<'_> {
         Ok(Some(source))
     }
 
+    /// Whether the value at `at` is `.into()` of text, which `From`
+    /// converts into a `Box<dyn Error>`.
+    pub(super) fn text_into_at(&self, at: Position) -> bool {
+        self.text_into.iter().any(|into| into.span.start() == at)
+    }
+
+    /// rustc's E0308 for a value of type `from` at `value` where the
+    /// `Box<dyn Error>` `expected` is: only a box unsizes to one. `None`
+    /// for a box.
+    pub(super) fn unboxed_error(&self, expected: &Ty, from: &Ty, value: Span) -> Option<Error> {
+        let from = self.inference.resolve(from);
+        if matches!(from, Ty::Boxed(_)) {
+            return None;
+        }
+        let help = match &from {
+            Ty::Script(id, _) if self.models.implements("Error", *id) => {
+                Some(crate::resolve::Boxing::New)
+            }
+            Ty::ParseError(_) => Some(crate::resolve::Boxing::New),
+            Ty::String => Some(crate::resolve::Boxing::Into("String".into())),
+            Ty::Str => {
+                let ty = if self.text_literal_at(value.start()) {
+                    "&'static str"
+                } else {
+                    "&str"
+                };
+                Some(crate::resolve::Boxing::Into(ty.into()))
+            }
+            _ => None,
+        };
+        Some(Error::Unboxed {
+            expected: expected.name(&self.models),
+            actual: from.name(&self.models),
+            help,
+            expression: value,
+        })
+    }
+
+    /// Whether a string literal starts at `at`, whose type rustc writes
+    /// `&'static str`.
+    fn text_literal_at(&self, at: Position) -> bool {
+        let (Some(line), Some(column)) = (at.line(), at.position()) else {
+            return false;
+        };
+        let Some(text) = self.text.lines().nth(line - 1) else {
+            return false;
+        };
+        let head = text.chars().skip(column - 1).take(2).collect::<String>();
+        head.starts_with('"') || head == "r\"" || head == "r#"
+    }
+
     /// `Err(Box::new(e))` and `Err("text".into())` in a body returning
     /// `Result<_, Box<dyn Error>>`: the error boxed as `dyn Error` where it
     /// is made, as Rust's expected type coerces it. So the arms of an `if`

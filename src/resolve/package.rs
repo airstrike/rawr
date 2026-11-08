@@ -659,7 +659,6 @@ impl<'a> Resolver<'a> {
         self.resolve_aliases()?;
         let prelude = self.prelude();
         let mut aliases = BTreeMap::new();
-        #[cfg(feature = "rust-import")]
         let mut lexical = BTreeMap::new();
         let units = std::mem::take(&mut self.units);
         for Unit {
@@ -668,7 +667,6 @@ impl<'a> Resolver<'a> {
             slots,
         } in units
         {
-            #[cfg(feature = "rust-import")]
             lexical.insert(
                 program::source::Id::from_index(context.source.index()),
                 parsed.imports().to_vec().into_boxed_slice(),
@@ -812,7 +810,6 @@ impl<'a> Resolver<'a> {
             aliases,
             scripts,
             instances: super::Instances::default(),
-            #[cfg(feature = "rust-import")]
             lexical,
             macros,
         };

@@ -97,6 +97,9 @@ pub enum Category {
     /// A root `main` that is `async` with no runtime's entry, as rustc's
     /// E0752.
     AsyncMain,
+    /// `write!` into a value whose `Write` trait is not in scope, as
+    /// rustc's E0599.
+    UnscopedWrite,
     /// A path into std, core or alloc that rustc refuses: one std doesn't
     /// have (E0432, E0433, E0425), or an unstable item (E0658).
     StdPath,
@@ -171,6 +174,7 @@ impl fmt::Display for Category {
                 formatter.write_str("unlabeled jump in a `while` condition")
             }
             Self::AsyncMain => formatter.write_str("async main"),
+            Self::UnscopedWrite => formatter.write_str("trait not in scope"),
             Self::StdPath => formatter.write_str("std path"),
             Self::NotYet => formatter.write_str("not yet run"),
             Self::TypeAnnotationsNeeded => formatter.write_str("type annotations needed"),
@@ -623,6 +627,19 @@ pub enum Error {
         /// Expression or assignment span.
         expression: Span,
     },
+    /// A value that is no box where a `Box<dyn Error>` is expected, which
+    /// rustc refuses (E0308): only a box unsizes to a trait object's box.
+    Unboxed {
+        /// The box's type name.
+        expected: ImmutableString,
+        /// The value's type name.
+        actual: ImmutableString,
+        /// How rustc says to make the box: `Box::new` of an error, or
+        /// `.into()` of text.
+        help: Option<Boxing>,
+        /// The value.
+        expression: Span,
+    },
     /// An `if` with no `else` whose value is expected to have a type other
     /// than `()`, which rustc refuses (E0317).
     IfWithoutElse {
@@ -833,6 +850,16 @@ pub enum Error {
     /// `#[tokio::main]`, which rustc refuses (E0752).
     AsyncMain {
         /// The function's signature, from `async` to its output.
+        at: Span,
+    },
+    /// `write!(s, ..)` into a value whose `Write` impl's trait is not in
+    /// scope where the macro is, which rustc refuses (E0599 "cannot write
+    /// into `String`"): a trait's methods are callable only where the
+    /// trait is in scope.
+    UnscopedWrite {
+        /// The value's type, as rustc writes it.
+        owner: ImmutableString,
+        /// The value written into.
         at: Span,
     },
     /// A path into std, core or alloc that rustc refuses, in rustc's words:
@@ -1066,7 +1093,7 @@ impl Error {
             Self::MovedValue { .. } => Category::MovedValue,
             Self::BorrowConflict { .. } => Category::BorrowConflict,
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
-            Self::TypeMismatch { .. } => Category::TypeMismatch,
+            Self::TypeMismatch { .. } | Self::Unboxed { .. } => Category::TypeMismatch,
             Self::IfWithoutElse { .. } => Category::IfWithoutElse,
             Self::ReturnWithoutValue { .. } => Category::ReturnWithoutValue,
             Self::ImmutableBinding { .. } => Category::ImmutableBinding,
@@ -1089,6 +1116,7 @@ impl Error {
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
             Self::AsyncMain { .. } => Category::AsyncMain,
+            Self::UnscopedWrite { .. } => Category::UnscopedWrite,
             Self::StdPath { .. } => Category::StdPath,
             Self::NotYet { .. } => Category::NotYet,
             Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
@@ -1132,9 +1160,9 @@ impl Error {
             | Self::InvalidMatch { owner, .. }
             | Self::PatternFields { owner, .. } => owner.as_str(),
             Self::NonExhaustive { ty, .. } | Self::Refutable { ty, .. } => ty.as_str(),
-            Self::TypeMismatch { expected, .. } | Self::IfWithoutElse { expected, .. } => {
-                expected.as_str()
-            }
+            Self::TypeMismatch { expected, .. }
+            | Self::Unboxed { expected, .. }
+            | Self::IfWithoutElse { expected, .. } => expected.as_str(),
             Self::ReturnWithoutValue { output, .. } => output.as_str(),
             Self::ImmutableBinding { binding, .. } => binding.as_str(),
             Self::InvalidImplOwner { owner, .. }
@@ -1150,6 +1178,7 @@ impl Error {
             Self::Syntax { message, .. } | Self::Unimplemented { message, .. } => message.as_str(),
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::AsyncMain { .. } => "main",
+            Self::UnscopedWrite { owner, .. } => owner.as_str(),
             Self::StdPath { message, .. } => message.as_str(),
             Self::NotYet { path, .. } => path.as_str(),
             Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
@@ -1189,9 +1218,9 @@ impl Error {
             Self::MovedValue { reference, .. } => *reference,
             Self::BorrowConflict { access, .. } => *access,
             Self::InvalidConstruction { construction, .. } => *construction,
-            Self::TypeMismatch { expression, .. } | Self::IfWithoutElse { expression, .. } => {
-                *expression
-            }
+            Self::TypeMismatch { expression, .. }
+            | Self::Unboxed { expression, .. }
+            | Self::IfWithoutElse { expression, .. } => *expression,
             Self::ReturnWithoutValue { at, .. } => *at,
             Self::ImmutableBinding { mutation, .. } => *mutation,
             Self::InvalidImplOwner { reference, .. } => *reference,
@@ -1208,7 +1237,7 @@ impl Error {
             Self::NonExhaustive { scrutinee, .. } => *scrutinee,
             Self::Refutable { pattern, .. } | Self::PatternFields { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
-            Self::AsyncMain { at } => *at,
+            Self::AsyncMain { at } | Self::UnscopedWrite { at, .. } => *at,
             Self::StdPath { reference, .. } | Self::NotYet { reference, .. } => *reference,
             Self::TypeAnnotationsNeeded { reference, .. } => *reference,
             Self::ArgumentCount { call, .. } => *call,
@@ -1274,6 +1303,7 @@ impl Error {
             | Self::Unimplemented { .. }
             | Self::InvalidConstruction { .. }
             | Self::TypeMismatch { .. }
+            | Self::Unboxed { .. }
             | Self::IfWithoutElse { .. }
             | Self::ReturnWithoutValue { .. }
             | Self::MissingCapability { .. }
@@ -1284,6 +1314,7 @@ impl Error {
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
+            | Self::UnscopedWrite { .. }
             | Self::StdPath { .. }
             | Self::NotYet { .. }
             | Self::TypeAnnotationsNeeded { .. }
@@ -1629,6 +1660,23 @@ impl fmt::Display for NotFound<'_> {
     }
 }
 
+/// How rustc's help says to make the `Box<dyn Error>` a value is not.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Boxing {
+    /// `Box::new(value)`, for a value whose type implements `Error`.
+    New,
+    /// `value.into()`, for text of this type: `&'static str` or `String`.
+    Into(ImmutableString),
+}
+
+impl Boxing {
+    /// rustc's note beside its `Box::new` help.
+    pub(crate) const HEAP_NOTE: &'static str = "for more on the distinction between the stack \
+        and the heap, read https://doc.rust-lang.org/book/ch15-01-box.html, \
+        https://doc.rust-lang.org/rust-by-example/std/box.html, and \
+        https://doc.rust-lang.org/std/boxed/index.html";
+}
+
 /// A type as rustc's "expected .., found .." labels name it: an integer
 /// or a float literal whose type is still open by its kind, any other in
 /// backticks.
@@ -1863,6 +1911,12 @@ impl fmt::Display for Written<'_> {
                 expected,
                 actual,
                 expression,
+            }
+            | Error::Unboxed {
+                expected,
+                actual,
+                expression,
+                ..
             } => write!(
                 formatter,
                 "mismatched types at {expression}: expected `{expected}`, found `{actual}` (E0308)"
@@ -2005,6 +2059,9 @@ impl fmt::Display for Written<'_> {
             Error::UnlabeledJumpInWhileCondition { .. } => formatter
                 .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
             Error::AsyncMain { .. } => formatter.write_str(ASYNC_MAIN),
+            Error::UnscopedWrite { owner, at } => {
+                write!(formatter, "cannot write into `{owner}` at {at}")
+            }
             Error::StdPath {
                 code,
                 message,

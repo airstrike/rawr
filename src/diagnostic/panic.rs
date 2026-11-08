@@ -22,9 +22,9 @@ pub fn panic(report: &Report) -> String {
 ///
 /// The file is the source identity of the report's primary label. The line
 /// and column are where rustc places a panic: the name of a method call, the
-/// `[` of an index, else the start of the expression. An array's index is
-/// labelled at its start alone, where rustc places its panic. A report
-/// without a position names its source alone.
+/// `[` of an index, else the start of the expression. An array's or a
+/// slice's index is labelled at its start alone, where rustc places its
+/// panic. A report without a position names its source alone.
 #[must_use]
 pub fn panicked(report: &Report, thread: &str) -> String {
     let location = report

@@ -28,27 +28,31 @@ macro_rules! gen_arithmetic_functions {
                 pub fn multiply(x: $arg_type, y: $arg_type) -> RawrResultOf<$arg_type> {
                     x.checked_mul(y).ok_or_else(|| make_err(format!("Multiplication overflow: {x} * {y}")))
                 }
+                // Debug Rust's panics, in its words.
                 #[rawr_fn(name = "/", return_raw)]
                 pub fn divide(x: $arg_type, y: $arg_type) -> RawrResultOf<$arg_type> {
-                    // Detect division by zero
                     if y == 0 {
-                        Err(make_err(format!("Division by zero: {x} / {y}")))
+                        Err(make_err("attempt to divide by zero"))
                     } else {
-                        x.checked_div(y).ok_or_else(|| make_err(format!("Division overflow: {x} / {y}")))
+                        x.checked_div(y).ok_or_else(|| make_err("attempt to divide with overflow"))
                     }
                 }
                 #[rawr_fn(name = "%", return_raw)]
                 pub fn modulo(x: $arg_type, y: $arg_type) -> RawrResultOf<$arg_type> {
-                    x.checked_rem(y).ok_or_else(|| make_err(format!("Modulo division by zero or overflow: {x} % {y}")))
+                    if y == 0 {
+                        Err(make_err("attempt to calculate the remainder with a divisor of zero"))
+                    } else {
+                        x.checked_rem(y).ok_or_else(|| make_err("attempt to calculate the remainder with overflow"))
+                    }
                 }
                 #[rawr_fn(name = "**", return_raw)]
                 pub fn power(x: $arg_type, y: INT) -> RawrResultOf<$arg_type> {
                     if y > (u32::MAX as INT) {
-                        Err(make_err(format!("Exponential overflow: {x} ** {y}")))
+                        Err(make_err("attempt to exponentiate with overflow"))
                     } else if y < 0 {
                         Err(make_err(format!("Integer raised to a negative power: {x} ** {y}")))
                     } else {
-                        x.checked_pow(u32::try_from(y).unwrap()).ok_or_else(|| make_err(format!("Exponential overflow: {x} ** {y}")))
+                        x.checked_pow(u32::try_from(y).unwrap()).ok_or_else(|| make_err("attempt to exponentiate with overflow"))
                     }
                 }
 

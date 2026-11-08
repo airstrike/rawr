@@ -4798,6 +4798,9 @@ struct Models {
     /// The first segment of a path being read that starts with `::`
     /// (`::image::ImageReader`): an outside crate, which no `use` shadows.
     global_head: Option<ImmutableString>,
+    /// Where the lowering is in the source, which says whether a name a
+    /// block's `use` binds is in scope; `NONE` before any token is read.
+    at: Position,
     /// Native closure copies retain the original whole-candidate contribution.
     #[cfg(feature = "rust-import")]
     _imported_owner: Option<crate::package::import::runner::account::support::Owner>,
@@ -4824,8 +4827,10 @@ struct Tables {
     features: crate::project::cargo::features::Enabled,
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
-    #[cfg(feature = "rust-import")]
     lexical: BTreeMap<crate::program::source::Id, Box<[crate::item::Use]>>,
+    /// The blocks a name is in scope in when only blocks' `use`s bind it
+    /// in its source: rustc scopes a block's `use` to the block (#7).
+    block_scopes: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[Span]>>,
     by_name: BTreeMap<(crate::program::source::Id, ImmutableString), Nominal>,
     /// The source that declares each script type.
     declared_in: BTreeMap<type_def::Id, crate::program::source::Id>,
@@ -5188,10 +5193,34 @@ impl Models {
         let mut imported_variants = Vec::new();
         let mut ordering_variants = Vec::new();
         let mut host_variants = Vec::new();
+        // A name only blocks' `use`s bind is in scope in those blocks; one a
+        // module's `use` or an item of the source binds is in scope there.
+        let declared = by_name
+            .keys()
+            .chain(functions.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut block_scopes = BTreeMap::<_, Vec<Span>>::new();
+        let mut module_names = BTreeSet::new();
         for shell in program.items.iter() {
             let item::Kind::Use(item) = &shell.kind else {
                 continue;
             };
+            let blocks = program
+                .lexical
+                .get(&shell.source)
+                .and_then(|imports| use_blocks(imports, item.span));
+            for binding in &item.bindings {
+                let key = (shell.source, binding.name.text.clone());
+                match &blocks {
+                    Some(blocks) if !declared.contains(&key) => {
+                        block_scopes.entry(key).or_default().extend(blocks);
+                    }
+                    _ => {
+                        module_names.insert(key);
+                    }
+                }
+            }
             for binding in &item.bindings {
                 // A module and a function of its name, bound in their own
                 // namespaces, read as one name.
@@ -5245,6 +5274,11 @@ impl Models {
                 }
             }
         }
+        let block_scopes = block_scopes
+            .into_iter()
+            .filter(|(key, _)| !module_names.contains(key))
+            .map(|(key, blocks)| (key, blocks.into_boxed_slice()))
+            .collect();
         // An imported variant reads as its enum's path, `Shape::Circle`. The
         // enum is named by its own name in that source, which a different
         // type of that name there leaves to a name no source can write.
@@ -5519,8 +5553,8 @@ impl Models {
             test: engine.test(),
             features: program.features().clone(),
             imports,
-            #[cfg(feature = "rust-import")]
             lexical: program.lexical.clone(),
+            block_scopes,
             by_name,
             declared_in,
             variants,
@@ -5647,6 +5681,7 @@ impl Models {
             context: program.source.entry(),
             tables: Shared::new(tables),
             global_head: None,
+            at: Position::NONE,
             #[cfg(feature = "rust-import")]
             _imported_owner: None,
             #[cfg(test)]
@@ -5655,13 +5690,32 @@ impl Models {
     }
 
     fn get(&self, name: &str) -> Option<&Nominal> {
-        self.by_name.get(&(self.context, name.into()))
+        self.by_name
+            .get(&(self.context, name.into()))
+            .filter(|_| self.in_scope(name, self.at))
     }
 
-    /// The enum an imported variant's name stands for in this source.
-    fn imported_variant(&self, name: &str) -> Option<&[ImmutableString]> {
+    /// Whether `name` is in scope at `at` in this source as far as `use`s
+    /// say: everywhere, unless only blocks' `use`s bind it, and then inside
+    /// those blocks.
+    fn in_scope(&self, name: &str, at: Position) -> bool {
+        at.is_none()
+            || self
+                .block_scopes
+                .get(&(self.context, name.into()))
+                .is_none_or(|blocks| {
+                    blocks
+                        .iter()
+                        .any(|block| block.start() <= at && at <= block.end())
+                })
+    }
+
+    /// The enum an imported variant's name at `at` stands for in this
+    /// source.
+    fn imported_variant(&self, name: &str, at: Position) -> Option<&[ImmutableString]> {
         self.variants
             .get(&(self.context, name.into()))
+            .filter(|_| self.in_scope(name, at))
             .map(AsRef::as_ref)
     }
 
@@ -5676,11 +5730,12 @@ impl Models {
             })
     }
 
-    /// The whole path of the crate enum variant a name stands for in this
-    /// source (`use iced::Center;`).
-    fn imported_host_variant(&self, name: &str) -> Option<&[ImmutableString]> {
+    /// The whole path of the crate enum variant a name at `at` stands for
+    /// in this source (`use iced::Center;`).
+    fn imported_host_variant(&self, name: &str, at: Position) -> Option<&[ImmutableString]> {
         self.host_variants
             .get(&(self.context, name.into()))
+            .filter(|_| self.in_scope(name, at))
             .map(AsRef::as_ref)
     }
 
@@ -5893,7 +5948,9 @@ impl Models {
     }
 
     fn function(&self, name: &str) -> Option<&ScriptFunction> {
-        self.functions.get(&(self.context, name.into()))
+        self.functions
+            .get(&(self.context, name.into()))
+            .filter(|_| self.in_scope(name, self.at))
     }
 
     fn qualified_function(&self, span: Span) -> Option<&ScriptFunction> {
@@ -5909,7 +5966,9 @@ impl Models {
         {
             return None;
         }
-        self.imports.get(&(self.context, name.into()))
+        self.imports
+            .get(&(self.context, name.into()))
+            .filter(|_| self.in_scope(name, self.at))
     }
 
     fn for_source(&self, source: crate::program::source::Id) -> Self {
@@ -13019,6 +13078,10 @@ struct Parser<'a> {
     /// The `text.into()` calls, whose target `Err(..)` may box as `dyn
     /// Error` (`error_object.rs`) and the use site gives.
     text_into: Vec<TextInto>,
+    /// Where each `Err(error)` starts, with its error's span: a `Result<_,
+    /// Box<dyn Error>>` expected of it is a `Box<dyn Error>` expected of
+    /// the error.
+    err_payloads: BTreeMap<Position, Span>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// Each type parameter of a dependency's trait method that native code
@@ -13365,6 +13428,7 @@ impl<'a> Parser<'a> {
             settled_parses: Vec::new(),
             parse_count: 0,
             text_into: Vec::new(),
+            err_payloads: BTreeMap::new(),
             generics: BTreeMap::new(),
             opaque: BTreeMap::new(),
             pending_turbofish: None,
@@ -14875,22 +14939,16 @@ impl<'a> Parser<'a> {
                     .cloned(),
             );
         }
-        let mut chosen = None;
         // An `impl From` is as visible as `From`, from every module.
-        for candidate in candidates {
-            let (from, owner) = self.conversion_source(&candidate);
-            let checkpoint = self.inference.checkpoint();
-            let fits = expected.is_none_or(|expected| self.unify_type(&owner, expected))
-                && self.unify_type(&from, source);
-            self.inference.rollback(checkpoint);
-            if fits {
-                if chosen.is_some() {
-                    return Ok(None);
-                }
-                chosen = Some(candidate);
-            }
+        let mut fitting = self.fitting_conversions(candidates, expected, source);
+        // Several fit an unsuffixed literal: rustc's fallback, `i32` or
+        // `f64`, chooses the impl that takes it.
+        if fitting.len() > 1
+            && let Some(fallback) = literal_fallback(&self.inference.resolve(source))
+        {
+            fitting = self.fitting_conversions(fitting, expected, &fallback);
         }
-        let Some(candidate) = chosen else {
+        let Ok([candidate]) = <[_; 1]>::try_from(fitting) else {
             return Ok(None);
         };
         let substitution = self.fresh_generics(candidate.generics(), span);
@@ -14908,6 +14966,34 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         let candidate = self.bind_method_instance(candidate, &substitution, span)?;
         Ok(Some((candidate, from, owner)))
+    }
+
+    /// `ty` as rustc names it in an unsatisfied bound: an unsuffixed
+    /// literal's type is its fallback, `i32` or `f64`, by then.
+    fn fallback_name(&self, ty: &Ty) -> ImmutableString {
+        let ty = self.inference.resolve(ty);
+        literal_fallback(&ty).unwrap_or(ty).name(&self.models)
+    }
+
+    /// The `candidates` whose `impl From<S> for Self` takes `source`, with
+    /// `Self` unified with `expected` when the use names it.
+    fn fitting_conversions(
+        &mut self,
+        candidates: Vec<method::Definition>,
+        expected: Option<&Ty>,
+        source: &Ty,
+    ) -> Vec<method::Definition> {
+        candidates
+            .into_iter()
+            .filter(|candidate| {
+                let (from, owner) = self.conversion_source(candidate);
+                let checkpoint = self.inference.checkpoint();
+                let fits = expected.is_none_or(|expected| self.unify_type(&owner, expected))
+                    && self.unify_type(&from, source);
+                self.inference.rollback(checkpoint);
+                fits
+            })
+            .collect()
     }
 
     /// `S` and `Self` of a conversion's `impl From<S> for Self`, its impl's
@@ -15116,7 +15202,7 @@ impl<'a> Parser<'a> {
                     // rustc names the `From` impl an `Into` bound needs.
                     return Err(Error::MissingCapability {
                         owner: target.name(&self.models),
-                        capability: format!("From<{}>", source.name(&self.models)).into(),
+                        capability: format!("From<{}>", self.fallback_name(&source)).into(),
                         operation: span,
                         derive: false,
                         required_by: None,
@@ -19106,6 +19192,30 @@ impl<'a> Parser<'a> {
             }
             self.inference.rollback(checkpoint);
         }
+        // Several take an unsuffixed literal: rustc's fallback, `i32` or
+        // `f64`, chooses the one that takes it.
+        if fitting.len() > 1
+            && let Some(fallback) = literal_fallback(&self.inference.resolve(source))
+        {
+            let argument =
+                self.operator_expr(origin::Fragment::default(), fallback.clone(), host.receiver);
+            fitting.retain(|item| {
+                let checkpoint = self.inference.checkpoint();
+                let fits = self
+                    .instantiate_host_signature(
+                        item,
+                        None,
+                        Some(std::slice::from_ref(&argument)),
+                        Span::NONE,
+                    )
+                    .is_ok_and(|signature| {
+                        matches!(&signature.inputs[..], [input] if self.unify_type(input, &fallback))
+                            && self.unify_type(&signature.output, target)
+                    });
+                self.inference.rollback(checkpoint);
+                fits
+            });
+        }
         let item = match <[_; 1]>::try_from(fitting) {
             Ok([item]) => item,
             Err(fitting) if fitting.is_empty() => return Ok(None),
@@ -19642,7 +19752,7 @@ impl<'a> Parser<'a> {
                 }
                 return Err(Error::MissingCapability {
                     owner: target.name(&self.models),
-                    capability: format!("From<{}>", conversion.source.name(&self.models)).into(),
+                    capability: format!("From<{}>", self.fallback_name(&conversion.source)).into(),
                     operation: conversion.span,
                     derive: matches!(target, Ty::Script(..)),
                     required_by: None,
@@ -36474,6 +36584,24 @@ impl<'a> Parser<'a> {
                 return Ok(self.binary(lhs, symbol, rhs, Ty::Bool));
             }
         }
+        // `/` and `%` of a kind narrower than the runtime's `i64` panic as
+        // debug Rust's do, by zero and at `MIN / -1` and `MIN % -1`, which
+        // the runtime's `i64` computes.
+        if output.is_none()
+            && matches!(symbol, "/" | "%")
+            && let Ty::Int(kind) = ty
+            && kind.checked()
+        {
+            let expression = span(lhs.span.start(), rhs.span.end());
+            let source = self.int_op(
+                symbol,
+                lhs.rendered_source(),
+                rhs.rendered_source(),
+                &ty,
+                &ty,
+            );
+            return Ok(self.operator_expr(source, ty, expression));
+        }
         let Some(output) = output else {
             let value = self.binary(lhs, symbol, rhs, ty.clone());
             return Ok(self.checked_arithmetic(value, symbol));
@@ -36579,6 +36707,7 @@ impl<'a> Parser<'a> {
             "*" => "multiply",
             "/" => "divide",
             "%" => "calculate the remainder",
+            "pow" => "exponentiate",
             _ => "negate",
         };
         let source = std::mem::take(&mut value.source);
@@ -38437,9 +38566,16 @@ impl<'a> Parser<'a> {
             _ => {
                 let bounds = compare(self, &y, &z).expect("the type is ordered");
                 let above = compare(self, &x, &z).expect("the type is ordered");
+                // An integer's `clamp` names its bounds; `Ord`'s asserts.
+                let failed = match self.inference.resolve(&ty) {
+                    Ty::Int(kind) if !kind.wide() => {
+                        format!("\"min > max. min = \" + {second} + \", max = \" + {third}")
+                    }
+                    _ => "\"assertion failed: min <= max\"".to_string(),
+                };
                 source.push_text("if !(");
                 source.push(bounds);
-                source.push_text(" <= 0) { __rawr_throw \"assertion failed: min <= max\"; } if ");
+                source.push_text(format!(" <= 0) {{ __rawr_throw {failed}; }} if "));
                 source.push(ordered);
                 source.push_text(format!(" < 0 {{ {second} }} else if "));
                 source.push(above);
@@ -38988,7 +39124,7 @@ impl<'a> Parser<'a> {
         source.push(argument.rendered_source());
         source.push_text("))");
         let value = self.operator_expr(source, number, span(value.span.start(), end));
-        Ok(self.checked_arithmetic(value, "*"))
+        Ok(self.checked_arithmetic(value, "pow"))
     }
 
     /// An integer method of `INT_METHODS` on `value` of `kind`.
@@ -41937,10 +42073,10 @@ impl<'a> Parser<'a> {
             return self.keyed_index(value, keyed, index, end);
         }
         self.require_type(&Ty::Int(Int::Usize), &index.ty, index.span)?;
-        let (element, length) = match self.inference.resolve(&value.ty) {
-            Ty::Array { element, kind } => (*element, kind.length()),
+        let (element, kind) = match self.inference.resolve(&value.ty) {
+            Ty::Array { element, kind } => (*element, kind),
             Ty::Reference { target, .. } => match *target {
-                Ty::Array { element, kind } => (*element, kind.length()),
+                Ty::Array { element, kind } => (*element, kind),
                 ty => {
                     return Err(Error::TypeMismatch {
                         expected: "an array, Vec or slice".into(),
@@ -41960,15 +42096,16 @@ impl<'a> Parser<'a> {
         // Rust panics on a negative or out-of-range index. The index is a
         // block, so the evaluator places that panic at the block, which
         // stands for the whole expression, whose `[` a `Vec`'s panic names,
-        // or for an array's start alone, where rustc places its panic.
-        // Rawr types a slice as a `Vec`.
+        // or for an array's or a slice's start alone, where rustc places
+        // its panic: their index is built in, a `Vec`'s is `Index::index`.
         let mut checked = origin::Fragment::plain("{ let i = ");
         checked.push(index.rendered_source());
         checked.push_text("; if i < 0 { __rawr_throw \"index out of bounds\" } i }");
-        checked.cover(match length {
-            Some(_) => point_span(value.span.start()),
-            None => span(value.span.start(), end),
+        checked.cover(match kind {
+            sequence::Kind::Array(_) | sequence::Kind::Slice => point_span(value.span.start()),
+            sequence::Kind::Vec | sequence::Kind::Deque => span(value.span.start(), end),
         });
+        let length = kind.length();
         let mut source = value.rendered_source().surrounded("(", ")");
         source.push_text("[");
         source.push(checked.clone());
@@ -45976,6 +46113,9 @@ impl<'a> Parser<'a> {
         };
         if variant == Prelude::Err && inferred {
             self.box_returned_error(value)?;
+        }
+        if variant == Prelude::Err {
+            self.err_payloads.insert(start.start(), value.span);
         }
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
@@ -52877,7 +53017,7 @@ impl<'a> Parser<'a> {
                     else {
                         return Err(Error::MissingCapability {
                             owner: full.into(),
-                            capability: format!("From<{}>", source.name(&self.models)).into(),
+                            capability: format!("From<{}>", self.fallback_name(&source)).into(),
                             operation: call,
                             derive: false,
                             required_by: None,
@@ -53479,7 +53619,7 @@ impl<'a> Parser<'a> {
             else {
                 return Err(Error::MissingCapability {
                     owner: model.name().into(),
-                    capability: format!("From<{}>", source.name(&self.models)).into(),
+                    capability: format!("From<{}>", self.fallback_name(&source)).into(),
                     operation: call,
                     derive: true,
                     required_by: None,
@@ -55739,12 +55879,19 @@ impl<'a> Parser<'a> {
             value.ty = source.clone();
         }
         // `Err(Box::new(e))` or `Err("text".into())` where a `Result<T,
-        // Box<dyn Error>>` is expected: its error boxed as below.
+        // Box<dyn Error>>` is expected: its error boxed as below. The error
+        // of an `Err(error)` that is no box is rustc's E0308 at the error.
         if let (Ty::Result(to_ok, to_error), Ty::Result(from_ok, from_error)) = (&target, &source)
             && self.boxed_std_error(to_error)
             && !self.boxed_std_error(from_error)
             && !matches!(self.inference.resolve(from_error), Ty::Infer(_) | Ty::Never)
         {
+            if let Some(payload) = self.err_payloads.get(&value.span.start()).copied()
+                && !self.text_into_at(payload.start())
+                && let Some(error) = self.unboxed_error(to_error, from_error, payload)
+            {
+                return Err(error);
+            }
             self.require_type(to_ok, from_ok, value.span)?;
             let result = self.temporary("result");
             let error = self.prelude_op(PreludeOp::UnwrapErr, [result.as_str().into()]);
@@ -55767,13 +55914,19 @@ impl<'a> Parser<'a> {
             *value = self.operator_expr(boxed, target, value.span);
             return Ok(None);
         }
-        // An error, a box of one, a `&str` or a `String` where a `Box<dyn
-        // Error>` is expected: boxed as std's `dyn Error`, as its `From`
-        // impls and `Box`'s unsizing make one (`error_object.rs`).
+        // A box of an error, or `.into()` of a `&str` or a `String`, where a
+        // `Box<dyn Error>` is expected: boxed as std's `dyn Error`, as
+        // `Box`'s unsizing and its `From` impls make one
+        // (`error_object.rs`). Any other value is rustc's E0308.
         if self.boxed_std_error(&target)
             && !self.boxed_std_error(&source)
             && !matches!(source, Ty::Infer(_) | Ty::Never)
         {
+            if !self.text_into_at(value.span.start())
+                && let Some(error) = self.unboxed_error(&target, &source, value.span)
+            {
+                return Err(error);
+            }
             let Some(object) =
                 self.error_object(&source, value.rendered_source(), true, value.span)?
             else {
@@ -58100,6 +58253,7 @@ impl<'a> Parser<'a> {
                 .expect("token streams always end with EOF"),
         };
         self.track_calls(&token, position);
+        self.models.at = position;
         (token, position)
     }
 
@@ -58157,6 +58311,18 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// The blocks of the import at `span` among a source's `imports`, and of
+/// each import there that binds what it binds, which hoisting merged into
+/// it: `None` when one of them is the module's.
+fn use_blocks(imports: &[crate::item::Use], span: Span) -> Option<Vec<Span>> {
+    let key = imports.iter().find(|used| used.span == span)?.hoist_key();
+    imports
+        .iter()
+        .filter(|used| used.hoist_key() == key)
+        .map(|used| used.scope)
+        .collect()
+}
+
 /// Each name of an imported enum variant (`use Shape::*;`) as its path,
 /// `Shape::Circle`, where a path may start: not after `.` or `::`, and not
 /// before a `:` that names a field or a `::` that goes on to a name. A
@@ -58187,7 +58353,7 @@ fn expand_imported_variants(
             _ => None,
         };
         // A crate enum's variant is its enum's, `Alignment::Center`.
-        if let Some(path) = name.and_then(|name| models.imported_host_variant(name)) {
+        if let Some(path) = name.and_then(|name| models.imported_host_variant(name, *position)) {
             for (segment, name) in path.iter().enumerate() {
                 if segment > 0 {
                     expanded.push((Token::DoubleColon, *position));
@@ -58196,7 +58362,7 @@ fn expand_imported_variants(
             }
             continue;
         }
-        let owner = name.and_then(|name| models.imported_variant(name));
+        let owner = name.and_then(|name| models.imported_variant(name, *position));
         for segment in owner.into_iter().flatten() {
             expanded.push((
                 Token::Identifier(Box::new(segment.as_str().into())),
@@ -60893,21 +61059,11 @@ fn vec_method(context: Option<&NativeCallContext<'_>>, args: &mut FnCallArgs) ->
             Ok(Dynamic::UNIT)
         }
         Some("drain") => {
-            let high = if b == usize::MAX { len } else { b };
-            let high = if inclusive {
-                high.saturating_add(1)
-            } else {
-                high
-            };
-            if high > len {
-                return fail(format!(
-                    "range end index {high} out of range for slice of length {len}"
-                ));
+            let high = (b != usize::MAX).then_some(b);
+            match drain_window(a, high, inclusive, len) {
+                Ok((low, high)) => Ok(Dynamic::from_array(array.drain(low..high).collect())),
+                Err(message) => fail(message),
             }
-            if a > high {
-                return fail(format!("slice index starts at {a} but ends at {high}"));
-            }
-            Ok(Dynamic::from_array(array.drain(a..high).collect()))
         }
         _ => Err(invariant("an unknown `Vec` method")),
     }
@@ -61345,23 +61501,13 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
     } else {
         let low = at(args[1]).unwrap_or(usize::MAX);
         let high = match args[2].as_int().unwrap_or(-1) {
-            -1 => len,
-            high => usize::try_from(high).unwrap_or(usize::MAX),
+            -1 => None,
+            high => Some(usize::try_from(high).unwrap_or(usize::MAX)),
         };
-        let high = if args[3].as_bool().unwrap_or(false) {
-            high.saturating_add(1)
-        } else {
-            high
-        };
-        if high > len {
-            return fail(format!(
-                "range end index {high} out of range for slice of length {len}"
-            ));
+        match slice_window(low, high, args[3].as_bool().unwrap_or(false), len) {
+            Ok(window) => window,
+            Err(message) => return fail(message),
         }
-        if low > high {
-            return fail(format!("slice index starts at {low} but ends at {high}"));
-        }
-        (low, high)
     };
     if let Some(place) = place {
         let window = |range: std::ops::Range<usize>| {
@@ -61500,6 +61646,63 @@ fn int_method_code(name: &str) -> Option<usize> {
         .position(|(method, operand, _)| *method == name && *operand != 'x' && *method != "!")
 }
 
+/// std's panic for a range of a slice of `len` from `start` to `end`, in
+/// the order `SliceIndex`'s checks find it.
+fn slice_index_fail(start: usize, end: usize, len: usize) -> String {
+    if start > len {
+        format!("range start index {start} out of range for slice of length {len}")
+    } else if start > end && end <= len {
+        format!("slice index starts at {start} but ends at {end}")
+    } else {
+        format!("range end index {end} out of range for slice of length {len}")
+    }
+}
+
+/// The elements `low..high` of a slice of `len` that `s[low..high]`,
+/// `s[low..=high]` (`inclusive`) or `s[low..]` (`high` `None`) takes, or
+/// std's panic for the range, as `Index` on a slice checks it.
+pub(crate) fn slice_window(
+    low: usize,
+    high: Option<usize>,
+    inclusive: bool,
+    len: usize,
+) -> Result<(usize, usize), String> {
+    let (end, fits) = match high {
+        None => (len, low <= len),
+        Some(high) if inclusive && high < len => (high + 1, low <= high + 1),
+        Some(high) if inclusive => (high, false),
+        Some(high) => (high, low <= high && high <= len),
+    };
+    if fits {
+        Ok((low, end))
+    } else {
+        Err(slice_index_fail(low, end, len))
+    }
+}
+
+/// The elements `Vec::drain` takes of a `Vec` of `len`, or std's panic,
+/// which checks the range's end before its start.
+fn drain_window(
+    low: usize,
+    high: Option<usize>,
+    inclusive: bool,
+    len: usize,
+) -> Result<(usize, usize), String> {
+    let end = match high {
+        None => len,
+        Some(high) if inclusive && high >= len || !inclusive && high > len => {
+            return Err(slice_index_fail(0, high, len));
+        }
+        Some(high) if inclusive => high + 1,
+        Some(high) => high,
+    };
+    if low > end {
+        Err(slice_index_fail(low, end, len))
+    } else {
+        Ok((low, end))
+    }
+}
+
 /// `INT_METHODS[code]` on `value` of the kind `kinds[0]` (`Int::KINDS`
 /// index), its operand of the kind `kinds[1]`, as debug Rust computes it:
 /// in `i128`, a `u64`/`usize` read from its bits, the result truncated to
@@ -61598,6 +61801,7 @@ fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
                     "sub" => "subtract",
                     "div" => "divide",
                     "rem" => "calculate the remainder",
+                    "pow" => "exponentiate",
                     _ => "multiply",
                 };
                 return panic(&format!("attempt to {verb} with overflow"));

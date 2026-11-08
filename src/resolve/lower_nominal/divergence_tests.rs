@@ -804,3 +804,165 @@ main();
         "{report}"
     );
 }
+
+/// With several `From` impls an unsuffixed literal fits, rustc's literal
+/// fallback (`i32`, `f64`) chooses the impl, through `T::from`, `.into()`
+/// and `From::from` (#8). `cargo run` prints `i32 i32 i32 f64 i64 f64 i32
+/// 300`. With no impl of the fallback type, rustc's E0277 names it.
+#[test]
+fn language_a_literal_with_several_from_impls_takes_its_fallback_type() {
+    let impls = r#"
+struct S(&'static str);
+impl From<i32> for S { fn from(_: i32) -> Self { S("i32") } }
+impl From<i64> for S { fn from(_: i64) -> Self { S("i64") } }
+impl From<u8> for S { fn from(_: u8) -> Self { S("u8") } }
+struct F(&'static str);
+impl From<f32> for F { fn from(_: f32) -> Self { F("f32") } }
+impl From<f64> for F { fn from(_: f64) -> Self { F("f64") } }
+"#;
+    assert_eq!(
+        printed(&format!(
+            r#"{impls}
+fn main() {{
+    let a = S::from(5);
+    let b: S = 5.into();
+    let c: S = From::from(7);
+    let d = F::from(1.5);
+    let e = S::from(5i64);
+    let f: F = 2.5.into();
+    let n = 300;
+    let g = S::from(n);
+    println!("{{}} {{}} {{}} {{}} {{}} {{}} {{}} {{}}", a.0, b.0, c.0, d.0, e.0, f.0, g.0, n);
+}}
+main();
+"#
+        )),
+        "i32 i32 i32 f64 i64 f64 i32 300\n"
+    );
+    let report = refused(
+        r#"
+struct T(i32);
+impl From<i64> for T { fn from(_: i64) -> Self { T(1) } }
+impl From<u8> for T { fn from(_: u8) -> Self { T(2) } }
+fn main() { let t = T::from(5); println!("{}", t.0); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0277]: the trait bound `T: From<i32>` is not satisfied\n --> <script>:5:21"
+        ),
+        "{report}"
+    );
+}
+
+/// The first lines of the panic `cargo run` of `source` prints, from
+/// `thread 'main' panicked at main.rs:<line>:<column>:` to its message.
+fn panicked(source: &str) -> String {
+    let engine = Engine::new();
+    let evidence = crate::diagnostic::Source::new("main.rs", source).unwrap();
+    let unit = engine.parse_unit(source).unwrap();
+    let (ast, positions) = engine
+        .compile_unit_with_positions(unit, evidence.clone())
+        .unwrap_or_else(|error| panic!("{error}"));
+    let error = engine
+        .call_fn::<crate::Dynamic>(&mut crate::Scope::new(), &ast, "main", ())
+        .expect_err("the program panics");
+    let report = crate::diagnostic::Report::from_evaluation_located(
+        evidence,
+        positions.translate(&error),
+        &error,
+    )
+    .unwrap();
+    let panic = crate::diagnostic::panic(&report);
+    panic.lines().take(2).collect::<Vec<_>>().join("\n")
+}
+
+/// An index past a slice's end panics at the expression's start, as
+/// rustc places a built-in index's panic and as an array's does (#35).
+#[test]
+fn language_a_slice_index_panics_at_the_expression_start() {
+    assert_eq!(
+        panicked(
+            "fn get(s: &[i32], i: usize) -> i32 {\n    let x = 0;\n    s[i] + x\n}\nfn main() {\n    \
+             let i: usize = \"5\".parse().unwrap();\n    println!(\"{}\", get(&[1, 2, 3], i));\n}\n"
+        ),
+        "thread 'main' panicked at main.rs:3:5:\nindex out of bounds: the len is 3 but the index is 5"
+    );
+    assert_eq!(
+        panicked(
+            "fn main() {\n    let i: usize = \"5\".parse().unwrap();\n    let v = vec![1, 2, 3];\n    \
+             let s: &[i32] = &v;\n    println!(\"{}\", s[i]);\n}\n"
+        ),
+        "thread 'main' panicked at main.rs:5:20:\nindex out of bounds: the len is 3 but the index is 5"
+    );
+}
+
+/// Integer division and remainder by zero, and their overflow, panic with
+/// rustc's message at the expression's start, as `cargo run` prints them
+/// (#37), as do a slice range out of bounds (at its `[`), an integer
+/// `pow` that overflows and an integer `clamp` whose bounds are reversed.
+#[test]
+fn language_division_by_zero_panics_as_rustc_words_and_places_it() {
+    let prelude = "fn main() {\n    let d: i32 = \"0\".parse().unwrap();\n    let n: i64 = \
+                   \"0\".parse().unwrap();\n    let v = vec![1, 2, 3];\n    let start: usize = \
+                   \"5\".parse().unwrap();\n    let hi: i32 = \"1\".parse().unwrap();\n";
+    for (line, at, message) in [
+        (
+            "println!(\"{}\", 10 / d);",
+            "7:20",
+            "attempt to divide by zero",
+        ),
+        (
+            "println!(\"{}\", 10 % d);",
+            "7:20",
+            "attempt to calculate the remainder with a divisor of zero",
+        ),
+        (
+            "println!(\"{}\", 10i64 / n);",
+            "7:20",
+            "attempt to divide by zero",
+        ),
+        (
+            "println!(\"{}\", 10i64 % n);",
+            "7:20",
+            "attempt to calculate the remainder with a divisor of zero",
+        ),
+        (
+            "let mut x = 10;\n    x /= d;",
+            "8:5",
+            "attempt to divide by zero",
+        ),
+        (
+            "println!(\"{}\", i32::MIN % (d - 1));",
+            "7:20",
+            "attempt to calculate the remainder with overflow",
+        ),
+        (
+            "println!(\"{}\", i64::MIN / (n - 1));",
+            "7:20",
+            "attempt to divide with overflow",
+        ),
+        (
+            "println!(\"{:?}\", &v[start..]);",
+            "7:24",
+            "range start index 5 out of range for slice of length 3",
+        ),
+        (
+            "println!(\"{:?}\", &v[1..=start]);",
+            "7:24",
+            "range end index 5 out of range for slice of length 3",
+        ),
+        (
+            "println!(\"{}\", 3.clamp(5, hi));",
+            "7:22",
+            "min > max. min = 5, max = 1",
+        ),
+    ] {
+        assert_eq!(
+            panicked(&format!("{prelude}    {line}\n}}\n")),
+            format!("thread 'main' panicked at main.rs:{at}:\n{message}"),
+            "{line}"
+        );
+    }
+}

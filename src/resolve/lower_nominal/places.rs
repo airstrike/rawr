@@ -457,8 +457,10 @@ impl Parser<'_> {
             if inclusive {
                 range.push_text(" + 1");
             }
+            // std's checks, in its order: the start, the end, their order.
             range.push_text(format!(
-                "; if {hi} > {place}.len() {{ __rawr_throw \"range end index \" + {hi} + \" out of range \
+                "; if {lo} > {place}.len() {{ __rawr_throw \"range start index \" + {lo} + \" out of \
+                 range for slice of length \" + {place}.len(); }} if {hi} > {place}.len() {{ __rawr_throw \"range end index \" + {hi} + \" out of range \
                  for slice of length \" + {place}.len(); }} if {lo} > {hi} {{ __rawr_throw \"slice index \
                  starts at \" + {lo} + \" but ends at \" + {hi}; }} {lo}..{hi} }})"
             ));
