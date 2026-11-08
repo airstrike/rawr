@@ -635,3 +635,42 @@ pub(super) fn text_end(mut position: Position, text: &str) -> Position {
 pub(super) fn span(start: Position, end: Position) -> Span {
     Span::new(start, end)
 }
+
+/// The index of a free function's `&mut` parameter, which is its receiver
+/// `this` at runtime: the function changes the caller's place in place,
+/// and a call `f(&mut v, x)` is the method call `v.f(x)`.
+/// `source` lexed as checked Rawr reads Rust, through its EOF marker.
+pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> {
+    let inputs = [source];
+    let (mut stream, control) = engine.lex_raw(&inputs, None);
+    control.borrow_mut().rust = true;
+    let mut tokens = Vec::new();
+    loop {
+        let token = stream
+            .next()
+            .expect("token streams always produce their EOF marker");
+        let is_eof = token.0 == Token::EOF;
+        let token = match token {
+            // Rust has no power operator: binary `**` is `*` then a
+            // deref (`a * *b`), and `**=` is `*` then `*=`. The untyped
+            // script lexer keeps `**`.
+            (Token::PowerOf | Token::PowerOfAssign, position) => {
+                let second = if token.0 == Token::PowerOf {
+                    Token::Multiply
+                } else {
+                    Token::MultiplyAssign
+                };
+                let mut next = position;
+                next.advance();
+                tokens.push((Token::Multiply, position));
+                (second, next)
+            }
+            token => token,
+        };
+        tokens.push(token);
+        if is_eof {
+            break;
+        }
+    }
+    tokens
+}
