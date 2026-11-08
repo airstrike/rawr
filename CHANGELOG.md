@@ -157,6 +157,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked type that native code holds as a `Box<dyn Trait>` can clone a field of a value it lent in place, as `fn scrollable_id(&self) -> Id { self.state.scrollable_id.clone() }` does while native code still holds `&State` from `state()` or a view from `preview()`. icedxdy's browser no longer exits when a page is selected. (#1445)
 - A local array or slice borrowed where a crate takes `&'static [T]` is now rustc's E0597, as a borrowed string already was; statics, ranges of them and constant literals still pass. (#1064)
 - An unused `use crate::module;` in a marked file is no longer refused with E0432; as in rustc, it is at most a warning. (#1436)
+- ?play's universe (iced, tokio and ratatui with their generated bindings) builds for wasm32, and the site can run an iced snippet in your browser on it: each Run gets a fresh instance in a frame of its own, drawn by iced's web shell, answering clicks with no round trip to the server. The landing page keeps its iced counter on the server for now, since the browser draws it at the wrong scale on high-density displays. (#1448; part of #1395, #1384)
 
 ## 0.3.171 (2026-11-07)
 

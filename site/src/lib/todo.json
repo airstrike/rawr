@@ -163,7 +163,8 @@
         {"text":"A marked type that native code holds as a `Box<dyn Trait>` can return references: a `&'static Meta` or `&'static [Block]` that is a static gives native code the static itself, and `&self.state` is lent where the value holds it. A reference result rawr can't give yet is an error at `rawr check` instead of a panic at the call.","issues":[1442]},
         {"text":"A marked type that native code holds as a `Box<dyn Trait>` can clone a field of a value it lent in place, as `fn scrollable_id(&self) -> Id { self.state.scrollable_id.clone() }` does while native code still holds `&State` from `state()` or a view from `preview()`. icedxdy's browser no longer exits when a page is selected.","issues":[1445]},
         {"text":"A local array or slice borrowed where a crate takes `&'static [T]` is now rustc's E0597, as a borrowed string already was; statics, ranges of them and constant literals still pass.","issues":[1064]},
-        {"text":"An unused `use crate::module;` in a marked file is no longer refused with E0432; as in rustc, it is at most a warning.","issues":[1436]}
+        {"text":"An unused `use crate::module;` in a marked file is no longer refused with E0432; as in rustc, it is at most a warning.","issues":[1436]},
+        {"text":"?play's universe (iced, tokio and ratatui with their generated bindings) builds for wasm32, and the site can run an iced snippet in your browser on it: each Run gets a fresh instance in a frame of its own, drawn by iced's web shell, answering clicks with no round trip to the server. The landing page keeps its iced counter on the server for now, since the browser draws it at the wrong scale on high-density displays.","issues":[1448],"refs":[1395,1384]}
       ]
     },
     "releases": [
@@ -3218,7 +3219,12 @@
     {"issue":1444,"title":"A `&'static T` result that is an element or field of a static (`&BLOCKS[0]`, `&META.inner`)…","state":"open","category":"No glue (D593)"},
     {"issue":1445,"title":"A value a stand-in lent in place (`&self.state`) can't also be shared by a view in the same…","state":"closed","category":"Divergences from rustc"},
     {"issue":1446,"title":"Two lower_nominal collected_tests fail with \"missing runtime binding for `native::identity`\"…","state":"open","category":"Health"},
-    {"issue":1447,"title":"A crate struct's field read through a nested place (`self.state.id`) is read by value, not lent…","state":"open","category":"Imported lifetimes after slice 2"}
+    {"issue":1447,"title":"A crate struct's field read through a nested place (`self.state.id`) is read by value, not lent…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":1448,"title":"?play's universe builds for wasm32 and runs in the browser","state":"open","category":"Platforms"},
+    {"issue":1449,"title":"iced in the browser's universe draws at twice its hit-test scale at devicePixelRatio 2 (Retina)…","state":"open","category":"Platforms"},
+    {"issue":1450,"title":"A method a crate trait's generic impl gives a generic crate type doesn't resolve (ratzilla's…","state":"open","category":"No glue (D593)"},
+    {"issue":1451,"title":"`?` misses a crate's `impl From<CrateError> for io::Error`, and a derived (thiserror) Error impl…","state":"open","category":"Divergences from rustc"},
+    {"issue":1452,"title":"rawr-import builds a runner for a non-host target and then tries to start it; it should build…","state":"open","category":"Importer"}
   ],
   "groups": [
     {
