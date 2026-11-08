@@ -2506,6 +2506,68 @@ fn a_workspace_member_resolves_with_the_roots_patch() {
     assert_runs_and_checks(&root.join("app"), &home);
 }
 
+/// Two members of one workspace build their runners in the workspace's one
+/// build directory, and each runner is its own Cargo unit there. When they
+/// shared one, a member took the other's build script, which names the
+/// shared runtime the other last linked; once that entry was gone, its
+/// runner failed with E0463 (#1421).
+#[test]
+fn each_workspace_members_runner_builds_its_own_units() {
+    let root = crate::support::scratch().join("member-runners");
+    let mut members = Vec::new();
+    for name in ["left", "right"] {
+        members.push((
+            format!("{name}/Cargo.toml"),
+            format!(
+                "[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n\
+                 [dependencies]\nrawr-patched-gauge={{path='../gauge'}}\n"
+            ),
+        ));
+        members.push((
+            format!("{name}/src/main.rs"),
+            format!(
+                "// rawr\nfn main() {{\n    println!(\"{name}: {{}}\", rawr_patched_gauge::sides());\n}}\n"
+            ),
+        ));
+    }
+    let mut files = PATCHED_GAUGE.to_vec();
+    files.push((
+        "Cargo.toml",
+        "[workspace]\nmembers=['left','right','gauge']\nresolver='3'\n",
+    ));
+    files.extend(
+        members
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str())),
+    );
+    project(&root, &files);
+    let home = crate::support::scratch().join("rawr-home");
+
+    for name in ["left", "right"] {
+        assert_eq!(run_ok(&root.join(name), &home), format!("{name}: 6\n"));
+    }
+
+    // Each runner's build script ran in a directory of its own, so each
+    // output names its own runner's carrier.
+    let outputs = fs::read_dir(root.join("target/debug/build"))
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            let name = path.file_name()?.to_str()?;
+            name.starts_with("rawr-generated-runner-")
+                .then(|| fs::read_to_string(path.join("output")).ok())
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    for name in ["left", "right"] {
+        let carrier = format!("members/{name}/runner/rawr-generated-manifest.carrier");
+        assert!(
+            outputs.iter().any(|output| output.contains(&carrier)),
+            "no build script output names {carrier}: {outputs:#?}"
+        );
+    }
+}
+
 /// A project as `FIXTURE`, with `main` and, when `events` is given, a path
 /// crate `events 0.1.0` at `events/` that returns it.
 fn nightly_project(root: &Path, main: &str, events: Option<&str>) {
