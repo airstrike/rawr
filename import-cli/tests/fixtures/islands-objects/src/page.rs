@@ -13,6 +13,26 @@ pub trait Page: Debug + PageClone + Send {
     fn label(&self) -> &str;
     /// The names the page had, borrowed from it.
     fn items(&self) -> &[String];
+    /// What the page draws, which borrows it, as a view's element does.
+    fn draw(&self) -> Drawn<'_>;
+}
+
+/// What a page draws: text it borrows, as iced's `Element<'_, Message>`
+/// borrows its state.
+#[derive(Debug)]
+pub struct Drawn<'a> {
+    text: &'a str,
+}
+
+impl<'a> Drawn<'a> {
+    pub fn text(&self) -> &'a str {
+        self.text
+    }
+}
+
+/// `text`, drawn.
+pub fn drawn(text: &str) -> Drawn<'_> {
+    Drawn { text }
 }
 
 /// A page's clone as a box, which a `Clone` page has.
@@ -83,5 +103,9 @@ impl Page for Home {
 
     fn items(&self) -> &[String] {
         &[]
+    }
+
+    fn draw(&self) -> Drawn<'_> {
+        drawn("home")
     }
 }

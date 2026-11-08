@@ -51,6 +51,11 @@ impl page::Page for BadgePage {
     fn items(&self) -> &[String] {
         &self.names
     }
+
+    // What it draws borrows the page's own label.
+    fn draw(&self) -> page::Drawn<'_> {
+        page::drawn(&self.label)
+    }
 }
 
 pub fn new(page_index: usize) -> Box<dyn page::Page> {

@@ -680,16 +680,14 @@ impl<'a> Generator<'a> {
     }
 
     /// For a stand-in's `&self` function whose result is a shared borrow of
-    /// its receiver (#1305), as `fn label(&self) -> &str`, the owned type
-    /// the result comes back as, which the stand-in keeps for as long as
-    /// the receiver stays borrowed: `String` for `&str`, `Vec<T>` for
-    /// `&[T]`, and `T` for `&T`. `None` when the result is no such borrow,
-    /// and `Err` says why it can't come back.
+    /// its receiver (#1305), as `fn label(&self) -> &str`, how the result
+    /// comes back. `None` when the result is no such borrow, and `Err` says
+    /// why it can't come back.
     fn kept_result(
         &self,
         file: &Source<'_>,
         function: &item::Function,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<Result<Borrowed, String>> {
         let (
             Some(item::Receiver::Shared(receiver)),
             Some(type_ref::Type::Reference {
@@ -714,7 +712,7 @@ impl<'a> Generator<'a> {
             type_ref::Type::Path(path)
                 if path.segments.len() == 1 && path.segments[0].name.text == "str" =>
             {
-                return Some(Ok("::std::string::String".to_owned()));
+                return Some(Ok(Borrowed::Pinned));
             }
             type_ref::Type::Path(path)
                 if path
@@ -741,7 +739,7 @@ impl<'a> Generator<'a> {
                 slice(file.text, target.span()).to_owned()
             }
         };
-        Some(Ok(owned))
+        Some(Ok(Borrowed::Kept(owned)))
     }
 
     /// The generated text of `file` with its inline modules `group`, and
@@ -1235,6 +1233,9 @@ impl<'a> Generator<'a> {
             text,
             "    let mut __call = {island}::Call::new({path:?}, {owned});"
         );
+        if matches!(kept, Some(Borrowed::Pinned)) {
+            text.push_str("    __call.pinned();\n");
+        }
         // Each `&mut` argument in argument order, as its change comes back:
         // a copy, or what a lent place was given.
         let mut changed = Vec::new();
@@ -1274,7 +1275,13 @@ impl<'a> Generator<'a> {
             .output
             .as_ref()
             .map_or("()", |ty| slice(file.text, ty.span()));
-        if let Some(kept) = kept {
+        if let Some(Borrowed::Pinned) = kept {
+            // The result is the program's own text, pinned with the value.
+            let _ = writeln!(
+                text,
+                "    let __value: {output} = self.0.pinned(&mut __reply);"
+            );
+        } else if let Some(Borrowed::Kept(kept)) = kept {
             // The result borrows the receiver: the stand-in keeps the
             // value it came back as for as long as `&self` is borrowed.
             let _ = writeln!(
@@ -1472,6 +1479,18 @@ fn std_impls(item: &item::Parsed) -> Vec<(&str, Std)> {
         }
         _ => Vec::new(),
     }
+}
+
+/// How a stand-in's `&self` result that borrows its receiver comes back
+/// (`Generator::kept_result`).
+enum Borrowed {
+    /// A `&str`: the program's own text, read where it is, pinned with the
+    /// value till it is next taken `&mut` (#1322).
+    Pinned,
+    /// A `&[T]` or a `&T`, whose program value is no native `[T]` or `T`:
+    /// the owned type it comes back as, `Vec<T>` for `&[T]` and `T` for
+    /// `&T`, which the stand-in keeps for as long as `&self` is borrowed.
+    Kept(String),
 }
 
 /// Where a module's stand-ins go (`Generator::stand_in`): the names it
@@ -1745,6 +1764,27 @@ pub mod __rawr_island {
             // happen while `&self` is borrowed; nothing else reaches or
             // moves it.
             unsafe { &*place }
+        }
+
+        /// The `&str` a `&self` call gave back ([`Call::pinned`]): the
+        /// program's own text, which the runner keeps pinned with the
+        /// program value, for as long as the object is borrowed (#1322).
+        pub fn pinned(&self, reply: &mut Reply) -> &str {
+            let (address, length) = reply.read(|input| {
+                input.expect(PINNED, "a pinned `&str`");
+                (input.count(), input.count())
+            });
+            // SAFETY: the runner pinned the text, valid UTF-8, with the
+            // value of this object's handle, and lets it go only when the
+            // value is next taken `&mut` or released, which a `&mut self`
+            // call or the object's drop does, and neither can happen while
+            // `&self` is borrowed. Nothing writes a pinned text in place.
+            unsafe {
+                ::std::str::from_utf8_unchecked(::std::slice::from_raw_parts(
+                    ::std::ptr::with_exposed_provenance::<u8>(address),
+                    length,
+                ))
+            }
         }
 
         /// Let go of the kept results, as a `&mut self` call may once
@@ -2024,6 +2064,7 @@ pub mod __rawr_island {
     const LENT: u8 = 20;
     const NATIVE: u8 = 21;
     const HANDLE: u8 = 22;
+    const PINNED: u8 = 23;
 
     /// A value on its way to the interpreter.
     pub struct Out(::std::vec::Vec<u8>);
@@ -2604,6 +2645,7 @@ pub mod __rawr_island {
     pub struct Call<'c> {
         path: &'static str,
         owned: bool,
+        pinned: bool,
         count: u32,
         mutable: u64,
         values: Out,
@@ -2625,6 +2667,7 @@ pub mod __rawr_island {
             Self {
                 path,
                 owned,
+                pinned: false,
                 count: 0,
                 mutable: 0,
                 values: Out(::std::vec::Vec::new()),
@@ -2684,6 +2727,12 @@ pub mod __rawr_island {
             self.values.0.extend_from_slice(&object.0.to_le_bytes());
             self.count += 1;
         }
+        /// The call's result is a `&str` that borrows its stand-in's
+        /// receiver, which comes back as the program's own text, pinned
+        /// with the value ([`Object::pinned`]).
+        pub fn pinned(&mut self) {
+            self.pinned = true;
+        }
         /// An argument the call may change, which comes back after it.
         pub fn mutable<T: Put + ?Sized>(&mut self, value: &T) {
             self.mutable |= 1 << self.count;
@@ -2692,7 +2741,7 @@ pub mod __rawr_island {
         pub fn send(mut self) -> Reply {
             register();
             let mut bytes = ::std::vec::Vec::with_capacity(13 + self.values.0.len());
-            bytes.push(u8::from(self.owned));
+            bytes.push(u8::from(self.owned) | u8::from(self.pinned) << 1);
             bytes.extend_from_slice(&self.count.to_le_bytes());
             bytes.extend_from_slice(&self.mutable.to_le_bytes());
             bytes.extend_from_slice(&self.values.0);
@@ -3125,17 +3174,22 @@ mod tests {
             text.contains("can't call `physics::Badge::Page::same` yet"),
             "{text}"
         );
-        // A result that borrows the receiver is kept by the stand-in for
-        // as long as `&self` is borrowed, and a `&mut self` call lets
-        // what it kept go (#1305); a `&'static` one is no borrow of it.
-        for (output, kept) in [
-            ("&str", "::std::string::String"),
-            ("&'a [String]", "::std::vec::Vec<String>"),
-        ] {
-            let expected =
-                format!("    let __value: {output} = self.0.keep::<{kept}>(__reply.take());\n");
-            assert!(text.contains(&expected), "{expected}\n{text}");
-        }
+        // A `&str` that borrows the receiver is the program's own text,
+        // pinned with the value (#1322); a `&[T]`, whose program value is
+        // no native slice, is kept by the stand-in for as long as `&self`
+        // is borrowed, and a `&mut self` call lets what it kept go
+        // (#1305); a `&'static` one is no borrow of it.
+        assert!(
+            text.contains(
+                "        __call.pinned();\n        __call.object(&self.0);\n        \
+                 let mut __reply = __call.send();\n        \
+                 let __value: &str = self.0.pinned(&mut __reply);\n"
+            ),
+            "{text}"
+        );
+        let expected = "    let __value: &'a [String] = \
+                        self.0.keep::<::std::vec::Vec<String>>(__reply.take());\n";
+        assert!(text.contains(expected), "{expected}\n{text}");
         assert!(
             text.contains(
                 "fn update(&mut self, __a0: Message) -> Option<Message> {\n        \
