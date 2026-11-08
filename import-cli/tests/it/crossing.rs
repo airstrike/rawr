@@ -774,6 +774,23 @@ fn an_opaque_program_takes_a_subscription_of_its_state() {
     );
 }
 
+/// iced's pane_grid (#1234): a closure the crate calls on another thread
+/// gives `Some` of a program message holding crate values, which move with
+/// it to the program's thread, as `Some` or `None` is read at once. The
+/// output is `cargo run`'s.
+#[test]
+fn a_message_a_closure_gives_on_another_thread_keeps_its_crate_values() {
+    let (rawr, cargo) = both_printed("hotkeys.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("heard SplitFocused(Vertical)\nsplit Vertical true")
+            && rawr.contains(
+                "heard Both([Horizontal, Vertical])\nsplits [Vertical, Horizontal, Vertical]"
+            ),
+        "{rawr}"
+    );
+}
+
 /// iced's todos (#1050): `Application::presets` takes `impl
 /// IntoIterator<Item = Preset<P::State, P::Message>>`, whose item names the
 /// opaque program's own state and message, read through the opaque

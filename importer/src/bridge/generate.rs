@@ -160,7 +160,7 @@ impl Drop for Release {
         });
     }
 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]>, default_of: Option<[u8; 32]>, opaque: Option<OpaqueTable>, name: &'static str }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]>, default_of: Option<[u8; 32]>, opaque: Option<OpaqueTable>, send: Option<SendValue>, name: &'static str }
 
 /// A native value an iced view borrows lives in the application's home
 /// (D568): its slot reaches it there, and holds no value of its own.
@@ -297,6 +297,55 @@ fn give_proxy(arena: &mut Arena, proxy: __rawr_internal::crossing::Proxy) -> Dyn
     lend(arena, || proxy.into_dynamic())
 }
 
+/// A native value out of a call's arena, with what its slot knew of its
+/// type, on its way to the arena where the script value holding it is
+/// first used (`script_proxy`).
+struct Moved {
+    slot: u32,
+    generation: u64,
+    value: Box<dyn Any + Send>,
+    send: SendValue,
+    debug: Option<DebugText>,
+    display: Option<DebugText>,
+    clone: Option<CloneValue>,
+    relations: Relations,
+    witness: Option<__rawr_internal::host::runtime::Witness>,
+    project: Option<Project>,
+    mapper: Option<[u8; 16]>,
+    default_of: Option<[u8; 32]>,
+    opaque: Option<OpaqueTable>,
+    name: &'static str,
+}
+
+/// The proxy of the script value `value` that script code gives native
+/// code. On a thread whose arena is a call's own (`CallArena`), as iced's
+/// executor runs `keyboard::listen().filter_map(..)`'s closure, the native
+/// values `value` holds there move with it, and are given slots where it
+/// is first used (`Proxy::deferred`), on the owner thread, as a deferred
+/// script value is made there. What holds the proxy, as the `Some` of a
+/// `filter_map`, is known now.
+#[allow(dead_code)]
+fn script_proxy(mut value: Dynamic) -> __rawr_internal::crossing::Proxy {
+    let moved = arena_access(|arena| arena.call.then(|| (arena.epoch, arena.move_out(&mut value))))
+        .flatten()
+        .filter(|(_, moved)| !moved.is_empty());
+    let Some((epoch, moved)) = moved else {
+        return __rawr_internal::crossing::Proxy::new(value);
+    };
+    let mut pending = Some((value, moved));
+    __rawr_internal::crossing::Proxy::deferred(move || {
+        let (value, released) = arena_access(|arena| {
+            let (mut value, moved) = pending.take()?;
+            let released = arena.move_in(&mut value, epoch, moved);
+            Some((value, released))
+        })
+        .flatten()?;
+        // The handles on the call's slots go once the arena is free.
+        drop(released);
+        Some(value)
+    })
+}
+
 fn display_text<T: std::fmt::Display + 'static>(value: &dyn Any) -> Option<String> {
     value.downcast_ref::<T>().map(ToString::to_string)
 }
@@ -376,6 +425,37 @@ trait WithoutClone {
 
 impl<T> WithoutClone for &DebugProbe<T> {
     fn native_clone(&self) -> Option<CloneValue> {
+        None
+    }
+}
+
+/// A stored value of a type that implements `Send`, held as one, so it may
+/// move to another thread's arena (`script_proxy`); the value itself back
+/// when it is of another type.
+type SendValue = fn(Box<dyn Any>) -> Result<Box<dyn Any + Send>, Box<dyn Any>>;
+
+fn send_value<T: Send + 'static>(value: Box<dyn Any>) -> Result<Box<dyn Any + Send>, Box<dyn Any>> {
+    value.downcast::<T>().map(|value| value as Box<dyn Any + Send>)
+}
+
+#[allow(dead_code)]
+trait ViaSend {
+    fn native_send(&self) -> Option<SendValue>;
+}
+
+impl<T: Send + 'static> ViaSend for DebugProbe<T> {
+    fn native_send(&self) -> Option<SendValue> {
+        Some(send_value::<T>)
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutSend {
+    fn native_send(&self) -> Option<SendValue>;
+}
+
+impl<T> WithoutSend for &DebugProbe<T> {
+    fn native_send(&self) -> Option<SendValue> {
         None
     }
 }
@@ -639,13 +719,15 @@ macro_rules! insert_native {
         #[allow(unused_imports)]
         use $crate::__rawr_runner::{
             ViaClone as _, ViaDebug as _, ViaDisplay as _, ViaEqual as _, ViaHash as _,
-            ViaOrder as _, WithoutClone as _, WithoutDebug as _, WithoutDisplay as _,
-            WithoutEqual as _, WithoutHash as _, WithoutOrder as _,
+            ViaOrder as _, ViaSend as _, WithoutClone as _, WithoutDebug as _,
+            WithoutDisplay as _, WithoutEqual as _, WithoutHash as _, WithoutOrder as _,
+            WithoutSend as _,
         };
         let value = $value;
         let debug = (&$crate::__rawr_runner::debug_probe(&value)).native_debug();
         let display = (&$crate::__rawr_runner::debug_probe(&value)).native_display();
         let clone = (&$crate::__rawr_runner::debug_probe(&value)).native_clone();
+        let send = (&$crate::__rawr_runner::debug_probe(&value)).native_send();
         let relations = $crate::__rawr_runner::Relations {
             equal: (&$crate::__rawr_runner::debug_probe(&value)).native_equal(),
             hash: (&$crate::__rawr_runner::debug_probe(&value)).native_hash(),
@@ -655,6 +737,7 @@ macro_rules! insert_native {
         if let Ok(handle) = &handle {
             $arena.set_display(handle.clone(), display);
             $arena.set_relations(handle.clone(), relations);
+            $arena.set_send(handle.clone(), send);
         }
         handle
     }};
@@ -1137,7 +1220,9 @@ impl std::fmt::Debug for NativeHandle {
         }
     }
 }
-struct Arena { epoch: [u8; 32], slots: Vec<NativeSlot>, free: Vec<u32> }
+/// A thread's native values, by slot. `call` marks a call's own
+/// (`CallArena`).
+struct Arena { epoch: [u8; 32], slots: Vec<NativeSlot>, free: Vec<u32>, call: bool }
 
 thread_local! {
     static NATIVE_ARENA: RefCell<Option<Arena>> = const { RefCell::new(None) };
@@ -1157,9 +1242,10 @@ static CALL_EPOCHS: std::sync::Mutex<Vec<[u8; 32]>> = std::sync::Mutex::new(Vec:
 /// An arena for one call on a thread that has none, as iced's executor
 /// calls `Task::map`'s function: the native values the call takes and gives
 /// move through it, and it ends with the call. A call that only moves its
-/// values, as `Result::ok` does, needs nothing of the owner's arena. A value
-/// the call keeps past its end, in a script value it gives, can't reach the
-/// owner's arena, so the call fails there and says so.
+/// values, as `Result::ok` does, needs nothing of the owner's arena. A
+/// value of a `Send` type that a script value it gives holds moves with
+/// that value (`script_proxy`). Another value the call keeps past its end
+/// can't reach the owner's arena, so the call fails there and says so.
 #[allow(dead_code)]
 struct CallArena(Option<[u8; 32]>);
 
@@ -1178,7 +1264,7 @@ impl CallArena {
         );
         let installed = NATIVE_ARENA.with(|cell| match cell.try_borrow_mut() {
             Ok(mut arena) if arena.is_none() => {
-                *arena = Some(Arena::new(epoch));
+                *arena = Some(Arena { call: true, ..Arena::new(epoch) });
                 true
             }
             _ => false,
@@ -1410,7 +1496,7 @@ fn range_from<T: Int>(range: std::ops::RangeInclusive<i64>) -> Result<std::ops::
 
 impl Arena {
     fn new(epoch: [u8; 32]) -> Self {
-        Self { epoch, slots: Vec::new(), free: Vec::new() }
+        Self { epoch, slots: Vec::new(), free: Vec::new(), call: false }
     }
 
     fn insert<T: 'static>(&mut self, value: T) -> Result<NativeHandle, Error> {
@@ -1425,7 +1511,7 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None, opaque: None, name: "" });
+                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None, opaque: None, send: None, name: "" });
                 slot
             }
         };
@@ -1445,6 +1531,7 @@ impl Arena {
         entry.mapper = None;
         entry.default_of = None;
         entry.opaque = None;
+        entry.send = None;
         let release = std::sync::Arc::new(Release { epoch: self.epoch, slot, generation: entry.generation });
         Ok(NativeHandle { epoch: self.epoch, slot, generation: entry.generation, release: Some(release) })
     }
@@ -1530,6 +1617,100 @@ impl Arena {
         if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
             entry.relations = relations;
         }
+    }
+
+    #[allow(dead_code)]
+    fn set_send(&mut self, handle: NativeHandle, send: Option<SendValue>) {
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
+            entry.send = send;
+        }
+    }
+
+    /// The values `value`'s handles hold in this call's arena, out of their
+    /// slots to move with it (`script_proxy`): each of a `Send` type, held
+    /// by value. Another stays, as its thread can't give it away.
+    fn move_out(&mut self, value: &mut Dynamic) -> Vec<Moved> {
+        let mut moved = Vec::<Moved>::new();
+        value.deep_scan(|held| {
+            let Some((slot, generation)) = held
+                .read_lock::<NativeHandle>()
+                .filter(|handle| handle.epoch == self.epoch)
+                .map(|handle| (handle.slot, handle.generation))
+            else {
+                return;
+            };
+            if moved.iter().any(|value| value.slot == slot) {
+                return;
+            }
+            let Some(entry) = self.slots.get_mut(slot as usize) else {
+                return;
+            };
+            let Some(send) = entry.send.filter(|_| entry.generation == generation && !entry.leased) else {
+                return;
+            };
+            let Some(stored) = entry.value.take() else {
+                return;
+            };
+            match send(stored) {
+                Ok(stored) => moved.push(Moved {
+                    slot,
+                    generation,
+                    value: stored,
+                    send,
+                    debug: entry.debug,
+                    display: entry.display,
+                    clone: entry.clone,
+                    relations: entry.relations,
+                    witness: entry.witness.clone(),
+                    project: entry.project,
+                    mapper: entry.mapper,
+                    default_of: entry.default_of,
+                    opaque: entry.opaque,
+                    name: entry.name,
+                }),
+                Err(stored) => entry.value = Some(stored),
+            }
+        });
+        moved
+    }
+
+    /// `moved`, which `value` held in the call arena `epoch`, in slots of
+    /// this arena, and `value`'s handles on them. The handles it held
+    /// before are given back, to drop once the arena is free.
+    fn move_in(&mut self, value: &mut Dynamic, epoch: [u8; 32], moved: Vec<Moved>) -> Vec<NativeHandle> {
+        let mut given = Vec::with_capacity(moved.len());
+        for moved in moved {
+            let Ok(handle) = self.occupy(Some(moved.value), None, moved.name) else {
+                continue;
+            };
+            if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
+                entry.send = Some(moved.send);
+                entry.debug = moved.debug;
+                entry.display = moved.display;
+                entry.clone = moved.clone;
+                entry.relations = moved.relations;
+                entry.witness = moved.witness;
+                entry.project = moved.project;
+                entry.mapper = moved.mapper;
+                entry.default_of = moved.default_of;
+                entry.opaque = moved.opaque;
+            }
+            given.push(((moved.slot, moved.generation), handle));
+        }
+        let mut released = Vec::new();
+        value.deep_scan(|held| {
+            let Some(mut handle) = held.write_lock::<NativeHandle>() else {
+                return;
+            };
+            let key = (handle.slot, handle.generation);
+            if handle.epoch != epoch {
+                return;
+            }
+            if let Some((_, new)) = given.iter().find(|(old, _)| *old == key) {
+                released.push(std::mem::replace(&mut *handle, new.clone()));
+            }
+        });
+        released
     }
 
     /// The live value of `handle`, with its slot.
@@ -14177,8 +14358,10 @@ fn render_slot(
             // `Task::map`'s function and iced's `listen_with`, native
             // values move in and out through an arena of the call's own
             // (`CallArena`). A script value made of native inputs is made
-            // where it is used instead (`deferred`), when it can be.
-            let call_arena = if native || native_output {
+            // where it is used instead (`deferred`), when it can be; one
+            // the function gives in a container, as `Some(message)`, takes
+            // the native values it holds with it (`script_proxy`).
+            let call_arena = if native || native_output || holds_script(&returned) {
                 "let _arena = CallArena::enter();\n        "
             } else {
                 ""
@@ -15733,8 +15916,10 @@ fn render_callable_closure(
     } else {
         format!("(|| {converted})()")
     };
-    // An arena of the call's own on a thread with none (`CallArena`).
-    let call_arena = if native_inputs || native_output {
+    // An arena of the call's own on a thread with none (`CallArena`), which
+    // a script value the closure gives takes its native values out of
+    // (`script_proxy`).
+    let call_arena = if native_inputs || native_output || holds_script(&returned) {
         "let _arena = CallArena::enter();\n            "
     } else {
         ""
@@ -16400,7 +16585,7 @@ fn render_from_dynamic(
             let rust = concrete_type(ty).ok_or_else(|| request::drift("a script type's proxy"))?;
             write!(
                 output,
-                "Ok::<{rust}, Error>(<{rust}>::from_proxy(__rawr_internal::crossing::Proxy::new({value})))"
+                "Ok::<{rust}, Error>(<{rust}>::from_proxy(script_proxy({value})))"
             )
         }
         // The value a table's call takes inside another type, as an
@@ -16830,6 +17015,20 @@ fn holds_native(ty: &convert::Type) -> bool {
             holds_native(element)
         }
         convert::Type::Result(ok, err) => holds_native(ok) || holds_native(err),
+        _ => false,
+    }
+}
+
+/// Whether `ty` holds a script value, which may hold native values a call
+/// makes, as `Option<Message>` holds `Message::Split(Axis::Vertical)`.
+fn holds_script(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Script { .. } => true,
+        convert::Type::Tuple(members) => members.iter().any(holds_script),
+        convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
+            holds_script(element)
+        }
+        convert::Type::Result(ok, err) => holds_script(ok) || holds_script(err),
         _ => false,
     }
 }

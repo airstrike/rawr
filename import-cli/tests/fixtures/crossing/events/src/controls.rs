@@ -646,6 +646,40 @@ impl<T> Subscription<T> {
     }
 }
 
+impl<T> Subscription<T> {
+    /// The messages `f` keeps of these, which `f` makes on another thread,
+    /// as iced's executor runs `keyboard::listen().filter_map(..)`'s
+    /// closure.
+    pub fn filter_map<A>(
+        self,
+        f: impl Fn(T) -> Option<A> + crate::MaybeSend + 'static,
+    ) -> Subscription<A>
+    where
+        T: crate::MaybeSend + 'static,
+        A: crate::MaybeSend + 'static,
+    {
+        Subscription {
+            messages: std::thread::spawn(move || self.messages.into_iter().filter_map(f).collect())
+                .join()
+                .expect("the filtering thread finishes"),
+        }
+    }
+}
+
+/// A few events, as iced's `keyboard::listen()` hears them.
+pub fn signals() -> Subscription<Signal> {
+    Subscription {
+        messages: vec![Signal::Moved, Signal::Rescaled(0.5), Signal::Rescaled(2.0)],
+    }
+}
+
+/// The way a pane splits, as iced's `pane_grid::Axis`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    Horizontal,
+    Vertical,
+}
+
 /// An event a program may listen for, as iced's `Event`.
 #[derive(Debug, Clone, Copy)]
 pub enum Signal {
