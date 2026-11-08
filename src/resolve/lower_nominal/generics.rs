@@ -813,3 +813,336 @@ impl<'a> Parser<'a> {
         Ok(substitution)
     }
 }
+
+/// The generic parameter `ty` is, or refers to.
+/// The generic parameter or opaque associated type `ty` is, or refers to:
+/// a value with only its bounds' methods.
+pub(super) fn bounded_value(ty: &Ty) -> Option<Ty> {
+    match ty {
+        Ty::Param(_) | Ty::Projection(..) => Some(ty.clone()),
+        Ty::Reference { target, .. } => bounded_value(target),
+        _ => None,
+    }
+}
+
+/// `ty` with each generic parameter in `substitution` replaced.
+pub(super) fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
+    let each = |types: &[Ty]| -> Box<[Ty]> {
+        types
+            .iter()
+            .map(|ty| instantiate(ty, substitution))
+            .collect()
+    };
+    match ty {
+        Ty::Param(name) => substitution
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| ty.clone()),
+        Ty::Option(element) => Ty::Option(Box::new(instantiate(element, substitution))),
+        Ty::Boxed(target) => Ty::Boxed(Box::new(instantiate(target, substitution))),
+        Ty::Counted(counter, target) => {
+            Ty::Counted(*counter, Box::new(instantiate(target, substitution)))
+        }
+        Ty::Weak(counter, target) => {
+            Ty::Weak(*counter, Box::new(instantiate(target, substitution)))
+        }
+        Ty::Iter(item, std) => Ty::Iter(Box::new(instantiate(item, substitution)), *std),
+        Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
+        Ty::Cow(inner) => Ty::Cow(Box::new(instantiate(inner, substitution))),
+        Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
+        Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(instantiate(element, substitution))),
+        Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(instantiate(inner, substitution))),
+        Ty::Thread(kind, inner) => Ty::Thread(*kind, Box::new(instantiate(inner, substitution))),
+        Ty::Keyed(kind, arguments) => Ty::Keyed(
+            *kind,
+            arguments
+                .iter()
+                .map(|argument| instantiate(argument, substitution))
+                .collect(),
+        ),
+        Ty::Dyn(trait_name, bindings) => Ty::Dyn(
+            trait_name.clone(),
+            bindings
+                .iter()
+                .map(|(name, ty)| (name.clone(), instantiate(ty, substitution)))
+                .collect(),
+        ),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(instantiate(ok, substitution)),
+            Box::new(instantiate(err, substitution)),
+        ),
+        Ty::Array { element, kind } => Ty::Array {
+            element: Box::new(instantiate(element, substitution)),
+            kind: *kind,
+        },
+        Ty::Tuple(members) => Ty::Tuple(each(members)),
+        Ty::Reference { mutable, target } => Ty::Reference {
+            mutable: *mutable,
+            target: Box::new(instantiate(target, substitution)),
+        },
+        Ty::Fn { inputs, output } => Ty::Fn {
+            inputs: each(inputs),
+            output: Box::new(instantiate(output, substitution)),
+        },
+        Ty::FnItem {
+            key,
+            inputs,
+            output,
+        } => Ty::FnItem {
+            key: key.clone(),
+            inputs: each(inputs),
+            output: Box::new(instantiate(output, substitution)),
+        },
+        Ty::Host { proof, arguments } => Ty::Host {
+            proof: proof.clone(),
+            arguments: each(arguments),
+        },
+        Ty::Script(id, arguments) => Ty::Script(*id, each(arguments)),
+        Ty::Projection(base, trait_name, name) => Ty::Projection(
+            Box::new(instantiate(base, substitution)),
+            trait_name.clone(),
+            name.clone(),
+        ),
+        _ => ty.clone(),
+    }
+}
+
+/// The generic parameters bounded by `Default` or by a trait with a
+/// function without `self`: each takes a hidden type witness, so
+/// `T::default()` and `T::new()` reach a type erased at runtime.
+pub(super) fn witness_generics<'a>(
+    generics: &'a [item::Generic],
+    models: &'a Models,
+) -> impl Iterator<Item = &'a item::Generic> {
+    generics.iter().filter(|generic| {
+        generic.host
+            || generic.bounds.contains(capability::Kind::Default)
+            || generic
+                .traits
+                .iter()
+                .any(|name| static_trait(models, &name.text))
+    })
+}
+
+/// Whether a resolved type names a generic parameter.
+pub(super) fn mentions_parameter(ty: &type_ref::Type) -> bool {
+    match ty {
+        type_ref::Type::Unit(_) => false,
+        type_ref::Type::Tuple { members, .. } => members.iter().any(mentions_parameter),
+        type_ref::Type::Reference { target, .. } => mentions_parameter(target),
+        type_ref::Type::Path(path) => {
+            matches!(
+                path.target,
+                type_ref::Target::Parameter | type_ref::Target::Projection(..)
+            ) || path.arguments.iter().any(|argument| match argument {
+                type_ref::Argument::Type(ty) => mentions_parameter(ty),
+                type_ref::Argument::Lifetime(_) => false,
+            })
+        }
+    }
+}
+
+/// Each generic parameter's generic trait bounds' arguments:
+/// `(U, Convert)` to `[[i64]]` for `U: Convert<i64>`, and to
+/// `[[i64], [String]]` for `U: Convert<i64> + Convert<String>`.
+pub(super) fn generic_trait_arguments(
+    generics: &[item::Generic],
+) -> BTreeMap<(ImmutableString, ImmutableString), Vec<Box<[Ty]>>> {
+    let mut all = BTreeMap::<_, Vec<Box<[Ty]>>>::new();
+    for generic in generics {
+        for (trait_name, arguments) in &generic.trait_arguments {
+            all.entry((generic.name.text.clone(), trait_name.clone()))
+                .or_default()
+                .push(arguments.iter().map(Ty::from_resolved).collect());
+        }
+    }
+    all
+}
+
+/// The positional trait arguments of a trait object, kept among its
+/// bindings under the names `0`, `1`, ..: `i64` of `dyn Convert<i64>`.
+pub(super) fn dyn_arguments(bindings: &[(ImmutableString, Ty)]) -> Vec<Ty> {
+    let mut positional = bindings
+        .iter()
+        .filter_map(|(name, ty)| Some((name.parse::<usize>().ok()?, ty.clone())))
+        .collect::<Vec<_>>();
+    positional.sort_by_key(|(index, _)| *index);
+    positional.into_iter().map(|(_, ty)| ty).collect()
+}
+
+/// The supertraits of the trait `name`, transitively.
+pub(super) fn supertraits(models: &Models, name: &str) -> Vec<ImmutableString> {
+    models
+        .traits
+        .get(name)
+        .map(|(_, declared)| {
+            declared
+                .supertraits
+                .1
+                .iter()
+                .map(|name| name.text.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether the trait `name` has functions without `self`, which a generic
+/// parameter bounded by it calls through its type witness.
+pub(super) fn static_trait(models: &Models, name: &str) -> bool {
+    models.traits.get(name).is_some_and(|(_, declared)| {
+        declared
+            .functions
+            .iter()
+            .any(|function| function.receiver.is_none())
+    })
+}
+
+/// Every generic parameter list an item declares.
+pub(super) fn item_generics(kind: &item::Kind) -> Vec<&item::Generic> {
+    match kind {
+        item::Kind::Struct(item) => item.generics.iter().collect(),
+        item::Kind::Enum(item) => item.generics.iter().collect(),
+        item::Kind::Function(item) => item.generics.iter().collect(),
+        item::Kind::Impl(item) => item
+            .generics
+            .iter()
+            .chain(
+                item.functions
+                    .iter()
+                    .flat_map(|function| function.generics.iter()),
+            )
+            .collect(),
+        item::Kind::Trait(item) => item
+            .functions
+            .iter()
+            .flat_map(|function| function.generics.iter())
+            .collect(),
+        item::Kind::Use(_) => Vec::new(),
+    }
+}
+
+/// `Iterator` and the traits whose `Item` is its own, which Rawr's iterator
+/// type stands for.
+pub(super) fn is_iterator_trait(name: &str) -> bool {
+    matches!(
+        name,
+        "Iterator" | "DoubleEndedIterator" | "ExactSizeIterator"
+    )
+}
+
+/// `T::Output = U` of each `T: Trait<Output = U>` in `generics`.
+pub(super) fn generic_equalities(
+    generics: &[item::Generic],
+) -> BTreeMap<(ImmutableString, ImmutableString, ImmutableString), Ty> {
+    generics
+        .iter()
+        .flat_map(|generic| {
+            generic.projections.iter().map(|(trait_name, name, ty)| {
+                (
+                    (
+                        generic.name.text.clone(),
+                        trait_name.text.clone(),
+                        name.text.clone(),
+                    ),
+                    Ty::from_resolved(ty),
+                )
+            })
+        })
+        .collect()
+}
+
+/// The user trait bounds of each generic parameter in `generics`.
+/// The generic parameters a signature names inside a host type.
+pub(super) fn host_witnesses(generics: &[item::Generic]) -> Vec<ImmutableString> {
+    generics
+        .iter()
+        .filter(|generic| generic.host)
+        .map(|generic| generic.name.text.clone())
+        .collect()
+}
+
+pub(super) fn generic_traits(
+    generics: &[item::Generic],
+) -> BTreeMap<ImmutableString, Box<[ImmutableString]>> {
+    generics
+        .iter()
+        .filter(|generic| !generic.traits.is_empty())
+        .map(|generic| {
+            (
+                generic.name.text.clone(),
+                generic
+                    .traits
+                    .iter()
+                    .map(|name| name.text.clone())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// The capabilities a bound set names.
+pub(super) fn bound_kinds(bounds: capability::Set) -> impl Iterator<Item = capability::Kind> {
+    [
+        capability::Kind::Default,
+        capability::Kind::Debug,
+        capability::Kind::Clone,
+        capability::Kind::Copy,
+        capability::Kind::PartialEq,
+        capability::Kind::Eq,
+        // An `Rc` is not `Send` (rustc's E0277).
+        capability::Kind::Send,
+    ]
+    .into_iter()
+    .filter(move |kind| bounds.contains(*kind))
+}
+
+/// The head `dispatcher(witness, ` of `T::from(x)` for a generic target
+/// `T` and its `From` instance `index`, written over a conversion
+/// placeholder before the converted value's `(x))`.
+pub(super) fn generic_conversion_call(param: &str, index: usize) -> String {
+    format!(
+        "{}({}, ",
+        static_instance_dispatcher_name("From", "from", index),
+        witness_variable(param)
+    )
+}
+
+/// A trait call whose generic trait's dispatcher waits for inference:
+/// `(placeholder, trait, method, arguments, span, static, Self)`.
+pub(super) type PendingInstance = (
+    String,
+    ImmutableString,
+    ImmutableString,
+    Box<[Ty]>,
+    Span,
+    bool,
+    Ty,
+);
+
+/// An impl's where-clause bounds at an instance (D604): each bounded
+/// type, the bound's trait identity and the trait's arguments, then each
+/// bound that fixes an associated type (`ImplProjection`).
+#[cfg(feature = "rust-import")]
+pub(super) struct ImplBounds {
+    pub(super) traits: Vec<(Ty, [u8; 32], Vec<Ty>)>,
+    pub(super) projections: Vec<ImplProjection>,
+}
+
+/// A bound `<ty as Trait>::Name == value` of an impl at an instance, with
+/// the associated type each type `ty` may be gives (`facade::
+/// ImplProjection`).
+#[cfg(feature = "rust-import")]
+#[derive(Debug)]
+pub(super) struct ImplProjection {
+    pub(super) ty: Ty,
+    pub(super) value: Ty,
+    pub(super) cases: Box<[(Ty, Ty)]>,
+}
+
+/// Why no impl fixed an `impl Trait`'s hidden type (D604): none fits the
+/// type named, or more than one does.
+#[cfg(feature = "rust-import")]
+pub(super) enum Selection {
+    None(String),
+    Many(String),
+}
