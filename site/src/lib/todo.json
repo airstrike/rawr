@@ -129,7 +129,8 @@
         {"text":"Two `let`s of a crate value that borrows what it takes, such as an invariant `Text<'a>` or what `explain` gives, go to one call outside a view too, as Rust infers one lifetime for both.","issues":[1335]},
         {"text":"rawr keeps one copy of each crate's bindings: the home's for a shared crate, target/rawr/bindings for a path crate, and the file the nightly compiler wrote for bindings that haven't settled. target/rawr/staged holds only a small record for each, keeps those of the last four resolutions that ran the nightly compiler, and drops the rest. A check whose bindings are unchanged writes none of them again.","issues":[1354,1355]},
         {"text":"The iced tab is iced's counter, and Run shows its window's first frame. The ratatui tab draws a to-do screen with ratatui's widgets and prints it as text. Both carry a Run button and the server marker, and the build shows what the server returns. The server's universe gains ratatui 0.30 (play/universe). A block that needs the server's next image (`data-image=\"next\"`) says so while that image isn't live; the ratatui block carries it and its real output appears once the release workflow rebuilds the image and the site builds again. Merged as 7777bd005.","issues":[1372]},
-        {"text":"A project's target/rawr now grows by an edit's changes, not by a full copy per edit. The API, generic contract, facade, overlay and a runner's generated sources are kept as shared parts in target/rawr/store.parts, so a new generation writes only the parts it changed. When a runner leaves the four the project keeps, the units only its generation used go with it, and so does every part nothing lists any more. An undo to any of the four newest generations still rebuilds nothing.","issues":[1356,1358]}
+        {"text":"A project's target/rawr now grows by an edit's changes, not by a full copy per edit. The API, generic contract, facade, overlay and a runner's generated sources are kept as shared parts in target/rawr/store.parts, so a new generation writes only the parts it changed. When a runner leaves the four the project keeps, the units only its generation used go with it, and so does every part nothing lists any more. An undo to any of the four newest generations still rebuilds nothing.","issues":[1356,1358]},
+        {"text":"Shared bindings and trait facts are kept in one directory per extraction protocol in rawr's home (`formats/<protocol>`). Each directory records the installed rawr executables that use it. An older protocol's directory is removed once it has gone a day unused and no installed rawr uses it, so a protocol bump no longer leaves gigabytes of unreachable entries. `rawr cache clean` now also removes idle shared trait facts, and the home's stale `digests` file is removed.","issues":[1359]}
       ]
     },
     "releases": [
@@ -3096,7 +3097,7 @@
     {"issue":1356,"title":"Generic, facade and overlay contents and runner sources are stored as content-defined parts","state":"closed","category":"Health"},
     {"issue":1357,"title":"A resolution bundle keeps each protocol sidecar once per content","state":"open","category":"Health"},
     {"issue":1358,"title":"The store retires a product once no kept resolution, runner or pin reaches it","state":"closed","category":"Health"},
-    {"issue":1359,"title":"Rawr's home keeps bindings and inventories per format and retires formats no installed rawr uses","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1359,"title":"Rawr's home keeps bindings and inventories per format and retires formats no installed rawr uses","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1360,"title":"The runner embeds a compact facade plan instead of a gigabyte of JSON","state":"open","category":"Importer"},
     {"issue":1361,"title":"Stored parts and tables are compressed with zstd when written","state":"open","category":"Health"},
     {"issue":1362,"title":"The generic classification and the facade plan store each fact once","state":"open","category":"Importer"},
@@ -4114,7 +4115,7 @@
             {"number":1356,"title":"Generic, facade and overlay contents and runner sources are stored as content-defined parts","state":"closed"},
             {"number":1357,"title":"A resolution bundle keeps each protocol sidecar once per content","state":"open"},
             {"number":1358,"title":"The store retires a product once no kept resolution, runner or pin reaches it","state":"closed"},
-            {"number":1359,"title":"Rawr's home keeps bindings and inventories per format and retires formats no installed rawr uses","state":"open"},
+            {"number":1359,"title":"Rawr's home keeps bindings and inventories per format and retires formats no installed rawr uses","state":"closed"},
             {"number":1360,"title":"The runner embeds a compact facade plan instead of a gigabyte of JSON","state":"open"},
             {"number":1361,"title":"Stored parts and tables are compressed with zstd when written","state":"open"},
             {"number":1362,"title":"The generic classification and the facade plan store each fact once","state":"open"},
