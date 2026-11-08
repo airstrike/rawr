@@ -746,12 +746,19 @@ fn mutable_buffers_are_lent_in_place() {
 /// image's `GenericImage::get_pixel_mut`, is a place (#1318): `.0 = [..]`,
 /// `*p = Pixel(..)`, `.0[3] += 1`, the same through a local that keeps it,
 /// and the reference lent on to another crate call write the crate's own
-/// pixel, and the crate reads them back. The output is `cargo run`'s.
+/// pixel, and the crate reads them back. The method is called once per
+/// statement or binding, as rustc holds the reference it gives (#1325):
+/// the crate counts 11 calls, as under `cargo run`. The output is
+/// `cargo run`'s. The reference pins the buffer while it lives: reading
+/// the buffer before its last use is rustc's E0502.
 #[test]
 fn a_mutable_reference_a_crate_method_returns_is_a_place() {
     let (rawr, cargo) = both_printed("painted.rs", "");
     assert_eq!(rawr, cargo);
     assert!(rawr.starts_with("Pixel([5, 6, 7, 9])"), "{rawr}");
+    assert!(rawr.ends_with("lent 11 times"), "{rawr}");
+    let stderr = rejected_as_cargo("painted_pinned.rs", "E0502");
+    assert!(stderr.contains("main.rs:7:"), "{stderr}");
 }
 
 #[test]

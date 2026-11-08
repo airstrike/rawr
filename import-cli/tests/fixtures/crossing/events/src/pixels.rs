@@ -10,6 +10,8 @@ pub struct Pixel(pub [u8; 4]);
 #[derive(Debug, Default)]
 pub struct Buffer {
     pixels: Vec<Pixel>,
+    /// How often a pixel was lent mutably.
+    lent: usize,
 }
 
 impl Buffer {
@@ -17,12 +19,19 @@ impl Buffer {
     pub fn new(count: usize) -> Self {
         Self {
             pixels: vec![Pixel([0; 4]); count],
+            lent: 0,
         }
     }
 
     /// The pixel at `index`, lent mutably.
     pub fn get_mut(&mut self, index: usize) -> &mut Pixel {
+        self.lent += 1;
         &mut self.pixels[index]
+    }
+
+    /// How often `get_mut` and `pixel_mut` were called.
+    pub fn lent(&self) -> usize {
+        self.lent
     }
 
     /// The pixel at `index`.
@@ -45,6 +54,7 @@ pub trait Image {
 
 impl Image for Buffer {
     fn pixel_mut(&mut self, index: usize) -> &mut Pixel {
+        self.lent += 1;
         &mut self.pixels[index]
     }
 }
