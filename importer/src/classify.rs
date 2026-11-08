@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 133;
+const CLASSIFIER_VERSION: u32 = 134;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -10688,11 +10688,16 @@ pub(crate) fn associated_at(
         if found.is_some() {
             return None;
         }
-        found = Some(normalize_at(
-            graph,
-            &substitute_bindings(value, &bindings),
-            depth + 1,
-        )?);
+        let value = normalize_at(graph, &substitute_bindings(value, &bindings), depth + 1)?;
+        // `this` binds each parameter the impl's self type names. One only
+        // the impl's where clauses fix, as `E` of futures_util's `impl<St,
+        // Si, Item, E> Future for Forward<St, Si, Item>` gives `Output =
+        // Result<(), E>`, is still the impl's own parameter, which no
+        // caller declares (#1295).
+        if names_type_parameter(&value) {
+            return None;
+        }
+        found = Some(value);
     }
     found
 }
