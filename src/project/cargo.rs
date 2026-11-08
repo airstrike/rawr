@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+pub mod cfg;
 pub mod features;
 
 /// The workspace `cargo metadata` describes from one manifest: its
@@ -105,6 +106,7 @@ pub enum Error {
 
 const METADATA: &str = "cargo metadata";
 const UNIT_GRAPH: &str = "cargo build --unit-graph";
+const PRINT_CFG: &str = "rustc --print cfg";
 
 /// One kept `cargo metadata` answer, by the manifest it was asked from.
 struct Described {
@@ -597,10 +599,21 @@ impl Unit {
             Some("abort") => Panic::Abort,
             _ => Panic::Unwind,
         };
+        let directory = package.manifest.parent().unwrap_or(Path::new("."));
+        let target = cfg::Target::of_unit(directory, root).map_err(|error| match error {
+            cfg::Error::Spawn(source) => Error::Spawn {
+                command: PRINT_CFG,
+                source,
+            },
+            cfg::Error::Failed(stderr) => Error::Failed {
+                command: PRINT_CFG,
+                stderr,
+            },
+        })?;
         Ok(Self {
             crates: crates.into_boxed_slice(),
             build_crates: build_crates.into_boxed_slice(),
-            features: features::Enabled::of_unit(root),
+            features: features::Enabled::of_unit(root).with_target(target),
             panic,
         })
     }

@@ -404,8 +404,9 @@ impl SnapshotBuilder {
         Ok(())
     }
 
-    /// Bind the features Cargo enabled for the entry package, after the
-    /// entry and before any file. A snapshot that binds none has none.
+    /// Bind the entry package's configuration, after the entry and before
+    /// any file: the features Cargo enabled and the options rustc sets, as
+    /// `rustc --print cfg` lines. A snapshot that binds none has none.
     #[doc(hidden)]
     pub fn features<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) -> Result<(), Error> {
         if !self.entry {

@@ -415,7 +415,8 @@ impl Snapshot {
                 .to_str()
                 .ok_or(rawr_import::surface::Error::NonUtf8Path)?,
         )?;
-        builder.features(self.features.names())?;
+        let cfg = self.features.lines().collect::<Vec<_>>();
+        builder.features(cfg.iter().map(String::as_str))?;
         for file in &self.files {
             builder.file(
                 file.path
@@ -442,7 +443,8 @@ impl Snapshot {
                 .to_str()
                 .ok_or(rawr_import::supervisor::snapshot::Error::Malformed)?,
         )?;
-        capture.features(self.features.names())?;
+        let cfg = self.features.lines().collect::<Vec<_>>();
+        capture.features(cfg.iter().map(String::as_str))?;
         for file in &self.files {
             capture.file(
                 file.path

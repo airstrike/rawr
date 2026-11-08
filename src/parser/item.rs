@@ -38,8 +38,8 @@ std::thread_local! {
     /// Whether the file being parsed builds as `rustc --test` builds it:
     /// `cfg(test)` holds.
     static TEST: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
-    /// The features Cargo enables for the package of the file being parsed:
-    /// its `cfg(feature = "..")`s hold.
+    /// The features Cargo enables for the package of the file being parsed,
+    /// and the options rustc sets for its target: what its `cfg(..)`s read.
     static FEATURES: core::cell::RefCell<Enabled> = core::cell::RefCell::default();
 }
 
@@ -1241,9 +1241,9 @@ fn cfg_disabled(attributes: &[crate::item::Attribute]) -> bool {
 }
 
 /// One `cfg` predicate: `test` (as the engine builds: rustc's `--test`),
-/// `debug_assertions` (true), `feature = "x"` (a feature Cargo enables for
-/// the package), `not(..)`, `all(..)`, `any(..)`; any other option does not
-/// hold.
+/// `feature = "x"` (a feature Cargo enables for the package), `not(..)`,
+/// `all(..)`, `any(..)`, and any other option as rustc sets it for the
+/// target Cargo builds the package for (`target_os = ".."`, `unix`).
 fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
     let name = parse_name(input, "in a `cfg` predicate")?;
     match name.text.as_str() {
@@ -1270,10 +1270,16 @@ fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
                     Some((Token::StringConstant(value), _)) if name == "feature" => {
                         FEATURES.with_borrow(|features| features.holds(&value))
                     }
+                    Some((Token::StringConstant(value), _)) => {
+                        FEATURES.with_borrow(|features| features.option(name, Some(&value)))
+                    }
                     _ => false,
                 });
             }
-            Ok(name == "debug_assertions" || name == "test" && TEST.get())
+            if name == "test" {
+                return Ok(TEST.get());
+            }
+            Ok(FEATURES.with_borrow(|features| features.option(name, None)))
         }
     }
 }

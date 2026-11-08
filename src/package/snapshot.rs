@@ -7,8 +7,9 @@ use std::path::{Component, Path, PathBuf};
 pub struct Snapshot {
     entry: PathBuf,
     files: Box<[(PathBuf, Box<str>)]>,
-    /// The features Cargo enabled for the entry package, under which its
-    /// `cfg(feature = "..")`s hold. None unless the parent hands them on.
+    /// The features Cargo enabled for the entry package and the options
+    /// rustc sets for its target, which its `cfg(..)`s read. The host's
+    /// unless the parent hands them on.
     features: crate::project::cargo::features::Enabled,
 }
 

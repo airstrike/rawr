@@ -215,12 +215,12 @@ impl Cells {
     }
 }
 
-/// What a parse was computed from: the text, and the features its
-/// `cfg(feature = "..")`s read.
+/// What a parse was computed from: the text, and the features and target
+/// options its `cfg(..)`s read.
 fn digest(text: &str, features: &Enabled) -> [u8; 32] {
     let mut digest = Sha256::new();
-    for name in features.names() {
-        digest.update(name.as_bytes());
+    for line in features.lines() {
+        digest.update(line.as_bytes());
         digest.update([0]);
     }
     digest.update([0xff]);
