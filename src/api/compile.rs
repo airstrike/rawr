@@ -110,17 +110,12 @@ impl Engine {
         unit: crate::parse::Unit,
         source: crate::diagnostic::Source,
     ) -> ParseResult<AST> {
-        if let Some(compiled) =
-            crate::package::compile::inline_modules(self, &unit, source.identity(), source.text())
-        {
-            return compiled.map(program::Executable::into_hosted_ast);
-        }
-        let program = crate::resolve::resolve_with_evidence(unit, &self.host_registry, source)?;
-        crate::resolve::lower_with_engine(
+        crate::package::compile::one_file(
             self,
-            program,
-            Some(&Scope::new()),
-            self.optimization_level,
+            unit,
+            (source.identity(), source.text()),
+            (Some(&Scope::new()), self.optimization_level),
+            None,
         )
         .map(program::Executable::into_hosted_ast)
     }
@@ -133,17 +128,12 @@ impl Engine {
         unit: crate::parse::Unit,
         source: crate::diagnostic::Source,
     ) -> ParseResult<(AST, program::Positions)> {
-        if let Some(compiled) =
-            crate::package::compile::inline_modules(self, &unit, source.identity(), source.text())
-        {
-            return compiled.map(program::Executable::into_ast_with_positions);
-        }
-        let program = crate::resolve::resolve_with_evidence(unit, &self.host_registry, source)?;
-        crate::resolve::lower_with_engine(
+        crate::package::compile::one_file(
             self,
-            program,
-            Some(&Scope::new()),
-            self.optimization_level,
+            unit,
+            (source.identity(), source.text()),
+            (Some(&Scope::new()), self.optimization_level),
+            None,
         )
         .map(program::Executable::into_ast_with_positions)
     }
@@ -417,25 +407,13 @@ impl Engine {
         let identity = evidence
             .as_ref()
             .map_or("<script>", crate::diagnostic::Source::identity);
-        if let Some(compiled) =
-            crate::package::compile::inline_modules(self, &unit, identity, &source)
-        {
-            return compiled;
-        }
-
-        let program =
-            crate::timing::observe_optional(session, crate::timing::Phase::Resolve, || {
-                match evidence {
-                    Some(evidence) => {
-                        crate::resolve::resolve_with_evidence(unit, &self.host_registry, evidence)
-                    }
-                    None => crate::resolve::resolve(unit, &self.host_registry),
-                }
-            })?;
-
-        crate::timing::observe_optional(session, crate::timing::Phase::Lower, || {
-            crate::resolve::lower_with_engine(self, program, scope, optimization_level)
-        })
+        crate::package::compile::one_file(
+            self,
+            unit,
+            (identity, &source),
+            (scope, optimization_level),
+            session,
+        )
     }
 
     /// Parse the lowered program text the evaluator runs. Only text the

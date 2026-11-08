@@ -122,6 +122,10 @@ pub struct Graph {
     /// (#1040), with the derives that are due again.
     #[cfg(feature = "rust-import")]
     stale: Vec<rawr_import::expand::Item>,
+    /// A host's one in-memory file ([`Graph::load_parsed`]), whose paths
+    /// may start at any crate the host registered, as no manifest names
+    /// its dependencies.
+    hosted: bool,
 }
 
 impl Id {
@@ -379,6 +383,18 @@ impl Graph {
         Builder::from_snapshot(engine, snapshot).load_snapshot()
     }
 
+    /// [`Graph::load_snapshot`] of one file the engine already parsed as
+    /// `entry`, which the graph keeps rather than parsing its text again.
+    pub(crate) fn load_parsed(
+        engine: &Engine,
+        snapshot: &super::snapshot::Snapshot,
+        entry: crate::parse::Unit,
+    ) -> Result<Self, Error> {
+        let mut builder = Builder::from_snapshot(engine, snapshot);
+        builder.entry = Some(entry);
+        builder.load_snapshot()
+    }
+
     /// Return all packages in deterministic dependency-discovery order.
     #[must_use]
     pub fn packages(&self) -> &[Package] {
@@ -506,6 +522,12 @@ impl Graph {
             .collect()
     }
 
+    /// Whether this is a host's one in-memory file, which no manifest's
+    /// extern prelude bounds.
+    pub(crate) const fn hosted(&self) -> bool {
+        self.hosted
+    }
+
     #[allow(dead_code)]
     pub(crate) fn into_parts(self) -> Parts {
         (
@@ -567,6 +589,8 @@ struct Builder<'a> {
     engine: &'a Engine,
     cells: Option<&'a super::Cells>,
     snapshot: Option<&'a super::snapshot::Snapshot>,
+    /// The entry source's parse, when the caller already has it.
+    entry: Option<crate::parse::Unit>,
     evidence: Vec<diagnostic::Source>,
     sources: Vec<source::Source>,
     units: Vec<Unit>,
@@ -591,6 +615,7 @@ impl<'a> Builder<'a> {
             engine,
             cells: None,
             snapshot: None,
+            entry: None,
             evidence: Vec::new(),
             sources: Vec::new(),
             units: Vec::new(),
@@ -633,10 +658,12 @@ impl<'a> Builder<'a> {
             expanded: self.expanded,
             #[cfg(feature = "rust-import")]
             stale: self.stale,
+            hosted: false,
         })
     }
 
     fn load_snapshot(mut self) -> Result<Graph, Error> {
+        let hosted = self.entry.is_some();
         let snapshot = self
             .snapshot
             .expect("snapshot builder retains its immutable input");
@@ -657,6 +684,7 @@ impl<'a> Builder<'a> {
             expanded: self.expanded,
             #[cfg(feature = "rust-import")]
             stale: self.stale,
+            hosted,
         })
     }
 
@@ -1111,8 +1139,13 @@ impl<'a> Builder<'a> {
         .map_err(Error::diagnostic)?;
         let evidence = self.push_evidence(source.diagnostic().clone());
         let features = &self.packages[package.0].features;
-        let parsed = match self.cells {
-            Some(cells) => match cells.get(&canonical, source.text(), features) {
+        let entry = self
+            .entry
+            .take()
+            .filter(|_| *features == crate::project::cargo::features::Enabled::default());
+        let parsed = match (entry, self.cells) {
+            (Some(parsed), _) => parsed,
+            (None, Some(cells)) => match cells.get(&canonical, source.text(), features) {
                 Some(parsed) => parsed,
                 None => {
                     let parsed = self
@@ -1123,7 +1156,7 @@ impl<'a> Builder<'a> {
                     parsed
                 }
             },
-            None => self
+            (None, None) => self
                 .engine
                 .parse_unit_with(source.text(), features)
                 .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?,

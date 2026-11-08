@@ -1172,6 +1172,26 @@ impl Registry {
             .then(|| ty.path_ref().to_string().into())
     }
 
+    /// The variants of the public crate enum `qualified` names, as a glob
+    /// import of it (`use iced::Alignment::*;`) reaches them.
+    pub(crate) fn enum_variants(&self, qualified: &str) -> Option<Vec<ImmutableString>> {
+        let path = path::Path::parse(qualified).ok()?;
+        let path = self.canonical(&path).unwrap_or(path);
+        let ty = self.type_by_path(&path)?;
+        if ty.visibility() != type_def::Visibility::Public {
+            return None;
+        }
+        let type_def::Shape::Enum(variants) = ty.shape() else {
+            return None;
+        };
+        Some(
+            variants
+                .iter()
+                .map(|variant| ImmutableString::from(variant.name()))
+                .collect(),
+        )
+    }
+
     /// A crate type alias that passes its own parameters on, all and in
     /// order, to the imported type `identity`, as iced's `canvas::Cache<
     /// Renderer = ..>` does to `geometry::Cache<Renderer>`. Its path reaches

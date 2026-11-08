@@ -187,16 +187,6 @@ impl fmt::Debug for Executable {
 }
 
 impl Executable {
-    pub(crate) fn from_resolved(
-        engine: &Engine,
-        program: resolve::Program,
-        scope: Option<&Scope>,
-        optimization_level: crate::OptimizationLevel,
-    ) -> crate::parser::ParseResult<Self> {
-        Self::from_resolved_at(engine, program, scope, optimization_level)
-            .map_err(resolve::LoweringFailure::into_error)
-    }
-
     pub(crate) fn from_package_resolved(
         engine: &Engine,
         program: resolve::Program,

@@ -22,36 +22,44 @@ pub(crate) fn executable(
     executable_with_evidence(engine, target, session, false).map(|(executable, ..)| executable)
 }
 
-/// One in-memory file, `text` named `identity`, compiled as the root of a
-/// crate, when its `mod` items are all inline (`mod geometry { .. }`): each
-/// module is read from the file's own text, as `rawr run` reads it, without
-/// a file or a project. `None` when the file declares no module, or a file module
-/// (`mod util;`), which the single-file compiler refuses.
+/// One in-memory file, `text` named `identity` and already parsed as
+/// `unit`, compiled as the root of a crate: each inline module (`mod
+/// geometry { .. }`) is read from the file's own text, as `rawr run` reads
+/// it, without a file or a project. A file module (`mod util;`) needs the
+/// project, so the single-file compiler refuses it.
 ///
 /// The program is the single-file compiler's
 /// ([`Executable::into_one_file`](program::Executable::into_one_file)).
-pub(crate) fn inline_modules(
+pub(crate) fn one_file(
     engine: &Engine,
-    unit: &crate::parse::Unit,
-    identity: &str,
-    text: &str,
-) -> Option<crate::parser::ParseResult<program::Executable>> {
-    let mut inline = false;
+    unit: crate::parse::Unit,
+    (identity, text): (&str, &str),
+    (scope, optimization_level): (Option<&Scope>, crate::OptimizationLevel),
+    session: Option<&timing::Session>,
+) -> crate::parser::ParseResult<program::Executable> {
     for item in unit.items() {
-        if let crate::item::Parsed::Module(module) = item {
-            module.inline?;
-            inline = true;
+        if let crate::item::Parsed::Module(module) = item
+            && module.inline.is_none()
+        {
+            return Err(resolve::Error::UnsupportedNominalSyntax {
+                construct: "file modules require project/package compilation".into(),
+                source: module.span,
+            }
+            .into());
         }
     }
-    if !inline {
-        return None;
-    }
-    let path = std::path::Path::new("/").join(identity);
-    let snapshot = super::snapshot::Snapshot::new(path.clone(), vec![(path, text.into())]).ok()?;
-    let compiled = Graph::load_snapshot(engine, &snapshot)
-        .and_then(|graph| executable_from_graph(engine, graph, None, false))
+    // A name no path can hold, as `../x`, is the file's name only.
+    let snapshot = |identity: &str| {
+        let path = std::path::Path::new("/").join(identity);
+        super::snapshot::Snapshot::new(path.clone(), vec![(path, text.into())])
+    };
+    let snapshot = snapshot(identity)
+        .or_else(|_| snapshot("main.rs"))
+        .expect("one absolute file is a valid snapshot");
+    let compiled = Graph::load_parsed(engine, &snapshot, unit)
+        .and_then(|graph| lower_graph(engine, graph, session, false, (scope, optimization_level)))
         .map_err(Error::into_file_error);
-    Some(compiled.map(|(executable, ..)| executable.into_one_file()))
+    compiled.map(|(executable, ..)| executable.into_one_file())
 }
 
 #[cfg(feature = "rust-import")]
@@ -159,6 +167,24 @@ pub(crate) fn executable_from_graph(
     session: Option<&timing::Session>,
     retain_source: bool,
 ) -> Result<ExecutableEvidence, Error> {
+    lower_graph(
+        engine,
+        graph,
+        session,
+        retain_source,
+        (Some(&Scope::new()), engine.optimization_level),
+    )
+}
+
+/// [`executable_from_graph`], lowered with `scope`'s constants at
+/// `optimization_level`.
+fn lower_graph(
+    engine: &Engine,
+    graph: Graph,
+    session: Option<&timing::Session>,
+    retain_source: bool,
+    (scope, optimization_level): (Option<&Scope>, crate::OptimizationLevel),
+) -> Result<ExecutableEvidence, Error> {
     let sources = graph.diagnostic_sources();
     let entry = graph.entry_source().id();
     let source = retain_source.then(|| crate::reload::source::Graph::from_package(&graph));
@@ -167,16 +193,12 @@ pub(crate) fn executable_from_graph(
             .map_err(|failure| Error::resolution(sources.clone(), failure))
     })?;
     let executable = timing::observe_optional(session, timing::Phase::Lower, || {
-        resolve::lower_package_with_engine(
-            engine,
-            program,
-            Some(&Scope::new()),
-            engine.optimization_level,
+        resolve::lower_package_with_engine(engine, program, scope, optimization_level).map_err(
+            |failure| {
+                let (evidence, error) = failure.into_parts();
+                Error::compilation(sources.clone(), evidence, error)
+            },
         )
-        .map_err(|failure| {
-            let (evidence, error) = failure.into_parts();
-            Error::compilation(sources.clone(), evidence, error)
-        })
     })?;
     Ok((executable, sources, entry, source))
 }

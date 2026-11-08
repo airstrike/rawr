@@ -14459,3 +14459,71 @@ fn language_a_program_struct_by_path_is_its_value() {
         assert_eq!(run(&program), 42, "{value}");
     }
 }
+
+/// A single-file crate names its own items from the root: `crate::` and
+/// `self::` in a type, a value, a call, a pattern and a `use`, as rustc
+/// reads them (#1344). `super::` at the root is rustc's E0433.
+#[test]
+fn language_crate_and_self_paths_name_the_root_of_a_single_file() {
+    let source = r#"
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Side { Left, Right }
+
+struct Point { x: i64 }
+
+const LIMIT: i64 = 3;
+
+fn flip(side: crate::Side) -> self::Side {
+    match side {
+        crate::Side::Left => self::Side::Right,
+        self::Side::Right => crate::Side::Left,
+    }
+}
+
+use crate::Side::Left;
+use self::Point as P;
+
+fn main() {
+    let s: self::Side = crate::Side::Right;
+    let p: crate::Point = self::P { x: crate::LIMIT };
+    let crate::Point { x } = p;
+    println!("{:?} {:?} {} {}", crate::flip(s), self::flip(Left), x, Left == Side::Left);
+}
+main();
+"#;
+    assert_eq!(printed(source), "Left Right 3 true\n");
+    let error = rejected("pub fn run() -> i64 { super::run() } run()");
+    assert!(
+        error.contains("too many leading `super` keywords"),
+        "{error}"
+    );
+}
+
+/// A module re-exports an enum's variant by `pub use`, one by name and
+/// all by a glob, and the root uses them through the module, as rustc
+/// does (#1345).
+#[test]
+fn language_pub_use_re_exports_a_variant_and_a_variant_glob() {
+    let source = r#"mod kinds {
+    #[derive(Debug)]
+    pub enum Kind { Primary, Secondary }
+    pub use self::Kind::Secondary;
+
+    pub mod shades {
+        #[derive(Debug)]
+        pub enum Shade { Light, Dark(i64) }
+        pub use Shade::*;
+    }
+}
+
+use kinds::shades::{Dark, Light};
+
+fn main() {
+    let k = kinds::Secondary;
+    let d = Dark(2);
+    println!("{:?} {:?} {:?} {:?}", k, kinds::Kind::Primary, d, Light);
+}
+main();
+"#;
+    assert_eq!(printed(source), "Secondary Primary Dark(2) Light\n");
+}

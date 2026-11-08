@@ -282,6 +282,7 @@ impl LoweringFailure {
         )
     }
 
+    #[cfg(all(test, feature = "rust-import"))]
     pub(crate) fn into_error(self) -> crate::ParseError {
         match self.evidence {
             LoweringEvidence::Original(_) => self.error,
@@ -775,23 +776,6 @@ fn resolve_with(
     resolve_with_evidence_and_namespace(unit, host, namespace, allocation_order, evidence)
 }
 
-pub(crate) fn lower_with_engine(
-    engine: &crate::Engine,
-    program: Program,
-    scope: Option<&crate::Scope>,
-    optimization_level: crate::OptimizationLevel,
-) -> crate::parser::ParseResult<program::Executable> {
-    for shell in &program.items {
-        match &shell.kind {
-            item::Kind::Use(_) | item::Kind::Struct(_) | item::Kind::Enum(_) => {}
-            item::Kind::Impl(_) | item::Kind::Trait(_) => {}
-            item::Kind::Function(function) => reject_unavailable(function)?,
-        }
-    }
-
-    program::Executable::from_resolved(engine, program, scope, optimization_level)
-}
-
 pub(crate) fn lower_package_with_engine(
     engine: &crate::Engine,
     program: Program,
@@ -866,16 +850,6 @@ fn missing_lifetime(ty: &crate::item::type_ref::Type) -> Result<(), Error> {
                 Argument::Type(ty) => missing_lifetime(ty),
                 Argument::Lifetime(_) => Ok(()),
             }),
-    }
-}
-
-fn reject_unavailable(function: &item::Function) -> Result<(), Error> {
-    match function.body.lowering {
-        item::Lowering::Unavailable => Err(Error::LoweringUnavailable {
-            item: function.name.text.clone(),
-            body: function.body.span,
-        }),
-        item::Lowering::NominalFunction | item::Lowering::NominalMethod(_) => Ok(()),
     }
 }
 
@@ -5993,20 +5967,22 @@ mod tests {
             AllocationOrder::Reverse,
         )
         .unwrap();
-        let source_order = program::Executable::from_resolved(
+        let Ok(source_order) = program::Executable::from_package_resolved(
             &engine,
             source_order,
             None,
             engine.optimization_level,
-        )
-        .unwrap();
-        let reverse_order = program::Executable::from_resolved(
+        ) else {
+            panic!("the program lowers");
+        };
+        let Ok(reverse_order) = program::Executable::from_package_resolved(
             &engine,
             reverse_order,
             None,
             engine.optimization_level,
-        )
-        .unwrap();
+        ) else {
+            panic!("the program lowers");
+        };
 
         let source_values: Vec<_> = source_order.items().cloned().collect();
         let reverse_values: Vec<_> = reverse_order.items().cloned().collect();
