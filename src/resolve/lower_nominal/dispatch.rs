@@ -1,16 +1,14 @@
 //! Function and method writers: the generated dispatchers of trait, instance,
 //! `Into` and static calls, and the text of each lowered function and method.
 
-use super::closure;
 use super::models::{Models, Nominal};
 use super::op::{builtin_code, owner_id, owner_key, ExecutableOp, PreludeOp, COUNTED_KEY};
 use super::ty::Ty;
 use super::{
-    copied_parameters, default_value, drops, instance_dispatcher_name, instance_text,
-    item_generics, location, mentions_parameter, method_copied, method_name, origin,
-    retain_locations, static_dispatcher_name, static_instance_dispatcher_name, this_parameter,
-    trait_dispatcher_name, witness_generics, witness_variable, Lowered, ParsedExpr, Parser,
-    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL,
+    closure, default_value, drops, instance_dispatcher_name, instance_text, item_generics,
+    location, mentions_parameter, method_name, origin, retain_locations, static_dispatcher_name,
+    static_instance_dispatcher_name, trait_dispatcher_name, witness_generics, witness_variable,
+    Lowered, ParsedExpr, Parser, CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL,
 };
 use crate::resolve::{item, type_ref, Error, Program};
 use crate::{capability, method, ImmutableString, Span};
@@ -871,4 +869,74 @@ impl<'a> Parser<'a> {
         }
         .retain_origin())
     }
+}
+
+/// A free function's first `&mut` parameter, which a call passes as its
+/// receiver's place. Not its `&mut fmt::Formatter`, whose text the body
+/// gives back (`wrap_formatter`).
+/// `names` with each of `from`'s names also in `to`, where `to` names
+/// nothing of its own by that name.
+pub(super) fn inherit_names<V: Clone>(
+    names: &mut BTreeMap<(crate::program::source::Id, ImmutableString), V>,
+    from: crate::program::source::Id,
+    to: crate::program::source::Id,
+) {
+    let inherited = names
+        .iter()
+        .filter(|((source, _), _)| *source == from)
+        .map(|((_, name), value)| (name.clone(), value.clone()))
+        .collect::<Vec<_>>();
+    for (name, value) in inherited {
+        names.entry((to, name)).or_insert(value);
+    }
+}
+
+pub(crate) fn this_parameter(definition: &item::Function) -> Option<usize> {
+    definition.parameters.iter().position(|parameter| {
+        matches!(
+            parameter.ty,
+            type_ref::Type::Reference { mutable: true, .. }
+        ) && !crate::resolve::direct_mutable_invocation(&parameter.ty)
+            && definition.formatter.as_ref() != Some(&parameter.name.text)
+    })
+}
+
+/// The `&mut` parameters a call copies in and back out: a free
+/// function's after its receiver (`this_parameter`), an inherent method's
+/// or associated function's all. Rust's borrow rules keep them apart, so
+/// the copies change the caller's places as the references would. Not the
+/// `formatter`, whose text the body gives back (`wrap_formatter`).
+pub(super) fn copied_parameters(
+    parameters: &[item::Parameter],
+    receiver: Option<usize>,
+    formatter: Option<&ImmutableString>,
+) -> Vec<usize> {
+    parameters
+        .iter()
+        .enumerate()
+        .filter(|(index, parameter)| {
+            Some(*index) != receiver
+                && matches!(
+                    parameter.ty,
+                    type_ref::Type::Reference { mutable: true, .. }
+                )
+                && !crate::resolve::direct_mutable_invocation(&parameter.ty)
+                && formatter != Some(&parameter.name.text)
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// `copied_parameters` of a method, a trait's too (every impl of a trait
+/// function copies the same parameters, so a dispatcher passes the copies
+/// through); not the formatter of a `Debug` or `Display` `fmt`, nor any
+/// method's `&mut fmt::Formatter`, whose text the body gives back.
+pub(super) fn method_copied(definition: &method::Definition, _models: &Models) -> Vec<usize> {
+    if definition
+        .trait_name()
+        .is_some_and(|name| matches!(name.as_str(), "Debug" | "Display"))
+    {
+        return Vec::new();
+    }
+    copied_parameters(definition.parameters(), None, definition.formatter())
 }

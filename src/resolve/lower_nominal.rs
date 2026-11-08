@@ -135,7 +135,9 @@ use compare::{allowed_type, COMPARISON};
 use coverage::{
     bool_literals, field_order, reject_empty_range, scalar_text, tuple_members, Scalar,
 };
+pub(crate) use dispatch::this_parameter;
 use dispatch::{builtin_conversions_from, builtin_operator, BUILTIN_CONVERSIONS};
+use dispatch::{copied_parameters, inherit_names, method_copied};
 pub(super) use entry::lower;
 #[cfg(feature = "rust-import")]
 pub(crate) use entry::with_uses;
@@ -289,76 +291,6 @@ pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> 
         }
     }
     tokens
-}
-
-/// A free function's first `&mut` parameter, which a call passes as its
-/// receiver's place. Not its `&mut fmt::Formatter`, whose text the body
-/// gives back (`wrap_formatter`).
-/// `names` with each of `from`'s names also in `to`, where `to` names
-/// nothing of its own by that name.
-fn inherit_names<V: Clone>(
-    names: &mut BTreeMap<(crate::program::source::Id, ImmutableString), V>,
-    from: crate::program::source::Id,
-    to: crate::program::source::Id,
-) {
-    let inherited = names
-        .iter()
-        .filter(|((source, _), _)| *source == from)
-        .map(|((_, name), value)| (name.clone(), value.clone()))
-        .collect::<Vec<_>>();
-    for (name, value) in inherited {
-        names.entry((to, name)).or_insert(value);
-    }
-}
-
-pub(crate) fn this_parameter(definition: &item::Function) -> Option<usize> {
-    definition.parameters.iter().position(|parameter| {
-        matches!(
-            parameter.ty,
-            type_ref::Type::Reference { mutable: true, .. }
-        ) && !super::direct_mutable_invocation(&parameter.ty)
-            && definition.formatter.as_ref() != Some(&parameter.name.text)
-    })
-}
-
-/// The `&mut` parameters a call copies in and back out: a free
-/// function's after its receiver (`this_parameter`), an inherent method's
-/// or associated function's all. Rust's borrow rules keep them apart, so
-/// the copies change the caller's places as the references would. Not the
-/// `formatter`, whose text the body gives back (`wrap_formatter`).
-fn copied_parameters(
-    parameters: &[item::Parameter],
-    receiver: Option<usize>,
-    formatter: Option<&ImmutableString>,
-) -> Vec<usize> {
-    parameters
-        .iter()
-        .enumerate()
-        .filter(|(index, parameter)| {
-            Some(*index) != receiver
-                && matches!(
-                    parameter.ty,
-                    type_ref::Type::Reference { mutable: true, .. }
-                )
-                && !super::direct_mutable_invocation(&parameter.ty)
-                && formatter != Some(&parameter.name.text)
-        })
-        .map(|(index, _)| index)
-        .collect()
-}
-
-/// `copied_parameters` of a method, a trait's too (every impl of a trait
-/// function copies the same parameters, so a dispatcher passes the copies
-/// through); not the formatter of a `Debug` or `Display` `fmt`, nor any
-/// method's `&mut fmt::Formatter`, whose text the body gives back.
-fn method_copied(definition: &method::Definition, _models: &Models) -> Vec<usize> {
-    if definition
-        .trait_name()
-        .is_some_and(|name| matches!(name.as_str(), "Debug" | "Display"))
-    {
-        return Vec::new();
-    }
-    copied_parameters(definition.parameters(), None, definition.formatter())
 }
 
 /// A path naming a free value and free functions, as a Rust `fn` item: the
