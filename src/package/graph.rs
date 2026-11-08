@@ -798,7 +798,7 @@ impl<'a> Builder<'a> {
                 None => Some(module_root.join("main.rs")),
             };
             match path {
-                Some(path) => self.bin_root(&root, &module_root, path)?,
+                Some(path) => self.bin_root(package, &root, &module_root, path)?,
                 None => None,
             }
         } else {
@@ -813,8 +813,9 @@ impl<'a> Builder<'a> {
         // (D501): Rawr reads only its `mod` declarations, as the root of the
         // marked modules, and the native build compiles the rest.
         let marked = crate::project::is_marked(&text);
-        let read = if !marked && self.reaches_marked(&module_root, &text).is_some() {
-            let declarations = super::island::root_text(&text, has_bin);
+        let read = if !marked && self.reaches_marked(package, &module_root, &text).is_some() {
+            let declarations =
+                super::island::root_text(&text, has_bin, &self.packages[package.0].features);
             self.packages[package.0].native_root = Some(NativeRoot {
                 module: RustModule {
                     modules: Box::default(),
@@ -915,7 +916,7 @@ impl<'a> Builder<'a> {
         let marked = if crate::project::is_marked(&text) {
             Some(library.clone())
         } else {
-            self.reaches_marked(module_root, &text)
+            self.reaches_marked(package, module_root, &text)
         };
         let Some(marked) = marked else {
             return Ok(());
@@ -970,6 +971,7 @@ impl<'a> Builder<'a> {
     /// `module_root`.
     fn bin_root(
         &self,
+        package: Id,
         root: &Path,
         module_root: &Path,
         path: PathBuf,
@@ -986,7 +988,9 @@ impl<'a> Builder<'a> {
                 None,
             )
         })?;
-        if crate::project::is_marked(&text) || self.reaches_marked(module_root, &text).is_some() {
+        if crate::project::is_marked(&text)
+            || self.reaches_marked(package, module_root, &text).is_some()
+        {
             return Ok(None);
         }
         Ok(Some(RustModule {
@@ -998,12 +1002,15 @@ impl<'a> Builder<'a> {
 
     /// The first marked module the native crate root `text` reaches
     /// through its `mod` declarations and those of the native modules it
-    /// declares, as project discovery decides.
-    fn reaches_marked(&self, module_root: &Path, text: &str) -> Option<PathBuf> {
+    /// declares, as project discovery decides, its `cfg`s read under the
+    /// features and target options of `package`.
+    fn reaches_marked(&self, package: Id, module_root: &Path, text: &str) -> Option<PathBuf> {
         let mut pending = vec![(Vec::<ImmutableString>::new(), text.to_owned())];
         let mut seen = std::collections::BTreeSet::new();
         while let Some((modules, text)) = pending.pop() {
-            for declaration in super::polyglot::declarations(&text) {
+            for declaration in
+                super::polyglot::declarations(&text, &self.packages[package.0].features)
+            {
                 if declaration.explicit_path || declaration.disabled {
                     continue;
                 }
@@ -1356,7 +1363,9 @@ impl<'a> Builder<'a> {
             .collect::<Vec<_>>();
         let mut violation = None;
         'modules: for module in &self.packages[package.0].rust_modules {
-            for reference in super::polyglot::references(&module.text) {
+            for reference in
+                super::polyglot::references(&module.text, &self.packages[package.0].features)
+            {
                 if reference.disabled {
                     continue;
                 }
@@ -1561,7 +1570,7 @@ impl<'a> Builder<'a> {
         canonical: &Path,
         text: &str,
     ) -> Result<(), Error> {
-        let declarations = super::polyglot::declarations(text);
+        let declarations = super::polyglot::declarations(text, &self.packages[package.0].features);
         let mut evidence = None;
         for child in declarations {
             // `#[path]` is Rust's choice; a `#[cfg]`-disabled one is

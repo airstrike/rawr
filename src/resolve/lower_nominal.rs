@@ -785,6 +785,25 @@ fn instanced_method(definition: &method::Definition) -> bool {
         && definition.generics().iter().any(|generic| generic.host)
 }
 
+/// Whether rawr compiles the `from` of a script `impl From<S>` for a
+/// crate's type once per instantiation its callers use: the impl's own
+/// parameter is one of the crate type's arguments, as `M` of `impl<'a, M>
+/// From<Mine> for Slot<'a, M>`, which the crate takes at one type at each
+/// use (D629). Each conversion binds its instance (`select_conversion`).
+#[cfg(feature = "rust-import")]
+fn instanced_crate_impl(definition: &method::Definition) -> bool {
+    definition.conversion().is_some()
+        && definition.builtin_owner().is_some_and(|owner| {
+            matches!(
+                owner,
+                type_ref::Type::Path(type_ref::Path {
+                    target: type_ref::Target::Host { .. },
+                    ..
+                })
+            ) && mentions_parameter(owner)
+        })
+}
+
 /// An item `instance_round` added: a function item's index, or a method's.
 #[cfg(feature = "rust-import")]
 #[derive(Clone, Copy)]
@@ -927,6 +946,13 @@ fn instance_templates(program: &mut Program) -> bool {
                 .methods
                 .iter()
                 .filter(|definition| instanced_method(definition))
+                .map(|definition| definition.key().clone()),
+        )
+        .chain(
+            program
+                .builtin_methods
+                .iter()
+                .filter(|definition| instanced_crate_impl(definition))
                 .map(|definition| definition.key().clone()),
         )
         .collect::<Vec<_>>();
@@ -1118,6 +1144,46 @@ fn body_templates<A: crate::host::ImportAllocation>(
         candidates.retain(|(key, _)| !promoted.contains(key));
     }
     Ok(!program.instances.templates.is_empty())
+}
+
+/// The instance `id` of the method template `definition` at `types`, the
+/// types of its generic parameters, whose names are `names`: listed among
+/// the template's instances, its body reading each parameter as its type.
+#[cfg(feature = "rust-import")]
+fn method_instance(
+    instances: &mut super::Instances,
+    models: &Models,
+    definition: &method::Definition,
+    names: Vec<ImmutableString>,
+    types: &[Ty],
+    id: method::Id,
+) -> method::Definition {
+    let template = definition.key();
+    let listed = instances
+        .templates
+        .get_mut(template)
+        .expect("each template is listed");
+    // A trait impl's function keeps its trait in its name, by which native
+    // code reaches it (`Widget<M, T, R>::draw#1`).
+    let name: ImmutableString = format!("{}#{}", template.name(), listed.len() + 1).into();
+    let key = template.renamed(name.clone());
+    listed.push((names.into_boxed_slice(), key.clone()));
+    let span = definition.name_span();
+    let substituted = definition
+        .generics()
+        .iter()
+        .zip(types)
+        .map(|(generic, ty)| {
+            let named = named_type(ty, models, span)
+                .expect("an instance's types are each one a signature names");
+            (generic.name.text.clone(), named)
+        })
+        .collect::<Box<[_]>>();
+    let instance = definition.instance(id, key.clone(), name, |ty| {
+        substitute_parameters(ty, &substituted)
+    });
+    instances.types.insert(key, substituted);
+    instance
 }
 
 /// Polymorphic recursion would make instances without end.
@@ -1329,6 +1395,32 @@ fn instance_round<A: crate::host::ImportAllocation>(
         if added.is_empty() {
             return Ok(Vec::new());
         }
+        // A function of an impl for a crate's type has its instances beside
+        // it, numbered as such impls' functions are.
+        let (added_builtin, added): (Vec<_>, Vec<_>) = added.into_iter().partition(|(key, ..)| {
+            program
+                .builtin_methods
+                .iter()
+                .any(|definition| definition.key() == key)
+        });
+        let mut builtin_methods = std::mem::take(&mut program.builtin_methods).into_vec();
+        for (template, names, types) in added_builtin {
+            let definition = builtin_methods
+                .iter()
+                .find(|definition| *definition.key() == template)
+                .expect("a builtin template is an impl's function")
+                .clone();
+            let id = method::Id::from_index(super::BUILTIN_METHOD_IDS + builtin_methods.len());
+            builtin_methods.push(method_instance(
+                &mut program.instances,
+                &models,
+                &definition,
+                names,
+                &types,
+                id,
+            ));
+        }
+        program.builtin_methods = builtin_methods.into_boxed_slice();
         // A method's instance is a method of its owner, beside the others.
         let (added_methods, added): (Vec<_>, Vec<_>) = added.into_iter().partition(|(key, ..)| {
             program
@@ -1344,36 +1436,15 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 .find(|definition| *definition.key() == template)
                 .expect("a method template is a method")
                 .clone();
-            let instances = program
-                .instances
-                .templates
-                .get_mut(&template)
-                .expect("each template is listed");
-            // A trait impl's function keeps its trait in its name, by which
-            // native code reaches it (`Widget<M, T, R>::draw#1`).
-            let name: ImmutableString =
-                format!("{}#{}", template.name(), instances.len() + 1).into();
-            let key = template.renamed(name.clone());
-            instances.push((names.into_boxed_slice(), key.clone()));
-            let span = definition.name_span();
-            let substituted = definition
-                .generics()
-                .iter()
-                .zip(&types)
-                .map(|(generic, ty)| {
-                    let named = named_type(ty, &models, span)
-                        .expect("an instance's types are each one a signature names");
-                    (generic.name.text.clone(), named)
-                })
-                .collect::<Box<[_]>>();
-            let instance = definition.instance(
-                method::Id::from_index(methods.len()),
-                key.clone(),
-                name,
-                |ty| substitute_parameters(ty, &substituted),
-            );
-            program.instances.types.insert(key, substituted);
-            methods.push(instance);
+            let id = method::Id::from_index(methods.len());
+            methods.push(method_instance(
+                &mut program.instances,
+                &models,
+                &definition,
+                names,
+                &types,
+                id,
+            ));
         }
         let added_methods = (first_method..methods.len()).map(Added::Method);
         program.methods = methods.into_boxed_slice();
@@ -4945,7 +5016,11 @@ impl Models {
             .methods
             .iter()
             .chain(&program.builtin_methods)
-            .filter(|method| method.conversion().is_some())
+            // A conversion compiled per instantiation is chosen as its
+            // template, which binds its instance (D629).
+            .filter(|method| {
+                method.conversion().is_some() && !program.instances.types.contains_key(method.key())
+            })
         {
             conversions
                 .entry(method.owner())
@@ -10511,9 +10586,13 @@ struct FrameArray {
     /// How many statements' frames were open when it started: a call
     /// opening a frame of the same statement binds its elements.
     depth: usize,
-    /// Where the element being parsed starts, its index, and how many
-    /// frames its statement had then.
-    element: (Position, usize, usize),
+    /// How many calls had been noted when it started (`calls_noted`),
+    /// counted rather than placed, as a macro's tokens all sit at its
+    /// call.
+    noted: usize,
+    /// How many calls had been noted when the element being parsed
+    /// started, its index, and how many frames its statement had then.
+    element: (usize, usize, usize),
     /// Each element whose frame needs the elements before it bound first,
     /// with how many frames its statement had when it started.
     bound: Vec<(usize, usize)>,
@@ -12783,8 +12862,13 @@ struct Parser<'a> {
     /// For each of `frames`, where its statement starts and where each
     /// call or assignment parsed in it so far starts: a frame is opened
     /// ahead of its statement, so one written before the call that opens
-    /// it would run after it.
-    frame_effects: Vec<(Position, Vec<Position>)>,
+    /// it would run after it. Each call is kept with its count among the
+    /// calls noted (`calls_noted`).
+    frame_effects: Vec<(Position, Vec<(Position, usize)>)>,
+    /// How many calls and assignments have been noted for
+    /// `frame_effects`, which orders them where their places can't, as
+    /// in a macro's expansion.
+    calls_noted: usize,
     /// The array literals being parsed, innermost last: a call that opens
     /// a frame in one element is preceded by the calls of the elements
     /// before it, which are bound ahead of the frame in their order.
@@ -13147,6 +13231,7 @@ impl<'a> Parser<'a> {
             pending_arguments: None,
             frames: Vec::new(),
             frame_effects: Vec::new(),
+            calls_noted: 0,
             frame_arrays: Vec::new(),
             call_parens: Vec::new(),
             callee: None,
@@ -14643,8 +14728,30 @@ impl<'a> Parser<'a> {
         expected: Option<&Ty>,
         source: &Ty,
         span: Span,
-    ) -> Option<(method::Definition, Ty, Ty)> {
-        let candidates = self.models.conversions.get(&target)?.clone();
+    ) -> Result<Option<(method::Definition, Ty, Ty)>, Error> {
+        let mut candidates = self
+            .models
+            .conversions
+            .get(&target)
+            .cloned()
+            .unwrap_or_default();
+        // A crate's type that another of its paths names, as a macro's
+        // `$crate::compose::Slot` names the `natives::compose::Slot` the
+        // program's `impl From<Mine> for Slot<'a, ()>` names: the impls
+        // for the type at its other paths, which unify with it.
+        if let Some(expected) = expected
+            && matches!(self.inference.resolve(expected), Ty::Host { .. })
+        {
+            candidates.extend(
+                self.models
+                    .conversions
+                    .iter()
+                    .filter(|(owner, _)| **owner != target)
+                    .flat_map(|(_, methods)| methods)
+                    .filter(|method| method.builtin_owner().is_some())
+                    .cloned(),
+            );
+        }
         let mut chosen = None;
         // An `impl From` is as visible as `From`, from every module.
         for candidate in candidates {
@@ -14655,12 +14762,14 @@ impl<'a> Parser<'a> {
             self.inference.rollback(checkpoint);
             if fits {
                 if chosen.is_some() {
-                    return None;
+                    return Ok(None);
                 }
                 chosen = Some(candidate);
             }
         }
-        let candidate = chosen?;
+        let Some(candidate) = chosen else {
+            return Ok(None);
+        };
         let substitution = self.fresh_generics(candidate.generics(), span);
         let from = instantiate(
             &Ty::from_resolved(candidate.conversion().expect("conversions have a source")),
@@ -14671,7 +14780,11 @@ impl<'a> Parser<'a> {
             self.unify_type(&owner, expected);
         }
         self.unify_type(&from, source);
-        Some((candidate, from, owner))
+        // `impl<'a, M> From<Mine> for Slot<'a, M>`: the instance at the
+        // types this use gives the impl's parameters (D629).
+        #[cfg(feature = "rust-import")]
+        let candidate = self.bind_method_instance(candidate, &substitution, span)?;
+        Ok(Some((candidate, from, owner)))
     }
 
     /// `S` and `Self` of a conversion's `impl From<S> for Self`, its impl's
@@ -16653,7 +16766,10 @@ impl<'a> Parser<'a> {
 
     /// The tokens of a call's parenthesised arguments, from its `(` to the
     /// matching `)` (consumed), without a trailing comma; with the
-    /// position of the `)`.
+    /// position of the `)`. The calls among them, and the call they close,
+    /// are noted for `frame_effects` as the tokens are parsed, not as they
+    /// are taken: the call runs after its arguments, so a scope frame one
+    /// of them opens is not preceded by it (`Into::<T>::into(label("x"))`).
     fn take_argument_tokens(&mut self) -> Result<(Vec<(Token, Position)>, Position), Error> {
         let (open, position) = self.next();
         if open == Token::Unit {
@@ -16665,6 +16781,21 @@ impl<'a> Parser<'a> {
                 source: point_span(position),
             });
         }
+        let noted = self
+            .frame_effects
+            .iter()
+            .map(|(_, effects)| effects.len())
+            .collect::<Vec<_>>();
+        let taken = self.take_until_close();
+        for ((_, effects), noted) in self.frame_effects.iter_mut().zip(noted) {
+            effects.truncate(noted);
+        }
+        taken
+    }
+
+    /// The tokens up to the `)` that closes an open `(` (consumed), for
+    /// `take_argument_tokens`.
+    fn take_until_close(&mut self) -> Result<(Vec<(Token, Position)>, Position), Error> {
         let mut depth = 0usize;
         let mut tokens = Vec::new();
         loop {
@@ -18906,6 +19037,52 @@ impl<'a> Parser<'a> {
         Some((items, self.models.item_owner(&path).cloned()))
     }
 
+    /// rustc's E0277 for `source` converted into the library type
+    /// `target`, none of whose `From` impls takes it: the bound, and the
+    /// type each impl takes, as rustc lists the trait's other impls. `None`
+    /// when `target` has no `from` to list.
+    fn unsatisfied_from(&mut self, target: &Ty, source: &Ty, at: Span) -> Option<Error> {
+        let (items, _) = self.target_from(target)?;
+        let mut takes = Vec::new();
+        for item in items
+            .iter()
+            .filter(|item| item.kind() == crate::host::item::Kind::AssociatedFunction)
+        {
+            let checkpoint = self.inference.checkpoint();
+            if let Ok(signature) = self.instantiate_host_signature(item, None, None, Span::NONE)
+                && let [input] = &signature.inputs[..]
+            {
+                // Rawr's text is the `&str` the impl takes.
+                let input = match self.inference.resolve(input) {
+                    Ty::Str => "&str".into(),
+                    input => input.name(&self.models),
+                };
+                takes.push(format!("          From<{input}>"));
+            }
+            self.inference.rollback(checkpoint);
+        }
+        if takes.is_empty() {
+            return None;
+        }
+        takes.sort();
+        takes.dedup();
+        let target = target.name(&self.models);
+        let bound = format!("From<{}>", source.name(&self.models));
+        Some(Error::StdPath {
+            code: "E0277",
+            message: format!("the trait bound `{target}: {bound}` is not satisfied").into(),
+            label: Some(format!("the trait `{bound}` is not implemented for `{target}`").into()),
+            note: Some(
+                format!(
+                    "the following other types implement trait `From<T>`:\n{}",
+                    takes.join("\n")
+                )
+                .into(),
+            ),
+            reference: at,
+        })
+    }
+
     /// The `from` functions of the library type `target` for a conversion
     /// of text of type `source` whose target the context gives as it is
     /// parsed (`Into::<T>::into(x)`, `<T as From<S>>::from(x)`, `let t: T
@@ -19222,6 +19399,11 @@ impl<'a> Parser<'a> {
                         if host.forms.is_empty() {
                             self.demand_into(&source);
                         }
+                        if let Some(error) =
+                            self.unsatisfied_from(&target, &source, conversion.span)
+                        {
+                            return Err(error);
+                        }
                         let (source, target) =
                             (source.name(&self.models), target.name(&self.models));
                         return Err(Error::InvalidMethodCall {
@@ -19278,9 +19460,12 @@ impl<'a> Parser<'a> {
                 // `impl<T, const N: usize> From<[T; N]> for Vec<T>`.
                 self.unify_type(element, &from);
                 String::new()
-            } else if let Some((definition, ..)) = owner_id(&target).and_then(|id| {
-                self.select_conversion(id, Some(&target), &conversion.source, conversion.span)
-            }) {
+            } else if let Some((definition, ..)) = match owner_id(&target) {
+                Some(id) => {
+                    self.select_conversion(id, Some(&target), &conversion.source, conversion.span)?
+                }
+                None => None,
+            } {
                 method_name(definition.id())
             } else if let Some(op) = self.std_conversion(&target, &conversion.source) {
                 op.map(|op| self.push_op(Op::Prelude(op)))
@@ -25065,7 +25250,7 @@ impl<'a> Parser<'a> {
         // written before this call in it, outside it, would run after it.
         let start = value.span.start();
         if let Some((statement, effects)) = self.frame_effects.last_mut() {
-            effects.retain(|at| *at < start);
+            effects.retain(|(at, _)| *at < start);
             // The calls of an array's earlier elements, bound ahead of the
             // frame (`FrameArray`).
             let depth = self.frames.len();
@@ -25076,7 +25261,9 @@ impl<'a> Parser<'a> {
             {
                 let (element, index, mark) = array.element;
                 if !effects.is_empty()
-                    && effects.iter().all(|at| array.start <= *at && *at < element)
+                    && effects
+                        .iter()
+                        .all(|(_, noted)| (array.noted..element).contains(noted))
                 {
                     effects.clear();
                     if array.bound.last().is_none_or(|(last, _)| *last != index) {
@@ -25084,7 +25271,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            if let Some(&earlier) = effects.first() {
+            if let Some(&(earlier, _)) = effects.first() {
                 let line = statement.line().unwrap_or_default();
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
@@ -27524,13 +27711,12 @@ impl<'a> Parser<'a> {
                         })
                     }
                 };
-                if name == "feature" {
-                    return Ok(self.models.features.holds(&value));
-                }
-                Ok(self.models.features.option(&name, Some(&value)))
+                Ok(self
+                    .models
+                    .features
+                    .cfg(&name, Some(&value), self.models.test))
             }
-            "test" => Ok(self.models.test),
-            _ => Ok(self.models.features.option(&name, None)),
+            _ => Ok(self.models.features.cfg(&name, None, self.models.test)),
         }
     }
 
@@ -29308,13 +29494,12 @@ impl<'a> Parser<'a> {
             self.next();
         }
 
-        // `self::Side::Left`: a path from this module.
-        let head = match self.peek() {
-            Token::SelfValue if matches!(self.peek_second(), Token::DoubleColon) => {
-                let position = self.next().1;
-                ("self".into(), point_span(position))
-            }
-            _ => self.expect_name("payload binding or enum name in match pattern")?,
+        let head = if matches!(self.peek(), Token::SelfValue)
+            && matches!(self.peek_second(), Token::DoubleColon)
+        {
+            ("self".into(), point_span(self.next().1))
+        } else {
+            self.expect_name("payload binding or enum name in match pattern")?
         };
         let mut segments = vec![head];
         while matches!(self.peek(), Token::DoubleColon) {
@@ -41822,7 +42007,7 @@ impl<'a> Parser<'a> {
             {
                 self.parse_qualified("super".into(), token_span)
             }
-            // `self::Side::Left`: a path from this module, never the receiver.
+            // `self::m::f()`: a path from this module, never the receiver.
             Token::SelfValue if matches!(self.peek(), Token::DoubleColon) => {
                 self.parse_qualified("self".into(), token_span)
             }
@@ -45210,7 +45395,8 @@ impl<'a> Parser<'a> {
         self.frame_arrays.push(FrameArray {
             start: open,
             depth: self.frames.len(),
-            element: (open, 0, 0),
+            noted: self.calls_noted,
+            element: (self.calls_noted, 0, 0),
             bound: Vec::new(),
         });
         let parsed = self.parse_array_elements(&close, array);
@@ -45333,7 +45519,7 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let frames = self.frames.last().map_or(0, Vec::len);
-            let element = (self.position(), elements.len(), frames);
+            let element = (self.calls_noted, elements.len(), frames);
             if let Some(array) = self.frame_arrays.last_mut() {
                 array.element = element;
             }
@@ -45658,7 +45844,7 @@ impl<'a> Parser<'a> {
             && let Some(target) = owner_id(&returned)
             && !self.unifies(&returned, &error)
             && let Some((conversion, ..)) =
-                self.select_conversion(target, Some(&returned), &error, value.span)
+                self.select_conversion(target, Some(&returned), &error, value.span)?
         {
             let ok = self.inference.fresh();
             self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
@@ -51811,9 +51997,10 @@ impl<'a> Parser<'a> {
             }
             // The impl for this Self type: `f32::from` beside `f64::from`,
             // which share one impl owner.
-            if let Some((definition, from, _)) =
-                owner.and_then(|id| self.select_conversion(id, Some(&builtin), &source, expression))
-            {
+            if let Some((definition, from, _)) = match owner {
+                Some(id) => self.select_conversion(id, Some(&builtin), &source, expression)?,
+                None => None,
+            } {
                 self.coerce_expr(&from, argument)?;
                 return Ok(self.operator_expr(
                     origin::Fragment::call(
@@ -52289,8 +52476,11 @@ impl<'a> Parser<'a> {
                 return self.parse_qualified(first, first_span);
             }
         }
-        // `module::S`, `module::W(x)`, `module::W`.
-        if !matches!(self.peek(), Token::DoubleColon | Token::LeftBrace)
+        // `module::S`, `module::W(x)`, `module::W`, and `module::S` before
+        // the block of a `match` or an `if let`, where no struct literal
+        // stands.
+        if !matches!(self.peek(), Token::DoubleColon)
+            && (self.no_struct || !matches!(self.peek(), Token::LeftBrace))
             && let Some(model) = self.models.qualified_owner(path_span).cloned()
             && let Some(value) = self.parse_struct_value(model, path_span)?
         {
@@ -52391,7 +52581,7 @@ impl<'a> Parser<'a> {
                     };
                     let source = self.inference.resolve(&argument.ty);
                     let Some((conversion, from, owner)) =
-                        self.select_conversion(target, None, &source, call)
+                        self.select_conversion(target, None, &source, call)?
                     else {
                         return Err(Error::MissingCapability {
                             owner: full.into(),
@@ -52992,7 +53182,7 @@ impl<'a> Parser<'a> {
             };
             let source = self.inference.resolve(&argument.ty);
             let Some((definition, from, owner)) =
-                self.select_conversion(target, None, &source, call)
+                self.select_conversion(target, None, &source, call)?
             else {
                 return Err(Error::MissingCapability {
                     owner: model.name().into(),
@@ -55152,7 +55342,7 @@ impl<'a> Parser<'a> {
             && let Some(id) = owner_id(&target)
             && self.models.conversions.contains_key(&id)
             && let Some((conversion, ..)) =
-                self.select_conversion(id, Some(&target), &source, value.span)
+                self.select_conversion(id, Some(&target), &source, value.span)?
         {
             value.source =
                 origin::Fragment::call(method_name(conversion.id()), [value.rendered_source()]);
@@ -57412,6 +57602,14 @@ impl<'a> Parser<'a> {
             Token::Identifier(name) | Token::Reserved(name) => {
                 Ok(((*name).into(), point_span(position)))
             }
+            Token::SelfValue => Err(Error::StdPath {
+                code: "E0433",
+                message: "`self` in paths can only be used in start position or last position"
+                    .into(),
+                label: Some("can only be used in path start position or last position".into()),
+                note: None,
+                reference: Span::new(position, text_end(position, "self")),
+            }),
             token => Err(Error::UnsupportedNominalSyntax {
                 construct: format!("qualified nominal member; found `{token}`").into(),
                 source: point_span(position),
@@ -57633,8 +57831,9 @@ impl<'a> Parser<'a> {
     /// parsed.
     fn effect(&mut self, at: Position) {
         for (_, effects) in &mut self.frame_effects {
-            effects.push(at);
+            effects.push((at, self.calls_noted));
         }
+        self.calls_noted += 1;
     }
 
     /// Starts collecting the scope frames of a statement.

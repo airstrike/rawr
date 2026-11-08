@@ -389,6 +389,10 @@ impl Definition {
         }
         instance.owner_arguments = instance.owner_arguments.iter().map(&substitute).collect();
         instance.trait_arguments = instance.trait_arguments.iter().map(&substitute).collect();
+        // A crate's type an impl is for, as `Slot<'a, M>` of `impl<'a, M>
+        // From<Mine> for Slot<'a, M>`, and the type its `From` takes.
+        instance.builtin_owner = instance.builtin_owner.as_ref().map(&substitute);
+        instance.conversion = instance.conversion.as_ref().map(&substitute);
         let parameters = self
             .generics
             .iter()

@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 138;
+const CLASSIFIER_VERSION: u32 = 139;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8545,7 +8545,7 @@ impl<P: api::Phase> Context<'_, P> {
             // A borrow guard a method gives, as `RefCell::borrow_mut` and
             // Freya's `State::write` do, is the type it dereferences to,
             // reached only inside each call while the guard lives.
-            Err(error) => match self.guard_output(signature, &inputs)? {
+            Err(error) => match self.guard_output(signature)? {
                 Some((target, mode)) => {
                     guard = Some(mode);
                     target
@@ -10213,15 +10213,12 @@ impl<P: api::Phase> Context<'_, P> {
     /// it is reached, from rustc's evidence (`model::Guard`): `None` when
     /// the output is no guard or Rawr can't hold its target. A `DerefMut`
     /// guard is a place, as image's `get_pixel_mut(&mut self, x, y) -> &mut
-    /// P` gives (#1318). Its method is called once for a receiver in the
-    /// arena (#1325), but a receiver a scope frame's region holds reaches
-    /// it again by calling the method again with copies of its inputs, so
-    /// only a method whose inputs besides its receiver all clone is one;
-    /// with other inputs it is read through `Deref` alone.
+    /// P` gives (#1318), whatever its other inputs: its method is called
+    /// once, and the guard is kept with the receiver, in the arena (#1325)
+    /// or in a scope frame's region (#1333).
     fn guard_output(
         &self,
         signature: &model::Signature,
-        inputs: &[representability::convert::Type],
     ) -> Result<
         Option<(
             representability::convert::Type,
@@ -10280,13 +10277,9 @@ impl<P: api::Phase> Context<'_, P> {
             {
                 return Ok(None);
             }
-            // A place reached again by calling the method again needs its
-            // inputs again: copies of values that clone.
-            let mutable = *mutability == model::Mutability::Mutable
-                && inputs.iter().all(|input| self.clones(input));
             return Ok(Some((
                 Type::Option(Box::new(target)),
-                if mutable {
+                if *mutability == model::Mutability::Mutable {
                     representability::signature::Guard::OptionMutable
                 } else {
                     representability::signature::Guard::OptionShared
@@ -10319,7 +10312,7 @@ impl<P: api::Phase> Context<'_, P> {
         // A store crosses the other way, which a sequence or a tuple
         // doesn't yet.
         let stored = !matches!(target, Type::Sequence { .. } | Type::Tuple(_));
-        let mode = if mutable && stored && inputs.iter().all(|input| self.clones(input)) {
+        let mode = if mutable && stored {
             representability::signature::Guard::Mutable
         } else {
             representability::signature::Guard::Shared

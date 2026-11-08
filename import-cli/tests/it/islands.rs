@@ -370,6 +370,64 @@ fn a_marked_module_names_the_items_of_a_native_module() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A native root's `mod` declarations are read under the `cfg`s Cargo
+/// builds the package with, from `rustc --print cfg` (#1337): the marked
+/// module under this host's `target_os` loads, the one under its `not`,
+/// which would not compile, is never read, and a `#[path]` applied by a
+/// `#[cfg_attr(unix, ..)]` is Rust's choice, so the broken marked file the
+/// module tree would name is never read either. `cargo run`, `rawr check`
+/// and `rawr run` print the same.
+#[test]
+fn a_native_root_s_modules_load_as_cargo_configures_them_for_the_target() {
+    const CFG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-cfg");
+    let printed = ["42", if cfg!(unix) { "unix" } else { "other" }];
+    let root = crate::support::scratch().join("islands-cfg");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(CFG), &root);
+    edit(
+        &root.join("src/main.rs"),
+        "\"OS\"",
+        &format!("{:?}", std::env::consts::OS),
+    );
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        format!("{}\n", printed.join("\n"))
+    );
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(&root, &[]);
+    for line in printed {
+        let seen = run.until(|_| true);
+        assert_eq!(seen, line, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 /// A marked type becomes a native trait's object (#1264): a marked leaf
 /// writes `impl page::Page for BadgePage` and `new() -> Box<dyn
 /// page::Page>`, and native code keeps the boxes beside a native page in a

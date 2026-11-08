@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 50;
+const SCHEMA: u32 = 51;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -4098,9 +4098,12 @@ fn callable_signature(
 }
 
 /// The receiver's type a method's impl fixes, when one of its arguments
-/// holds the impl's own parameter, as `impl<T> Task<Option<T>>` fixes
-/// `Task<Option<T>>`: which form of an overloaded method a receiver takes.
-/// A receiver that names a parameter the signature declares no type
+/// is more than a parameter, as `impl<T> Task<Option<T>>` fixes
+/// `Task<Option<T>>` and `impl From<Text<'a, Theme>> for Slot<'a, M>`
+/// fixes the receiver of `Text`'s `into` to the crate's own `Theme`: which
+/// form of an overloaded method a receiver takes, and the arguments the
+/// receiver's type left open, as rustc's impl selection binds them. A
+/// receiver that names a parameter the signature declares no type
 /// parameter for, as an opaque program's members name the callables
 /// `timed(..)` captured, fixes no form a call can name.
 fn fixed_instance(
@@ -4125,7 +4128,6 @@ fn fixed_instance(
     let Some(instance @ Converted::Nominal { arguments, .. }) = source.instance() else {
         return Ok(None);
     };
-    let any = |_: u32| true;
     let undeclared = |index: u32| {
         !source.parameters().iter().any(|parameter| {
             parameter.index() == index
@@ -4133,9 +4135,9 @@ fn fixed_instance(
         })
     };
     if names_parameter(instance, &undeclared)
-        || !arguments.iter().any(|argument| {
-            !matches!(argument, Converted::Parameter(_)) && names_parameter(argument, &any)
-        })
+        || arguments
+            .iter()
+            .all(|argument| matches!(argument, Converted::Parameter(_)))
     {
         return Ok(None);
     }

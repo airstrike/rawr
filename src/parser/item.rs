@@ -2,7 +2,7 @@
 
 use super::ParseResult;
 use crate::item::type_ref;
-use crate::project::cargo::features::Enabled;
+use crate::project::cargo::features::{Enabled, Operator};
 use crate::tokenizer::{Token, TokenStream, TokenizerControl};
 use crate::{Engine, ImmutableString, Position, Span, PERR};
 
@@ -1246,42 +1246,28 @@ fn cfg_disabled(attributes: &[crate::item::Attribute]) -> bool {
 /// target Cargo builds the package for (`target_os = ".."`, `unix`).
 fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
     let name = parse_name(input, "in a `cfg` predicate")?;
-    match name.text.as_str() {
-        operator @ ("not" | "all" | "any") => {
-            expect(input, Token::LeftParen, "after a `cfg` operator")?;
-            let mut values = Vec::new();
-            while !matches!(input.peek(), Some((Token::RightParen, _))) {
-                values.push(parse_cfg_predicate(input)?);
-                if matches!(input.peek(), Some((Token::Comma, _))) {
-                    input.next();
-                }
-            }
-            expect(input, Token::RightParen, "to close a `cfg` operator")?;
-            Ok(match operator {
-                "not" => !values.first().copied().unwrap_or(false),
-                "all" => values.iter().all(|value| *value),
-                _ => values.iter().any(|value| *value),
-            })
-        }
-        name => {
-            if matches!(input.peek(), Some((Token::Equals, _))) {
+    if let Some(operator) = Operator::named(&name.text) {
+        expect(input, Token::LeftParen, "after a `cfg` operator")?;
+        let mut values = Vec::new();
+        while !matches!(input.peek(), Some((Token::RightParen, _))) {
+            values.push(parse_cfg_predicate(input)?);
+            if matches!(input.peek(), Some((Token::Comma, _))) {
                 input.next();
-                return Ok(match input.next() {
-                    Some((Token::StringConstant(value), _)) if name == "feature" => {
-                        FEATURES.with_borrow(|features| features.holds(&value))
-                    }
-                    Some((Token::StringConstant(value), _)) => {
-                        FEATURES.with_borrow(|features| features.option(name, Some(&value)))
-                    }
-                    _ => false,
-                });
             }
-            if name == "test" {
-                return Ok(TEST.get());
-            }
-            Ok(FEATURES.with_borrow(|features| features.option(name, None)))
         }
+        expect(input, Token::RightParen, "to close a `cfg` operator")?;
+        return Ok(operator.holds(&values));
     }
+    if matches!(input.peek(), Some((Token::Equals, _))) {
+        input.next();
+        return Ok(match input.next() {
+            Some((Token::StringConstant(value), _)) => {
+                FEATURES.with_borrow(|features| features.cfg(&name.text, Some(&value), TEST.get()))
+            }
+            _ => false,
+        });
+    }
+    Ok(FEATURES.with_borrow(|features| features.cfg(&name.text, None, TEST.get())))
 }
 
 /// Pass over one item's tokens: up to a `;` or the `}` closing its body.
@@ -4525,22 +4511,11 @@ fn parse_path_bindings(
     }
 
     loop {
-        // `self::Shape`: a path from this module, whose `self` only starts it.
+        // `self::m::Item`: a path from this module, as rustc reads it.
         let name = match input.peek() {
             Some((Token::SelfValue, position)) if segments.is_empty() && !global => {
                 let span = token_span(*position, "self");
                 input.next();
-                if !matches!(input.peek(), Some((Token::DoubleColon, _))) {
-                    let (token, position) =
-                        input.peek().expect("token streams always end with EOF");
-                    return Err(unexpected(
-                        format!("expected `::`, found {}", found(token)),
-                        "expected `::`",
-                        None,
-                        token,
-                        *position,
-                    ));
-                }
                 crate::item::Name {
                     span,
                     text: "self".into(),

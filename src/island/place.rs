@@ -88,10 +88,13 @@ pub struct Yoke<U: ?Sized + 'static> {
 }
 
 impl<U: ?Sized + 'static> Yoke<U> {
-    /// `owner`, kept with the guard `reach` makes of it.
+    /// `owner`, kept with the guard `reach` makes of it. `reach` gives
+    /// none for a method whose `Option<&mut T>` is `None`, as pane_grid's
+    /// `state.get_mut(pane)` of a pane it lacks (#1334): the yoke has then
+    /// ended already.
     pub fn new<T: Any>(
         owner: Box<T>,
-        reach: impl for<'a> FnOnce(&'a mut T) -> Box<dyn DerefMut<Target = U> + 'a>,
+        reach: impl for<'a> FnOnce(&'a mut T) -> Option<Box<dyn DerefMut<Target = U> + 'a>>,
     ) -> Self {
         let value = NonNull::from(Box::leak(owner));
         // The yoke frees the value if `reach` unwinds.
@@ -106,12 +109,13 @@ impl<U: ?Sized + 'static> Yoke<U> {
         // ends before the value is reached any other way, given back or
         // freed (`owner`, `into_owner`, `drop`), and it is reached only
         // through `target`, for as long as the yoke is borrowed.
-        let guard = unsafe {
-            std::mem::transmute::<Box<dyn DerefMut<Target = U> + '_>, Box<dyn DerefMut<Target = U>>>(
-                guard,
-            )
-        };
-        yoke.guard = Some(guard);
+        yoke.guard =
+            guard.map(|guard| unsafe {
+                std::mem::transmute::<
+                    Box<dyn DerefMut<Target = U> + '_>,
+                    Box<dyn DerefMut<Target = U>>,
+                >(guard)
+            });
         yoke
     }
 
@@ -160,7 +164,7 @@ mod tests {
         let mut calls = 0;
         let mut yoke = Yoke::new(Box::new(vec![1_u8, 2, 3]), |pixels: &mut Vec<u8>| {
             calls += 1;
-            Box::new(&mut pixels[1])
+            Some(Box::new(&mut pixels[1]))
         });
         *yoke.target().unwrap() = 7;
         *yoke.target().unwrap() += 1;
@@ -171,5 +175,19 @@ mod tests {
         assert!(yoke.target().is_none());
         let owner = yoke.into_owner().downcast::<Vec<u8>>().unwrap();
         assert_eq!(*owner, [1, 8, 3, 4]);
+    }
+
+    /// A method that lends nothing leaves a yoke that has ended, whose
+    /// value is given back whole.
+    #[test]
+    fn a_yoke_of_no_guard_has_ended() {
+        let mut yoke = Yoke::<u8>::new(Box::new(vec![1_u8]), |pixels: &mut Vec<u8>| {
+            pixels
+                .get_mut(4)
+                .map(|pixel| Box::new(pixel) as Box<dyn std::ops::DerefMut<Target = u8>>)
+        });
+        assert!(yoke.target().is_none());
+        let owner = yoke.into_owner().downcast::<Vec<u8>>().unwrap();
+        assert_eq!(*owner, [1]);
     }
 }

@@ -10906,6 +10906,109 @@ fn fails() -> i64 {
     );
 }
 
+/// A leading `self::` names the current module, as `super::` and
+/// `crate::` do: a value, a call, a pattern, a type and a `use`, in the
+/// root and in a nested module, with `self::super::` too (#1342). `cargo
+/// run` prints `20 [ab] primary secondary 21 [c][c] 1`. `self` after a
+/// path's first segment is rustc's E0433.
+#[test]
+fn language_self_paths_name_the_current_module() {
+    let source = r#"mod parts {
+    pub mod badge {
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub enum Kind {
+            Primary,
+            Secondary,
+        }
+
+        impl Kind {
+            pub fn weight(self) -> i64 {
+                match self {
+                    self::Kind::Primary => 1,
+                    self::Kind::Secondary => 2,
+                }
+            }
+        }
+
+        pub struct Secondary;
+
+        impl Secondary {
+            pub fn weight(&self) -> i64 {
+                self::Kind::Secondary.weight() * 10
+            }
+        }
+
+        pub fn badge(text: &str) -> String {
+            format!("[{text}]")
+        }
+
+        pub fn twice(text: &str) -> String {
+            let one: self::Kind = self::Kind::Primary;
+            format!("{}{} {}", self::badge(text), self::super::badge::badge(text), one.weight())
+        }
+    }
+}
+
+use self::parts::badge::{self as b, Kind};
+
+fn label(kind: self::parts::badge::Kind) -> &'static str {
+    match kind {
+        self::parts::badge::Kind::Secondary => "secondary",
+        b::Kind::Primary => "primary",
+    }
+}
+
+fn unit(value: self::parts::badge::Secondary) -> i64 {
+    match value {
+        self::parts::badge::Secondary => value.weight() + 1,
+    }
+}
+
+fn main() {
+    let w = self::parts::badge::Secondary.weight();
+    let s = self::parts::badge::badge("ab");
+    println!(
+        "{w} {s} {} {} {} {}",
+        label(Kind::Primary),
+        label(b::Kind::Secondary),
+        unit(b::Secondary),
+        self::parts::badge::twice("c")
+    );
+}
+"#;
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    let evidence = crate::diagnostic::Source::new("play.rs", source).unwrap();
+    let unit = engine.parse_unit(source).unwrap();
+    let ast = engine
+        .compile_unit(unit, evidence)
+        .unwrap_or_else(|error| panic!("{error}"));
+    engine
+        .call_fn::<()>(&mut crate::Scope::new(), &ast, "main", ())
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        lines.lock().unwrap().as_str(),
+        "20 [ab] primary secondary 21 [c][c] 1\n"
+    );
+
+    let misplaced =
+        "mod parts { pub fn f() -> i64 { 1 } }\nfn main() { let _ = parts::self::f(); }\n";
+    let unit = engine.parse_unit(misplaced).unwrap();
+    let error = engine
+        .compile_unit(
+            unit,
+            crate::diagnostic::Source::new("play.rs", misplaced).unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("`self` in paths can only be used in start position"),
+        "{error}"
+    );
+}
+
 #[test]
 fn language_unit_pattern_matches_the_unit_value() {
     let value = run(r#"
@@ -14286,6 +14389,74 @@ fn language_a_module_and_a_function_of_one_name_import_together() {
             ("E0252", "the name `badge` is defined multiple times"),
             "{imports}"
         );
+    }
+}
+
+/// The program's own unit struct, named by any path in the value
+/// namespace, is its value, and an uncalled tuple struct is its
+/// constructor as a function, as rustc reads `parts::badge::Secondary`,
+/// `badge::Secondary` after `use parts::badge;` and `.map(badge::Wrap)`.
+/// So is a unit struct's path before the block of a `match` or an `if
+/// let`, where no struct literal stands (#1327).
+#[test]
+fn language_a_program_struct_by_path_is_its_value() {
+    let parts = r#"mod parts {
+    pub mod badge {
+        pub struct Secondary;
+
+        impl Secondary {
+            pub fn weight(&self) -> i64 {
+                40
+            }
+        }
+
+        pub struct Wrap(pub i64);
+
+        pub fn badge(label: &str) -> i64 {
+            label.len() as i64
+        }
+    }
+}
+"#;
+    let calls = [
+        ("", "parts::badge::Secondary.weight()"),
+        ("", "crate::parts::badge::Secondary.weight()"),
+        ("use parts::badge;", "badge::Secondary.weight()"),
+        (
+            "use parts::badge::{self, badge};",
+            "badge(\"\") + badge::Secondary.weight()",
+        ),
+        (
+            "use parts::badge;",
+            "(|| { let s = badge::Secondary; s.weight() })()",
+        ),
+        ("", "Some(40).map(parts::badge::Wrap).unwrap().0"),
+        (
+            "use parts::badge;",
+            "[20, 20].into_iter().map(badge::Wrap).map(|w| w.0).sum()",
+        ),
+        (
+            "",
+            "match parts::badge::Secondary { parts::badge::Secondary => 40 }",
+        ),
+        (
+            "use parts::badge;",
+            "match badge::Secondary { badge::Secondary => 40 }",
+        ),
+        (
+            "use parts::badge;",
+            "if let badge::Secondary = badge::Secondary { 40 } else { 0 }",
+        ),
+        (
+            "",
+            "match parts::badge::Wrap(40) { parts::badge::Wrap(n) => n }",
+        ),
+    ];
+    for (imports, value) in calls {
+        let program = format!(
+            "{parts}{imports}\npub fn run() -> i64 {{ let v: i64 = {value}; v + 2 }}\nrun()"
+        );
+        assert_eq!(run(&program), 42, "{value}");
     }
 }
 
