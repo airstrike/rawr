@@ -97,6 +97,11 @@ impl Source {
         self.maps[id.index()].text()
     }
 
+    /// Each source's text.
+    pub(crate) fn texts(&self) -> impl Iterator<Item = &str> {
+        self.maps.iter().map(source::Map::text)
+    }
+
     pub(crate) const fn entry(&self) -> Id {
         self.entry
     }
