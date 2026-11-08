@@ -24,7 +24,8 @@ pub(crate) use error::{
     Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
-    BindingSite, Callee, Category, Error, Expansion, MacroScope, MoveCause, Private, Unresolved,
+    BindingSite, Boxing, Callee, Category, Error, Expansion, MacroScope, MoveCause, Private,
+    Unresolved,
 };
 use std::collections::BTreeMap;
 

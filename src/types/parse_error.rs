@@ -430,6 +430,9 @@ impl fmt::Display for ParseErrorType {
                 }
                 crate::resolve::Error::TypeMismatch {
                     expected, actual, ..
+                }
+                | crate::resolve::Error::Unboxed {
+                    expected, actual, ..
                 } => write!(f, "mismatched types: expected `{expected}`, found `{actual}`"),
                 crate::resolve::Error::IfWithoutElse { .. } => {
                     f.write_str(crate::resolve::IF_WITHOUT_ELSE)

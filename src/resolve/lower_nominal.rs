@@ -13078,6 +13078,10 @@ struct Parser<'a> {
     /// The `text.into()` calls, whose target `Err(..)` may box as `dyn
     /// Error` (`error_object.rs`) and the use site gives.
     text_into: Vec<TextInto>,
+    /// Where each `Err(error)` starts, with its error's span: a `Result<_,
+    /// Box<dyn Error>>` expected of it is a `Box<dyn Error>` expected of
+    /// the error.
+    err_payloads: BTreeMap<Position, Span>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// Each type parameter of a dependency's trait method that native code
@@ -13424,6 +13428,7 @@ impl<'a> Parser<'a> {
             settled_parses: Vec::new(),
             parse_count: 0,
             text_into: Vec::new(),
+            err_payloads: BTreeMap::new(),
             generics: BTreeMap::new(),
             opaque: BTreeMap::new(),
             pending_turbofish: None,
@@ -46036,6 +46041,9 @@ impl<'a> Parser<'a> {
         if variant == Prelude::Err && inferred {
             self.box_returned_error(value)?;
         }
+        if variant == Prelude::Err {
+            self.err_payloads.insert(start.start(), value.span);
+        }
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
         let payload = Box::new(self.inference.resolve(&value.ty));
@@ -55798,12 +55806,19 @@ impl<'a> Parser<'a> {
             value.ty = source.clone();
         }
         // `Err(Box::new(e))` or `Err("text".into())` where a `Result<T,
-        // Box<dyn Error>>` is expected: its error boxed as below.
+        // Box<dyn Error>>` is expected: its error boxed as below. The error
+        // of an `Err(error)` that is no box is rustc's E0308 at the error.
         if let (Ty::Result(to_ok, to_error), Ty::Result(from_ok, from_error)) = (&target, &source)
             && self.boxed_std_error(to_error)
             && !self.boxed_std_error(from_error)
             && !matches!(self.inference.resolve(from_error), Ty::Infer(_) | Ty::Never)
         {
+            if let Some(payload) = self.err_payloads.get(&value.span.start()).copied()
+                && !self.text_into_at(payload.start())
+                && let Some(error) = self.unboxed_error(to_error, from_error, payload)
+            {
+                return Err(error);
+            }
             self.require_type(to_ok, from_ok, value.span)?;
             let result = self.temporary("result");
             let error = self.prelude_op(PreludeOp::UnwrapErr, [result.as_str().into()]);
@@ -55826,13 +55841,19 @@ impl<'a> Parser<'a> {
             *value = self.operator_expr(boxed, target, value.span);
             return Ok(None);
         }
-        // An error, a box of one, a `&str` or a `String` where a `Box<dyn
-        // Error>` is expected: boxed as std's `dyn Error`, as its `From`
-        // impls and `Box`'s unsizing make one (`error_object.rs`).
+        // A box of an error, or `.into()` of a `&str` or a `String`, where a
+        // `Box<dyn Error>` is expected: boxed as std's `dyn Error`, as
+        // `Box`'s unsizing and its `From` impls make one
+        // (`error_object.rs`). Any other value is rustc's E0308.
         if self.boxed_std_error(&target)
             && !self.boxed_std_error(&source)
             && !matches!(source, Ty::Infer(_) | Ty::Never)
         {
+            if !self.text_into_at(value.span.start())
+                && let Some(error) = self.unboxed_error(&target, &source, value.span)
+            {
+                return Err(error);
+            }
             let Some(object) =
                 self.error_object(&source, value.rendered_source(), true, value.span)?
             else {
