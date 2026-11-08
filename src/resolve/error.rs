@@ -82,6 +82,9 @@ pub enum Category {
     /// A `let`, `for` or parameter pattern that misses some values of what
     /// it binds, as rustc's E0005.
     Refutable,
+    /// A tuple struct or tuple variant pattern with more or fewer fields
+    /// than its type declares, as rustc's E0023.
+    PatternFields,
     /// Source combines nominal operations with syntax not lowered in this phase.
     UnsupportedNominalSyntax,
     /// Syntax Rust does not have, as rustc reports it.
@@ -158,6 +161,7 @@ impl fmt::Display for Category {
             Self::InvalidMatch => formatter.write_str("invalid match"),
             Self::NonExhaustive => formatter.write_str("non-exhaustive patterns"),
             Self::Refutable => formatter.write_str("refutable pattern"),
+            Self::PatternFields => formatter.write_str("pattern field count"),
             Self::UnsupportedNominalSyntax => formatter.write_str("unsupported nominal syntax"),
             Self::Syntax => formatter.write_str("syntax error"),
             Self::UnlabeledJumpInWhileCondition => {
@@ -762,6 +766,27 @@ pub enum Error {
         /// The pattern.
         pattern: Span,
     },
+    /// A tuple struct or tuple variant pattern with more or fewer fields
+    /// than its type declares, which rustc refuses (E0023).
+    PatternFields {
+        /// The struct or variant the pattern names, as written.
+        owner: ImmutableString,
+        /// Whether the pattern names a tuple variant, not a tuple struct.
+        variant: bool,
+        /// How many fields the struct or variant declares.
+        expected: usize,
+        /// How many field patterns the pattern writes, besides `..`.
+        found: usize,
+        /// The field patterns, or the whole pattern when it writes none.
+        pattern: Span,
+        /// Each declared field, when the program declares them in the
+        /// pattern's file.
+        fields: Box<[Span]>,
+        /// rustc's help, with the pattern rewritten: `_` for each field it
+        /// misses, or parentheses around its fields where the one declared
+        /// field is a tuple of that many.
+        help: Option<ImmutableString>,
+    },
     /// A nominal script reaches syntax deliberately deferred to a later step.
     UnsupportedNominalSyntax {
         /// Stable description of the unsupported construct.
@@ -1020,6 +1045,7 @@ impl Error {
             Self::InvalidMatch { .. } => Category::InvalidMatch,
             Self::NonExhaustive { .. } => Category::NonExhaustive,
             Self::Refutable { .. } => Category::Refutable,
+            Self::PatternFields { .. } => Category::PatternFields,
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
@@ -1063,7 +1089,8 @@ impl Error {
             | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
             | Self::MissingCapability { owner, .. }
-            | Self::InvalidMatch { owner, .. } => owner.as_str(),
+            | Self::InvalidMatch { owner, .. }
+            | Self::PatternFields { owner, .. } => owner.as_str(),
             Self::NonExhaustive { ty, .. } | Self::Refutable { ty, .. } => ty.as_str(),
             Self::TypeMismatch { expected, .. } | Self::IfWithoutElse { expected, .. } => {
                 expected.as_str()
@@ -1137,7 +1164,7 @@ impl Error {
             Self::MissingCapability { operation, .. } => *operation,
             Self::InvalidMatch { pattern, .. } => *pattern,
             Self::NonExhaustive { scrutinee, .. } => *scrutinee,
-            Self::Refutable { pattern, .. } => *pattern,
+            Self::Refutable { pattern, .. } | Self::PatternFields { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::AsyncMain { at } => *at,
             Self::StdPath { reference, .. } | Self::NotYet { reference, .. } => *reference,
@@ -1207,6 +1234,7 @@ impl Error {
             | Self::InvalidMatch { .. }
             | Self::NonExhaustive { .. }
             | Self::Refutable { .. }
+            | Self::PatternFields { .. }
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
@@ -1372,6 +1400,55 @@ impl fmt::Display for Refutable<'_> {
             BindingSite::Argument => "function argument",
         };
         write!(formatter, "refutable pattern in {origin}")
+    }
+}
+
+/// rustc's E0023 for a tuple struct or tuple variant pattern of `found`
+/// fields where its type declares `expected`: "this pattern has 1 field,
+/// but the corresponding tuple variant has 2 fields".
+pub(crate) struct PatternFields {
+    pub(crate) variant: bool,
+    pub(crate) expected: usize,
+    pub(crate) found: usize,
+}
+
+impl PatternFields {
+    const fn noun(&self) -> &'static str {
+        if self.variant {
+            "tuple variant"
+        } else {
+            "tuple struct"
+        }
+    }
+
+    fn fields(count: usize) -> String {
+        format!("{count} field{}", if count == 1 { "" } else { "s" })
+    }
+
+    /// rustc's label on the field patterns: "expected 2 fields, found 1".
+    pub(crate) fn label(&self) -> String {
+        format!(
+            "expected {}, found {}",
+            Self::fields(self.expected),
+            self.found
+        )
+    }
+
+    /// rustc's label on the declared fields: "tuple variant has 2 fields".
+    pub(crate) fn declared(&self) -> String {
+        format!("{} has {}", self.noun(), Self::fields(self.expected))
+    }
+}
+
+impl fmt::Display for PatternFields {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "this pattern has {}, but the corresponding {} has {}",
+            Self::fields(self.found),
+            self.noun(),
+            Self::fields(self.expected)
+        )
     }
 }
 
@@ -1817,6 +1894,21 @@ impl fmt::Display for Written<'_> {
                 "{}: {} at {pattern} (E0005)",
                 Refutable { witnesses, site },
                 NonExhaustive(witnesses).label()
+            ),
+            Error::PatternFields {
+                variant,
+                expected,
+                found,
+                pattern,
+                ..
+            } => write!(
+                formatter,
+                "{} at {pattern} (E0023)",
+                PatternFields {
+                    variant: *variant,
+                    expected: *expected,
+                    found: *found,
+                }
             ),
             Error::UnsupportedNominalSyntax { construct, source } => {
                 write!(formatter, "{} at {source}", Unsupported(construct))
