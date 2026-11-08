@@ -19903,6 +19903,8 @@ impl<'a> Parser<'a> {
         let ops = std::mem::take(&mut self.ops);
         #[cfg(feature = "rust-import")]
         self.collect_imported_ops(&ops)?;
+        #[cfg(feature = "rust-import")]
+        self.refuse_open_crate_values(&ops)?;
         if self.symbolic_only {
             Ok(Vec::new())
         } else {
@@ -21804,7 +21806,15 @@ impl<'a> Parser<'a> {
             let mut ambiguous = false;
             for case in relation.cases() {
                 let mut bindings = BTreeMap::new();
-                if self.pattern_matches(case.this(), &actual, &mut bindings, owner) {
+                if self.pattern_matches(case.this(), &actual, &mut bindings, owner)
+                    && self.case_arguments_fit(
+                        case,
+                        relation,
+                        &bindings,
+                        parameters,
+                        (&item_path, owner),
+                    )
+                {
                     ambiguous |= matched.is_some();
                     matched = Some((case, bindings));
                 }
@@ -21951,6 +21961,47 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Whether `case` of `relation` fits by its trait arguments as well as
+    /// by its self type, `bindings` what the self type bound. A case whose
+    /// self type is a bare variable, as core's reflexive `impl<T> From<T>
+    /// for T` behind `impl Into<Slot<'a, Message>>`, fits every argument by
+    /// its self type, so rustc selects it by the whole trait reference: it
+    /// fits only an argument that unifies with the bound's (#1404). Any
+    /// other case is chosen by its self type.
+    fn case_arguments_fit(
+        &mut self,
+        case: &crate::host::signature::Case,
+        relation: &crate::host::signature::Relation,
+        bindings: &BTreeMap<u32, Ty>,
+        parameters: &BTreeMap<ImmutableString, Ty>,
+        (item_path, owner): (&str, Option<&crate::host::facade::Dependency>),
+    ) -> bool {
+        if !matches!(case.this(), crate::host::signature::Pattern::Variable(_)) {
+            return true;
+        }
+        if case.arguments().len() != relation.arguments().len() {
+            return false;
+        }
+        let checkpoint = self.inference.checkpoint();
+        let mut bindings = bindings.clone();
+        let mut parameters = parameters.clone();
+        let mut fits = true;
+        for (implemented, declared) in case.arguments().iter().zip(relation.arguments()) {
+            let at = (item_path, Span::NONE);
+            let implemented =
+                self.pattern_type(implemented, &mut bindings, &mut parameters, at, owner);
+            let declared =
+                self.pattern_type(declared, &mut BTreeMap::new(), &mut parameters, at, owner);
+            fits = matches!((implemented, declared), (Ok(implemented), Ok(declared))
+                if self.unify_type(&declared, &implemented));
+            if !fits {
+                break;
+            }
+        }
+        self.inference.rollback(checkpoint);
+        fits
     }
 
     /// The type parameters an imported item's bounds leave open once its
@@ -57427,6 +57478,55 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// A crate value a call of the body takes or gives whose type still
+    /// holds a variable now the body's types are settled, as the message of
+    /// a `Row<'_, _>` no use fixes: rustc can't infer it either, so it is
+    /// rustc's E0282 at the first `let` whose type holds the variable, or
+    /// at the call for the item's parameter that holds it, never a runner
+    /// that names `_` where cargo refuses it (#1404).
+    #[cfg(feature = "rust-import")]
+    fn refuse_open_crate_values(&self, ops: &[Op]) -> Result<(), Error> {
+        if self.imported.is_none() {
+            return Ok(());
+        }
+        for op in ops {
+            let Op::Intrinsic { operation } = op else {
+                continue;
+            };
+            if operation.item.imported_identity().is_none() {
+                continue;
+            }
+            let values = operation
+                .operands
+                .iter()
+                .map(|(ty, at, _)| (ty, *at))
+                .chain([(&operation.output, operation.span)]);
+            for (ty, at) in values {
+                let ty = self.inference.resolve(ty);
+                if !matches!(ty, Ty::Host { .. }) {
+                    continue;
+                }
+                let Some(unknown) = first_inference(&ty) else {
+                    continue;
+                };
+                return Err(self.unsettled(&unknown, at, None).unwrap_or_else(|| {
+                    let parameter = operation
+                        .requirements
+                        .iter()
+                        .find(|(_, ty, _)| {
+                            contains(&self.inference.resolve(ty), &|inner| *inner == unknown)
+                        })
+                        .map_or_else(|| ty.name(&self.models), |(name, ..)| name.clone());
+                    Error::TypeAnnotationsNeeded {
+                        parameter,
+                        reference: at,
+                    }
+                }));
+            }
+        }
+        Ok(())
+    }
+
     /// Symbolic lowering keeps no ops, so it records the facade dependencies the
     /// executable call to a facade item would carry.
     #[cfg(feature = "rust-import")]
@@ -58188,6 +58288,16 @@ fn mentions_script(ty: &Ty) -> bool {
 
 fn contains_inference(ty: &Ty) -> bool {
     contains(ty, &|ty| matches!(ty, Ty::Infer(_)))
+}
+
+/// The first unknown type inside `ty`, outermost first.
+#[cfg(feature = "rust-import")]
+fn first_inference(ty: &Ty) -> Option<Ty> {
+    let found = std::cell::RefCell::new(None);
+    contains(ty, &|inner| {
+        matches!(inner, Ty::Infer(_)) && found.replace(Some(inner.clone())).is_none()
+    });
+    found.into_inner()
 }
 
 /// Whether `ty` holds a literal whose kind is still open: `{integer}` or

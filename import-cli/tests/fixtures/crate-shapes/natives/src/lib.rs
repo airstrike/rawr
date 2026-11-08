@@ -1314,6 +1314,34 @@ pub mod badge {
         }
     }
 
+    /// A badge of any slot, as a component crate's `badge(content: impl
+    /// Into<Slot<'a, Message>>)` makes one.
+    pub struct Composed<'a, M> {
+        content: parts::Slot<'a, M>,
+        style: StyleFn,
+    }
+
+    pub fn composed<'a, M: 'a>(content: impl Into<parts::Slot<'a, M>>) -> Composed<'a, M> {
+        Composed {
+            content: content.into(),
+            style: StyleFn(|size| format!("default {size}")),
+        }
+    }
+
+    impl<'a, M: 'a> Composed<'a, M> {
+        pub fn style(mut self, style: impl Into<StyleFn>) -> Self {
+            self.style = style.into();
+            self
+        }
+    }
+
+    impl<'a, M: 'a> From<Composed<'a, M>> for parts::Slot<'a, M> {
+        fn from(badge: Composed<'a, M>) -> Self {
+            let style = (badge.style.0)(2);
+            parts::Slot::from(format!("badge {style} [{}]", badge.content.label()))
+        }
+    }
+
     pub fn badge(label: &str) -> Badge {
         Badge {
             label: label.to_string(),
@@ -1343,7 +1371,9 @@ pub mod badge {
 /// `Into::<$crate::compose::Slot<'_, _>>::into` in an array a row takes as
 /// `impl IntoIterator`, as iced's `Row::with_children` does.
 pub mod compose {
-    pub use parts::{badge_check, icon, label, rule, Icon, Label, Row, Rule, Slot, Theme};
+    pub use parts::{
+        badge_check, icon, label, rule, wrap, Compose, Icon, Label, Row, Rule, Slot, Theme,
+    };
     pub use widgets::{text, text_like, Text, TextLike};
 }
 
@@ -1368,6 +1398,24 @@ macro_rules! badge {
                 $(Into::<$crate::compose::Slot<'_, _>>::into($child)),*
             ])
             .spacing(4),
+        )
+    };
+}
+
+/// A component of `compose::Slot`s, as a component crate's `badge!` makes
+/// one: its children's row wrapped in `Slot::new`, whose message only
+/// `impl Compose<Message> for Row` ties to the row's, passed on as `impl
+/// Into<Slot<'a, Message>>`.
+#[macro_export]
+macro_rules! component {
+    ($($child:expr),* $(,)?) => {
+        $crate::badge::composed(
+            $crate::compose::Slot::new(
+                $crate::compose::Row::with_children([
+                    $(Into::<$crate::compose::Slot<'_, _>>::into($child)),*
+                ])
+                .spacing(2),
+            ),
         )
     };
 }

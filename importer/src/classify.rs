@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 139;
+const CLASSIFIER_VERSION: u32 = 140;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2599,13 +2599,19 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             // for a crate type a case, `S` the self type that gives it, as
             // `From<Text<'a, Theme, Renderer>> for Element<'a, Message,
             // Theme, Renderer>` ties the text's theme and renderer to the
-            // element's. An `S` that is a bare parameter fits every argument
-            // and so ties nothing.
+            // element's. A crate impl whose `S` is a bare parameter fits
+            // every argument and so ties nothing. Core's reflexive `impl<T>
+            // From<T> for T` is the first case: it fits only an argument of
+            // the target's own type, and ties that argument's parameters to
+            // the target's, as a `Slot<'_, _>` passed to `impl Into<Slot<'a,
+            // Message>>` is the slot of `Message` (#1404).
             if let [Type::Nominal {
                 definition: into, ..
             }] = &*converted
                 && self.is_core_trait(trait_id, "Into")
             {
+                let reflexive = Type::Parameter(IMPL_PARAMETER);
+                cases.push(Case::new(reflexive.clone(), Box::new([reflexive])));
                 for implementation in self.core_implementations("From") {
                     let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
                         continue;

@@ -454,6 +454,16 @@ fn a_forwarding_impls_parameters_are_its_own() {
 /// that unifies with its type, as rustc does, rather than E0283 (#1403).
 ///
 /// A `String` takes `From<String>` and a literal `From<&str>`, and only the program's own `Cow<str>` takes `From<Cow<str>>` (#1390).
+///
+/// A crate macro that wraps its row in `Slot::new(child: impl
+/// Compose<Message, T, R> + 'a)` and passes that slot on as `impl
+/// Into<Slot<'a, Message>>`, as a component crate's `badge!` does, ties
+/// the row's message to the slot's through `impl Compose<Message> for
+/// Row<'a, Message>` and the slot's to the badge's through core's
+/// reflexive `From<T> for T`, as rustc's impl selection links them, so a
+/// later use fixes all three. So does a function whose `C:
+/// Compose<Message>` is a where-clause. A badge whose message nothing
+/// fixes is rustc's E0282 at its `let` (#1404).
 #[test]
 fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     runs_as_cargo_does(
@@ -465,7 +475,12 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
          row 8 [string badge secondary 4 [icon 12 | str Verified] | \
          string badge ghost 4 [str Bookmark | icon 12]]\n\
          row 0 [string badge secondary 4 [text check 12 | str Verified]]\n\
-         text check 12 | icon 12 | rule\n107997\n",
+         text check 12 | icon 12 | rule\n\
+         string badge default 2 [composed row 2 [icon 12 | str Verified]]\n\
+         row 8 [string badge secondary 2 [composed row 2 [text check 12 | str Verified]] | \
+         string badge ghost 2 [composed row 2 [str Bookmark | icon 12]]]\n\
+         string badge default 2 [composed row 2 [str a]] | str b\n\
+         composed row 0 [str w]\n107997\n",
     );
     let program = "// rawr\nuse natives::compose::{self, Row, Theme};\nuse natives::slots;\n\n\
                    fn main() {\n    let row: Row<'_, ()> = \
@@ -496,6 +511,29 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     ] {
         assert!(rawr.contains(expected), "{stderr}");
     }
+    // A component whose message nothing fixes is rustc's E0282 at its
+    // `let`, never a runner whose `_` cargo refuses.
+    let program = "// rawr\nuse natives::compose::Slot;\n\nfn main() {\n    \
+                   let composed = natives::badge::composed(Slot::from(\"x\"));\n    \
+                   let slot = Slot::from(composed);\n    println!(\"{}\", slot.label());\n}\n";
+    let root = SHAPES.lease(&[("src/main.rs", program)]);
+    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = text(&check.stderr);
+    assert!(!check.status.success(), "{stderr}");
+    assert!(!stderr.contains("rawr_adapters"), "{stderr}");
+    let rawr = stderr.split("cargo check found").next().unwrap_or_default();
+    assert!(
+        rawr.contains("error[E0282]: type annotations needed for `natives::badge::Composed<"),
+        "{stderr}"
+    );
 }
 
 /// A crate function whose signature has an array type, as a component
