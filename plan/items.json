@@ -1227,6 +1227,7 @@
     {"t":"T1224","issue":1224,"title":"T1224: A marked function can't take a native value nested by value in an argument (Option<Kind>, Vec<Item>)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
     {"t":"T1225","issue":1225,"title":"T1225: A marked function can't take a native value whose type names a non-'static lifetime by value","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":["D558"],"commit":null,"release":null},
     {"t":"T1226","issue":1226,"title":"T1226: A result of a native type in a generic marked impl can't cross","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1227","issue":1227,"title":"T1227: `a.b.c += v` through more than one imported struct field","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1227","issue":1227,"title":"T1227: `a.b.c += v` through more than one imported struct field","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1228","issue":1228,"title":"T1228: The site redirects plain http to https","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
