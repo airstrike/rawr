@@ -3885,7 +3885,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Library markers run from a native main in 0.3.167 (#1107). Next: a Result back to native code (#1118), the main thread (#1119), `use crate::m` (#1117), both trees (#1114), src/bin (#1116)",
+          "note": "A real app of 1016 packages with two marked leaf modules passes rawr check (2026-11-08, after #1231, #1262, #1278, #1295, #1309, #1318, #1331). Next: its rawr run; a native root naming marked types (#1249, #1264 done for trait objects)",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
