@@ -136,6 +136,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A `use` or path whose crate isn't a dependency now reads as rustc's E0433, with rustc's `cargo add` help. A missing item or module in a present module reads as rustc's E0432 or E0425, with rustc's labels. The help "isn't available in Rawr yet" is gone. (#1386)
 - `rawr cache warm` builds what the first run with dependencies used to build: it installs the nightly rawr reads crate APIs with (the one the current directory names, or the pinned one), gets that nightly's driver and std table, and compiles rawr's runtime for your Rust compiler. It prints the same progress lines, or one line when everything is built. The installer runs it, so a fresh install's first `rawr run` no longer stops to compile rawr's runtime. (#1388)
 - A crate value's `.into()` whose target type is known but has open arguments, as `Slot<'_, _>` in a row whose message type only a later child fixes, picks the one `From` impl that fits, as rustc does, instead of reporting E0283. (#1403)
+- A crate's `From<String>`, `From<&str>` and `From<Cow<str>>` impls stay three: a `String` reaches `From<String>`, a literal `From<&str>`, and only a program's own `Cow<str>` (`Cow::Borrowed`, `Cow::from`) reaches `From<Cow<str>>`, as rustc selects them. Before, a `String` could reach the crate's Cow impl. (#1390)
 
 ## 0.3.171 (2026-11-07)
 
