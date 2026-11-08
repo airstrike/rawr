@@ -1,9 +1,11 @@
 // The docs' navigation and the build's passes over a page's HTML. A page is
 // src/content/docs/<path>.html: its description in a <meta> line, then its
 // <article>. The build gives it the site bar, the sidebar, the pager, a "#"
-// link on each section heading, "On this page" for narrow screens, and
-// highlighted code. A new page is a file there and an entry in GROUPS.
+// link on each section heading, "On this page" for narrow screens,
+// highlighted code, and the output of each runnable snippet, from running it.
+// A new page is a file there and an entry in GROUPS.
 import { highlight } from "./highlight.ts";
+import { outputHtml, type Result } from "./output.ts";
 
 export const SITE = "https://rawr.airstrike.fyi";
 
@@ -137,6 +139,75 @@ export function highlightBlocks(html: string): string {
     const code = highlight(decode(text), lang);
     if (/\bdata-run\b/.test(attributes)) return `${whole}<template data-hl>${code}</template>`;
     return `<code${attributes}>${code}</code>`;
+  });
+}
+
+/** rawr-web's API (web/src/lib.rs): a run's result as JSON text. */
+export interface Web {
+  run_text(code: string): string;
+}
+
+/** How the build runs a snippet, as a Run button would. */
+export interface Runs {
+  /** A fresh rawr-web, so no run sees another's state. */
+  web(): Promise<Web>;
+  /** A `data-where="server"` block's run on rawr's server. */
+  server(code: string): Promise<Result>;
+}
+
+/** Each source's run, once per Runs: a snippet on two pages, or a page built twice, runs once. */
+const ran = new WeakMap<Runs, Map<string, Promise<Result>>>();
+
+function run(runs: Runs, block: { name: string; code: string; server: boolean }): Promise<Result> {
+  let results = ran.get(runs);
+  if (!results) ran.set(runs, (results = new Map()));
+  const key = `${block.server ? "server" : "web"}:${block.code}`;
+  let result = results.get(key);
+  if (result) return result;
+  result = block.server
+    ? runs.server(block.code)
+    : runs.web().then((web) => {
+        try {
+          return JSON.parse(web.run_text(block.code)) as Result;
+        } catch (error) {
+          throw new Error(`${block.name} stopped rawr-web (${error}). A snippet that needs rawr's server is marked data-where="server".`);
+        }
+      });
+  results.set(key, result);
+  return result;
+}
+
+/**
+ * Fills each run strip's output with what its snippet prints. A snippet runs
+ * in rawr-web, or on the server when it is marked `data-where="server"`, as
+ * its Run button runs it. The source leaves each output empty: an output
+ * written by hand, a button with no snippet, a run that rawr-web can't finish
+ * and a run a limit stopped all fail the build.
+ */
+export async function runOutputs(html: string, runs: Runs): Promise<string> {
+  const blocks = new Map<string, { name: string; code: string; server: boolean }>();
+  for (const [, attributes, text] of html.matchAll(/<code([^>]*\bdata-run\b[^>]*)>([^<]*)<\/code>/g)) {
+    const id = /\bid="([^"]+)"/.exec(attributes)?.[1];
+    const name = /\bdata-run="([^"]*)"/.exec(attributes)?.[1] || "this snippet";
+    if (!id) throw new Error(`the run block ${name} has no id`);
+    blocks.set(id, { name, code: decode(text), server: /\bdata-where="server"/.test(attributes) });
+  }
+  const filled = new Map<string, string>();
+  for (const [, source, out] of html.matchAll(/<button[^>]*\bdata-source="([^"]+)"[^>]*\bdata-out="([^"]+)"/g)) {
+    const block = blocks.get(source);
+    if (!block) throw new Error(`the Run button for ${out} names ${source}, which is no run block`);
+    const result = await run(runs, block);
+    if (result.limit) throw new Error(`${block.name}: a limit stopped its run, so it has no output to show`);
+    filled.set(out, outputHtml(result));
+  }
+  for (const [id, block] of blocks) {
+    if (!html.includes(`data-source="${id}"`)) throw new Error(`the run block ${block.name} has no Run button`);
+  }
+  return html.replace(/(<span id="([^"]+)"[^>]*>)([\s\S]*?)(<\/span>)/g, (whole, open: string, id: string, inner: string, close: string) => {
+    const output = filled.get(id);
+    if (output === undefined) return whole;
+    if (inner !== "") throw new Error(`${id} holds an output written by hand; the build writes it from the run`);
+    return open + output + close;
   });
 }
 

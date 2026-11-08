@@ -13,7 +13,7 @@
 }
 
 println!("{}", total(&amp;[0.1, 0.2]));</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-nested-fn" data-out="out-nested-fn" aria-label="Run nested-fn.rs" hidden></button><b>rawr run nested-fn.rs</b><span id="out-nested-fn" aria-live="polite">0.3</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-nested-fn" data-out="out-nested-fn" aria-label="Run nested-fn.rs" hidden></button><b>rawr run nested-fn.rs</b><span id="out-nested-fn" aria-live="polite"></span></div>
 </div>
 <h2 id="struct"><code>struct</code></h2>
 <p>Structs with named fields, tuple structs and unit structs.</p>
@@ -29,7 +29,7 @@ let p = Point { x: 1.0, y: 2.0 };
 let m = Meters(3.5);
 let _marker = Marker;
 println!("{} {} {}", p.x, p.y, m.0);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-structs" data-out="out-structs" aria-label="Run structs.rs" hidden></button><b>rawr run structs.rs</b><span id="out-structs" aria-live="polite">1 2 3.5</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-structs" data-out="out-structs" aria-label="Run structs.rs" hidden></button><b>rawr run structs.rs</b><span id="out-structs" aria-live="polite"></span></div>
 </div>
 <h2 id="enum"><code>enum</code></h2>
 <p>Unit, tuple and struct variants. A fieldless enum casts to an integer with <code>as</code>, and explicit discriminants set its values.</p>
@@ -50,7 +50,7 @@ let shape = Shape::Rect { w: 2.0, h: 3.0 };
 if let Shape::Rect { w, h } = shape {
     println!("{n} {}", w * h);
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-enums" data-out="out-enums" aria-label="Run enums.rs" hidden></button><b>rawr run enums.rs</b><span id="out-enums" aria-live="polite">10 6</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-enums" data-out="out-enums" aria-label="Run enums.rs" hidden></button><b>rawr run enums.rs</b><span id="out-enums" aria-live="polite"></span></div>
 </div>
 <h2 id="impl"><code>impl</code></h2>
 <p>Methods, associated functions and associated consts. An <code>impl</code> can sit inside a function body. <code>Self</code> works in a method&rsquo;s type annotations.</p>
@@ -75,7 +75,7 @@ struct Point {
 
 let p = Point::origin().shifted(2.5);
 println!("{} {}", p.x, p.y);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-impl" data-out="out-impl" aria-label="Run impl.rs" hidden></button><b>rawr run impl.rs</b><span id="out-impl" aria-live="polite">2.5 0</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-impl" data-out="out-impl" aria-label="Run impl.rs" hidden></button><b>rawr run impl.rs</b><span id="out-impl" aria-live="polite"></span></div>
 </div>
 <p>A method can return <code>&amp;mut T</code> or <code>Option&lt;&amp;mut T&gt;</code> borrowed from its <code>&amp;mut self</code>. A free function can return one borrowed from its first <code>&amp;mut</code> parameter. A write through the reference changes the place it names, and the reference can be kept in a local.</p>
 <div class="block">
@@ -101,7 +101,7 @@ if let Some(n) = c.last() {
     *n = 9;
 }
 println!("{:?}", c.counts);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-mut-ref" data-out="out-mut-ref" aria-label="Run mut-ref.rs" hidden></button><b>rawr run mut-ref.rs</b><span id="out-mut-ref" aria-live="polite">[2, 5, 9]</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-mut-ref" data-out="out-mut-ref" aria-label="Run mut-ref.rs" hidden></button><b>rawr run mut-ref.rs</b><span id="out-mut-ref" aria-live="polite"></span></div>
 </div>
 <h2 id="trait"><code>trait</code></h2>
 <p>Default methods, associated types and static functions. A trait can be implemented for your own types and for built-in types such as <code>i64</code>.</p>
@@ -126,7 +126,7 @@ impl Describe for i64 {
 }
 
 println!("{}", 7_i64.describe());</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-traits" data-out="out-traits" aria-label="Run traits.rs" hidden></button><b>rawr run traits.rs</b><span id="out-traits" aria-live="polite">this is the number 7</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-traits" data-out="out-traits" aria-label="Run traits.rs" hidden></button><b>rawr run traits.rs</b><span id="out-traits" aria-live="polite"></span></div>
 </div>
 <h2 id="send-sync"><code>Send</code> and <code>Sync</code></h2>
 <p>Every value in interpreted code is already <code>Send</code> and <code>Sync</code>, so these impls change nothing. rawr checks them as rustc does. <code>impl Send</code> without <code>unsafe</code> is an error, and so is an <code>unsafe impl</code> of another trait.</p>
@@ -139,7 +139,7 @@ unsafe impl Sync for Handle {}
 
 let h = Handle(7);
 println!("handle {}", h.0);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-unsafe-impl" data-out="out-unsafe-impl" aria-label="Run unsafe-impl.rs" hidden></button><b>rawr run unsafe-impl.rs</b><span id="out-unsafe-impl" aria-live="polite">handle 7</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-unsafe-impl" data-out="out-unsafe-impl" aria-label="Run unsafe-impl.rs" hidden></button><b>rawr run unsafe-impl.rs</b><span id="out-unsafe-impl" aria-live="polite"></span></div>
 </div>
 <h2 id="const"><code>const</code> and <code>static</code></h2>
 <p>A <code>const fn</code> is a function. A constant may call one. A <code>static mut</code> isn&rsquo;t supported yet.</p>
@@ -152,7 +152,7 @@ const LIMIT: usize = double(5);
 static GREETING: &amp;str = "hello";
 
 println!("{GREETING} {LIMIT}");</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-consts" data-out="out-consts" aria-label="Run consts.rs" hidden></button><b>rawr run consts.rs</b><span id="out-consts" aria-live="polite">hello 10</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-consts" data-out="out-consts" aria-label="Run consts.rs" hidden></button><b>rawr run consts.rs</b><span id="out-consts" aria-live="polite"></span></div>
 </div>
 <h2 id="type"><code>type</code></h2>
 <p>Aliases can be generic. A <code>pub type</code> can be imported from another module.</p>
@@ -163,7 +163,7 @@ type Grid = Vec&lt;Vec&lt;u8&gt;&gt;;
 let p: Pair&lt;i64&gt; = (1, 2);
 let g: Grid = vec![vec![0; 3]; 2];
 println!("{p:?} {}x{}", g.len(), g[0].len());</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-aliases" data-out="out-aliases" aria-label="Run aliases.rs" hidden></button><b>rawr run aliases.rs</b><span id="out-aliases" aria-live="polite">(1, 2) 2x3</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-aliases" data-out="out-aliases" aria-label="Run aliases.rs" hidden></button><b>rawr run aliases.rs</b><span id="out-aliases" aria-live="polite"></span></div>
 </div>
 <h2 id="mod"><code>mod</code> and visibility</h2>
 <p><code>mod util;</code> loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. Cargo builds a module without it as native Rust. Inline modules work too, also in a single file with no project, as in <code>?play</code>, the playground and a script an app <a href="/docs/embedding#modules">embeds</a>.</p>
@@ -181,7 +181,7 @@ fn main() {
     let a = geometry::area(2.0, 3.0);
     println!("{a}");
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-geometry" data-out="out-geometry" aria-label="Run geometry.rs" hidden></button><b>rawr run geometry.rs</b><span id="out-geometry" aria-live="polite">6</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-geometry" data-out="out-geometry" aria-label="Run geometry.rs" hidden></button><b>rawr run geometry.rs</b><span id="out-geometry" aria-live="polite"></span></div>
 </div>
 <h2 id="use"><code>use</code></h2>
 <p>Paths, groups, and globs of a standard library module work. A path that starts with <code>::</code> names an outside crate, and its first name must be a crate. A path may start with <code>self::</code>. A path may also start at a name another <code>use</code> brings in. This holds in a function body too, so after <code>use iced::keyboard;</code>, a function&rsquo;s <code>use keyboard::key;</code> names <code>iced::keyboard::key</code>.</p>
@@ -214,7 +214,7 @@ fn main() {
     };
     println!("{} {:?} {order}", area(&amp;Square(3.0)), Dot);
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-variants" data-out="out-variants" aria-label="Run variants.rs" hidden></button><b>rawr run variants.rs</b><span id="out-variants" aria-live="polite">9 Dot less</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-variants" data-out="out-variants" aria-label="Run variants.rs" hidden></button><b>rawr run variants.rs</b><span id="out-variants" aria-live="polite"></span></div>
 </div>
 <h2 id="derive"><code>#[derive]</code></h2>
 <p><code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. rawr checks a derive as rustc does, so deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</p>
@@ -228,7 +228,7 @@ struct Order {
 let a = Order { id: 1, ..Default::default() };
 let b = a.clone();
 println!("{a:?} {}", a == b);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-derive" data-out="out-derive" aria-label="Run derive.rs" hidden></button><b>rawr run derive.rs</b><span id="out-derive" aria-live="polite">Order { id: 1, note: "" } true</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-derive" data-out="out-derive" aria-label="Run derive.rs" hidden></button><b>rawr run derive.rs</b><span id="out-derive" aria-live="polite"></span></div>
 </div>
 <p>A crate&rsquo;s derive macro works on your own types too. rustc expands it with the crate your <code>Cargo.toml</code> names, and rawr runs the expanded code as part of your program. The expansion is kept in <code>target/rawr/expand/</code> and runs again only when the type changes. An edit that changes only the expanded code&rsquo;s bodies, as a new <code>#[serde(rename)]</code> does, swaps into the running program as an edit to a function body does, and the program keeps its state. An error in the expanded code is reported at the derive, as rustc reports it.</p>
 <div class="block">

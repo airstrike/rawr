@@ -21,6 +21,8 @@
 // original, and restores it. An edited snippet is highlighted again when it
 // loses focus, by the build's highlighter, loaded only then.
 
+import { outputHtml } from "../lib/output.ts";
+
 /** rawr-web's API (web/src/lib.rs), as the playground uses it. */
 export interface Web {
   run_text(code: string): string;
@@ -242,19 +244,14 @@ export function setup({ document, window, fetch, web }: Env): void {
       source.focus();
     });
 
-    const show = (node: Node) => {
+    const show = (html: string) => {
       const live = document.createElement("span");
       live.className = "live";
-      live.append(node);
+      live.innerHTML = html;
       out.replaceChildren(live);
       out.classList.remove("pending", "quiet");
     };
-    const fail = (message: string) => {
-      const span = document.createElement("span");
-      span.className = "err";
-      span.textContent = message;
-      show(span);
-    };
+    const fail = (message: string) => show(outputHtml({ kind: "error", text: message }));
 
     const run = async () => {
       setState("running");
@@ -279,30 +276,9 @@ export function setup({ document, window, fetch, web }: Env): void {
         }
         if (result.failed !== undefined) {
           fail("The code could not run. " + result.failed);
-        } else if (result.kind === "error") {
-          fail((result.text ?? "").replace(/\n$/, ""));
         } else {
-          const lines = document.createDocumentFragment();
-          // What an iced program drew, above what it printed.
-          if (result.frame) {
-            const image = document.createElement("img");
-            image.src = `data:${result.frame.type};base64,${result.frame.data}`;
-            image.alt = "What the program drew";
-            image.style.display = "block";
-            image.style.maxWidth = "100%";
-            lines.append(image);
-          }
-          const add = (value: string, cls: string) => {
-            const span = document.createElement("span");
-            span.textContent = value;
-            if (cls) span.className = cls;
-            lines.append(span);
-          };
-          for (const chunk of result.output || []) add(chunk.text, chunk.stream === "stderr" ? "err" : "");
-          const last = lines.lastChild;
-          if (last) last.textContent = (last.textContent ?? "").replace(/\n$/, "");
-          if (result.status !== 0) add((last ? "\n" : "") + "exit status " + result.status, "exit");
-          show(lines);
+          // The build draws each snippet's static output with the same function.
+          show(outputHtml(result));
         }
       } catch (error) {
         // fetch throws a TypeError when the network fails.

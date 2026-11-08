@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { PAGES, anchors, decode, highlightBlocks, pager, parse, sidebar, source, toc } from "../src/lib/docs.ts";
+import { PAGES, anchors, decode, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Runs } from "../src/lib/docs.ts";
+import type { Result } from "../src/lib/output.ts";
 import { highlightRust, highlightToml } from "../src/lib/highlight.ts";
 
 test("Rust gets the site's syntax classes", () => {
@@ -47,6 +48,57 @@ test("a run block keeps its plain text for /play/run, with its highlighted copy 
   // A block that already holds markup is left alone.
   const marked = '<code data-lang="rust"><span class="k">?play</span></code>';
   assert.equal(highlightBlocks(marked), marked);
+});
+
+/** A run block with its strip, as the content files write it: the output empty. */
+const block = (id: string, code: string, where = "") =>
+  `<pre><code data-lang="rust" data-run="${id}.rs" id="src-${id}"${where}>${code}</code></pre>` +
+  `<div class="run"><button type="button" class="runbtn" data-source="src-${id}" data-out="out-${id}" hidden></button><b>rawr run ${id}.rs</b><span id="out-${id}" aria-live="polite"></span></div>`;
+
+/** A stand-in rawr-web that answers each source from `results`, and the server likewise. */
+function standIn(results: Record<string, unknown>) {
+  const ran: string[] = [];
+  const runs: Runs = {
+    web: async () => ({
+      run_text(code: string) {
+        ran.push(`web ${code}`);
+        if (!(code in results)) throw new Error("unreachable");
+        return JSON.stringify(results[code]);
+      },
+    }),
+    server: async (code) => (ran.push(`server ${code}`), results[code] as Result),
+  };
+  return { runs, ran };
+}
+
+test("the build runs each snippet and writes its output as a Run shows it", async () => {
+  const { runs, ran } = standIn({
+    'println!("a<b");': { kind: "text", status: 0, output: [{ stream: "stdout", text: "a<b\n" }] },
+    "bad": { kind: "error", text: "error[E0382]: borrow of moved value: `a`\n" },
+    "fails": { kind: "text", status: 1, output: [{ stream: "stdout", text: "n = 42\n" }, { stream: "stderr", text: "Error: x\n" }] },
+    "thread": { kind: "text", status: 0, output: [{ stream: "stdout", text: "4\n" }] },
+    "draw": { kind: "text", status: 0, output: [], frame: { type: "image/png", data: "AAAA" } },
+  });
+  const html = await runOutputs(
+    block("a", "println!(&quot;a&lt;b&quot;);") + block("b", "bad") + block("c", "fails") + block("d", "thread", ' data-where="server"') + block("e", "draw") + block("f", "println!(&quot;a&lt;b&quot;);"),
+    runs,
+  );
+  const out = (id: string) => new RegExp(`<span id="out-${id}" aria-live="polite">(.*?)</span></div>`, "s").exec(html)?.[1];
+  assert.equal(out("a"), "<span>a&lt;b</span>", "the text is escaped and loses its last newline");
+  assert.equal(out("b"), '<span class="err">error[E0382]: borrow of moved value: `a`</span>', "a compile error carries the smoke test's class=\"err\"");
+  assert.equal(out("c"), '<span>n = 42\n</span><span class="err">Error: x</span><span class="exit">\nexit status 1</span>');
+  assert.equal(out("d"), "<span>4</span>", "a server block's output comes from the server");
+  assert.equal(out("e"), '<img src="data:image/png;base64,AAAA" alt="What the program drew" style="display: block; max-width: 100%;">', "what an iced program drew");
+  assert.equal(out("f"), out("a"));
+  assert.deepEqual(ran, ['web println!("a<b");', "web bad", "web fails", "server thread", "web draw"], "each source runs once, and only a server block on the server");
+});
+
+test("the build refuses an output written by hand, a snippet rawr-web can't run and a run a limit stopped", async () => {
+  const { runs } = standIn({ ok: { kind: "text", status: 0, output: [] }, slow: { kind: "text", status: 0, output: [], limit: true } });
+  await assert.rejects(runOutputs(block("a", "ok").replace("></span></div>", ">42</span></div>"), runs), /written by hand/);
+  await assert.rejects(runOutputs(block("b", "spawn"), runs), /stopped rawr-web.*data-where="server"/);
+  await assert.rejects(runOutputs(block("c", "slow"), runs), /a limit stopped its run/);
+  await assert.rejects(runOutputs('<pre><code data-lang="rust" data-run="x.rs" id="src-x">ok</code></pre>', runs), /has no Run button/);
 });
 
 test("headings get a # link, and a long page gets On this page after its lede", () => {

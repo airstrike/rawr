@@ -27,9 +27,7 @@ fn main() -&gt; Result&lt;(), String&gt; {
     println!("m = {m}");
     Ok(())
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-parse" data-out="out-parse" aria-label="Run parse.rs" hidden></button><b>rawr run parse.rs</b><span id="out-parse" aria-live="polite">n = 42
-Error: "\"forty\": invalid digit found in string"
-<span class="exit">exit status 1</span></span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-parse" data-out="out-parse" aria-label="Run parse.rs" hidden></button><b>rawr run parse.rs</b><span id="out-parse" aria-live="polite"></span></div>
 </div>
 <p>A program prints what the Rust binary prints and exits with the same status. An error from <code>main</code> exits with status 1. A panic exits with status 101. It prints what a program built by Cargo prints on stderr:</p>
 <pre><code>thread 'main' panicked at src/main.rs:5:5:
