@@ -2687,6 +2687,11 @@ fn instance_surface_type(
             mutable: false,
             ty: Box::new(Type::Builtin(Builtin::Str)),
         },
+        // The unsized `str` a literal fills `F` of `&'f F` with, as jiff's
+        // `strftime` takes it: the key of the `strftime::<str>` adapter, as
+        // `imported_surface_type` names it, never the item's other
+        // instances' shared binding.
+        Ty::UnsizedStr => Type::Builtin(Builtin::Str),
         Ty::ProfileMessage { payload, seal, .. } => Type::ProfileMessage {
             mapper: *seal,
             payload: Box::new(instance_surface_type(inference, models, payload)?),
