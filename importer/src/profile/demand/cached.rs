@@ -306,7 +306,6 @@ mod tests {
         let bytes = product.encode().expect("the demand product encodes");
         assert!(Product::decode(&bytes).is_ok());
         assert!(Product::decode(&[]).is_err());
-        assert!(Product::decode(&bytes).is_err());
     }
 
     #[test]
@@ -319,6 +318,5 @@ mod tests {
             .expect("the generated profile product encodes");
         assert!(GeneratedProduct::decode(&bytes).is_ok());
         assert!(GeneratedProduct::decode(&[]).is_err());
-        assert!(GeneratedProduct::decode(&bytes).is_err());
     }
 }

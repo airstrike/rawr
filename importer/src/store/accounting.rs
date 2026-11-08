@@ -2705,7 +2705,7 @@ mod tests {
             super::super::entry::ensure_admitted_directory(
                 publication,
                 &root,
-                Path::new("actions/toolchain/0002"),
+                Path::new("actions/toolchain/0003"),
             )?;
             super::super::entry::ensure_admitted_directory(
                 publication,
@@ -3305,7 +3305,7 @@ mod tests {
             super::super::entry::ensure_admitted_directory(
                 publication,
                 &root,
-                Path::new("actions/runner/0002"),
+                Path::new("actions/runner/0003"),
             )?;
             super::super::entry::ensure_admitted_directory(
                 publication,
