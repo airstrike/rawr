@@ -108,6 +108,8 @@ mod std_method_tests;
 #[cfg(test)]
 mod str_tests;
 #[cfg(test)]
+mod tests;
+#[cfg(test)]
 mod trait_instance_tests;
 
 use super::borrowck::{
@@ -130,10 +132,12 @@ use builtin_method::{
     vec_method, vec_method_code, CHAR_METHODS, DEQUE_METHODS, INT_METHODS, SLICE_CHUNKS,
     STR_CHANGES, STR_PIECES,
 };
+pub(crate) use cell::{cell_held, cell_lock, cell_new, is_cell};
 use closure::SELF_CAPTURE;
 pub(crate) use compare::equal_value;
 use compare::Shape;
 use compare::{allowed_type, COMPARISON};
+use conversion::{HostInto, PendingConversion, TextInto};
 use coverage::{
     bool_literals, field_order, reject_empty_range, scalar_text, tuple_members, Scalar,
 };
@@ -143,10 +147,12 @@ use dispatch::{copied_parameters, inherit_names, method_copied};
 #[cfg(feature = "rust-import")]
 use entry::body_source;
 pub(super) use entry::lower;
+pub(super) use entry::runtime_entry;
 #[cfg(feature = "rust-import")]
 pub(crate) use entry::with_uses;
 pub(crate) use entry::Output;
 use entry::{expand_imported_variants, trait_objects, use_blocks, Lowered};
+use expr::ParsedExpr;
 use format::PANIC_MACROS;
 use from_str::{parse_text, ParseError};
 use generics::{
@@ -156,6 +162,9 @@ use generics::{
 };
 #[cfg(feature = "rust-import")]
 use generics::{ImplBounds, ImplProjection, Selection};
+use host_call::{host_number_accepts, macro_or_value, value_or_call, HostCheck};
+#[cfg(feature = "rust-import")]
+use host_call::{names_variant, unsupported_field, ImportedContext, UNSUPPORTED_MESSAGE_FUNCTION};
 #[cfg(feature = "rust-import")]
 pub(super) use imported::imported;
 #[cfg(all(test, feature = "rust-import"))]
@@ -197,6 +206,9 @@ use naming::{
 pub(crate) use naming::{function_display_name, private_function_name};
 #[cfg(test)]
 use op::builtin_type_key;
+use op::invariant;
+#[cfg(test)]
+use op::matches_runtime_model;
 #[cfg(feature = "rust-import")]
 use op::ImportedOperation;
 use op::{
@@ -206,9 +218,14 @@ use op::{
     Op, PreludeOp, ProjectionOperation, WitnessedOp, FLOAT_BINARY_METHODS, FLOAT_UNARY_METHODS,
     SHAPED_HASHED, SHAPED_TOTAL,
 };
+use operator::{cast_value, compound_operator, kind_code, unsigned_order};
 use pattern::{PatternBinding, Prelude};
 pub(crate) use relocate::relocate;
 use relocate::rewrite_statements;
+use scope::{
+    binds_by_value, ArrayElements, Binding, BindingKind, BoundIterator, Branch, Frame, FrameArray,
+    LocalType, LoopElement, LoopFrame, UninitializedUse,
+};
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write;
@@ -228,6 +245,7 @@ use surface::{
     method_without_call, range_inclusive_element, range_type_id, unnamed_signature_type, unpassable,
 };
 use time::{time_code, time_method};
+pub(crate) use tokens::lex_rust;
 use tokens::{
     argument_count, assignment_token, point_span, source_full_span, source_span, span,
     split_arguments, split_first_argument, standard_function, stringify_tokens, template_tokens,
@@ -1261,22 +1279,3 @@ impl<'a> Parser<'a> {
         }
     }
 }
-pub(crate) use cell::{cell_held, cell_lock, cell_new, is_cell};
-use conversion::{HostInto, PendingConversion, TextInto};
-pub(super) use entry::runtime_entry;
-use expr::ParsedExpr;
-use host_call::{host_number_accepts, macro_or_value, value_or_call, HostCheck};
-#[cfg(feature = "rust-import")]
-use host_call::{names_variant, unsupported_field, ImportedContext, UNSUPPORTED_MESSAGE_FUNCTION};
-use op::invariant;
-#[cfg(test)]
-use op::matches_runtime_model;
-use operator::{cast_value, compound_operator, kind_code, unsigned_order};
-use scope::{
-    binds_by_value, ArrayElements, Binding, BindingKind, BoundIterator, Branch, Frame, FrameArray,
-    LocalType, LoopElement, LoopFrame, UninitializedUse,
-};
-pub(crate) use tokens::lex_rust;
-
-#[cfg(test)]
-mod tests;
