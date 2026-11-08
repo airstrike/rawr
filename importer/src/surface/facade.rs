@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 46;
+const SCHEMA: u32 = 47;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -685,6 +685,23 @@ pub struct Item {
     member: Option<super::identity::Definition>,
 }
 
+/// Which of the opaque types that items at `path` give `identity` is, in
+/// the order the items are (`opaque::inherent_owner`).
+fn opaque_sibling(items: &[Item], path: &str, identity: &[u8; 32]) -> usize {
+    let mut given = Vec::new();
+    for item in items.iter().filter(|item| *item.path == *path) {
+        if let Type::Nominal { identity, .. } = &item.signature.output
+            && !given.contains(&identity)
+        {
+            given.push(identity);
+        }
+    }
+    given
+        .iter()
+        .position(|given| *given == identity)
+        .unwrap_or_default()
+}
+
 /// Closed static item family.
 #[derive(Clone, Copy, Deserialize, Serialize)]
 pub enum ItemKind {
@@ -1267,10 +1284,19 @@ impl Plan {
                 items.push(item);
                 facade.items = items.into_boxed_slice();
             }
+            // The names of the type's associated items so far, by which an
+            // opaque type a method gives is apart from its namesakes'.
+            let mut seen = Vec::new();
             for associated in outcome
                 .implementations()
                 .flat_map(crate::classify::ImplementationOutcome::associated)
             {
+                let sibling = seen
+                    .iter()
+                    .filter(|name| **name == associated.name())
+                    .count();
+                seen.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                seen.push(associated.name());
                 // An impl that fixes some of its type's arguments is
                 // relevant to each type it names: iced's `impl TextEditor<
                 // 'a, PlainText, ..>` is `TextEditor`'s, not `PlainText`'s.
@@ -1301,8 +1327,12 @@ impl Plan {
                     facade.items = items.into_boxed_slice();
                 }
                 // The members of the opaque type an inherent method gives,
-                // in its owner's module, as Rawr declares them.
-                let opaque = super::opaque::path(&format!("{owner}__{}", associated.name()), 0);
+                // in its owner's module, as Rawr declares them, each impl's
+                // apart (`opaque::inherent_owner`).
+                let opaque = super::opaque::path(
+                    &super::opaque::inherent_owner(&owner, associated.name(), sibling),
+                    0,
+                );
                 for member in associated
                     .implementations()
                     .flat_map(crate::classify::ImplementationOutcome::associated)
@@ -1462,15 +1492,23 @@ impl Plan {
                     // A type's method gives one declared in the type's
                     // module, as `form::__rawr_opaque_Holder__items_mut`
                     // for `form::Holder::items_mut`: a type is no module.
-                    let owner = match item.path.rsplit_once("::") {
+                    let inherent = match item.path.rsplit_once("::") {
                         Some((parent, name))
                             if types.iter().any(|ty| !ty.opaque && *ty.path == *parent) =>
                         {
-                            format!("{parent}__{name}")
+                            Some((parent, name))
                         }
-                        _ => item.path.to_string(),
+                        _ => None,
                     };
                     for (index, (identity, parameters)) in found.into_iter().enumerate() {
+                        let owner = match inherent {
+                            Some((parent, name)) => super::opaque::inherent_owner(
+                                parent,
+                                name,
+                                opaque_sibling(&facade.items, &item.path, &identity),
+                            ),
+                            None => item.path.to_string(),
+                        };
                         let path = super::opaque::path(&owner, index);
                         if types.iter().any(|ty| {
                             *ty.path == *path

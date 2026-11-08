@@ -1284,11 +1284,19 @@ fn imported_paths<'contract>(
             path.clone()
         };
         let definition = outcome.identity().definition();
+        // The names of the type's associated items so far, by which an
+        // opaque type a method gives is apart from its namesakes'.
+        let mut seen = Vec::new();
         for (implementation, associated) in outcome.implementations().flat_map(|implementation| {
             implementation
                 .associated()
                 .map(move |associated| (implementation.identity(), associated))
         }) {
+            let sibling = seen
+                .iter()
+                .filter(|name| **name == associated.name())
+                .count();
+            seen.push(associated.name());
             // A trait's method over its `Self` is reached beside the trait
             // (`surface::member`).
             if definition.is_some_and(|definition| {
@@ -1326,9 +1334,12 @@ fn imported_paths<'contract>(
                 continue;
             }
             // The members of the opaque type an inherent method gives,
-            // declared in its owner's module (`opaque_types`).
-            let opaque =
-                rawr_import::surface::opaque::path(&format!("{owner}__{}", associated.name()), 0);
+            // declared in its owner's module (`opaque_types`), each impl's
+            // apart (`opaque::inherent_owner`).
+            let opaque = rawr_import::surface::opaque::path(
+                &rawr_import::surface::opaque::inherent_owner(&owner, associated.name(), sibling),
+                0,
+            );
             for member in associated
                 .implementations()
                 .flat_map(rawr_import::classify::ImplementationOutcome::associated)
@@ -2375,11 +2386,17 @@ fn build(
         } else {
             entry.relative.to_string()
         };
+        let mut seen = Vec::new();
         for associated in entry
             .outcome
             .implementations()
             .flat_map(rawr_import::classify::ImplementationOutcome::associated)
         {
+            let sibling = seen
+                .iter()
+                .filter(|name| **name == associated.name())
+                .count();
+            seen.push(associated.name());
             let path_bytes = owner
                 .len()
                 .checked_add(2)
@@ -2410,7 +2427,11 @@ fn build(
             // The members of the opaque type the method gives, declared in
             // its owner's module (`opaque_types`), each with its owner.
             let opaque = rawr_import::surface::opaque::path(
-                &format!("{}__{}", entry.relative, associated.name()),
+                &rawr_import::surface::opaque::inherent_owner(
+                    &entry.relative,
+                    associated.name(),
+                    sibling,
+                ),
                 0,
             );
             let members = associated
@@ -3135,13 +3156,23 @@ fn opaque_types(
     // Each path to the type declares it, as `next` of the iterator a type's
     // method gives is reached through each.
     for entry in &facade.entries {
+        let mut seen = Vec::new();
         for associated in entry
             .outcome
             .implementations()
             .flat_map(rawr_import::classify::ImplementationOutcome::associated)
         {
+            let sibling = seen
+                .iter()
+                .filter(|name| **name == associated.name())
+                .count();
+            seen.push(associated.name());
             visit(
-                &format!("{}__{}", entry.relative, associated.name()),
+                &rawr_import::surface::opaque::inherent_owner(
+                    &entry.relative,
+                    associated.name(),
+                    sibling,
+                ),
                 associated,
                 rawr_import::surface::member::declared,
             );
