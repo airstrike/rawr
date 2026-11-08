@@ -60056,11 +60056,22 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
             value
         })
     };
+    // A native slice, as a marked page's `&BLOCKS[1..2]` (#1291), is cut
+    // where it is: the range borrows its elements, as Rust's does.
+    let place = crate::place::get(args[0]);
     let text = args[0].clone().into_immutable_string().ok();
-    let len = match (&text, args[0].as_array_ref()) {
-        (Some(text), _) => text.len(),
-        (None, Ok(array)) => array.len(),
-        (None, Err(_)) => return Err(invariant("a slice is not an array or a string at runtime")),
+    let len = match (&place, &text, args[0].as_array_ref()) {
+        (Some(place), ..) => place
+            .invoke(crate::place::Operation::Len, &mut [])?
+            .as_int()
+            .ok()
+            .and_then(|len| usize::try_from(len).ok())
+            .ok_or_else(|| invariant("a native slice's length is not a usize"))?,
+        (None, Some(text), _) => text.len(),
+        (None, None, Ok(array)) => array.len(),
+        (None, None, Err(_)) => {
+            return Err(invariant("a slice is not an array or a string at runtime"))
+        }
     };
     let at = |value: &Dynamic| usize::try_from(value.as_int().unwrap_or_default()).ok();
     let (low, high) = if op == PreludeOp::SplitAt {
@@ -60090,6 +60101,20 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
         }
         (low, high)
     };
+    if let Some(place) = place {
+        let window = |range: std::ops::Range<usize>| {
+            place
+                .window(range)
+                .unwrap_or_else(|| Err(invariant("a native slice that can't be cut")))
+        };
+        if op == PreludeOp::SplitAt {
+            return Ok(Dynamic::from_array(vec![
+                window(0..low)?,
+                window(low..len)?,
+            ]));
+        }
+        return window(low..high).and_then(found);
+    }
     let pieces: Vec<Dynamic> = match (&text, args[0].as_array_ref()) {
         (Some(text), _) => {
             for index in [low, high] {

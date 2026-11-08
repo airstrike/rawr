@@ -102,6 +102,12 @@ impl Unit {
         &self.items
     }
 
+    /// The items, to stand one in for another the resolver reads elsewhere.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn items_mut(&mut self) -> &mut [item::Parsed] {
+        &mut self.items
+    }
+
     /// The items, where the statements start and the statements' source.
     pub(crate) fn parts(&self) -> (&[item::Parsed], Option<Position>, &str) {
         (&self.items, self.statements, &self.script_source)

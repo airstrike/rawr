@@ -13,4 +13,5 @@ fn main() {
     println!("{}", badge::heading());
     println!("{}", badge::BLOCKS.len());
     println!("{}", badge::count());
+    badge::titles();
 }

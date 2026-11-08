@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 133;
+const CLASSIFIER_VERSION: u32 = 134;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7784,8 +7784,36 @@ impl<P: api::Phase> Context<'_, P> {
     /// An immutable `static`, read by its path where the bridge runs: a
     /// slice of values the bridge clones (game_of_life's `pub static ALL:
     /// &[Preset]`), or a primitive.
+    ///
+    /// A slice of crate values without `Clone` that borrow nothing, as a
+    /// page's `pub static BLOCKS: &[Block]`, is lent where it is: Rawr
+    /// reads its elements in place, as Rust does, and copies none (#1291).
     fn statik(&self, ty: &model::Type) -> Result<representability::constant::Plan, Failure> {
         use representability::convert::Type;
+        if let model::Type::Reference {
+            mutability: model::Mutability::Shared,
+            ty: target,
+            ..
+        } = ty
+            && let model::Type::Slice(element) = &**target
+            && !names_early_lifetime(element)
+            && !names_late_lifetime(element)
+        {
+            let element = self.convert(element)?;
+            if matches!(element, Type::Nominal { .. }) && !self.clones(&element) {
+                return Ok(representability::constant::Plan::new(
+                    Type::Borrowed {
+                        mutable: false,
+                        ty: Box::new(Type::Sequence {
+                            element: Box::new(element),
+                            owned: false,
+                            length: None,
+                        }),
+                    },
+                    None,
+                ));
+            }
+        }
         let ty = self.convert_value(ty)?;
         if !matches!(
             ty,
