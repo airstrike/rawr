@@ -1,7 +1,11 @@
 //! 128-bit integers, and numeric literals whose type is not known yet.
 
-use super::{invariant, Int, Ty, INT_METHODS};
+use super::op::PreludeOp;
+use super::ty::{Float, Int, Ty};
+use super::{invariant, kind_code, origin, span, ParsedExpr, Parser, INT_METHODS};
 use crate::func::FnCallArgs;
+use crate::resolve::Error;
+use crate::tokenizer::Token;
 use crate::{Dynamic, EvalAltResult, ImmutableString, Position, RawrResult, Span, INT};
 
 /// A runtime integer as the number it is: an `i64`, or the boxed `i128`
@@ -358,4 +362,105 @@ pub(super) enum PendingFloatKind {
     Literal(f64),
     /// The name of the `RoundF32` helper the placeholder calls.
     Round(String),
+}
+
+impl<'a> Parser<'a> {
+    /// `lhs symbol rhs` of the `i128` or `u128` type `ty` through
+    /// `INT_METHODS`, of the type `output`.
+    pub(super) fn wide_binary(
+        &mut self,
+        symbol: &str,
+        lhs: ParsedExpr,
+        rhs: ParsedExpr,
+        ty: Ty,
+        output: Ty,
+    ) -> ParsedExpr {
+        let expression = span(lhs.span.start(), rhs.span.end());
+        let source = self.int_op(
+            symbol,
+            lhs.rendered_source(),
+            rhs.rendered_source(),
+            &ty,
+            &ty,
+        );
+        self.operator_expr(source, output, expression)
+    }
+
+    /// An integer literal past `i64` (the tokenizer's float of its text
+    /// `text`): of its suffix's kind or the one inference settles on, which
+    /// must hold it. `None` for a float literal.
+    pub(super) fn wide_literal(
+        &mut self,
+        text: &str,
+        at: Span,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        let Some(value) = integer_text(text) else {
+            return Ok(None);
+        };
+        let ty = match self.peek() {
+            Token::Identifier(name) if Float::named(name.as_str()).is_some() => return Ok(None),
+            Token::Identifier(name) if let Some(kind) = Int::named(name.as_str()) => {
+                self.next();
+                Ty::Int(kind)
+            }
+            _ => {
+                let id = self.inference.fresh_id();
+                self.literal_kinds.push((id, true));
+                Ty::Int(Int::Var(id))
+            }
+        };
+        self.wide_constant(value, ty, at).map(Some)
+    }
+
+    /// The integer `value` of the integer type `ty` as the runtime keeps
+    /// it (`PreludeOp::WideLiteral`); a kind inference has not settled is
+    /// checked once it has.
+    pub(super) fn wide_constant(
+        &mut self,
+        value: Wide,
+        ty: Ty,
+        at: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let digits = format!("{:?}", value.to_string());
+        let mut boxed = |kind: Int| {
+            let code = kind_code(Ty::Int(kind)).to_string();
+            let call = self.prelude_op(
+                PreludeOp::WideLiteral,
+                [digits.as_str().into(), code.into()],
+            );
+            call.as_str().to_string()
+        };
+        // A `u64`'s or a `usize`'s bits are an `i64` literal.
+        let bits = format!("({})", value.unsigned() as u64 as INT);
+        let source = match ty {
+            Ty::Int(Int::Var(_)) => {
+                let texts = [boxed(Int::I128), boxed(Int::U128), bits];
+                let width = texts.iter().map(String::len).max().unwrap_or_default();
+                let placeholder = format!(
+                    "{:<width$}",
+                    format!(
+                        "__rawr_wide_literal_{:08}",
+                        self.pending_wide_literals.len()
+                    )
+                );
+                self.pending_wide_literals.push(PendingWide {
+                    ty: ty.clone(),
+                    value,
+                    at,
+                    placeholder: placeholder.clone(),
+                    texts,
+                });
+                placeholder
+            }
+            Ty::Int(kind) if value.fits(kind).is_err() => {
+                return Err(self.overflowing(kind, value, at));
+            }
+            Ty::Int(Int::U64 | Int::Usize) => bits,
+            Ty::Int(kind) => boxed(kind),
+            _ => {
+                return Err(self.unsupported("an integer literal of a type that is not an integer"))
+            }
+        };
+        Ok(self.operator_expr(origin::Fragment::plain(source), ty, at))
+    }
 }
