@@ -321,6 +321,9 @@ impl fmt::Display for ParseErrorType {
                     f,
                     "Duplicate item '{name}'; first declared at {previous_declaration}"
                 ),
+                crate::resolve::Error::DuplicateImport { name, .. } => {
+                    write!(f, "the name `{name}` is defined multiple times")
+                }
                 crate::resolve::Error::UnknownType { name, path, .. } => {
                     write!(f, "{}", crate::resolve::NotFound::type_named(name, *path))
                 }

@@ -386,7 +386,9 @@ fn a_crates_recursive_enum_of_a_static_slice_of_itself() {
 /// formatted by its derives, matched as a pattern, passed where a method
 /// takes `impl Into<StyleFn>` with `impl From<Secondary> for StyleFn`, and
 /// converted by `.into()`. A tuple struct's constructor is a function
-/// value passed to `map` (#1317).
+/// value passed to `map` (#1317). `use natives::badge::{self, badge};`
+/// binds the module and its function of one name, so `badge::Secondary`
+/// goes through the module and `badge("..")` calls the function (#1319).
 #[test]
 fn a_crates_unit_struct_is_a_value_and_its_tuple_constructor_a_function() {
     runs_as_cargo_does(

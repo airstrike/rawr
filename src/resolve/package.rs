@@ -55,6 +55,17 @@ enum Target {
     },
 }
 
+impl Target {
+    /// The namespace an import of the target binds its name in.
+    const fn namespace(&self) -> item::Namespace {
+        match self {
+            Self::Module | Self::Trait | Self::Type(_) => item::Namespace::Type,
+            Self::Item(_) | Self::HostItem { .. } => item::Namespace::Value,
+            Self::HostModuleItem { .. } => item::Namespace::Both,
+        }
+    }
+}
+
 #[derive(Default)]
 struct ResolvedQualifiedCalls {
     functions: BTreeMap<(program::source::Id, Span), crate::item::Key>,
@@ -110,6 +121,10 @@ struct Resolver<'a> {
     exports: BTreeMap<Address, Export>,
     /// Private `use` bindings, so a path may start with an imported module.
     aliases: BTreeMap<Address, Export>,
+    /// A second private `use` of a name `aliases` binds, in Rust's other
+    /// namespace: the function `use badge::{self, badge};` binds beside
+    /// the module (`through_alias`).
+    other_aliases: BTreeMap<Address, Export>,
     /// The names each module's private glob imports bind (`use super::*;`,
     /// `use Shape::*;`), which its declarations and explicit imports
     /// shadow, as in Rust.
@@ -224,6 +239,7 @@ impl<'a> Resolver<'a> {
             declarations: BTreeMap::new(),
             exports: BTreeMap::new(),
             aliases: BTreeMap::new(),
+            other_aliases: BTreeMap::new(),
             globs: BTreeMap::new(),
             type_declarations: Vec::new(),
             enum_variants: BTreeMap::new(),
@@ -338,15 +354,19 @@ impl<'a> Resolver<'a> {
                 };
                 if use_item.header.visibility.is_none() {
                     for (name, path) in use_paths(use_item) {
-                        self.aliases.insert(
-                            context.address(&name.text),
-                            Export {
-                                source: context.source,
-                                context: context.clone(),
-                                path,
-                                span: name.span,
-                            },
-                        );
+                        let address = context.address(&name.text);
+                        let export = Export {
+                            source: context.source,
+                            context: context.clone(),
+                            path,
+                            span: name.span,
+                        };
+                        let aliases = if self.aliases.contains_key(&address) {
+                            &mut self.other_aliases
+                        } else {
+                            &mut self.aliases
+                        };
+                        aliases.insert(address, export);
                     }
                     continue;
                 }
@@ -879,7 +899,7 @@ impl<'a> Resolver<'a> {
         &self,
         context: &Context,
         parsed: &crate::item::Use,
-        occupied: &BTreeMap<ImmutableString, (source::Id, Span)>,
+        bound: &BTreeMap<(ImmutableString, item::Namespace), (source::Id, Span, bool)>,
     ) -> Result<Vec<UsePath>, Failure> {
         let crate::item::UseTree::Glob { prefix, span } = &parsed.tree else {
             return Ok(Vec::new());
@@ -913,7 +933,12 @@ impl<'a> Resolver<'a> {
         };
         Ok(names
             .into_iter()
-            .filter(|name| !occupied.contains_key(name))
+            .filter(|name| {
+                item::Namespace::Both
+                    .sides()
+                    .iter()
+                    .any(|side| !bound.contains_key(&(name.clone(), *side)))
+            })
             .map(|name| {
                 let mut path = segments.to_vec();
                 path.push(name.clone());
@@ -1054,8 +1079,7 @@ impl<'a> Resolver<'a> {
                 None => {
                     let address = context.address(name);
                     let alias = self
-                        .aliases
-                        .get(&address)
+                        .through_alias(&address)
                         .or_else(|| self.globs.get(&address))?;
                     if alias.path.len() < 2 {
                         return None;
@@ -1126,10 +1150,26 @@ impl<'a> Resolver<'a> {
         // name may be imported beside it (`mod circle;` and
         // `use circle::circle;`).
         let mut modules = BTreeMap::<ImmutableString, (source::Id, Span)>::new();
+        // Each name bound in each of Rust's namespaces, which an import of
+        // that name in that namespace collides with, and whether an import
+        // bound it: two imports are rustc's E0252.
+        let mut bound =
+            BTreeMap::<(ImmutableString, item::Namespace), (source::Id, Span, bool)>::new();
         for (address, declaration) in &self.declarations {
             if address.package == context.namespace.package
                 && address.modules == context.namespace.modules
             {
+                let namespace = match declaration.target {
+                    Target::Module | Target::Trait => item::Namespace::Type,
+                    Target::Item(_) => item::Namespace::Value,
+                    _ => item::Namespace::Both,
+                };
+                for side in namespace.sides() {
+                    bound.insert(
+                        (address.name.clone(), *side),
+                        (declaration.source, declaration.span, false),
+                    );
+                }
                 if matches!(declaration.target, Target::Module) {
                     modules.insert(address.name.clone(), (declaration.source, declaration.span));
                     continue;
@@ -1158,7 +1198,7 @@ impl<'a> Resolver<'a> {
             };
             let mut bindings = Vec::new();
 
-            let globbed = self.glob_paths(context, parsed, &occupied)?;
+            let globbed = self.glob_paths(context, parsed, &bound)?;
             for (name, path) in use_paths(parsed).into_iter().chain(globbed) {
                 let module_only = parsed.binds_module_only(&name);
                 // `use ::image::ColorType;` names the crate `image`, never a
@@ -1241,6 +1281,21 @@ impl<'a> Resolver<'a> {
                         self.resolve_any_path(context, &path, name.span, &mut active)?
                     }
                 };
+                // A glob's name is shadowed by the one a declaration or an
+                // explicit import binds in its namespace, as in Rust: `use
+                // m::badge;` beside `use m::badge::*;` keeps the glob's
+                // function `badge`.
+                let namespace = variant
+                    .as_ref()
+                    .map_or_else(|| target.namespace(), item::Import::namespace);
+                if glob(&parsed_items[index])
+                    && namespace
+                        .sides()
+                        .iter()
+                        .any(|side| bound.contains_key(&(name.text.clone(), *side)))
+                {
+                    continue;
+                }
                 // An item of a `.rs` module keeps its crate spelling. A Rust
                 // type another module of this crate imported, named through
                 // that import (`use crate::Preset;` after the root's `use
@@ -1330,30 +1385,18 @@ impl<'a> Resolver<'a> {
                         item::Import::Item { definitions, owner }
                     }
                 };
-                let value = matches!(
-                    import,
-                    item::Import::ScriptItem { .. }
-                        | item::Import::Item { .. }
-                        | item::Import::Variant { .. }
-                        | item::Import::OrderingVariant
-                        | item::Import::HostVariant { .. }
-                );
-                let previous = if value {
-                    occupied.insert(name.text.clone(), (context.source, name.span))
-                } else {
-                    occupied
-                        .insert(name.text.clone(), (context.source, name.span))
-                        .or_else(|| modules.get(&name.text).copied())
-                };
-                if let Some((previous_source, previous_span)) = previous {
+                occupied.insert(name.text.clone(), (context.source, name.span));
+                let previous = import.namespace().sides().iter().find_map(|side| {
+                    bound.insert(
+                        (name.text.clone(), *side),
+                        (context.source, name.span, true),
+                    )
+                });
+                if let Some((previous_source, previous_span, imported)) = previous {
                     return Err(Failure {
                         primary: context.source,
                         secondary: Some(previous_source),
-                        error: Error::DuplicateItem {
-                            name: name.text,
-                            declaration: name.span,
-                            previous_declaration: previous_span,
-                        },
+                        error: Error::duplicate(name.text, name.span, previous_span, imported),
                     });
                 }
                 // A std type imported under another name, as iced's `Never`
@@ -1450,8 +1493,7 @@ impl<'a> Resolver<'a> {
     fn module_alias(&self, context: &Context, name: &str) -> Option<&Export> {
         let address = context.address(name);
         let alias = self
-            .aliases
-            .get(&address)
+            .through_alias(&address)
             .or_else(|| self.exports.get(&address))?;
         let module = self.is_direct_script_path(&alias.context, &alias.path)
             && matches!(
@@ -1480,8 +1522,7 @@ impl<'a> Resolver<'a> {
         };
         let address = context.address(first);
         let alias = self
-            .aliases
-            .get(&address)
+            .through_alias(&address)
             .or_else(|| self.exports.get(&address))?;
         let direct = host_target(
             self.host,
@@ -1491,6 +1532,34 @@ impl<'a> Resolver<'a> {
             None,
         );
         (alias.path.first() != Some(first) && direct.is_err()).then_some((address, alias))
+    }
+
+    /// The private `use` of `address` a longer path goes through: of two
+    /// `use`s of one name in Rust's two namespaces, the one that names a
+    /// module, as `badge::Secondary` goes through the module of `use
+    /// badge::{self, badge};` and `badge(..)` calls the function.
+    fn through_alias(&self, address: &Address) -> Option<&Export> {
+        let first = self.aliases.get(address)?;
+        let Some(other) = self.other_aliases.get(address) else {
+            return Some(first);
+        };
+        let module = |alias: &Export| {
+            alias.path.first() != Some(&address.name)
+                && matches!(
+                    self.resolve_any_path(
+                        &alias.context,
+                        &alias.path,
+                        alias.span,
+                        &mut BTreeSet::new()
+                    ),
+                    Ok(Target::Module | Target::HostModuleItem { .. })
+                )
+        };
+        Some(if !module(first) && module(other) {
+            other
+        } else {
+            first
+        })
     }
 
     fn is_child_module(&self, context: &Context, name: &str) -> bool {

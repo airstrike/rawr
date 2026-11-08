@@ -8,6 +8,8 @@ use std::fmt;
 pub enum Category {
     /// A second item reused an existing declaration name.
     DuplicateItem,
+    /// Two imports bound one name in one namespace (rustc's E0252).
+    DuplicateImport,
     /// A type path in an item header could not be resolved.
     UnknownType,
     /// A compile-time import path is not present in static host metadata.
@@ -128,6 +130,7 @@ impl fmt::Display for Category {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateItem => formatter.write_str("duplicate item"),
+            Self::DuplicateImport => formatter.write_str("duplicate import"),
             Self::UnknownType => formatter.write_str("unknown type"),
             Self::UnknownImport => formatter.write_str("unknown import"),
             Self::InvalidImport => formatter.write_str("invalid import"),
@@ -374,6 +377,16 @@ pub enum Error {
         /// Primary span on the second declaration.
         declaration: Span,
         /// Secondary span on the first declaration.
+        previous_declaration: Span,
+    },
+    /// Two imports bound one name in one of Rust's namespaces, rustc's
+    /// E0252: two functions, or a module and a type, of one name.
+    DuplicateImport {
+        /// The name both imports bind.
+        name: ImmutableString,
+        /// Primary span on the second import's name.
+        declaration: Span,
+        /// Secondary span on the first import's name.
         previous_declaration: Span,
     },
     /// A header referenced neither a script type, builtin, nor host type.
@@ -940,6 +953,29 @@ pub enum Error {
 }
 
 impl Error {
+    /// A name bound twice in one of Rust's namespaces: rustc's E0252 when
+    /// an import bound it before, a duplicate item when a declaration did.
+    pub(crate) fn duplicate(
+        name: ImmutableString,
+        declaration: Span,
+        previous_declaration: Span,
+        imported: bool,
+    ) -> Self {
+        if imported {
+            Self::DuplicateImport {
+                name,
+                declaration,
+                previous_declaration,
+            }
+        } else {
+            Self::DuplicateItem {
+                name,
+                declaration,
+                previous_declaration,
+            }
+        }
+    }
+
     /// rustc's E0061 (E0057 for a closure) for a call of `name` that gives
     /// `found` arguments where it takes `expected`. Its definition is not in
     /// the program's source.
@@ -1010,6 +1046,7 @@ impl Error {
     pub const fn category(&self) -> Category {
         match self {
             Self::DuplicateItem { .. } => Category::DuplicateItem,
+            Self::DuplicateImport { .. } => Category::DuplicateImport,
             Self::UnknownType { .. } => Category::UnknownType,
             Self::UnknownImport { .. } => Category::UnknownImport,
             Self::InvalidImport { .. } => Category::InvalidImport,
@@ -1068,6 +1105,7 @@ impl Error {
     pub fn name(&self) -> &str {
         match self {
             Self::DuplicateItem { name, .. }
+            | Self::DuplicateImport { name, .. }
             | Self::UnknownType { name, .. }
             | Self::UnknownFunction { name, .. }
             | Self::UnknownVariable { name, .. }
@@ -1123,7 +1161,9 @@ impl Error {
     #[must_use]
     pub const fn primary_span(&self) -> Span {
         match self {
-            Self::DuplicateItem { declaration, .. } => *declaration,
+            Self::DuplicateItem { declaration, .. } | Self::DuplicateImport { declaration, .. } => {
+                *declaration
+            }
             Self::UnknownType { reference, .. } => *reference,
             Self::UnknownImport { reference, .. }
             | Self::InvalidImport { reference, .. }
@@ -1183,6 +1223,10 @@ impl Error {
     pub const fn secondary_span(&self) -> Option<Span> {
         match self {
             Self::DuplicateItem {
+                previous_declaration,
+                ..
+            }
+            | Self::DuplicateImport {
                 previous_declaration,
                 ..
             } => Some(*previous_declaration),
@@ -1612,6 +1656,14 @@ impl fmt::Display for Written<'_> {
             } => write!(
                 formatter,
                 "duplicate item `{name}` at {declaration}; first declared at {previous_declaration}"
+            ),
+            Error::DuplicateImport {
+                name,
+                declaration,
+                previous_declaration,
+            } => write!(
+                formatter,
+                "the name `{name}` is defined multiple times at {declaration}; previously imported at {previous_declaration}"
             ),
             Error::UnknownType {
                 name,

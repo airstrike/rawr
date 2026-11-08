@@ -1210,6 +1210,19 @@ fn resolve_imports(
     types: &mut BTreeMap<ImmutableString, type_ref::Target>,
 ) -> Result<Vec<Option<item::Use>>, Error> {
     let mut occupied = local_declarations.clone();
+    // Each name bound in each of Rust's namespaces, which an import of that
+    // name in that namespace collides with, and whether an import bound it:
+    // two imports are rustc's E0252. This file's own items are kept by name
+    // alone, so each holds both.
+    let mut bound = local_declarations
+        .iter()
+        .flat_map(|(name, span)| {
+            item::Namespace::Both
+                .sides()
+                .iter()
+                .map(move |side| ((name.clone(), *side), (*span, false)))
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut uses = vec![None; parsed_items.len()];
     // A glob binds no name an explicit `use` binds, wherever that `use` is.
     let explicit = parsed_items
@@ -1433,14 +1446,20 @@ fn resolve_imports(
         }
 
         for binding in &bindings {
-            if let Some(previous_declaration) =
-                occupied.insert(binding.name.text.clone(), binding.name.span)
-            {
-                return Err(Error::DuplicateItem {
-                    name: binding.name.text.clone(),
-                    declaration: binding.name.span,
+            occupied.insert(binding.name.text.clone(), binding.name.span);
+            let previous = binding.target.namespace().sides().iter().find_map(|side| {
+                bound.insert(
+                    (binding.name.text.clone(), *side),
+                    (binding.name.span, true),
+                )
+            });
+            if let Some((previous_declaration, imported)) = previous {
+                return Err(Error::duplicate(
+                    binding.name.text.clone(),
+                    binding.name.span,
                     previous_declaration,
-                });
+                    imported,
+                ));
             }
             if let item::Import::Type { definition, owner } = &binding.target {
                 types.insert(

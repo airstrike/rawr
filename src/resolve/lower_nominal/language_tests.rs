@@ -14175,3 +14175,59 @@ fn a_let_of_a_value_that_never_comes_takes_any_use() {
     "#);
     assert_eq!(value, 42);
 }
+
+/// A module and a function of one name bind in Rust's two namespaces:
+/// `use parts::badge::{self, badge};` brings in both, so
+/// `badge::Secondary::weight()` goes through the module and `badge("..")`
+/// calls the function, as two `use` lines do and a glob beside the
+/// module's import does. Two functions, or a module and a struct, of one
+/// name share a namespace: rustc's E0252.
+#[test]
+fn language_a_module_and_a_function_of_one_name_import_together() {
+    let parts = r#"mod parts {
+    pub mod badge {
+        pub struct Secondary;
+
+        impl Secondary {
+            pub fn weight() -> i64 {
+                40
+            }
+        }
+
+        pub fn badge(label: &str) -> i64 {
+            label.len() as i64
+        }
+    }
+
+    pub fn label(text: &str) -> i64 {
+        text.len() as i64 * 2
+    }
+}
+"#;
+    let call = "pub fn run() -> i64 { badge(\"ab\") + badge::Secondary::weight() }\nrun()";
+    for imports in [
+        "use parts::badge::{self, badge};",
+        "use parts::badge::badge;\nuse parts::badge;",
+        "use parts::badge;\nuse parts::badge::badge;",
+        "use parts::badge;\nuse parts::badge::*;",
+    ] {
+        assert_eq!(run(&format!("{parts}{imports}\n{call}")), 42, "{imports}");
+    }
+    for imports in [
+        "use parts::badge::badge;\nuse parts::label as badge;",
+        "use parts::badge;\nuse parts::badge::Secondary as badge;",
+    ] {
+        let program = format!("{parts}{imports}\n{call}");
+        let error = Engine::new()
+            .compile(&program)
+            .map(|_| ())
+            .expect_err("rustc refuses two imports of one name in one namespace");
+        let source = crate::diagnostic::Source::new("main.rs", &program).unwrap();
+        let report = crate::diagnostic::Report::from_parse(source, &error).unwrap();
+        assert_eq!(
+            (report.code().as_str(), report.message()),
+            ("E0252", "the name `badge` is defined multiple times"),
+            "{imports}"
+        );
+    }
+}
