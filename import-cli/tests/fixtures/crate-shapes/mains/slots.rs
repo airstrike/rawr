@@ -4,7 +4,7 @@ use natives::slots;
 
 struct Mine(u32);
 
-impl<'a> From<Mine> for Slot<'a, ()> {
+impl<'a, M> From<Mine> for Slot<'a, M> {
     fn from(mine: Mine) -> Self {
         Slot::from(format!("mine {}", mine.0))
     }
