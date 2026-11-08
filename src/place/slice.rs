@@ -251,6 +251,119 @@ impl<E: Policy> Storage for Lending<E> {
     }
 }
 
+/// A slice of native values that lives as long as the program, as a
+/// marked page's `pub static BLOCKS: &[Block]` does, or the elements
+/// `range` of one: `slice` names the static, so the place holds no
+/// reference and no element is copied. A call that takes a `&'static [T]`
+/// takes it ([`lasting_of`]).
+struct Lasting<E: Policy> {
+    slice: fn() -> &'static [E::Value],
+    range: Range<usize>,
+}
+
+impl<E: Policy> Lasting<E> {
+    fn read(&self, mutable: bool) -> RawrResultOf<&'static [E::Value]> {
+        if mutable {
+            return Err(failure("the native slice is shared"));
+        }
+        (self.slice)()
+            .get(self.range.clone())
+            .ok_or_else(out_of_bounds)
+    }
+}
+
+impl<E: Policy> Storage for Lasting<E> {
+    fn invoke(
+        &self,
+        witness: &Witness,
+        path: &[usize],
+        operation: Operation,
+        arguments: &mut [Dynamic],
+        rest: Option<&mut crate::scope::Rest<'_>>,
+    ) -> RawrResult {
+        let value = self.read(operation.mutable())?;
+        invoke_at::<E>(
+            Access::Shared(value),
+            witness,
+            path,
+            operation,
+            arguments,
+            rest,
+        )
+    }
+
+    fn reach(
+        &self,
+        _witness: &Witness,
+        path: &[usize],
+        mutable: bool,
+        visit: &mut dyn FnMut(Access<'_, dyn Any>) -> RawrResult,
+    ) -> RawrResult {
+        if path.is_empty() {
+            return Err(failure("a native slice is reached by its own descriptor"));
+        }
+        reach_at::<E>(Access::Shared(self.read(mutable)?), path, visit)
+    }
+
+    fn copies(&self, path: &[usize]) -> bool {
+        path.split_first()
+            .is_some_and(|(_, path)| E::copies_at(path))
+    }
+
+    /// A window of a lasting slice lasts as long, as Rust's `&BLOCKS[1..2]`
+    /// is a `&'static [Block]` too.
+    fn window(&self, root: &Place, range: Range<usize>) -> Option<RawrResult> {
+        let start = self.range.start;
+        let window = start.checked_add(range.start)?..start.checked_add(range.end)?;
+        if window.start > window.end || window.end > self.range.end {
+            return Some(Err(out_of_bounds()));
+        }
+        Some(Ok(Dynamic::from(Place {
+            witness: root.witness.clone(),
+            mutable: false,
+            storage: Shared::new(Self {
+                slice: self.slice,
+                range: window,
+            }),
+        })))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// The slice `slice` gives, a `static` of native values that lives as long
+/// as the program: a place marked code reads in place, and that a
+/// `&'static [T]` parameter takes ([`lasting_of`]).
+pub fn lasting<E: Policy>(witness: &Witness, slice: fn() -> &'static [E::Value]) -> RawrResult {
+    if !witness
+        .sequence_element()
+        .is_some_and(|element| E::accepts(&element))
+    {
+        return Err(failure("a native slice has the wrong element witness"));
+    }
+    Ok(Dynamic::from(Place {
+        witness: witness.clone(),
+        mutable: false,
+        storage: Shared::new(Lasting::<E> {
+            slice,
+            range: 0..slice().len(),
+        }),
+    }))
+}
+
+/// The slice `place` is when it lives as long as the program ([`lasting`]),
+/// or is a window of one: what fills a `&'static [T]` parameter.
+#[must_use]
+pub fn lasting_of<E: Policy>(place: &Place) -> Option<&'static [E::Value]> {
+    place
+        .storage
+        .as_any()
+        .downcast_ref::<Lasting<E>>()
+        .and_then(|lasting| lasting.read(false).ok())
+}
+
 /// The elements `range` of the slice `root` (`Place::window`): a slice
 /// that `reach` hands to its visitor at each operation, through `root`,
 /// cut to `range`, so no element is copied and the root's own loan or
@@ -405,6 +518,9 @@ pub fn reach<E: Policy, R>(
     }
     if let Some(lending) = place.storage.as_any().downcast_ref::<Lending<E>>() {
         return lending.access(mutable, |value| visit(Access::Shared(value)));
+    }
+    if let Some(lasting) = place.storage.as_any().downcast_ref::<Lasting<E>>() {
+        return visit(Access::Shared(lasting.read(mutable)?));
     }
     super::reach::<super::sequence::Vector<E>, _>(place, witness, mutable, |value| match value {
         Access::Shared(value) => visit(Access::Shared(value)),

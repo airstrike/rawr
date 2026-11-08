@@ -14,4 +14,7 @@ fn main() {
     println!("{}", badge::BLOCKS.len());
     println!("{}", badge::count());
     badge::titles();
+    badge::state().show();
+    badge::part().show();
+    badge::promoted().show();
 }
