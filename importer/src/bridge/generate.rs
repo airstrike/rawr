@@ -743,6 +743,41 @@ macro_rules! insert_native {
     }};
 }
 
+/// How script code reads a `$target` native code lent it through the
+/// family `$family` (`scope::Reads`): its `Display` and `Debug` text and
+/// its `PartialEq`, chosen as `insert_native` chooses a stored value's. The
+/// type carries no lifetime, so the value is reached as `dyn Any`.
+#[allow(unused_macros)]
+macro_rules! lent_reads {
+    ($family:ty, $target:ty) => {{
+        fn reach(
+            nonce: __rawr_internal::scope::Nonce,
+            visit: &mut dyn FnMut(&dyn std::any::Any),
+        ) -> Result<(), __rawr_internal::scope::Error> {
+            __rawr_internal::scope::with_ref::<$family, _>(nonce, |value| visit(value))
+        }
+        fn display(value: &dyn std::any::Any) -> Option<String> {
+            #[allow(unused_imports)]
+            use $crate::__rawr_runner::{ViaDisplay as _, WithoutDisplay as _};
+            let target = value.downcast_ref::<$target>()?;
+            (&$crate::__rawr_runner::debug_probe(target)).native_display()?(value)
+        }
+        fn debug(value: &dyn std::any::Any) -> Option<String> {
+            #[allow(unused_imports)]
+            use $crate::__rawr_runner::{ViaDebug as _, WithoutDebug as _};
+            let target = value.downcast_ref::<$target>()?;
+            (&$crate::__rawr_runner::debug_probe(target)).native_debug()?(value)
+        }
+        fn equal(value: &dyn std::any::Any, other: &dyn std::any::Any) -> Option<bool> {
+            #[allow(unused_imports)]
+            use $crate::__rawr_runner::{ViaEqual as _, WithoutEqual as _};
+            let target = value.downcast_ref::<$target>()?;
+            (&$crate::__rawr_runner::debug_probe(target)).native_equal()?(value, other)
+        }
+        __rawr_internal::scope::Reads::new(reach, display, debug, equal)
+    }};
+}
+
 /// A copy of what a borrow guard dereferences to, made inside the call that
 /// holds the guard: its `Clone`, or an error naming the type when it has
 /// none, so a target without `Clone` fails where it is read and not where
@@ -2361,6 +2396,8 @@ fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::host::display::register::<__rawr_internal::scope::Scoped>();
     __rawr_internal::host::debug::register::<__rawr_internal::scope::Projected>();
     __rawr_internal::host::display::register::<__rawr_internal::scope::Projected>();
+    __rawr_internal::host::debug::register::<__rawr_internal::scope::Lent>();
+    __rawr_internal::host::display::register::<__rawr_internal::scope::Lent>();
     NATIVE_ARENA.with(|arena| *arena.borrow_mut() = Some(Arena::new(epoch)));
     // A new program's arena: the handles the last one gave out are stale.
     EXPORTED.with_borrow_mut(Vec::clear);
@@ -3932,6 +3969,20 @@ fn native_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
         }
         (None, None) => {}
     }
+    // A value native code lent the script function (D558.3), with another
+    // lent value or one the arena holds.
+    let lent = |value: &Dynamic| value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent);
+    match (lent(lhs), lent(rhs)) {
+        (Some(lhs), Some(rhs)) => return lhs.equal(&rhs).ok().flatten(),
+        (Some(lent), None) | (None, Some(lent)) => {
+            let other = if lhs.is::<__rawr_internal::scope::Lent>() { rhs } else { lhs };
+            let handle = other.read_lock::<NativeHandle>().map(|value| value.clone())?;
+            return arena_access(|arena| arena.with_value(handle, |value| lent.equal_native(value).ok().flatten()))
+                .flatten()
+                .flatten();
+        }
+        (None, None) => {}
+    }
     let lhs = lhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
     let rhs = rhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
     arena_access(|arena| arena.equal(lhs, rhs)).flatten()
@@ -3960,6 +4011,7 @@ fn imported_runtime(
     }
     __rawr_internal::host::value::register_relations::<NativeHandle>(native_equal, native_compare);
     __rawr_internal::host::value::register_relations::<__rawr_internal::scope::Scoped>(native_equal, native_compare);
+    __rawr_internal::host::value::register_relations::<__rawr_internal::scope::Lent>(native_equal, native_compare);
     register_defaults();
     let mut registry = __rawr_internal::host::runtime::Registry::new();
     // The core's future, which a crate's async functions give in a program
@@ -14520,15 +14572,13 @@ fn render_slot(
                 parameters.push(format!("{name}: &{lifetime}{borrow}()"));
                 values.push(format!("{{ let _ = {name}; Dynamic::from(()) }}"));
             }
-            // A shared borrow of a native value, as iced's `pick_list`
-            // gives `font::Family::to_string` a `&Family`: a copy, as a
-            // closure's borrowed native input crosses
-            // (`render_callable_closure`), so script code reads it as the
-            // value it is, `Display` too.
+            // A shared borrow of one of std's values Rawr's std holds as its
+            // own, as `&Duration`, or of a facade's own value: Rawr's value
+            // of it, as a `&str` is Rawr's string.
             convert::Type::Borrowed { mutable: false, ty }
                 if family.is_none()
                     && matches!(**ty, convert::Type::Nominal { .. })
-                    && !is_value(ty)
+                    && (is_duration(ty) || is_facade_value(ty))
                     && !carries_lifetime(ty) =>
             {
                 let rust = concrete_type(ty).ok_or_else(|| drift("a slot's input"))?;
@@ -14540,13 +14590,15 @@ fn render_slot(
                     "(({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position}))))"
                 ));
             }
-            // A native value the function borrows `&mut`: lent for the
-            // call alone, as a script impl's function is (D558.3). A
-            // closure gives each `&mut` parameter back after its value, as
-            // `Path::new(|p| ..)`'s does, so it is one of the call's places.
-            // So is one it borrows shared where its output is at the slot's
+            // A native value the function borrows: lent for the call alone,
+            // as a script impl's function is (D558.3), so the function reads
+            // the value native code holds at each call, as elevato's
+            // `update(.., building: &Building)` does, and nothing is copied
+            // or asks `Clone` (#1405). A closure gives each `&mut` parameter
+            // back after its value, as `Path::new(|p| ..)`'s does, so it is
+            // one of the call's places. Where the output is at the slot's
             // `'x`, as `transition`'s view takes `&Animation<f32>` and gives
-            // a widget of the view: the output's type is one for every
+            // a widget of the view, the output's type is one for every
             // borrow of the input, so it borrows nothing of it, and the
             // input's borrow is a lifetime of its own.
             convert::Type::Borrowed {
@@ -14559,11 +14611,12 @@ fn render_slot(
                 let rust = concrete_type(ty).ok_or_else(|| drift("a slot's input"))?;
                 let borrow = if *borrowed_mutably { "&mut " } else { "&" };
                 parameters.push(format!("{name}: {borrow}{rust}"));
-                values.push(lent_value(position, *borrowed_mutably, &rust));
                 if *borrowed_mutably {
                     mutable.push(position.to_string());
                 }
-                lends.push(LentInput::new(position, *borrowed_mutably, rust));
+                let lend = LentInput::new(position, *borrowed_mutably, rust);
+                values.push(lend.value());
+                lends.push(lend);
             }
             convert::Type::Borrowed {
                 mutable: borrowed_mutably,
@@ -14977,6 +15030,7 @@ fn function_argument_list(
                 .map_err(request::unwritable)?;
             }
             _ if VIEWED_ARGUMENTS.get()
+                && keeps_borrow(signature, position, ty)
                 && viewed_native(&substituted(ty, signature, substitutions)?).is_some() =>
             {
                 let option = matches!(
@@ -15226,7 +15280,7 @@ fn render_take_input(
     }
     // A crate value the output borrows past the call: the value moved into
     // an `Rc` its slot shares, which the call's pins hold (`views_natives`).
-    if VIEWED_ARGUMENTS.get() {
+    if VIEWED_ARGUMENTS.get() && keeps_borrow(signature, local, ty) {
         let substituted = substituted(ty, signature, substitutions)?;
         if let Some(target) = viewed_native(&substituted) {
             let rust = concrete_type(target)
@@ -16199,9 +16253,10 @@ fn render_callable_closure(
         {
             let rust = concrete_type(ty).ok_or_else(|| request::drift("closure input type"))?;
             parameters.push(format!("input_{position}: &mut {rust}"));
-            values.push(lent_value(position, true, &rust));
             lent.push(position.to_string());
-            lends.push(LentInput::new(position, true, rust));
+            let lend = LentInput::new(position, true, rust);
+            values.push(lend.value());
+            lends.push(lend);
             continue;
         }
         let rust = concrete_type(input).ok_or_else(|| request::drift("closure input type"))?;
@@ -18569,7 +18624,9 @@ fn lent_cell(
                 return Ok(None);
             };
             format!("SliceLent<{item}>")
-        } else if let Some(target) = viewed_native(&input) {
+        } else if let Some(target) = viewed_native(&input)
+            && keeps_borrow(signature, position, declared)
+        {
             let Some(rust) = concrete_type(target) else {
                 return Ok(None);
             };
@@ -18952,11 +19009,12 @@ fn viewed_native(ty: &convert::Type) -> Option<&convert::Type> {
 }
 
 /// Whether the call's output carries a lifetime, or is opaque, and an input
-/// is a `&T` of a crate value, or an `Option` of one (`viewed_native`), or
-/// a `&[T]` of them (`lent_slice_element`): the output may
-/// borrow the value for as long as it lives, so the adapter shares it with
-/// the pins of the view's region, or of the runner out of any region,
-/// instead of lending it for the call alone (D568).
+/// is a `&T` of a crate value it may keep, or an `Option` of one
+/// (`viewed_native`, `keeps_borrow`), or a `&[T]` of them
+/// (`lent_slice_element`): the output may borrow the value for as long as
+/// it lives, so the adapter shares it with the pins of the view's region,
+/// or of the runner out of any region, instead of lending it for the call
+/// alone (D568).
 fn views_natives(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
@@ -18971,13 +19029,33 @@ fn views_natives(
     if !borrows {
         return Ok(false);
     }
-    for declared in signature.inputs() {
+    for (position, declared) in signature.inputs().iter().enumerate() {
         let input = substituted(declared, signature, substitutions)?;
-        if viewed_native(&input).is_some() || lent_slice_element(declared, &input).is_some() {
+        if (viewed_native(&input).is_some() && keeps_borrow(signature, position, declared))
+            || lent_slice_element(declared, &input).is_some()
+        {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Whether the output of a call may keep the borrow its input at
+/// `position`, declared `declared`, takes: a reference at a lifetime the
+/// output names, which the classifier reads as kept (`Signature::lends`),
+/// or what a type parameter or an `Option` holds, as `pick_list(Some(
+/// &self.backend), ..)` gives a `PickList` whose `V` is `&Backend`. A
+/// reference at a lifetime the output doesn't name, as elevato's
+/// `view<'a, M: 'a>(&Building) -> Element<'a, M>` takes, is borrowed for
+/// the call alone, so a value native code lent a script function fills it
+/// as rustc lets the borrow pass on (#1406).
+fn keeps_borrow(
+    signature: &crate::classify::representability::signature::Signature,
+    position: usize,
+    declared: &convert::Type,
+) -> bool {
+    !matches!(declared, convert::Type::Borrowed { .. })
+        || u32::try_from(position).is_ok_and(|position| signature.lends().contains(&position))
 }
 
 /// The crate type of the elements of a `&[T]` a call takes, as iced's
@@ -20073,8 +20151,9 @@ fn render_impl_function(
             {
                 let target =
                     concrete_type(ty).ok_or_else(|| drift("a script impl function's input"))?;
-                values.push(lent_value(position, *borrowed_mutably, &target));
-                lends.push(LentInput::new(position, *borrowed_mutably, target));
+                let lend = LentInput::new(position, *borrowed_mutably, target);
+                values.push(lend.value());
+                lends.push(lend);
             }
             // One whose type carries lifetimes, as iced's `update(..,
             // shell: &mut Shell<'_, Message>)` takes: lent for the call too,
@@ -20088,13 +20167,9 @@ fn render_impl_function(
             {
                 let target =
                     concrete_type(ty).ok_or_else(|| drift("a script impl function's input"))?;
-                values.push(lent_value(position, *borrowed_mutably, &target));
-                lends.push(LentInput::scoped(
-                    position,
-                    *borrowed_mutably,
-                    target,
-                    family,
-                ));
+                let lend = LentInput::scoped(position, *borrowed_mutably, target, family);
+                values.push(lend.value());
+                lends.push(lend);
             }
             convert::Type::Borrowed { ty, .. } => {
                 // A copy of a value Rawr holds by value, as a `&str` or a
@@ -20303,23 +20378,27 @@ fn render_impl_function(
 
 /// A borrowed native value native code gives a script function, lent around
 /// its call (`lent_around`): the input's position, whether it is `&mut`,
-/// its Rust type, and that type at the scope family's `'x`.
+/// its Rust type, that type at the scope family's `'x`, and whether script
+/// code reads it through its type's traits (`scope::Reads`).
 struct LentInput {
     position: usize,
     mutable: bool,
     rust: String,
     family: String,
+    reads: bool,
 }
 
 impl LentInput {
     /// A value of a type without lifetimes, which its family is at every
-    /// `'x`.
+    /// `'x`: `'static`, so its `Display`, `Debug` and `PartialEq` reach it
+    /// as `dyn Any`, as the arena's values are reached.
     fn new(position: usize, mutable: bool, rust: String) -> Self {
         Self {
             position,
             mutable,
             family: rust.clone(),
             rust,
+            reads: true,
         }
     }
 
@@ -20332,7 +20411,32 @@ impl LentInput {
             mutable,
             rust,
             family,
+            reads: false,
         }
+    }
+
+    /// The script value of the lent value, inside its lend.
+    fn value(&self) -> String {
+        let Self {
+            position,
+            mutable,
+            rust,
+            reads,
+            ..
+        } = self;
+        let writer = if *mutable {
+            format!("Some(&REACH_MUT_{position} as __rawr_internal::scope::Accessor)")
+        } else {
+            "None".to_owned()
+        };
+        let reads = if *reads {
+            format!(".with_reads(&READS_{position})")
+        } else {
+            String::new()
+        };
+        format!(
+            "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {rust:?}, {writer}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)){reads})"
+        )
     }
 }
 
@@ -20348,6 +20452,7 @@ fn lent_around(lends: &[LentInput], call: String) -> (String, String) {
         mutable: borrowed_mutably,
         rust: target,
         family,
+        reads,
     } in lends.iter().rev()
     {
         let lend = if *borrowed_mutably {
@@ -20382,6 +20487,12 @@ fn lent_around(lends: &[LentInput], call: String) -> (String, String) {
 "
             ));
         }
+        if *reads {
+            items.push_str(&format!(
+                "        static READS_{position}: __rawr_internal::scope::Reads = lent_reads!(Lend{position}, {target});
+"
+            ));
+        }
     }
     (items, call)
 }
@@ -20395,18 +20506,6 @@ fn lent_mutably(ty: &convert::Type) -> bool {
         && !is_value(ty)
         && !is_duration(ty)
         && !carries_lifetime(ty)
-}
-
-/// The script value of a native value lent at `position` (`lent_around`).
-fn lent_value(position: usize, borrowed_mutably: bool, target: &str) -> String {
-    format!(
-        "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {target:?}, {}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)))",
-        if borrowed_mutably {
-            format!("Some(&REACH_MUT_{position} as __rawr_internal::scope::Accessor)")
-        } else {
-            "None".to_owned()
-        }
-    )
 }
 
 /// The scope families the adapters named, as the `rawr_families` module.

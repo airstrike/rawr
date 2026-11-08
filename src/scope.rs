@@ -189,20 +189,69 @@ impl std::error::Error for Error {}
 pub type Accessor = &'static (dyn Any + Sync);
 
 /// A lent value as script code holds it: the nonce of its lend, the Rust
-/// name of its type, and the accessors a trampoline made for it. Copying
-/// it copies the claim, not the value, and every copy expires with the
-/// lend.
+/// name of its type, the accessors a trampoline made for it, and what
+/// script code reads of it through its type's traits. Copying it copies
+/// the claim, not the value, and every copy expires with the lend.
 #[derive(Clone, Copy)]
 pub struct Lent {
     nonce: Nonce,
     name: &'static str,
     mutable: Option<Accessor>,
     shared: Option<Accessor>,
+    reads: Option<&'static Reads>,
+}
+
+/// How script code reads a lent value through its type's traits, as the
+/// site that lends it makes this for the value's type: the value reached
+/// shared as `dyn Any`, and its `Display` text, `Debug` text and `==` with
+/// another value of its type, each `None` where the type lacks the trait.
+pub struct Reads {
+    reach: Reach,
+    display: fn(&dyn Any) -> Option<String>,
+    debug: fn(&dyn Any) -> Option<String>,
+    equal: fn(&dyn Any, &dyn Any) -> Option<bool>,
+}
+
+/// How a lend's site reaches its value shared, as `dyn Any`, for the
+/// visitor, by the lend's nonce ([`with_ref`]).
+pub type Reach = fn(Nonce, &mut dyn FnMut(&dyn Any)) -> Result<(), Error>;
+
+impl Reads {
+    /// The reads of a value `reach` reaches by its lend's nonce, with its
+    /// type's `display`, `debug` and `equal`.
+    #[must_use]
+    pub const fn new(
+        reach: Reach,
+        display: fn(&dyn Any) -> Option<String>,
+        debug: fn(&dyn Any) -> Option<String>,
+        equal: fn(&dyn Any, &dyn Any) -> Option<bool>,
+    ) -> Self {
+        Self {
+            reach,
+            display,
+            debug,
+            equal,
+        }
+    }
+}
+
+impl std::fmt::Display for Lent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.display() {
+            Ok(Some(text)) => f.write_str(&text),
+            Ok(None) => write!(f, "<{}>", self.name),
+            Err(error) => write!(f, "<{}: {error}>", self.name),
+        }
+    }
 }
 
 impl std::fmt::Debug for Lent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "lent `{}`", self.name)
+        match self.debug() {
+            Ok(Some(text)) => f.write_str(&text),
+            Ok(None) => write!(f, "lent `{}`", self.name),
+            Err(error) => write!(f, "lent `{}`: {error}", self.name),
+        }
     }
 }
 
@@ -222,7 +271,62 @@ impl Lent {
             name,
             mutable,
             shared,
+            reads: None,
         }
+    }
+
+    /// The lent value, read through its type's traits by `reads`.
+    #[must_use]
+    pub const fn with_reads(self, reads: &'static Reads) -> Self {
+        Self {
+            reads: Some(reads),
+            ..self
+        }
+    }
+
+    /// The value's `Display` text, or `None` when its type has none.
+    pub fn display(&self) -> Result<Option<String>, Error> {
+        self.read(|reads, value| (reads.display)(value))
+    }
+
+    /// The value's `Debug` text, or `None` when its type has none.
+    pub fn debug(&self) -> Result<Option<String>, Error> {
+        self.read(|reads, value| (reads.debug)(value))
+    }
+
+    /// `self == other` of a value of its type, as a runner's arena holds
+    /// one, when the type is `PartialEq`.
+    pub fn equal_native(&self, other: &dyn Any) -> Result<Option<bool>, Error> {
+        self.read(|reads, value| (reads.equal)(value, other))
+    }
+
+    /// `self == other` of two lent values of one `PartialEq` type.
+    pub fn equal(&self, other: &Self) -> Result<Option<bool>, Error> {
+        let mut equal = Ok(None);
+        self.read(|_, value| {
+            equal = other.equal_native(value);
+            Some(())
+        })?;
+        equal
+    }
+
+    /// What `read` gives of the value reached shared, or `None` when its
+    /// site made no reads.
+    fn read<R>(
+        &self,
+        read: impl FnOnce(&Reads, &dyn Any) -> Option<R>,
+    ) -> Result<Option<R>, Error> {
+        let Some(reads) = self.reads else {
+            return Ok(None);
+        };
+        let mut read = Some(read);
+        let mut output = None;
+        (reads.reach)(self.nonce, &mut |value| {
+            if let Some(read) = read.take() {
+                output = read(reads, value);
+            }
+        })?;
+        Ok(output)
     }
 
     /// The nonce of the lend.
@@ -2355,5 +2459,55 @@ mod tests {
         assert_eq!(rest, [5, 7]);
         let other = region.take_given(Text, first, other).unwrap();
         assert_eq!(other.collect::<Vec<_>>(), ["one"]);
+    }
+
+    fn reach_count(nonce: Nonce, visit: &mut dyn FnMut(&dyn std::any::Any)) -> Result<(), Error> {
+        super::with_ref::<CountF, _>(nonce, |count| visit(count))
+    }
+
+    fn display_count(value: &dyn std::any::Any) -> Option<String> {
+        value.downcast_ref::<usize>().map(ToString::to_string)
+    }
+
+    fn debug_count(value: &dyn std::any::Any) -> Option<String> {
+        value
+            .downcast_ref::<usize>()
+            .map(|count| format!("Count({count})"))
+    }
+
+    fn equal_count(value: &dyn std::any::Any, other: &dyn std::any::Any) -> Option<bool> {
+        Some(value.downcast_ref::<usize>()? == other.downcast_ref::<usize>()?)
+    }
+
+    static COUNT_READS: super::Reads =
+        super::Reads::new(reach_count, display_count, debug_count, equal_count);
+
+    /// A lent value is read through its type's traits while its lend runs,
+    /// as script code formats a `&T` native code lent it and compares it
+    /// with a value of its type and with another lent value. Once the lend
+    /// returns, each read is the borrow's end, and a value its site made no
+    /// reads for has no text of its own.
+    #[test]
+    fn a_lent_value_is_read_through_its_types_traits_while_its_lend_runs() {
+        let (three, other) = (3_usize, 3_usize);
+        let kept = super::lend_ref::<CountF, _>(&three, |n| {
+            let lent = Lent::new(n, "usize", None, None).with_reads(&COUNT_READS);
+            assert_eq!(lent.to_string(), "3");
+            assert_eq!(format!("{lent:?}"), "Count(3)");
+            assert_eq!(lent.equal_native(&3_usize), Ok(Some(true)));
+            assert_eq!(lent.equal_native(&4_usize), Ok(Some(false)));
+            assert_eq!(lent.equal_native(&"3"), Ok(None));
+            super::lend_ref::<CountF, _>(&other, |m| {
+                let again = Lent::new(m, "usize", None, None).with_reads(&COUNT_READS);
+                assert_eq!(lent.equal(&again), Ok(Some(true)));
+                assert_eq!(lent.equal(&lent), Ok(Some(true)));
+            });
+            lent
+        });
+        assert_eq!(kept.display(), Err(Error::Expired));
+        assert!(format!("{kept:?}").starts_with("lent `usize`: "));
+        let plain = Lent::new(super::nonce(0), "usize", None, None);
+        assert_eq!(plain.display(), Ok(None));
+        assert_eq!(plain.to_string(), "<usize>");
     }
 }
