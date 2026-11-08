@@ -102,6 +102,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A `&mut` that a crate method returns, such as image's `get_pixel_mut(x, y)`, is a place: `.0 = v`, `*p = v`, `.0[3] += 1` and passing it on to another crate call change the crate's own value, as in Rust. (#1318)
 - `use m::badge::{self, badge};` binds the module and the function of one name, as Rust does: `badge::Secondary` goes through the module and `badge("..")` calls the function. Two `use` lines and a glob beside the module's import do the same. Two imports of one name in one namespace are rustc's E0252. (#1319)
 - A crate macro that converts its children with `Into::<Slot<'_, _>>::into(child)`, as a component crate's `badge!` and `row!` do, now takes a string literal through the crate's `From<&'a str>` and a `String` through its `From<String>`, as cargo does. So do `"x".into()`, `From::from("x")` and `<T as From<_>>::from(..)` wherever the target type is known. (#1326)
+- `rawr run` of a program that rustc rejects, such as a marked type missing a native trait's supertrait, now shows only `cargo check`'s error, at the program's own paths, without rawr's report of its copy of the crate. A save that breaks the program the same way shows cargo's error too. (#1323)
+- A `&mut` a crate method returns is held for its statement or binding, as Rust holds it: `buffer.get_mut(i).0 = v` and `let p = buffer.get_mut(i);` call the method once, not once per access. (#1325)
+- A call can take borrowed crate values from several `let`s at once, as `Row::with_children([a, b])` takes two `Slot`s each made from its own string: its output lives as long as the shortest borrow, as in Rust. (#1329)
 
 ## 0.3.171 (2026-11-07)
 

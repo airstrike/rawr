@@ -14,5 +14,9 @@ fn main() {
     buffer.pixel_mut(3).0[0] *= 2;
     pixels::fill(buffer.get_mut(0), 7);
     println!("{:?}", buffer.get(1));
+    for index in 0..4 {
+        buffer.get_mut(index).0[2] += 1;
+    }
     println!("{}", buffer.describe());
+    println!("lent {} times", buffer.lent());
 }

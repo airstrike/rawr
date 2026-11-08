@@ -108,7 +108,10 @@
         {"text":"`rawr check` on a marked type that lacks a native trait's supertrait shows only cargo's error at the program's own paths, not a failed build of rawr's copy of the crate with generated names.","issues":[1310]},
         {"text":"A `&mut` that a crate method returns, such as image's `get_pixel_mut(x, y)`, is a place: `.0 = v`, `*p = v`, `.0[3] += 1` and passing it on to another crate call change the crate's own value, as in Rust.","issues":[1318]},
         {"text":"`use m::badge::{self, badge};` binds the module and the function of one name, as Rust does: `badge::Secondary` goes through the module and `badge(\"..\")` calls the function. Two `use` lines and a glob beside the module's import do the same. Two imports of one name in one namespace are rustc's E0252.","issues":[1319]},
-        {"text":"A crate macro that converts its children with `Into::<Slot<'_, _>>::into(child)`, as a component crate's `badge!` and `row!` do, now takes a string literal through the crate's `From<&'a str>` and a `String` through its `From<String>`, as cargo does. So do `\"x\".into()`, `From::from(\"x\")` and `<T as From<_>>::from(..)` wherever the target type is known.","issues":[1326]}
+        {"text":"A crate macro that converts its children with `Into::<Slot<'_, _>>::into(child)`, as a component crate's `badge!` and `row!` do, now takes a string literal through the crate's `From<&'a str>` and a `String` through its `From<String>`, as cargo does. So do `\"x\".into()`, `From::from(\"x\")` and `<T as From<_>>::from(..)` wherever the target type is known.","issues":[1326]},
+        {"text":"`rawr run` of a program that rustc rejects, such as a marked type missing a native trait's supertrait, now shows only `cargo check`'s error, at the program's own paths, without rawr's report of its copy of the crate. A save that breaks the program the same way shows cargo's error too.","issues":[1323]},
+        {"text":"A `&mut` a crate method returns is held for its statement or binding, as Rust holds it: `buffer.get_mut(i).0 = v` and `let p = buffer.get_mut(i);` call the method once, not once per access.","issues":[1325]},
+        {"text":"A call can take borrowed crate values from several `let`s at once, as `Row::with_children([a, b])` takes two `Slot`s each made from its own string: its output lives as long as the shortest borrow, as in Rust.","issues":[1329]}
       ]
     },
     "releases": [
@@ -3039,14 +3042,20 @@
     {"issue":1320,"title":"A struct's constructor is no separate rejected export","state":"open","category":"Divergences from rustc"},
     {"issue":1321,"title":"A stand-in's `&self` result of a native type with `'_` lets its borrowed strings go at the next `&mut` reach","state":"open","category":"Divergences from rustc"},
     {"issue":1322,"title":"A stand-in's borrowed result (`&str`, `&[T]`, `&T`) is a copy the stand-in keeps, not a borrow of the kept value","state":"open","category":"Divergences from rustc"},
-    {"issue":1323,"title":"rawr run shows only cargo's error when rawr's copy of the crate fails to build for the same reason","state":"open","category":"Divergences from rustc"},
+    {"issue":1323,"title":"rawr run shows only cargo's error when rawr's copy of the crate fails to build for the same reason","state":"closed","category":"Divergences from rustc"},
     {"issue":1324,"title":"A crate signature with `&mut [T; N]` (or another array type) can be used","state":"open","category":"Divergences from rustc"},
-    {"issue":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"open","category":"Divergences from rustc"},
+    {"issue":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"closed","category":"Divergences from rustc"},
     {"issue":1326,"title":"`Into::<Slot<'_, _>>::into(\"text\")` in a crate macro: a literal doesn't take the crate's From<&str>/From<String>","state":"closed","category":"Divergences from rustc"},
     {"issue":1327,"title":"A program's own unit struct is a value through a module path","state":"open","category":"Divergences from rustc"},
     {"issue":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"open","category":"Divergences from rustc"},
-    {"issue":1329,"title":"Crate values lent by two scope frames passed to one call","state":"open","category":"Divergences from rustc"},
-    {"issue":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"open","category":"Divergences from rustc"}
+    {"issue":1329,"title":"Crate values lent by two scope frames passed to one call","state":"closed","category":"Divergences from rustc"},
+    {"issue":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"open","category":"Divergences from rustc"},
+    {"issue":1331,"title":"`#[cfg(..)]` on a struct-literal field, a match arm, an array element or an expression statement","state":"open","category":"Divergences from rustc"},
+    {"issue":1332,"title":"Test the save path of #1323: a save during rawr run that breaks rawr's crate copy shows only cargo check's error","state":"open","category":"Health"},
+    {"issue":1333,"title":"A `&mut` place of a receiver in a scope frame's region calls the method once","state":"open","category":"Divergences from rustc"},
+    {"issue":1334,"title":"An `Option<&mut T>` a crate method lends calls the method once","state":"open","category":"Divergences from rustc"},
+    {"issue":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"open","category":"Divergences from rustc"},
+    {"issue":1336,"title":"Selecting among many generic From impls by the argument's type: `Into::<Slot<'_, _>>::into(icon().size(12))`","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3609,8 +3618,9 @@
             {"number":1320,"title":"A struct's constructor is no separate rejected export","state":"open"},
             {"number":1326,"title":"`Into::<Slot<'_, _>>::into(\"text\")` in a crate macro: a literal doesn't take the crate's From<&str>/From<String>","state":"closed"},
             {"number":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"open"},
-            {"number":1329,"title":"Crate values lent by two scope frames passed to one call","state":"open"},
-            {"number":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"open"}
+            {"number":1329,"title":"Crate values lent by two scope frames passed to one call","state":"closed"},
+            {"number":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"open"},
+            {"number":1336,"title":"Selecting among many generic From impls by the argument's type: `Into::<Slot<'_, _>>::into(icon().size(12))`","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -3654,7 +3664,10 @@
             {"number":1280,"title":"A generic type's `&self` method giving an opaque type that borrows it fails in the generated runner (E0521)","state":"open"},
             {"number":1281,"title":"The opaque type of a method reached through a sole type alias has no members","state":"open"},
             {"number":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open"},
-            {"number":1313,"title":"A projection bound on a crate's own trait (`<F as Trait>::Output = T`) has no cases","state":"open"}
+            {"number":1313,"title":"A projection bound on a crate's own trait (`<F as Trait>::Output = T`) has no cases","state":"open"},
+            {"number":1333,"title":"A `&mut` place of a receiver in a scope frame's region calls the method once","state":"open"},
+            {"number":1334,"title":"An `Option<&mut T>` a crate method lends calls the method once","state":"open"},
+            {"number":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"open"}
           ]
         }
       ]
@@ -3940,9 +3953,10 @@
             {"number":1318,"title":"Assigning through a crate method's returned `&mut` into a public field: `rgba.get_pixel_mut(x, y).0 = [0; 4]`","state":"closed"},
             {"number":1321,"title":"A stand-in's `&self` result of a native type with `'_` lets its borrowed strings go at the next `&mut` reach","state":"open"},
             {"number":1322,"title":"A stand-in's borrowed result (`&str`, `&[T]`, `&T`) is a copy the stand-in keeps, not a borrow of the kept value","state":"open"},
-            {"number":1323,"title":"rawr run shows only cargo's error when rawr's copy of the crate fails to build for the same reason","state":"open"},
+            {"number":1323,"title":"rawr run shows only cargo's error when rawr's copy of the crate fails to build for the same reason","state":"closed"},
             {"number":1324,"title":"A crate signature with `&mut [T; N]` (or another array type) can be used","state":"open"},
-            {"number":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"open"}
+            {"number":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"closed"},
+            {"number":1331,"title":"`#[cfg(..)]` on a struct-literal field, a match arm, an array element or an expression statement","state":"open"}
           ]
         }
       ]

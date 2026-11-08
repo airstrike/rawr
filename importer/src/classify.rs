@@ -10186,11 +10186,12 @@ impl<P: api::Phase> Context<'_, P> {
     /// The type a borrowing method's guard output dereferences to, and how
     /// it is reached, from rustc's evidence (`model::Guard`): `None` when
     /// the output is no guard or Rawr can't hold its target. A `DerefMut`
-    /// guard is a place each read and store reaches by calling the method
-    /// again with copies of its inputs, so only a method whose inputs
-    /// besides its receiver all clone is one, as image's
-    /// `get_pixel_mut(&mut self, x, y) -> &mut P` (#1318); with other
-    /// inputs it is read through `Deref` alone.
+    /// guard is a place, as image's `get_pixel_mut(&mut self, x, y) -> &mut
+    /// P` gives (#1318). Its method is called once for a receiver in the
+    /// arena (#1325), but a receiver a scope frame's region holds reaches
+    /// it again by calling the method again with copies of its inputs, so
+    /// only a method whose inputs besides its receiver all clone is one;
+    /// with other inputs it is read through `Deref` alone.
     fn guard_output(
         &self,
         signature: &model::Signature,
