@@ -3,7 +3,8 @@
 
 use super::models::Nominal;
 use super::op::ordering_discriminant;
-use super::pattern::{PatternSyntax, Prelude};
+use super::pattern;
+use super::pattern::Prelude;
 use super::ty::{Int, Ty};
 use super::{cow, instantiate, origin, without_references, Parser};
 use crate::resolve::{BindingSite, Error};
@@ -69,10 +70,10 @@ pub(super) fn specialize_slice(
 
 /// The `..` of a tuple-like pattern's `members`: its index, with Rust's
 /// errors for a second one and for `name @ ..` outside a slice.
-pub(super) fn tuple_rest(members: &[PatternSyntax]) -> Result<Option<usize>, Error> {
+pub(super) fn tuple_rest(members: &[pattern::Syntax]) -> Result<Option<usize>, Error> {
     let mut found = None;
     for (index, member) in members.iter().enumerate() {
-        let PatternSyntax::Rest { binding, span } = member else {
+        let pattern::Syntax::Rest { binding, span } = member else {
             continue;
         };
         if let Some((name, _)) = binding {
@@ -98,10 +99,10 @@ pub(super) fn tuple_rest(members: &[PatternSyntax]) -> Result<Option<usize>, Err
 /// `members` of a tuple-like pattern of `arity` elements, its `..` read as
 /// the `discard`s that fill the arity: Rust's `(a, .., z)`.
 pub(super) fn tuple_members<'a>(
-    members: &'a [PatternSyntax],
+    members: &'a [pattern::Syntax],
     arity: usize,
-    discard: &'a PatternSyntax,
-) -> Result<Vec<&'a PatternSyntax>, Error> {
+    discard: &'a pattern::Syntax,
+) -> Result<Vec<&'a pattern::Syntax>, Error> {
     let Some(rest) = tuple_rest(members)? else {
         return Ok(members.iter().collect());
     };
@@ -227,18 +228,18 @@ pub(super) fn scalar_text(literal: &ast::NominalLiteral) -> String {
 
 /// The `bool` literals a pattern names, in `[false, true]`, when it has
 /// no other alternative.
-pub(super) fn bool_literals(syntax: &PatternSyntax, seen: &mut [bool; 2]) {
+pub(super) fn bool_literals(syntax: &pattern::Syntax, seen: &mut [bool; 2]) {
     match syntax {
-        PatternSyntax::Literal {
+        pattern::Syntax::Literal {
             literal: ast::NominalLiteral::Bool(value),
             ..
         } => seen[usize::from(*value)] = true,
-        PatternSyntax::Or { alternatives, .. } => {
+        pattern::Syntax::Or { alternatives, .. } => {
             for alternative in alternatives.iter() {
                 bool_literals(alternative, seen);
             }
         }
-        PatternSyntax::At { pattern, .. } => bool_literals(pattern, seen),
+        pattern::Syntax::At { pattern, .. } => bool_literals(pattern, seen),
         _ => {}
     }
 }
@@ -351,15 +352,15 @@ impl Scalar {
     /// pattern whose values rawr doesn't read, as a constant's path.
     pub(super) fn covered(
         self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
         covered: &mut Vec<(u128, u128)>,
     ) -> Option<()> {
         match syntax {
-            PatternSyntax::Literal { literal, .. } => {
+            pattern::Syntax::Literal { literal, .. } => {
                 let ordinal = self.ordinal(literal)?;
                 covered.push((ordinal, ordinal));
             }
-            PatternSyntax::Range {
+            pattern::Syntax::Range {
                 low,
                 high,
                 inclusive,
@@ -379,15 +380,15 @@ impl Scalar {
                     covered.push((low, high));
                 }
             }
-            PatternSyntax::Binding { .. } | PatternSyntax::Discard { .. } => {
+            pattern::Syntax::Binding { .. } | pattern::Syntax::Discard { .. } => {
                 covered.push(self.bounds());
             }
-            PatternSyntax::Or { alternatives, .. } => {
+            pattern::Syntax::Or { alternatives, .. } => {
                 for alternative in alternatives.iter() {
                     self.covered(alternative, covered)?;
                 }
             }
-            PatternSyntax::At { pattern, .. } => self.covered(pattern, covered)?,
+            pattern::Syntax::At { pattern, .. } => self.covered(pattern, covered)?,
             _ => return None,
         }
         Some(())
@@ -605,7 +606,7 @@ impl<'a> Parser<'a> {
     /// still to lower test.
     pub(super) fn require_irrefutable(
         &mut self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
         coverage: &Pattern,
         ty: &Ty,
         site: BindingSite,
@@ -620,7 +621,7 @@ impl<'a> Parser<'a> {
             // rest of it `_`: `(Style { width: 0_i64, .. }, _)`.
             let at = check.span();
             let prefix = match syntax {
-                PatternSyntax::Reference { .. } => String::new(),
+                pattern::Syntax::Reference { .. } => String::new(),
                 _ => self.reference_prefix(ty),
             };
             witnesses = self
@@ -648,7 +649,7 @@ impl<'a> Parser<'a> {
     /// first field whose pattern misses some.
     pub(super) fn host_uncovered(
         &mut self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
         ty: &Ty,
     ) -> Result<Vec<String>, Error> {
         if !syntax.may_refute() {
@@ -656,10 +657,10 @@ impl<'a> Parser<'a> {
         }
         let referenced = self.referenced(ty);
         match syntax {
-            PatternSyntax::At { pattern, .. } | PatternSyntax::Reference { pattern, .. } => {
+            pattern::Syntax::At { pattern, .. } | pattern::Syntax::Reference { pattern, .. } => {
                 self.host_uncovered(pattern, &referenced)
             }
-            PatternSyntax::Enum(pattern)
+            pattern::Syntax::Enum(pattern)
                 if pattern.host_struct && matches!(referenced, Ty::Host { .. }) =>
             {
                 let names = pattern
@@ -707,7 +708,7 @@ impl<'a> Parser<'a> {
     /// `coverage`, misses, as rustc writes them.
     pub(super) fn uncovered(
         &self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
         coverage: &Pattern,
         ty: &Ty,
     ) -> Vec<String> {
@@ -752,7 +753,7 @@ impl<'a> Parser<'a> {
     /// on `ty` that misses some of its values, before it is destructured.
     pub(super) fn refuse_refutable(
         &mut self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
         ty: &Ty,
         site: BindingSite,
     ) -> Result<(), Error> {
@@ -1079,35 +1080,35 @@ impl<'a> Parser<'a> {
 
     /// The variants an arm's pattern covers whole: a variant whose fields
     /// it matches with bindings and `_` only.
-    pub(super) fn host_covers(syntax: &PatternSyntax, covered: &mut Vec<ImmutableString>) {
-        let irrefutable = |member: &PatternSyntax| {
+    pub(super) fn host_covers(syntax: &pattern::Syntax, covered: &mut Vec<ImmutableString>) {
+        let irrefutable = |member: &pattern::Syntax| {
             let mut member = member;
             loop {
                 match member {
-                    PatternSyntax::At { pattern, .. } => member = pattern,
-                    PatternSyntax::Reference { pattern, .. } => member = pattern,
+                    pattern::Syntax::At { pattern, .. } => member = pattern,
+                    pattern::Syntax::Reference { pattern, .. } => member = pattern,
                     other => {
                         return matches!(
                             other,
-                            PatternSyntax::Binding { .. }
-                                | PatternSyntax::Ref { .. }
-                                | PatternSyntax::Discard { .. }
-                                | PatternSyntax::Rest { .. }
+                            pattern::Syntax::Binding { .. }
+                                | pattern::Syntax::Ref { .. }
+                                | pattern::Syntax::Discard { .. }
+                                | pattern::Syntax::Rest { .. }
                         )
                     }
                 }
             }
         };
         match syntax {
-            PatternSyntax::Or { alternatives, .. } => {
+            pattern::Syntax::Or { alternatives, .. } => {
                 for alternative in alternatives.iter() {
                     Self::host_covers(alternative, covered);
                 }
             }
-            PatternSyntax::At { pattern, .. } | PatternSyntax::Reference { pattern, .. } => {
+            pattern::Syntax::At { pattern, .. } | pattern::Syntax::Reference { pattern, .. } => {
                 Self::host_covers(pattern, covered);
             }
-            PatternSyntax::Enum(pattern) if pattern.payload.iter().all(irrefutable) => {
+            pattern::Syntax::Enum(pattern) if pattern.payload.iter().all(irrefutable) => {
                 covered.push(pattern.variant.clone());
             }
             _ => {}
@@ -1121,7 +1122,7 @@ impl<'a> Parser<'a> {
     /// `A(C)` cover `A` when `B` and `C` are its field's variants.
     pub(super) fn host_rows_cover(
         &mut self,
-        rows: Vec<Vec<&PatternSyntax>>,
+        rows: Vec<Vec<&pattern::Syntax>>,
         tys: &[Ty],
         at: Span,
     ) -> Result<bool, Error> {
@@ -1138,22 +1139,22 @@ impl<'a> Parser<'a> {
             let mut firsts = vec![first];
             while let Some(first) = firsts.pop() {
                 match first {
-                    PatternSyntax::At { pattern, .. }
-                    | PatternSyntax::Reference { pattern, .. } => {
+                    pattern::Syntax::At { pattern, .. }
+                    | pattern::Syntax::Reference { pattern, .. } => {
                         firsts.push(pattern);
                     }
-                    PatternSyntax::Or { alternatives, .. } => firsts.extend(alternatives.iter()),
+                    pattern::Syntax::Or { alternatives, .. } => firsts.extend(alternatives.iter()),
                     _ => spread.push((first, tail.to_vec())),
                 }
             }
         }
-        let irrefutable = |pattern: &PatternSyntax| {
+        let irrefutable = |pattern: &pattern::Syntax| {
             matches!(
                 pattern,
-                PatternSyntax::Binding { .. }
-                    | PatternSyntax::Ref { .. }
-                    | PatternSyntax::Discard { .. }
-                    | PatternSyntax::Rest { .. }
+                pattern::Syntax::Binding { .. }
+                    | pattern::Syntax::Ref { .. }
+                    | pattern::Syntax::Discard { .. }
+                    | pattern::Syntax::Rest { .. }
             )
         };
         let resolved = self.inference.resolve(ty);
@@ -1180,7 +1181,7 @@ impl<'a> Parser<'a> {
         };
         let definition = proof.definition.clone();
         let path: ImmutableString = definition.path().as_str().into();
-        let discard = PatternSyntax::Discard { span: at };
+        let discard = pattern::Syntax::Discard { span: at };
         for variant in &variants {
             let mut parameters = definition
                 .parameters()
@@ -1203,7 +1204,9 @@ impl<'a> Parser<'a> {
             for (first, tail) in &spread {
                 let members = match first {
                     pattern if irrefutable(pattern) => vec![&discard; fields.len()],
-                    PatternSyntax::Enum(pattern) if pattern.variant.as_str() == variant.name() => {
+                    pattern::Syntax::Enum(pattern)
+                        if pattern.variant.as_str() == variant.name() =>
+                    {
                         match &pattern.named {
                             Some((names, _)) => {
                                 let mut members = vec![&discard; fields.len()];

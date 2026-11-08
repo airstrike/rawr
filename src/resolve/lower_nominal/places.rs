@@ -590,7 +590,7 @@ impl Parser<'_> {
         &mut self,
         name: ImmutableString,
         declaration: Span,
-        pattern: Option<&PatternSyntax>,
+        pattern: Option<&pattern::Syntax>,
         start: Span,
         label: Option<ImmutableString>,
     ) -> Result<Option<ParsedExpr>, Error> {
@@ -639,9 +639,9 @@ impl Parser<'_> {
         let mut parts = None;
         let element = match (pattern, &first) {
             (None, None) => Some((name, declaration)),
-            (Some(PatternSyntax::Tuple { members, .. }), Some(first)) if members.len() == 2 => {
+            (Some(pattern::Syntax::Tuple { members, .. }), Some(first)) if members.len() == 2 => {
                 match &members[0] {
-                    PatternSyntax::Binding {
+                    pattern::Syntax::Binding {
                         name,
                         span,
                         mutable,
@@ -660,7 +660,7 @@ impl Parser<'_> {
                             },
                         );
                     }
-                    PatternSyntax::Discard { .. } => {}
+                    pattern::Syntax::Discard { .. } => {}
                     other => {
                         self.bindings = outer;
                         return Err(Error::UnsupportedNominalSyntax {
@@ -670,8 +670,8 @@ impl Parser<'_> {
                     }
                 }
                 match &members[1] {
-                    PatternSyntax::Binding { name, span, .. } => Some((name.clone(), *span)),
-                    PatternSyntax::Discard { .. } => None,
+                    pattern::Syntax::Binding { name, span, .. } => Some((name.clone(), *span)),
+                    pattern::Syntax::Discard { .. } => None,
                     other => {
                         parts = Some(other.clone());
                         None
@@ -728,7 +728,7 @@ impl Parser<'_> {
             let last_type = self.last_type.clone();
             let last_expression = self.last_expression.take();
             let bound = self.bind_let_pattern(
-                PatternSite::For,
+                pattern::Site::For,
                 parts.span().start(),
                 &parts,
                 subject,

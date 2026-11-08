@@ -506,7 +506,7 @@ impl Parser<'_> {
     pub(super) fn resolve_cow_pattern(
         &self,
         owned: bool,
-        payload: &PatternSyntax,
+        payload: &pattern::Syntax,
         at: Span,
         expected: &Ty,
         bound_names: &mut BTreeMap<ImmutableString, Span>,

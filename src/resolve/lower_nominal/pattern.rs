@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 #[derive(Clone)]
-pub(super) enum PatternSyntax {
+pub(super) enum Syntax {
     /// `name` or `mut name`.
     Binding {
         name: ImmutableString,
@@ -56,22 +56,22 @@ pub(super) enum PatternSyntax {
         ty: Ty,
         definition: type_def::Definition,
         fields: Box<[Ty]>,
-        members: Box<[PatternSyntax]>,
+        members: Box<[Syntax]>,
         span: Span,
     },
-    Enum(EnumPatternSyntax),
+    Enum(EnumSyntax),
     /// `Some(pattern)` or `None` on an `Option<T>`, `Ok(pattern)` or
     /// `Err(pattern)` on a `Result<T, E>`.
     Prelude {
         variant: Prelude,
-        payload: Option<Box<PatternSyntax>>,
+        payload: Option<Box<Syntax>>,
         span: Span,
     },
     /// `Cow::Borrowed(pattern)` or `Cow::Owned(pattern)` (`owned`) on a
     /// `Cow<'_, B>`.
     Cow {
         owned: bool,
-        payload: Box<PatternSyntax>,
+        payload: Box<Syntax>,
         span: Span,
     },
     /// `0`, `-1`, `'a'`, `"x"`, `true`, `1.5`.
@@ -89,20 +89,20 @@ pub(super) enum PatternSyntax {
     },
     /// `(a, b)`.
     Tuple {
-        members: Box<[PatternSyntax]>,
+        members: Box<[Syntax]>,
         span: Span,
     },
     /// `p | q`.
     Or {
-        alternatives: Box<[PatternSyntax]>,
+        alternatives: Box<[Syntax]>,
         span: Span,
     },
     /// `[a, b, rest @ .., z]` on an array or slice; `rest` is the `..`
     /// element (`Rest`) when written.
     Slice {
-        before: Box<[PatternSyntax]>,
-        rest: Option<Box<PatternSyntax>>,
-        after: Box<[PatternSyntax]>,
+        before: Box<[Syntax]>,
+        rest: Option<Box<Syntax>>,
+        after: Box<[Syntax]>,
         span: Span,
     },
     /// `..` or `name @ ..`, an element of a slice or tuple pattern.
@@ -113,14 +113,14 @@ pub(super) enum PatternSyntax {
     /// `&p` or `&mut p`.
     Reference {
         mutable: bool,
-        pattern: Box<PatternSyntax>,
+        pattern: Box<Syntax>,
         span: Span,
     },
     /// `name @ pattern`.
     At {
         name: ImmutableString,
         name_span: Span,
-        pattern: Box<PatternSyntax>,
+        pattern: Box<Syntax>,
     },
 }
 
@@ -163,7 +163,7 @@ impl Prelude {
     }
 }
 
-impl PatternSyntax {
+impl Syntax {
     pub(super) fn span(&self) -> Span {
         match self {
             Self::Binding { span, .. }
@@ -329,12 +329,12 @@ impl PatternSyntax {
 pub(super) type SpannedNames = Box<[(ImmutableString, Span)]>;
 
 #[derive(Clone)]
-pub(super) struct EnumPatternSyntax {
+pub(super) struct EnumSyntax {
     pub(super) owner: SpannedNames,
     pub(super) owner_span: Span,
     pub(super) variant: ImmutableString,
     pub(super) variant_span: Span,
-    pub(super) payload: Box<[PatternSyntax]>,
+    pub(super) payload: Box<[Syntax]>,
     /// `V { x, y: p, .. }`: the field each of `payload` names, in written
     /// order, and whether `..` ends it.
     pub(super) named: Option<(SpannedNames, bool)>,
@@ -346,7 +346,7 @@ pub(super) struct EnumPatternSyntax {
 /// The statement a pattern that must match every value binds in, which
 /// names it in rustc's E0005.
 #[derive(Clone, Copy)]
-pub(in crate::resolve) enum PatternSite {
+pub(in crate::resolve) enum Site {
     /// `let pattern = value;`.
     Let,
     /// `for pattern in values`.
@@ -355,7 +355,7 @@ pub(in crate::resolve) enum PatternSite {
     Argument,
 }
 
-pub(super) struct ResolvedEnumPattern {
+pub(super) struct ResolvedEnum {
     pub(super) proof: NominalEnumPattern,
     pub(super) coverage: coverage::Pattern,
 }
@@ -372,7 +372,7 @@ pub(super) struct PatternBinding {
 /// A pattern on a facade value, lowered to the facade's variant tests and
 /// readers: the tests, in order, and the names it binds.
 #[derive(Default)]
-pub(super) struct HostPattern {
+pub(super) struct Host {
     pub(super) tests: Vec<origin::Fragment>,
     pub(super) binds: Vec<PatternBinding>,
     pub(super) values: Vec<origin::Fragment>,
@@ -389,7 +389,7 @@ pub(super) struct HostPattern {
     pub(super) steps: Vec<HostStep>,
 }
 
-/// One binding or part of a `HostPattern`, by its index.
+/// One binding or part of a `Host`, by its index.
 #[derive(Clone, Copy)]
 pub(super) enum HostStep {
     Bind(usize),
@@ -400,7 +400,7 @@ pub(super) enum HostStep {
     Part(usize),
 }
 
-/// Where a `HostPattern`'s bindings are read.
+/// Where a `Host`'s bindings are read.
 #[derive(Clone, Copy)]
 pub(super) enum HostReading {
     /// In the arm, the scope they are used in.
@@ -480,7 +480,7 @@ impl HostPart {
     }
 }
 
-impl HostPattern {
+impl Host {
     pub(super) fn bind(&mut self, binding: PatternBinding, value: origin::Fragment) {
         self.steps.push(HostStep::Bind(self.binds.len()));
         self.binds.push(binding);
@@ -608,7 +608,7 @@ impl HostPattern {
 
 /// A resolved root match pattern: its runtime proof, its coverage, and the
 /// bindings it declares.
-pub(super) struct ResolvedRootPattern {
+pub(super) struct ResolvedRoot {
     pub(super) proof: NominalPattern,
     pub(super) coverage: coverage::Pattern,
     pub(super) span: Span,
@@ -626,9 +626,9 @@ impl<'a> Parser<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::resolve) fn bind_let_pattern(
         &mut self,
-        site: PatternSite,
+        site: Site,
         start: Position,
-        syntax: &PatternSyntax,
+        syntax: &Syntax,
         subject: ParsedExpr,
         matched: Option<Matched>,
         otherwise: Option<Branch>,
@@ -648,14 +648,14 @@ impl<'a> Parser<'a> {
         if otherwise.is_none() {
             let site = match site {
                 // The statement up to its `;`, where `end` is.
-                PatternSite::Let => BindingSite::Local {
+                Site::Let => BindingSite::Local {
                     statement: self
                         .written(span(start, end))
                         .map(|statement| statement.trim_end().into()),
                     binds: !resolved.bindings.is_empty(),
                 },
-                PatternSite::For => BindingSite::ForLoop,
-                PatternSite::Argument => BindingSite::Argument,
+                Site::For => BindingSite::ForLoop,
+                Site::Argument => BindingSite::Argument,
             };
             self.require_irrefutable(syntax, &resolved.coverage, &written_ty, site)?;
         }
@@ -784,9 +784,7 @@ impl<'a> Parser<'a> {
         // `let W(a) = iter.collect();`: the pattern's struct is the type
         // the value is expected to have, as its annotation would be.
         let expected = annotation.clone().or_else(|| match &syntax {
-            PatternSyntax::TupleStruct { ty, .. } | PatternSyntax::UnitStruct { ty, .. } => {
-                Some(ty.clone())
-            }
+            Syntax::TupleStruct { ty, .. } | Syntax::UnitStruct { ty, .. } => Some(ty.clone()),
             _ => None,
         });
         let dereferenced = matches!(self.peek(), Token::Multiply);
@@ -810,7 +808,7 @@ impl<'a> Parser<'a> {
             let end = self.position();
             self.terminate(start, Continuation::Let)?;
             return self.bind_let_pattern(
-                PatternSite::Let,
+                Site::Let,
                 start,
                 &syntax,
                 value,
@@ -831,7 +829,7 @@ impl<'a> Parser<'a> {
             let end = self.position();
             self.terminate(start, Continuation::Let)?;
             return self.bind_let_pattern(
-                PatternSite::Let,
+                Site::Let,
                 start,
                 &syntax,
                 value,
@@ -858,7 +856,7 @@ impl<'a> Parser<'a> {
             };
             self.place_root = Some(root);
             (place, origin::Fragment::default())
-        } else if let PatternSyntax::Discard { .. } = syntax
+        } else if let Syntax::Discard { .. } = syntax
             && let Some(mut discarded) = self.discarded(&value)
         {
             // `let _ = v.iter().map(f);` runs no stage, as Rust's.
@@ -921,7 +919,7 @@ impl<'a> Parser<'a> {
     }
 
     /// A pattern, with top-level alternatives: `p | q`.
-    pub(super) fn parse_pattern_syntax(&mut self) -> Result<PatternSyntax, Error> {
+    pub(super) fn parse_pattern_syntax(&mut self) -> Result<Syntax, Error> {
         if matches!(self.peek(), Token::Pipe) {
             // A leading `|`, as Rust allows.
             self.next();
@@ -943,7 +941,7 @@ impl<'a> Parser<'a> {
                 .span()
                 .end(),
         );
-        Ok(PatternSyntax::Or {
+        Ok(Syntax::Or {
             alternatives: alternatives.into_boxed_slice(),
             span,
         })
@@ -1024,7 +1022,7 @@ impl<'a> Parser<'a> {
 
     /// A pattern without top-level alternatives, as closure parameters and
     /// `let` take.
-    pub(super) fn parse_pattern_no_alt(&mut self) -> Result<PatternSyntax, Error> {
+    pub(super) fn parse_pattern_no_alt(&mut self) -> Result<Syntax, Error> {
         let start = self.position();
         // `todo!()` where a pattern goes: std's panicking macros expand to
         // a call, which no pattern is (E0532).
@@ -1052,7 +1050,7 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Token::Underscore) {
             self.next();
             let span = Span::new(start, text_end(start, "_"));
-            return Ok(PatternSyntax::Discard { span });
+            return Ok(Syntax::Discard { span });
         }
         self.splice_std_alias();
         // `&p`, `&mut p`; `&&p` is two references.
@@ -1064,13 +1062,13 @@ impl<'a> Parser<'a> {
             }
             let pattern = self.parse_pattern_no_alt()?;
             let span = Span::new(start, pattern.span().end());
-            let inner = PatternSyntax::Reference {
+            let inner = Syntax::Reference {
                 mutable,
                 pattern: Box::new(pattern),
                 span,
             };
             return Ok(if double {
-                PatternSyntax::Reference {
+                Syntax::Reference {
                     mutable: false,
                     pattern: Box::new(inner),
                     span,
@@ -1082,7 +1080,7 @@ impl<'a> Parser<'a> {
         // `..`, an element of a slice or tuple pattern.
         if matches!(self.peek(), Token::ExclusiveRange) {
             self.next();
-            return Ok(PatternSyntax::Rest {
+            return Ok(Syntax::Rest {
                 binding: None,
                 span: Span::new(start, text_end(start, "..")),
             });
@@ -1094,7 +1092,7 @@ impl<'a> Parser<'a> {
             // `()` matches the one unit value, as `Ok(())` does.
             if matches!(self.next().0, Token::Unit) {
                 let span = Span::new(start, text_end(start, "()"));
-                return Ok(PatternSyntax::Discard { span });
+                return Ok(Syntax::Discard { span });
             }
             let mut members = Vec::new();
             let mut trailing_comma = false;
@@ -1112,7 +1110,7 @@ impl<'a> Parser<'a> {
             if members.len() == 1 && !trailing_comma {
                 return Ok(members.pop().expect("one member"));
             }
-            return Ok(PatternSyntax::Tuple {
+            return Ok(Syntax::Tuple {
                 members: members.into_boxed_slice(),
                 span: span(start, end),
             });
@@ -1125,13 +1123,13 @@ impl<'a> Parser<'a> {
             let span = Span::new(at, text_end(at, &token.to_string()));
             let before = bytes
                 .iter()
-                .map(|byte| PatternSyntax::Literal {
+                .map(|byte| Syntax::Literal {
                     literal: ast::NominalLiteral::Int(i64::from(*byte)),
                     ty: Ty::Int(Int::U8),
                     span,
                 })
                 .collect();
-            return Ok(PatternSyntax::Slice {
+            return Ok(Syntax::Slice {
                 before,
                 rest: None,
                 after: Box::default(),
@@ -1143,7 +1141,7 @@ impl<'a> Parser<'a> {
                 Token::InclusiveRange => true,
                 Token::ExclusiveRange => false,
                 _ => {
-                    return Ok(PatternSyntax::Literal {
+                    return Ok(Syntax::Literal {
                         literal: low,
                         ty: low_ty,
                         span: low_span,
@@ -1161,7 +1159,7 @@ impl<'a> Parser<'a> {
             let end = high
                 .as_ref()
                 .map_or(text_end(operator, ".."), |(_, _, span)| span.end());
-            return Ok(PatternSyntax::Range {
+            return Ok(Syntax::Range {
                 low: Some((low, low_ty)),
                 high: high.map(|(literal, ty, _)| (literal, ty)),
                 inclusive,
@@ -1177,7 +1175,7 @@ impl<'a> Parser<'a> {
                     source: point_span(operator),
                 });
             };
-            return Ok(PatternSyntax::Range {
+            return Ok(Syntax::Range {
                 low: None,
                 high: Some((high, ty)),
                 inclusive: true,
@@ -1242,13 +1240,13 @@ impl<'a> Parser<'a> {
             // `name @ ..`, the rest of a slice pattern.
             if matches!(self.peek(), Token::ExclusiveRange) {
                 let (_, rest) = self.next();
-                return Ok(PatternSyntax::Rest {
+                return Ok(Syntax::Rest {
                     binding: Some((name, name_span)),
                     span: Span::new(name_span.start(), text_end(rest, "..")),
                 });
             }
             let pattern = self.parse_pattern_no_alt()?;
-            return Ok(PatternSyntax::At {
+            return Ok(Syntax::At {
                 name,
                 name_span,
                 pattern: Box::new(pattern),
@@ -1260,7 +1258,7 @@ impl<'a> Parser<'a> {
             && let Some(value) = ordering_discriminant(variant)
             && self.ordering_path(path.iter().map(|(name, _)| name.as_str()))
         {
-            return Ok(PatternSyntax::Literal {
+            return Ok(Syntax::Literal {
                 literal: ast::NominalLiteral::Int(value),
                 ty: Ty::Ordering,
                 span: Span::new(
@@ -1282,7 +1280,7 @@ impl<'a> Parser<'a> {
                 self.next();
             }
             let end = self.expect(Token::RightParen, "')' after a `Cow` variant pattern")?;
-            return Ok(PatternSyntax::Cow {
+            return Ok(Syntax::Cow {
                 owned,
                 payload: Box::new(payload),
                 span: span(start, end),
@@ -1303,7 +1301,7 @@ impl<'a> Parser<'a> {
             let start = segments[0].1.start();
             if variant == Prelude::None {
                 let end = text_end(name_span.start(), variant.name());
-                return Ok(PatternSyntax::Prelude {
+                return Ok(Syntax::Prelude {
                     variant,
                     payload: None,
                     span: Span::new(start, end),
@@ -1315,7 +1313,7 @@ impl<'a> Parser<'a> {
                 self.next();
             }
             let end = self.expect(Token::RightParen, "')' after a prelude variant pattern")?;
-            return Ok(PatternSyntax::Prelude {
+            return Ok(Syntax::Prelude {
                 variant,
                 payload: Some(Box::new(payload)),
                 span: span(start, end),
@@ -1348,7 +1346,7 @@ impl<'a> Parser<'a> {
                     && item.form == crate::item::StructForm::Unit
                     && item.generics.is_empty()
                 {
-                    return Ok(PatternSyntax::UnitStruct {
+                    return Ok(Syntax::UnitStruct {
                         ty: model.ty(),
                         span: path,
                     });
@@ -1379,7 +1377,7 @@ impl<'a> Parser<'a> {
                 names.push((name, name_span));
                 payload.push(pattern);
             }
-            return Ok(PatternSyntax::Enum(EnumPatternSyntax {
+            return Ok(Syntax::Enum(EnumSyntax {
                 owner: segments.into_boxed_slice(),
                 owner_span,
                 variant,
@@ -1394,7 +1392,7 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         if !mutable && let Some(ty) = self.imported_unit_struct(&segments) {
             let (last, last_span) = segments.last().expect("a pattern path");
-            return Ok(PatternSyntax::UnitStruct {
+            return Ok(Syntax::UnitStruct {
                 ty,
                 span: Span::new(segments[0].1.start(), text_end(last_span.start(), last)),
             });
@@ -1404,9 +1402,9 @@ impl<'a> Parser<'a> {
                 .pop()
                 .expect("one-segment patterns retain their binding");
             if !mutable && let Some(ty) = self.unit_struct(&name) {
-                return Ok(PatternSyntax::UnitStruct { ty, span });
+                return Ok(Syntax::UnitStruct { ty, span });
             }
-            return Ok(PatternSyntax::Binding {
+            return Ok(Syntax::Binding {
                 name,
                 span,
                 mutable,
@@ -1446,7 +1444,7 @@ impl<'a> Parser<'a> {
             self.expect(Token::RightParen, "')' after match payload patterns")?;
         }
 
-        Ok(PatternSyntax::Enum(EnumPatternSyntax {
+        Ok(Syntax::Enum(EnumSyntax {
             owner: segments.into_boxed_slice(),
             owner_span,
             variant,
@@ -1458,12 +1456,12 @@ impl<'a> Parser<'a> {
     }
 
     /// `[a, b, rest @ .., z]`, after its `[` at `start`.
-    pub(super) fn parse_slice_pattern(&mut self, start: Position) -> Result<PatternSyntax, Error> {
+    pub(super) fn parse_slice_pattern(&mut self, start: Position) -> Result<Syntax, Error> {
         self.next();
         let (mut before, mut rest, mut after) = (Vec::new(), None, Vec::new());
         while !matches!(self.peek(), Token::RightBracket | Token::EOF) {
             let element = self.parse_pattern_syntax()?;
-            if let PatternSyntax::Rest { span, .. } = &element {
+            if let Syntax::Rest { span, .. } = &element {
                 if rest.is_some() {
                     return Err(Error::UnsupportedNominalSyntax {
                         construct: "`..` can only be used once per slice pattern".into(),
@@ -1483,7 +1481,7 @@ impl<'a> Parser<'a> {
             }
         }
         let end = self.expect(Token::RightBracket, "']' to close a slice pattern")?;
-        Ok(PatternSyntax::Slice {
+        Ok(Syntax::Slice {
             before: before.into_boxed_slice(),
             rest,
             after: after.into_boxed_slice(),
@@ -1494,7 +1492,7 @@ impl<'a> Parser<'a> {
     /// One pattern nested in a payload of type `expected`.
     pub(super) fn resolve_child_pattern(
         &self,
-        syntax: &PatternSyntax,
+        syntax: &Syntax,
         expected: &Ty,
         owner: &str,
         variant: &str,
@@ -1511,9 +1509,7 @@ impl<'a> Parser<'a> {
                 if !syntax.is_irrefutable_leaf()
                     && !matches!(
                         syntax,
-                        PatternSyntax::Reference { .. }
-                            | PatternSyntax::At { .. }
-                            | PatternSyntax::Or { .. }
+                        Syntax::Reference { .. } | Syntax::At { .. } | Syntax::Or { .. }
                     ) =>
             {
                 // `&&T` matches the `T` below both, as rustc does.
@@ -1553,7 +1549,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn resolve_child_pattern_in_mode(
         &self,
-        syntax: &PatternSyntax,
+        syntax: &Syntax,
         expected: &Ty,
         owner: &str,
         variant: &str,
@@ -1566,11 +1562,11 @@ impl<'a> Parser<'a> {
         if matches!(expected, Ty::Host { .. })
             && !matches!(
                 syntax,
-                PatternSyntax::Binding { .. }
-                    | PatternSyntax::Ref { .. }
-                    | PatternSyntax::Discard { .. }
-                    | PatternSyntax::At { .. }
-                    | PatternSyntax::Reference { .. }
+                Syntax::Binding { .. }
+                    | Syntax::Ref { .. }
+                    | Syntax::Discard { .. }
+                    | Syntax::At { .. }
+                    | Syntax::Reference { .. }
             )
         {
             // The facade's tests read the part; what they bind is not in
@@ -1605,7 +1601,7 @@ impl<'a> Parser<'a> {
         match syntax {
             // `ref mut x` binds `&mut` to the part, which the pattern's
             // place takes back after each statement that uses it.
-            PatternSyntax::Ref {
+            Syntax::Ref {
                 name,
                 span,
                 mutable,
@@ -1616,7 +1612,7 @@ impl<'a> Parser<'a> {
                     mutable: *mutable,
                     target: Box::new(expected),
                 };
-                let binding = PatternSyntax::Binding {
+                let binding = Syntax::Binding {
                     name: name.clone(),
                     span: *span,
                     mutable: false,
@@ -1634,7 +1630,7 @@ impl<'a> Parser<'a> {
                 self.binding_mode.set(mode);
                 resolved
             }
-            PatternSyntax::Binding {
+            Syntax::Binding {
                 name,
                 span,
                 mutable,
@@ -1669,13 +1665,13 @@ impl<'a> Parser<'a> {
                     coverage::Pattern::Wildcard,
                 ))
             }
-            PatternSyntax::Discard { .. } => Ok((
+            Syntax::Discard { .. } => Ok((
                 NominalPattern::Discard {
                     expected: self.payload_type(&expected),
                 },
                 coverage::Pattern::Wildcard,
             )),
-            PatternSyntax::UnitStruct { ty, span } => {
+            Syntax::UnitStruct { ty, span } => {
                 self.require_pattern_type(&expected, ty, *span)?;
                 Ok((
                     NominalPattern::Discard {
@@ -1684,7 +1680,7 @@ impl<'a> Parser<'a> {
                     coverage::Pattern::Wildcard,
                 ))
             }
-            PatternSyntax::Enum(pattern) => {
+            Syntax::Enum(pattern) => {
                 let resolved = self.resolve_enum_pattern(
                     pattern,
                     &expected,
@@ -1693,10 +1689,10 @@ impl<'a> Parser<'a> {
                 )?;
                 Ok((NominalPattern::Enum(resolved.proof), resolved.coverage))
             }
-            PatternSyntax::Prelude { .. } => {
+            Syntax::Prelude { .. } => {
                 self.resolve_prelude_pattern(syntax, &expected, bound_names, binding_declarations)
             }
-            PatternSyntax::Cow {
+            Syntax::Cow {
                 owned,
                 payload,
                 span,
@@ -1708,7 +1704,7 @@ impl<'a> Parser<'a> {
                 bound_names,
                 binding_declarations,
             ),
-            PatternSyntax::Literal { literal, ty, span } => {
+            Syntax::Literal { literal, ty, span } => {
                 self.require_pattern_type(&expected, ty, *span)?;
                 self.trace_test(borrowck::Access::Read, None);
                 Ok((
@@ -1720,7 +1716,7 @@ impl<'a> Parser<'a> {
                     },
                 ))
             }
-            PatternSyntax::Range {
+            Syntax::Range {
                 low,
                 high,
                 inclusive,
@@ -1751,7 +1747,7 @@ impl<'a> Parser<'a> {
                     },
                 ))
             }
-            PatternSyntax::TupleStruct {
+            Syntax::TupleStruct {
                 definition,
                 members,
                 span,
@@ -1814,7 +1810,7 @@ impl<'a> Parser<'a> {
                     },
                 ))
             }
-            PatternSyntax::Tuple { members, span } => {
+            Syntax::Tuple { members, span } => {
                 let Ty::Tuple(types) = &expected else {
                     return Err(Error::TypeMismatch {
                         expected: expected.name(&self.models),
@@ -1822,7 +1818,7 @@ impl<'a> Parser<'a> {
                         expression: *span,
                     });
                 };
-                let discard = PatternSyntax::Discard { span: *span };
+                let discard = Syntax::Discard { span: *span };
                 let members = tuple_members(members, types.len(), &discard)?;
                 if types.len() != members.len() {
                     return Err(Error::TypeMismatch {
@@ -1861,7 +1857,7 @@ impl<'a> Parser<'a> {
                     },
                 ))
             }
-            PatternSyntax::Reference {
+            Syntax::Reference {
                 mutable,
                 pattern,
                 span,
@@ -1900,7 +1896,7 @@ impl<'a> Parser<'a> {
                 self.binding_mode.set(mode);
                 resolved
             }
-            PatternSyntax::At {
+            Syntax::At {
                 name,
                 name_span,
                 pattern,
@@ -1945,7 +1941,7 @@ impl<'a> Parser<'a> {
                     coverage,
                 ))
             }
-            PatternSyntax::Slice {
+            Syntax::Slice {
                 before,
                 rest,
                 after,
@@ -2006,7 +2002,7 @@ impl<'a> Parser<'a> {
                 if length.is_none() {
                     self.trace_test(borrowck::Access::Length, Some(*span));
                 }
-                let mut resolve = |members: &[PatternSyntax], after: bool| {
+                let mut resolve = |members: &[Syntax], after: bool| {
                     let mut proofs = Vec::with_capacity(members.len());
                     let mut coverage = Vec::with_capacity(members.len());
                     for (index, member) in members.iter().enumerate() {
@@ -2033,7 +2029,7 @@ impl<'a> Parser<'a> {
                 // `name @ ..` binds the middle: an array of the remaining
                 // length, or a slice.
                 let rest_proof = match rest.as_deref() {
-                    Some(PatternSyntax::Rest {
+                    Some(Syntax::Rest {
                         binding: Some((name, name_span)),
                         ..
                     }) => {
@@ -2044,7 +2040,7 @@ impl<'a> Parser<'a> {
                                 None => sequence::Kind::Slice,
                             },
                         };
-                        let binding = PatternSyntax::Binding {
+                        let binding = Syntax::Binding {
                             name: name.clone(),
                             span: *name_span,
                             mutable: false,
@@ -2084,12 +2080,12 @@ impl<'a> Parser<'a> {
                     },
                 ))
             }
-            PatternSyntax::Rest { span, .. } => Err(Error::InvalidMatch {
+            Syntax::Rest { span, .. } => Err(Error::InvalidMatch {
                 owner: owner.into(),
                 reason: "`..` patterns are not allowed here".into(),
                 pattern: *span,
             }),
-            PatternSyntax::Or { alternatives, .. } => {
+            Syntax::Or { alternatives, .. } => {
                 let mut proofs = Vec::with_capacity(alternatives.len());
                 let mut coverage = Vec::with_capacity(alternatives.len());
                 let mut first: Option<BTreeMap<ImmutableString, Ty>> = None;
@@ -2190,12 +2186,12 @@ impl<'a> Parser<'a> {
     /// or `Err(pattern)` against a `Result<T, E>`.
     pub(super) fn resolve_prelude_pattern(
         &self,
-        syntax: &PatternSyntax,
+        syntax: &Syntax,
         expected: &Ty,
         bound_names: &mut BTreeMap<ImmutableString, Span>,
         binding_declarations: &mut Vec<PatternBinding>,
     ) -> Result<(NominalPattern, coverage::Pattern), Error> {
-        let PatternSyntax::Prelude {
+        let Syntax::Prelude {
             variant, payload, ..
         } = syntax
         else {
@@ -2265,9 +2261,9 @@ impl<'a> Parser<'a> {
     /// of `subject` type.
     pub(super) fn resolve_root_pattern(
         &mut self,
-        syntax: &PatternSyntax,
+        syntax: &Syntax,
         subject: &Ty,
-    ) -> Result<ResolvedRootPattern, Error> {
+    ) -> Result<ResolvedRoot, Error> {
         let outer_or_types = self.or_binding_types.take();
         let resolved = self.resolve_root_pattern_parts(syntax, subject);
         let or_types = self.or_binding_types.replace(outer_or_types);
@@ -2293,9 +2289,9 @@ impl<'a> Parser<'a> {
 
     pub(super) fn resolve_root_pattern_parts(
         &self,
-        syntax: &PatternSyntax,
+        syntax: &Syntax,
         subject: &Ty,
-    ) -> Result<ResolvedRootPattern, Error> {
+    ) -> Result<ResolvedRoot, Error> {
         self.binding_mode.set(None);
         let mut bound_names = BTreeMap::<ImmutableString, Span>::new();
         let mut bindings = Vec::new();
@@ -2312,7 +2308,7 @@ impl<'a> Parser<'a> {
         );
         let trace = self.end_trace(outer);
         let (proof, coverage) = resolved?;
-        Ok(ResolvedRootPattern {
+        Ok(ResolvedRoot {
             proof,
             coverage,
             span: syntax.span(),
@@ -2347,11 +2343,11 @@ impl<'a> Parser<'a> {
 
     pub(super) fn resolve_enum_pattern(
         &self,
-        syntax: &EnumPatternSyntax,
+        syntax: &EnumSyntax,
         expected: &Ty,
         bound_names: &mut BTreeMap<ImmutableString, Span>,
         binding_declarations: &mut Vec<PatternBinding>,
-    ) -> Result<ResolvedEnumPattern, Error> {
+    ) -> Result<ResolvedEnum, Error> {
         let owner: ImmutableString = syntax
             .owner
             .iter()
@@ -2405,7 +2401,7 @@ impl<'a> Parser<'a> {
             });
         };
         // The written pattern of each payload slot, `_` where `..` skips it.
-        let discard = PatternSyntax::Discard {
+        let discard = Syntax::Discard {
             span: syntax.variant_span,
         };
         let children = match (&syntax.named, &variant.fields) {
@@ -2453,8 +2449,8 @@ impl<'a> Parser<'a> {
             let written = syntax
                 .payload
                 .iter()
-                .filter(|member| !matches!(member, PatternSyntax::Rest { .. }))
-                .map(PatternSyntax::span)
+                .filter(|member| !matches!(member, Syntax::Rest { .. }))
+                .map(Syntax::span)
                 .collect::<Vec<_>>();
             let fields = variant
                 .payload
@@ -2536,7 +2532,7 @@ impl<'a> Parser<'a> {
         let identity = type_def::Identity::Script(definition.key().clone());
         let variant_id = nominal::variant::Id::from_name(&variant.name);
 
-        Ok(ResolvedEnumPattern {
+        Ok(ResolvedEnum {
             proof: NominalEnumPattern {
                 enum_name: definition.name().into(),
                 identity: identity.clone(),
@@ -2565,7 +2561,7 @@ impl<'a> Parser<'a> {
         &mut self,
         model: Nominal,
         start: Span,
-    ) -> Result<PatternSyntax, Error> {
+    ) -> Result<Syntax, Error> {
         let (ty, substitution) = self.fresh_nominal(&model, start);
         let Nominal::Struct { definition, item } = model else {
             unreachable!("tuple struct patterns are parsed for structs");
@@ -2593,15 +2589,15 @@ impl<'a> Parser<'a> {
         let span = span(start.start(), end);
         let written = members
             .iter()
-            .filter(|member| !matches!(member, PatternSyntax::Rest { .. }))
-            .map(PatternSyntax::span)
+            .filter(|member| !matches!(member, Syntax::Rest { .. }))
+            .map(Syntax::span)
             .collect::<Vec<_>>();
         // `W(a, ..)`: `_` for the fields `..` skips.
         if let Some(rest) = tuple_rest(&members)? {
             let fill = (fields.len() + 1).saturating_sub(members.len());
             members.splice(
                 rest..=rest,
-                std::iter::repeat_with(|| PatternSyntax::Discard { span }).take(fill),
+                std::iter::repeat_with(|| Syntax::Discard { span }).take(fill),
             );
         }
         if members.len() != fields.len() {
@@ -2614,7 +2610,7 @@ impl<'a> Parser<'a> {
                 item.fields.iter().map(|field| field.span),
             ));
         }
-        Ok(PatternSyntax::TupleStruct {
+        Ok(Syntax::TupleStruct {
             ty,
             definition,
             fields,
@@ -2629,7 +2625,7 @@ impl<'a> Parser<'a> {
         &mut self,
         model: Nominal,
         start: Span,
-    ) -> Result<PatternSyntax, Error> {
+    ) -> Result<Syntax, Error> {
         let (ty, substitution) = self.fresh_nominal(&model, start);
         let Nominal::Struct { definition, item } = model else {
             unreachable!("struct patterns are parsed for structs");
@@ -2651,7 +2647,7 @@ impl<'a> Parser<'a> {
             .map(|index| {
                 index
                     .and_then(|index| written[index].take())
-                    .unwrap_or(PatternSyntax::Discard { span })
+                    .unwrap_or(Syntax::Discard { span })
             })
             .collect();
         let fields = item
@@ -2659,7 +2655,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
             .collect();
-        Ok(PatternSyntax::TupleStruct {
+        Ok(Syntax::TupleStruct {
             ty,
             definition,
             fields,
@@ -2674,9 +2670,9 @@ impl<'a> Parser<'a> {
     #[allow(clippy::type_complexity)]
     pub(super) fn parse_field_patterns(
         &mut self,
-    ) -> Result<(Vec<(ImmutableString, Span, PatternSyntax)>, bool, Position), Error> {
+    ) -> Result<(Vec<(ImmutableString, Span, Syntax)>, bool, Position), Error> {
         self.expect(Token::LeftBrace, "'{' to start a struct pattern")?;
-        let mut fields = Vec::<(ImmutableString, Span, PatternSyntax)>::new();
+        let mut fields = Vec::<(ImmutableString, Span, Syntax)>::new();
         let mut rest = false;
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             if matches!(self.peek(), Token::ExclusiveRange) {
@@ -2685,7 +2681,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             if let Some(pattern) = self.parse_ref_binding()? {
-                let PatternSyntax::Ref { name, span, .. } = &pattern else {
+                let Syntax::Ref { name, span, .. } = &pattern else {
                     unreachable!("a `ref` binding");
                 };
                 if fields.iter().any(|(known, ..)| known == name) {
@@ -2706,7 +2702,7 @@ impl<'a> Parser<'a> {
                 self.next();
                 self.parse_pattern_syntax()?
             } else {
-                PatternSyntax::Binding {
+                Syntax::Binding {
                     name: name.clone(),
                     span: name_span,
                     mutable,
@@ -2733,15 +2729,15 @@ impl<'a> Parser<'a> {
     pub(super) fn parameter_pattern_syntax(
         &mut self,
         pattern: &crate::item::ParameterPattern,
-    ) -> Result<PatternSyntax, Error> {
+    ) -> Result<Syntax, Error> {
         Ok(match pattern {
-            crate::item::ParameterPattern::Binding { name, mutable } => PatternSyntax::Binding {
+            crate::item::ParameterPattern::Binding { name, mutable } => Syntax::Binding {
                 name: name.text.clone(),
                 span: name.span,
                 mutable: *mutable,
             },
-            crate::item::ParameterPattern::Discard(span) => PatternSyntax::Discard { span: *span },
-            crate::item::ParameterPattern::Tuple { members, span } => PatternSyntax::Tuple {
+            crate::item::ParameterPattern::Discard(span) => Syntax::Discard { span: *span },
+            crate::item::ParameterPattern::Tuple { members, span } => Syntax::Tuple {
                 members: members
                     .iter()
                     .map(|member| self.parameter_pattern_syntax(member))
@@ -2752,7 +2748,7 @@ impl<'a> Parser<'a> {
                 mutable,
                 pattern,
                 span,
-            } => PatternSyntax::Reference {
+            } => Syntax::Reference {
                 mutable: *mutable,
                 pattern: Box::new(self.parameter_pattern_syntax(pattern)?),
                 span: *span,
@@ -2769,7 +2765,7 @@ impl<'a> Parser<'a> {
                 && let Some(variant) = Prelude::from_name(&name.text)
                 && self.models.get(&name.text).is_none() =>
             {
-                PatternSyntax::Prelude {
+                Syntax::Prelude {
                     variant,
                     payload: Some(Box::new(self.parameter_pattern_syntax(member)?)),
                     span: *span,
@@ -2804,7 +2800,7 @@ impl<'a> Parser<'a> {
                             path: false,
                         });
                     };
-                    return Ok(PatternSyntax::Enum(EnumPatternSyntax {
+                    return Ok(Syntax::Enum(EnumSyntax {
                         owner: owner
                             .iter()
                             .map(|name| (name.text.clone(), name.span))
@@ -2845,7 +2841,7 @@ impl<'a> Parser<'a> {
                         item.fields.iter().map(|field| field.span),
                     ));
                 }
-                PatternSyntax::TupleStruct {
+                Syntax::TupleStruct {
                     ty,
                     definition,
                     fields,
@@ -2938,7 +2934,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Bind each name a facade pattern makes for the code it guards.
-    pub(super) fn bind_host_pattern(&mut self, pattern: &HostPattern) {
+    pub(super) fn bind_host_pattern(&mut self, pattern: &Host) {
         for binding in &pattern.binds {
             self.bindings.insert(
                 binding.name.clone(),
@@ -2980,10 +2976,10 @@ impl<'a> Parser<'a> {
     /// fields are matched as any pattern on their types.
     pub(super) fn host_pattern(
         &mut self,
-        syntax: &PatternSyntax,
+        syntax: &Syntax,
         value: origin::Fragment,
         ty: &Ty,
-        out: &mut HostPattern,
+        out: &mut Host,
     ) -> Result<(), Error> {
         // Through `&T` a binding is a reference, Rust's default binding mode;
         // a `&` pattern takes the value itself.
@@ -2993,7 +2989,7 @@ impl<'a> Parser<'a> {
         };
         let outer = self.host_binding_mode.get();
         let mode = match syntax {
-            PatternSyntax::Reference { .. } if through.is_some() => None,
+            Syntax::Reference { .. } if through.is_some() => None,
             _ => outer.or(through),
         };
         self.host_binding_mode.set(mode);
@@ -3004,10 +3000,10 @@ impl<'a> Parser<'a> {
 
     pub(super) fn host_pattern_in_mode(
         &mut self,
-        syntax: &PatternSyntax,
+        syntax: &Syntax,
         value: origin::Fragment,
         ty: Ty,
-        out: &mut HostPattern,
+        out: &mut Host,
     ) -> Result<(), Error> {
         let bound = |ty: &Ty, mode: Option<bool>| match mode {
             Some(mutable) => Ty::Reference {
@@ -3017,8 +3013,8 @@ impl<'a> Parser<'a> {
             None => ty.clone(),
         };
         match syntax {
-            PatternSyntax::Discard { .. } | PatternSyntax::Rest { binding: None, .. } => Ok(()),
-            PatternSyntax::Binding {
+            Syntax::Discard { .. } | Syntax::Rest { binding: None, .. } => Ok(()),
+            Syntax::Binding {
                 name,
                 span,
                 mutable,
@@ -3035,7 +3031,7 @@ impl<'a> Parser<'a> {
                 );
                 Ok(())
             }
-            PatternSyntax::Ref { name, span, .. } => {
+            Syntax::Ref { name, span, .. } => {
                 self.require_new_host_binding(out, name, *span)?;
                 out.bind(
                     PatternBinding {
@@ -3048,7 +3044,7 @@ impl<'a> Parser<'a> {
                 );
                 Ok(())
             }
-            PatternSyntax::At {
+            Syntax::At {
                 name,
                 name_span,
                 pattern,
@@ -3065,8 +3061,8 @@ impl<'a> Parser<'a> {
                 );
                 self.host_pattern(pattern, value, &ty, out)
             }
-            PatternSyntax::Reference { pattern, .. } => self.host_pattern(pattern, value, &ty, out),
-            PatternSyntax::Literal {
+            Syntax::Reference { pattern, .. } => self.host_pattern(pattern, value, &ty, out),
+            Syntax::Literal {
                 literal,
                 ty: actual,
                 span,
@@ -3077,7 +3073,7 @@ impl<'a> Parser<'a> {
                 out.tests.push(test);
                 Ok(())
             }
-            PatternSyntax::Range {
+            Syntax::Range {
                 low,
                 high,
                 inclusive,
@@ -3105,17 +3101,17 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             }
-            PatternSyntax::Or { alternatives, span } => {
+            Syntax::Or { alternatives, span } => {
                 // Each alternative binds the same names; the first's
                 // readers bind them, as a facade reads a field the same
                 // way in every variant.
                 let mut tests = Vec::new();
-                let mut first: Option<HostPattern> = None;
+                let mut first: Option<Host> = None;
                 let mut irrefutable = false;
                 for alternative in alternatives.iter() {
-                    let mut compiled = HostPattern::default();
+                    let mut compiled = Host::default();
                     self.host_pattern(alternative, value.clone(), &ty, &mut compiled)?;
-                    let names = |pattern: &HostPattern| {
+                    let names = |pattern: &Host| {
                         pattern
                             .binds
                             .iter()
@@ -3156,7 +3152,7 @@ impl<'a> Parser<'a> {
                 out.absorb_binds(first);
                 Ok(())
             }
-            PatternSyntax::Prelude {
+            Syntax::Prelude {
                 variant,
                 payload,
                 span,
@@ -3189,11 +3185,11 @@ impl<'a> Parser<'a> {
                     }),
                 }
             }
-            PatternSyntax::Enum(pattern) if matches!(ty, Ty::Host { .. }) => {
+            Syntax::Enum(pattern) if matches!(ty, Ty::Host { .. }) => {
                 self.host_variant_pattern(pattern, value, &ty, out)
             }
             // A unit struct has one value: its pattern tests nothing.
-            PatternSyntax::UnitStruct { ty: unit, span } => self.require_type(unit, &ty, *span),
+            Syntax::UnitStruct { ty: unit, span } => self.require_type(unit, &ty, *span),
             other => Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
                     "this pattern on `{}` below a pattern on a library value",
@@ -3209,10 +3205,10 @@ impl<'a> Parser<'a> {
     /// on a facade enum value.
     pub(super) fn host_variant_pattern(
         &mut self,
-        pattern: &EnumPatternSyntax,
+        pattern: &EnumSyntax,
         value: origin::Fragment,
         ty: &Ty,
-        out: &mut HostPattern,
+        out: &mut Host,
     ) -> Result<(), Error> {
         let Ty::Host { proof, .. } = ty else {
             unreachable!("host variant patterns match host values");
@@ -3283,7 +3279,7 @@ impl<'a> Parser<'a> {
         let discards_only = pattern.payload.iter().all(|member| {
             matches!(
                 member,
-                PatternSyntax::Discard { .. } | PatternSyntax::Rest { binding: None, .. }
+                Syntax::Discard { .. } | Syntax::Rest { binding: None, .. }
             )
         });
         let Some(reader) = reader.cloned() else {
@@ -3380,10 +3376,10 @@ impl<'a> Parser<'a> {
     #[cfg(feature = "rust-import")]
     pub(super) fn imported_variant_pattern(
         &mut self,
-        pattern: &EnumPatternSyntax,
+        pattern: &EnumSyntax,
         value: origin::Fragment,
         ty: &Ty,
-        out: &mut HostPattern,
+        out: &mut Host,
     ) -> Result<(), Error> {
         let Ty::Host { proof, arguments } = ty else {
             unreachable!("imported variant patterns match imported values");
@@ -3448,8 +3444,8 @@ impl<'a> Parser<'a> {
         let rawr_import::surface::identity::Selector::EnumVariant { form, .. } = selector else {
             unreachable!("an enum variant's selector names an enum variant")
         };
-        let discard = PatternSyntax::Discard { span: at };
-        let members: Vec<(usize, &PatternSyntax)> = match (form, &pattern.named) {
+        let discard = Syntax::Discard { span: at };
+        let members: Vec<(usize, &Syntax)> = match (form, &pattern.named) {
             // `Variant { .. }` matches any variant's fields, as in Rust.
             (_, Some((names, true))) if names.is_empty() => Vec::new(),
             (rawr_import::surface::identity::Form::Named { .. }, Some((names, _))) => {
@@ -3528,16 +3524,16 @@ impl<'a> Parser<'a> {
         for (index, member) in &members {
             if matches!(
                 member,
-                PatternSyntax::Binding { .. }
-                    | PatternSyntax::Ref { .. }
-                    | PatternSyntax::Discard { .. }
-                    | PatternSyntax::Literal { .. }
-                    | PatternSyntax::Range { .. }
+                Syntax::Binding { .. }
+                    | Syntax::Ref { .. }
+                    | Syntax::Discard { .. }
+                    | Syntax::Literal { .. }
+                    | Syntax::Range { .. }
             ) {
                 continue;
             }
             let name = self.temporary("field");
-            let mut below = HostPattern::default();
+            let mut below = Host::default();
             self.host_pattern(
                 member,
                 origin::Fragment::plain(name.as_str()),
@@ -3563,8 +3559,8 @@ impl<'a> Parser<'a> {
         let binds = |wanted: Option<bool>| {
             members.iter().any(|(index, member)| {
                 let mode = match member {
-                    PatternSyntax::Binding { .. } => outer,
-                    PatternSyntax::Ref { mutable, .. } => Some(*mutable),
+                    Syntax::Binding { .. } => outer,
+                    Syntax::Ref { mutable, .. } => Some(*mutable),
                     _ => return false,
                 };
                 mode == wanted && native(self, &fields[*index])
@@ -3657,27 +3653,24 @@ impl<'a> Parser<'a> {
                 out.absorb_binds(below);
                 continue;
             }
-            if matches!(member, PatternSyntax::Discard { .. }) {
+            if matches!(member, Syntax::Discard { .. }) {
                 continue;
             }
             let copy = reader(self, index, false)?;
-            let Some(part) = part.filter(|_| {
-                matches!(
-                    member,
-                    PatternSyntax::Binding { .. } | PatternSyntax::Ref { .. }
-                )
-            }) else {
+            let Some(part) =
+                part.filter(|_| matches!(member, Syntax::Binding { .. } | Syntax::Ref { .. }))
+            else {
                 self.host_pattern(member, copy, &fields[index], out)?;
                 continue;
             };
             // The binding any pattern on the field makes, read from the
             // part instead: by reference for `ref` and `ref mut`.
-            let mut single = HostPattern::default();
+            let mut single = Host::default();
             self.host_pattern(member, copy, &fields[index], &mut single)?;
             let (Some(mut binding), Some(copy)) = (single.binds.pop(), single.values.pop()) else {
                 unreachable!("a binding pattern binds its name")
             };
-            if let PatternSyntax::Ref { mutable, .. } = member {
+            if let Syntax::Ref { mutable, .. } = member {
                 binding.ty = Ty::Reference {
                     mutable: *mutable,
                     target: Box::new(binding.ty),

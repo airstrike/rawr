@@ -2,7 +2,7 @@
 //! parameters, and the closures lifted into their own functions.
 
 use super::lvalue::Lvalue;
-use super::pattern::PatternSyntax;
+use super::pattern;
 use super::ty::{Float, HostTyProof, Int, Ty};
 use super::{
     assignment_token, contains_inference, drops, origin, places, point_span, span, text_end,
@@ -430,7 +430,7 @@ impl<'a> Parser<'a> {
         let output_hint = self.closure_output.take();
         let outer_changed = self.self_changed.replace(false);
         let mut parameters = Vec::<(ImmutableString, Ty, Span)>::new();
-        let mut patterns = Vec::<(usize, PatternSyntax)>::new();
+        let mut patterns = Vec::<(usize, pattern::Syntax)>::new();
         // `|a, b|` as rustc's note on a call of it shows it.
         let mut header = start;
         if token == Token::Pipe {

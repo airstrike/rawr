@@ -322,19 +322,19 @@ fn clear_text(place: &str, prefix: &[usize], moves: &[Vec<usize>]) -> String {
 }
 
 /// The names a pattern binds.
-pub(super) fn pattern_names(syntax: &PatternSyntax) -> Vec<ImmutableString> {
+pub(super) fn pattern_names(syntax: &pattern::Syntax) -> Vec<ImmutableString> {
     let mut names = Vec::new();
     collect_names(syntax, &mut names);
     names.into_iter().map(|(name, _)| name).collect()
 }
 
 /// The names a pattern binds, in written order, with their declarations.
-fn collect_names(syntax: &PatternSyntax, names: &mut Vec<(ImmutableString, Span)>) {
+fn collect_names(syntax: &pattern::Syntax, names: &mut Vec<(ImmutableString, Span)>) {
     match syntax {
-        PatternSyntax::Binding { name, span, .. } | PatternSyntax::Ref { name, span, .. } => {
+        pattern::Syntax::Binding { name, span, .. } | pattern::Syntax::Ref { name, span, .. } => {
             names.push((name.clone(), *span));
         }
-        PatternSyntax::At {
+        pattern::Syntax::At {
             name,
             name_span,
             pattern,
@@ -342,31 +342,31 @@ fn collect_names(syntax: &PatternSyntax, names: &mut Vec<(ImmutableString, Span)
             names.push((name.clone(), *name_span));
             collect_names(pattern, names);
         }
-        PatternSyntax::Rest {
+        pattern::Syntax::Rest {
             binding: Some((name, span)),
             ..
         } => names.push((name.clone(), *span)),
-        PatternSyntax::TupleStruct { members, .. } | PatternSyntax::Tuple { members, .. } => {
+        pattern::Syntax::TupleStruct { members, .. } | pattern::Syntax::Tuple { members, .. } => {
             members
                 .iter()
                 .for_each(|member| collect_names(member, names));
         }
-        PatternSyntax::Enum(pattern) => pattern
+        pattern::Syntax::Enum(pattern) => pattern
             .payload
             .iter()
             .for_each(|member| collect_names(member, names)),
-        PatternSyntax::Prelude {
+        pattern::Syntax::Prelude {
             payload: Some(payload),
             ..
         }
-        | PatternSyntax::Cow { payload, .. } => collect_names(payload, names),
-        PatternSyntax::Reference { pattern, .. } => collect_names(pattern, names),
-        PatternSyntax::Or { alternatives, .. } => {
+        | pattern::Syntax::Cow { payload, .. } => collect_names(payload, names),
+        pattern::Syntax::Reference { pattern, .. } => collect_names(pattern, names),
+        pattern::Syntax::Or { alternatives, .. } => {
             if let Some(first) = alternatives.first() {
                 collect_names(first, names);
             }
         }
-        PatternSyntax::Slice {
+        pattern::Syntax::Slice {
             before,
             rest,
             after,
@@ -1137,7 +1137,7 @@ impl Parser<'_> {
     /// `bindings` drop at the end of the innermost scope.
     pub(super) fn pattern_drops(
         &mut self,
-        syntax: Option<&PatternSyntax>,
+        syntax: Option<&pattern::Syntax>,
         ty: &Ty,
         holder: &Holder,
         bindings: &[(ImmutableString, Span, Ty)],
@@ -1147,7 +1147,7 @@ impl Parser<'_> {
             return Ok(String::new());
         }
         let mut moves = Vec::new();
-        let at = syntax.map_or(Span::NONE, PatternSyntax::span);
+        let at = syntax.map_or(Span::NONE, pattern::Syntax::span);
         match syntax {
             Some(syntax) => {
                 self.pattern_moves(syntax, ty, &mut Vec::new(), &mut moves)?;
@@ -1238,7 +1238,7 @@ impl Parser<'_> {
     /// value was made for it.
     pub(super) fn let_pattern_drops(
         &mut self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
         value: &ParsedExpr,
         ty: &Ty,
         whole: &str,
@@ -1277,7 +1277,7 @@ impl Parser<'_> {
     /// types.
     pub(super) fn pattern_bindings(
         &self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
     ) -> Vec<(ImmutableString, Span, Ty)> {
         let mut names = Vec::new();
         collect_names(syntax, &mut names);
@@ -1296,7 +1296,7 @@ impl Parser<'_> {
     /// `path`, into `moves`. Whether a part with drop glue stays behind.
     fn pattern_moves(
         &mut self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
         ty: &Ty,
         path: &mut Vec<usize>,
         moves: &mut Vec<Vec<usize>>,
@@ -1308,16 +1308,16 @@ impl Parser<'_> {
         }
         let at = syntax.span();
         Ok(match syntax {
-            PatternSyntax::Binding { .. } | PatternSyntax::At { .. } => {
+            pattern::Syntax::Binding { .. } | pattern::Syntax::At { .. } => {
                 if self.needs_drop(&resolved, at)? {
                     moves.push(path.clone());
                 }
                 false
             }
-            PatternSyntax::Ref { .. } | PatternSyntax::Discard { .. } => {
+            pattern::Syntax::Ref { .. } | pattern::Syntax::Discard { .. } => {
                 self.needs_drop(&resolved, at)?
             }
-            PatternSyntax::Rest { binding, .. } => {
+            pattern::Syntax::Rest { binding, .. } => {
                 let needs = self.needs_drop(&resolved, at)?;
                 if needs && binding.is_some() {
                     moves.push(path.clone());
@@ -1326,11 +1326,11 @@ impl Parser<'_> {
                     needs
                 }
             }
-            PatternSyntax::Literal { .. }
-            | PatternSyntax::Range { .. }
-            | PatternSyntax::UnitStruct { .. }
-            | PatternSyntax::Reference { .. } => false,
-            PatternSyntax::TupleStruct {
+            pattern::Syntax::Literal { .. }
+            | pattern::Syntax::Range { .. }
+            | pattern::Syntax::UnitStruct { .. }
+            | pattern::Syntax::Reference { .. } => false,
+            pattern::Syntax::TupleStruct {
                 definition,
                 fields,
                 members,
@@ -1346,11 +1346,11 @@ impl Parser<'_> {
                 self.reject_drop_move(definition.id(), moves.len() > before, at)?;
                 leftover
             }
-            PatternSyntax::Tuple { members, span } => {
+            pattern::Syntax::Tuple { members, span } => {
                 let Ty::Tuple(types) = &resolved else {
                     return Ok(false);
                 };
-                let discard = PatternSyntax::Discard { span: *span };
+                let discard = pattern::Syntax::Discard { span: *span };
                 let members = tuple_members(members, types.len(), &discard)?;
                 let mut leftover = false;
                 for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
@@ -1360,7 +1360,7 @@ impl Parser<'_> {
                 }
                 leftover
             }
-            PatternSyntax::Enum(pattern) => {
+            pattern::Syntax::Enum(pattern) => {
                 let Ty::Script(id, arguments) = &resolved else {
                     return Ok(false);
                 };
@@ -1374,10 +1374,10 @@ impl Parser<'_> {
                 else {
                     return Ok(false);
                 };
-                let discard = PatternSyntax::Discard {
+                let discard = pattern::Syntax::Discard {
                     span: pattern.variant_span,
                 };
-                let children: Vec<&PatternSyntax> = match (&pattern.named, &variant.fields) {
+                let children: Vec<&pattern::Syntax> = match (&pattern.named, &variant.fields) {
                     (Some((written, rest)), declared) => {
                         let declared = declared.as_deref().unwrap_or_default();
                         let rest = *rest || variant.payload.is_empty();
@@ -1411,7 +1411,7 @@ impl Parser<'_> {
                 self.reject_drop_move(*id, moves.len() > before, at)?;
                 leftover
             }
-            PatternSyntax::Prelude {
+            pattern::Syntax::Prelude {
                 variant, payload, ..
             } => {
                 let inner = match (&resolved, variant) {
@@ -1438,7 +1438,7 @@ impl Parser<'_> {
             }
             // A `Cow::Owned` binding moves its owned value out, which drop
             // glue would need to follow.
-            PatternSyntax::Cow { owned, payload, .. } => {
+            pattern::Syntax::Cow { owned, payload, .. } => {
                 if let Ty::Cow(borrowed) = &resolved
                     && *owned
                     && binds_by_value(payload)
@@ -1454,7 +1454,7 @@ impl Parser<'_> {
                 }
                 false
             }
-            PatternSyntax::Or { alternatives, .. } => {
+            pattern::Syntax::Or { alternatives, .. } => {
                 let mut leftover = false;
                 for alternative in alternatives.iter() {
                     let mut inside = Vec::new();
@@ -1470,7 +1470,7 @@ impl Parser<'_> {
                 }
                 leftover
             }
-            PatternSyntax::Slice { .. } => {
+            pattern::Syntax::Slice { .. } => {
                 if binds_by_value(syntax) && self.needs_drop(&resolved, at)? {
                     return Err(Error::UnsupportedNominalSyntax {
                         construct: "a slice pattern that moves a value whose type implements \

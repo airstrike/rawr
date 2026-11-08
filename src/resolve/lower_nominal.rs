@@ -139,7 +139,7 @@ use op::{
     IntrinsicOperation, Keys, Op, PreludeOp, ProjectionOperation, WitnessedOp,
     FLOAT_BINARY_METHODS, FLOAT_UNARY_METHODS, SHAPED_HASHED, SHAPED_TOTAL,
 };
-use pattern::{HostPattern, PatternBinding, PatternSite, PatternSyntax, Prelude};
+use pattern::{PatternBinding, Prelude};
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write;
@@ -2960,7 +2960,7 @@ type PendingInstance = (
 
 /// A facade pattern met below a script pattern: the hidden name its value
 /// is bound to, the pattern, the value's type and the binding mode.
-type HostCheck = (ImmutableString, PatternSyntax, Ty, Option<bool>);
+type HostCheck = (ImmutableString, pattern::Syntax, Ty, Option<bool>);
 
 struct Parser<'a> {
     marker: std::marker::PhantomData<&'a ()>,
@@ -8598,7 +8598,7 @@ impl<'a> Parser<'a> {
                 self.expect(Token::SemiColon, "';' after a parameter's value")?;
                 let matched = self.matched(&subject, value_start);
                 self.bind_let_pattern(
-                    PatternSite::Argument,
+                    pattern::Site::Argument,
                     at.start(),
                     &syntax,
                     subject,
@@ -16769,7 +16769,7 @@ impl<'a> Parser<'a> {
         let end = otherwise.syntax.end();
         self.consume_terminator(start)?;
         self.bind_let_pattern(
-            PatternSite::Let,
+            pattern::Site::Let,
             start,
             &syntax,
             subject,
@@ -16783,24 +16783,24 @@ impl<'a> Parser<'a> {
     /// Whether a slice pattern in `syntax` matches a slice of unknown
     /// length in `ty`, which only a coverage check finds irrefutable
     /// (`[..]`, `[a @ ..]`), where an array's length decides it.
-    fn matches_unsized_slice(&self, syntax: &PatternSyntax, ty: &Ty) -> bool {
+    fn matches_unsized_slice(&self, syntax: &pattern::Syntax, ty: &Ty) -> bool {
         let ty = self.referenced(ty);
         match (syntax, &ty) {
-            (PatternSyntax::Slice { .. }, Ty::Array { kind, .. })
+            (pattern::Syntax::Slice { .. }, Ty::Array { kind, .. })
                 if !matches!(kind, sequence::Kind::Array(_)) =>
             {
                 true
             }
-            (PatternSyntax::Slice { before, after, .. }, Ty::Array { element, .. }) => before
+            (pattern::Syntax::Slice { before, after, .. }, Ty::Array { element, .. }) => before
                 .iter()
                 .chain(after.iter())
                 .any(|member| self.matches_unsized_slice(member, element)),
-            (PatternSyntax::Tuple { members, .. }, Ty::Tuple(types)) => members
+            (pattern::Syntax::Tuple { members, .. }, Ty::Tuple(types)) => members
                 .iter()
                 .zip(types.iter())
                 .any(|(member, ty)| self.matches_unsized_slice(member, ty)),
             (
-                PatternSyntax::TupleStruct {
+                pattern::Syntax::TupleStruct {
                     members, fields, ..
                 },
                 _,
@@ -16808,9 +16808,10 @@ impl<'a> Parser<'a> {
                 .iter()
                 .zip(fields.iter())
                 .any(|(member, ty)| self.matches_unsized_slice(member, ty)),
-            (PatternSyntax::Reference { pattern, .. } | PatternSyntax::At { pattern, .. }, _) => {
-                self.matches_unsized_slice(pattern, &ty)
-            }
+            (
+                pattern::Syntax::Reference { pattern, .. } | pattern::Syntax::At { pattern, .. },
+                _,
+            ) => self.matches_unsized_slice(pattern, &ty),
             _ => false,
         }
     }
@@ -16819,7 +16820,7 @@ impl<'a> Parser<'a> {
     /// statements that do it. A refutable pattern is rejected, as in Rust.
     fn destructure(
         &mut self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
         path: &str,
         ty: &Ty,
     ) -> Result<String, Error> {
@@ -16854,21 +16855,21 @@ impl<'a> Parser<'a> {
 
     fn destructure_into(
         &mut self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
         path: &str,
         ty: &Ty,
         statements: &mut String,
     ) -> Result<(), Error> {
         match syntax {
-            PatternSyntax::Discard { .. } => Ok(()),
-            PatternSyntax::UnitStruct { ty: unit, span } => {
+            pattern::Syntax::Discard { .. } => Ok(()),
+            pattern::Syntax::UnitStruct { ty: unit, span } => {
                 let target = match self.inference.resolve(ty) {
                     Ty::Reference { target, .. } => *target,
                     ty => ty,
                 };
                 self.require_type(unit, &target, *span)
             }
-            PatternSyntax::Binding {
+            pattern::Syntax::Binding {
                 name,
                 span,
                 mutable,
@@ -16901,7 +16902,7 @@ impl<'a> Parser<'a> {
             }
             // `ref x` binds a shared reference, a copy at runtime; `ref mut
             // x` is the destructured place itself, as `let x = &mut v;`.
-            PatternSyntax::Ref {
+            pattern::Syntax::Ref {
                 name,
                 span,
                 mutable: false,
@@ -16929,7 +16930,7 @@ impl<'a> Parser<'a> {
                 );
                 Ok(())
             }
-            PatternSyntax::Ref { name, span, .. } => {
+            pattern::Syntax::Ref { name, span, .. } => {
                 let Some(root) = self.place_root.clone() else {
                     return Err(Error::UnsupportedNominalSyntax {
                         construct: "`ref mut` other than of a local's place or its tuple members"
@@ -16950,13 +16951,13 @@ impl<'a> Parser<'a> {
                 self.borrow_place(name.clone(), *span, target, path.into(), root);
                 Ok(())
             }
-            PatternSyntax::At {
+            pattern::Syntax::At {
                 name,
                 name_span,
                 pattern,
             } => {
                 self.destructure_into(
-                    &PatternSyntax::Binding {
+                    &pattern::Syntax::Binding {
                         name: name.clone(),
                         span: *name_span,
                         mutable: false,
@@ -16967,7 +16968,7 @@ impl<'a> Parser<'a> {
                 )?;
                 self.destructure_into(pattern, path, ty, statements)
             }
-            PatternSyntax::TupleStruct {
+            pattern::Syntax::TupleStruct {
                 ty: pattern_ty,
                 definition,
                 fields,
@@ -17012,12 +17013,12 @@ impl<'a> Parser<'a> {
                 self.trace_leave(traced);
                 destructured
             }
-            PatternSyntax::Tuple { members, span } => {
+            pattern::Syntax::Tuple { members, span } => {
                 // A tuple pattern also matches through `&(A, B)`, binding
                 // references to its members.
                 let traced = self.trace_length();
                 let (target, mode) = self.enter_reference(ty);
-                let discard = PatternSyntax::Discard { span: *span };
+                let discard = pattern::Syntax::Discard { span: *span };
                 let arity = match &target {
                     Ty::Tuple(types) => types.len(),
                     _ => members.len(),
@@ -17056,7 +17057,7 @@ impl<'a> Parser<'a> {
                 self.trace_leave(traced);
                 destructured
             }
-            PatternSyntax::Slice {
+            pattern::Syntax::Slice {
                 before,
                 rest,
                 after,
@@ -17079,7 +17080,7 @@ impl<'a> Parser<'a> {
                 self.trace_leave(traced);
                 destructured
             }
-            PatternSyntax::Reference {
+            pattern::Syntax::Reference {
                 mutable,
                 pattern,
                 span,
@@ -17122,7 +17123,7 @@ impl<'a> Parser<'a> {
             }
             // `let Point { x, .. } = point;` on a facade struct: each field
             // read and bound.
-            PatternSyntax::Enum(pattern)
+            pattern::Syntax::Enum(pattern)
                 if pattern.host_struct && matches!(self.inference.resolve(ty), Ty::Host { .. }) =>
             {
                 let ty = self.inference.resolve(ty);
@@ -17130,7 +17131,7 @@ impl<'a> Parser<'a> {
                     self.trace_unmodeled("a pattern binding a part of a host value", syntax.span());
                 }
                 let traced = self.begin_trace();
-                let mut out = HostPattern::default();
+                let mut out = pattern::Host::default();
                 let hosted =
                     self.host_pattern(syntax, origin::Fragment::plain(path), &ty, &mut out);
                 self.end_trace(traced);
@@ -17144,7 +17145,7 @@ impl<'a> Parser<'a> {
                 }
                 for (binding, value) in out.binds.into_iter().zip(out.values) {
                     let value = value.as_str().to_string();
-                    let binding_pattern = PatternSyntax::Binding {
+                    let binding_pattern = pattern::Syntax::Binding {
                         name: binding.name.clone(),
                         span: binding.span,
                         mutable: binding.mutable,
@@ -17165,9 +17166,9 @@ impl<'a> Parser<'a> {
     #[allow(clippy::too_many_arguments)]
     fn destructure_array(
         &mut self,
-        before: &[PatternSyntax],
-        rest: Option<&PatternSyntax>,
-        after: &[PatternSyntax],
+        before: &[pattern::Syntax],
+        rest: Option<&pattern::Syntax>,
+        after: &[pattern::Syntax],
         pattern: Span,
         path: &str,
         ty: &Ty,
@@ -17223,7 +17224,7 @@ impl<'a> Parser<'a> {
             self.destructure_into(member, &format!("{path}[{index}]"), element, statements)?;
             self.trace_leave(step);
         }
-        if let Some(PatternSyntax::Rest {
+        if let Some(pattern::Syntax::Rest {
             binding: Some((name, span)),
             ..
         }) = rest
@@ -17234,7 +17235,7 @@ impl<'a> Parser<'a> {
                 element: element.clone(),
                 kind: sequence::Kind::Array(length - fixed),
             };
-            let binding = PatternSyntax::Binding {
+            let binding = pattern::Syntax::Binding {
                 name: name.clone(),
                 span: *span,
                 mutable: false,
@@ -19433,7 +19434,7 @@ impl<'a> Parser<'a> {
         source: origin::Fragment,
         start: Span,
         label: Option<ImmutableString>,
-        pattern: Option<&PatternSyntax>,
+        pattern: Option<&pattern::Syntax>,
         fused: Option<(origin::Fragment, origin::Fragment)>,
     ) -> Result<ParsedExpr, Error> {
         let outer = self.bindings.clone();
@@ -19547,7 +19548,7 @@ impl<'a> Parser<'a> {
         lhs: ParsedExpr,
         start: Span,
         label: Option<ImmutableString>,
-        pattern: Option<&PatternSyntax>,
+        pattern: Option<&pattern::Syntax>,
     ) -> Result<ParsedExpr, Error> {
         let (items, index) = (self.temporary("items"), self.temporary("index"));
         self.open_drops();
@@ -19854,9 +19855,9 @@ impl<'a> Parser<'a> {
 
     /// Lower the facade patterns met below the script pattern just resolved:
     /// each hidden name's tests and the bindings its pattern makes.
-    fn take_host_checks(&mut self) -> Result<HostPattern, Error> {
+    fn take_host_checks(&mut self) -> Result<pattern::Host, Error> {
         let checks = std::mem::take(&mut *self.host_checks.borrow_mut());
-        let mut pattern = HostPattern::default();
+        let mut pattern = pattern::Host::default();
         for (name, syntax, ty, mode) in checks {
             let outer = self.host_binding_mode.replace(mode);
             let lowered = self.host_pattern(
@@ -19931,7 +19932,7 @@ impl<'a> Parser<'a> {
 
     fn require_new_host_binding(
         &self,
-        out: &HostPattern,
+        out: &pattern::Host,
         name: &ImmutableString,
         span: Span,
     ) -> Result<(), Error> {
@@ -19989,7 +19990,7 @@ impl<'a> Parser<'a> {
             self.flow().arm(tested);
             tested = self.flow().split();
             let syntax = self.parse_pattern_syntax()?;
-            let mut compiled = HostPattern::default();
+            let mut compiled = pattern::Host::default();
             self.host_pattern(
                 &syntax,
                 origin::Fragment::plain(temporary.as_str()),
@@ -20101,7 +20102,7 @@ impl<'a> Parser<'a> {
     /// subject.
     fn scalar_condition(
         &self,
-        syntax: &PatternSyntax,
+        syntax: &pattern::Syntax,
         ty: &Ty,
         temporary: &str,
         binding: &mut Option<(ImmutableString, Span, bool)>,
@@ -20118,8 +20119,8 @@ impl<'a> Parser<'a> {
             Ok(())
         };
         Ok(match syntax {
-            PatternSyntax::Discard { .. } => None,
-            PatternSyntax::Binding {
+            pattern::Syntax::Discard { .. } => None,
+            pattern::Syntax::Binding {
                 name,
                 span,
                 mutable,
@@ -20127,7 +20128,7 @@ impl<'a> Parser<'a> {
                 bind(name, *span, *mutable)?;
                 None
             }
-            PatternSyntax::At {
+            pattern::Syntax::At {
                 name,
                 name_span,
                 pattern,
@@ -20135,7 +20136,7 @@ impl<'a> Parser<'a> {
                 bind(name, *name_span, false)?;
                 self.scalar_condition(pattern, ty, temporary, binding)?
             }
-            PatternSyntax::Literal {
+            pattern::Syntax::Literal {
                 literal,
                 ty: actual,
                 span,
@@ -20143,7 +20144,7 @@ impl<'a> Parser<'a> {
                 self.require_pattern_type(ty, actual, *span)?;
                 Some(format!("{temporary} == {}", scalar_text(literal)))
             }
-            PatternSyntax::Range {
+            pattern::Syntax::Range {
                 low,
                 high,
                 inclusive,
@@ -20175,7 +20176,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(format!("({})", tests.join(" && ")))
             }
-            PatternSyntax::Or { alternatives, .. } => {
+            pattern::Syntax::Or { alternatives, .. } => {
                 let mut tests = Vec::new();
                 for alternative in alternatives.iter() {
                     match self.scalar_condition(alternative, ty, temporary, binding)? {
@@ -27441,7 +27442,7 @@ impl<'a> Parser<'a> {
     }
 
     /// `ref name` or `ref mut name`, when the next tokens are one.
-    fn parse_ref_binding(&mut self) -> Result<Option<PatternSyntax>, Error> {
+    fn parse_ref_binding(&mut self) -> Result<Option<pattern::Syntax>, Error> {
         if !(matches!(self.peek(), Token::Identifier(ref name) if name.as_str() == "ref")
             && matches!(self.peek_second(), Token::Identifier(_) | Token::Mut))
         {
@@ -27453,7 +27454,7 @@ impl<'a> Parser<'a> {
             self.next();
         }
         let (name, span) = self.expect_name("a `ref` binding")?;
-        Ok(Some(PatternSyntax::Ref {
+        Ok(Some(pattern::Syntax::Ref {
             name,
             span,
             mutable,
@@ -39347,17 +39348,17 @@ struct UninitializedUse {
 
 /// Whether `pattern` binds some part of its value by value: a name, not a
 /// `ref`, a `_` or a `&` pattern.
-fn binds_by_value(pattern: &PatternSyntax) -> bool {
+fn binds_by_value(pattern: &pattern::Syntax) -> bool {
     match pattern {
-        PatternSyntax::Binding { .. } => true,
-        PatternSyntax::Rest { binding, .. } => binding.is_some(),
-        PatternSyntax::TupleStruct { members, .. } | PatternSyntax::Tuple { members, .. } => {
+        pattern::Syntax::Binding { .. } => true,
+        pattern::Syntax::Rest { binding, .. } => binding.is_some(),
+        pattern::Syntax::TupleStruct { members, .. } | pattern::Syntax::Tuple { members, .. } => {
             members.iter().any(binds_by_value)
         }
-        PatternSyntax::Or { alternatives, .. } => alternatives.iter().any(binds_by_value),
-        PatternSyntax::Prelude { payload, .. } => payload.as_deref().is_some_and(binds_by_value),
-        PatternSyntax::Cow { payload, .. } => binds_by_value(payload),
-        PatternSyntax::Slice {
+        pattern::Syntax::Or { alternatives, .. } => alternatives.iter().any(binds_by_value),
+        pattern::Syntax::Prelude { payload, .. } => payload.as_deref().is_some_and(binds_by_value),
+        pattern::Syntax::Cow { payload, .. } => binds_by_value(payload),
+        pattern::Syntax::Slice {
             before,
             rest,
             after,
