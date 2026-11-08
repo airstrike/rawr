@@ -70,7 +70,7 @@ pub(crate) enum GitReference {
 
 impl GitReference {
     /// The manifest key and value that declare this reference.
-    #[cfg(feature = "rust-import")]
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     pub(crate) fn key_value(&self) -> Option<(&'static str, &str)> {
         match self {
             Self::Branch(name) => Some(("branch", name)),

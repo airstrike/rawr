@@ -1177,7 +1177,7 @@ pub fn derive_exports() -> api::Graph<api::Extracted> {
         )
     };
     let derive = || ledger::Reason::UnsupportedPublicPath {
-        compiler_kind: crate::extract::protocol::DERIVE_MACRO.into(),
+        compiler_kind: crate::api::ledger::DERIVE_MACRO.into(),
     };
     let exports = vec![
         ledger::Path::Rejected {

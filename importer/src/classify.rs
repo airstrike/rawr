@@ -10,6 +10,7 @@ use std::io::{self, Write};
 use crate::api::{self, ledger, model};
 use crate::contract::{self, Classified, Contract};
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
 pub mod representability;
 pub mod std_binding;
@@ -257,8 +258,16 @@ struct Measured {
 }
 
 /// Checked-arithmetic overflow is a genuine failure and stays terminal.
+#[cfg(not(target_arch = "wasm32"))]
 fn arithmetic() -> Error {
     Error::Node(Box::new(crate::node::Error::Allocation))
+}
+
+/// Checked-arithmetic overflow is a genuine failure and stays terminal. A
+/// runner on wasm has no node store to report it through.
+#[cfg(target_arch = "wasm32")]
+fn arithmetic() -> Error {
+    Error::Allocation
 }
 
 struct Context<'graph, P: api::Phase = api::Extracted> {
@@ -333,7 +342,7 @@ struct Authority {
 }
 
 impl Authority {
-    const fn production(limits: &crate::cargo::Limits) -> Self {
+    const fn production(limits: &crate::limits::Limits) -> Self {
         Self {
             items: limits.classified_contract_items,
             bytes: limits.classified_contract_bytes,
@@ -3560,10 +3569,11 @@ impl Serialize for ImplementationRecord {
 impl api::Graph<api::Extracted> {
     /// Classify and select the facade as one pure batch before publishing their
     /// current DAG receipts. Legacy graphs retain their existing validation path.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn classify_with_facade(
         self,
         policy: &Policy,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<(Contract<Classified>, crate::surface::facade::Cached), Error> {
         cached::classify_facade(self, policy, limits)
     }
@@ -3582,8 +3592,9 @@ impl api::Graph<api::Extracted> {
     pub fn classify(
         self,
         policy: &Policy,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Contract<Classified>, Error> {
+        #[cfg(not(target_arch = "wasm32"))]
         if self.node_chain().is_some() {
             return cached::classify(self, policy, limits);
         }
@@ -3715,7 +3726,7 @@ impl ClassifiedParts {
     pub(crate) fn into_contract(
         self,
         graph: api::Graph<api::Extracted>,
-        chain: Option<crate::node::Chain>,
+        chain: Option<crate::node_parts::Chain>,
     ) -> Contract<Classified> {
         Contract::seal(
             graph,
@@ -13556,7 +13567,7 @@ pub enum Error {
     #[error("stored classified contract is not canonical")]
     Canonical,
     #[error("content-addressed generic classification failed")]
-    Node(#[source] Box<crate::node::Error>),
+    Node(#[source] Box<crate::node_parts::Error>),
 }
 
 impl Write for Measured {
@@ -13587,7 +13598,7 @@ mod tests {
         assert!(std::mem::size_of::<SupportOutcome<'static>>() <= 96);
         assert!(std::mem::size_of::<SupportRejection>() > std::mem::size_of::<SupportEdge>());
 
-        let standard = crate::cargo::Limits::standard();
+        let standard = crate::limits::Limits::standard();
         let contract = crate::test_fixture::support_outcomes()
             .classify(&Policy::standard(), &standard)
             .expect("support outcomes classify");
@@ -13665,13 +13676,14 @@ mod tests {
             expected_items
         );
 
-        let mut exact = crate::cargo::Limits::fixture(usize::MAX, expected_items, usize::MAX);
+        let mut exact = crate::limits::Limits::fixture(usize::MAX, expected_items, usize::MAX);
         exact.classified_contract_items = expected_items;
         crate::test_fixture::support_outcomes()
             .classify(&Policy::standard(), &exact)
             .expect("the exact retained-item boundary accepts");
 
-        let mut exact_bytes = crate::cargo::Limits::fixture(expected_bytes, usize::MAX, usize::MAX);
+        let mut exact_bytes =
+            crate::limits::Limits::fixture(expected_bytes, usize::MAX, usize::MAX);
         exact_bytes.classified_contract_bytes = expected_bytes;
         crate::test_fixture::support_outcomes()
             .classify(&Policy::standard(), &exact_bytes)
@@ -13688,7 +13700,7 @@ mod tests {
     fn classification_is_total_positioned_and_cardinality_exact() {
         let graph = crate::test_fixture::graph();
         let contract = graph
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("fixture graph classifies");
         let outcomes = contract.outcomes().collect::<Vec<_>>();
 
@@ -13751,7 +13763,7 @@ mod tests {
     fn selectors_are_exact_to_item_receiver_and_member() {
         use crate::surface::identity::{Definition, Field, Selector};
 
-        let standard = crate::cargo::Limits::standard();
+        let standard = crate::limits::Limits::standard();
         let contract = crate::test_fixture::graph()
             .classify(&Policy::standard(), &standard)
             .expect("selector fixture classifies");
@@ -14018,12 +14030,12 @@ mod tests {
         let graph = crate::test_fixture::graph();
         let raw = graph.fingerprint();
         let standard = graph
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("standard policy classifies");
         let prior = crate::test_fixture::graph()
             .classify(
                 &Policy::with_versions(super::CONTRACT_SCHEMA - 1, super::CLASSIFIER_VERSION - 1),
-                &crate::cargo::Limits::standard(),
+                &crate::limits::Limits::standard(),
             )
             .expect("the prior closed-vocabulary policy remains measurable in tests");
 
@@ -14037,7 +14049,7 @@ mod tests {
     fn core_option_signatures_are_admitted_as_rawr_options() {
         use super::representability::convert::{Builtin, Type};
         let contract = crate::test_fixture::option_function()
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("the option graph classifies");
         let function = contract
             .outcomes()
@@ -14061,7 +14073,7 @@ mod tests {
     fn a_future_parameter_the_output_names_is_rejected_and_its_output_is_kept() {
         use super::representability::{reject, signature};
         let contract = crate::test_fixture::future_parameter_functions()
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("the future parameter graph classifies");
         let outcome = |name: &str| {
             contract
@@ -14107,7 +14119,7 @@ mod tests {
     fn a_closure_that_returns_a_future_is_refused_in_rust_terms() {
         use super::representability::reject;
         let contract = crate::test_fixture::future_closure_functions()
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("the future closure graph classifies");
         let outcome = |name: &str| {
             contract
@@ -14140,7 +14152,7 @@ mod tests {
     fn core_result_signatures_are_admitted_as_rawr_results() {
         use super::representability::convert::{Builtin, Type};
         let contract = crate::test_fixture::result_function()
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("the result graph classifies");
         let function = contract
             .outcomes()
@@ -14173,7 +14185,7 @@ mod tests {
     fn upstream_example_shapes_are_bound_as_rust_has_them() {
         use super::representability::convert::{Builtin, Type};
         let contract = crate::test_fixture::native_shapes()
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("the native shapes graph classifies");
         let named = |name: &str| {
             contract
@@ -14282,7 +14294,7 @@ mod tests {
     #[test]
     fn remaining_representability_families_are_closed_and_positioned() {
         let contract = crate::test_fixture::representability_families()
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("the representability-family graph classifies");
         let outcomes = contract.outcomes().collect::<Vec<_>>();
         assert_eq!(outcomes.len(), 5);
@@ -14328,7 +14340,7 @@ mod tests {
         use crate::api::model;
 
         let graph = crate::test_fixture::graph();
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let context = super::Context::new(&graph, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let definition = graph
@@ -14800,7 +14812,7 @@ mod tests {
         use crate::api::model;
 
         let graph = crate::test_fixture::graph();
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let context = super::Context::new(&graph, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let definition = graph
@@ -14903,7 +14915,7 @@ mod tests {
         use crate::api::{identity, model};
 
         let graph = crate::test_fixture::classification_implementation_outcomes();
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let context = super::Context::new(&graph, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let target = graph.definitions().next().unwrap().id();
@@ -14998,7 +15010,7 @@ mod tests {
         use crate::api::model;
 
         let graph = crate::test_fixture::graph();
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let context = super::Context::new(&graph, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let definition = graph
@@ -15057,7 +15069,7 @@ mod tests {
         use crate::api::model;
 
         let graph = crate::test_fixture::graph();
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let context = super::Context::new(&graph, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let definition = graph
@@ -15291,7 +15303,7 @@ mod tests {
 
     #[test]
     fn production_contract_authority_is_exact_atomic_and_stage_isolated() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let authority = super::Authority::production(&limits);
         assert_eq!(authority.items, 6_500_000);
         assert_eq!(authority.bytes, 671_088_640);
@@ -15470,7 +15482,7 @@ mod tests {
     #[cfg(feature = "rustc-driver")]
     #[test]
     fn transaction_history_cannot_change_classification_identity() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let first = crate::test_fixture::graph()
             .classify(&Policy::standard(), &limits)
             .expect("the first fixture classifies");

@@ -5,8 +5,10 @@ use sha2::{Digest as _, Sha256};
 
 use crate::classify::representability::{self, Representability};
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
 const SCHEMA: u32 = 52;
@@ -449,7 +451,7 @@ pub fn derives(
             continue;
         };
         if key.namespace() != crate::api::identity::Namespace::Macro
-            || compiler_kind.as_ref() != crate::extract::protocol::DERIVE_MACRO
+            || compiler_kind.as_ref() != crate::api::ledger::DERIVE_MACRO
         {
             continue;
         }
@@ -1046,6 +1048,7 @@ impl Type {
 
 impl Plan {
     /// Reuse the exact facade selected from a current content-addressed API graph.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn encode_cached(contract: &crate::Contract<crate::Classified>) -> crate::Result<Cached> {
         cached::encode(contract)
     }

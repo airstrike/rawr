@@ -14,7 +14,7 @@ pub enum Error {
         operation: &'static str,
         /// Exact typed-node failure.
         #[source]
-        source: Box<crate::node::Error>,
+        source: Box<crate::node_parts::Error>,
     },
 
     /// Another build holds the build directory, as Cargo's "Blocking

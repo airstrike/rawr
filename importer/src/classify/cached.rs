@@ -10,7 +10,7 @@ const DOMAIN: &[u8] = b"rawr.generic.classification/v2";
 pub(super) fn classify_facade(
     graph: api::Graph<api::Extracted>,
     policy: &Policy,
-    limits: &crate::cargo::Limits,
+    limits: &crate::limits::Limits,
 ) -> Result<(Contract<Classified>, crate::surface::facade::Cached), Error> {
     let parent = graph.node_chain().cloned().ok_or(Error::Canonical)?;
     let Some(retention) = parent.retention() else {
@@ -61,7 +61,7 @@ pub(super) fn classify_facade(
 pub(super) fn classify(
     graph: api::Graph<api::Extracted>,
     policy: &Policy,
-    limits: &crate::cargo::Limits,
+    limits: &crate::limits::Limits,
 ) -> Result<Contract<Classified>, Error> {
     let parent = graph.node_chain().cloned().ok_or(Error::Canonical)?;
     let authority = authority(policy)?;
@@ -97,7 +97,7 @@ impl Product {
     pub(crate) fn capture(
         graph: &api::Graph<impl api::Phase>,
         policy: &Policy,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Self, Error> {
         let (parts, _) = graph.classify_parts(policy, Authority::production(limits))?;
         Ok(Self {
@@ -176,7 +176,7 @@ mod tests {
         fs::create_dir(&project).unwrap();
         fs::create_dir(&cargo_home).unwrap();
         let cargo_home = fs::canonicalize(cargo_home).unwrap();
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let policy = Policy::standard();
         let context = crate::context::Context::capture(
             &project,
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn captured_graph_roundtrips_owned_classification_without_current_publication() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let policy = Policy::standard();
         let captured = crate::test_fixture::captured_support_outcomes();
         let extracted = crate::test_fixture::support_outcomes();
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn owned_classification_parts_generate_the_same_facade_before_contract_publication() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let policy = Policy::standard();
         let graph = crate::test_fixture::support_outcomes();
         let product = Product::capture(&graph, &policy, &limits).expect("classify owned graph");
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn generic_product_replays_the_exact_contract_and_rejects_noncanonical_bytes() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let policy = Policy::standard();
         let graph = crate::test_fixture::support_outcomes();
         let (parts, _) = graph
@@ -344,7 +344,7 @@ mod tests {
                 .expect("the generic fixture Cargo home is Unicode"),
         )])
         .expect("the generic fixture environment seals");
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let context =
             crate::context::Context::capture(&project, environment, "generic-test-target", &limits)
                 .expect("the generic fixture context seals");
@@ -400,7 +400,7 @@ mod tests {
                 .expect("the interleaved fixture Cargo home is Unicode"),
         )])
         .expect("the interleaved fixture environment seals");
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let context = crate::context::Context::capture(
             &project,
             environment,

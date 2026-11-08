@@ -5,9 +5,12 @@ use std::ops::Range;
 use sha2::{Digest as _, Sha256};
 
 /// Cumulative source validation ownership for one original reload attempt.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod attempt;
+#[cfg(not(target_arch = "wasm32"))]
 mod freshness;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use freshness::Freshness;
 
 const ENTRY_DOMAIN: &[u8] = b"rawr.snapshot.entry/v2";
@@ -51,7 +54,7 @@ impl Bytes {
 
     /// Start one canonical capture using the same snapshot limits.
     #[must_use]
-    pub fn capture(limits: &crate::cargo::Limits) -> Capture {
+    pub fn capture(limits: &crate::limits::Limits) -> Capture {
         Capture {
             framed: Vec::new(),
             entry: false,
@@ -344,14 +347,14 @@ mod tests {
     const PATH: &str = "/fixture/main.rs";
     const CONTENTS: &[u8] = b"fn main() {}\n";
 
-    fn snapshot(limits: &crate::cargo::Limits) -> crate::surface::Snapshot {
+    fn snapshot(limits: &crate::limits::Limits) -> crate::surface::Snapshot {
         let mut digest = crate::surface::Snapshot::builder(limits);
         digest.entry(PATH).unwrap();
         digest.file(PATH, CONTENTS).unwrap();
         digest.seal().unwrap()
     }
 
-    fn capture(limits: &crate::cargo::Limits) -> super::Capture {
+    fn capture(limits: &crate::limits::Limits) -> super::Capture {
         let mut capture = Bytes::capture(limits);
         capture.entry(PATH).unwrap();
         capture.file(PATH, CONTENTS).unwrap();
@@ -361,7 +364,7 @@ mod tests {
     /// A captured snapshot binds and decodes whole; a digest mismatch refuses.
     #[test]
     fn snapshot_transport_binds_decodes_and_refuses_a_mismatch() {
-        let standard = crate::cargo::Limits::standard();
+        let standard = crate::limits::Limits::standard();
         let expected = snapshot(&standard);
         let bound = capture(&standard)
             .bind(expected)

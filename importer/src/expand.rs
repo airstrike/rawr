@@ -249,7 +249,7 @@ impl Basis {
     pub fn capture(
         request: crate::cargo::Request,
         native: &crate::process::Native,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> crate::Result<Self> {
         let resolution = request.resolve(native, limits)?;
         resolution
@@ -298,7 +298,7 @@ pub fn expand(
     edition: &str,
     directory: &Path,
     native: &crate::process::Native,
-    limits: &crate::cargo::Limits,
+    limits: &crate::limits::Limits,
 ) -> crate::Result<Vec<request::Expanded>> {
     let protocol = crate::extract::protocol::SCHEMA;
     let keys = items
@@ -348,7 +348,7 @@ fn run(
     edition: &str,
     directory: &Path,
     native: &crate::process::Native,
-    limits: &crate::cargo::Limits,
+    limits: &crate::limits::Limits,
 ) -> crate::Result<Vec<request::Expanded>> {
     use crate::process::{Command, Program, ToolPaths as _};
     let protocol = crate::extract::protocol::SCHEMA;

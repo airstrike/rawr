@@ -98,7 +98,7 @@ fn matching_bracket(text: &str) -> Option<usize> {
 }
 
 /// The shadow crate's entry module, with `attribute` as written.
-#[cfg(feature = "rust-import")]
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) fn source(attribute: &str) -> String {
     format!(
         r#"

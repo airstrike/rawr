@@ -40,7 +40,7 @@ pub struct Contract<P: Phase> {
     canonical: Box<[u8]>,
     fingerprint: fingerprint::Fingerprint,
     allocation: Usage,
-    chain: Option<crate::node::Chain>,
+    chain: Option<crate::node_parts::Chain>,
     phase: std::marker::PhantomData<fn() -> P>,
 }
 
@@ -69,7 +69,7 @@ impl Contract<Classified> {
         canonical: Box<[u8]>,
         fingerprint: fingerprint::Fingerprint,
         allocation: Usage,
-        chain: Option<crate::node::Chain>,
+        chain: Option<crate::node_parts::Chain>,
     ) -> Self {
         Self {
             graph,
@@ -87,12 +87,13 @@ impl Contract<Classified> {
     /// Borrow the current generic-classification node for downstream joins.
     #[doc(hidden)]
     #[must_use]
-    pub const fn node_chain(&self) -> Option<&crate::node::Chain> {
+    pub const fn node_chain(&self) -> Option<&crate::node_parts::Chain> {
         self.chain.as_ref()
     }
 
     /// Consume the classified graph after demand sealing and transfer its exact
     /// normal-build proof into runner generation.
+    #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn into_native_proof(self) -> crate::input::proof::Proof {
         self.graph.into_freshness_proof()
@@ -225,7 +226,7 @@ impl Contract<Classified> {
     #[doc(hidden)]
     pub fn allocation(
         &self,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Allocation, crate::surface::Error> {
         Allocation::new(self.fingerprint, self.allocation, limits)
     }
@@ -371,7 +372,7 @@ impl Allocation {
     #[cfg(feature = "test-fixtures")]
     pub(crate) fn fixture(
         contract: fingerprint::Fingerprint,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Self {
         Self {
             contract,
@@ -384,7 +385,7 @@ impl Allocation {
     pub(crate) fn new(
         contract: fingerprint::Fingerprint,
         usage: Usage,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Self, crate::surface::Error> {
         let allocation = Self {
             contract,
@@ -507,7 +508,7 @@ mod tests {
 
     #[test]
     fn allocation_seeds_the_exact_classified_contract_authority_atomically() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let exact = Usage {
             items: limits.classified_contract_items,
             bytes: limits.classified_contract_bytes,
@@ -520,7 +521,7 @@ mod tests {
 
     #[test]
     fn classified_contract_allocation_is_isolated_from_unrelated_authorities() {
-        let standard = crate::cargo::Limits::standard();
+        let standard = crate::limits::Limits::standard();
         let mut isolated = standard;
         isolated.items = 0;
         isolated.json_bytes = 0;
@@ -547,7 +548,7 @@ mod tests {
 
     #[test]
     fn later_retain_remains_one_atomic_cumulative_transaction() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let seed = Usage {
             items: limits.classified_contract_items - 1,
             bytes: limits.classified_contract_bytes - 1,

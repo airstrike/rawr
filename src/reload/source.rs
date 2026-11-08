@@ -207,7 +207,7 @@ impl Inputs {
 
     /// Extend Rawr inputs with exact files and recursively observed native
     /// source roots retained by an imported generation proof.
-    #[cfg(feature = "rust-import")]
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     #[doc(hidden)]
     #[must_use]
     pub fn with_imported(
@@ -224,7 +224,7 @@ impl Inputs {
     /// (a relative target directory, a `package.workspace` redirect). Each
     /// is watched where that spelling reaches, the one identity a change to
     /// it has ([`rawr_import::location::resolved`]).
-    #[cfg(feature = "rust-import")]
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     #[doc(hidden)]
     #[must_use]
     pub fn imported(imported: impl IntoIterator<Item = rawr_import::input::proof::Watch>) -> Self {
@@ -497,7 +497,7 @@ impl Snapshot {
     #[doc(hidden)]
     pub fn imported(
         &self,
-        limits: &rawr_import::cargo::Limits,
+        limits: &rawr_import::limits::Limits,
     ) -> Result<rawr_import::surface::Snapshot, rawr_import::surface::Error> {
         let mut builder = rawr_import::surface::Snapshot::builder(limits);
         builder.entry(
@@ -524,7 +524,7 @@ impl Snapshot {
     pub fn imported_transport(
         &self,
         expected: rawr_import::surface::Snapshot,
-        limits: &rawr_import::cargo::Limits,
+        limits: &rawr_import::limits::Limits,
     ) -> Result<rawr_import::supervisor::snapshot::Bytes, rawr_import::supervisor::snapshot::Error>
     {
         let mut capture = rawr_import::supervisor::snapshot::Bytes::capture(limits);
@@ -846,7 +846,7 @@ mod tests {
         let target = crate::project::Target::discover(&root).unwrap();
         let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
         let snapshot = Snapshot::from_graph(&super::Graph::from_package(&graph));
-        let limits = rawr_import::cargo::Limits::standard();
+        let limits = rawr_import::limits::Limits::standard();
         snapshot.imported(&limits).unwrap();
     }
 
@@ -871,7 +871,7 @@ mod tests {
         let target = crate::project::Target::discover(&root).unwrap();
         let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
         let snapshot = Snapshot::from_graph(&super::Graph::from_package(&graph));
-        let limits = rawr_import::cargo::Limits::standard();
+        let limits = rawr_import::limits::Limits::standard();
         snapshot.imported(&limits).unwrap();
         let mains = snapshot
             .files
@@ -885,7 +885,7 @@ mod tests {
 
     #[test]
     fn imported_snapshot_rejects_non_utf8_entry_and_file_paths() {
-        let limits = rawr_import::cargo::Limits::standard();
+        let limits = rawr_import::limits::Limits::standard();
         let invalid = PathBuf::from(OsString::from_vec(vec![b'/', 0xff]));
         let snapshot = |entry, files| Snapshot {
             inputs: Arc::new(Inputs {

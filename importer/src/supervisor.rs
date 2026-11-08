@@ -3,7 +3,9 @@
 use std::num::NonZeroU64;
 
 pub mod activation;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod bootstrap;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod slot;
 pub mod snapshot;
 

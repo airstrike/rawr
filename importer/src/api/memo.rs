@@ -24,7 +24,7 @@ pub(crate) fn key(
     request: &[u8; 32],
     policy: &[u8; 32],
     store_context: &[u8; 32],
-    limits: &crate::cargo::Limits,
+    limits: &crate::limits::Limits,
 ) -> Option<[u8; 32]> {
     let semantic = serde_json::to_vec(&super::semantic::Context(context)).ok()?;
     let mut digest = Sha256::new();

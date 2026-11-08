@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 pub mod activation;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
 pub mod contract;
 pub mod demand;
@@ -206,7 +207,7 @@ pub trait Checked {
 
     /// Borrow the current checked-program node when this proof came from DAG replay.
     #[doc(hidden)]
-    fn node_chain(&self) -> Option<&crate::node::Chain> {
+    fn node_chain(&self) -> Option<&crate::node_parts::Chain> {
         None
     }
 }
@@ -261,7 +262,7 @@ pub struct Proof {
     abis: Box<[contract::ExtensionAbi]>,
     endpoints: Box<[contract::OperationEndpoint]>,
     projections: Box<[contract::Projection]>,
-    chain: Option<crate::node::Chain>,
+    chain: Option<crate::node_parts::Chain>,
 }
 
 /// Canonically validated generated owner, without current graph authority.
@@ -272,7 +273,7 @@ impl Parts {
         &self.0
     }
 
-    pub(crate) fn into_current(self, chain: crate::node::Chain) -> Proof {
+    pub(crate) fn into_current(self, chain: crate::node_parts::Chain) -> Proof {
         Proof {
             chain: Some(chain),
             ..self.0
@@ -340,7 +341,7 @@ impl Proof {
     #[cfg(feature = "test-fixtures")]
     #[doc(hidden)]
     #[must_use]
-    pub fn neutral_with_chain(chain: crate::node::Chain) -> Self {
+    pub fn neutral_with_chain(chain: crate::node_parts::Chain) -> Self {
         Self::neutral().with_chain(chain)
     }
 
@@ -348,7 +349,7 @@ impl Proof {
     #[cfg(feature = "test-fixtures")]
     #[doc(hidden)]
     #[must_use]
-    pub fn with_chain(mut self, chain: crate::node::Chain) -> Self {
+    pub fn with_chain(mut self, chain: crate::node_parts::Chain) -> Self {
         self.chain = Some(chain);
         self
     }
@@ -373,7 +374,7 @@ impl Proof {
     #[doc(hidden)]
     #[must_use]
     pub fn neutral_with_chain_application(
-        chain: crate::node::Chain,
+        chain: crate::node_parts::Chain,
         application: [u8; 32],
     ) -> Self {
         let mut proof = Self::neutral_with_application(application);
@@ -385,7 +386,7 @@ impl Proof {
     #[cfg(feature = "test-fixtures")]
     #[doc(hidden)]
     pub fn fixture_lifecycle_with_chain_application(
-        chain: crate::node::Chain,
+        chain: crate::node_parts::Chain,
         application: [u8; 32],
     ) -> Result<Self, Error> {
         let mut proof = Self::neutral_with_application(application);
@@ -420,6 +421,7 @@ impl Proof {
         definition: &D,
         demand: &Demand,
     ) -> Result<Self, Error> {
+        #[cfg(not(target_arch = "wasm32"))]
         if demand.node_chain().is_some() {
             return demand::cached::generate(definition, demand);
         }
@@ -466,7 +468,7 @@ impl Proof {
         bytes: &[u8],
         demand: &Demand,
         product_lifecycle: bool,
-        chain: crate::node::Chain,
+        chain: crate::node_parts::Chain,
     ) -> Result<Self, Error> {
         Self::decode_owned(bytes, demand, product_lifecycle).map(|parts| parts.into_current(chain))
     }
@@ -548,7 +550,7 @@ impl Proof {
     /// Borrow the current generated-profile node for runner joins.
     #[doc(hidden)]
     #[must_use]
-    pub const fn node_chain(&self) -> Option<&crate::node::Chain> {
+    pub const fn node_chain(&self) -> Option<&crate::node_parts::Chain> {
         self.chain.as_ref()
     }
 
@@ -680,6 +682,7 @@ pub fn classify<C: Checked, D: Definition<C>>(
     definition: &D,
     graph: &crate::api::Graph<crate::api::Extracted>,
 ) -> Result<Contract, Error> {
+    #[cfg(not(target_arch = "wasm32"))]
     if graph.node_chain().is_some() {
         return cached::classify(definition, graph);
     }
@@ -703,6 +706,7 @@ pub fn demand<C: Checked, D: Definition<C>>(
     contract: &Contract,
     checked: &C,
 ) -> Result<Demand, Error> {
+    #[cfg(not(target_arch = "wasm32"))]
     if contract.node_chain().is_some() {
         return demand::cached::evaluate(definition, contract, checked);
     }

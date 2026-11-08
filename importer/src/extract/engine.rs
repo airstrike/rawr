@@ -40,7 +40,7 @@ pub(crate) const TABLE_SCHEMA: u32 = 8;
 
 /// The compiler kind of a derive macro's public path, as serde's
 /// `Serialize`: its export is unsupported with this kind, and the facade
-/// lists it as a derive a program may name (`protocol::DERIVE_MACRO`).
+/// lists it as a derive a program may name (`api::ledger::DERIVE_MACRO`).
 pub(crate) const DERIVE_MACRO: &str = "derive-macro";
 
 /// The deepest module nesting a walk follows: the walk recurses per module,

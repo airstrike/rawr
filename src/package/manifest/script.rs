@@ -57,11 +57,11 @@ fn home() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".cargo")))
         .unwrap_or_else(|| PathBuf::from(".cargo"));
-    #[cfg(feature = "rust-import")]
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     {
         rawr_import::store::home(&cargo_home)
     }
-    #[cfg(not(feature = "rust-import"))]
+    #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
     {
         std::env::var_os("RAWR_HOME")
             .filter(|home| !home.is_empty())

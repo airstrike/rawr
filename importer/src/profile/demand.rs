@@ -5,6 +5,7 @@ use sha2::{Digest as _, Sha256};
 
 use super::{contract, Contract, Error, Identity, Proof, Version};
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
 
 /// One exact demanded profile hook bound to compiler evidence.
@@ -28,7 +29,7 @@ pub struct Demand {
     endpoints: Box<[contract::OperationEndpoint]>,
     projections: Box<[contract::Projection]>,
     digest: [u8; 32],
-    chain: Option<crate::node::Chain>,
+    chain: Option<crate::node_parts::Chain>,
 }
 
 /// Canonically validated owned demand, without current graph authority.
@@ -39,7 +40,7 @@ impl Parts {
         &self.0
     }
 
-    pub(crate) fn into_current(self, chain: crate::node::Chain) -> Demand {
+    pub(crate) fn into_current(self, chain: crate::node_parts::Chain) -> Demand {
         Demand {
             chain: Some(chain),
             ..self.0
@@ -134,7 +135,7 @@ impl Demand {
         bytes: &[u8],
         contract: &Contract,
         checked: &C,
-        chain: crate::node::Chain,
+        chain: crate::node_parts::Chain,
     ) -> Result<Self, Error> {
         Self::decode_owned(
             bytes,
@@ -225,7 +226,7 @@ impl Demand {
     /// Borrow the current demand node for generated-proof joins.
     #[doc(hidden)]
     #[must_use]
-    pub const fn node_chain(&self) -> Option<&crate::node::Chain> {
+    pub const fn node_chain(&self) -> Option<&crate::node_parts::Chain> {
         self.chain.as_ref()
     }
 
