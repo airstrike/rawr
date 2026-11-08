@@ -293,7 +293,7 @@ impl Package {
             .map(|cargo| (cargo.path.as_path(), cargo.text.as_str()))
     }
 
-    #[cfg(feature = "rust-import")]
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     pub(crate) const fn cargo(&self) -> Option<&manifest::cargo::Cargo> {
         self.cargo.as_ref()
     }

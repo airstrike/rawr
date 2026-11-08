@@ -49,7 +49,7 @@ impl Features {
     /// `declared` (its dependencies and build dependencies), exactly as the
     /// package's. A value that names a dependency the generated package
     /// leaves out (the attribute crate) is left out with it.
-    #[cfg(feature = "rust-import")]
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     pub(crate) fn manifest(&self, declared: &[&rust::Dependency]) -> String {
         use std::fmt::Write as _;
         if self.table.is_empty() {

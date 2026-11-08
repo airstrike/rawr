@@ -43,6 +43,7 @@ impl Brand {
     }
 
     /// Reconstruct the Rawr ownership brand from a validated cached facade node.
+    #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn replay(facade: &rawr_import::surface::facade::Cached) -> Result<Self, Error> {
         let facade = facade.bytes();
@@ -116,7 +117,7 @@ impl crate::Engine {
         contract: &rawr_import::Contract<rawr_import::Classified>,
         snapshot: crate::reload::source::Snapshot,
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
-        let limits = rawr_import::cargo::Limits::standard();
+        let limits = rawr_import::limits::Limits::standard();
         self.compile_imported_applied(contract, snapshot, &limits, &[])
             .map(|compiled| compiled.demand)
     }
@@ -131,7 +132,7 @@ impl crate::Engine {
         snapshot: crate::reload::source::Snapshot,
         applications: &[rawr_import::surface::application::Application],
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
-        let limits = rawr_import::cargo::Limits::standard();
+        let limits = rawr_import::limits::Limits::standard();
         self.compile_imported_applied(contract, snapshot, &limits, applications)
             .map(|compiled| compiled.demand)
     }
@@ -140,7 +141,7 @@ impl crate::Engine {
         &self,
         contract: &rawr_import::Contract<rawr_import::Classified>,
         snapshot: crate::reload::source::Snapshot,
-        limits: &rawr_import::cargo::Limits,
+        limits: &rawr_import::limits::Limits,
         applications: &[rawr_import::surface::application::Application],
     ) -> Result<CompiledImported, super::Error> {
         snapshot

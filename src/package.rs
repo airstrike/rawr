@@ -10,7 +10,7 @@ pub mod import;
 pub(crate) mod island;
 mod manifest;
 pub(crate) mod polyglot;
-#[cfg(feature = "rust-import")]
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 mod rust;
 pub mod snapshot;
 pub mod source;

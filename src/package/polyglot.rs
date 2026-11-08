@@ -275,7 +275,10 @@ pub(crate) fn references(text: &str, features: &Enabled) -> Vec<Reference> {
 /// `env!("CARGO_MANIFEST_DIR")` names the package's own directory,
 /// `package`, so a path through it reaches what Cargo's build reaches, even
 /// outside the package (#1136).
-#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "rust-import", not(target_arch = "wasm32"))),
+    allow(dead_code)
+)]
 pub(crate) fn widened(
     text: &str,
     declared_by_rawr: bool,
@@ -441,7 +444,10 @@ pub(crate) fn widened(
 /// outside the crate, so they must be public there (#1185). An `impl`, an
 /// `extern` block or crate, a macro and an item written `pub(self)` are
 /// left as written.
-#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "rust-import", not(target_arch = "wasm32"))),
+    allow(dead_code)
+)]
 pub(crate) fn root_items_public(text: &str) -> String {
     let tokens = tokens(text);
     let mut inserts = Vec::new();
@@ -540,7 +546,10 @@ fn attribute_end(tokens: &[Token<'_>], index: usize) -> usize {
 
 /// `text`, a crate root, with its own `fn main` renamed `name`: `None` when
 /// it declares none.
-#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "rust-import", not(target_arch = "wasm32"))),
+    allow(dead_code)
+)]
 pub(crate) fn main_renamed(text: &str, name: &str) -> Option<String> {
     let tokens = tokens(text);
     let mut depth = 0_usize;
