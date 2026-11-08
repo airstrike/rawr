@@ -136,7 +136,8 @@
         {"text":"`rawr run` starts its file watcher on apps with a thousand dependencies: the OS watches the project's source directories, each path dependency's and each manifest's directory, never every dependency file, and registry and git dependencies get no watch, since a changed one arrives through `Cargo.lock`.","issues":[1375]},
         {"text":"Installing a contract counted its facade roots by rescanning every prior outcome for each outcome, which took minutes on a workspace of a thousand packages. The roots are collected once.","issues":[1383]},
         {"text":"`#[widget]` / `#[rawr::widget]` is gone from rawr-macros and from rawr's parser. It did nothing; `#[preview]` is the one Rawr attribute.","issues":[1379]},
-        {"text":"A string literal passed to a crate call that borrows it, as `badge![icon(), \"Verified\"]` or `Slot::from(\"x\")` does, is `'static` text, as in Rust: no scope frame opens for it, so nested view code such as `row![badge![..].style(..), ..].spacing(8).into()` checks and runs as cargo runs it.","issues":[1363]}
+        {"text":"A string literal passed to a crate call that borrows it, as `badge![icon(), \"Verified\"]` or `Slot::from(\"x\")` does, is `'static` text, as in Rust: no scope frame opens for it, so nested view code such as `row![badge![..].style(..), ..].spacing(8).into()` checks and runs as cargo runs it.","issues":[1363]},
+        {"text":"A long-running rawr (such as `rawr mcp`) no longer loses its host directory when another rawr prunes old hosts. Each process leases its host for as long as it runs, and prune and `rawr cache clean` skip leased hosts.","issues":[1389]}
       ]
     },
     "releases": [
@@ -3133,7 +3134,7 @@
     {"issue":1386,"title":"Unresolved imports and paths get rustc's E0432/E0433 wording; the help \"isn't available in Rawr…","state":"open","category":"Health"},
     {"issue":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"open","category":"Importer"},
     {"issue":1388,"title":"A rawr command warms the runtime, driver and std table for the active toolchain after cargo…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1389,"title":"A host in rawr's home is pruned by mtime while a running rawr uses it; a live process leases its…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1389,"title":"A host in rawr's home is pruned by mtime while a running rawr uses it; a live process leases its…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1390,"title":"A program's From<String> call reaches the crate's From<Cow<str>> adapter: a Cow<str> input looks…","state":"open","category":"No glue (D593)"},
     {"issue":1391,"title":"A literal lent to a crate method whose output borrows its &str arguments still opens a scope frame","state":"open","category":"No glue (D593)"}
   ],

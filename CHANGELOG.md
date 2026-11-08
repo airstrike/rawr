@@ -130,6 +130,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Installing a contract counted its facade roots by rescanning every prior outcome for each outcome, which took minutes on a workspace of a thousand packages. The roots are collected once. (#1383)
 - `#[widget]` / `#[rawr::widget]` is gone from rawr-macros and from rawr's parser. It did nothing; `#[preview]` is the one Rawr attribute. (#1379)
 - A string literal passed to a crate call that borrows it, as `badge![icon(), "Verified"]` or `Slot::from("x")` does, is `'static` text, as in Rust: no scope frame opens for it, so nested view code such as `row![badge![..].style(..), ..].spacing(8).into()` checks and runs as cargo runs it. (#1363)
+- A long-running rawr (such as `rawr mcp`) no longer loses its host directory when another rawr prunes old hosts. Each process leases its host for as long as it runs, and prune and `rawr cache clean` skip leased hosts. (#1389)
 
 ## 0.3.171 (2026-11-07)
 
