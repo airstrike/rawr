@@ -166,7 +166,7 @@ fn main() {
       <div class="lib" id="lib-iced-panel">
         <div class="block">
           <div class="file"><b>src/main.rs</b><span>iced&rsquo;s counter</span></div>
-          <pre><code data-lang="rust">// rawr
+          <pre><code data-lang="rust" data-run="main.rs" id="src-iced" data-where="server">// rawr
 use iced::Center;
 use iced::widget::{Widget, button, column, text};
 
@@ -174,10 +174,28 @@ pub fn main() -&gt; iced::Result {
     iced::run(Counter::update, Counter::view)
 }
 
-// ...
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+    Decrement,
+}
 
 impl Counter {
-    // ...
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Increment =&gt; {
+                self.value += 1;
+            }
+            Message::Decrement =&gt; {
+                self.value -= 1;
+            }
+        }
+    }
 
     fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
         column![
@@ -189,33 +207,43 @@ impl Counter {
         .align_x(Center)
     }
 }</code></pre>
-          <div class="run"><b>rawr run</b><span class="quiet">(opens a window)</span></div>
+          <div class="run"><button type="button" class="runbtn" data-source="src-iced" data-out="out-iced" aria-label="Run main.rs on rawr&rsquo;s server" hidden></button><small>on rawr&rsquo;s server</small><b>rawr run</b><span id="out-iced" aria-live="polite"></span></div>
         </div>
       </div>
       <div class="lib" id="lib-ratatui-panel">
         <div class="block">
-          <div class="file"><b>src/ui.rs</b><span>examples/tui</span></div>
-          <pre><code data-lang="rust">// rawr
-use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
-use ratatui::widgets::{Block, Paragraph};
+          <div class="file"><b>ui.rs</b><span>ratatui&rsquo;s widgets</span></div>
+          <pre><code data-lang="rust" data-run="ui.rs" id="src-ratatui" data-where="server" data-image="next">// rawr
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::widgets::{Block, Paragraph, Widget};
 
-use crate::app::App;
-
-pub fn draw(frame: &amp;mut Frame, app: &amp;mut App) {
+fn draw(area: Rect, buffer: &amp;mut Buffer) {
     let areas = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
-    .split(frame.area());
-    frame.render_widget(
-        Paragraph::new(app.input.clone()).block(Block::bordered().title(" New to-do ")),
-        areas[0],
-    );
-    // ...
+    .split(area);
+    Paragraph::new("Water the plants")
+        .block(Block::bordered().title(" New to-do "))
+        .render(areas[0], buffer);
+    Paragraph::new("✓ Buy milk\n☐ Walk the dog\n☐ Try rawr")
+        .block(Block::bordered().title(" To do: 2 left "))
+        .render(areas[1], buffer);
+    Paragraph::new("a adds · Space checks off").render(areas[2], buffer);
+}
+
+pub fn main() {
+    let area = Rect::new(0, 0, 36, 9);
+    let mut buffer = Buffer::empty(area);
+    draw(area, &amp;mut buffer);
+    for y in 0..area.height {
+        let row: String = (0..area.width).map(|x| buffer[(x, y)].symbol()).collect();
+        println!("{}", row.trim_end());
+    }
 }</code></pre>
-          <div class="run"><b>rawr run</b><span class="quiet">(draws in the terminal)</span></div>
+          <div class="run"><button type="button" class="runbtn" data-source="src-ratatui" data-out="out-ratatui" aria-label="Run ui.rs on rawr&rsquo;s server" hidden></button><small>on rawr&rsquo;s server</small><b>rawr run ui.rs</b><span id="out-ratatui" aria-live="polite"></span></div>
         </div>
       </div>
       <div class="lib" id="lib-std-panel">

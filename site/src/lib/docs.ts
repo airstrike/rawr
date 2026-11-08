@@ -176,20 +176,32 @@ function run(runs: Runs, block: { name: string; code: string; server: boolean })
   return result;
 }
 
+/** The output of a block that waits for the server's next image. */
+export const NEXT_IMAGE = '<span class="next">This runs once rawr&rsquo;s server has its next image.</span>';
+
 /**
  * Fills each run strip's output with what its snippet prints. A snippet runs
  * in rawr-web, or on the server when it is marked `data-where="server"`, as
  * its Run button runs it. The source leaves each output empty: an output
  * written by hand, a button with no snippet, a run that rawr-web can't finish
  * and a run a limit stopped all fail the build.
+ *
+ * A server block marked `data-image="next"` needs a crate that only the
+ * server's next image has, and the release workflow builds that image. While
+ * the live server answers it with a compile error, its output says so
+ * (`class="next"`, which the deploy's smoke test reads) and the build warns
+ * instead of failing. Once the live server runs it, its output is the run's.
  */
 export async function runOutputs(html: string, runs: Runs): Promise<string> {
-  const blocks = new Map<string, { name: string; code: string; server: boolean }>();
+  const blocks = new Map<string, { name: string; code: string; server: boolean; next: boolean }>();
   for (const [, attributes, text] of html.matchAll(/<code([^>]*\bdata-run\b[^>]*)>([^<]*)<\/code>/g)) {
     const id = /\bid="([^"]+)"/.exec(attributes)?.[1];
     const name = /\bdata-run="([^"]*)"/.exec(attributes)?.[1] || "this snippet";
     if (!id) throw new Error(`the run block ${name} has no id`);
-    blocks.set(id, { name, code: decode(text), server: /\bdata-where="server"/.test(attributes) });
+    const server = /\bdata-where="server"/.test(attributes);
+    const next = /\bdata-image="next"/.test(attributes);
+    if (next && !server) throw new Error(`${name} waits for the server's next image, so it is marked data-where="server"`);
+    blocks.set(id, { name, code: decode(text), server, next });
   }
   const filled = new Map<string, string>();
   for (const [, source, out] of html.matchAll(/<button[^>]*\bdata-source="([^"]+)"[^>]*\bdata-out="([^"]+)"/g)) {
@@ -197,6 +209,12 @@ export async function runOutputs(html: string, runs: Runs): Promise<string> {
     if (!block) throw new Error(`the Run button for ${out} names ${source}, which is no run block`);
     const result = await run(runs, block);
     if (result.limit) throw new Error(`${block.name}: a limit stopped its run, so it has no output to show`);
+    if (block.next && result.kind === "error") {
+      console.warn(`${block.name} needs the server's next image: the live server answers it with a compile error, so its output waits for the release workflow's image and the site's next build`);
+      filled.set(out, NEXT_IMAGE);
+      continue;
+    }
+    if (block.next) console.warn(`${block.name} runs on the live server, so its data-image="next" can go`);
     filled.set(out, outputHtml(result));
   }
   for (const [id, block] of blocks) {

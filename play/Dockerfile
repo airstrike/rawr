@@ -62,7 +62,7 @@ RUN --mount=type=cache,id=rawr-play-build-registry,target=/usr/local/cargo/regis
     && install -D -m 0755 -t /out "target/$target/release/rawr-play" "target/$target/release/rawr-play-bot"
 
 # The universe runner (#434, #436): rawr-import builds generated bindings
-# for play/universe (iced at the pinned rev, iced_test and tokio) and the
+# for play/universe (iced at the pinned rev, iced_test, tokio and ratatui) and the
 # runner that links them, once, here. examples.sh first copies the iced
 # examples play/universe/examples.txt names, from iced's checkout at that
 # rev, into the universe program (#1000). iced's shell there is ?play's own

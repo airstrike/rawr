@@ -27,7 +27,7 @@ The image names a universe runner (`PLAY_UNIVERSE`, `/universe`), and then
 every snippet runs on it instead of the base language
 (`play/src/universe.rs`). `rawr-import` builds it once, in the image's
 `universe` stage, from `play/universe` with `RAWR_UNIVERSE_RUNNER=1`: the
-generated bindings of iced (at the pinned rev), iced_test and tokio, and a
+generated bindings of iced (at the pinned rev), iced_test, tokio and ratatui, and a
 runner that links them.
 
 The bot starts the runner once, as a server, with `RAWR_PLAY_ROOT` and
@@ -101,7 +101,8 @@ program uses.
 The universe program also holds whole programs (#1000): every iced
 example that `play/universe/examples.txt` names, at the universe's pinned
 rev, and ?play's own in `play/universe/programs` (iced's solar_system drawn
-with plain shapes, since iced's own reads image files).
+with plain shapes, since iced's own reads image files, and `ui.rs`, the landing
+page's ratatui snippet, which draws a to-do screen into a buffer and prints it).
 `play/universe/examples.sh` copies them into `src/examples/`, each a
 module with its own `main`, from iced's checkout as Cargo resolved the
 universe's iced; the image runs it before it builds the runner. A module
