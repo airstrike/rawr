@@ -691,17 +691,14 @@ impl Export {
             .facade_root
             .retained_bytes()?
             .checked_sub(std::mem::size_of::<host::path::Path>())?;
-        let facade = self
-            .facade
-            .retained_bytes()?
-            .checked_sub(std::mem::size_of::<host::facade::Fingerprint>())?;
+        // The facade is named by its fingerprint, a handle on the contract
+        // that facade retains once: an export never re-walks it (#1309).
         let contract = self
             .contract
             .retained_bytes()?
             .checked_sub(std::mem::size_of::<Contract>())?;
         std::mem::size_of::<Self>()
             .checked_add(root)?
-            .checked_add(facade)?
             .checked_add(contract)
     }
 

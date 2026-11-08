@@ -371,3 +371,12 @@ fn a_marked_binary_names_its_packages_library_by_the_crate_name() {
 fn a_provided_methods_opaque_output_whose_supertrait_binds_self() {
     runs_as_cargo_does("doubling", "6\n4\n");
 }
+
+/// A crate's recursive enum, whose group holds `&'static [Self]`, is built
+/// from literals in a static and in a call and read by the crate's
+/// functions. A facade names another facade's type by its fingerprint,
+/// never by walking that facade's contract at each mention (#1309).
+#[test]
+fn a_crates_recursive_enum_of_a_static_slice_of_itself() {
+    runs_as_cargo_does("pages", "5\nBuilt 2\nExamples\n");
+}
