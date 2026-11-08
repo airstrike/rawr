@@ -3,7 +3,7 @@
 @property --pos { syntax: "<percentage>"; inherits: true; initial-value: 50%; }
 body { font-size: var(--fs-read); line-height: 1.5; overflow-x: hidden; }
 /* Inline code sits in the line: a light chip, a little smaller than the text. */
-:is(p, li, td, th, figcaption) code { font-size: 0.84em; color: var(--ink); background: var(--chip); padding: 0 2px; overflow-wrap: anywhere; }
+:is(p, li, td, th) code { font-size: 0.84em; color: var(--ink); background: var(--chip); padding: 0 2px; overflow-wrap: anywhere; }
 
 .wrap { max-width: 1280px; margin: 0 auto; padding: 0 var(--pad); }
 
@@ -62,9 +62,6 @@ body { font-size: var(--fs-read); line-height: 1.5; overflow-x: hidden; }
 .compare.tween { transition: --pos 0.45s cubic-bezier(.2,.7,.2,1); }
 .compare.intro { animation: peek 1.8s 0.5s cubic-bezier(.45,0,.2,1) both; }
 @keyframes peek { 0% { --pos: 50%; } 40% { --pos: 78%; } 75% { --pos: 34%; } 100% { --pos: 50%; } }
-.compare figcaption { margin-top: 14px; font-size: var(--fs-read); max-width: 46em; }
-.compare figcaption code { white-space: nowrap; }
-.compare figcaption small { display: block; margin-top: 8px; font-size: var(--fs-small); color: var(--quiet); }
 
 /* Sections: a rule between them, with room above each heading; the heading
    on the left, the material on the right. */
@@ -89,9 +86,6 @@ main > section > .wrap { padding: 0; }
 .libs input:focus-visible + label { outline: 2px solid var(--red); outline-offset: 2px; }
 .libs .lib { display: none; flex-basis: 100%; min-width: 0; margin-top: 10px; }
 #lib-iced:checked ~ #lib-iced-panel, #lib-ratatui:checked ~ #lib-ratatui-panel, #lib-std:checked ~ #lib-std-panel { display: block; }
-/* Under the iced and ratatui tabs, which don't run on the page yet. */
-.libs .later { flex-basis: 100%; margin-top: 10px; font-size: var(--fs-small); color: var(--quiet); }
-#lib-std:checked ~ .later { display: none; }
 
 .cmds { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .cmd { display: flex; align-items: stretch; border: 1px solid var(--grid); background: var(--wash); min-width: 0; }
@@ -109,11 +103,6 @@ main > section > .wrap { padding: 0; }
 .block pre { padding: 14px 16px; font-size: 13px; line-height: 1.6; color: var(--ink); overflow-x: auto; white-space: pre; }
 .block .run { border-top: 1px solid var(--grid); }
 .stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
-.shot { border: 1px solid var(--grid); background: var(--wash); }
-.shot img { display: block; width: 100%; height: auto; }
-.shot figcaption, .fig-note { padding: 10px 14px; border-top: 1px solid var(--grid); font-size: var(--fs-small); color: var(--quiet); }
-.pair { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; align-items: start; }
-.pair .shot img { width: 160px; }
 
 .status { max-width: 40em; }
 .status + .status { margin-top: 12px; }
