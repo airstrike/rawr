@@ -3046,7 +3046,8 @@
     {"issue":1327,"title":"A program's own unit struct is a value through a module path","state":"open","category":"Divergences from rustc"},
     {"issue":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"open","category":"Divergences from rustc"},
     {"issue":1329,"title":"Crate values lent by two scope frames passed to one call","state":"open","category":"Divergences from rustc"},
-    {"issue":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"open","category":"Divergences from rustc"}
+    {"issue":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"open","category":"Divergences from rustc"},
+    {"issue":1331,"title":"`#[cfg(..)]` on a struct-literal field, a match arm, an array element or an expression statement","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3942,7 +3943,8 @@
             {"number":1322,"title":"A stand-in's borrowed result (`&str`, `&[T]`, `&T`) is a copy the stand-in keeps, not a borrow of the kept value","state":"open"},
             {"number":1323,"title":"rawr run shows only cargo's error when rawr's copy of the crate fails to build for the same reason","state":"open"},
             {"number":1324,"title":"A crate signature with `&mut [T; N]` (or another array type) can be used","state":"open"},
-            {"number":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"open"}
+            {"number":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"open"},
+            {"number":1331,"title":"`#[cfg(..)]` on a struct-literal field, a match arm, an array element or an expression statement","state":"open"}
           ]
         }
       ]
