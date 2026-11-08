@@ -195,3 +195,152 @@ impl<'a> Parser<'a> {
         Some((definition, *error))
     }
 }
+
+/// A numeric kind as the runtime's `Narrow` and `Cast` take it: an integer
+/// kind's index in `Int::KINDS`, `10` for `f32`, `11` for `f64`, `12` for
+/// `char`.
+/// `std::num::ParseIntError` and its kin, the errors of `str::parse`.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(super) enum ParseError {
+    Int,
+    Float,
+    Bool,
+    Char,
+    /// `std::convert::Infallible`, the error of `parse::<String>()`.
+    Infallible,
+    /// `std::string::FromUtf8Error`, the error of `String::from_utf8`.
+    Utf8,
+    /// `std::num::TryFromIntError`, the error of `u8::try_from(x)` and
+    /// `x.try_into()` among integers.
+    TryFromInt,
+}
+
+impl ParseError {
+    pub(super) fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "ParseIntError" => Self::Int,
+            "ParseFloatError" => Self::Float,
+            "ParseBoolError" => Self::Bool,
+            "ParseCharError" => Self::Char,
+            "Infallible" => Self::Infallible,
+            "FromUtf8Error" => Self::Utf8,
+            "TryFromIntError" => Self::TryFromInt,
+            _ => return None,
+        })
+    }
+
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::Int => "ParseIntError",
+            Self::Float => "ParseFloatError",
+            Self::Bool => "ParseBoolError",
+            Self::Char => "ParseCharError",
+            Self::Infallible => "Infallible",
+            Self::Utf8 => "FromUtf8Error",
+            Self::TryFromInt => "TryFromIntError",
+        }
+    }
+
+    /// The error of parsing into `target`, which Rust's `FromStr` covers.
+    pub(super) fn of(target: &Ty) -> Option<Self> {
+        Some(match target {
+            Ty::Int(_) => Self::Int,
+            Ty::Float(_) => Self::Float,
+            Ty::Bool => Self::Bool,
+            Ty::Char => Self::Char,
+            Ty::String => Self::Infallible,
+            _ => return None,
+        })
+    }
+
+    /// Each message (the error's `Display`, its value at runtime) with the
+    /// error's `Debug`, as Rust's std writes them. A `TryFromIntError` is
+    /// its `Debug` at runtime instead, and [`Self::display`] its message.
+    pub(super) const fn texts(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Int => &[
+                (
+                    "cannot parse integer from empty string",
+                    "ParseIntError { kind: Empty }",
+                ),
+                (
+                    "invalid digit found in string",
+                    "ParseIntError { kind: InvalidDigit }",
+                ),
+                (
+                    "number too large to fit in target type",
+                    "ParseIntError { kind: PosOverflow }",
+                ),
+                (
+                    "number too small to fit in target type",
+                    "ParseIntError { kind: NegOverflow }",
+                ),
+            ],
+            Self::Float => &[
+                (
+                    "cannot parse float from empty string",
+                    "ParseFloatError { kind: Empty }",
+                ),
+                ("invalid float literal", "ParseFloatError { kind: Invalid }"),
+            ],
+            Self::Bool => &[(
+                "provided string was not `true` or `false`",
+                "ParseBoolError",
+            )],
+            Self::Char => &[
+                (
+                    "cannot parse char from empty string",
+                    "ParseCharError { kind: EmptyString }",
+                ),
+                (
+                    "too many characters in string",
+                    "ParseCharError { kind: TooManyChars }",
+                ),
+            ],
+            // A `TryFromIntError` is its `Debug` text, which names the
+            // side it overflowed, and its message is one for both. A
+            // `FromUtf8Error` is its `Debug` text, which holds its bytes.
+            Self::Infallible | Self::Utf8 | Self::TryFromInt => &[],
+        }
+    }
+}
+
+/// `std::num::TryFromIntError`'s message, its `Display`.
+pub(super) const TRY_FROM_INT_MESSAGE: &str = "out of range integral type conversion attempted";
+
+/// `text.parse()` into the kind `code` (`kind_code`): `Ok` of the value,
+/// or `Err` of the std error's message, by Rust's own `FromStr`.
+pub(super) fn parse_text(text: &str, code: INT) -> Dynamic {
+    fn result<T, E: std::fmt::Display>(
+        parsed: Result<T, E>,
+        value: impl FnOnce(T) -> Dynamic,
+    ) -> Dynamic {
+        match parsed {
+            Ok(parsed) => crate::result::ok(value(parsed)),
+            Err(error) => crate::result::err(ImmutableString::from(error.to_string()).into()),
+        }
+    }
+    let int = |value: i128| Dynamic::from(value as INT);
+    match code {
+        10 => result(text.parse::<f32>(), |value| {
+            Dynamic::from(crate::FLOAT::from(value))
+        }),
+        11 => result(text.parse::<crate::FLOAT>(), Dynamic::from),
+        12 => result(text.parse::<char>(), Dynamic::from),
+        15 => result(text.parse::<bool>(), Dynamic::from),
+        16 => crate::result::ok(ImmutableString::from(text).into()),
+        code => match Int::from_code(code).map_or("i64", Int::name) {
+            "i128" => result(text.parse::<i128>(), wide_i128),
+            "u128" => result(text.parse::<u128>(), wide_u128),
+            "i8" => result(text.parse::<i8>(), |value| int(value.into())),
+            "i16" => result(text.parse::<i16>(), |value| int(value.into())),
+            "i32" => result(text.parse::<i32>(), |value| int(value.into())),
+            "u8" => result(text.parse::<u8>(), |value| int(value.into())),
+            "u16" => result(text.parse::<u16>(), |value| int(value.into())),
+            "u32" => result(text.parse::<u32>(), |value| int(value.into())),
+            // A `u64` or `usize` is its bits in the runtime's `i64`.
+            "u64" | "usize" => result(text.parse::<u64>(), |value| int(value.into())),
+            _ => result(text.parse::<i64>(), |value| int(value.into())),
+        },
+    }
+}
