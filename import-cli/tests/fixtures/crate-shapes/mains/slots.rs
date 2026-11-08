@@ -1,6 +1,6 @@
 // rawr
 use natives::compose::{self, Row, Slot, Theme};
-use natives::{badge, slots};
+use natives::{badge, component, slots};
 
 struct Mine(u32);
 
@@ -23,6 +23,17 @@ fn badges<'a>() -> Slot<'a, ()> {
     slots![
         badge![compose::icon().size(12), "Verified"].style(badge::Secondary),
         badge!["Bookmark", compose::icon().size(12)].style(badge::Ghost)
+    ]
+    .spacing(8)
+    .into()
+}
+
+/// A component crate's badges, as its `badge!` makes them: each a row
+/// wrapped in `Slot::new`, its message open until the view's own fixes it.
+fn components<'a>() -> Slot<'a, ()> {
+    slots![
+        component![compose::badge_check().size(12), "Verified"].style(badge::Secondary),
+        component!["Bookmark", compose::icon().size(12)].style(badge::Ghost)
     ]
     .spacing(8)
     .into()
@@ -75,6 +86,16 @@ fn main() {
     println!("{}", row.draw());
     let ruled = slots![check().size(12), compose::icon().size(12), compose::rule()];
     println!("{}", ruled.draw());
+    let composed: Slot<()> = component![compose::icon().size(12), "Verified"].into();
+    let row: Row<()> = Row::with_children([composed]);
+    println!("{}", row.draw());
+    let row: Row<()> = Row::with_children([components()]);
+    println!("{}", row.draw());
+    let row: Row<()> = Row::with_children([Slot::from(component!["a"]), Slot::from("b")]);
+    println!("{}", row.draw());
+    let wrapped: Slot<()> = compose::wrap(Row::with_children([Slot::from("w")]));
+    let row: Row<()> = Row::with_children([wrapped]);
+    println!("{}", row.draw());
     let mut many = Vec::new();
     for _ in 0..1000 {
         let view: Slot<()> = slots![

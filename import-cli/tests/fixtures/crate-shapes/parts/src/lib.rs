@@ -2,7 +2,9 @@
 //! a row takes its children as, built by `From` from a `&str`, a `String`,
 //! a `Cow<str>`, the widget crate's text at the crate's own theme, and the
 //! crate's own icon and label. Its theme and renderer default to the
-//! crate's own, which each `From` impl names by leaving them out.
+//! crate's own, which each `From` impl names by leaving them out. A
+//! `Compose` implementor is a slot by `Slot::new`, as icedxdy_widget's
+//! `Slot::new(child: impl Compose<Message, T, R> + 'a)` boxes one.
 
 use std::borrow::Cow;
 use std::marker::PhantomData;
@@ -17,8 +19,31 @@ pub struct Slot<'a, Message, T = Theme, R = Plain> {
     message: PhantomData<(&'a Message, T, R)>,
 }
 
+/// What a slot holds, as icedxdy_widget's `Compose` is: its theme and
+/// renderer default to the crate's own, so an impl that leaves them out
+/// fixes them.
+pub trait Compose<Message, T = Theme, R = Plain> {
+    fn compose(&self) -> String;
+}
+
+impl<'a, Message: 'a, T: 'a, R: 'a> Slot<'a, Message, T, R> {
+    /// Wrap any `Compose` implementor: its impl ties the slot's message,
+    /// theme and renderer to the child's.
+    pub fn new(child: impl Compose<Message, T, R> + 'a) -> Self {
+        Slot::labeled(format!("composed {}", child.compose()))
+    }
+}
+
+/// `Slot::new` with the bound in a where-clause.
+pub fn wrap<'a, Message: 'a, C>(child: C) -> Slot<'a, Message>
+where
+    C: Compose<Message> + 'a,
+{
+    Slot::new(child)
+}
+
 impl<'a, Message, T, R> Slot<'a, Message, T, R> {
-    fn new(label: String) -> Self {
+    fn labeled(label: String) -> Self {
         Slot {
             label,
             message: PhantomData,
@@ -32,19 +57,19 @@ impl<'a, Message, T, R> Slot<'a, Message, T, R> {
 
 impl<'a, Message: 'a> From<&'a str> for Slot<'a, Message> {
     fn from(text: &'a str) -> Self {
-        Slot::new(format!("str {text}"))
+        Slot::labeled(format!("str {text}"))
     }
 }
 
 impl<'a, Message: 'a> From<String> for Slot<'a, Message> {
     fn from(text: String) -> Self {
-        Slot::new(format!("string {text}"))
+        Slot::labeled(format!("string {text}"))
     }
 }
 
 impl<'a, Message: 'a> From<Cow<'a, str>> for Slot<'a, Message> {
     fn from(text: Cow<'a, str>) -> Self {
-        Slot::new(format!("cow {text}"))
+        Slot::labeled(format!("cow {text}"))
     }
 }
 
@@ -64,7 +89,7 @@ impl Icon {
 
 impl<'a, Message: 'a> From<Icon> for Slot<'a, Message> {
     fn from(icon: Icon) -> Self {
-        Slot::new(format!("icon {}", icon.size))
+        Slot::labeled(format!("icon {}", icon.size))
     }
 }
 
@@ -76,7 +101,7 @@ pub fn badge_check<'a, Theme>() -> widgets::Text<'a, Theme> {
 
 impl<'a, Message: 'a> From<widgets::Text<'a, Theme>> for Slot<'a, Message> {
     fn from(text: widgets::Text<'a, Theme>) -> Self {
-        Slot::new(format!("text {}", text.describe()))
+        Slot::labeled(format!("text {}", text.describe()))
     }
 }
 
@@ -91,7 +116,7 @@ pub fn label(text: &str) -> Label<'_> {
 
 impl<'a, Message: 'a> From<Label<'a>> for Slot<'a, Message> {
     fn from(label: Label<'a>) -> Self {
-        Slot::new(format!("label {}", label.text))
+        Slot::labeled(format!("label {}", label.text))
     }
 }
 
@@ -123,10 +148,18 @@ impl<'a, Message: 'a> Row<'a, Message> {
     }
 }
 
+/// A row composes at the crate's own theme and renderer, its message the
+/// slot's, as icedxdy_widget's `impl Compose<Message> for Row` does.
+impl<'a, Message: 'a> Compose<Message> for Row<'a, Message> {
+    fn compose(&self) -> String {
+        format!("row {} [{}]", self.spacing, self.draw())
+    }
+}
+
 /// A row is a slot of a row, as `row![..].into()` gives an `Element`.
 impl<'a, Message: 'a> From<Row<'a, Message>> for Slot<'a, Message> {
     fn from(row: Row<'a, Message>) -> Self {
-        Slot::new(format!("row {} [{}]", row.spacing, row.draw()))
+        Slot::labeled(format!("row {} [{}]", row.spacing, row.draw()))
     }
 }
 
@@ -140,6 +173,6 @@ pub fn rule() -> Rule {
 
 impl<'a> From<Rule> for Slot<'a, ()> {
     fn from(_: Rule) -> Self {
-        Slot::new("rule".to_owned())
+        Slot::labeled("rule".to_owned())
     }
 }
