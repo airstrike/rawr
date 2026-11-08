@@ -25,7 +25,46 @@ use crate::{Dynamic, Engine, EvalAltResult, FnPtr, Position, Shared};
 pub type Outcome = Result<Dynamic, Box<EvalAltResult>>;
 
 /// A thread's [`Outcome`] until it is joined.
-type Slot = Shared<Mutex<Option<std::thread::JoinHandle<Outcome>>>>;
+type Slot = Shared<Mutex<Option<Thread>>>;
+
+/// A thread a handle joins.
+enum Thread {
+    /// One the program spawned, which runs its closure.
+    Program(std::thread::JoinHandle<Outcome>),
+    /// One a crate spawned and gave the `JoinHandle` of (#1266).
+    Crate(Box<dyn Joined>),
+}
+
+/// A crate's thread, which gives its value as rawr's once it is joined.
+trait Joined: Send {
+    fn join(self: Box<Self>) -> Outcome;
+    fn is_finished(&self) -> bool;
+}
+
+/// A crate's `JoinHandle<T>` and what makes its `T` rawr's.
+struct Native<T, F> {
+    handle: std::thread::JoinHandle<T>,
+    give: F,
+}
+
+impl<T, F> Joined for Native<T, F>
+where
+    T: Send,
+    F: FnOnce(T) -> Outcome + Send,
+{
+    fn join(self: Box<Self>) -> Outcome {
+        let Self { handle, give } = *self;
+        // The thread printed its panic as it ended, through Rust's hook.
+        handle
+            .join()
+            .map_err(|_| panic("a crate's thread panicked"))
+            .and_then(give)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+}
 
 /// The threads one evaluation spawned, and whether its root still runs.
 #[derive(Default)]
@@ -101,7 +140,7 @@ impl Threads {
             })
             // What `std::thread::spawn` panics with.
             .map_err(|error| panic(&format!("failed to spawn thread: {error:?}")))?;
-        let slot = Shared::new(Mutex::new(Some(thread)));
+        let slot = Shared::new(Mutex::new(Some(Thread::Program(thread))));
         running.push(slot.clone());
         Ok(Handle(slot))
     }
@@ -140,7 +179,7 @@ impl Drop for Threads {
                 }
             };
             for slot in slots {
-                if let Some(thread) = take(&slot) {
+                if let Some(Thread::Program(thread)) = take(&slot) {
                     let _ = thread.join();
                 }
             }
@@ -149,16 +188,29 @@ impl Drop for Threads {
 }
 
 impl Handle {
+    /// The handle of a crate's thread, as a crate's function gives its
+    /// `JoinHandle<T>`: `give` makes the thread's `T` rawr's where it is
+    /// joined. No group joins it, as no Rust scope joins a crate's thread.
+    pub(crate) fn native<T, F>(handle: std::thread::JoinHandle<T>, give: F) -> Self
+    where
+        T: Send + 'static,
+        F: FnOnce(T) -> Outcome + Send + 'static,
+    {
+        Self(Shared::new(Mutex::new(Some(Thread::Crate(Box::new(
+            Native { handle, give },
+        ))))))
+    }
+
     /// Wait for the thread to end, as `JoinHandle::join`: its closure's
     /// value, or the panic that ended it. A handle joins once; a copy
     /// joined after it finds nothing.
     pub(crate) fn join(&self) -> Option<Outcome> {
-        let thread = take(&self.0)?;
-        Some(
-            thread
+        Some(match take(&self.0)? {
+            Thread::Program(thread) => thread
                 .join()
                 .unwrap_or_else(|_| Err(panic("rawr: a spawned thread aborted"))),
-        )
+            Thread::Crate(thread) => thread.join(),
+        })
     }
 
     /// Whether the thread's closure has returned, as
@@ -168,11 +220,14 @@ impl Handle {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
-            .is_none_or(std::thread::JoinHandle::is_finished)
+            .is_none_or(|thread| match thread {
+                Thread::Program(thread) => thread.is_finished(),
+                Thread::Crate(thread) => thread.is_finished(),
+            })
     }
 }
 
-fn take(slot: &Slot) -> Option<std::thread::JoinHandle<Outcome>> {
+fn take(slot: &Slot) -> Option<Thread> {
     slot.lock().unwrap_or_else(PoisonError::into_inner).take()
 }
 

@@ -142,6 +142,9 @@ pub(crate) enum Shape {
     /// Rust's `Arc<T>` (true) or `Rc<T>` of a crate's `T`: rawr's counted
     /// pointer, standing for the crate's own pointer at runtime (#775).
     Counted(bool, Box<Type>),
+    /// Rust's `std::thread::JoinHandle<T>` a crate gives: rawr's thread
+    /// handle, whose `join` gives the crate thread's `T` as rawr's (#1266).
+    JoinHandle(Box<Type>),
     /// std's `HashMap`, `HashSet`, `BTreeMap` or `BTreeSet`, by its name,
     /// of its key (and value) types: rawr's collection of that kind, an
     /// array sorted by key at runtime (#777).
@@ -214,6 +217,7 @@ impl Type {
             | Shape::Iter(element)
             | Shape::Boxed(element)
             | Shape::Counted(_, element)
+            | Shape::JoinHandle(element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => element.retained_bytes(),
             Shape::Result(ok, err) => ok
@@ -270,6 +274,7 @@ impl Type {
             Shape::Iter(element) => Shape::Iter(Box::new(element.try_clone()?)),
             Shape::Boxed(element) => Shape::Boxed(Box::new(element.try_clone()?)),
             Shape::Counted(arc, element) => Shape::Counted(*arc, Box::new(element.try_clone()?)),
+            Shape::JoinHandle(element) => Shape::JoinHandle(Box::new(element.try_clone()?)),
             Shape::Keyed(kind, members) => Shape::Keyed(
                 kind,
                 members
@@ -389,6 +394,13 @@ impl Type {
     #[must_use]
     pub fn counted(arc: bool, element: Self) -> Self {
         Self(Shape::Counted(arc, Box::new(element)))
+    }
+
+    /// Construct Rust's `std::thread::JoinHandle<element>` a crate gives:
+    /// rawr's thread handle, which joins the crate's thread (#1266).
+    #[must_use]
+    pub fn join_handle(element: Self) -> Self {
+        Self(Shape::JoinHandle(Box::new(element)))
     }
 
     /// Construct std's keyed collection `kind` of `members`, its key type
@@ -570,6 +582,9 @@ impl Type {
                 *arc,
                 element.resolve(root, types, parameters, _imported, item)?,
             )),
+            Shape::JoinHandle(element) => Ok(Self::join_handle(
+                element.resolve(root, types, parameters, _imported, item)?,
+            )),
             Shape::Range(element) => Ok(Self::range(
                 element.resolve(root, types, parameters, _imported, item)?,
             )),
@@ -701,6 +716,7 @@ impl Type {
             | Shape::Iter(element)
             | Shape::Boxed(element)
             | Shape::Counted(_, element)
+            | Shape::JoinHandle(element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => {
                 element.resolve_imported(root, types, parameters, imported, item, allocation)?;
@@ -859,6 +875,7 @@ impl Type {
             | Shape::Iter(element)
             | Shape::Boxed(element)
             | Shape::Counted(_, element)
+            | Shape::JoinHandle(element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => {
                 element.collect_exports(exports);
@@ -964,6 +981,10 @@ impl crate::digest::Write for Type {
             }
             Shape::Counted(arc, element) => {
                 writer.tag(if *arc { 0x2319 } else { 0x2318 });
+                element.write(writer)?;
+            }
+            Shape::JoinHandle(element) => {
+                writer.tag(0x231e);
                 element.write(writer)?;
             }
             Shape::Keyed(kind, members) => {

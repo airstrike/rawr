@@ -16300,6 +16300,7 @@ fn render_give(
         ty if boxed_element(ty).is_some()
             || counted_element(ty).is_some()
             || keyed_element(ty).is_some()
+            || joined_element(ty).is_some()
             || matches!(range_inclusive_element(ty), Some(convert::Type::Nominal { .. }))
             || matches!(range_inclusive_element(ty), Some(convert::Type::Builtin(builtin))
                 if *builtin == convert::Builtin::I64 || builtin.is_narrow_integer()) =>
@@ -16768,6 +16769,16 @@ fn render_to_dynamic(
         ty if let Some(element) = boxed_element(ty) => {
             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
         }
+        // A crate's thread, as rawr's handle of it: what it gives becomes
+        // rawr's where the program joins it (#1266).
+        ty if let Some(element) = joined_element(ty) => {
+            let mut converted = String::new();
+            render_to_dynamic(element, &format!("joined_{depth}"), depth + 1, &mut converted)?;
+            write!(
+                output,
+                "Ok::<Dynamic, Error>(__rawr_internal::crossing::joined({value}, move |joined_{depth}| ({converted}).map_err(runtime_error)))"
+            )
+        }
         // std's `RangeInclusive` of a crate's type, as iced's
         // `Radians::RANGE`: rawr's range of its two bounds.
         ty if let Some(element @ convert::Type::Nominal { .. }) = range_inclusive_element(ty) => {
@@ -17008,6 +17019,8 @@ fn holds_native(ty: &convert::Type) -> bool {
     match ty {
         ty if let Some(element) = boxed_element(ty) => holds_native(element),
         ty if counted_element(ty).is_some() => true,
+        // What a crate's thread gives crosses by value (#1266).
+        ty if joined_element(ty).is_some() => false,
         ty if let Some((_, members)) = keyed_element(ty) => members.iter().any(holds_native),
         convert::Type::Nominal { .. } => !is_value(ty) && !is_duration(ty),
         convert::Type::Tuple(members) => members.iter().any(holds_native),
@@ -17100,6 +17113,24 @@ fn boxed_element(ty: &convert::Type) -> Option<&convert::Type> {
             definition,
             arguments,
         } if *definition == crate::surface::identity::Definition::boxed() => {
+            match arguments.as_ref() {
+                [element] => Some(element),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `T` of a thread's `JoinHandle<T>` a crate's function gives, which
+/// crosses as rawr's thread handle: its `T` becomes rawr's where the
+/// program joins it, with no call's arena (#1266).
+fn joined_element(ty: &convert::Type) -> Option<&convert::Type> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if *definition == crate::surface::identity::Definition::join_handle() => {
             match arguments.as_ref() {
                 [element] => Some(element),
                 _ => None,

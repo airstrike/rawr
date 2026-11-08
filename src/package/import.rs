@@ -3512,6 +3512,13 @@ impl Types {
                 {
                     return Ok(host::type_ref::Type::boxed(element));
                 }
+                // A thread's `JoinHandle<T>` a crate gives: rawr's (#1266).
+                if *definition == rawr_import::surface::identity::Definition::join_handle()
+                    && converted.len() == 1
+                    && let Some(element) = converted.pop()
+                {
+                    return Ok(host::type_ref::Type::join_handle(element));
+                }
                 // std's map or set: rawr's of its kind (#777).
                 if let Some(kind) =
                     rawr_import::surface::identity::Definition::keyed_kind(definition.as_bytes())

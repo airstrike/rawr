@@ -312,6 +312,45 @@ fn a_formats_borrow_lasts_as_long_as_its_output() {
     assert!(stderr.contains("E0502"), "{stderr}");
 }
 
+/// A crate's function of open's `that_in_background` shape, which takes an
+/// `impl AsRef<OsStr>` and gives a thread's `JoinHandle<io::Result<()>>`:
+/// a `&str` and a `String` fill the argument, and the program ignores the
+/// handle or joins it for what the crate's thread gave (#1266).
+#[test]
+fn a_crates_join_handle_is_joined_or_ignored() {
+    runs_as_cargo_does("opened", "true\ntrue\n");
+}
+
+/// A path into a crate none of whose items the program can use yet, as
+/// `opener::that_if_given` gives an `Option<JoinHandle<..>>`: the crate is
+/// a module, and rawr says why the item can't be used, as it does in a
+/// crate with other items. It used to say rustc's E0433 for the crate, as
+/// for one the program doesn't depend on (#1267).
+#[test]
+fn a_crate_with_no_usable_item_says_why_its_item_cant_be_used() {
+    let program = "// rawr\n\nfn main() {\n    let _ = opener::that_if_given(Some(\"https://iced.rs\"));\n}\n";
+    let root = SHAPES.lease(&[("src/main.rs", program)]);
+    let directory = crate::support::scratch();
+    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = text(&check.stderr);
+    assert!(!check.status.success(), "{stderr}");
+    assert!(!stderr.contains("E0433"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "`that_if_given` can't be used yet: rawr doesn't run `std::thread::JoinHandle` here in a crate's signature yet"
+        ),
+        "{stderr}"
+    );
+}
+
 /// A package's marked binary names the package's library by its crate
 /// name, as Cargo builds the binary with the library as a dependency
 /// (#1164): it calls the library's `run`, generic over the binary's own
