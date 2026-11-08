@@ -1067,7 +1067,8 @@ fn type_bytes(ty: &convert::Type) -> Option<usize> {
         convert::Type::Option(element)
         | convert::Type::Borrowed { ty: element, .. }
         | convert::Type::Range(element)
-        | convert::Type::Sequence { element, .. } => {
+        | convert::Type::Sequence { element, .. }
+        | convert::Type::ConstArray { element, .. } => {
             type_bytes(element)?.checked_add(std::mem::size_of::<convert::Type>())
         }
         convert::Type::Result(ok, err) => type_bytes(ok)?
@@ -1612,6 +1613,11 @@ impl Framed {
                     None => self.byte(8),
                 }
                 self.byte(u8::from(*owned));
+                self.converted_type(element);
+            }
+            convert::Type::ConstArray { element, parameter } => {
+                self.byte(17);
+                self.0.update(parameter.to_le_bytes());
                 self.converted_type(element);
             }
             convert::Type::Tuple(members) => {

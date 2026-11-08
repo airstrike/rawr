@@ -99,10 +99,14 @@ impl Builtin {
 }
 
 /// Which of Rust's sequence types a host's array is.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum Sequence {
     /// `[T; N]`, of its length.
     Array(usize),
+    /// `[T; N]` of an imported item's const parameter `N`, by name, whose
+    /// length the call's argument gives (#1330).
+    #[cfg(feature = "rust-import")]
+    Length(crate::ImmutableString),
     /// `Vec<T>`.
     Vec,
     /// `[T]`, whose elements a call copies.
@@ -264,7 +268,7 @@ impl Type {
             Shape::Tuple(types) => Shape::Tuple(slice(types)?),
             Shape::Array { element, sequence } => Shape::Array {
                 element: Box::new(element.try_clone()?),
-                sequence: *sequence,
+                sequence: sequence.clone(),
             },
             Shape::Option(element) => Shape::Option(Box::new(element.try_clone()?)),
             Shape::Reference { mutable, target } => Shape::Reference {
@@ -338,6 +342,16 @@ impl Type {
         Self(Shape::Array {
             element: Box::new(element),
             sequence: Sequence::Array(length),
+        })
+    }
+
+    /// Construct an array `[element; N]` of an imported item's const
+    /// parameter `N`, whose length the call's argument gives.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn array_of_length(element: Self, length: crate::ImmutableString) -> Self {
+        Self(Shape::Array {
+            element: Box::new(element),
+            sequence: Sequence::Length(length),
         })
     }
 
@@ -563,7 +577,7 @@ impl Type {
             ))),
             Shape::Array { element, sequence } => Ok(Self(Shape::Array {
                 element: Box::new(element.resolve(root, types, parameters, _imported, item)?),
-                sequence: *sequence,
+                sequence: sequence.clone(),
             })),
             Shape::Reference { mutable, target } => Ok(Self::reference(
                 *mutable,
@@ -959,6 +973,8 @@ impl crate::digest::Write for Type {
                 element.write(writer)?;
                 writer.text(&match sequence {
                     Sequence::Array(length) => length.to_string(),
+                    #[cfg(feature = "rust-import")]
+                    Sequence::Length(name) => name.to_string(),
                     Sequence::Vec => "_".into(),
                     Sequence::Slice => "[]".into(),
                 });

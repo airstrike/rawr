@@ -19,6 +19,10 @@ pub struct Definition {
     /// parameters, as iced's `impl<T> Task<Option<T>>` fixes `Task<Option<T>>`
     /// for its `and_then`: a receiver of another type takes another form.
     instance: Option<Box<host::type_ref::Type>>,
+    /// The declared parameters that are const lengths, as `N` of
+    /// `with_children<const N: usize>([Slot; N])`: a call's argument gives
+    /// each, and an instance has it as a constant, never a type (#1330).
+    lengths: Box<[ImmutableString]>,
 }
 
 /// A bound `R: Trait<A..>` on an imported generic item's type parameter
@@ -206,6 +210,7 @@ pub struct Builder {
     relations: Vec<Relation>,
     crossing: bool,
     instance: Option<host::type_ref::Type>,
+    lengths: Vec<ImmutableString>,
 }
 
 impl Builder {
@@ -220,6 +225,7 @@ impl Builder {
             relations: Vec::new(),
             crossing: false,
             instance: None,
+            lengths: Vec::new(),
         }
     }
 
@@ -270,6 +276,16 @@ impl Builder {
             }
         }
         self.declared.push(index);
+        Ok(self)
+    }
+
+    /// Mark the declared parameter `name` as a const length (#1330).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn length(&mut self, name: ImmutableString) -> Result<&mut Self, host::Error> {
+        self.lengths
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.lengths.push(name);
         Ok(self)
     }
 
@@ -324,6 +340,7 @@ impl Builder {
             relations: self.relations.into_boxed_slice(),
             crossing: self.crossing,
             instance: self.instance.map(Box::new),
+            lengths: self.lengths.into_boxed_slice(),
         }
     }
 }
@@ -406,6 +423,7 @@ impl Definition {
                 .as_ref()
                 .map(|ty| ty.try_clone().map(Box::new))
                 .transpose()?,
+            lengths: self.lengths.clone(),
         })
     }
 
@@ -461,6 +479,19 @@ impl Definition {
     /// The type parameters' names in the order the item declares them,
     /// the order of a turbofish and of an imported instance's types.
     pub(crate) fn declared_type_parameters(&self) -> impl Iterator<Item = ImmutableString> + '_ {
+        self.declared_parameters()
+            .filter(|name| !self.lengths.contains(name))
+    }
+
+    /// The const length parameters' names in the order the item declares
+    /// them, the order of an imported instance's constants (#1330).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn declared_length_parameters(&self) -> impl Iterator<Item = ImmutableString> + '_ {
+        self.declared_parameters()
+            .filter(|name| self.lengths.contains(name))
+    }
+
+    fn declared_parameters(&self) -> impl Iterator<Item = ImmutableString> + '_ {
         self.declared.iter().filter_map(|index| {
             self.type_parameters
                 .get(*index as usize)
@@ -581,6 +612,7 @@ impl Definition {
             relations: self.relations.clone(),
             crossing: self.crossing,
             instance,
+            lengths: self.lengths.clone(),
         })
     }
 

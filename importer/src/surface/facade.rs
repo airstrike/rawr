@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 49;
+const SCHEMA: u32 = 50;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -755,6 +755,11 @@ pub struct Signature {
     /// carries.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     opaques: Box<[representability::signature::Opaque]>,
+    /// The parameters among `parameters` that are const lengths, as `N`
+    /// of `with_children<const N: usize>([Slot; N])`: a call's argument
+    /// gives each, never a type (#1330).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    lengths: Box<[Box<str>]>,
 }
 
 /// A bound `R: Trait<A..>` and the trait's implementations Rawr can name:
@@ -870,6 +875,12 @@ pub enum Type {
     /// Rust's array `[T; length]`, a Rawr array of that length, as a
     /// relation's case `From<[u16; 2]>` takes.
     FixedArray { element: Box<Type>, length: u32 },
+    /// Rust's array `[T; N]` of the item's const parameter `N`, by name: a
+    /// Rawr array whose length the call's argument gives `N` (#1330).
+    ConstArray {
+        element: Box<Type>,
+        length: Box<str>,
+    },
     /// An output tuple, a Rawr tuple.
     Tuple(Box<[Type]>),
     /// Rust's `Range<T>` of a float, a Rawr `Range<f64>` value.
@@ -945,6 +956,7 @@ impl Type {
             | Self::Array(element)
             | Self::Slice(element)
             | Self::FixedArray { element, .. }
+            | Self::ConstArray { element, .. }
             | Self::Range(element) => {
                 element.opaque(opaque, found);
             }
@@ -982,6 +994,7 @@ impl Type {
             | Self::Array(element)
             | Self::Slice(element)
             | Self::FixedArray { element, .. }
+            | Self::ConstArray { element, .. }
             | Self::Range(element)
             | Self::Reference {
                 target: element, ..
@@ -1016,6 +1029,7 @@ impl Type {
             | Self::Array(element)
             | Self::Slice(element)
             | Self::FixedArray { element, .. }
+            | Self::ConstArray { element, .. }
             | Self::Range(element)
             | Self::Reference {
                 target: element, ..
@@ -2330,6 +2344,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
             crossing: false,
             instance: None,
             opaques: Box::default(),
+            lengths: Box::default(),
         },
         values: None,
         member: None,
@@ -3530,6 +3545,13 @@ impl Signature {
     pub const fn instance(&self) -> Option<&Type> {
         self.instance.as_ref()
     }
+
+    /// Whether the parameter `name` is a const length, which a call's
+    /// argument gives (#1330).
+    #[must_use]
+    pub fn is_length(&self, name: &str) -> bool {
+        self.lengths.iter().any(|length| &**length == name)
+    }
 }
 
 /// The derivable std traits each parameter's bounds name, by position.
@@ -3726,6 +3748,7 @@ fn written_item(
                 crossing: false,
                 instance: None,
                 opaques: Box::default(),
+                lengths: Box::default(),
             },
         ),
         Representability::Value(_)
@@ -3886,6 +3909,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         crossing: false,
         instance: fixed_instance(source)?,
         opaques: source.opaques().into(),
+        lengths: lengths(&kept)?,
     })
 }
 
@@ -4069,6 +4093,7 @@ fn callable_signature(
         crossing: false,
         instance: fixed_instance(source)?,
         opaques: source.opaques().into(),
+        lengths: lengths(&kept)?,
     })
 }
 
@@ -4143,6 +4168,23 @@ fn parameters(
         .try_reserve_exact(source.len())
         .map_err(|_| super::Error::Allocation)?;
     for parameter in source {
+        output.push(copy(parameter.name())?);
+    }
+    Ok(output.into_boxed_slice())
+}
+
+/// The names of the const parameters among `source`, in order.
+fn lengths(
+    source: &[representability::signature::Parameter],
+) -> Result<Box<[Box<str>]>, super::Error> {
+    let mut output = Vec::new();
+    for parameter in source
+        .iter()
+        .filter(|parameter| parameter.kind() == representability::signature::Kind::Constant)
+    {
+        output
+            .try_reserve(1)
+            .map_err(|_| super::Error::Allocation)?;
         output.push(copy(parameter.name())?);
     }
     Ok(output.into_boxed_slice())
@@ -4285,6 +4327,16 @@ fn ty(
             element: Box::new(ty(element, parameters)?),
             length: *length,
         },
+        Source::ConstArray { element, parameter } => {
+            let parameter = parameters
+                .iter()
+                .find(|declared| declared.index() == *parameter)
+                .ok_or(Unwritten::Type)?;
+            Type::ConstArray {
+                element: Box::new(ty(element, parameters)?),
+                length: copy(parameter.name())?,
+            }
+        }
         // `&[&'static str]`: a slice of `&str`.
         Source::Sequence {
             element,

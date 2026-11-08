@@ -1147,6 +1147,9 @@ fn signature(
     let mut builder = host::signature::Builder::new();
     for (index, parameter) in signature.parameters().enumerate() {
         builder.type_parameter(parameter, &super::requirements(signature.bounds(index)))?;
+        if signature.is_length(parameter) {
+            builder.length(parameter.into())?;
+        }
     }
     if signature.crossing() {
         builder.crossing();
@@ -1226,6 +1229,7 @@ fn names_variable(source: &facade::Type) -> bool {
         facade::Type::Option(element)
         | facade::Type::Array(element)
         | facade::Type::FixedArray { element, .. }
+        | facade::Type::ConstArray { element, .. }
         | facade::Type::Range(element) => names_variable(element),
         facade::Type::Result(ok, err) => names_variable(ok) || names_variable(err),
         facade::Type::FunctionItem { input, output } | facade::Type::Callable { input, output } => {
@@ -1357,6 +1361,9 @@ fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
             ty(element)?,
             usize::try_from(*length).expect("an array length fits in usize"),
         ),
+        facade::Type::ConstArray { element, length } => {
+            host::type_ref::Type::array_of_length(ty(element)?, length.as_ref().into())
+        }
         facade::Type::Tuple(members) => {
             host::type_ref::Type::tuple(members.iter().map(ty).collect::<Result<Vec<_>, _>>()?)?
         }

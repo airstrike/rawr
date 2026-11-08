@@ -105,6 +105,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `rawr run` of a program that rustc rejects, such as a marked type missing a native trait's supertrait, now shows only `cargo check`'s error, at the program's own paths, without rawr's report of its copy of the crate. A save that breaks the program the same way shows cargo's error too. (#1323)
 - A `&mut` a crate method returns is held for its statement or binding, as Rust holds it: `buffer.get_mut(i).0 = v` and `let p = buffer.get_mut(i);` call the method once, not once per access. (#1325)
 - A call can take borrowed crate values from several `let`s at once, as `Row::with_children([a, b])` takes two `Slot`s each made from its own string: its output lives as long as the shortest borrow, as in Rust. (#1329)
+- `#[cfg(..)]` and `#[cfg_attr(..)]` on a struct expression's field, a match arm, an array or tuple element or a call argument leave it out where they don't hold, as in rustc. This covers crate structs such as iced's `window::Settings { #[cfg(target_os = "macos")] platform_specific: .., ..Default::default() }`. `target_os`, `unix`, `debug_assertions` and every other cfg follow `rustc --print cfg` for the target and profile Cargo builds with. (#1331)
+- A crate function's array types work as in Rust: `[T; N]` by value with a const-generic `N` taken from the array you pass (`Row::with_children([a, b])`), `&[T; N]`, `&mut [T; N]` whose writes reach your array or a crate struct's field (`fill(&mut pixel.0, 7)`), and `-> [u8; 4]` results. (#1330, #1324)
 
 ## 0.3.171 (2026-11-07)
 

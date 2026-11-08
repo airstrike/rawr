@@ -749,6 +749,8 @@ fn concrete(ty: &convert::Type, depth: usize) -> bool {
         | convert::Type::Borrowed { ty: element, .. }
         | convert::Type::Range(element)
         | convert::Type::Sequence { element, .. } => concrete(element, depth + 1),
+        // Its length is the instance's constant.
+        convert::Type::ConstArray { .. } => false,
         convert::Type::Result(ok, err) => concrete(ok, depth + 1) && concrete(err, depth + 1),
         convert::Type::Tuple(members)
         | convert::Type::Script {
