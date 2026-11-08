@@ -115,7 +115,9 @@
         {"text":"`#[cfg(..)]` and `#[cfg_attr(..)]` on a struct expression's field, a match arm, an array or tuple element or a call argument leave it out where they don't hold, as in rustc. This covers crate structs such as iced's `window::Settings { #[cfg(target_os = \"macos\")] platform_specific: .., ..Default::default() }`. `target_os`, `unix`, `debug_assertions` and every other cfg follow `rustc --print cfg` for the target and profile Cargo builds with.","issues":[1331]},
         {"text":"A crate function's array types work as in Rust: `[T; N]` by value with a const-generic `N` taken from the array you pass (`Row::with_children([a, b])`), `&[T; N]`, `&mut [T; N]` whose writes reach your array or a crate struct's field (`fill(&mut pixel.0, 7)`), and `-> [u8; 4]` results.","issues":[1330,1324]},
         {"text":"A crate macro's children convert through the crate's From impl for their own full type, as rustc selects it: a widget crate's generic Text whose theme only the impl fixes, the crate's own builders, a program's own From impl, and a type reached through a re-export. A child no impl takes gets rustc's E0277 with the types the impls take, never \"unknown member\".","issues":[1336]},
-        {"text":"A crate method's `&mut` of a value a scope frame's region holds, and an `Option<&mut T>` a crate method returns (as pane_grid's `state.get_mut(pane)`), are now called once and held for the statement or binding, as rustc holds them. Such methods are now places whatever their other inputs are.","issues":[1333,1334]}
+        {"text":"A crate method's `&mut` of a value a scope frame's region holds, and an `Option<&mut T>` a crate method returns (as pane_grid's `state.get_mut(pane)`), are now called once and held for the statement or binding, as rustc holds them. Such methods are now places whatever their other inputs are.","issues":[1333,1334]},
+        {"text":"A program's unit struct named by a module path is its value in a `match` scrutinee and an `if let` value too, as `match badge::Secondary { badge::Secondary => .. }`.","issues":[1327]},
+        {"text":"A program's generic `impl<'a, M> From<Mine> for Slot<'a, M>` of a crate type can pass its own `M` to the crate in its body: the impl is compiled for each type its conversions take, as rustc monomorphises it.","issues":[1341]}
       ]
     },
     "releases": [
@@ -3050,7 +3052,7 @@
     {"issue":1324,"title":"A crate signature with `&mut [T; N]` (or another array type) can be used","state":"closed","category":"Divergences from rustc"},
     {"issue":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"closed","category":"Divergences from rustc"},
     {"issue":1326,"title":"`Into::<Slot<'_, _>>::into(\"text\")` in a crate macro: a literal doesn't take the crate's From<&str>/From<String>","state":"closed","category":"Divergences from rustc"},
-    {"issue":1327,"title":"A program's own unit struct is a value through a module path","state":"open","category":"Divergences from rustc"},
+    {"issue":1327,"title":"A program's own unit struct is a value through a module path","state":"closed","category":"Divergences from rustc"},
     {"issue":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"open","category":"Divergences from rustc"},
     {"issue":1329,"title":"Crate values lent by two scope frames passed to one call","state":"closed","category":"Divergences from rustc"},
     {"issue":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"closed","category":"Divergences from rustc"},
@@ -3064,7 +3066,9 @@
     {"issue":1338,"title":"cfg: RUSTFLAGS --cfg values and a disabled multi-parameter closure argument","state":"open","category":"Divergences from rustc"},
     {"issue":1339,"title":"A crate function whose output is `[T; N]` of a const parameter only the output fixes is refused","state":"open","category":"Divergences from rustc"},
     {"issue":1340,"title":"`&mut [T; N]` of crate values crosses as a lent place, not a copy","state":"open","category":"Divergences from rustc"},
-    {"issue":1341,"title":"A program's generic impl of a std trait for a crate type can't pass its own parameter to the crate","state":"open","category":"Divergences from rustc"}
+    {"issue":1341,"title":"A program's generic impl of a std trait for a crate type can't pass its own parameter to the crate","state":"closed","category":"Divergences from rustc"},
+    {"issue":1342,"title":"A `self::` path in a body names an item of the current module","state":"open","category":"Divergences from rustc"},
+    {"issue":1343,"title":"A program's generic impl of a std trait other than From for a crate type passes its own parameter to the crate","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3632,7 +3636,7 @@
             {"number":1336,"title":"Selecting among many generic From impls by the argument's type: `Into::<Slot<'_, _>>::into(icon().size(12))`","state":"closed"},
             {"number":1339,"title":"A crate function whose output is `[T; N]` of a const parameter only the output fixes is refused","state":"open"},
             {"number":1340,"title":"`&mut [T; N]` of crate values crosses as a lent place, not a copy","state":"open"},
-            {"number":1341,"title":"A program's generic impl of a std trait for a crate type can't pass its own parameter to the crate","state":"open"}
+            {"number":1341,"title":"A program's generic impl of a std trait for a crate type can't pass its own parameter to the crate","state":"closed"}
           ],
           "milestone": "0.4"
         },
