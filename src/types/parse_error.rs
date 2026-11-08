@@ -497,6 +497,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::AsyncMain { .. } => {
                     f.write_str(crate::resolve::ASYNC_MAIN)
                 }
+                crate::resolve::Error::UnscopedWrite { owner, .. } => {
+                    write!(f, "cannot write into `{owner}`")
+                }
                 crate::resolve::Error::StdPath { message, .. } => f.write_str(message),
                 crate::resolve::Error::NonExhaustive { witnesses, .. } => {
                     write!(f, "{}", crate::resolve::NonExhaustive(witnesses))

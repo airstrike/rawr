@@ -1057,6 +1057,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::Syntax { .. }
         | R::UnlabeledJumpInWhileCondition { .. }
         | R::AsyncMain { .. }
+        | R::UnscopedWrite { .. }
         | R::StdPath { .. }
         | R::NotYet { .. }
         | R::TypeAnnotationsNeeded { .. }

@@ -1118,3 +1118,73 @@ fn a_tuple_pattern_of_the_wrong_field_count_is_e0023() {
         );
     }
 }
+
+/// The report rawr renders for `source`, which it refuses.
+fn rendered(source: &str) -> String {
+    let error = Engine::new()
+        .compile(source)
+        .map(|_| ())
+        .expect_err("rawr refuses this program");
+    let evidence = Source::new("main.rs", source).expect("a test source has an identity");
+    render(&Report::from_parse(evidence, &error).expect("the error is in the source"))
+}
+
+/// `write!` calls the `write_fmt` of a `Write` trait, which is callable
+/// only where the trait is in scope: rustc's E0599 "cannot write into
+/// `String`" at the value written into, with no `use std::fmt::Write;`
+/// in its module or its block (#5).
+#[test]
+fn a_write_with_no_write_trait_in_scope_is_e0599() {
+    let string =
+        "fn main() {\n    let mut s = String::new();\n    write!(s, \"{}\", 1).unwrap();\n}\n";
+    assert_eq!(
+        refused(string),
+        ("E0599".into(), "cannot write into `String`".into(), None)
+    );
+    let report = rendered(string);
+    assert!(report.contains(" --> main.rs:3:12"), "{report}");
+    assert!(
+        report.contains(
+            "  = help: trait `Write` which provides `write_fmt` is implemented but not in \
+             scope; perhaps you want to import it: `use std::fmt::Write;`\n  = note: must \
+             implement `io::Write`, `fmt::Write`, or have a `write_fmt` method\n"
+        ),
+        "{report}"
+    );
+    // `&mut s`, and a `use` in another function's block.
+    let report = rendered(
+        "fn other() {\n    use std::fmt::Write;\n}\nfn main() {\n    let mut s = String::new();\n    \
+         writeln!(&mut s, \"{}\", 1).unwrap();\n}\n",
+    );
+    assert!(
+        report.starts_with("error[E0599]: cannot write into `String`\n --> main.rs:6:14"),
+        "{report}"
+    );
+    // A type of the program's that implements the trait by its path.
+    assert_eq!(
+        refused(
+            "struct W(String);\nimpl std::fmt::Write for W {\n    fn write_str(&mut self, s: &str) \
+             -> std::fmt::Result {\n        self.0.push_str(s);\n        Ok(())\n    }\n}\nfn main() \
+             {\n    let mut w = W(String::new());\n    writeln!(w, \"{}\", 2).unwrap();\n}\n"
+        ),
+        ("E0599".into(), "cannot write into `W`".into(), None)
+    );
+    // In scope from the module, the block, an inline module's `use` and an
+    // anonymous import, rawr writes as rustc does.
+    for source in [
+        "use std::fmt::Write;\nfn main() {\n    let mut s = String::new();\n    write!(s, \"{}\", \
+         1).unwrap();\n}\n",
+        "fn main() {\n    use std::fmt::Write as _;\n    let mut s = String::new();\n    write!(s, \
+         \"{}\", 1).unwrap();\n}\n",
+        "mod m {\n    use std::fmt::Write;\n    pub fn f() -> String {\n        let mut s = \
+         String::new();\n        write!(s, \"x\").unwrap();\n        s\n    }\n}\nfn main() {\n    \
+         m::f();\n}\n",
+        "use std::fmt::{self, Write};\nstruct W(String);\nimpl Write for W {\n    fn write_str(&mut \
+         self, s: &str) -> fmt::Result {\n        self.0.push_str(s);\n        Ok(())\n    }\n}\nfn \
+         main() {\n    let mut w = W(String::new());\n    writeln!(w, \"{}\", 2).unwrap();\n}\n",
+    ] {
+        Engine::new()
+            .compile(source)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}

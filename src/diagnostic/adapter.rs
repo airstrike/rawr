@@ -753,6 +753,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::Syntax => code::PARSE_SYNTAX,
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
+        resolve::Category::UnscopedWrite => code::RESOLVE_NO_METHOD,
         resolve::Category::StdPath => match error {
             resolve::Error::StdPath { code, .. } => code::std_path(code),
             _ => unreachable!("a std path's category"),
@@ -841,6 +842,13 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnknownFunction {
             import: Some(path), ..
         } => builder.help(format!("consider importing this function: `use {path};`")),
+        // rustc's help that names the import, after its note.
+        resolve::Error::UnscopedWrite { .. } => builder
+            .note("must implement `io::Write`, `fmt::Write`, or have a `write_fmt` method")
+            .help(
+                "trait `Write` which provides `write_fmt` is implemented but not in scope; \
+                 perhaps you want to import it: `use std::fmt::Write;`",
+            ),
         resolve::Error::UnknownMacro {
             scope: resolve::MacroScope::Elsewhere,
             ..
@@ -1160,6 +1168,7 @@ fn resolution_message(error: &resolve::Error) -> String {
             "`break` or `continue` with no label in the condition of a `while` loop".to_string()
         }
         resolve::Error::AsyncMain { .. } => resolve::ASYNC_MAIN.to_string(),
+        resolve::Error::UnscopedWrite { owner, .. } => format!("cannot write into `{owner}`"),
         resolve::Error::StdPath { message, .. } => message.to_string(),
         resolve::Error::NonExhaustive { witnesses, .. } => {
             resolve::NonExhaustive(witnesses).to_string()

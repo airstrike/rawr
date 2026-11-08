@@ -511,6 +511,14 @@ pub struct UseMember {
 }
 
 impl Use {
+    /// Whether the import is in scope at `at` in its source: a module's
+    /// everywhere, a block's inside the block.
+    #[must_use]
+    pub fn visible_at(&self, at: crate::Position) -> bool {
+        self.scope
+            .is_none_or(|scope| scope.start() <= at && at <= scope.end())
+    }
+
     /// Whether the import starts with `::`, which names an outside crate.
     #[must_use]
     pub fn global(&self) -> bool {

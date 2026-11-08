@@ -4824,7 +4824,6 @@ struct Tables {
     features: crate::project::cargo::features::Enabled,
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
-    #[cfg(feature = "rust-import")]
     lexical: BTreeMap<crate::program::source::Id, Box<[crate::item::Use]>>,
     by_name: BTreeMap<(crate::program::source::Id, ImmutableString), Nominal>,
     /// The source that declares each script type.
@@ -5519,7 +5518,6 @@ impl Models {
             test: engine.test(),
             features: program.features().clone(),
             imports,
-            #[cfg(feature = "rust-import")]
             lexical: program.lexical.clone(),
             by_name,
             declared_in,

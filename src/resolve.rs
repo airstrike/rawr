@@ -110,8 +110,8 @@ pub struct Program {
     /// The generic functions compiled once per instantiation (D629).
     instances: Instances,
     /// Each source's original imports with their lexical scopes (D652),
-    /// before hoisting: the scope a proof-backed imported call reads.
-    #[cfg(feature = "rust-import")]
+    /// before hoisting: the scope a proof-backed imported call reads, and
+    /// where a block's `use` is in scope.
     lexical: BTreeMap<program::source::Id, Box<[crate::item::Use]>>,
     /// The program's own `macro_rules!` macros and their scopes.
     macros: macros::Table,
@@ -542,7 +542,6 @@ fn resolve_with_evidence_and_namespace(
     evidence: crate::diagnostic::Source,
 ) -> Result<Program, Error> {
     std_trait::begin();
-    #[cfg(feature = "rust-import")]
     let lexical = BTreeMap::from([(
         program::source::Id::ROOT,
         unit.imports().to_vec().into_boxed_slice(),
@@ -639,7 +638,6 @@ fn resolve_with_evidence_and_namespace(
         }]
         .into_boxed_slice(),
         instances: Instances::default(),
-        #[cfg(feature = "rust-import")]
         lexical,
         macros,
     };

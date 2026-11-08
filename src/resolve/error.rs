@@ -97,6 +97,9 @@ pub enum Category {
     /// A root `main` that is `async` with no runtime's entry, as rustc's
     /// E0752.
     AsyncMain,
+    /// `write!` into a value whose `Write` trait is not in scope, as
+    /// rustc's E0599.
+    UnscopedWrite,
     /// A path into std, core or alloc that rustc refuses: one std doesn't
     /// have (E0432, E0433, E0425), or an unstable item (E0658).
     StdPath,
@@ -171,6 +174,7 @@ impl fmt::Display for Category {
                 formatter.write_str("unlabeled jump in a `while` condition")
             }
             Self::AsyncMain => formatter.write_str("async main"),
+            Self::UnscopedWrite => formatter.write_str("trait not in scope"),
             Self::StdPath => formatter.write_str("std path"),
             Self::NotYet => formatter.write_str("not yet run"),
             Self::TypeAnnotationsNeeded => formatter.write_str("type annotations needed"),
@@ -835,6 +839,16 @@ pub enum Error {
         /// The function's signature, from `async` to its output.
         at: Span,
     },
+    /// `write!(s, ..)` into a value whose `Write` impl's trait is not in
+    /// scope where the macro is, which rustc refuses (E0599 "cannot write
+    /// into `String`"): a trait's methods are callable only where the
+    /// trait is in scope.
+    UnscopedWrite {
+        /// The value's type, as rustc writes it.
+        owner: ImmutableString,
+        /// The value written into.
+        at: Span,
+    },
     /// A path into std, core or alloc that rustc refuses, in rustc's words:
     /// one std doesn't have (E0432, E0433, E0425), or an unstable item
     /// (E0658). From the std table (D711).
@@ -1089,6 +1103,7 @@ impl Error {
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
             Self::AsyncMain { .. } => Category::AsyncMain,
+            Self::UnscopedWrite { .. } => Category::UnscopedWrite,
             Self::StdPath { .. } => Category::StdPath,
             Self::NotYet { .. } => Category::NotYet,
             Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
@@ -1150,6 +1165,7 @@ impl Error {
             Self::Syntax { message, .. } | Self::Unimplemented { message, .. } => message.as_str(),
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::AsyncMain { .. } => "main",
+            Self::UnscopedWrite { owner, .. } => owner.as_str(),
             Self::StdPath { message, .. } => message.as_str(),
             Self::NotYet { path, .. } => path.as_str(),
             Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
@@ -1208,7 +1224,7 @@ impl Error {
             Self::NonExhaustive { scrutinee, .. } => *scrutinee,
             Self::Refutable { pattern, .. } | Self::PatternFields { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
-            Self::AsyncMain { at } => *at,
+            Self::AsyncMain { at } | Self::UnscopedWrite { at, .. } => *at,
             Self::StdPath { reference, .. } | Self::NotYet { reference, .. } => *reference,
             Self::TypeAnnotationsNeeded { reference, .. } => *reference,
             Self::ArgumentCount { call, .. } => *call,
@@ -1284,6 +1300,7 @@ impl Error {
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
+            | Self::UnscopedWrite { .. }
             | Self::StdPath { .. }
             | Self::NotYet { .. }
             | Self::TypeAnnotationsNeeded { .. }
@@ -2005,6 +2022,9 @@ impl fmt::Display for Written<'_> {
             Error::UnlabeledJumpInWhileCondition { .. } => formatter
                 .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
             Error::AsyncMain { .. } => formatter.write_str(ASYNC_MAIN),
+            Error::UnscopedWrite { owner, at } => {
+                write!(formatter, "cannot write into `{owner}` at {at}")
+            }
             Error::StdPath {
                 code,
                 message,

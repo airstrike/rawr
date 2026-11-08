@@ -17,6 +17,55 @@ impl Parser<'_> {
             && matches!(ahead.next(), Some((Token::Identifier(name), _)) if name.as_str() == formatter.as_str())
     }
 
+    /// Whether `std::fmt::Write` may be in scope at `at`, as rustc asks of
+    /// a trait before its method is called: a `use` of it or a glob of
+    /// `std::fmt`, in this module or in a block that holds `at`. A `use` of
+    /// a path outside std that ends in `Write`, or a glob of one, may reach
+    /// it through a re-export, so it counts.
+    fn fmt_write_in_scope(&self, at: Position) -> bool {
+        let Some(imports) = self.models.lexical.get(&self.models.context) else {
+            return true;
+        };
+        let std = |path: &[ImmutableString]| {
+            path.first()
+                .is_some_and(|root| crate::std_table::is_root(root))
+        };
+        imports
+            .iter()
+            .filter(|used| used.visible_at(at))
+            .any(|used| {
+                if let crate::item::UseTree::Glob { prefix, .. } = &used.tree {
+                    let path = prefix
+                        .segments
+                        .iter()
+                        .map(|segment| segment.name.text.clone())
+                        .collect::<Vec<_>>();
+                    return match &path[..] {
+                        [root, module] if crate::std_table::is_root(root) => module == "fmt",
+                        path => !std(path),
+                    };
+                }
+                // With `std::io::Write` in scope rustc says the method's
+                // bounds are not met, which this check doesn't word.
+                used.bindings().iter().any(|(_, path)| match &path[..] {
+                    [.., last] if last != "Write" => false,
+                    [root, module, _] if crate::std_table::is_root(root) => {
+                        module == "fmt" || module == "io"
+                    }
+                    path => !std(path),
+                })
+            })
+    }
+
+    /// rustc's E0599 for `write!` into `target` where no `Write` trait is in
+    /// scope: `None` where `std::fmt::Write` is.
+    fn unscoped_write(&self, owner: &Ty, target: Span) -> Option<Error> {
+        (!self.fmt_write_in_scope(target.start())).then(|| Error::UnscopedWrite {
+            owner: owner.name(&self.models),
+            at: target,
+        })
+    }
+
     /// `write!(s, ..)`, `write!(&mut s, ..)` or `writeln!(s, ..)` into the
     /// `String` place `s`, after the macro's name.
     pub(super) fn parse_write_string(
@@ -26,11 +75,12 @@ impl Parser<'_> {
     ) -> Result<ParsedExpr, Error> {
         self.next();
         self.expect(Token::LeftParen, "'(' after `write!`")?;
+        let target_start = self.position();
         if matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut) {
             self.next();
             self.next();
         }
-        if let Some(written) = self.write_into_program_writer(name, name_span)? {
+        if let Some(written) = self.write_into_program_writer(name, name_span, target_start)? {
             return Ok(written);
         }
         let target = self.parse_expr()?;
@@ -52,6 +102,10 @@ impl Parser<'_> {
                 .into(),
                 source: target.span,
             });
+        }
+        let owner = self.inference.resolve(text_ty);
+        if let Some(error) = self.unscoped_write(&owner, span(target_start, target.span.start())) {
+            return Err(error);
         }
         let (mut text, end) = if matches!(self.peek(), Token::Comma) {
             self.next();
@@ -95,6 +149,7 @@ impl Parser<'_> {
         &mut self,
         name: &str,
         name_span: Span,
+        target_start: Position,
     ) -> Result<Option<ParsedExpr>, Error> {
         let Token::Identifier(local) = self.peek() else {
             return Ok(None);
@@ -109,9 +164,10 @@ impl Parser<'_> {
         while let Ty::Reference { target, .. } = ty {
             ty = self.inference.resolve(&target);
         }
-        let Ty::Script(id, _) = ty else {
+        let Ty::Script(id, _) = &ty else {
             return Ok(None);
         };
+        let id = *id;
         let writes = self
             .models
             .trait_methods
@@ -127,6 +183,9 @@ impl Parser<'_> {
             return Ok(None);
         }
         let (local_token, at) = self.next();
+        if let Some(error) = self.unscoped_write(&ty, span(target_start, at)) {
+            return Err(error);
+        }
         let (arguments, close) = if matches!(self.peek(), Token::Comma) {
             self.next();
             self.splice_tokens(vec![(Token::LeftParen, at)]);
