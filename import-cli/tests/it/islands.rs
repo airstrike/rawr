@@ -364,8 +364,12 @@ fn a_marked_module_names_the_items_of_a_native_module() {
 /// page::Page>`, and native code keeps the boxes beside a native page in a
 /// `Vec<Box<dyn Page>>`, calls their `&self` methods and their `&mut self`
 /// `update`, whose changes a later call reads, with a native `Message` in
-/// and a native `Task` out, and drops one. `rawr check` passes as `cargo
-/// check` does, and `rawr run` prints what `cargo run` prints.
+/// and a native `Task` out, and drops one. `Page: Debug + PageClone`
+/// (#1301): the box prints by the page's derived `Debug`, and clones by
+/// its derived `Clone` into a page of its own. A `&self` `summary` calls
+/// a native helper that calls `title()` on the same object while it runs
+/// (#1302). `rawr check` passes as `cargo check` does, and `rawr run`
+/// prints what `cargo run` prints.
 #[test]
 fn a_marked_type_becomes_a_native_trait_object() {
     const OBJECTS: &str = concat!(
@@ -389,6 +393,14 @@ fn a_marked_type_becomes_a_native_trait_object() {
         String::from_utf8_lossy(&native.stderr)
     );
     assert!(printed.contains("badge 1: clicks 8\n"), "{printed}");
+    assert!(
+        printed.contains(
+            "BadgePage { page_index: 2, count: 1, label: \"count\" } \
+             BadgePage { page_index: 2, count: 11, label: \"count\" }\n"
+        ),
+        "{printed}"
+    );
+    assert!(printed.contains("count 1 sees badge 2\n"), "{printed}");
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
         .arg(&root)

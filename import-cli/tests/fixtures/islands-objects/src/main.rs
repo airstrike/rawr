@@ -28,4 +28,18 @@ fn main() {
     for page in &pages {
         println!("{}: {}", page.title(), page.view());
     }
+    // `Page: Debug + PageClone`: the box prints by the page's `Debug`, and
+    // its clone is a page of its own.
+    println!("{:?}", pages[1]);
+    let mut copy = pages[1].clone();
+    copy.update(Message::Bump(10));
+    println!("{:?} {:?}", pages[1], copy);
+    pages.push(copy);
+    page::SHOWN.with_borrow_mut(|shown| shown.extend(pages));
+    page::SHOWN.with_borrow(|shown| {
+        for index in 0..shown.len() {
+            println!("{}", shown[index].summary(index));
+        }
+        println!("{}", shown[1].summary(2));
+    });
 }

@@ -126,6 +126,123 @@ fn path(identity: &type_def::Identity) -> Option<String> {
 }
 
 impl Model {
+    /// `lhs` and `rhs` ordered as a derived `PartialOrd` orders them, for a
+    /// native trait object's stand-in (#1301): numbers, strings, chars,
+    /// bools and `()`, `Option` and `Result`, arrays and tuples element by
+    /// element, a struct's fields in order and an enum's variants in
+    /// declaration order, then their payloads. `None` when unordered.
+    pub(crate) fn island_order(&self, lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
+        use std::cmp::Ordering;
+        let lexicographic = |lhs: &[Dynamic], rhs: &[Dynamic]| {
+            for (lhs, rhs) in lhs.iter().zip(rhs) {
+                match self.island_order(lhs, rhs)? {
+                    Ordering::Equal => {}
+                    ordering => return Some(ordering),
+                }
+            }
+            Some(lhs.len().cmp(&rhs.len()))
+        };
+        if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
+            return match (lhs, rhs) {
+                (Some(lhs), Some(rhs)) => self.island_order(&lhs, &rhs),
+                (lhs, rhs) => Some(lhs.is_some().cmp(&rhs.is_some())),
+            };
+        }
+        if let (Some(lhs), Some(rhs)) = (crate::result::read(lhs), crate::result::read(rhs)) {
+            return match (lhs, rhs) {
+                (Ok(lhs), Ok(rhs)) | (Err(lhs), Err(rhs)) => self.island_order(&lhs, &rhs),
+                (lhs, rhs) => Some(lhs.is_err().cmp(&rhs.is_err())),
+            };
+        }
+        match (&lhs.0, &rhs.0) {
+            (Union::Shared(..), _) | (_, Union::Shared(..)) => {
+                self.island_order(&lhs.flatten_clone(), &rhs.flatten_clone())
+            }
+            (Union::Unit(..), Union::Unit(..)) => Some(Ordering::Equal),
+            (Union::Bool(lhs, ..), Union::Bool(rhs, ..)) => Some(lhs.cmp(rhs)),
+            (Union::Char(lhs, ..), Union::Char(rhs, ..)) => Some(lhs.cmp(rhs)),
+            (Union::Int(lhs, tag, ..), Union::Int(rhs, other, ..))
+                if *tag == crate::types::dynamic::UNSIGNED_TAG
+                    || *other == crate::types::dynamic::UNSIGNED_TAG =>
+            {
+                Some((*lhs as u64).cmp(&(*rhs as u64)))
+            }
+            (Union::Int(lhs, ..), Union::Int(rhs, ..)) => Some(lhs.cmp(rhs)),
+            (Union::Str(lhs, ..), Union::Str(rhs, ..)) => Some(lhs.as_str().cmp(rhs.as_str())),
+            (Union::Float(lhs, ..), Union::Float(rhs, ..)) => (**lhs).partial_cmp(&**rhs),
+            (Union::Array(lhs, ..), Union::Array(rhs, ..)) => lexicographic(lhs, rhs),
+            (Union::Variant(..), Union::Variant(..)) => crate::host::value::host_compare(lhs, rhs),
+            (Union::Struct(lhs, ..), Union::Struct(rhs, ..))
+                if lhs.identity() == rhs.identity() =>
+            {
+                lexicographic(lhs.fields(), rhs.fields())
+            }
+            (Union::Enum(lhs, ..), Union::Enum(rhs, ..)) if lhs.identity() == rhs.identity() => {
+                let order = &self.definitions.get(lhs.identity())?.names.order;
+                let index = |variant: &nominal::variant::Id| {
+                    order.iter().position(|declared| declared == variant)
+                };
+                match index(lhs.variant())?.cmp(&index(rhs.variant())?) {
+                    Ordering::Equal => lexicographic(lhs.payload(), rhs.payload()),
+                    ordering => Some(ordering),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Feed `value` to `state` as a derived `Hash` does, for a native trait
+    /// object's stand-in (#1301): each field or element in order, an enum's
+    /// variant first. `Err` names what can't be hashed.
+    pub(crate) fn island_hash(
+        &self,
+        value: &Dynamic,
+        state: &mut impl std::hash::Hasher,
+    ) -> Result<(), String> {
+        use std::hash::Hash;
+        match &value.0 {
+            Union::Shared(..) => self.island_hash(&value.flatten_clone(), state),
+            Union::Unit(..)
+            | Union::Bool(..)
+            | Union::Str(..)
+            | Union::Char(..)
+            | Union::Int(..)
+            | Union::Float(..) => {
+                value.hash(state);
+                Ok(())
+            }
+            Union::Array(elements, ..) => {
+                elements.len().hash(state);
+                elements
+                    .iter()
+                    .try_for_each(|element| self.island_hash(element, state))
+            }
+            Union::Struct(nominal, ..) => nominal
+                .fields()
+                .iter()
+                .try_for_each(|field| self.island_hash(field, state)),
+            Union::Enum(nominal, ..) => {
+                nominal.variant().hash(state);
+                nominal
+                    .payload()
+                    .iter()
+                    .try_for_each(|member| self.island_hash(member, state))
+            }
+            _ => match (crate::option::read(value), crate::result::read(value)) {
+                (Some(option), _) => {
+                    option.is_some().hash(state);
+                    option.map_or(Ok(()), |inner| self.island_hash(&inner, state))
+                }
+                (_, Some(result)) => {
+                    result.is_ok().hash(state);
+                    let (Ok(inner) | Err(inner)) = result;
+                    self.island_hash(&inner, state)
+                }
+                _ => Err(format!("a `{}` can't be hashed yet", value.type_name())),
+            },
+        }
+    }
+
     /// The model's script types by path.
     pub(crate) fn island_types(&self) -> Types {
         Types(

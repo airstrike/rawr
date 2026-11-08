@@ -252,14 +252,104 @@ struct Generator<'a> {
     crossing: BTreeSet<String>,
     /// Traits declared in marked code: their impls are not mirrored.
     traits: BTreeSet<&'a str>,
+    /// The std traits each marked type implements, derived or written, by
+    /// the type's name: what its stand-in implements too (#1301).
+    implemented: BTreeMap<&'a str, BTreeSet<Std>>,
+}
+
+/// A std trait a stand-in implements for the marked type it holds, as a
+/// native trait's supertrait may require (#1301).
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Std {
+    Debug,
+    Display,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Default,
+    PartialOrd,
+    Ord,
+}
+
+impl Std {
+    /// The std trait named `name`, as a derive or an impl writes it last.
+    fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "Debug" => Self::Debug,
+            "Display" => Self::Display,
+            "Clone" => Self::Clone,
+            "PartialEq" => Self::PartialEq,
+            "Eq" => Self::Eq,
+            "Hash" => Self::Hash,
+            "Default" => Self::Default,
+            "PartialOrd" => Self::PartialOrd,
+            "Ord" => Self::Ord,
+            _ => return None,
+        })
+    }
+
+    /// The stand-in `stand_in`'s impl of the trait, each function asking
+    /// the interpreter for the program value's own (`island::Object`), the
+    /// type at `owner`'s.
+    fn implementation(self, stand_in: &str, owner: &str) -> String {
+        let island = format!("crate::{MODULE}");
+        let body = match self {
+            Self::Debug | Self::Display => {
+                let which = if self == Self::Debug { "DEBUG" } else { "DISPLAY" };
+                format!(
+                    "    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n        \
+                     f.write_str(&self.0.text({owner:?}, {island}::{which}))\n    }}\n"
+                )
+            }
+            Self::Clone => format!(
+                "    fn clone(&self) -> Self {{\n        Self(self.0.duplicate({owner:?}))\n    }}\n"
+            ),
+            Self::PartialEq => format!(
+                "    fn eq(&self, other: &Self) -> bool {{\n        self.0.equal(&other.0, {owner:?})\n    }}\n"
+            ),
+            Self::Eq => String::new(),
+            Self::Hash => format!(
+                "    fn hash<H: ::std::hash::Hasher>(&self, state: &mut H) {{\n        \
+                 state.write_u64(self.0.hash({owner:?}))\n    }}\n"
+            ),
+            Self::Default => format!(
+                "    fn default() -> Self {{\n        Self({island}::Object::default_of({owner:?}))\n    }}\n"
+            ),
+            Self::PartialOrd => format!(
+                "    fn partial_cmp(&self, other: &Self) -> ::std::option::Option<::std::cmp::Ordering> {{\n        \
+                 self.0.compare(&other.0, {owner:?}, false)\n    }}\n"
+            ),
+            Self::Ord => format!(
+                "    fn cmp(&self, other: &Self) -> ::std::cmp::Ordering {{\n        \
+                 self.0.compare(&other.0, {owner:?}, true).unwrap_or(::std::cmp::Ordering::Equal)\n    }}\n"
+            ),
+        };
+        let path = match self {
+            Self::Debug => "::std::fmt::Debug",
+            Self::Display => "::std::fmt::Display",
+            Self::Clone => "::std::clone::Clone",
+            Self::PartialEq => "::std::cmp::PartialEq",
+            Self::Eq => "::std::cmp::Eq",
+            Self::Hash => "::std::hash::Hash",
+            Self::Default => "::std::default::Default",
+            Self::PartialOrd => "::std::cmp::PartialOrd",
+            Self::Ord => "::std::cmp::Ord",
+        };
+        format!("impl {path} for {stand_in} {{\n{body}}}\n")
+    }
 }
 
 impl<'a> Generator<'a> {
     fn new(sources: &'a [Source<'a>]) -> Self {
         let mut types = BTreeMap::new();
         let mut traits = BTreeSet::new();
+        let mut implemented = BTreeMap::<&str, BTreeSet<Std>>::new();
         for source in sources {
             for item in source.items {
+                for (name, std) in std_impls(item) {
+                    implemented.entry(name).or_default().insert(std);
+                }
                 let (name, generics, fields) = match item {
                     item::Parsed::Struct(declared) if declared.header.visibility.is_some() => (
                         declared.name.text.as_str(),
@@ -295,12 +385,17 @@ impl<'a> Generator<'a> {
                 );
             }
         }
+        // A marked trait named as a std one is the program's own.
+        for implemented in implemented.values_mut() {
+            implemented.retain(|std| !traits.contains(format!("{std:?}").as_str()));
+        }
         // A type crosses when every field does; start from all and drop
         // those with a field that doesn't, until none drops.
         let mut generator = Self {
             types,
             crossing: BTreeSet::new(),
             traits,
+            implemented,
         };
         generator.crossing = generator
             .types
@@ -842,6 +937,11 @@ impl<'a> Generator<'a> {
                  #[doc(hidden)]\n\
                  pub struct {stand_in}(pub {island}::Object);"
             );
+            // Each std trait the marked type implements, as a supertrait of
+            // the native trait may require (#1301).
+            for std in self.implemented.get(name).into_iter().flatten() {
+                text.push_str(&std.implementation(&full, &path));
+            }
         }
         let written = slice(file.text, trait_.span);
         let _ = writeln!(text, "impl {written} for {full} {{");
@@ -1175,6 +1275,57 @@ impl<'a> Generator<'a> {
     }
 }
 
+/// Each std trait `item` gives a type of the marked crate, by the type's
+/// name: a struct's or enum's derives, or an impl of one for a type with no
+/// parameters, `impl fmt::Debug for Badge` (#1301).
+fn std_impls(item: &item::Parsed) -> Vec<(&str, Std)> {
+    fn derived<'i>(header: &item::Header, name: &'i item::Name) -> Vec<(&'i str, Std)> {
+        header
+            .attributes
+            .iter()
+            .filter(|attribute| {
+                matches!(attribute.path.segments.as_ref(), [only] if only.name.text == "derive")
+            })
+            .flat_map(|attribute| attribute.arguments.iter())
+            .filter_map(|derived| Std::named(&derived.segments.last()?.name.text))
+            .map(|std| (name.text.as_str(), std))
+            .collect()
+    }
+    match item {
+        item::Parsed::Struct(declared) if declared.generics.is_empty() => {
+            derived(&declared.header, &declared.name)
+        }
+        item::Parsed::Enum(declared) if declared.generics.is_empty() => {
+            derived(&declared.header, &declared.name)
+        }
+        item::Parsed::Impl(declared) => {
+            let (Some(trait_), type_ref::Type::Path(owner)) = (&declared.trait_, &declared.owner)
+            else {
+                return Vec::new();
+            };
+            let (Some(last), Some(owner)) = (trait_.segments.last(), owner.segments.last()) else {
+                return Vec::new();
+            };
+            let own = matches!(
+                trait_.segments[0].name.text.as_str(),
+                "crate" | "self" | "super"
+            );
+            match Std::named(&last.name.text) {
+                Some(std)
+                    if !own
+                        && last.arguments.is_empty()
+                        && owner.arguments.is_empty()
+                        && declared.generics.is_empty() =>
+                {
+                    vec![(owner.name.text.as_str(), std)]
+                }
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Where a module's stand-ins go (`Generator::stand_in`): the names it
 /// has declared already, its generated items, the shape, what can't cross
 /// and the makers.
@@ -1382,6 +1533,7 @@ pub mod __rawr_island {
         fn __rawr_island_start_v1(entry: fn() -> i32);
         fn __rawr_island_objects_v1(makers: &[(&'static str, Maker)]);
         fn __rawr_island_release_v1(handle: u64);
+        fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> ::std::vec::Vec<u8>;
     }
 
     /// What makes a native trait's object of a program value: the
@@ -1416,6 +1568,83 @@ pub mod __rawr_island {
         fn drop(&mut self) {
             // SAFETY: as for `register`.
             unsafe { __rawr_island_release_v1(self.0) }
+        }
+    }
+
+    // What a stand-in's std trait asks of the program value it holds, by
+    // the program's own impl, derived or written (`rawr::island::Op`).
+    pub const DEBUG: u8 = 0;
+    pub const DISPLAY: u8 = 1;
+    const CLONE: u8 = 2;
+    const EQUAL: u8 = 3;
+    const HASH: u8 = 4;
+    const DEFAULT: u8 = 5;
+    const PARTIAL_ORDER: u8 = 6;
+    const ORDER: u8 = 7;
+
+    /// The answer to `op` of the value at `handle` (and `other`), as the
+    /// type at `owner` implements it; a failure panics, as a trampoline's.
+    fn ask(owner: &str, op: u8, handle: u64, other: u64) -> ::std::vec::Vec<u8> {
+        register();
+        // SAFETY: as for `register`.
+        let mut reply = unsafe { __rawr_island_trait_v1(owner, op, handle, other) };
+        match reply.first() {
+            ::std::option::Option::Some(0) => {
+                reply.remove(0);
+                reply
+            }
+            _ => ::std::panic!(
+                "{}",
+                ::std::string::String::from_utf8_lossy(reply.get(1..).unwrap_or_default())
+            ),
+        }
+    }
+
+    /// The first eight bytes of `reply` as a number.
+    fn number(reply: &[u8]) -> u64 {
+        let mut bytes = [0; 8];
+        bytes.copy_from_slice(&reply[..8]);
+        u64::from_le_bytes(bytes)
+    }
+
+    impl Object {
+        /// The value's `Debug` or `Display` text.
+        pub fn text(&self, owner: &str, op: u8) -> ::std::string::String {
+            ::std::string::String::from_utf8_lossy(&ask(owner, op, self.0, 0)).into_owned()
+        }
+
+        /// A clone of the value, under a handle of its own.
+        pub fn duplicate(&self, owner: &str) -> Self {
+            Self(number(&ask(owner, CLONE, self.0, 0)))
+        }
+
+        pub fn equal(&self, other: &Self, owner: &str) -> bool {
+            ask(owner, EQUAL, self.0, other.0) == [1]
+        }
+
+        pub fn hash(&self, owner: &str) -> u64 {
+            number(&ask(owner, HASH, self.0, 0))
+        }
+
+        /// The `Default` of the type at `owner`, under a handle of its own.
+        pub fn default_of(owner: &str) -> Self {
+            Self(number(&ask(owner, DEFAULT, 0, 0)))
+        }
+
+        /// `partial_cmp`, or with `total` `cmp`, of the two values.
+        pub fn compare(
+            &self,
+            other: &Self,
+            owner: &str,
+            total: bool,
+        ) -> ::std::option::Option<::std::cmp::Ordering> {
+            let op = if total { ORDER } else { PARTIAL_ORDER };
+            match ask(owner, op, self.0, other.0).as_slice() {
+                [0] => ::std::option::Option::Some(::std::cmp::Ordering::Less),
+                [1] => ::std::option::Option::Some(::std::cmp::Ordering::Equal),
+                [2] => ::std::option::Option::Some(::std::cmp::Ordering::Greater),
+                _ => ::std::option::Option::None,
+            }
         }
     }
 
@@ -2612,7 +2841,7 @@ mod tests {
     fn a_crate_traits_impl_gets_a_stand_in_and_a_maker() {
         let shadow = generate(
             "// rawr\nuse crate::page::{self, Message};\nuse std::fmt;\n\
-             pub struct Badge {\n    count: usize,\n}\n\
+             #[derive(Clone, PartialEq, Eq)]\npub struct Badge {\n    count: usize,\n}\n\
              impl page::Page for Badge {\n    fn title(&self) -> String { String::new() }\n    \
              fn update(&mut self, message: Message) -> Option<Message> { None }\n    \
              fn same(&self, other: &Self) -> bool { true }\n}\n\
@@ -2656,11 +2885,30 @@ mod tests {
             ),
             "{text}"
         );
-        // A std trait is not the crate's: no stand-in for it.
+        // A std trait is not the crate's: no maker for it, but the
+        // stand-in implements each the type does, derived or written, as a
+        // supertrait may require (#1301).
         assert!(
-            !text.contains("for crate::physics::__RawrBadge {\n    fn fmt"),
+            text.contains(
+                "impl ::std::fmt::Display for crate::physics::__RawrBadge {\n    \
+                 fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {\n        \
+                 f.write_str(&self.0.text(\"physics::Badge\", crate::__rawr_island::DISPLAY))\n"
+            ),
             "{text}"
         );
+        assert!(
+            text.contains(
+                "impl ::std::clone::Clone for crate::physics::__RawrBadge {\n    \
+                 fn clone(&self) -> Self {\n        \
+                 Self(self.0.duplicate(\"physics::Badge\"))\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("impl ::std::cmp::Eq for crate::physics::__RawrBadge {\n}\n"),
+            "{text}"
+        );
+        assert!(!text.contains("::std::hash::Hash for"), "{text}");
         assert_eq!(
             shadow.objects,
             [(

@@ -126,7 +126,25 @@ static MAKERS: Mutex<Vec<(&'static str, Maker)>> = Mutex::new(Vec::new());
 #[derive(Default)]
 struct Kept {
     next: u64,
-    values: HashMap<u64, Dynamic>,
+    values: HashMap<u64, Held>,
+}
+
+/// One program value native code holds as a native trait's object.
+struct Held {
+    /// The value, which each `&self` call on it shares, as a shared borrow
+    /// does (#1302); `None` while a `&mut self` call has it.
+    value: Option<Dynamic>,
+    /// How many `&self` calls on it run.
+    readers: usize,
+}
+
+/// How a call has the program value it is the receiver of.
+#[derive(Clone, Copy)]
+enum Borrow {
+    /// `&self`: shared with every other `&self` call that runs on it.
+    Shared,
+    /// `&mut self`: taken for the call, alone.
+    Mutable,
 }
 
 #[cfg(feature = "sync")]
@@ -169,6 +187,21 @@ pub fn __rawr_island_release_v1(handle: u64) {
     drop(released);
 }
 
+/// `value` kept under a handle of its own, as a native trait object's.
+fn keep(value: Dynamic) -> u64 {
+    kept(|kept| {
+        kept.next += 1;
+        kept.values.insert(
+            kept.next,
+            Held {
+                value: Some(value),
+                readers: 0,
+            },
+        );
+        kept.next
+    })
+}
+
 /// `value`, of the program's type at `owner`, as the native trait object
 /// `Box<dyn trait_name>`: the value is kept under a handle, and the
 /// stand-in rawr's copy of the crate declares for `owner` holds it and
@@ -182,11 +215,7 @@ pub(crate) fn object(value: Dynamic, owner: &str, trait_name: &str) -> Result<Dy
         .filter(|(path, _)| *path == owner)
         .map(|(_, maker)| *maker)
         .collect::<Vec<_>>();
-    let handle = kept(|kept| {
-        kept.next += 1;
-        kept.values.insert(kept.next, value);
-        kept.next
-    });
+    let handle = keep(value);
     // The crate's own path of the trait, without the crate's name, which
     // the stand-in's impl compares with its own.
     let below = trait_name
@@ -204,18 +233,138 @@ pub(crate) fn object(value: Dynamic, owner: &str, trait_name: &str) -> Result<Dy
     }
 }
 
-/// The program value of `handle` out of the table, for one call of the
-/// impl's function it is the receiver of.
-fn take_kept(handle: u64) -> Result<Dynamic, String> {
-    kept(|kept| kept.values.remove(&handle)).ok_or_else(|| {
-        "rawr: a native trait object's program value is in use by a call it made, or was dropped"
-            .to_owned()
+/// The program value of `handle` for one call of the impl's function it
+/// is the receiver of, `borrow`ed: a `&self` call shares it with any other
+/// that runs, at any depth of calls back into the same object (#1302), and
+/// a `&mut self` call takes it. A `&mut self` call while another call on
+/// it runs is the borrow conflict rustc reports of such code.
+fn take_kept(handle: u64, borrow: Borrow) -> Result<Dynamic, String> {
+    kept(|kept| {
+        let held = kept.values.get_mut(&handle).ok_or_else(|| {
+            "rawr: a native trait object's program value was used after it was dropped".to_owned()
+        })?;
+        match (borrow, held.value.as_mut()) {
+            (Borrow::Shared, Some(value)) => {
+                if !value.is_shared() {
+                    *value = value.take().into_shared();
+                }
+                held.readers += 1;
+                Ok(value.clone())
+            }
+            (Borrow::Mutable, Some(_)) if held.readers == 0 => {
+                Ok(held.value.take().map(Dynamic::flatten).unwrap_or_default())
+            }
+            (Borrow::Mutable, Some(_)) => Err(
+                "error[E0502]: cannot borrow a native trait object as mutable because it is \
+                 also borrowed as immutable: a `&mut self` method was called on it while a \
+                 `&self` method on it runs"
+                    .to_owned(),
+            ),
+            (Borrow::Shared, None) => Err(
+                "error[E0502]: cannot borrow a native trait object as immutable because it is \
+                 also borrowed as mutable: a `&self` method was called on it while a \
+                 `&mut self` method on it runs"
+                    .to_owned(),
+            ),
+            (Borrow::Mutable, None) => Err(
+                "error[E0499]: cannot borrow a native trait object as mutable more than once \
+                 at a time: a `&mut self` method was called on it while another on it runs"
+                    .to_owned(),
+            ),
+        }
     })
 }
 
-/// Put the program value of `handle` back after the call it was taken for.
-fn put_kept(handle: u64, value: Dynamic) {
-    kept(|kept| kept.values.insert(handle, value));
+/// What a stand-in's std trait asks of the program value it holds, as
+/// the shadow crate's support numbers it (#1301).
+mod op {
+    pub(super) const DEBUG: u8 = 0;
+    pub(super) const DISPLAY: u8 = 1;
+    pub(super) const CLONE: u8 = 2;
+    pub(super) const EQUAL: u8 = 3;
+    pub(super) const HASH: u8 = 4;
+    pub(super) const DEFAULT: u8 = 5;
+    pub(super) const PARTIAL_ORDER: u8 = 6;
+    pub(super) const ORDER: u8 = 7;
+}
+
+/// One question a stand-in's std trait asks (`__rawr_island_trait_v1`).
+struct Asked<'a> {
+    /// The marked type's path from the crate's root.
+    owner: &'a str,
+    op: u8,
+    handle: u64,
+    /// The other operand's handle, of an `eq` or a comparison.
+    other: u64,
+}
+
+/// Answer what a stand-in's impl of a std trait asks of the program value
+/// at `handle` (and `other`), by the impl of the type at `owner` the
+/// program has, derived or written (#1301): its `Debug` or `Display` text,
+/// a clone under a handle of its own, `eq`, a hash, a `Default` under a
+/// handle of its own, `partial_cmp` or `cmp`. The reply starts with `0`
+/// and holds the answer, or starts with `1` and holds a message to panic
+/// with. The value is borrowed as a `&self` call borrows it.
+#[unsafe(no_mangle)]
+pub fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> Vec<u8> {
+    let asked = Asked {
+        owner,
+        op,
+        handle,
+        other,
+    };
+    if current().is_some() {
+        let _entry = crate::future::trampoline();
+        if let Some(current) = current() {
+            let catalog = current.bootstrap.catalog();
+            let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
+                catalog
+                    .invoke_item(function, arguments)
+                    .map_err(|error| error.to_string())
+            };
+            return current
+                .calls
+                .ask(&asked, catalog.authority().model(), &invoke)
+                .unwrap_or_else(|message| failure(&message));
+        }
+    }
+    #[cfg(feature = "sync")]
+    if let Some((calls, shared)) = elsewhere() {
+        let _entry = crate::future::entry();
+        let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
+            shared
+                .authority
+                .invoke_bound(function, arguments, shared.runtime.clone())
+                .map_err(|error| error.to_string())
+        };
+        return calls
+            .ask(&asked, shared.authority.model(), &invoke)
+            .unwrap_or_else(|message| failure(&message));
+    }
+    failure(&format!("rawr: no runner serves the traits of `{owner}`"))
+}
+
+/// End the call `borrow` gave `value`, the program value of `handle`: a
+/// `&mut self` call's value goes back, a `&self` call's share ends.
+fn put_kept(handle: u64, borrow: Borrow, value: Dynamic) {
+    // A value whose object was dropped meanwhile is dropped once the table
+    // is free again.
+    let released = kept(|kept| {
+        let Some(held) = kept.values.get_mut(&handle) else {
+            return Some(value);
+        };
+        match borrow {
+            Borrow::Shared => {
+                held.readers = held.readers.saturating_sub(1);
+                Some(value)
+            }
+            Borrow::Mutable => {
+                held.value = Some(value);
+                None
+            }
+        }
+    });
+    drop(released);
 }
 
 /// Register the native `main` to start: the shadow crate's island module
@@ -1051,14 +1200,18 @@ impl Calls {
             if reader.bytes.first() == Some(&program::model::island::HANDLE) {
                 reader.byte().map_err(malformed)?;
                 let handle = u64::from_le_bytes(reader.array().map_err(malformed)?);
-                let value = match take_kept(handle) {
+                let borrow = match item.receiver() {
+                    Some(crate::receiver::Mode::Shared) => Borrow::Shared,
+                    _ => Borrow::Mutable,
+                };
+                let value = match take_kept(handle, borrow) {
                     Ok(value) => value,
                     Err(message) => {
                         restore(&held, &mut values);
                         return Err(message);
                     }
                 };
-                held.push((index, handle));
+                held.push((index, handle, borrow));
                 values.push(value);
                 continue;
             }
@@ -1150,11 +1303,180 @@ impl Calls {
     }
 }
 
-/// Put each stand-in's receiver in `values` back under its handle.
-fn restore(held: &[(usize, u64)], values: &mut [Dynamic]) {
-    for &(index, handle) in held {
+impl Calls {
+    /// The answer to `asked` (`__rawr_island_trait_v1`), the program's
+    /// functions run by `invoke`.
+    fn ask(
+        &self,
+        asked: &Asked<'_>,
+        model: &program::model::Model,
+        invoke: &Invoke<'_>,
+    ) -> Result<Vec<u8>, String> {
+        let owner = asked.owner;
+        let member = |name: &str| self.items.get(&(true, format!("{owner}::{name}")));
+        let failed = |name: &'static str| {
+            move |error: String| format!("rawr: `{owner}`'s `{name}` failed: {error}")
+        };
+        let mut reply = vec![0];
+        if asked.op == op::DEFAULT {
+            let value = match member("Default::default") {
+                Some(default) => invoke(default, &mut []).map_err(failed("Default::default"))?,
+                None => derived_default(model, owner)?,
+            };
+            reply.extend_from_slice(&keep(value.flatten()).to_le_bytes());
+            return Ok(reply);
+        }
+        let two = matches!(asked.op, op::EQUAL | op::PARTIAL_ORDER | op::ORDER);
+        let value = take_kept(asked.handle, Borrow::Shared)?;
+        let other = if two {
+            match take_kept(asked.other, Borrow::Shared) {
+                Ok(other) => Some(other),
+                Err(message) => {
+                    put_kept(asked.handle, Borrow::Shared, value);
+                    return Err(message);
+                }
+            }
+        } else {
+            None
+        };
+        let answered = Self::answer_std(asked.op, &value, other.as_ref(), model, &member, invoke);
+        put_kept(asked.handle, Borrow::Shared, value);
+        if let Some(other) = other {
+            put_kept(asked.other, Borrow::Shared, other);
+        }
+        let answer = answered.map_err(|error| format!("rawr: `{owner}`: {error}"))?;
+        match answer {
+            Answer::Text(text) => reply.extend_from_slice(text.as_bytes()),
+            Answer::Value(value) => reply.extend_from_slice(&keep(value.flatten()).to_le_bytes()),
+            Answer::Bool(answer) => reply.push(u8::from(answer)),
+            Answer::Number(number) => reply.extend_from_slice(&number.to_le_bytes()),
+            Answer::Order(ordering) => reply.push(match ordering {
+                Some(std::cmp::Ordering::Less) => 0,
+                Some(std::cmp::Ordering::Equal) => 1,
+                Some(std::cmp::Ordering::Greater) => 2,
+                None => 3,
+            }),
+        }
+        Ok(reply)
+    }
+
+    /// `op` of `value` (and `other`), by the program's own `member` where it
+    /// wrote one and else as the derive does.
+    fn answer_std<'i>(
+        op: u8,
+        value: &Dynamic,
+        other: Option<&Dynamic>,
+        model: &program::model::Model,
+        member: &dyn Fn(&str) -> Option<&'i item::Value>,
+        invoke: &Invoke<'_>,
+    ) -> Result<Answer, String> {
+        let other = || other.cloned().unwrap_or_default();
+        let call = |name: &str, arguments: &mut [Dynamic]| {
+            member(name).map(|function| {
+                invoke(function, arguments).map_err(|error| format!("`{name}` failed: {error}"))
+            })
+        };
+        let ordering = |order: Dynamic| -> Option<std::cmp::Ordering> {
+            let order = order.as_int().ok()?;
+            Some(order.cmp(&0))
+        };
+        Ok(match op {
+            op::DEBUG => match call(
+                "Debug::fmt",
+                &mut [value.clone(), ImmutableString::new().into()],
+            ) {
+                Some(text) => Answer::Text(text?.to_string()),
+                None => Answer::Text(
+                    model
+                        .debug_text(&value.flatten_clone())
+                        .ok_or("its `Debug` can't be written yet")?,
+                ),
+            },
+            op::DISPLAY => {
+                let text = call(
+                    "Display::fmt",
+                    &mut [value.clone(), ImmutableString::new().into()],
+                )
+                .ok_or("it has no `Display`")??;
+                Answer::Text(text.to_string())
+            }
+            op::CLONE => match call("Clone::clone", &mut [value.clone()]) {
+                Some(copy) => Answer::Value(copy?),
+                None => Answer::Value(value.flatten_clone()),
+            },
+            op::EQUAL => match call("PartialEq::eq", &mut [value.clone(), other()]) {
+                Some(equal) => Answer::Bool(
+                    equal?
+                        .as_bool()
+                        .map_err(|actual| format!("`eq` gave {actual}"))?,
+                ),
+                None => Answer::Bool(crate::host::value::structural_equal(
+                    &value.flatten_clone(),
+                    &other().flatten_clone(),
+                )),
+            },
+            op::HASH => {
+                if member("Hash::hash").is_some() {
+                    return Err("its own `Hash` can't be called from native code yet".to_owned());
+                }
+                let mut state = std::collections::hash_map::DefaultHasher::new();
+                model.island_hash(value, &mut state)?;
+                Answer::Number(std::hash::Hasher::finish(&state))
+            }
+            op::PARTIAL_ORDER => {
+                match call("PartialOrd::partial_cmp", &mut [value.clone(), other()]) {
+                    Some(order) => {
+                        Answer::Order(crate::option::read(&order?).flatten().and_then(ordering))
+                    }
+                    None => Answer::Order(model.island_order(value, &other())),
+                }
+            }
+            op::ORDER => match call("Ord::cmp", &mut [value.clone(), other()]) {
+                Some(order) => Answer::Order(ordering(order?)),
+                None => Answer::Order(model.island_order(value, &other())),
+            },
+            _ => {
+                return Err(format!(
+                    "the native code asked {op}, which rawr doesn't know"
+                ))
+            }
+        })
+    }
+}
+
+/// What a stand-in's std trait gets back (`Calls::ask`).
+enum Answer {
+    Text(String),
+    /// A new value, kept under a handle of its own.
+    Value(Dynamic),
+    Bool(bool),
+    Number(u64),
+    Order(Option<std::cmp::Ordering>),
+}
+
+/// The derived `Default` of the script type at `owner`.
+fn derived_default(model: &program::model::Model, owner: &str) -> Result<Dynamic, String> {
+    #[cfg(feature = "sync")]
+    {
+        model
+            .default_by_path(owner)
+            .ok_or_else(|| format!("rawr: the running program has no type `{owner}`"))?
+            .map_err(|error| format!("rawr: `{owner}`'s `Default`: {error}"))
+    }
+    #[cfg(not(feature = "sync"))]
+    {
+        let _ = model;
+        Err(format!(
+            "rawr: `{owner}`'s derived `Default` needs the runner"
+        ))
+    }
+}
+
+/// End each stand-in's receiver's borrow in `values` (`put_kept`).
+fn restore(held: &[(usize, u64, Borrow)], values: &mut [Dynamic]) {
+    for &(index, handle, borrow) in held {
         if let Some(value) = values.get_mut(index) {
-            put_kept(handle, value.take());
+            put_kept(handle, borrow, value.take());
         }
     }
 }
@@ -1283,6 +1605,37 @@ mod tests {
             r#"Job { id: 7, name: "seven", tags: ["a"], next: Some(Done { at: 3 }) }"#
         );
     }
+}
+
+/// A native trait object's program value is shared by `&self` calls at
+/// any depth, the one value and not a copy, and taken by a `&mut self`
+/// call only while none runs; a `&mut self` call beside another call is
+/// rustc's borrow conflict (#1302).
+#[cfg(all(test, feature = "sync"))]
+#[test]
+fn shared_calls_share_a_kept_value_and_a_mutable_one_takes_it() {
+    let handle = keep(Dynamic::from(1_i64));
+    let outer = take_kept(handle, Borrow::Shared).unwrap();
+    let inner = take_kept(handle, Borrow::Shared).unwrap();
+    assert!(outer.is_shared() && inner.is_shared());
+    assert_eq!(inner.as_int(), Ok(1));
+    let conflict = take_kept(handle, Borrow::Mutable).unwrap_err();
+    assert!(conflict.starts_with("error[E0502]"), "{conflict}");
+    put_kept(handle, Borrow::Shared, inner);
+    put_kept(handle, Borrow::Shared, outer);
+    let taken = take_kept(handle, Borrow::Mutable).unwrap();
+    // The share ended, so the value comes out of its cell, not copied.
+    assert!(!taken.is_shared());
+    let conflict = take_kept(handle, Borrow::Shared).unwrap_err();
+    assert!(conflict.starts_with("error[E0502]"), "{conflict}");
+    let conflict = take_kept(handle, Borrow::Mutable).unwrap_err();
+    assert!(conflict.starts_with("error[E0499]"), "{conflict}");
+    // A `&mut self` call's change is there at the next call.
+    drop(taken);
+    put_kept(handle, Borrow::Mutable, Dynamic::from(2_i64));
+    assert_eq!(take_kept(handle, Borrow::Shared).unwrap().as_int(), Ok(2));
+    __rawr_island_release_v1(handle);
+    assert!(take_kept(handle, Borrow::Shared).is_err());
 }
 
 /// A generation compiled on the protocol thread is admitted on the thread
