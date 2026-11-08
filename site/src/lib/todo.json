@@ -119,7 +119,9 @@
         {"text":"A program's unit struct named by a module path is its value in a `match` scrutinee and an `if let` value too, as `match badge::Secondary { badge::Secondary => .. }`.","issues":[1327]},
         {"text":"A program's generic `impl<'a, M> From<Mine> for Slot<'a, M>` of a crate type can pass its own `M` to the crate in its body: the impl is compiled for each type its conversions take, as rustc monomorphises it.","issues":[1341]},
         {"text":"A leading `self::` in a path names the current module, as rustc reads it: in values, calls, patterns, types, `use` lists and `self::super::`. `self` after a path's first segment is rustc's E0433.","issues":[1342]},
-        {"text":"A native crate root's `mod` declarations are read under the `cfg`s Cargo builds the package with for this target, `cfg_attr` included: `#[cfg(windows)] mod x;` on macOS is no longer scanned, loaded or built, and a `#[path]` applied by `#[cfg_attr(..)]` resolves as rustc resolves it.","issues":[1337]}
+        {"text":"A native crate root's `mod` declarations are read under the `cfg`s Cargo builds the package with for this target, `cfg_attr` included: `#[cfg(windows)] mod x;` on macOS is no longer scanned, loaded or built, and a `#[path]` applied by `#[cfg_attr(..)]` resolves as rustc resolves it.","issues":[1337]},
+        {"text":"A single-file program names its own items through `crate::`, `self::` and `super::` as rustc does, in types, values, calls, patterns and `use`, with rustc's error for `super::` at the root.","issues":[1344]},
+        {"text":"`pub use` of an enum variant, by name or by glob, re-exports it from its module, for the program's enums and a crate's.","issues":[1345]}
       ]
     },
     "releases": [
@@ -3071,8 +3073,8 @@
     {"issue":1341,"title":"A program's generic impl of a std trait for a crate type can't pass its own parameter to the crate","state":"closed","category":"Divergences from rustc"},
     {"issue":1342,"title":"A `self::` path in a body names an item of the current module","state":"closed","category":"Divergences from rustc"},
     {"issue":1343,"title":"A program's generic impl of a std trait other than From for a crate type passes its own parameter to the crate","state":"open","category":"Divergences from rustc"},
-    {"issue":1344,"title":"A file without `mod` items resolves `crate::`, `self::` and `super::` paths","state":"open","category":"Divergences from rustc"},
-    {"issue":1345,"title":"`pub use Enum::Variant;` re-exports a crate enum's variant","state":"open","category":"Divergences from rustc"},
+    {"issue":1344,"title":"A file without `mod` items resolves `crate::`, `self::` and `super::` paths","state":"closed","category":"Divergences from rustc"},
+    {"issue":1345,"title":"`pub use Enum::Variant;` re-exports a crate enum's variant","state":"closed","category":"Divergences from rustc"},
     {"issue":1346,"title":"The file watcher fails to start on a large project: `unable to start FSEvent stream`; watch the inputs, not the tree","state":"open","category":"Health"},
     {"issue":1347,"title":"One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open","category":"Health"},
     {"issue":1348,"title":"In a single file with modules, a top-level statement such as `picks::Count(2)` or…","state":"open","category":"Divergences from rustc"},

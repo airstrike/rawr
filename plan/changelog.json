@@ -112,7 +112,9 @@
       {"text":"A program's unit struct named by a module path is its value in a `match` scrutinee and an `if let` value too, as `match badge::Secondary { badge::Secondary => .. }`.","issues":[1327]},
       {"text":"A program's generic `impl<'a, M> From<Mine> for Slot<'a, M>` of a crate type can pass its own `M` to the crate in its body: the impl is compiled for each type its conversions take, as rustc monomorphises it.","issues":[1341]},
       {"text":"A leading `self::` in a path names the current module, as rustc reads it: in values, calls, patterns, types, `use` lists and `self::super::`. `self` after a path's first segment is rustc's E0433.","issues":[1342]},
-      {"text":"A native crate root's `mod` declarations are read under the `cfg`s Cargo builds the package with for this target, `cfg_attr` included: `#[cfg(windows)] mod x;` on macOS is no longer scanned, loaded or built, and a `#[path]` applied by `#[cfg_attr(..)]` resolves as rustc resolves it.","issues":[1337]}
+      {"text":"A native crate root's `mod` declarations are read under the `cfg`s Cargo builds the package with for this target, `cfg_attr` included: `#[cfg(windows)] mod x;` on macOS is no longer scanned, loaded or built, and a `#[path]` applied by `#[cfg_attr(..)]` resolves as rustc resolves it.","issues":[1337]},
+      {"text":"A single-file program names its own items through `crate::`, `self::` and `super::` as rustc does, in types, values, calls, patterns and `use`, with rustc's error for `super::` at the root.","issues":[1344]},
+      {"text":"`pub use` of an enum variant, by name or by glob, re-exports it from its module, for the program's enums and a crate's.","issues":[1345]}
     ]
   },
   "releases": [
