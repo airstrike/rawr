@@ -55231,6 +55231,9 @@ impl<'a> Parser<'a> {
             types.push(surface);
         }
         let types = types.into_boxed_slice();
+        if std::env::var_os("RAWR_DEBUG_INSTANCE").is_some() {
+            eprintln!("DEBUG use {} symbolic={} revealing={} {:?} {:?}", item.path(), self.symbolic_only, self.revealing.is_some(), types, requirements.iter().map(|(n, t, _)| (n.clone(), self.inference.resolve(t).name(&self.models))).collect::<Vec<_>>());
+        }
         let function_count = arguments
             .clone()
             .filter(|(ty, _, _)| {

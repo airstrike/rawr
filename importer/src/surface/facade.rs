@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 46;
+const SCHEMA: u32 = 47;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -1043,6 +1043,12 @@ impl Plan {
         // Each trait Rawr code names: its root, its path and its identity,
         // whose header is written once every type is in (D604).
         let mut named_traits = Vec::<(Box<str>, Box<str>, [u8; 32])>::new();
+        // The members of the opaque type each inherent method gives, by the
+        // type's identity: two impls of one type, as swash's `Setting<u16>`
+        // and `Setting<f32>`, may each have a `parse_list` of its own.
+        let opaque_identities = super::opaque::identities(graph);
+        let mut inherent_members =
+            std::collections::BTreeMap::<[u8; 32], Vec<crate::classify::Outcome<'a>>>::new();
         for outcome in outcomes {
             let named_trait = matches!(
                 outcome.representability(),
@@ -1295,25 +1301,28 @@ impl Plan {
                 };
                 let associated_path = format!("{owner}::{}", associated.name());
                 if let Some(item) = item(&associated_path, associated)? {
+                    // The members of the opaque type an inherent method
+                    // gives, declared where the opaque type is (below).
+                    let mut found = Vec::new();
+                    item.signature.output.opaque(&opaque_identities, &mut found);
+                    // Each path to the type gives them again.
+                    if let Some((identity, _)) = found.first() {
+                        let members = inherent_members.entry(*identity).or_default();
+                        for member in associated
+                            .implementations()
+                            .flat_map(crate::classify::ImplementationOutcome::associated)
+                        {
+                            if members.iter().any(|known| known.name() == member.name()) {
+                                continue;
+                            }
+                            members.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                            members.push(member);
+                        }
+                    }
                     let mut items = std::mem::take(&mut facade.items).into_vec();
                     items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                     items.push(item);
                     facade.items = items.into_boxed_slice();
-                }
-                // The members of the opaque type an inherent method gives,
-                // in its owner's module, as Rawr declares them.
-                let opaque = super::opaque::path(&format!("{owner}__{}", associated.name()), 0);
-                for member in associated
-                    .implementations()
-                    .flat_map(crate::classify::ImplementationOutcome::associated)
-                {
-                    let member_path = format!("{opaque}::{}", member.name());
-                    if let Some(item) = item(&member_path, member)? {
-                        let mut items = std::mem::take(&mut facade.items).into_vec();
-                        items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                        items.push(item);
-                        facade.items = items.into_boxed_slice();
-                    }
                 }
             }
         }
@@ -1439,6 +1448,7 @@ impl Plan {
         if !opaque.is_empty() {
             for facade in &mut facades {
                 let mut types = std::mem::take(&mut facade.types).into_vec();
+                let mut members = Vec::new();
                 // The opaque type a trait's method gives is declared beside
                 // the method over the trait's `Self`, as Rawr declares it
                 // (`surface::member`), and not again beside each type the
@@ -1471,7 +1481,17 @@ impl Plan {
                         _ => item.path.to_string(),
                     };
                     for (index, (identity, parameters)) in found.into_iter().enumerate() {
-                        let path = super::opaque::path(&owner, index);
+                        // Another impl's method of the same name, as swash's
+                        // `parse_list` of `Setting<u16>` and of
+                        // `Setting<f32>`, gives another type: numbered on.
+                        let mut slot = index;
+                        let path = loop {
+                            let path = super::opaque::path(&owner, slot);
+                            match types.iter().find(|ty| *ty.path == *path) {
+                                Some(ty) if ty.identity != identity => slot += 1,
+                                _ => break path,
+                            }
+                        };
                         if types.iter().any(|ty| {
                             *ty.path == *path
                                 || (!member
@@ -1494,6 +1514,15 @@ impl Plan {
                             associated.trait_identity()
                                 == *super::identity::Definition::iterator().as_bytes()
                         });
+                        // An inherent method's opaque type has its members
+                        // beside it, as Rawr declares them.
+                        for &member in inherent_members.get(&identity).into_iter().flatten() {
+                            let member_path = format!("{path}::{}", member.name());
+                            if let Some(declared) = self::item(&member_path, member)? {
+                                members.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                                members.push(declared);
+                            }
+                        }
                         types.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                         types.push(TypeDefinition {
                             path: path.into(),
@@ -1526,6 +1555,14 @@ impl Plan {
                     }
                 }
                 facade.types = types.into_boxed_slice();
+                if !members.is_empty() {
+                    let mut items = std::mem::take(&mut facade.items).into_vec();
+                    items
+                        .try_reserve(members.len())
+                        .map_err(|_| super::Error::Allocation)?;
+                    items.extend(members);
+                    facade.items = items.into_boxed_slice();
+                }
             }
         }
         // A facade resolves a type it names and another facade declares

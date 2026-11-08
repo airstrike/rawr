@@ -1270,8 +1270,12 @@ fn imported_paths<'contract>(
     entries
         .try_reserve_exact(capacity)
         .map_err(|_| Error::Allocation)?;
+    let identities = rawr_import::surface::opaque::identities(contract.raw_graph());
     for outcome in contract.outcomes() {
         let path = import_path(outcome.export(), allocation)?;
+        // The opaque types the type's inherent methods give, numbered as
+        // `opaque_types` declares them.
+        let mut slots = Vec::<(String, rawr_import::surface::identity::Definition)>::new();
         // A function's members are those of the opaque type it gives.
         let owner = if matches!(
             outcome.representability(),
@@ -1327,8 +1331,33 @@ fn imported_paths<'contract>(
             }
             // The members of the opaque type an inherent method gives,
             // declared in its owner's module (`opaque_types`).
-            let opaque =
-                rawr_import::surface::opaque::path(&format!("{owner}__{}", associated.name()), 0);
+            let base = format!("{owner}__{}", associated.name());
+            let opaque = match inherent_signature_output(associated) {
+                Some(output) => {
+                    let mut found = Vec::new();
+                    opaque_found(output, &identities, &mut found);
+                    let mut first = None;
+                    for (index, (definition, _)) in found.into_iter().enumerate() {
+                        let slot = opaque_slot(
+                            |candidate| {
+                                slots
+                                    .iter()
+                                    .find(|(known, _)| known == candidate)
+                                    .map(|(_, known)| *known)
+                            },
+                            &base,
+                            index,
+                            definition,
+                        );
+                        if !slots.iter().any(|(known, _)| *known == slot) {
+                            slots.push((slot.clone(), definition));
+                        }
+                        first.get_or_insert(slot);
+                    }
+                    first.unwrap_or_else(|| rawr_import::surface::opaque::path(&base, 0))
+                }
+                None => rawr_import::surface::opaque::path(&base, 0),
+            };
             for member in associated
                 .implementations()
                 .flat_map(rawr_import::classify::ImplementationOutcome::associated)
@@ -2147,7 +2176,7 @@ fn build(
     // An opaque `impl Trait` type a function gives is a type of its own,
     // declared beside the function, at the type arguments its caller fixes.
     // Its paths are the owners its members are declared under.
-    let mut opaque_paths = std::collections::BTreeSet::new();
+    let mut opaque_paths = Vec::new();
     for (path, definition, parameters, associated) in opaque_types(contract, &facade) {
         let shape = crate::Shared::new(host::type_def::Shape::Opaque);
         // An iterator, as `impl Iterator<Item = T>` is, whatever bound
@@ -2170,7 +2199,7 @@ fn build(
             Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
             Err(error) => return Err(error.into()),
         }
-        opaque_paths.insert(path);
+        opaque_paths.push((path, definition));
     }
     for entry in &facade.entries {
         let (parameters, defaults, implemented) = match entry.outcome.representability() {
@@ -2409,14 +2438,16 @@ fn build(
             }
             // The members of the opaque type the method gives, declared in
             // its owner's module (`opaque_types`), each with its owner.
-            let opaque = rawr_import::surface::opaque::path(
+            let Some(opaque) = inherent_opaque(
+                &opaque_paths,
                 &format!("{}__{}", entry.relative, associated.name()),
-                0,
-            );
+                associated,
+            ) else {
+                continue;
+            };
             let members = associated
                 .implementations()
-                .flat_map(rawr_import::classify::ImplementationOutcome::associated)
-                .filter(|_| opaque_paths.contains(&opaque));
+                .flat_map(rawr_import::classify::ImplementationOutcome::associated);
             for member in members {
                 let path = format!("{opaque}::{}", member.name());
                 if let Some(item) = imported_item(&types, &path, member, allocation)?
@@ -2984,6 +3015,64 @@ fn names_declared(
         })
 }
 
+/// What the associated item `associated` gives, when it is a function or a
+/// method.
+fn inherent_signature_output<'c>(
+    associated: rawr_import::classify::Outcome<'c>,
+) -> Option<&'c representability::convert::Type> {
+    Some(match associated.representability() {
+        Representability::Function(plan) => plan.signature().output(),
+        Representability::FunctionItem(plan) => plan.signature().output(),
+        Representability::Invocation(plan) => plan.signature().output(),
+        Representability::Method(plan) => plan.signature().output(),
+        _ => return None,
+    })
+}
+
+/// The path of the opaque type the inherent method `associated` gives,
+/// among those `declared` beside `owner`, as `{owner}` gives
+/// `__rawr_opaque_{owner}` and one numbered on for another impl's method
+/// of the same name (`opaque_types`): the one its output names.
+fn inherent_opaque<'d>(
+    declared: &'d [(String, rawr_import::surface::identity::Definition)],
+    owner: &str,
+    associated: rawr_import::classify::Outcome<'_>,
+) -> Option<&'d str> {
+    fn names(
+        ty: &representability::convert::Type,
+        definition: rawr_import::surface::identity::Definition,
+    ) -> bool {
+        use representability::convert::Type;
+        match ty {
+            Type::Nominal {
+                definition: named,
+                arguments,
+            } => *named == definition || arguments.iter().any(|ty| names(ty, definition)),
+            Type::Option(inner)
+            | Type::Borrowed { ty: inner, .. }
+            | Type::Range(inner)
+            | Type::Sequence { element: inner, .. } => names(inner, definition),
+            Type::Result(ok, err) => names(ok, definition) || names(err, definition),
+            Type::Tuple(members) => members.iter().any(|ty| names(ty, definition)),
+            _ => false,
+        }
+    }
+    let output = inherent_signature_output(associated)?;
+    let first = rawr_import::surface::opaque::path(owner, 0);
+    declared
+        .iter()
+        .filter(|(path, _)| {
+            path.strip_prefix(first.as_str()).is_some_and(|rest| {
+                rest.is_empty()
+                    || rest.strip_prefix('_').is_some_and(|slot| {
+                        !slot.is_empty() && slot.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+            })
+        })
+        .find(|(_, definition)| names(output, *definition))
+        .map(|(path, _)| path.as_str())
+}
+
 /// An opaque type a facade declares: its path, its definition, the names
 /// of its parameters, and the associated types it binds.
 type OpaqueType = (
@@ -2993,6 +3082,67 @@ type OpaqueType = (
     Box<[host::type_def::Associated]>,
 );
 
+/// Each opaque type `ty` names, of those in `opaque`, in order: its
+/// definition and its arguments.
+fn opaque_found<'t>(
+    ty: &'t representability::convert::Type,
+    opaque: &std::collections::BTreeSet<[u8; 32]>,
+    found: &mut Vec<(
+        rawr_import::surface::identity::Definition,
+        &'t [representability::convert::Type],
+    )>,
+) {
+    use representability::convert::Type;
+    match ty {
+        Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            if opaque.contains(definition.as_bytes()) {
+                found.push((*definition, arguments));
+            }
+            for argument in arguments {
+                opaque_found(argument, opaque, found);
+            }
+        }
+        Type::Option(inner)
+        | Type::Borrowed { ty: inner, .. }
+        | Type::Range(inner)
+        | Type::Sequence { element: inner, .. } => opaque_found(inner, opaque, found),
+        Type::Result(ok, err) => {
+            opaque_found(ok, opaque, found);
+            opaque_found(err, opaque, found);
+        }
+        Type::Tuple(members) => {
+            for member in members {
+                opaque_found(member, opaque, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The path the `index`th opaque type, `definition`, of a function at
+/// `owner` is declared at, where `taken` gives the type a path already has:
+/// the next one numbered on where another type has the path, as another
+/// impl's method of the same name gives one (`surface::opaque::path`). As
+/// the facade numbers them.
+fn opaque_slot(
+    taken: impl Fn(&str) -> Option<rawr_import::surface::identity::Definition>,
+    owner: &str,
+    index: usize,
+    definition: rawr_import::surface::identity::Definition,
+) -> String {
+    let mut slot = index;
+    loop {
+        let candidate = rawr_import::surface::opaque::path(owner, slot);
+        match taken(&candidate) {
+            Some(known) if known != definition => slot += 1,
+            _ => return candidate,
+        }
+    }
+}
+
 /// The opaque `impl Trait` types the facade's functions and methods give:
 /// each one's path beside each function that gives it, its definition,
 /// and its type parameters, named as the function's parameters its
@@ -3001,43 +3151,6 @@ fn opaque_types(
     contract: &rawr_import::Contract<rawr_import::Classified>,
     facade: &Facade<'_>,
 ) -> Vec<OpaqueType> {
-    fn walk<'t>(
-        ty: &'t representability::convert::Type,
-        opaque: &std::collections::BTreeSet<[u8; 32]>,
-        found: &mut Vec<(
-            rawr_import::surface::identity::Definition,
-            &'t [representability::convert::Type],
-        )>,
-    ) {
-        use representability::convert::Type;
-        match ty {
-            Type::Nominal {
-                definition,
-                arguments,
-            } => {
-                if opaque.contains(definition.as_bytes()) {
-                    found.push((*definition, arguments));
-                }
-                for argument in arguments {
-                    walk(argument, opaque, found);
-                }
-            }
-            Type::Option(inner)
-            | Type::Borrowed { ty: inner, .. }
-            | Type::Range(inner)
-            | Type::Sequence { element: inner, .. } => walk(inner, opaque, found),
-            Type::Result(ok, err) => {
-                walk(ok, opaque, found);
-                walk(err, opaque, found);
-            }
-            Type::Tuple(members) => {
-                for member in members {
-                    walk(member, opaque, found);
-                }
-            }
-            _ => {}
-        }
-    }
     let mut opaque = rawr_import::surface::opaque::identities(contract.raw_graph());
     // So is the opaque type a trait method's type parameter is, which the
     // function beside the trait's methods over its `Self` gives
@@ -3070,11 +3183,24 @@ fn opaque_types(
                 _ => return,
             };
             let mut found = Vec::new();
-            walk(signature.output(), &opaque, &mut found);
+            opaque_found(signature.output(), &opaque, &mut found);
             // Declared beside each path to the function, which its members
             // are reached through.
             for (index, (definition, arguments)) in found.into_iter().enumerate() {
-                let path = rawr_import::surface::opaque::path(path, index);
+                // Another impl's method of the same name, as swash's
+                // `parse_list` of `Setting<u16>` and of `Setting<f32>`,
+                // gives another type: numbered on, as the facade has it.
+                let path = opaque_slot(
+                    |candidate| {
+                        types
+                            .iter()
+                            .find(|(known, ..)| known == candidate)
+                            .map(|(_, declared, ..)| *declared)
+                    },
+                    path,
+                    index,
+                    definition,
+                );
                 if types.iter().any(|(known, declared, ..)| {
                     *known == path || (*declared == definition && served(known))
                 }) {
