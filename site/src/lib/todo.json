@@ -2976,7 +2976,8 @@
     {"issue":1279,"title":"A function's nested opaque output, as `-> impl Iterator<Item = impl Display>`, can't be used","state":"open","category":"Divergences from rustc"},
     {"issue":1280,"title":"A generic type's `&self` method giving an opaque type that borrows it fails in the generated runner (E0521)","state":"open","category":"Divergences from rustc"},
     {"issue":1281,"title":"The opaque type of a method reached through a sole type alias has no members","state":"open","category":"Divergences from rustc"},
-    {"issue":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open","category":"Divergences from rustc"}
+    {"issue":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3838,7 +3839,8 @@
             {"number":1272,"title":"A marked pub fn whose argument is a native alias of a wire type (`type Width = usize`) gets a native handle at the call","state":"open"},
             {"number":1273,"title":"A native module's unit struct used as a value (`page::Home`) can't be used yet","state":"open"},
             {"number":1277,"title":"rawr-import: a dependency's feature named on the command line (`--features dep/feat`) reaches the dependency","state":"open"},
-            {"number":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"closed"}
+            {"number":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"closed"},
+            {"number":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"open"}
           ]
         }
       ]
