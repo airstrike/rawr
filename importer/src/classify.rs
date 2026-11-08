@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 131;
+const CLASSIFIER_VERSION: u32 = 132;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7670,8 +7670,9 @@ impl<P: api::Phase> Context<'_, P> {
                 }
                 // A field of a type Rawr cannot hold is unavailable by
                 // itself, as in a struct. The variant stays and cannot be
-                // built, and a literal of it names the field.
-                let ty = match self.convert_held(field.ty()) {
+                // built, and a literal of it names the field. A field that
+                // borrows is held as a struct's is.
+                let ty = match self.convert_field(field.ty()) {
                     Ok(ty) => ty,
                     Err(Failure::Reject(_)) => {
                         constructible = false;
@@ -8754,11 +8755,45 @@ impl<P: api::Phase> Context<'_, P> {
     /// iced's `LineDash<'a>` has `segments: &'a [f32]`. A value Rawr builds
     /// keeps what it lends for as long as the runner lives, as a literal's
     /// is.
+    ///
+    /// A shared slice of other values that borrow nothing, as a page's
+    /// `children: &'static [Block]`, borrows them the same way, and an
+    /// `Option` of a `&str` or a slice of scalars, as `description:
+    /// Option<&'static str>`, is Rawr's `Option` of it (#1283).
     fn convert_field(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
-        match borrowed_argument(ty) {
-            Some(target) => self.convert_borrowed(target),
-            None => self.convert_held(ty),
+        use representability::convert::Type;
+        if let Some(target) = borrowed_argument(ty) {
+            return self.convert_borrowed(target);
         }
+        if let model::Type::Reference {
+            lifetime: model::Lifetime::Early { .. } | model::Lifetime::Static,
+            mutability: model::Mutability::Shared,
+            ty: target,
+        } = ty
+            && let model::Type::Slice(element) = &**target
+            && !names_early_lifetime(element)
+            && !names_late_lifetime(element)
+        {
+            return Ok(Type::Borrowed {
+                mutable: false,
+                ty: Box::new(Type::Sequence {
+                    element: Box::new(self.convert(element)?),
+                    owned: false,
+                    length: None,
+                }),
+            });
+        }
+        if let model::Type::Definition { id, arguments } = ty
+            && let Some(element) = self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|definition| option_element(definition, arguments))
+            && let Some(target) = borrowed_argument(element)
+        {
+            return Ok(Type::Option(Box::new(self.convert_borrowed(target)?)));
+        }
+        self.convert_held(ty)
     }
 
     /// A field's type as a struct or variant holds it: as `convert`, and an

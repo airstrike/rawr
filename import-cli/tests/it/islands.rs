@@ -356,6 +356,59 @@ fn a_marked_module_names_the_items_of_a_native_module() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A marked leaf writes its page as a native module's enum, whose fields
+/// are `&'static str`, `Option<&'static str>` and `&'static [Block]`, from
+/// literals: a `pub static BLOCKS` native code reads as a Rust item, and
+/// functions that give a built block back by value, lend built blocks to
+/// a native function, give one to it by value and read `BLOCKS` themselves
+/// (#1283). `rawr check` passes as `cargo check` does, and `rawr run`
+/// prints what `cargo run` prints.
+#[test]
+fn a_marked_static_of_native_blocks_is_read_by_native_code() {
+    const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");
+    let root = crate::support::scratch().join("islands-blocks");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(BLOCKS), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert!(
+        printed.ends_with("Count\n3\n  md A badge marks a count.\n3\n"),
+        "{printed}"
+    );
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(&root, &[]);
+    for expected in printed.lines() {
+        let line = run.until(|_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 #[test]
 fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin() {
     use std::io::Write as _;
