@@ -1134,6 +1134,10 @@ pub mod pages {
             Block::Md(text) => text,
             Block::Example { id, .. } => id,
             Block::Group { title, .. } => title,
+        }
+    }
+}
+
 /// futures_util's forwarding impls: `Wrap<S>`'s `Sink<Item>` declares an
 /// `Item` its self type doesn't name, and `Immediate<F>`'s `Stream`, as
 /// futures_util's `PollImmediate`, binds `<F as Future>::Output` to a `T`

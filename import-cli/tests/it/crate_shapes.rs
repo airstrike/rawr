@@ -379,6 +379,8 @@ fn a_provided_methods_opaque_output_whose_supertrait_binds_self() {
 #[test]
 fn a_crates_recursive_enum_of_a_static_slice_of_itself() {
     runs_as_cargo_does("pages", "5\nBuilt 2\nExamples\n");
+}
+
 /// futures_util's forwarding impls: `impl<S, Item> Sink<Item> for Wrap<S>`
 /// and `impl<T, F> Stream for Immediate<F> where F: Future<Output = T>`,
 /// where `Forward<S, A>`'s `Future::Output` is a `Result<(), E>` whose `E`
