@@ -1316,7 +1316,9 @@ impl Plan {
                             if members.iter().any(|known| known.name() == member.name()) {
                                 continue;
                             }
-                            members.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                            members
+                                .try_reserve(1)
+                                .map_err(|_| super::Error::Allocation)?;
                             members.push(member);
                         }
                     }
@@ -1520,7 +1522,9 @@ impl Plan {
                         for &member in inherent_members.get(&identity).into_iter().flatten() {
                             let member_path = format!("{path}::{}", member.name());
                             if let Some(declared) = self::item(&member_path, member)? {
-                                members.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                                members
+                                    .try_reserve(1)
+                                    .map_err(|_| super::Error::Allocation)?;
                                 members.push(declared);
                             }
                         }
