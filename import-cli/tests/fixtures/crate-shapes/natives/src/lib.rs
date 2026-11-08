@@ -1251,3 +1251,60 @@ pub mod forwarding {
         }
     }
 }
+
+/// Unit structs as style markers, as iced's and a component crate's
+/// `badge::Secondary` are: defined in one module, re-exported by another
+/// and converted by `From` where a method takes `impl Into<StyleFn>`. A
+/// tuple struct's constructor is a function value.
+pub mod markers {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Secondary;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Ghost;
+}
+
+pub mod badge {
+    pub use crate::markers::{Ghost, Secondary};
+
+    pub struct StyleFn(fn(u32) -> String);
+
+    impl From<Secondary> for StyleFn {
+        fn from(_: Secondary) -> Self {
+            StyleFn(|size| format!("secondary {size}"))
+        }
+    }
+
+    impl From<Ghost> for StyleFn {
+        fn from(_: Ghost) -> Self {
+            StyleFn(|size| format!("ghost {size}"))
+        }
+    }
+
+    pub struct Badge {
+        label: String,
+        style: StyleFn,
+    }
+
+    pub fn badge(label: &str) -> Badge {
+        Badge {
+            label: label.to_string(),
+            style: StyleFn(|size| format!("default {size}")),
+        }
+    }
+
+    impl Badge {
+        pub fn style(mut self, style: impl Into<StyleFn>) -> Self {
+            self.style = style.into();
+            self
+        }
+
+        pub fn draw(&self) -> String {
+            let size = self.label.len() as u32;
+            format!("{}: {}", self.label, (self.style.0)(size))
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Wrap(pub i64);
+}

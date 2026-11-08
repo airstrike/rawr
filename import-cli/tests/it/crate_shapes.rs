@@ -381,6 +381,20 @@ fn a_crates_recursive_enum_of_a_static_slice_of_itself() {
     runs_as_cargo_does("pages", "5\nBuilt 2\nExamples\n");
 }
 
+/// A crate's unit struct, re-exported by another module, is a value of its
+/// type, as `badge::Secondary` is in a component crate: copied, compared,
+/// formatted by its derives, matched as a pattern, passed where a method
+/// takes `impl Into<StyleFn>` with `impl From<Secondary> for StyleFn`, and
+/// converted by `.into()`. A tuple struct's constructor is a function
+/// value passed to `map` (#1317).
+#[test]
+fn a_crates_unit_struct_is_a_value_and_its_tuple_constructor_a_function() {
+    runs_as_cargo_does(
+        "markers",
+        "Secondary true true\nSecondary: secondary 9\nGhost: ghost 5\nmatched\n[Wrap(1), Wrap(2)]\n",
+    );
+}
+
 /// futures_util's forwarding impls: `impl<S, Item> Sink<Item> for Wrap<S>`
 /// and `impl<T, F> Stream for Immediate<F> where F: Future<Output = T>`,
 /// where `Forward<S, A>`'s `Future::Output` is a `Result<(), E>` whose `E`
