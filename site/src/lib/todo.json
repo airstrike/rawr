@@ -135,7 +135,8 @@
         {"text":"A push to main that changes `play/universe`, the bot's code or `play/Dockerfile` builds the ?play image and deploys it by itself. A snippet on the site that needs a crate the universe gained no longer waits for the release workflow. Every other change to the site or the docs deploys on push, as before.","issues":[1380]},
         {"text":"`rawr run` starts its file watcher on apps with a thousand dependencies: the OS watches the project's source directories, each path dependency's and each manifest's directory, never every dependency file, and registry and git dependencies get no watch, since a changed one arrives through `Cargo.lock`.","issues":[1375]},
         {"text":"Installing a contract counted its facade roots by rescanning every prior outcome for each outcome, which took minutes on a workspace of a thousand packages. The roots are collected once.","issues":[1383]},
-        {"text":"`#[widget]` / `#[rawr::widget]` is gone from rawr-macros and from rawr's parser. It did nothing; `#[preview]` is the one Rawr attribute.","issues":[1379]}
+        {"text":"`#[widget]` / `#[rawr::widget]` is gone from rawr-macros and from rawr's parser. It did nothing; `#[preview]` is the one Rawr attribute.","issues":[1379]},
+        {"text":"A string literal passed to a crate call that borrows it, as `badge![icon(), \"Verified\"]` or `Slot::from(\"x\")` does, is `'static` text, as in Rust: no scope frame opens for it, so nested view code such as `row![badge![..].style(..), ..].spacing(8).into()` checks and runs as cargo runs it.","issues":[1363]}
       ]
     },
     "releases": [
@@ -3106,7 +3107,7 @@
     {"issue":1360,"title":"The runner embeds a compact facade plan instead of a gigabyte of JSON","state":"open","category":"Importer"},
     {"issue":1361,"title":"Stored parts and tables are compressed with zstd when written","state":"open","category":"Health"},
     {"issue":1362,"title":"The generic classification and the facade plan store each fact once","state":"open","category":"Importer"},
-    {"issue":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"open","category":"Divergences from rustc"},
+    {"issue":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"closed","category":"Divergences from rustc"},
     {"issue":1364,"title":"A native trait object's `&[T]`/`&T` result that borrows the receiver comes back as a copy per call","state":"open","category":"Divergences from rustc"},
     {"issue":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open","category":"Divergences from rustc"},
     {"issue":1366,"title":"A free function taking `&T` of a value a scope frame's region holds","state":"open","category":"Divergences from rustc"},
@@ -3132,7 +3133,9 @@
     {"issue":1386,"title":"Unresolved imports and paths get rustc's E0432/E0433 wording; the help \"isn't available in Rawr…","state":"open","category":"Health"},
     {"issue":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"open","category":"Importer"},
     {"issue":1388,"title":"A rawr command warms the runtime, driver and std table for the active toolchain after cargo…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1389,"title":"A host in rawr's home is pruned by mtime while a running rawr uses it; a live process leases its…","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1389,"title":"A host in rawr's home is pruned by mtime while a running rawr uses it; a live process leases its…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1390,"title":"A program's From<String> call reaches the crate's From<Cow<str>> adapter: a Cow<str> input looks…","state":"open","category":"No glue (D593)"},
+    {"issue":1391,"title":"A literal lent to a crate method whose output borrows its &str arguments still opens a scope frame","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -3701,7 +3704,7 @@
             {"number":1339,"title":"A crate function whose output is `[T; N]` of a const parameter only the output fixes is refused","state":"open"},
             {"number":1340,"title":"`&mut [T; N]` of crate values crosses as a lent place, not a copy","state":"open"},
             {"number":1341,"title":"A program's generic impl of a std trait for a crate type can't pass its own parameter to the crate","state":"closed"},
-            {"number":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"open"},
+            {"number":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"closed"},
             {"number":1373,"title":"Call ratatui's Terminal::draw from rawr, and resolve TestBackend's Error","state":"open"},
             {"number":1374,"title":"Generated adapters call a trait method two traits share by method syntax (ratatui List::render, E0034)","state":"open"}
           ],

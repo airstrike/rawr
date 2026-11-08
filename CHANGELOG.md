@@ -129,6 +129,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `rawr run` starts its file watcher on apps with a thousand dependencies: the OS watches the project's source directories, each path dependency's and each manifest's directory, never every dependency file, and registry and git dependencies get no watch, since a changed one arrives through `Cargo.lock`. (#1375)
 - Installing a contract counted its facade roots by rescanning every prior outcome for each outcome, which took minutes on a workspace of a thousand packages. The roots are collected once. (#1383)
 - `#[widget]` / `#[rawr::widget]` is gone from rawr-macros and from rawr's parser. It did nothing; `#[preview]` is the one Rawr attribute. (#1379)
+- A string literal passed to a crate call that borrows it, as `badge![icon(), "Verified"]` or `Slot::from("x")` does, is `'static` text, as in Rust: no scope frame opens for it, so nested view code such as `row![badge![..].style(..), ..].spacing(8).into()` checks and runs as cargo runs it. (#1363)
 
 ## 0.3.171 (2026-11-07)
 
