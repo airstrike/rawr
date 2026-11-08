@@ -1,7 +1,8 @@
 //! A Cargo package as Cargo describes it. Its targets come from `cargo
 //! metadata`, and what one target builds with on the host (the crates its
-//! code names and its profile's panic strategy) from Cargo's unit graph.
-//! Rawr infers neither from `Cargo.toml` itself. Each answer is kept while
+//! code names, the features it enables and its profile's panic strategy)
+//! from Cargo's unit graph, asked with the command's feature flags. Rawr
+//! infers none of these from `Cargo.toml` itself. Each answer is kept while
 //! the files Cargo read for it are unchanged.
 
 use std::ffi::OsString;
@@ -9,6 +10,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+
+pub mod features;
 
 /// The workspace `cargo metadata` describes from one manifest: its
 /// members, each with its library and binary targets.
@@ -53,13 +56,14 @@ pub enum Kind {
 
 /// What one target builds with on the host, from Cargo's unit graph: the
 /// crates its code reaches by name (rustc's `--extern`s), with every
-/// `[target.'cfg(..)']` table and feature evaluated as Cargo does, and its
-/// profile's panic strategy.
+/// `[target.'cfg(..)']` table and feature evaluated as Cargo does, the
+/// features it enables, and its profile's panic strategy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Unit {
     crates: Box<[Box<str>]>,
     /// The crates the package's build script reaches by name.
     build_crates: Box<[Box<str>]>,
+    features: features::Enabled,
     panic: Panic,
 }
 
@@ -109,10 +113,12 @@ struct Described {
     workspace: Arc<Workspace>,
 }
 
-/// One kept unit-graph answer, by its package's manifest and its target.
+/// One kept unit-graph answer, by its package's manifest, its target and
+/// the feature flags it was asked with.
 struct Built {
     manifest: PathBuf,
     target: Target,
+    selection: features::Selection,
     inputs: Inputs,
     unit: Unit,
 }
@@ -451,8 +457,10 @@ impl Target {
 
 impl Unit {
     /// What `target` of `package` builds with on the host, as `cargo
-    /// build` builds it in the dev profile.
+    /// build` builds it in the dev profile, with the process's feature
+    /// flags ([`features::Selection::selected`]).
     pub fn of(package: &Package, target: &Target) -> Result<Self, Error> {
+        let selection = features::Selection::selected();
         let files = || {
             let mut files = vec![
                 package.workspace.clone(),
@@ -467,13 +475,16 @@ impl Unit {
         let kept = lock(&BUILT)
             .iter()
             .find(|kept| {
-                kept.manifest == package.manifest && kept.target == *target && kept.inputs == now
+                kept.manifest == package.manifest
+                    && kept.target == *target
+                    && kept.selection == selection
+                    && kept.inputs == now
             })
             .map(|kept| kept.unit.clone());
         if let Some(unit) = kept {
             return Ok(unit);
         }
-        let unit = Self::ask(package, target)?;
+        let unit = Self::ask(package, target, &selection)?;
         // Cargo may have written the lockfile, so the inputs are read after.
         let inputs = Inputs::read(files(), Vec::new());
         let mut built = lock(&BUILT);
@@ -481,6 +492,7 @@ impl Unit {
         built.push(Built {
             manifest: package.manifest.clone(),
             target: target.clone(),
+            selection,
             inputs,
             unit: unit.clone(),
         });
@@ -500,8 +512,15 @@ impl Unit {
         Self {
             crates: crates.iter().copied().map(Box::from).collect(),
             build_crates: Box::default(),
+            features: features::Enabled::default(),
             panic: Panic::Unwind,
         }
+    }
+
+    /// The features Cargo enables for the target.
+    #[must_use]
+    pub const fn features(&self) -> &features::Enabled {
+        &self.features
     }
 
     /// The crates the package's build script reaches by name.
@@ -516,14 +535,19 @@ impl Unit {
         self.panic
     }
 
-    fn ask(package: &Package, target: &Target) -> Result<Self, Error> {
+    fn ask(
+        package: &Package,
+        target: &Target,
+        selection: &features::Selection,
+    ) -> Result<Self, Error> {
         let mut command = cargo();
         // The unit graph is a nightly feature of any Cargo.
         command
             .env("RUSTC_BOOTSTRAP", "1")
             .args(["build", "--unit-graph", "-Z", "unstable-options"])
             .arg("--manifest-path")
-            .arg(&package.manifest);
+            .arg(&package.manifest)
+            .args(selection.flags());
         match target.kind {
             Kind::Library => command.arg("--lib"),
             Kind::Binary => command.args(["--bin", &target.name]),
@@ -576,6 +600,7 @@ impl Unit {
         Ok(Self {
             crates: crates.into_boxed_slice(),
             build_crates: build_crates.into_boxed_slice(),
+            features: features::Enabled::of_unit(root),
             panic,
         })
     }

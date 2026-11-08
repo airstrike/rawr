@@ -4622,6 +4622,9 @@ struct Tables {
     /// Whether the program builds as `rustc --test` builds it: `cfg(test)`
     /// holds.
     test: bool,
+    /// The features Cargo enables for the package: `cfg(feature = "..")`
+    /// holds for each.
+    features: crate::project::cargo::features::Enabled,
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
     #[cfg(feature = "rust-import")]
@@ -5269,6 +5272,7 @@ impl Models {
             host,
             access: engine.access().clone(),
             test: engine.test(),
+            features: program.features().clone(),
             imports,
             #[cfg(feature = "rust-import")]
             lexical: program.lexical.clone(),
@@ -26554,7 +26558,8 @@ impl<'a> Parser<'a> {
     }
 
     /// The predicate of `cfg(..)` or `cfg!(..)` for the target Rawr runs
-    /// on, `test` holding as the engine builds. No feature is on.
+    /// on, `test` holding as the engine builds and `feature = ".."` for
+    /// each feature Cargo enables for the package.
     fn cfg_predicate(&mut self) -> Result<bool, Error> {
         let (name, at) = match self.next() {
             (Token::Identifier(name), position) => (name.to_string(), position),
@@ -26597,6 +26602,9 @@ impl<'a> Parser<'a> {
                         })
                     }
                 };
+                if name == "feature" {
+                    return Ok(self.models.features.holds(&value));
+                }
                 Ok(cfg_value(&name, &value))
             }
             "test" => Ok(self.models.test),

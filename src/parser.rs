@@ -494,7 +494,13 @@ fn optimize_combo_chain(expr: &mut Expr) {
 /// The one `trait` item `source` declares: a trait a facade lets script
 /// types implement (iced's `component::Component`).
 pub(crate) fn parse_trait(source: &str) -> Option<crate::item::Trait> {
-    let items = item::parse(&Engine::new_raw(), source).ok()?.items;
+    let items = item::parse(
+        &Engine::new_raw(),
+        &crate::project::cargo::features::Enabled::default(),
+        source,
+    )
+    .ok()?
+    .items;
     match <[_; 1]>::try_from(items.into_vec()).ok()? {
         [crate::item::Parsed::Trait(declared)] => Some(declared),
         _ => None,
@@ -503,8 +509,22 @@ pub(crate) fn parse_trait(source: &str) -> Option<crate::item::Trait> {
 
 impl Engine {
     /// Parse Rawr item headers while retaining ordinary script statements outside item bodies.
+    /// No `cfg(feature = "..")` holds.
     pub fn parse_unit(&self, source: impl AsRef<str>) -> ParseResult<crate::parse::Unit> {
-        let source = crate::source::Map::new(source.as_ref());
+        self.parse_unit_with(
+            source.as_ref(),
+            &crate::project::cargo::features::Enabled::default(),
+        )
+    }
+
+    /// [`Engine::parse_unit`], with `features` enabled: the package's, as
+    /// Cargo resolves them, under which its `cfg(feature = "..")`s hold.
+    pub(crate) fn parse_unit_with(
+        &self,
+        source: &str,
+        features: &crate::project::cargo::features::Enabled,
+    ) -> ParseResult<crate::parse::Unit> {
+        let source = crate::source::Map::new(source);
         let item::ParsedFile {
             items,
             masked,
@@ -512,7 +532,7 @@ impl Engine {
             imports,
             inner_attributes,
             macros,
-        } = item::parse(self, source.text())?;
+        } = item::parse(self, features, source.text())?;
         #[cfg(feature = "syntax")]
         if let Some(error) = disabled::error(&source, disabled) {
             return Err(error);

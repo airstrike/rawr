@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 
 use crate::item::{self, type_ref};
+use crate::project::cargo::features::Enabled;
 use crate::{parse, source, ImmutableString, Position, Span};
 
 const MAGIC: &[u8; 4] = b"RPCL";
@@ -124,12 +125,13 @@ impl Cells {
     /// The directory or a cell cannot be written.
     pub fn save(&self, graph: &super::Graph) -> io::Result<usize> {
         let kept = self.kept.borrow();
+        let features = graph.entry_package().features();
         let mut written = 0;
         for (source, unit) in graph.parsed_units() {
             if kept.contains(source.path()) {
                 continue;
             }
-            let Some(bytes) = self.encode(source.text(), unit) else {
+            let Some(bytes) = self.encode(source.text(), features, unit) else {
                 continue;
             };
             if written == 0 {
@@ -144,10 +146,10 @@ impl Cells {
         Ok(written)
     }
 
-    /// The unit parsed earlier from exactly `text` at `path`, if a cell of
-    /// this build holds it.
-    pub(crate) fn get(&self, path: &Path, text: &str) -> Option<parse::Unit> {
-        let text_digest = digest(text);
+    /// The unit parsed earlier from exactly `text` at `path` with
+    /// `features` enabled, if a cell of this build holds it.
+    pub(crate) fn get(&self, path: &Path, text: &str, features: &Enabled) -> Option<parse::Unit> {
+        let text_digest = digest(text, features);
         if let Some(memory) = &self.memory
             && let Some((held, unit)) = memory.borrow().get(path)
             && *held == text_digest
@@ -172,9 +174,9 @@ impl Cells {
 
     /// Count one source parsed by a load through these cells, and remember
     /// its parse when these cells remember.
-    pub(crate) fn parsed(&self, path: &Path, text: &str, unit: &parse::Unit) {
+    pub(crate) fn parsed(&self, path: &Path, text: &str, features: &Enabled, unit: &parse::Unit) {
         self.parsed.set(self.parsed.get() + 1);
-        self.hold(path, digest(text), unit);
+        self.hold(path, digest(text, features), unit);
     }
 
     fn hold(&self, path: &Path, text_digest: [u8; 32], unit: &parse::Unit) {
@@ -195,7 +197,7 @@ impl Cells {
         self.directory.join(name)
     }
 
-    fn encode(&self, text: &str, unit: &parse::Unit) -> Option<Vec<u8>> {
+    fn encode(&self, text: &str, features: &Enabled, unit: &parse::Unit) -> Option<Vec<u8>> {
         let (items, statements, script_source) = unit.parts();
         if statements.is_some() {
             return None;
@@ -203,7 +205,7 @@ impl Cells {
         let mut writer = Writer(Vec::with_capacity(text.len() * 2));
         writer.0.extend_from_slice(MAGIC);
         writer.text(&self.stamp);
-        writer.0.extend_from_slice(&digest(text));
+        writer.0.extend_from_slice(&digest(text, features));
         writer.text(script_source);
         put_all(items, &mut writer);
         put_all(unit.imports(), &mut writer);
@@ -213,8 +215,17 @@ impl Cells {
     }
 }
 
-fn digest(text: &str) -> [u8; 32] {
-    Sha256::digest(text.as_bytes()).into()
+/// What a parse was computed from: the text, and the features its
+/// `cfg(feature = "..")`s read.
+fn digest(text: &str, features: &Enabled) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    for name in features.names() {
+        digest.update(name.as_bytes());
+        digest.update([0]);
+    }
+    digest.update([0xff]);
+    digest.update(text.as_bytes());
+    digest.finalize().into()
 }
 
 fn decode(reader: &mut Reader, text: &str) -> Option<parse::Unit> {
@@ -853,11 +864,12 @@ mod tests {
         let text = "#![allow(dead_code)] fn left() { use dep::Trait; { use dep::Trait; } } fn right() { use dep::Trait; }";
         let unit = crate::Engine::new().parse_unit(text).unwrap();
         let cells = Cells::new(std::env::temp_dir().join("rawr-lexical-cell-codec"));
-        let encoded = cells.encode(text, &unit).unwrap();
+        let features = super::Enabled::default();
+        let encoded = cells.encode(text, &features, &unit).unwrap();
         let mut reader = super::Reader { bytes: &encoded };
         assert_eq!(reader.take(super::MAGIC.len()).unwrap(), super::MAGIC);
         assert_eq!(reader.text().unwrap(), cells.stamp);
-        assert_eq!(reader.take(32).unwrap(), super::digest(text));
+        assert_eq!(reader.take(32).unwrap(), super::digest(text, &features));
         let kept = super::decode(&mut reader, text).unwrap();
         assert_eq!(unit.items(), kept.items());
         assert_eq!(unit.imports(), kept.imports());

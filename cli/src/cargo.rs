@@ -218,10 +218,12 @@ struct Running {
 
 impl Running {
     /// Start cargo on the package of `manifest`, or on its `target` when
-    /// options select one, or say why it didn't start: cargo is
+    /// options select one, with the command's feature flags, or say why it
+    /// didn't start: cargo is
     /// unavailable, or a script's manifest failed as cargo's would.
     fn start(program: &OsString, manifest: &Path, target: &[OsString]) -> Result<Self, Status> {
         let mut command = Command::new(program);
+        let selection = rawr::project::cargo::features::Selection::selected();
         if manifest
             .extension()
             .is_some_and(|extension| extension == "rs")
@@ -239,6 +241,7 @@ impl Running {
                 .arg(&check.bin)
                 .arg("--manifest-path")
                 .arg(&check.manifest)
+                .args(selection.flags())
                 .arg("--")
                 .arg(&check.remap);
             // The script area's Cargo config gives every script one build
@@ -251,6 +254,7 @@ impl Running {
             command
                 .args(["check", "--message-format=json"])
                 .args(target)
+                .args(selection.flags())
                 .arg("--manifest-path")
                 .arg(manifest);
             // From the crate's directory, as `cargo check` run there picks

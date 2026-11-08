@@ -2,6 +2,7 @@
 
 use super::ParseResult;
 use crate::item::type_ref;
+use crate::project::cargo::features::Enabled;
 use crate::tokenizer::{Token, TokenStream, TokenizerControl};
 use crate::{Engine, ImmutableString, Position, Span, PERR};
 
@@ -37,16 +38,23 @@ std::thread_local! {
     /// Whether the file being parsed builds as `rustc --test` builds it:
     /// `cfg(test)` holds.
     static TEST: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    /// The features Cargo enables for the package of the file being parsed:
+    /// its `cfg(feature = "..")`s hold.
+    static FEATURES: core::cell::RefCell<Enabled> = core::cell::RefCell::default();
 }
 
-pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
+/// The items of `source`, parsed for `engine`'s build with `features`
+/// enabled.
+pub(super) fn parse(engine: &Engine, features: &Enabled, source: &str) -> ParseResult<ParsedFile> {
     let outer = NESTED.take();
     let outer_skipped = SKIPPED.take();
     let outer_inner = INNER.take();
     let outer_macros = MACROS.take();
     let outer_test = TEST.replace(engine.test());
+    let outer_features = FEATURES.replace(features.clone());
     let parsed = parse_items(engine, source);
     TEST.set(outer_test);
+    FEATURES.set(outer_features);
     let mut nested = NESTED.replace(outer);
     let skipped = SKIPPED.replace(outer_skipped);
     let mut inner_attributes = INNER.replace(outer_inner).into_boxed_slice();
@@ -511,10 +519,17 @@ fn parse_inner_attribute(input: &mut TokenStream, hash: Position) -> ParseResult
 /// as `doc = include_str!("README.md")`, up to the next `,` or the `)`.
 fn parse_meta_item(input: &mut TokenStream) -> ParseResult<type_ref::Path> {
     let path = parse_path(input)?;
+    parse_meta_arguments(input)?;
+    Ok(path)
+}
+
+/// Pass over the `(..)` or `= value` of an attribute inside `cfg_attr(..)`,
+/// up to the next `,` or the `)`.
+fn parse_meta_arguments(input: &mut TokenStream) -> ParseResult<()> {
     let mut depth = 0usize;
     loop {
         match input.peek().expect("token streams always end with EOF") {
-            (Token::Comma | Token::RightParen, _) if depth == 0 => return Ok(path),
+            (Token::Comma | Token::RightParen, _) if depth == 0 => return Ok(()),
             (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
                 depth += 1;
             }
@@ -646,13 +661,13 @@ fn parse_item_after_attribute_marker(
     tokenizer_control: &TokenizerControl,
     hash: Position,
 ) -> ParseResult<Option<crate::item::Parsed>> {
-    let mut attributes = vec![parse_attribute_after_marker(input, hash)?];
+    let mut attributes = parse_attribute_after_marker(input, hash)?;
 
     while input
         .peek()
         .is_some_and(|(token, _)| is_attribute_marker(token))
     {
-        attributes.push(parse_attribute(input)?);
+        attributes.extend(parse_attribute(input)?);
     }
 
     let visibility = parse_item_visibility(input);
@@ -1188,7 +1203,7 @@ fn parse_leading(
         .peek()
         .is_some_and(|(token, _)| is_attribute_marker(token))
     {
-        attributes.push(parse_attribute(input)?);
+        attributes.extend(parse_attribute(input)?);
     }
 
     let visibility = parse_item_visibility(input);
@@ -1226,8 +1241,9 @@ fn cfg_disabled(attributes: &[crate::item::Attribute]) -> bool {
 }
 
 /// One `cfg` predicate: `test` (as the engine builds: rustc's `--test`),
-/// `debug_assertions` (true), `not(..)`, `all(..)`, `any(..)`; any other
-/// option, as `feature = "x"`, does not hold.
+/// `debug_assertions` (true), `feature = "x"` (a feature Cargo enables for
+/// the package), `not(..)`, `all(..)`, `any(..)`; any other option does not
+/// hold.
 fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
     let name = parse_name(input, "in a `cfg` predicate")?;
     match name.text.as_str() {
@@ -1250,8 +1266,12 @@ fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
         name => {
             if matches!(input.peek(), Some((Token::Equals, _))) {
                 input.next();
-                input.next();
-                return Ok(false);
+                return Ok(match input.next() {
+                    Some((Token::StringConstant(value), _)) if name == "feature" => {
+                        FEATURES.with_borrow(|features| features.holds(&value))
+                    }
+                    _ => false,
+                });
             }
             Ok(name == "debug_assertions" || name == "test" && TEST.get())
         }
@@ -1414,7 +1434,10 @@ fn skip_to_attribute_end(input: &mut TokenStream) -> ParseResult<Position> {
     }
 }
 
-fn parse_attribute(input: &mut TokenStream) -> ParseResult<crate::item::Attribute> {
+/// One outer attribute: the attributes it stands for, each spanning it.
+/// That is the attribute itself, or what a `#[cfg_attr(predicate, ..)]`
+/// applies when its predicate holds.
+fn parse_attribute(input: &mut TokenStream) -> ParseResult<Vec<crate::item::Attribute>> {
     let marker = match input.next().expect("token streams always end with EOF") {
         (token, position) if is_attribute_marker(&token) => position,
         (Token::LexError(error), position) => return Err(error.into_err(position)),
@@ -1430,9 +1453,76 @@ fn parse_attribute(input: &mut TokenStream) -> ParseResult<crate::item::Attribut
 fn parse_attribute_after_marker(
     input: &mut TokenStream,
     hash: Position,
-) -> ParseResult<crate::item::Attribute> {
+) -> ParseResult<Vec<crate::item::Attribute>> {
     expect(input, Token::LeftBracket, "after '#' in an attribute")?;
     let path = parse_path(input)?;
+    if path.segments.len() == 1 && path.segments[0].name.text == "cfg_attr" {
+        return parse_cfg_attr(input, path, hash);
+    }
+    parse_attribute_body(input, path, hash).map(|attribute| vec![attribute])
+}
+
+/// `#[cfg_attr(predicate, attribute, ..)]` after its path: each attribute
+/// it applies when the predicate holds, under the same rules as the one
+/// written alone. When it does not hold, it is kept as written, inert.
+fn parse_cfg_attr(
+    input: &mut TokenStream,
+    path: type_ref::Path,
+    hash: Position,
+) -> ParseResult<Vec<crate::item::Attribute>> {
+    expect(input, Token::LeftParen, "after `cfg_attr`")?;
+    let enabled = parse_cfg_predicate(input)?;
+    expect(input, Token::Comma, "after a `cfg_attr` predicate")?;
+    let mut applied = Vec::new();
+    while !matches!(input.peek(), Some((Token::RightParen, _))) {
+        let mut path = parse_path(input)?;
+        let mut arguments = Vec::new();
+        let named = |name: &str| path.segments.len() == 1 && path.segments[0].name.text == name;
+        if named("derive") && matches!(input.peek(), Some((Token::LeftParen, _))) {
+            input.next();
+            while !matches!(input.peek(), Some((Token::RightParen, _))) {
+                arguments.push(parse_path(input)?);
+                if matches!(input.peek(), Some((Token::Comma, _))) {
+                    input.next();
+                }
+            }
+            expect(input, Token::RightParen, "to close attribute arguments")?;
+        } else if named("cfg") {
+            expect(input, Token::LeftParen, "after `cfg`")?;
+            if !parse_cfg_predicate(input)? {
+                path.segments[0].name.text = CFG_DISABLED.into();
+            }
+            expect(input, Token::RightParen, "to close `cfg`")?;
+        } else {
+            parse_meta_arguments(input)?;
+        }
+        applied.push((path, arguments));
+        if matches!(input.peek(), Some((Token::Comma, _))) {
+            input.next();
+        }
+    }
+    expect(input, Token::RightParen, "to close `cfg_attr`")?;
+    let close = expect(input, Token::RightBracket, "to close an attribute")?;
+    let span = Span::new(hash, after(close, 1));
+    let attribute =
+        |(path, arguments): (type_ref::Path, Vec<type_ref::Path>)| crate::item::Attribute {
+            path,
+            arguments: arguments.into_boxed_slice(),
+            span,
+            text: ImmutableString::new(),
+        };
+    if !enabled {
+        return Ok(vec![attribute((path, Vec::new()))]);
+    }
+    Ok(applied.into_iter().map(attribute).collect())
+}
+
+/// An outer attribute after its path, through its `]`.
+fn parse_attribute_body(
+    input: &mut TokenStream,
+    path: type_ref::Path,
+    hash: Position,
+) -> ParseResult<crate::item::Attribute> {
     let mut arguments = Vec::new();
 
     // `#[cfg(predicate)]`, under the engine's build (`parse_cfg_predicate`).
@@ -4604,7 +4694,7 @@ fn parse_body_syntax(
                 .peek()
                 .is_some_and(|(token, _)| is_attribute_marker(token))
             {
-                attributes.push(parse_attribute(input)?);
+                attributes.extend(parse_attribute(input)?);
             }
             if input
                 .peek()
