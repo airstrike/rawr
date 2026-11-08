@@ -146,6 +146,7 @@ pub(super) use entry::lower;
 pub(crate) use entry::with_uses;
 pub(crate) use entry::Output;
 use entry::{expand_imported_variants, trait_objects, use_blocks, Lowered};
+use format::PANIC_MACROS;
 use from_str::{parse_text, ParseError};
 use generics::{
     bound_kinds, bounded_value, dyn_arguments, generic_conversion_call, generic_equalities,
@@ -1288,21 +1289,6 @@ use scope::{
     LocalType, LoopElement, LoopFrame, UninitializedUse,
 };
 pub(crate) use tokens::lex_rust;
-
-/// `=` or a compound assignment.
-/// The panic macros of Rust's prelude (`parse_panic_macro`).
-const PANIC_MACROS: &[&str] = &[
-    "panic",
-    "assert",
-    "assert_eq",
-    "assert_ne",
-    "debug_assert",
-    "debug_assert_eq",
-    "debug_assert_ne",
-    "unreachable",
-    "todo",
-    "unimplemented",
-];
 
 #[cfg(test)]
 mod tests {

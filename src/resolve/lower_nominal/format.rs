@@ -2417,3 +2417,18 @@ impl<'a> Parser<'a> {
         start
     }
 }
+
+/// `=` or a compound assignment.
+/// The panic macros of Rust's prelude (`parse_panic_macro`).
+pub(super) const PANIC_MACROS: &[&str] = &[
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "unreachable",
+    "todo",
+    "unimplemented",
+];
