@@ -52,6 +52,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The site, the playground and the bot share a new favicon: a red disc over a heavy rule, with a red triangle for the playground and the bot, following the browser's light or dark theme. The link previews for the site, /todo and the bot's invite are redrawn in the site's black, white and red with that mark, and each preview's URL carries its content hash so chat apps fetch the new card. The build progress bar draws in the site's reds instead of pink. (#1157)
 - A marked function can give native code back a value of a native type: the app's own `Message`, a struct from `main.rs`, or another crate's type. It works bare, inside an `Option`, a `Vec`, a tuple or a `Result`, and for a type with a lifetime such as `iced::Element<'a, Message>`. Native code gets the value itself. (#1203)
 - Native code can pass a marked function a native value by value, and the function keeps it as Rust would. A `&mut` native value the function changes, or replaces with `*value = new`, comes back changed. `item.count += 1` on another crate's struct field works, and `item.name.push('!')` on its `String` field changes the struct instead of a copy. (#1139)
+- A plain http request to the site, the playground or the bot pages moves to the same URL on https (301 for a GET, 308 for a POST so a playground request stays a POST). Before, http served the page as is. (#1228)
 
 ## 0.3.171 (2026-11-07)
 

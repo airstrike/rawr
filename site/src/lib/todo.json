@@ -58,7 +58,8 @@
         {"text":"`rawr run` of a program that ends while a save is being prepared ends with the program's own exit status, instead of exiting 1 with a framework error that said the save failed.","issues":[1127]},
         {"text":"The site, the playground and the bot share a new favicon: a red disc over a heavy rule, with a red triangle for the playground and the bot, following the browser's light or dark theme. The link previews for the site, /todo and the bot's invite are redrawn in the site's black, white and red with that mark, and each preview's URL carries its content hash so chat apps fetch the new card. The build progress bar draws in the site's reds instead of pink.","issues":[1157]},
         {"text":"A marked function can give native code back a value of a native type: the app's own `Message`, a struct from `main.rs`, or another crate's type. It works bare, inside an `Option`, a `Vec`, a tuple or a `Result`, and for a type with a lifetime such as `iced::Element<'a, Message>`. Native code gets the value itself.","issues":[1203]},
-        {"text":"Native code can pass a marked function a native value by value, and the function keeps it as Rust would. A `&mut` native value the function changes, or replaces with `*value = new`, comes back changed. `item.count += 1` on another crate's struct field works, and `item.name.push('!')` on its `String` field changes the struct instead of a copy.","issues":[1139]}
+        {"text":"Native code can pass a marked function a native value by value, and the function keeps it as Rust would. A `&mut` native value the function changes, or replaces with `*value = new`, comes back changed. `item.count += 1` on another crate's struct field works, and `item.name.push('!')` on its `String` field changes the struct instead of a copy.","issues":[1139]},
+        {"text":"A plain http request to the site, the playground or the bot pages moves to the same URL on https (301 for a GET, 308 for a POST so a playground request stays a POST). Before, http served the page as is.","issues":[1228]}
       ]
     },
     "releases": [
@@ -2893,7 +2894,8 @@
     {"issue":1224,"title":"A marked function can't take a native value nested by value in an argument (Option<Kind>, Vec<Item>)","state":"open","category":"Divergences from rustc"},
     {"issue":1225,"title":"A marked function can't take a native value whose type names a non-'static lifetime by value","state":"open","category":"Divergences from rustc"},
     {"issue":1226,"title":"A result of a native type in a generic marked impl can't cross","state":"open","category":"Divergences from rustc"},
-    {"issue":1227,"title":"`a.b.c += v` through more than one imported struct field","state":"open","category":"Divergences from rustc"}
+    {"issue":1227,"title":"`a.b.c += v` through more than one imported struct field","state":"open","category":"Divergences from rustc"},
+    {"issue":1228,"title":"The site redirects plain http to https","state":"open","category":"Health"}
   ],
   "groups": [
     {

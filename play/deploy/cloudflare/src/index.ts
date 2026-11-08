@@ -43,6 +43,7 @@ import { Container, ContainerProxy, getContainer, type OutboundHandlerContext } 
 import { CARDS } from "./cards.gen.ts";
 import { render, type Dashboard } from "./dashboard.ts";
 import { EXAMPLES, FIRST } from "./examples.ts";
+import { secured } from "./https.ts";
 import {
   ID_PATTERN,
   KEEP_DAYS,
@@ -832,6 +833,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
+    const moved = secured(request);
+    if (moved) return moved;
     if (url.hostname === OLD_HOST) {
       // 308 keeps a POST a POST (a playground page still open on the old host).
       const status = request.method === "GET" || request.method === "HEAD" ? 301 : 308;
