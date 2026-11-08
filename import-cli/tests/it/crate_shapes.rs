@@ -495,6 +495,16 @@ fn a_forwarding_impls_parameters_are_its_own() {
 /// later use fixes all three. So does a function whose `C:
 /// Compose<Message>` is a where-clause. A badge whose message nothing
 /// fixes is rustc's E0282 at its `let` (#1404).
+///
+/// A view whose message only its declared return type fixes, through each
+/// match arm's row `.into()` down to the badges' `Slot::new` and their
+/// children's conversions, runs as cargo runs it, as icedxdy's badge
+/// previews are written. The slot is also an `Element` by `From<Slot>`, so
+/// `impl Into<Slot<'a, Message>>` has an `Into<Element>` impl for a slot
+/// beside core's reflexive one, which only the trait's argument rules out.
+/// A pill that converts into both a slot and an element has its `into`
+/// in a family, whose generic method the runner binds per instance
+/// (#1422).
 #[test]
 fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     runs_as_cargo_does(
@@ -511,7 +521,14 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
          row 8 [string badge secondary 2 [composed row 2 [text check 12 | str Verified]] | \
          string badge ghost 2 [composed row 2 [str Bookmark | icon 12]]]\n\
          string badge default 2 [composed row 2 [str a]] | str b\n\
-         composed row 0 [str w]\n107997\n",
+         composed row 0 [str w]\n\
+         row 8 [string pill default 2 [str Badge] | string pill secondary 2 [str Secondary]] | \
+         row 8 [string pill secondary 2 [composed row 4 [text check 12 | str Verified]] | \
+         string pill ghost 2 [composed row 4 [str Bookmark | icon 12]] | \
+         string badge secondary 2 [composed row 2 [text check 12 | str Verified]]] | \
+         row 8 [string pill default 2 pressed [composed row 4 [str Open Link | icon 12]]] | \
+         row 8 [string badge default 2 [composed row 2 [text check 12 | str Verified]]] Noop\n\
+         107997\n",
     );
     let program = "// rawr\nuse natives::compose::{self, Row, Theme};\nuse natives::slots;\n\n\
                    fn main() {\n    let row: Row<'_, ()> = \

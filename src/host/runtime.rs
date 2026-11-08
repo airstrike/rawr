@@ -735,7 +735,9 @@ impl Builder {
     /// the item at `path`, spelled from the root or through a macro's
     /// `$crate`, serves that item; any other item of the selector
     /// takes the first adapter that reaches it, as an alias's path reaches
-    /// its target's.
+    /// its target's. A generic family's method, as one `into` of a
+    /// component crate's `Badge<'a, Message>` among its `From` impls for
+    /// `Slot` and `Element`, is bound as an item is (#1422).
     #[cfg(feature = "rust-import")]
     #[doc(hidden)]
     pub fn bind_imported_instance(
@@ -748,8 +750,7 @@ impl Builder {
             + 'static,
     ) -> Result<&mut Self, Error> {
         let definitions = self
-            .definition
-            .items()
+            .imported_items()
             .filter(|definition| {
                 definition
                     .imported_identity()

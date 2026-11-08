@@ -176,3 +176,27 @@ impl<'a> From<Rule> for Slot<'a, ()> {
         Slot::labeled("rule".to_owned())
     }
 }
+
+/// Any widget is a slot and any slot a widget, as icedxdy_widget's
+/// `From<Element> for Slot` and `From<Slot> for Element` make them.
+impl<'a, Message: 'a, T: 'a, R: 'a> From<widgets::Element<'a, Message, T, R>>
+    for Slot<'a, Message, T, R>
+{
+    fn from(element: widgets::Element<'a, Message, T, R>) -> Self {
+        Slot::labeled(format!("element {}", element.describe))
+    }
+}
+
+impl<'a, Message: 'a, T: 'a, R: 'a> From<Slot<'a, Message, T, R>>
+    for widgets::Element<'a, Message, T, R>
+{
+    fn from(slot: Slot<'a, Message, T, R>) -> Self {
+        widgets::Element::described(slot.label)
+    }
+}
+
+impl<'a, Message, T, R> Compose<Message, T, R> for widgets::Element<'a, Message, T, R> {
+    fn compose(&self) -> String {
+        format!("element {}", self.describe)
+    }
+}

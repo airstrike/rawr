@@ -49,6 +49,15 @@ impl<'a, Message, Theme, Renderer> From<Text<'a, Theme, Renderer>>
     }
 }
 
+impl<'a, Message, Theme, Renderer> Element<'a, Message, Theme, Renderer> {
+    pub fn described(describe: String) -> Self {
+        Element {
+            describe,
+            marker: PhantomData,
+        }
+    }
+}
+
 pub struct TextLike<'a, Theme> {
     pub content: &'a str,
     marker: PhantomData<Theme>,

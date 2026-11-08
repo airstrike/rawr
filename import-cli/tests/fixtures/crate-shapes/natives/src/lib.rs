@@ -1342,6 +1342,66 @@ pub mod badge {
         }
     }
 
+    /// A badge as icedxdy's is: any slot, a style and a message on press,
+    /// a slot of a row and a widget of its own when its message is `Clone`.
+    pub struct Pill<'a, M> {
+        content: parts::Slot<'a, M>,
+        style: StyleFn,
+        on_press: Option<M>,
+    }
+
+    pub fn pill<'a, M: 'a>(content: impl Into<parts::Slot<'a, M>>) -> Pill<'a, M> {
+        Pill {
+            content: content.into(),
+            style: StyleFn(|size| format!("default {size}")),
+            on_press: None,
+        }
+    }
+
+    impl<'a, M: 'a> Pill<'a, M> {
+        pub fn style(mut self, style: impl Into<StyleFn>) -> Self {
+            self.style = style.into();
+            self
+        }
+    }
+
+    impl<'a, M: Clone + 'a> Pill<'a, M> {
+        pub fn on_press(mut self, message: M) -> Self {
+            self.on_press = Some(message);
+            self
+        }
+    }
+
+    impl<'a, M: Clone + 'a> Pill<'a, M> {
+        fn describe(&self) -> String {
+            let style = (self.style.0)(2);
+            let press = if self.on_press.is_some() {
+                " pressed"
+            } else {
+                ""
+            };
+            format!("pill {style}{press} [{}]", self.content.label())
+        }
+    }
+
+    impl<'a, M: Clone + 'a> From<Pill<'a, M>> for widgets::Element<'a, M, parts::Theme> {
+        fn from(pill: Pill<'a, M>) -> Self {
+            widgets::Element::described(pill.describe())
+        }
+    }
+
+    impl<'a, M: Clone + 'a> From<Pill<'a, M>> for parts::Slot<'a, M> {
+        fn from(pill: Pill<'a, M>) -> Self {
+            parts::Slot::from(pill.describe())
+        }
+    }
+
+    impl<'a, M: Clone + 'a> parts::Compose<M> for Pill<'a, M> {
+        fn compose(&self) -> String {
+            self.describe()
+        }
+    }
+
     pub fn badge(label: &str) -> Badge {
         Badge {
             label: label.to_string(),
@@ -1416,6 +1476,36 @@ macro_rules! component {
                 ])
                 .spacing(2),
             ),
+        )
+    };
+}
+
+/// A pill of one child, or of a row of several, as icedxdy's `badge!`
+/// makes one: a leading bare identifier is the caller's `icon::$first()`.
+#[macro_export]
+macro_rules! pill {
+    ($single:expr $(,)?) => {
+        $crate::badge::pill($single)
+    };
+    ($first:ident, $($rest:expr),+ $(,)?) => {
+        $crate::badge::pill(
+            $crate::compose::Slot::new(
+                $crate::compose::Row::with_children([
+                    Into::<$crate::compose::Slot<'_, _>>::into(icon::$first()),
+                    $(Into::<$crate::compose::Slot<'_, _>>::into($rest)),+
+                ])
+                .spacing(4)
+            )
+        )
+    };
+    ($($child:expr),+ $(,)?) => {
+        $crate::badge::pill(
+            $crate::compose::Slot::new(
+                $crate::compose::Row::with_children([
+                    $(Into::<$crate::compose::Slot<'_, _>>::into($child)),+
+                ])
+                .spacing(4)
+            )
         )
     };
 }
