@@ -44,6 +44,32 @@ fn main() {
     println!("{label} {items:?} {}", pages[1].title());
     pages[1].update(Message::Rename("held".to_string()));
     println!("{} {:?}", pages[1].label(), pages[1].items());
+    // A label read many times is the page's own text each time, and what
+    // the page draws borrows that same text, however often it is drawn and
+    // renamed (#1322, #1321).
+    let first = pages[1].label().as_ptr();
+    let mut same = true;
+    for round in 0..200 {
+        same &= std::ptr::eq(pages[1].label().as_ptr(), first);
+        let drawn = pages[1].draw();
+        same &= std::ptr::eq(drawn.text().as_ptr(), first);
+        if round % 50 == 49 {
+            println!("{} {same}", drawn.text());
+        }
+    }
+    for round in 0..100 {
+        pages[1].update(Message::Rename(format!("name {round}")));
+        let label = pages[1].label();
+        let drawn = pages[1].draw();
+        same &= std::ptr::eq(drawn.text().as_ptr(), label.as_ptr());
+        same &= drawn.text() == format!("name {round}");
+    }
+    println!(
+        "{} {same} {}",
+        pages[1].draw().text(),
+        pages[0].draw().text()
+    );
+    pages[1].update(Message::Rename("held".to_string()));
     pages.push(copy);
     page::SHOWN.with_borrow_mut(|shown| shown.extend(pages));
     page::SHOWN.with_borrow(|shown| {

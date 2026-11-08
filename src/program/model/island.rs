@@ -44,6 +44,17 @@ pub(crate) const NATIVE: u8 = 21;
 /// the handle of the program value it holds, which the call takes from the
 /// kept values and puts back after (`island::object`).
 pub(crate) const HANDLE: u8 = 22;
+/// A stand-in's `&str` result that borrows its receiver (#1322): the
+/// address and length of the program's own text, pinned with the program
+/// value till it is next taken `&mut` (`island::Held::pins`).
+pub(crate) const PINNED: u8 = 23;
+
+/// The first byte of a call's header: the function is a member of the
+/// type before its last segment.
+pub(crate) const OWNED: u8 = 1;
+/// The first byte of a call's header: the result is a `&str` that borrows
+/// the stand-in's receiver, which comes back [`PINNED`].
+pub(crate) const BORROWS: u8 = 2;
 
 /// Nesting deeper than this does not cross.
 const DEPTH: usize = 256;
@@ -373,6 +384,22 @@ impl Model {
         natives: &mut Natives,
         depth: usize,
     ) -> Result<(), String> {
+        self.island_write_in(value, None, out, natives, depth)
+    }
+
+    /// [`Model::island_write`] of a call's result made in the region
+    /// `region`, which the caller keeps for as long as native code holds
+    /// what it takes (`island::Calls::call`): a value of that region, as a
+    /// `view(&self)`'s `Element<'_, Message>`, moves to native code as a
+    /// native value does (#1321). A value of any other region ends with it.
+    pub(crate) fn island_write_in(
+        &self,
+        value: &Dynamic,
+        region: Option<crate::scope::Nonce>,
+        out: &mut Vec<u8>,
+        natives: &mut Natives,
+        depth: usize,
+    ) -> Result<(), String> {
         if depth > DEPTH {
             return Err("a value is nested too deeply".into());
         }
@@ -400,7 +427,7 @@ impl Model {
                 out.push(ARRAY);
                 count(items.len(), out);
                 for item in items.iter() {
-                    self.island_write(item, out, natives, depth)?;
+                    self.island_write_in(item, region, out, natives, depth)?;
                 }
             }
             Union::Struct(value, ..) => {
@@ -411,7 +438,7 @@ impl Model {
                 );
                 count(value.fields().len(), out);
                 for field in value.fields() {
-                    self.island_write(field, out, natives, depth)?;
+                    self.island_write_in(field, region, out, natives, depth)?;
                 }
             }
             Union::Enum(value, ..) => {
@@ -423,10 +450,12 @@ impl Model {
                 text(value.variant().name(), out);
                 count(value.payload().len(), out);
                 for item in value.payload() {
-                    self.island_write(item, out, natives, depth)?;
+                    self.island_write_in(item, region, out, natives, depth)?;
                 }
             }
-            Union::Shared(..) => self.island_write(&value.flatten_clone(), out, natives, depth)?,
+            Union::Shared(..) => {
+                self.island_write_in(&value.flatten_clone(), region, out, natives, depth)?
+            }
             Union::Variant(..) => {
                 // A lent value can't leave the call it was lent for, in its
                 // result or in an argument native code takes back.
@@ -438,12 +467,30 @@ impl Model {
                         lent.name()
                     ));
                 }
-                if let Some(option) = value.read_lock::<crate::option::Value>() {
+                if let Some(scoped) = value.read_lock::<crate::scope::Scoped>().map(|held| *held) {
+                    if region != Some(scoped.nonce()) {
+                        return Err(format!(
+                            "it is a `{}` that borrows what ends with the call (E0515)",
+                            scoped.name()
+                        ));
+                    }
+                    // SAFETY: the region is the call's, which its caller
+                    // keeps for as long as native code holds what it takes.
+                    let native = crate::scope::with::<crate::scope::RegionF, _>(
+                        scoped.nonce(),
+                        |region| unsafe { region.take_native(scoped) },
+                    )
+                    .and_then(|taken| taken)
+                    .map_err(|error| error.to_string())?;
+                    out.push(NATIVE);
+                    count(natives.len(), out);
+                    natives.push(native);
+                } else if let Some(option) = value.read_lock::<crate::option::Value>() {
                     match &*option {
                         None => out.push(NONE),
                         Some(inner) => {
                             out.push(SOME);
-                            self.island_write(inner, out, natives, depth)?;
+                            self.island_write_in(inner, region, out, natives, depth)?;
                         }
                     }
                 } else if let Some(result) = value.read_lock::<crate::result::Value>() {
@@ -452,7 +499,7 @@ impl Model {
                         Err(inner) => (ERR, inner),
                     };
                     out.push(tag);
-                    self.island_write(inner, out, natives, depth)?;
+                    self.island_write_in(inner, region, out, natives, depth)?;
                 } else {
                     let native = crate::island::moved(value)
                         .ok_or_else(|| format!("a `{}` can't cross yet", value.type_name()))??;
