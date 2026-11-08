@@ -37,7 +37,7 @@ use toml_edit::{DocumentMut, Item, Table};
 use crate::cargo::config::INTERNAL_ALIAS;
 use crate::node;
 
-mod users;
+pub(crate) mod users;
 
 const DOMAIN: &[u8] = b"rawr.runtime/v1";
 /// The runtime's own package, which only depends on `rawr`.
@@ -1117,11 +1117,11 @@ pub fn clean(cargo_home: &Path) {
 }
 
 /// Best effort: remove entries other than `keep` that nothing used within
-/// `recent` and that no installed rawr links (the entry's [`users`], which
-/// only runtimes record). An entry a build leases is skipped, and nothing
-/// here waits for a lock or reads free disk. Each goes by being renamed
-/// aside first, so a partial removal is never taken for an entry and is
-/// finished by a later cleanup.
+/// `recent` and that no installed rawr links or uses (the entry's [`users`],
+/// which runtimes and shared formats record). A leased entry is skipped,
+/// and nothing here waits for a lock or reads free disk. Each goes by being
+/// renamed aside first, so a partial removal is never taken for an entry and
+/// is finished by a later cleanup.
 pub(crate) fn prune(runtimes: &Path, keep: &[&Path], recent: Duration) {
     let Ok(entries) = fs::read_dir(runtimes) else {
         return;

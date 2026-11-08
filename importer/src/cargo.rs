@@ -945,7 +945,9 @@ impl Request {
                 closure.scripts.insert(unit.clone(), scripts.clone());
             }
         }
-        closure.home = crate::store::home(resolution.context.cargo_home()).join("inventories");
+        closure.home = crate::bindings::format::inventories(&crate::store::home(
+            resolution.context.cargo_home(),
+        ));
         Ok(closure)
     }
 
