@@ -4036,7 +4036,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "A real app of 1016 packages with two marked leaf modules passes rawr check (2026-11-08, after #1231, #1262, #1278, #1295, #1309, #1318, #1331). Next: its rawr run; a native root naming marked types (#1249, #1264 done for trait objects)",
+          "note": "Two real apps run under rawr run (2026-11-08): the elevato game (after #1405, #1406, #1421, #1432) and icedxdy's browser example (after #1403, #1404, #1422, #1435, #1437, #1442). A 1016-package app passes rawr check; its run is paused. Next: a native root naming marked types (#1249) and the build.rs step for in-process reload (#1425, #1426)",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
