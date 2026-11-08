@@ -56,6 +56,9 @@ pub struct Inputs {
     directories: Box<[PathBuf]>,
     trees: Box<[PathBuf]>,
     sources: Box<[PathBuf]>,
+    /// Directories the OS watches nothing under, and no watched tree holds:
+    /// what builds write, and Cargo's registry and git checkouts.
+    unwatched: Box<[PathBuf]>,
 }
 
 /// Exact source and manifest contents consumed by one compiled candidate.
@@ -285,7 +288,23 @@ impl Inputs {
             .collect();
         Self {
             sources,
+            unwatched: union(self.unwatched, &sorted(outputs)),
             ..Self::from_paths(paths, trees)
+        }
+    }
+
+    /// These inputs with Cargo's registry and git `checkouts`
+    /// ([`rawr_import::location::checkouts_here`]) left unwatched. Their
+    /// sources never change while a program runs: a changed dependency is
+    /// a new checkout, which a changed `Cargo.lock` names. The files under
+    /// them stay inputs.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_checkouts(self, checkouts: &[PathBuf]) -> Self {
+        Self {
+            unwatched: union(self.unwatched, &sorted(checkouts)),
+            ..self
         }
     }
 
@@ -310,6 +329,7 @@ impl Inputs {
             directories: union(self.directories, &native.directories),
             trees: union(self.trees, &native.trees),
             sources,
+            unwatched: union(self.unwatched, &native.unwatched),
         }
     }
 
@@ -347,6 +367,12 @@ impl Inputs {
         &self.trees
     }
 
+    /// Return the directories the OS watches nothing under, in stable order.
+    #[must_use]
+    pub const fn unwatched(&self) -> &[PathBuf] {
+        &self.unwatched
+    }
+
     /// Return whether this exact input set contains one canonical path.
     #[must_use]
     pub fn contains(&self, path: &Path) -> bool {
@@ -378,8 +404,20 @@ impl Inputs {
             directories,
             trees: trees.into_iter().collect(),
             sources: Box::default(),
+            unwatched: Box::default(),
         }
     }
+}
+
+/// `paths` sorted and without duplicates.
+#[cfg(feature = "rust-import")]
+fn sorted(paths: &[PathBuf]) -> Box<[PathBuf]> {
+    paths
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Merge two sorted, duplicate-free path lists.
@@ -855,6 +893,7 @@ mod tests {
                 directories: Box::default(),
                 trees: Box::default(),
                 sources: Box::default(),
+                unwatched: Box::default(),
             }),
             files,
             entry,
@@ -893,6 +932,7 @@ mod tests {
             directories: Box::default(),
             trees: Box::default(),
             sources: Box::default(),
+            unwatched: Box::default(),
         }
         .with_imported([rawr_import::input::proof::Watch::Exact(missing.clone())]);
 

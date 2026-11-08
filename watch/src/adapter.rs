@@ -82,10 +82,10 @@ pub enum Notice {
 pub enum Error {
     /// The platform's recommended raw watcher could not start.
     Start(notify::Error),
-    /// The OS refused the stream over the paths the watcher asked for.
+    /// The OS refused the stream over the roots the watcher asked for.
     Stream {
-        /// Each registered path, a directory watched recursively or a path
-        /// watched by name.
+        /// Each registered root, a directory watched whole or for its own
+        /// entries, or a path watched by name.
         paths: Box<[PathBuf]>,
         /// The OS's refusal, as the native watcher reports it.
         source: notify::Error,
@@ -287,11 +287,7 @@ impl Adapter {
         native: bool,
         history: native::History,
     ) -> Result<Self, Error> {
-        let (directories, trees) = filter.roots();
-        let roots = transport_roots(
-            directories.iter().map(PathBuf::as_path),
-            trees.iter().map(PathBuf::as_path),
-        )?;
+        let roots = filter.wanted().roots()?;
         let registered = registration(&roots, &filter.watched());
         register_all(&mut watcher, &registered)?;
         let handler = native.then(|| Handler {
@@ -479,10 +475,9 @@ impl Control {
     /// incumbent. No registration occurs when the union is unchanged.
     pub fn prepare(&self, inputs: &rawr::reload::source::Inputs) -> Result<(), Error> {
         let result = (|| {
-            let added = transport_roots(
-                inputs.paths().iter().filter_map(|path| path.parent()),
-                inputs.trees().iter().map(PathBuf::as_path),
-            )?;
+            let mut wanted = Wanted::default();
+            wanted.add(inputs);
+            let added = wanted.roots()?;
             let mut watch = lock(&self.watch);
             let mut desired = watch.roots.clone();
             for (path, recursive) in added {
@@ -503,11 +498,7 @@ impl Control {
     pub fn reconcile(&self) -> Vec<Error> {
         let result = (|| {
             let mut watch = lock(&self.watch);
-            let (directories, trees) = self.filter.roots();
-            let desired = transport_roots(
-                directories.iter().map(PathBuf::as_path),
-                trees.iter().map(PathBuf::as_path),
-            )?;
+            let desired = self.filter.wanted().roots()?;
             watch.replace(desired, &self.filter.watched())
         })();
         match result {
@@ -630,30 +621,104 @@ fn mode(recursive: bool) -> RecursiveMode {
     }
 }
 
-fn transport_roots<'a>(
-    directories: impl Iterator<Item = &'a Path>,
-    trees: impl Iterator<Item = &'a Path>,
-) -> Result<BTreeMap<PathBuf, bool>, Error> {
-    // Sibling files repeat their parent: inspect each distinct path once.
-    let mut distinct = BTreeMap::<&Path, bool>::new();
-    for (path, recursive) in directories
-        .map(|path| (path, false))
-        .chain(trees.map(|path| (path, true)))
-    {
-        *distinct.entry(path).or_default() |= recursive;
+/// What the watcher's roots derive from: each input's directory, whether a
+/// manifest lies in it, the recursive trees, and the directories nothing
+/// under which is watched.
+#[derive(Default)]
+struct Wanted {
+    directories: BTreeMap<PathBuf, bool>,
+    trees: BTreeSet<PathBuf>,
+    unwatched: BTreeSet<PathBuf>,
+}
+
+impl Wanted {
+    fn add(&mut self, inputs: &rawr::reload::source::Inputs) {
+        self.add_paths(inputs.paths(), inputs.trees(), inputs.unwatched());
     }
-    let mut roots = BTreeMap::new();
-    for (path, recursive) in distinct {
-        let root = existing_directory(path)?;
-        // A missing recursive input needs only its next component's creation
-        // event; recursively watching a distant ancestor could cover the disk.
-        let recursive = recursive && root.as_path() == path;
-        roots
-            .entry(root)
-            .and_modify(|current| *current |= recursive)
-            .or_insert(recursive);
+
+    fn add_paths(&mut self, paths: &[PathBuf], trees: &[PathBuf], unwatched: &[PathBuf]) {
+        // Sibling files repeat their parent: keep each directory once.
+        for path in paths {
+            let Some(parent) = path.parent() else {
+                continue;
+            };
+            let manifest = path
+                .file_name()
+                .is_some_and(|name| name == "Cargo.toml" || name == "Cargo.lock");
+            match self.directories.get_mut(parent) {
+                Some(current) => *current |= manifest,
+                None => {
+                    self.directories.insert(parent.to_path_buf(), manifest);
+                }
+            }
+        }
+        self.trees.extend(trees.iter().cloned());
+        self.unwatched.extend(unwatched.iter().cloned());
     }
-    Ok(roots)
+
+    /// The directories the native watcher watches, a handful however many
+    /// files the inputs hold. A manifest's directory is watched for its own
+    /// entries, since it holds the package's `target`; so is any directory
+    /// with no manifest's directory above it (a Cargo config's, a home's).
+    /// Any other input directory below a manifest's (the package's `src/`,
+    /// a marked file's or a native module's directory, a path dependency's
+    /// `src/`) is watched whole and stands for every directory beneath it.
+    /// Nothing under an unwatched directory is watched, and no recursive
+    /// root holds one: a dependency from the registry or git arrives as a
+    /// change to `Cargo.lock`. The filter drops each event on a path that
+    /// is no input.
+    fn roots(&self) -> Result<BTreeMap<PathBuf, bool>, Error> {
+        let under = |path: &Path| self.unwatched.iter().any(|dir| path.starts_with(dir));
+        let holds = |path: &Path| self.unwatched.iter().any(|dir| dir.starts_with(path));
+        let manifests = self
+            .directories
+            .iter()
+            .filter(|(directory, manifest)| **manifest && !under(directory))
+            .map(|(directory, _)| directory.as_path())
+            .collect::<BTreeSet<_>>();
+        let mut wanted = BTreeMap::<&Path, bool>::new();
+        for (directory, manifest) in &self.directories {
+            if under(directory) {
+                continue;
+            }
+            let recursive = !*manifest
+                && !holds(directory)
+                && directory
+                    .ancestors()
+                    .skip(1)
+                    .any(|ancestor| manifests.contains(ancestor));
+            *wanted.entry(directory).or_default() |= recursive;
+        }
+        for tree in &self.trees {
+            if !under(tree) {
+                *wanted.entry(tree).or_default() = true;
+            }
+        }
+        let whole = wanted
+            .iter()
+            .filter(|(_, recursive)| **recursive)
+            .map(|(directory, _)| *directory)
+            .collect::<Vec<_>>();
+        let mut roots = BTreeMap::new();
+        for (path, recursive) in wanted {
+            if whole
+                .iter()
+                .any(|tree| path != *tree && path.starts_with(tree))
+            {
+                continue;
+            }
+            let root = existing_directory(path)?;
+            // A missing recursive input needs only its next component's
+            // creation event; recursively watching a distant ancestor could
+            // cover the disk.
+            let recursive = recursive && root.as_path() == path;
+            roots
+                .entry(root)
+                .and_modify(|current| *current |= recursive)
+                .or_insert(recursive);
+        }
+        Ok(roots)
+    }
 }
 
 fn existing_directory(path: &Path) -> Result<PathBuf, Error> {
@@ -747,61 +812,58 @@ impl Filter {
         }
     }
 
-    fn roots(&self) -> (BTreeSet<PathBuf>, BTreeSet<PathBuf>) {
+    fn wanted(&self) -> Wanted {
+        let mut wanted = Wanted::default();
         match self {
             Self::Publication(publication) => {
                 let read = publication.read();
-                (
-                    read.parents().into_vec().into_iter().collect(),
-                    read.trees().into_vec().into_iter().collect(),
-                )
+                wanted.add_paths(&read.paths(), &read.trees(), &read.unwatched());
             }
             Self::Direct(state) => {
                 let state = read(state);
-                let mut directories = state
-                    .current
-                    .paths()
-                    .iter()
-                    .filter_map(|path| path.parent().map(Path::to_path_buf))
-                    .collect::<BTreeSet<_>>();
-                let mut trees = state
-                    .current
-                    .trees()
-                    .iter()
-                    .cloned()
-                    .collect::<BTreeSet<_>>();
-                for entry in &state.staged {
-                    directories.extend(
-                        entry
-                            .inputs
-                            .paths()
-                            .iter()
-                            .filter_map(|path| path.parent().map(Path::to_path_buf)),
-                    );
-                    trees.extend(entry.inputs.trees().iter().cloned());
+                for inputs in std::iter::once(&state.current)
+                    .chain(state.staged.iter().map(|entry| &entry.inputs))
+                {
+                    wanted.add(inputs);
                 }
-                (directories, trees)
             }
         }
+        wanted
     }
 
-    /// Every exact input path and recursive root, current and staged: what
-    /// the watcher stands for, by path.
+    /// Every exact input path and recursive root, current and staged, that
+    /// lies under no unwatched directory: what the watcher stands for, by
+    /// path.
     fn watched(&self) -> BTreeSet<PathBuf> {
+        let kept = |unwatched: &[PathBuf], path: &PathBuf| {
+            !unwatched
+                .iter()
+                .any(|directory| path.starts_with(directory))
+        };
         match self {
             Self::Publication(publication) => {
                 let read = publication.read();
+                let unwatched = read.unwatched();
                 read.paths()
                     .into_vec()
                     .into_iter()
                     .chain(read.trees().into_vec())
+                    .filter(|path| kept(&unwatched, path))
                     .collect()
             }
             Self::Direct(state) => {
                 let state = read(state);
-                std::iter::once(&state.current)
-                    .chain(state.staged.iter().map(|entry| &entry.inputs))
-                    .flat_map(|inputs| inputs.paths().iter().chain(inputs.trees()).cloned())
+                let inputs = || {
+                    std::iter::once(&state.current)
+                        .chain(state.staged.iter().map(|entry| &entry.inputs))
+                };
+                let unwatched = inputs()
+                    .flat_map(|inputs| inputs.unwatched().iter().cloned())
+                    .collect::<Vec<_>>();
+                inputs()
+                    .flat_map(|inputs| inputs.paths().iter().chain(inputs.trees()))
+                    .filter(|path| kept(&unwatched, path))
+                    .cloned()
                     .collect()
             }
         }
@@ -1235,15 +1297,15 @@ mod tests {
         assert!(!filter.relevant(&change));
         let aborted = filter.stage(candidate.clone()).expect("candidate stages");
         assert!(filter.relevant(&change));
-        assert!(filter.roots().0.contains(&candidate_root));
+        assert!(filter.wanted().directories.contains_key(&candidate_root));
         filter.withdraw(aborted);
         assert!(!filter.relevant(&change));
-        assert!(!filter.roots().0.contains(&candidate_root));
+        assert!(!filter.wanted().directories.contains_key(&candidate_root));
 
         let committed = filter.stage(candidate).expect("candidate restages");
         filter.commit(committed).expect("candidate commits");
         assert!(filter.relevant(&change));
-        assert!(filter.roots().0.contains(&candidate_root));
+        assert!(filter.wanted().directories.contains_key(&candidate_root));
     }
 
     #[test]
@@ -1486,20 +1548,20 @@ mod tests {
         let root = fs::canonicalize(&fixture.root).unwrap();
         let absent = root.join("missing/nested");
         let other = root.join("another");
-        let roots = super::transport_roots(
-            [absent.as_path(), other.as_path()].into_iter(),
-            [absent.as_path()].into_iter(),
-        )
-        .unwrap();
+        let mut wanted = super::Wanted::default();
+        wanted.add_paths(
+            &[absent.join("a.rs"), other.join("b.rs")],
+            std::slice::from_ref(&absent),
+            &[],
+        );
+        let roots = wanted.roots().unwrap();
         assert_eq!(roots.len(), 1);
         assert_eq!(roots.get(&root), Some(&false));
 
         fs::create_dir_all(&absent).unwrap();
-        let roots = super::transport_roots(
-            [absent.as_path()].into_iter(),
-            [absent.as_path()].into_iter(),
-        )
-        .unwrap();
+        let mut wanted = super::Wanted::default();
+        wanted.add_paths(&[absent.join("a.rs")], std::slice::from_ref(&absent), &[]);
+        let roots = wanted.roots().unwrap();
         assert_eq!(roots.len(), 1);
         assert_eq!(roots.get(&absent), Some(&true));
     }
@@ -1510,15 +1572,96 @@ mod tests {
         let root = fs::canonicalize(&fixture.root).unwrap();
         let nested = root.join("nested");
         fs::create_dir_all(&nested).unwrap();
-        let parents = vec![nested.as_path(); 64];
-        let roots = super::transport_roots(
-            parents.iter().copied().chain([root.as_path()]),
-            [nested.as_path()].into_iter(),
-        )
-        .unwrap();
+        let paths = (0..64)
+            .map(|index| nested.join(format!("{index}.rs")))
+            .chain([root.join("top.rs")])
+            .collect::<Vec<_>>();
+        let mut wanted = super::Wanted::default();
+        wanted.add_paths(&paths, std::slice::from_ref(&nested), &[]);
+        let roots = wanted.roots().unwrap();
         assert_eq!(roots.len(), 2);
         assert_eq!(roots.get(&nested), Some(&true));
         assert_eq!(roots.get(&root), Some(&false));
+    }
+
+    /// A package of a few thousand input files under a few directories,
+    /// beside a registry checkout of a few thousand more: the watcher
+    /// registers the package's manifest directory and its `src/`, a path
+    /// dependency's two, and nothing of the registry's. An event on a file
+    /// under a root that is no input is dropped; one on an input arrives.
+    #[test]
+    fn a_big_package_registers_its_few_directories_and_none_of_the_registry_s() {
+        use std::collections::BTreeMap;
+        use std::path::{Path, PathBuf};
+        let fixture = Fixture::new("big-package");
+        let root = fs::canonicalize(&fixture.root).unwrap();
+        let app = root.join("app");
+        let dependency = root.join("dependency");
+        let registry = root.join("home/registry/src/index-1");
+        let target = app.join("target");
+        let mut written = Vec::new();
+        let mut write = |path: PathBuf| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "\n").unwrap();
+            written.push(path);
+        };
+        for manifest in ["Cargo.toml", "Cargo.lock"] {
+            write(app.join(manifest));
+        }
+        write(app.join("src/main.rs"));
+        write(dependency.join("Cargo.toml"));
+        for index in 0..3000 {
+            write(app.join(format!("src/module{}/file{index}.rs", index % 4)));
+            write(dependency.join(format!("src/file{index}.rs")));
+            write(registry.join(format!("crate{}/src/file{index}.rs", index % 40)));
+        }
+        fs::create_dir_all(target.join("debug")).unwrap();
+        let notes = app.join("src/notes.txt");
+        fs::write(&notes, "\n").unwrap();
+        let native = rawr::reload::source::Inputs::imported(
+            written
+                .iter()
+                .cloned()
+                .map(rawr_import::input::proof::Watch::Exact),
+        )
+        .outside(std::slice::from_ref(&target))
+        .with_checkouts(&[root.join("home/registry/src")]);
+        let adapter = Adapter::open_inputs(native, Duration::ZERO).unwrap();
+
+        let watch = super::lock(&adapter.control.watch);
+        assert_eq!(
+            watch.roots,
+            BTreeMap::from([
+                (app.clone(), false),
+                (app.join("src"), true),
+                (dependency.clone(), false),
+                (dependency.join("src"), true),
+            ])
+        );
+        let expected = if cfg!(target_os = "macos") {
+            BTreeMap::from([
+                (app.join("Cargo.lock"), false),
+                (app.join("Cargo.toml"), false),
+                (app.join("src"), true),
+                (dependency.join("Cargo.toml"), false),
+                (dependency.join("src"), true),
+            ])
+        } else {
+            watch.roots.clone()
+        };
+        assert_eq!(watch.registered, expected);
+        drop(watch);
+
+        let relevant = |path: &Path| {
+            adapter
+                .filter
+                .relevant(&crate::input::Change::from_event(&source_event(path)))
+        };
+        assert!(!relevant(&notes));
+        assert!(!relevant(&target.join("debug/app")));
+        assert!(relevant(&app.join("src/module1/file1.rs")));
+        assert!(relevant(&dependency.join("src/file7.rs")));
+        assert!(relevant(&app.join("Cargo.lock")));
     }
 
     #[test]
@@ -1650,7 +1793,7 @@ mod tests {
             rawr_import::input::proof::Watch::Exact(parent.join("config.toml")),
         ]);
         let adapter = transport(inputs, true);
-        assert!(adapter.filter.roots().0.contains(&parent));
+        assert!(adapter.filter.wanted().directories.contains_key(&parent));
         assert_eq!(
             super::lock(&adapter.control.watch).roots.get(&root),
             Some(&false)

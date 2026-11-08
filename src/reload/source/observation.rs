@@ -166,6 +166,7 @@ impl Decoded {
             directories: directories.into_boxed_slice(),
             trees,
             sources,
+            unwatched: Box::default(),
         }
     }
 }

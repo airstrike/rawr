@@ -79,6 +79,22 @@ pub fn outputs_here(project: &Path) -> Box<[PathBuf]> {
     outputs.into_boxed_slice()
 }
 
+/// The directories Cargo unpacks registry and git dependencies into under
+/// the process's own Cargo home: `registry/src` and `git/checkouts`. Their
+/// sources never change while a program runs; a changed dependency is a
+/// new directory there, which a changed `Cargo.lock` names.
+#[must_use]
+pub fn checkouts_here() -> Box<[PathBuf]> {
+    let home = crate::cargo::config::Environment::capture()
+        .ok()
+        .and_then(|environment| environment.cargo_home().ok().flatten());
+    let Some(home) = home else {
+        return Box::default();
+    };
+    let home = fs::canonicalize(&home).unwrap_or(home);
+    Box::from([home.join("registry/src"), home.join("git/checkouts")])
+}
+
 /// The target triple `cargo build` builds `project` for when none is named,
 /// `None` for the host without one.
 #[must_use]
