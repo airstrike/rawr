@@ -76,6 +76,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate function returning `impl Trait`, where the trait has a supertrait like `Add<Output = Self>` (as num-traits' `Num` does), now imports. Before, rawr-import overflowed its stack on it. (#1262)
 - A method of an opaque output that gives another opaque output of the same method, as `explain(..).explain(..)` does, can be used again. The fix for #1262 had left it unusable at `rawr check`. (#1270)
 - A marked module names a native module's trait by path (`Box<dyn page::Page>`, `use crate::page::Page;`) and takes, keeps and returns its objects. (#1263)
+- A path into a dependency none of whose items rawr can use yet names the item and says why, as it does for a crate with other items, instead of rustc's "cannot find module or crate". (#1267)
+- A crate's function that gives a thread's `JoinHandle`, as `open::that_in_background` does, runs: the program can ignore the handle or `.join()` it for what the thread gave. (#1266)
 
 ## 0.3.171 (2026-11-07)
 
