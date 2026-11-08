@@ -5627,7 +5627,7 @@ mod schema_tests {
             &path,
             None,
             Environment::empty(),
-            "aarch64-apple-darwin",
+            Some("aarch64-apple-darwin"),
             "dev",
             parallelism,
             &Limits::standard(),

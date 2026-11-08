@@ -174,7 +174,6 @@ impl Attestation {
             && self.proof.cargo_release.as_ref() == identity.cargo_release()
             && self.proof.cargo_commit.as_ref() == identity.cargo_commit()
             && self.proof.host.as_ref() == super::HOST
-            && self.proof.target.as_ref() == super::HOST
             && self.proof.components.as_ref()
                 == super::REQUIRED_COMPONENTS.map(Box::<str>::from).as_slice()
             && self.proof.schemas == Schemas::current();

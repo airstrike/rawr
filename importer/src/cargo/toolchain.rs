@@ -246,14 +246,6 @@ impl Requirement {
         Self
     }
 
-    pub(crate) const fn default_target(self) -> &'static str {
-        HOST
-    }
-
-    pub(crate) fn supports_target(self, target: &str) -> bool {
-        target == HOST
-    }
-
     pub(crate) fn verify(
         self,
         native: &impl ToolPaths,
@@ -274,14 +266,6 @@ impl Requirement {
         target: &str,
         budget: Option<&crate::node::GraphBudget>,
     ) -> Result<Proof> {
-        if !self.supports_target(target) {
-            return Err(Error::Toolchain {
-                field: "supported target",
-                expected: HOST.into(),
-                actual: target.into(),
-            });
-        }
-
         let rustc = run(
             native,
             process::Preflight::version(Program::Rustc)?,
@@ -414,7 +398,7 @@ impl Requirement {
             cargo_release: identity.cargo_release().into(),
             cargo_commit: identity.cargo_commit().into(),
             host: HOST.into(),
-            target: HOST.into(),
+            target: target.into(),
             components: REQUIRED_COMPONENTS.map(Box::from).into(),
             schemas: Schemas::current(),
             rustup,

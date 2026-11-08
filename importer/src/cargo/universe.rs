@@ -63,7 +63,10 @@ pub(crate) struct Definition {
     /// fixes, if any.
     framework: Option<&'static str>,
     protected: Closure,
-    target: &'static str,
+    /// The identity's state before the target and the toolchain, which
+    /// [`Definition::for_target`] completes for another target.
+    unbound: Sha256,
+    target: Box<str>,
     cargo_profile: &'static str,
     rustc_commit: &'static str,
     cargo_commit: &'static str,
@@ -389,21 +392,39 @@ impl Definition {
         // Rawr's own source identity, baked in at build time. A new Rawr
         // simply addresses new cache entries; it is never refused.
         identity.update(crate::host::DIGEST);
-        for value in [target, cargo_profile, rustc_commit, cargo_commit] {
-            identity.update((value.len() as u64).to_le_bytes());
-            identity.update(value.as_bytes());
-        }
         Ok(Self {
             seed,
             root,
             framework,
             protected,
-            target,
+            identity: bound(
+                identity.clone(),
+                [target, cargo_profile, rustc_commit, cargo_commit],
+            ),
+            unbound: identity,
+            target: target.into(),
             cargo_profile,
             rustc_commit,
             cargo_commit,
-            identity: Digest(identity.finalize().into()),
         })
+    }
+
+    /// The same universe for `target`, the one Cargo builds the project for.
+    pub(crate) fn for_target(&self, target: &str) -> Self {
+        let mut definition = self.clone();
+        if *target != *self.target {
+            definition.identity = bound(
+                self.unbound.clone(),
+                [
+                    target,
+                    self.cargo_profile,
+                    self.rustc_commit,
+                    self.cargo_commit,
+                ],
+            );
+            definition.target = target.into();
+        }
+        definition
     }
 
     /// Borrow the stable base identity used by the owning profile table.
@@ -441,7 +462,7 @@ impl Definition {
         config_context: Digest,
         config: Digest,
     ) -> Result<ContextProof> {
-        if target != self.target
+        if *target != *self.target
             || cargo_profile != self.cargo_profile
             || rustc_commit != self.rustc_commit
             || cargo_commit != self.cargo_commit
@@ -591,6 +612,16 @@ impl Definition {
     }
 }
 
+/// A universe's identity: its `unbound` state completed by its target,
+/// Cargo profile and toolchain commits.
+fn bound(mut identity: Sha256, values: [&str; 4]) -> Digest {
+    for value in values {
+        identity.update((value.len() as u64).to_le_bytes());
+        identity.update(value.as_bytes());
+    }
+    Digest(identity.finalize().into())
+}
+
 impl Catalog {
     /// The universe of a runner with no host profile: it governs the
     /// closure of the `rawr` runtime crate and fixes no framework.
@@ -615,6 +646,11 @@ impl Catalog {
     /// Select one current universe.
     pub(crate) fn new(current: Definition) -> Self {
         Self { current }
+    }
+
+    /// The same universe for `target`, the one Cargo builds the project for.
+    pub(crate) fn for_target(&self, target: &str) -> Self {
+        Self::new(self.current.for_target(target))
     }
 
     pub(crate) const fn current(&self) -> &Definition {

@@ -80,7 +80,6 @@ impl Scope {
     ) -> Result<Self, Error> {
         if toolchain.rustc_commit() != compiler()
             || toolchain.host() != toolchain::HOST
-            || target != toolchain::HOST
             || toolchain.target() != target
         {
             return Err(Error::Codec("resolution content consumer pin differs"));

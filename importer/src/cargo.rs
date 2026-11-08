@@ -2275,14 +2275,6 @@ impl Builder {
 
         let toolchain = toolchain::Requirement::pinned();
         let parallelism = process::parallelism::Proof::discover()?;
-        let target = self
-            .target
-            .unwrap_or_else(|| toolchain.default_target().into());
-        if !toolchain.supports_target(&target) {
-            return Err(Error::Request {
-                reason: format!("rawr does not support the target `{target}`").into_boxed_str(),
-            });
-        }
 
         let selected_authority = self
             .cargo_authority
@@ -2306,11 +2298,12 @@ impl Builder {
             &project_root,
             selected_authority.as_deref(),
             environment,
-            &target,
+            self.target.as_deref(),
             &self.profile,
             parallelism,
             limits,
         )?;
+        let target: Box<str> = config.target().into();
         let inputs = authority_inputs(&authority, &dependencies)?;
         if let Some(path) = self.demand.iter().find(|path| {
             !dependencies
@@ -2327,6 +2320,7 @@ impl Builder {
                 .into_boxed_str(),
             });
         }
+        let universe = self.universe.map(|universe| universe.for_target(&target));
         Ok(Request {
             inventory: self.inventory,
             #[cfg(feature = "rustc-driver")]
@@ -2341,7 +2335,7 @@ impl Builder {
             profile: self.profile,
             dependencies: dependencies.into_boxed_slice(),
             policy,
-            universe: self.universe,
+            universe,
             parallelism,
             internal,
             demand: self.demand.into_iter().collect(),
