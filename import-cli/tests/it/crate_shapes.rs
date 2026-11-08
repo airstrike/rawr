@@ -422,3 +422,21 @@ fn a_forwarding_impls_parameters_are_its_own() {
     assert!(check.status.success(), "{stderr}");
     assert!(!stderr.contains("left out"), "{stderr}");
 }
+
+/// A crate's `Slot<'a, M>` with `From<&'a str>`, `From<String>` and a
+/// `From` for its own icon type: `Into::<Slot<'_, _>>::into(child)` in a
+/// crate macro's array of children, as a component crate's `badge!` and
+/// `row!` write it, picks the impl for each child's type, a literal taking
+/// `From<&'a str>` and a `String` `From<String>`. So do `"x".into()` and
+/// `From::from("x")` with an annotated target and
+/// `<Slot<_> as From<_>>::from(..)`. The literal's `Slot` borrows it, so
+/// its call opens a scope frame ahead of the statement, and the icon
+/// before it in the array is bound ahead of that frame, as Rust runs it
+/// first (#1326).
+#[test]
+fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
+    runs_as_cargo_does(
+        "slots",
+        "icon 12 | str Verified | string Verified\nstr into\nstr from | string qualified\n",
+    );
+}
