@@ -1682,3 +1682,1122 @@ impl<'a> Parser<'a> {
         })
     }
 }
+
+/// rustc's size in bytes of a value of `ty`, for a type whose layout Rust
+/// fixes: a number, `bool`, `char`, `()` or an array of them.
+pub(super) fn primitive_size(ty: &Ty) -> Option<u64> {
+    Some(match ty {
+        Ty::Unit => 0,
+        Ty::Bool => 1,
+        Ty::Char => 4,
+        // An integer literal's type defaults to `i32`.
+        Ty::Int(Int::Var(_)) => 4,
+        Ty::Int(kind) => u64::from(kind.bits() / 8),
+        Ty::Float(Float::F32) => 4,
+        Ty::Float(_) => 8,
+        Ty::Array {
+            element,
+            kind: sequence::Kind::Array(length),
+        } => primitive_size(element)?.checked_mul(u64::try_from(*length).ok()?)?,
+        _ => return None,
+    })
+}
+
+/// The slice methods `SliceChunks` runs, by code: each gives the slices.
+pub(super) const SLICE_CHUNKS: &[&str] = &[
+    "chunks",
+    "windows",
+    "chunks_exact",
+    "rchunks",
+    "rchunks_exact",
+];
+
+/// The `Vec` methods `VecMethod` runs in place, by code.
+pub(super) const VEC_METHODS: &[&str] = &[
+    "insert",
+    "remove",
+    "swap",
+    "dedup",
+    "drain",
+    "pop",
+    "store",
+    "fill",
+    "copy_from_slice",
+    "split_off",
+    "swap_remove",
+    "pop_front",
+    "with_capacity",
+    "push",
+    "clear",
+    "truncate",
+    "reverse",
+    "append",
+    "resize",
+    "resize_with",
+    "retain",
+    "sort_by",
+    "sort_unstable_by",
+    "sort",
+    "sort_unstable",
+    "extend_move",
+    "extend_copy",
+    "extend_clone",
+    "deque_remove",
+    "swap_remove_back",
+    "swap_remove_front",
+    "rotate_left",
+    "rotate_right",
+];
+
+/// The `VecDeque` methods rawr runs, each as the `Vec` method of an array
+/// whose back is its end, or as an operation of the deque's own (`remove`'s
+/// `Option`, `range`, `as_slices`). std's others are not run yet (D712.1).
+pub(super) const DEQUE_METHODS: &[(&str, &str)] = &[
+    ("push_back", "push"),
+    ("pop_back", "pop"),
+    ("push_front", "push_front"),
+    ("pop_front", "pop_front"),
+    ("front", "first"),
+    ("back", "last"),
+    ("front_mut", "first_mut"),
+    ("back_mut", "last_mut"),
+    ("len", "len"),
+    ("is_empty", "is_empty"),
+    ("iter", "iter"),
+    ("iter_mut", "iter_mut"),
+    ("into_iter", "into_iter"),
+    ("get", "get"),
+    ("get_mut", "get_mut"),
+    ("contains", "contains"),
+    ("insert", "insert"),
+    ("swap", "swap"),
+    ("clear", "clear"),
+    ("truncate", "truncate"),
+    ("retain", "retain"),
+    ("extend", "extend"),
+    ("append", "append"),
+    ("split_off", "split_off"),
+    ("drain", "drain"),
+    ("resize", "resize"),
+    ("resize_with", "resize_with"),
+    ("clone", "clone"),
+    ("remove", "deque_remove"),
+    ("swap_remove_back", "swap_remove_back"),
+    ("swap_remove_front", "swap_remove_front"),
+    ("rotate_left", "rotate_left"),
+    ("rotate_right", "rotate_right"),
+    ("range", "range"),
+    ("as_slices", "as_slices"),
+    ("make_contiguous", "as_mut_slice"),
+];
+
+/// A `VEC_METHODS` code by name.
+pub(super) fn vec_method_code(name: &str) -> usize {
+    VEC_METHODS
+        .iter()
+        .position(|method| *method == name)
+        .expect("a listed `Vec` method")
+}
+
+/// `insert(i, x)`, `remove(i)`, `swap_remove(i)`, `swap(a, b)`, `dedup()` and
+/// `drain(low, high, inclusive)` (`high` `-1` for an open end) on the array
+/// taken by reference, with Rust's panics.
+pub(super) fn vec_method(
+    context: Option<&NativeCallContext<'_>>,
+    args: &mut FnCallArgs,
+) -> RawrResult {
+    let fail = |message: String| -> RawrResult {
+        Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let code = args[1].as_int().unwrap_or(-1);
+    let at = |value: &Dynamic| usize::try_from(value.as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    if let Some(place) = crate::place::get(args[0]) {
+        use crate::place::Operation;
+        let name = VEC_METHODS
+            .get(usize::try_from(code).unwrap_or(usize::MAX))
+            .copied();
+        let (operation, indexes): (Operation, &[usize]) = match name {
+            Some("insert") => (Operation::Insert, &[2, 3]),
+            Some("remove") => (Operation::Remove, &[2]),
+            Some("swap_remove") => (Operation::SwapRemove, &[2]),
+            Some("swap") => (Operation::Swap, &[2, 3]),
+            Some("pop") => (Operation::Pop, &[]),
+            Some("fill") => (Operation::Fill, &[3]),
+            Some("dedup") => (Operation::Dedup, &[]),
+            Some("drain") => (Operation::Drain, &[2, 3, 4]),
+            Some("copy_from_slice") => (Operation::CopyFromSlice, &[3]),
+            Some("split_off") => (Operation::SplitOff, &[2]),
+            Some("push") => (Operation::Push, &[2]),
+            Some("clear") => (Operation::Clear, &[]),
+            Some("truncate") => (Operation::Truncate, &[2]),
+            Some("reverse") => (Operation::Reverse, &[]),
+            Some("append") => (Operation::Append, &[2]),
+            Some("extend_move") => (Operation::Extend(crate::place::ExtendMode::Move), &[2]),
+            Some("extend_copy") => (Operation::Extend(crate::place::ExtendMode::Copy), &[2]),
+            Some("extend_clone") => (Operation::Extend(crate::place::ExtendMode::Clone), &[2]),
+            Some("resize") => (Operation::Resize, &[2, 3]),
+            Some("resize_with") => (Operation::ResizeWith, &[2, 3]),
+            Some("retain") => (Operation::Retain, &[2]),
+            Some("sort") => (Operation::Sort { stable: true }, &[]),
+            Some("sort_unstable") => (Operation::Sort { stable: false }, &[]),
+            Some("sort_by") => (Operation::SortBy { stable: true }, &[2]),
+            Some("sort_unstable_by") => (Operation::SortBy { stable: false }, &[2]),
+            _ => return Err(invariant("native sequence operation has no typed dispatch")),
+        };
+        let mut operands = indexes
+            .iter()
+            .map(|index| args[*index].take())
+            .collect::<Vec<_>>();
+        return match context {
+            Some(context) => place.invoke_in(context, operation, &mut operands),
+            None => place.invoke(operation, &mut operands),
+        };
+    }
+    let (a, b) = (at(args[2]), at(args[3]));
+    // The operands move in, as Rust's `push(x)` and `insert(i, x)` do.
+    let first = args[2].take();
+    let value = args[3].take();
+    let inclusive = args[4].as_bool().unwrap_or(false);
+    let mut array = args[0]
+        .as_array_mut()
+        .map_err(|_| invariant("a `Vec` is not an array at runtime"))?;
+    let len = array.len();
+    match VEC_METHODS
+        .get(usize::try_from(code).unwrap_or(usize::MAX))
+        .copied()
+    {
+        Some("extend_move" | "extend_copy" | "extend_clone") => {
+            array.extend(
+                first
+                    .into_array()
+                    .map_err(|_| invariant("an extend source is not an array"))?,
+            );
+            Ok(Dynamic::UNIT)
+        }
+        Some("push") => {
+            array.push(first);
+            Ok(Dynamic::UNIT)
+        }
+        Some("clear") => {
+            array.clear();
+            Ok(Dynamic::UNIT)
+        }
+        Some("truncate") => {
+            array.truncate(a);
+            Ok(Dynamic::UNIT)
+        }
+        Some("reverse") => {
+            array.reverse();
+            Ok(Dynamic::UNIT)
+        }
+        Some("append") => {
+            let mut incoming = first
+                .into_array()
+                .map_err(|_| invariant("an append operand is not an array"))?;
+            array.append(&mut incoming);
+            Ok(Dynamic::UNIT)
+        }
+        Some("insert") if a > len => fail(format!(
+            "insertion index (is {a}) should be <= len (is {len})"
+        )),
+        Some("insert") => {
+            array.insert(a, value);
+            Ok(Dynamic::UNIT)
+        }
+        Some("remove") if a >= len => {
+            fail(format!("removal index (is {a}) should be < len (is {len})"))
+        }
+        Some("remove") => Ok(array.remove(a)),
+        Some("swap_remove") if a >= len => fail(format!(
+            "swap_remove index (is {a}) should be < len (is {len})"
+        )),
+        Some("swap_remove") => Ok(array.swap_remove(a)),
+        // A new `Vec` with room for `a` items, as `VecCapacity` reads it
+        // back; it grows by doubling from 4, as Rust's does.
+        Some("with_capacity") => Ok(Dynamic::from_array(crate::Array::with_capacity(a))),
+        Some("swap") => match [a, b].into_iter().find(|index| *index >= len) {
+            Some(index) => fail(format!(
+                "index out of bounds: the len is {len} but the index is {index}"
+            )),
+            None => {
+                array.swap(a, b);
+                Ok(Dynamic::UNIT)
+            }
+        },
+        Some("dedup") => {
+            array.dedup_by(|later, earlier| equal_value(earlier, later));
+            Ok(Dynamic::UNIT)
+        }
+        Some("pop") => Ok(match array.pop() {
+            Some(last) => crate::option::some(last),
+            None => crate::option::none(),
+        }),
+        // A deque's removals, `None` past its end.
+        Some("deque_remove" | "swap_remove_back" | "swap_remove_front") if a >= len => {
+            Ok(crate::option::none())
+        }
+        Some("deque_remove") => Ok(crate::option::some(array.remove(a))),
+        Some("swap_remove_back") => Ok(crate::option::some(array.swap_remove(a))),
+        Some("swap_remove_front") => {
+            array.swap(0, a);
+            Ok(crate::option::some(array.remove(0)))
+        }
+        Some("rotate_left" | "rotate_right") if a > len => {
+            fail("assertion failed: n <= self.len()".into())
+        }
+        Some("rotate_left") => {
+            array.rotate_left(a);
+            Ok(Dynamic::UNIT)
+        }
+        Some("rotate_right") => {
+            array.rotate_right(a);
+            Ok(Dynamic::UNIT)
+        }
+        Some("pop_front") if array.is_empty() => Ok(crate::option::none()),
+        Some("pop_front") => Ok(crate::option::some(array.remove(0))),
+        // A changed copy of `array[a..]` stored back over it.
+        Some("store") => {
+            let copy = value.into_array().unwrap_or_default();
+            for (slot, element) in array.iter_mut().skip(a).zip(copy) {
+                *slot = element;
+            }
+            Ok(Dynamic::UNIT)
+        }
+        Some("fill") => {
+            array.fill(value);
+            Ok(Dynamic::UNIT)
+        }
+        Some("split_off") if a > len => fail(format!(
+            "`at` split index (is {a}) should be <= len (is {len})"
+        )),
+        Some("split_off") => Ok(Dynamic::from_array(array.split_off(a))),
+        Some("copy_from_slice") => {
+            let source = value.into_array().unwrap_or_default();
+            if source.len() != len {
+                return fail(format!(
+                    "source slice length ({}) does not match destination slice length ({len})",
+                    source.len()
+                ));
+            }
+            *array = source;
+            Ok(Dynamic::UNIT)
+        }
+        Some("drain") => {
+            let high = (b != usize::MAX).then_some(b);
+            match drain_window(a, high, inclusive, len) {
+                Ok((low, high)) => Ok(Dynamic::from_array(array.drain(low..high).collect())),
+                Err(message) => fail(message),
+            }
+        }
+        _ => Err(invariant("an unknown `Vec` method")),
+    }
+}
+
+/// The `String` methods `StrChange` runs in place, by code.
+pub(super) const STR_CHANGES: &[&str] = &[
+    "pop",
+    "clear",
+    "insert",
+    "insert_str",
+    "remove",
+    "truncate",
+    "split_off",
+    "push",
+    "push_str",
+    "retain",
+];
+
+/// `STR_CHANGES`' `code` on the string taken by reference, by bytes and
+/// with Rust's panics.
+pub(super) fn str_change(
+    context: Option<&NativeCallContext<'_>>,
+    args: &mut FnCallArgs,
+) -> RawrResult {
+    let fail = |message: String| -> RawrResult {
+        Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    let at = usize::try_from(args[2].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    let operand = args[3].clone();
+    if let Some(place) = crate::place::get(args[0]) {
+        use crate::place::Operation;
+        let (operation, indexes): (Operation, &[usize]) = match STR_CHANGES.get(code).copied() {
+            Some("pop") => (Operation::Pop, &[]),
+            Some("clear") => (Operation::Clear, &[]),
+            Some("truncate") => (Operation::Truncate, &[2]),
+            Some("push") => (Operation::Push, &[3]),
+            Some("push_str") => (Operation::PushStr, &[3]),
+            Some("insert") => (Operation::Insert, &[2, 3]),
+            Some("insert_str") => (Operation::InsertStr, &[2, 3]),
+            Some("remove") => (Operation::Remove, &[2]),
+            Some("split_off") => (Operation::SplitOff, &[2]),
+            Some("retain") => (Operation::Retain, &[3]),
+            _ => return Err(invariant("native String operation has no typed dispatch")),
+        };
+        let mut operands = indexes
+            .iter()
+            .map(|index| args[*index].take())
+            .collect::<Vec<_>>();
+        return match context {
+            Some(context) => place.invoke_in(context, operation, &mut operands),
+            None => place.invoke(operation, &mut operands),
+        };
+    }
+    let mut text = args[0]
+        .write_lock::<ImmutableString>()
+        .ok_or_else(|| invariant("a `String` is not a string at runtime"))?;
+    let name = STR_CHANGES.get(code).copied().unwrap_or_default();
+    // Rust asserts a char boundary before changing the string there.
+    let boundary = |text: &str, at: usize, what: &str| -> Result<(), Box<EvalAltResult>> {
+        if text.is_char_boundary(at) {
+            Ok(())
+        } else {
+            Err(EvalAltResult::ErrorRuntime(
+                format!("assertion failed: self.is_char_boundary({what})").into(),
+                Position::NONE,
+            )
+            .into())
+        }
+    };
+    match name {
+        "retain" => crate::place::text::retain_with(
+            context.ok_or_else(|| invariant("String::retain requires its script call context"))?,
+            operand,
+            |predicate| text.make_mut().retain(predicate),
+        ),
+        "pop" => Ok(match text.make_mut().pop() {
+            Some(c) => crate::option::some(c.into()),
+            None => crate::option::none(),
+        }),
+        "clear" => {
+            *text = ImmutableString::new();
+            Ok(Dynamic::UNIT)
+        }
+        "insert" | "insert_str" => {
+            boundary(&text, at, "idx")?;
+            match operand.as_char() {
+                Ok(c) => text.make_mut().insert(at, c),
+                Err(_) => {
+                    let piece = operand.clone_cast::<ImmutableString>();
+                    text.make_mut().insert_str(at, &piece);
+                }
+            }
+            Ok(Dynamic::UNIT)
+        }
+        "remove" => {
+            let len = text.len();
+            if at > len {
+                return fail(format!(
+                    "start byte index {at} is out of bounds for string of length {len}"
+                ));
+            }
+            if !text.is_char_boundary(at) {
+                let start = (0..at)
+                    .rev()
+                    .find(|index| text.is_char_boundary(*index))
+                    .unwrap_or(0);
+                let inside = text[start..].chars().next().unwrap_or_default();
+                let end = start + inside.len_utf8();
+                return fail(format!(
+                    "start byte index {at} is not a char boundary; it is inside {inside:?} \
+                     (bytes {start}..{end} of string)"
+                ));
+            }
+            match text[at..].chars().next() {
+                Some(c) => {
+                    text.make_mut().remove(at);
+                    Ok(c.into())
+                }
+                None => fail("cannot remove a char from the end of a string".into()),
+            }
+        }
+        "truncate" => {
+            if at <= text.len() {
+                boundary(&text, at, "new_len")?;
+                text.make_mut().truncate(at);
+            }
+            Ok(Dynamic::UNIT)
+        }
+        "split_off" => {
+            boundary(&text, at, "at")?;
+            let rest = text.make_mut().split_off(at);
+            Ok(Dynamic::from(ImmutableString::from(rest.as_str())))
+        }
+        "push" | "push_str" => {
+            match operand.as_char() {
+                Ok(c) => text.make_mut().push(c),
+                Err(_) => {
+                    let piece = operand.clone_cast::<ImmutableString>();
+                    text.make_mut().push_str(&piece);
+                }
+            }
+            Ok(Dynamic::UNIT)
+        }
+        _ => Err(invariant("an unknown `String` method")),
+    }
+}
+
+/// The string methods `StrPieces` runs, by code: each gives an array.
+/// `from_utf8` gives a `Result` of the text or its error's `Debug` text,
+/// `utf8_display` that error's message from its `Debug` text, and `debug`
+/// a string's or a char's `Debug` text.
+pub(super) const STR_PIECES: &[&str] = &[
+    "bytes",
+    "char_indices",
+    "splitn",
+    "from_utf8",
+    "debug",
+    "utf8_display",
+    "rsplitn",
+];
+
+pub(super) fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
+    let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    let name = STR_PIECES.get(code).copied().unwrap_or_default();
+    if name == "from_utf8" {
+        let bytes: Vec<u8> = args[0]
+            .as_array_ref()
+            .map_err(|_| invariant("a `Vec<u8>` is not an array at runtime"))?
+            .iter()
+            .map(|byte| u8::try_from(byte.as_int().unwrap_or_default()).unwrap_or_default())
+            .collect();
+        return Ok(match String::from_utf8(bytes) {
+            Ok(text) => crate::result::ok(Dynamic::from(ImmutableString::from(text))),
+            Err(error) => {
+                crate::result::err(Dynamic::from(ImmutableString::from(format!("{error:?}"))))
+            }
+        });
+    }
+    // `FromUtf8Error { bytes: [..], error: Utf8Error { valid_up_to: 0,
+    // error_len: Some(1) } }`: std's `Display` of that `Utf8Error`.
+    if name == "utf8_display" {
+        let debug = args[0].clone_cast::<ImmutableString>();
+        let number = |key: &str| {
+            let rest = debug.rsplit_once(key)?.1;
+            let digits = rest.split(|c: char| !c.is_ascii_digit()).next()?;
+            digits.parse::<usize>().ok()
+        };
+        let valid_up_to = number("valid_up_to: ").unwrap_or_default();
+        let text = match number("error_len: Some(") {
+            Some(length) => {
+                format!("invalid utf-8 sequence of {length} bytes from index {valid_up_to}")
+            }
+            None => format!("incomplete utf-8 byte sequence from index {valid_up_to}"),
+        };
+        return Ok(Dynamic::from(ImmutableString::from(text)));
+    }
+    if name == "debug" {
+        if let Some(place) = crate::place::get(args[0]) {
+            return place.invoke(crate::place::Operation::Debug, &mut []);
+        }
+        let text = match args[0].as_char() {
+            Ok(c) => format!("{c:?}"),
+            Err(_) => format!("{:?}", args[0].clone_cast::<ImmutableString>().as_str()),
+        };
+        return Ok(Dynamic::from(ImmutableString::from(text)));
+    }
+    let text = args[0].clone_cast::<ImmutableString>();
+    let string = |piece: &str| Dynamic::from(ImmutableString::from(piece));
+    let pieces: crate::Array = match name {
+        "bytes" => text
+            .bytes()
+            .map(|byte| Dynamic::from(crate::INT::from(byte)))
+            .collect(),
+        "char_indices" => text
+            .char_indices()
+            .map(|(index, c)| Dynamic::from_array(vec![(index as crate::INT).into(), c.into()]))
+            .collect(),
+        "splitn" => {
+            let count = usize::try_from(args[2].as_int().unwrap_or_default()).unwrap_or(0);
+            match args[3].as_char() {
+                Ok(c) => text.splitn(count, c).map(string).collect(),
+                Err(_) => {
+                    let pattern = args[3].clone_cast::<ImmutableString>();
+                    text.splitn(count, pattern.as_str()).map(string).collect()
+                }
+            }
+        }
+        "rsplitn" => {
+            let count = usize::try_from(args[2].as_int().unwrap_or_default()).unwrap_or(0);
+            match args[3].as_char() {
+                Ok(c) => text.rsplitn(count, c).map(string).collect(),
+                Err(_) => {
+                    let pattern = args[3].clone_cast::<ImmutableString>();
+                    text.rsplitn(count, pattern.as_str()).map(string).collect()
+                }
+            }
+        }
+        _ => return Err(invariant("an unknown string method")),
+    };
+    Ok(Dynamic::from_array(pieces))
+}
+
+/// `char`'s methods by name and result (`c` a `char`, `b` a `bool`, `u` a
+/// `usize`, `o` an `Option<u32>`): the code `CharMethod` runs.
+/// The `str` methods `StrMethod` runs, by code, each with its arguments'
+/// count and its output: `s` a `String`, `b` a `bool`, `f` an
+/// `Option<usize>`, `o` an `Option<&str>`, `p` an `Option<(&str, &str)>`.
+pub(super) const STR_METHODS: &[(&str, usize, char)] = &[
+    ("trim", 0, 's'),
+    ("trim_start", 0, 's'),
+    ("trim_end", 0, 's'),
+    ("to_ascii_uppercase", 0, 's'),
+    ("to_ascii_lowercase", 0, 's'),
+    ("replace", 2, 's'),
+    ("repeat", 1, 's'),
+    ("find", 1, 'f'),
+    ("rfind", 1, 'f'),
+    ("strip_prefix", 1, 'o'),
+    ("strip_suffix", 1, 'o'),
+    ("split_once", 1, 'p'),
+    ("rsplit_once", 1, 'p'),
+    ("eq_ignore_ascii_case", 1, 'b'),
+    ("is_char_boundary", 1, 'b'),
+    ("trim_matches", 1, 's'),
+    ("trim_start_matches", 1, 's'),
+    ("trim_end_matches", 1, 's'),
+];
+
+/// `STR_METHODS`' `code` on `text`, with Rust's results; a pattern is a
+/// `char` or a string.
+pub(super) fn str_method(
+    text: &str,
+    code: usize,
+    a: &Dynamic,
+    b: &Dynamic,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    let string = |value: &str| Dynamic::from(ImmutableString::from(value));
+    let pattern = |value: &Dynamic| match value.as_char() {
+        Ok(c) => c.to_string(),
+        Err(_) => value.clone_cast::<ImmutableString>().to_string(),
+    };
+    let option = |value: Option<Dynamic>| match value {
+        Some(value) => crate::option::some(value),
+        None => crate::option::none(),
+    };
+    let name = STR_METHODS.get(code).map_or("", |(name, ..)| *name);
+    Ok(match name {
+        "trim" => string(text.trim()),
+        "trim_start" => string(text.trim_start()),
+        "trim_end" => string(text.trim_end()),
+        "to_ascii_uppercase" => string(&text.to_ascii_uppercase()),
+        "to_ascii_lowercase" => string(&text.to_ascii_lowercase()),
+        "replace" => string(&text.replace(&pattern(a), &pattern(b))),
+        "repeat" => string(&text.repeat(usize::try_from(a.as_int().unwrap_or(0)).unwrap_or(0))),
+        "find" => option(text.find(&pattern(a)).map(|at| Dynamic::from(at as INT))),
+        "rfind" => option(text.rfind(&pattern(a)).map(|at| Dynamic::from(at as INT))),
+        "strip_prefix" => option(text.strip_prefix(&pattern(a)).map(string)),
+        "strip_suffix" => option(text.strip_suffix(&pattern(a)).map(string)),
+        // rustc takes only a `char` here; a string trims as both ends do.
+        "trim_matches" => match a.as_char() {
+            Ok(c) => string(text.trim_matches(c)),
+            Err(_) => {
+                let pattern = pattern(a);
+                string(
+                    text.trim_start_matches(pattern.as_str())
+                        .trim_end_matches(pattern.as_str()),
+                )
+            }
+        },
+        "trim_start_matches" => string(text.trim_start_matches(pattern(a).as_str())),
+        "trim_end_matches" => string(text.trim_end_matches(pattern(a).as_str())),
+        "split_once" | "rsplit_once" => {
+            let separator = pattern(a);
+            let split = if name == "split_once" {
+                text.split_once(separator.as_str())
+            } else {
+                text.rsplit_once(separator.as_str())
+            };
+            option(
+                split.map(|(left, right)| Dynamic::from_array(vec![string(left), string(right)])),
+            )
+        }
+        "eq_ignore_ascii_case" => text.eq_ignore_ascii_case(&pattern(a)).into(),
+        "is_char_boundary" => text
+            .is_char_boundary(usize::try_from(a.as_int().unwrap_or(0)).unwrap_or(0))
+            .into(),
+        _ => Dynamic::UNIT,
+    })
+}
+
+pub(super) const CHAR_METHODS: &[(&str, char)] = &[
+    ("to_ascii_uppercase", 'c'),
+    ("to_ascii_lowercase", 'c'),
+    ("is_alphabetic", 'b'),
+    ("is_numeric", 'b'),
+    ("is_alphanumeric", 'b'),
+    ("is_whitespace", 'b'),
+    ("is_uppercase", 'b'),
+    ("is_lowercase", 'b'),
+    ("is_control", 'b'),
+    ("is_ascii", 'b'),
+    ("is_ascii_digit", 'b'),
+    ("is_ascii_alphabetic", 'b'),
+    ("is_ascii_alphanumeric", 'b'),
+    ("is_ascii_uppercase", 'b'),
+    ("is_ascii_lowercase", 'b'),
+    ("is_ascii_whitespace", 'b'),
+    ("is_ascii_punctuation", 'b'),
+    ("is_ascii_hexdigit", 'b'),
+    ("is_digit", 'b'),
+    ("eq_ignore_ascii_case", 'b'),
+    ("to_digit", 'o'),
+    ("len_utf8", 'u'),
+];
+
+pub(super) fn char_method(c: char, name: &str, argument: &Dynamic) -> Dynamic {
+    let radix = || u32::try_from(argument.as_int().unwrap_or(10)).unwrap_or(10);
+    match name {
+        "to_ascii_uppercase" => c.to_ascii_uppercase().into(),
+        "to_ascii_lowercase" => c.to_ascii_lowercase().into(),
+        "to_digit" => match c.to_digit(radix()) {
+            Some(digit) => crate::option::some(INT::from(digit).into()),
+            None => crate::option::none(),
+        },
+        "len_utf8" => (c.len_utf8() as INT).into(),
+        name => match name {
+            "is_alphabetic" => c.is_alphabetic(),
+            "is_numeric" => c.is_numeric(),
+            "is_alphanumeric" => c.is_alphanumeric(),
+            "is_whitespace" => c.is_whitespace(),
+            "is_uppercase" => c.is_uppercase(),
+            "is_lowercase" => c.is_lowercase(),
+            "is_control" => c.is_control(),
+            "is_ascii" => c.is_ascii(),
+            "is_ascii_digit" => c.is_ascii_digit(),
+            "is_ascii_alphabetic" => c.is_ascii_alphabetic(),
+            "is_ascii_alphanumeric" => c.is_ascii_alphanumeric(),
+            "is_ascii_uppercase" => c.is_ascii_uppercase(),
+            "is_ascii_lowercase" => c.is_ascii_lowercase(),
+            "is_ascii_whitespace" => c.is_ascii_whitespace(),
+            "is_ascii_punctuation" => c.is_ascii_punctuation(),
+            "is_ascii_hexdigit" => c.is_ascii_hexdigit(),
+            "is_digit" => c.is_digit(radix()),
+            _ => argument
+                .as_char()
+                .is_ok_and(|other| c.eq_ignore_ascii_case(&other)),
+        }
+        .into(),
+    }
+}
+
+/// `Slice` (`v[low..high]`) and `SplitAt` (`v.split_at(mid)`) of an array
+/// or a string, a copy of the range, with Rust's panics for a range out of
+/// bounds or a string index off a `char` boundary. `SliceGetRange`
+/// (`v.get(low..high)`) is `None` where `Slice` panics, and `Some` of the
+/// copy.
+pub(super) fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
+    let checked = op == PreludeOp::SliceGetRange;
+    let fail = |message: String| -> RawrResult {
+        if checked {
+            return Ok(crate::option::none());
+        }
+        Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let found = |value: Dynamic| -> RawrResult {
+        Ok(if checked {
+            crate::option::some(value)
+        } else {
+            value
+        })
+    };
+    // A native slice, as a marked page's `&BLOCKS[1..2]` (#1291), is cut
+    // where it is: the range borrows its elements, as Rust's does.
+    let place = crate::place::get(args[0]);
+    let text = args[0].clone().into_immutable_string().ok();
+    let len = match (&place, &text, args[0].as_array_ref()) {
+        (Some(place), ..) => place
+            .invoke(crate::place::Operation::Len, &mut [])?
+            .as_int()
+            .ok()
+            .and_then(|len| usize::try_from(len).ok())
+            .ok_or_else(|| invariant("a native slice's length is not a usize"))?,
+        (None, Some(text), _) => text.len(),
+        (None, None, Ok(array)) => array.len(),
+        (None, None, Err(_)) => {
+            return Err(invariant("a slice is not an array or a string at runtime"))
+        }
+    };
+    let at = |value: &Dynamic| usize::try_from(value.as_int().unwrap_or_default()).ok();
+    let (low, high) = if op == PreludeOp::SplitAt {
+        let mid = at(args[1]).filter(|mid| *mid <= len);
+        let Some(mid) = mid else {
+            return fail("mid > len".into());
+        };
+        (mid, mid)
+    } else {
+        let low = at(args[1]).unwrap_or(usize::MAX);
+        let high = match args[2].as_int().unwrap_or(-1) {
+            -1 => None,
+            high => Some(usize::try_from(high).unwrap_or(usize::MAX)),
+        };
+        match slice_window(low, high, args[3].as_bool().unwrap_or(false), len) {
+            Ok(window) => window,
+            Err(message) => return fail(message),
+        }
+    };
+    if let Some(place) = place {
+        let window = |range: std::ops::Range<usize>| {
+            place
+                .window(range)
+                .unwrap_or_else(|| Err(invariant("a native slice that can't be cut")))
+        };
+        if op == PreludeOp::SplitAt {
+            return Ok(Dynamic::from_array(vec![
+                window(0..low)?,
+                window(low..len)?,
+            ]));
+        }
+        return window(low..high).and_then(found);
+    }
+    let pieces: Vec<Dynamic> = match (&text, args[0].as_array_ref()) {
+        (Some(text), _) => {
+            for index in [low, high] {
+                if !text.is_char_boundary(index) {
+                    return fail(format!("byte index {index} is not a char boundary"));
+                }
+            }
+            if op == PreludeOp::SplitAt {
+                let (left, right) = text.split_at(low);
+                vec![left.into(), right.into()]
+            } else {
+                return found(Dynamic::from(ImmutableString::from(&text[low..high])));
+            }
+        }
+        (None, Ok(array)) => {
+            if op == PreludeOp::SplitAt {
+                vec![
+                    Dynamic::from_array(array[..low].to_vec()),
+                    Dynamic::from_array(array[low..].to_vec()),
+                ]
+            } else {
+                return found(Dynamic::from_array(array[low..high].to_vec()));
+            }
+        }
+        (None, Err(_)) => return Err(invariant("a slice is not an array at runtime")),
+    };
+    Ok(Dynamic::from_array(pieces))
+}
+
+/// Rust's integer methods (`checked_*`, `wrapping_*`, `saturating_*`,
+/// `overflowing_*`, bit counts, rotations, Euclidean division) and the bit
+/// operators `<<`, `>>` and `!`, by code: `(name, operand, output)`, the
+/// operand `n` none, `s` the same kind, `u` a `u32`; the output `o` an
+/// `Option`, `t` the kind, `p` a `(value, overflowed)` pair, `u` a `u32`,
+/// `b` a `bool`, `a` the unsigned kind, `r` a `Result`.
+pub(super) const INT_METHODS: &[(&str, char, char)] = &[
+    ("checked_add", 's', 'o'),
+    ("checked_sub", 's', 'o'),
+    ("checked_mul", 's', 'o'),
+    ("checked_div", 's', 'o'),
+    ("checked_rem", 's', 'o'),
+    ("checked_neg", 'n', 'o'),
+    ("checked_pow", 'u', 'o'),
+    ("wrapping_add", 's', 't'),
+    ("wrapping_sub", 's', 't'),
+    ("wrapping_mul", 's', 't'),
+    ("wrapping_div", 's', 't'),
+    ("wrapping_rem", 's', 't'),
+    ("wrapping_neg", 'n', 't'),
+    ("wrapping_pow", 'u', 't'),
+    ("saturating_add", 's', 't'),
+    ("saturating_sub", 's', 't'),
+    ("saturating_mul", 's', 't'),
+    ("saturating_div", 's', 't'),
+    ("saturating_pow", 'u', 't'),
+    ("overflowing_add", 's', 'p'),
+    ("overflowing_sub", 's', 'p'),
+    ("overflowing_mul", 's', 'p'),
+    ("overflowing_div", 's', 'p'),
+    ("overflowing_rem", 's', 'p'),
+    ("overflowing_neg", 'n', 'p'),
+    ("overflowing_pow", 'u', 'p'),
+    ("count_ones", 'n', 'u'),
+    ("count_zeros", 'n', 'u'),
+    ("leading_zeros", 'n', 'u'),
+    ("trailing_zeros", 'n', 'u'),
+    ("rotate_left", 'u', 't'),
+    ("rotate_right", 'u', 't'),
+    ("rem_euclid", 's', 't'),
+    ("div_euclid", 's', 't'),
+    ("abs_diff", 's', 'a'),
+    ("is_power_of_two", 'n', 'b'),
+    ("ilog2", 'n', 'u'),
+    ("ilog10", 'n', 'u'),
+    // The operators, not spellable as methods.
+    ("<<", 'x', 't'),
+    (">>", 'x', 't'),
+    ("!", 'n', 't'),
+    ("try_from", 'x', 'r'),
+    // A `u64`'s and a `usize`'s arithmetic, with Rust's overflow panics.
+    ("+", 'x', 't'),
+    ("-", 'x', 't'),
+    ("*", 'x', 't'),
+    ("/", 'x', 't'),
+    ("%", 'x', 't'),
+    ("**", 'x', 't'),
+    // An `i128`'s and a `u128`'s operators, which the runtime's `i64` ones
+    // do not compute past `i64`.
+    ("neg", 'x', 't'),
+    ("&", 'x', 't'),
+    ("|", 'x', 't'),
+    ("^", 'x', 't'),
+    ("<", 'x', 'b'),
+    (">", 'x', 'b'),
+    ("<=", 'x', 'b'),
+    (">=", 'x', 'b'),
+    ("==", 'x', 'b'),
+    ("!=", 'x', 'b'),
+    // Methods of the signed kinds; `abs` and `signum` of the narrower ones
+    // are the runtime's.
+    ("abs", 'n', 't'),
+    ("signum", 'n', 't'),
+    ("unsigned_abs", 'n', 'a'),
+    ("is_negative", 'n', 'b'),
+    ("is_positive", 'n', 'b'),
+];
+
+/// The `INT_METHODS` only a signed kind has.
+pub(super) const SIGNED_INT_METHODS: &[&str] = &[
+    "abs",
+    "signum",
+    "unsigned_abs",
+    "is_negative",
+    "is_positive",
+];
+
+/// An `INT_METHODS` entry by name, for a method call.
+pub(super) fn int_method_code(name: &str) -> Option<usize> {
+    INT_METHODS
+        .iter()
+        .position(|(method, operand, _)| *method == name && *operand != 'x' && *method != "!")
+}
+
+/// std's panic for a range of a slice of `len` from `start` to `end`, in
+/// the order `SliceIndex`'s checks find it.
+pub(super) fn slice_index_fail(start: usize, end: usize, len: usize) -> String {
+    if start > len {
+        format!("range start index {start} out of range for slice of length {len}")
+    } else if start > end && end <= len {
+        format!("slice index starts at {start} but ends at {end}")
+    } else {
+        format!("range end index {end} out of range for slice of length {len}")
+    }
+}
+
+/// The elements `low..high` of a slice of `len` that `s[low..high]`,
+/// `s[low..=high]` (`inclusive`) or `s[low..]` (`high` `None`) takes, or
+/// std's panic for the range, as `Index` on a slice checks it.
+pub(crate) fn slice_window(
+    low: usize,
+    high: Option<usize>,
+    inclusive: bool,
+    len: usize,
+) -> Result<(usize, usize), String> {
+    let (end, fits) = match high {
+        None => (len, low <= len),
+        Some(high) if inclusive && high < len => (high + 1, low <= high + 1),
+        Some(high) if inclusive => (high, false),
+        Some(high) => (high, low <= high && high <= len),
+    };
+    if fits {
+        Ok((low, end))
+    } else {
+        Err(slice_index_fail(low, end, len))
+    }
+}
+
+/// The elements `Vec::drain` takes of a `Vec` of `len`, or std's panic,
+/// which checks the range's end before its start.
+pub(super) fn drain_window(
+    low: usize,
+    high: Option<usize>,
+    inclusive: bool,
+    len: usize,
+) -> Result<(usize, usize), String> {
+    let end = match high {
+        None => len,
+        Some(high) if inclusive && high >= len || !inclusive && high > len => {
+            return Err(slice_index_fail(0, high, len));
+        }
+        Some(high) if inclusive => high + 1,
+        Some(high) => high,
+    };
+    if low > end {
+        Err(slice_index_fail(low, end, len))
+    } else {
+        Ok((low, end))
+    }
+}
+
+/// `INT_METHODS[code]` on `value` of the kind `kinds[0]` (`Int::KINDS`
+/// index), its operand of the kind `kinds[1]`, as debug Rust computes it:
+/// in `i128`, a `u64`/`usize` read from its bits, the result truncated to
+/// the kind; `try_from` converts from `kinds[1]` to `kinds[0]`.
+pub(super) fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
+    let panic = |message: &str| -> RawrResult {
+        Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let kind = |code: INT| Int::from_code(code).unwrap_or(Int::I64);
+    let (kind, mut operand_kind) = (kind(kinds[0]), kind(kinds[1]));
+    let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
+    let (name, operand_type, output) = INT_METHODS.get(code).copied().unwrap_or(("", 'n', 't'));
+    if kind.wide() || operand_kind.wide() && name == "try_from" {
+        return wide_method(kind, operand_kind, args);
+    }
+    // A shift by an `i128` or a `u128`: an amount past `i64` overflows.
+    let operand = if operand_kind.wide() {
+        operand_kind = Int::I64;
+        let amount = wide_value(args[2]).map_or(0, Wide::signed);
+        INT::try_from(amount.max(-1)).unwrap_or(INT::MAX)
+    } else {
+        args[2].as_int().unwrap_or_default()
+    };
+    let bits = kind.bits();
+    let mask = u128::MAX >> (128 - bits);
+    let (low, high) = kind.full_range();
+    let value = args[0].as_int().unwrap_or_default();
+    if name == "try_from" {
+        let source = operand_kind.widen(value);
+        // `TryFromIntError`'s `Debug`, its runtime value.
+        return Ok(if (low..=high).contains(&source) {
+            crate::result::ok(kind.store(source).into())
+        } else if source > high {
+            crate::result::err(ImmutableString::from("TryFromIntError(PosOverflow)").into())
+        } else {
+            crate::result::err(ImmutableString::from("TryFromIntError(NegOverflow)").into())
+        });
+    }
+    let a = kind.widen(value);
+    let b = if operand_type == 's' {
+        kind.widen(operand)
+    } else {
+        operand_kind.widen(operand)
+    };
+    let wrap = |x: u128| -> INT { kind.store(kind.sign((x & mask) as i128)) };
+    let overflow_division = kind.signed() && a == low && b == -1;
+    let operation = match name {
+        "+" => "add",
+        "-" => "sub",
+        "*" => "mul",
+        "/" => "div",
+        "%" => "rem",
+        "**" => "pow",
+        _ => name.rsplit('_').next().unwrap_or(name),
+    };
+    // The exact result, `None` past `i128`, and the wrapped one.
+    let (exact, wrapped) = match operation {
+        "add" => (a.checked_add(b), wrap((a as u128).wrapping_add(b as u128))),
+        "sub" => (a.checked_sub(b), wrap((a as u128).wrapping_sub(b as u128))),
+        "mul" => (a.checked_mul(b), wrap((a as u128).wrapping_mul(b as u128))),
+        "neg" => (Some(-a), wrap(0u128.wrapping_sub(a as u128))),
+        "pow" => {
+            let exponent = u32::try_from(b).unwrap_or(u32::MAX);
+            (
+                a.checked_pow(exponent),
+                wrap((a as u128).wrapping_pow(exponent)),
+            )
+        }
+        "div" | "rem" | "euclid" if b == 0 => {
+            if name.starts_with("checked") {
+                return Ok(crate::option::none());
+            }
+            return panic(if operation == "rem" || name == "rem_euclid" {
+                "attempt to calculate the remainder with a divisor of zero"
+            } else {
+                "attempt to divide by zero"
+            });
+        }
+        "div" => (Some(a / b), wrap((a / b) as u128)),
+        "rem" if overflow_division => (None, 0),
+        "rem" => (Some(a % b), wrap((a % b) as u128)),
+        _ => (None, 0),
+    };
+    let in_range = exact.filter(|exact| (low..=high).contains(exact));
+    let result: Dynamic = match output {
+        'o' => match in_range {
+            Some(exact) => crate::option::some(kind.store(exact).into()),
+            None => crate::option::none(),
+        },
+        'p' => Dynamic::from_array(vec![wrapped.into(), in_range.is_none().into()]),
+        't' if name.len() <= 2 && name != "<<" && name != ">>" && name != "!" => match in_range {
+            Some(exact) => kind.store(exact).into(),
+            None => {
+                let verb = match operation {
+                    "add" => "add",
+                    "sub" => "subtract",
+                    "div" => "divide",
+                    "rem" => "calculate the remainder",
+                    "pow" => "exponentiate",
+                    _ => "multiply",
+                };
+                return panic(&format!("attempt to {verb} with overflow"));
+            }
+        },
+        't' if name.starts_with("wrapping") => wrapped.into(),
+        't' if name.starts_with("saturating") => {
+            let negative = match operation {
+                "add" => b < 0,
+                "sub" => b > 0,
+                "mul" | "div" => (a < 0) != (b < 0),
+                _ => a < 0 && b % 2 == 1,
+            };
+            kind.store(in_range.unwrap_or(if negative { low } else { high }))
+                .into()
+        }
+        _ => {
+            let pattern = (a as u128) & mask;
+            let ones = pattern.count_ones() as INT;
+            match name {
+                "count_ones" => ones,
+                "count_zeros" => INT::from(bits) - ones,
+                "leading_zeros" => INT::from(pattern.leading_zeros()) - (128 - INT::from(bits)),
+                "trailing_zeros" => INT::from(pattern.trailing_zeros().min(bits)),
+                "rotate_left" | "rotate_right" => {
+                    let turn = b.rem_euclid(i128::from(bits)) as u32;
+                    let turn = if name == "rotate_left" {
+                        turn
+                    } else {
+                        (bits - turn) % bits
+                    };
+                    match turn {
+                        0 => wrap(pattern),
+                        _ => wrap((pattern << turn) | (pattern >> (bits - turn))),
+                    }
+                }
+                "rem_euclid" | "div_euclid" if overflow_division => {
+                    return panic(if name == "rem_euclid" {
+                        "attempt to calculate the remainder with overflow"
+                    } else {
+                        "attempt to divide with overflow"
+                    })
+                }
+                "rem_euclid" => kind.store(a.rem_euclid(b)),
+                "div_euclid" => kind.store(a.div_euclid(b)),
+                "abs_diff" => kind.unsigned().store((a - b).abs()),
+                "unsigned_abs" => kind.unsigned().store(a.abs()),
+                "is_negative" => return Ok((a < 0).into()),
+                "is_positive" => return Ok((a > 0).into()),
+                "is_power_of_two" => return Ok((a > 0 && a & (a - 1) == 0).into()),
+                "ilog2" | "ilog10" if a <= 0 => {
+                    return panic("argument of integer logarithm must be positive")
+                }
+                "ilog2" => INT::from(a.ilog2()),
+                "ilog10" => INT::from(a.ilog10()),
+                "<<" | ">>" if !(0..i128::from(bits)).contains(&b) => {
+                    return panic(if name == "<<" {
+                        "attempt to shift left with overflow"
+                    } else {
+                        "attempt to shift right with overflow"
+                    })
+                }
+                "<<" => wrap(pattern << b as u32),
+                ">>" => wrap((a >> b) as u128),
+                "!" => wrap(!(a as u128)),
+                _ => return Err(invariant("an unknown integer method at runtime")),
+            }
+            .into()
+        }
+    };
+    Ok(result)
+}
