@@ -10,6 +10,7 @@ pub struct BadgePage {
     page_index: usize,
     count: usize,
     label: String,
+    names: Vec<String>,
 }
 
 impl page::Page for BadgePage {
@@ -25,7 +26,8 @@ impl page::Page for BadgePage {
             }
             Message::Rename(label) => {
                 let log = format!("renamed {} to {label}", self.label);
-                self.label = label;
+                let old = std::mem::replace(&mut self.label, label);
+                self.names.push(old);
                 Task::Log(log)
             }
         }
@@ -40,6 +42,15 @@ impl page::Page for BadgePage {
     fn summary(&self, index: usize) -> String {
         format!("{} sees {}", self.view(), page::title_of(index))
     }
+
+    // Native code holds these borrows of the page after the call returns.
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn items(&self) -> &[String] {
+        &self.names
+    }
 }
 
 pub fn new(page_index: usize) -> Box<dyn page::Page> {
@@ -47,5 +58,6 @@ pub fn new(page_index: usize) -> Box<dyn page::Page> {
         page_index,
         count: 0,
         label: "clicks".to_string(),
+        names: Vec::new(),
     })
 }

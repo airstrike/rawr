@@ -624,6 +624,71 @@ impl<'a> Generator<'a> {
         })
     }
 
+    /// For a stand-in's `&self` function whose result is a shared borrow of
+    /// its receiver (#1305), as `fn label(&self) -> &str`, the owned type
+    /// the result comes back as, which the stand-in keeps for as long as
+    /// the receiver stays borrowed: `String` for `&str`, `Vec<T>` for
+    /// `&[T]`, and `T` for `&T`. `None` when the result is no such borrow,
+    /// and `Err` says why it can't come back.
+    fn kept_result(
+        &self,
+        file: &Source<'_>,
+        function: &item::Function,
+    ) -> Option<Result<String, String>> {
+        let (
+            Some(item::Receiver::Shared(receiver)),
+            Some(type_ref::Type::Reference {
+                mutable: false,
+                lifetime,
+                target,
+                ..
+            }),
+        ) = (&function.receiver, &function.output)
+        else {
+            return None;
+        };
+        // An elided lifetime is the receiver's, as rustc elides it; a named
+        // one is the receiver's only when `&'a self` names it.
+        if let Some(lifetime) = lifetime
+            && lifetime.name.text != "_"
+            && !slice(file.text, *receiver).contains(&format!("'{}", lifetime.name.text))
+        {
+            return None;
+        }
+        let owned = match target.as_ref() {
+            type_ref::Type::Path(path)
+                if path.segments.len() == 1 && path.segments[0].name.text == "str" =>
+            {
+                return Some(Ok("::std::string::String".to_owned()));
+            }
+            type_ref::Type::Path(path)
+                if path
+                    .segments
+                    .last()
+                    .is_some_and(|last| last.name.text == crate::item::type_ref::SLICE_TYPE) =>
+            {
+                let element = path
+                    .segments
+                    .last()
+                    .and_then(|last| match &last.arguments[..] {
+                        [type_ref::Argument::Type(element)] => Some(element),
+                        _ => None,
+                    })?;
+                if let Err(reason) = self.crosses(element, None) {
+                    return Some(Err(reason));
+                }
+                format!("::std::vec::Vec<{}>", slice(file.text, element.span()))
+            }
+            target => {
+                if let Err(reason) = self.crosses(target, None) {
+                    return Some(Err(reason));
+                }
+                slice(file.text, target.span()).to_owned()
+            }
+        };
+        Some(Ok(owned))
+    }
+
     /// The generated text of `file` with its inline modules `group`, and
     /// each stand-in's maker it declares in `objects`.
     fn body(
@@ -1057,7 +1122,16 @@ impl<'a> Generator<'a> {
         // A result that doesn't cross by the wire format may still come
         // back part by part, its native parts moved.
         let mut back = None;
+        let kept = match self.kept_result(file, function).filter(|_| object) {
+            Some(Ok(owned)) => Some(owned),
+            Some(Err(reason)) => {
+                reasons.push(format!("its result: {reason}"));
+                None
+            }
+            None => None,
+        };
         if let Some(output) = &function.output
+            && kept.is_none()
             && self.crosses(output, owner).is_err()
         {
             match self.back(file, output, owner) {
@@ -1094,6 +1168,12 @@ impl<'a> Generator<'a> {
                 )
             );
             return Ok(text);
+        }
+        // A `&mut self` call ends every borrow of the receiver, as rustc
+        // allows it only once none is left: what the stand-in kept for
+        // them goes (#1305).
+        if object && matches!(function.receiver, Some(item::Receiver::Mutable(_))) {
+            text.push_str("    self.0.release();\n");
         }
         let owned = owner.is_some() || object;
         let _ = writeln!(
@@ -1139,7 +1219,14 @@ impl<'a> Generator<'a> {
             .output
             .as_ref()
             .map_or("()", |ty| slice(file.text, ty.span()));
-        if let Some(read) = back {
+        if let Some(kept) = kept {
+            // The result borrows the receiver: the stand-in keeps the
+            // value it came back as for as long as `&self` is borrowed.
+            let _ = writeln!(
+                text,
+                "    let __value: {output} = self.0.keep::<{kept}>(__reply.take());"
+            );
+        } else if let Some(read) = back {
             // Each native part comes back as the value the interpreter moves:
             // `Back`'s two `take`s, the first found for its type.
             let _ = writeln!(
@@ -1566,12 +1653,52 @@ pub mod __rawr_island {
     }
 
     /// The handle of the program value a stand-in holds, let go of when
-    /// the stand-in is dropped.
-    pub struct Object(u64);
+    /// the stand-in is dropped, and the results of its `&self` calls that
+    /// borrow it, as `fn label(&self) -> &str`'s (#1305).
+    pub struct Object(u64, ::std::sync::Mutex<::std::vec::Vec<Kept>>);
+
+    /// A result an [`Object`] keeps for its borrows, by its own allocation.
+    pub struct Kept(*mut (dyn ::std::any::Any + Send));
+
+    // SAFETY: what a `Kept` points at is `Send`, and only its `Object`
+    // reaches it.
+    unsafe impl Send for Kept {}
+
+    impl Drop for Kept {
+        fn drop(&mut self) {
+            // SAFETY: `Box::into_raw` made the pointer, and it is turned
+            // back once, here.
+            drop(unsafe { ::std::boxed::Box::from_raw(self.0) });
+        }
+    }
 
     impl Object {
         pub fn new(handle: u64) -> Self {
-            Self(handle)
+            Self(handle, ::std::sync::Mutex::new(::std::vec::Vec::new()))
+        }
+
+        /// `value`, a `&self` call's result that borrows the receiver,
+        /// borrowed for as long as the object is.
+        pub fn keep<T: Send + 'static>(&self, value: T) -> &T {
+            let place = ::std::boxed::Box::into_raw(::std::boxed::Box::new(value));
+            self.1
+                .lock()
+                .unwrap_or_else(::std::sync::PoisonError::into_inner)
+                .push(Kept(place));
+            // SAFETY: the allocation is freed only by `release`, which
+            // takes `&mut self`, or by the object's drop, and neither can
+            // happen while `&self` is borrowed; nothing else reaches or
+            // moves it.
+            unsafe { &*place }
+        }
+
+        /// Let go of the kept results, as a `&mut self` call may once
+        /// rustc has ended every borrow of them.
+        pub fn release(&mut self) {
+            self.1
+                .get_mut()
+                .unwrap_or_else(::std::sync::PoisonError::into_inner)
+                .clear();
         }
     }
 
@@ -1626,7 +1753,7 @@ pub mod __rawr_island {
 
         /// A clone of the value, under a handle of its own.
         pub fn duplicate(&self, owner: &str) -> Self {
-            Self(number(&ask(owner, CLONE, self.0, 0)))
+            Self::new(number(&ask(owner, CLONE, self.0, 0)))
         }
 
         pub fn equal(&self, other: &Self, owner: &str) -> bool {
@@ -1639,7 +1766,7 @@ pub mod __rawr_island {
 
         /// The `Default` of the type at `owner`, under a handle of its own.
         pub fn default_of(owner: &str) -> Self {
-            Self(number(&ask(owner, DEFAULT, 0, 0)))
+            Self::new(number(&ask(owner, DEFAULT, 0, 0)))
         }
 
         /// `partial_cmp`, or with `total` `cmp`, of the two values.
@@ -2904,7 +3031,10 @@ mod tests {
              #[derive(Clone, PartialEq, Eq)]\npub struct Badge {\n    count: usize,\n}\n\
              impl page::Page for Badge {\n    fn title(&self) -> String { String::new() }\n    \
              fn update(&mut self, message: Message) -> Option<Message> { None }\n    \
-             fn same(&self, other: &Self) -> bool { true }\n}\n\
+             fn same(&self, other: &Self) -> bool { true }\n    \
+             fn label(&self) -> &str { \"\" }\n    \
+             fn items<'a>(&'a self) -> &'a [String] { &[] }\n    \
+             fn named(&self) -> &'static str { \"\" }\n}\n\
              impl fmt::Display for Badge {\n    \
              fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { Ok(()) }\n}\n",
         );
@@ -2934,6 +3064,28 @@ mod tests {
         );
         assert!(
             text.contains("can't call `physics::Badge::Page::same` yet"),
+            "{text}"
+        );
+        // A result that borrows the receiver is kept by the stand-in for
+        // as long as `&self` is borrowed, and a `&mut self` call lets
+        // what it kept go (#1305); a `&'static` one is no borrow of it.
+        for (output, kept) in [
+            ("&str", "::std::string::String"),
+            ("&'a [String]", "::std::vec::Vec<String>"),
+        ] {
+            let expected =
+                format!("    let __value: {output} = self.0.keep::<{kept}>(__reply.take());\n");
+            assert!(text.contains(&expected), "{expected}\n{text}");
+        }
+        assert!(
+            text.contains(
+                "fn update(&mut self, __a0: Message) -> Option<Message> {\n        \
+                 self.0.release();\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("can't call `physics::Badge::Page::named` yet"),
             "{text}"
         );
         assert!(
