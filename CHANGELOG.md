@@ -98,6 +98,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Marked code reads a marked `pub static` of native values, such as a page's `BLOCKS: &[page::Block]`, where native code holds it. It reads the length, indexes, iterates, matches, and reads a block's `children`, with no copy. `&BLOCKS[1..2]` lends a range of it to a native function. (#1291)
 - A crate's unit struct is a value, as `badge::Secondary` is, through a module or a re-export: it is passed where a method takes `impl Into<T>` through the crate's `From`, compared, printed and matched as a pattern. A tuple struct's constructor is a function value, as in `.map(Wrap)`. (#1317)
 - A native trait's `&self` method can return a borrow of the marked value, as `fn label(&self) -> &str` or `fn items(&self) -> &[String]`; native code reads it after the call, and calling a `&mut self` method while it is still in use is rustc's E0502, as under cargo. (#1305)
+- `rawr check` on a marked type that lacks a native trait's supertrait shows only cargo's error at the program's own paths, not a failed build of rawr's copy of the crate with generated names. (#1310)
+- A `&mut` that a crate method returns, such as image's `get_pixel_mut(x, y)`, is a place: `.0 = v`, `*p = v`, `.0[3] += 1` and passing it on to another crate call change the crate's own value, as in Rust. (#1318)
 
 ## 0.3.171 (2026-11-07)
 
