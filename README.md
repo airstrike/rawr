@@ -135,7 +135,7 @@ and run `rawr run`. rawr-import reads iced's API and generates the bindings
 the marked file calls. Edit `src/main.rs` while the window is open. A save
 that passes the check reaches the running app at its next message. The app
 keeps its state when the new code is compatible with it. `cargo run` compiles
-the same app natively. The [iced docs](https://rawr.airstrike.fyi/docs/iced)
+the same app natively. The [iced docs](https://rawr.airstrike.fyi/docs/apps#iced)
 say what works today.
 
 ## Can a coding agent use it?
@@ -221,7 +221,7 @@ whose rules and drawing reload while you play. A ratatui app works the same
 way with no extra crate. `examples/tui` is a to-do list whose marked
 `ui::draw` takes ratatui's `&mut Frame`, which rawr lends it for the call.
 A save repaints the terminal at once, and rawr leaves the terminal as it
-found it. The [ratatui docs](https://rawr.airstrike.fyi/docs/ratatui) say
+found it. The [ratatui docs](https://rawr.airstrike.fyi/docs/apps#ratatui) say
 how. Planned and not built yet: calls from native modules other than the
 root.
 
