@@ -3054,7 +3054,8 @@
     {"issue":1332,"title":"Test the save path of #1323: a save during rawr run that breaks rawr's crate copy shows only cargo check's error","state":"open","category":"Health"},
     {"issue":1333,"title":"A `&mut` place of a receiver in a scope frame's region calls the method once","state":"open","category":"Divergences from rustc"},
     {"issue":1334,"title":"An `Option<&mut T>` a crate method lends calls the method once","state":"open","category":"Divergences from rustc"},
-    {"issue":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"open","category":"Divergences from rustc"}
+    {"issue":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"open","category":"Divergences from rustc"},
+    {"issue":1336,"title":"Selecting among many generic From impls by the argument's type: `Into::<Slot<'_, _>>::into(icon().size(12))`","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3618,7 +3619,8 @@
             {"number":1326,"title":"`Into::<Slot<'_, _>>::into(\"text\")` in a crate macro: a literal doesn't take the crate's From<&str>/From<String>","state":"closed"},
             {"number":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"open"},
             {"number":1329,"title":"Crate values lent by two scope frames passed to one call","state":"closed"},
-            {"number":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"open"}
+            {"number":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"open"},
+            {"number":1336,"title":"Selecting among many generic From impls by the argument's type: `Into::<Slot<'_, _>>::into(icon().size(12))`","state":"open"}
           ],
           "milestone": "0.4"
         },
