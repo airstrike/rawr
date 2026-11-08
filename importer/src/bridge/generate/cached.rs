@@ -250,6 +250,7 @@ impl Product {
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Overlay;
     const SCHEMA: u32 = SCHEMA;
+    const PARTS: bool = true;
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         let length = self.encoded_len();

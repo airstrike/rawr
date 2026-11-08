@@ -129,7 +129,7 @@ impl Continuation {
 
     /// Build the captured graph, from the stored API product when deferred.
     pub(crate) fn materialize(self) -> Result<Materialized, node::Error> {
-        let graph = build(&self.product, self.graph, &self.publication.context)?;
+        let graph = build(&self.product, self.graph)?;
         Ok(Materialized {
             product: self.product,
             graph,
@@ -150,10 +150,9 @@ impl Continuation {
         let node::staging::Owned::Current(api) = &product else {
             return Err(node::Error::State("historical API has no current proof"));
         };
-        let context = publication.context.clone();
         let proof = publication.proof(api)?;
         if KEEP.load(Ordering::Relaxed) && matches!(graph, Lazy::Pending(_)) {
-            std::thread::spawn(move || drop(build(&product, graph, &context)));
+            std::thread::spawn(move || drop(build(&product, graph)));
         }
         Ok(proof)
     }
@@ -186,7 +185,6 @@ pub fn keep_graphs() {
 fn build(
     product: &node::staging::Owned<super::cached::Product>,
     graph: Lazy,
-    context: &crate::context::Context,
 ) -> Result<super::Graph<super::Captured>, node::Error> {
     let key = product.identity();
     let keep = KEEP.load(Ordering::Relaxed);
@@ -197,7 +195,7 @@ fn build(
             Some((held, graph)) if *held == key => return Ok(graph.duplicate()),
             _ => {
                 let product = product.value();
-                let resolved = product.resolve(context)?;
+                let resolved = product.resolve()?;
                 materialize(Some(resolved.as_ref().unwrap_or(product)))?
             }
         },

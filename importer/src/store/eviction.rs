@@ -426,6 +426,8 @@ fn recover_unrooted(store: &Path, budget: &mut recovery::Budget) -> Result<bool,
 /// Every edit can publish a resolution, and every generated change a runner
 /// or an extraction build. Nothing else retires them, and each execution
 /// holds the build outputs it relocated or the executable it built (#577).
+/// A retired runner takes its generation with it (`generation`), so the
+/// other kinds are kept as long as a kept runner's generation is (#1358).
 pub(super) const KEPT: [(Kind, usize); 3] = [
     (Kind::Resolution, 4),
     (Kind::Runner, 4),
@@ -515,7 +517,7 @@ pub(super) fn recover_excess(
     let selected = lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
-        excess(&snapshot, &registrations, requesting, kept)
+        excess(store, &snapshot, &registrations, requesting, kept)
     })?;
     let Some(selected) = selected else {
         return Ok(false);
@@ -533,7 +535,7 @@ pub(super) fn recover_excess(
     lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
-        if excess(&snapshot, &registrations, requesting, kept)?.as_deref()
+        if excess(store, &snapshot, &registrations, requesting, kept)?.as_deref()
             != Some(selected.as_ref())
         {
             return Ok(false);
@@ -551,6 +553,7 @@ pub(super) fn recover_excess(
 }
 
 fn excess(
+    store: &Path,
     snapshot: &pins::lock::Snapshot,
     registrations: &[Registered],
     requesting: Digest,
@@ -558,7 +561,9 @@ fn excess(
 ) -> Result<Option<Box<[Registered]>>, Error> {
     let rooted = rooted(snapshot);
     for (kind, keep) in kept.iter().copied() {
-        if let Some(selected) = kind_excess(&rooted, registrations, requesting, kind, keep)? {
+        if let Some(selected) =
+            kind_excess(store, &rooted, registrations, requesting, kept, kind, keep)?
+        {
             return Ok(Some(selected));
         }
     }
@@ -580,9 +585,11 @@ fn rooted(snapshot: &pins::lock::Snapshot) -> BTreeSet<Reference> {
 }
 
 fn kind_excess(
+    store: &Path,
     rooted: &BTreeSet<Reference>,
     registrations: &[Registered],
     requesting: Digest,
+    kept: &[(Kind, usize)],
     kind: Kind,
     keep: usize,
 ) -> Result<Option<Box<[Registered]>>, Error> {
@@ -633,9 +640,132 @@ fn kind_excess(
         {
             released.insert(content.reference());
         }
+        if kind == Kind::Runner {
+            released.extend(generation(
+                store,
+                rooted,
+                registrations,
+                requesting,
+                kept,
+                *action,
+            )?);
+        }
         return deletion_plan(&released, rooted, registrations).map(Some);
     }
     Ok(None)
+}
+
+/// What a retired runner's generation leaves behind: each of the project's
+/// actions published before it that nothing kept reaches through its
+/// parents, with its content, and each of the project's older contents no
+/// action names. Kept are the pinned, the units of each kind `kept` keeps,
+/// whatever was published after the runner and every other project's
+/// actions. A content another action still names stays (`deletion_plan`).
+/// So a project keeps the generations of its kept runners, and an undo
+/// inside them hits every unit (#1358). A sibling of a kept runner that is
+/// not one of its parents, such as its overlay, was published after the
+/// retired runner, so it stays too. An envelope that does not read keeps
+/// the whole generation.
+fn generation(
+    store: &Path,
+    rooted: &BTreeSet<Reference>,
+    registrations: &[Registered],
+    requesting: Digest,
+    kept: &[(Kind, usize)],
+    retired: Registered,
+) -> Result<BTreeSet<Reference>, Error> {
+    let actions = registrations
+        .iter()
+        .copied()
+        .filter(|registered| registered.allocation().class == Class::Action)
+        .map(|registered| {
+            let allocation = registered.allocation();
+            (
+                (allocation.kind, allocation.schema, allocation.key),
+                registered,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let older = |registered: &Registered| {
+        registered.publisher() == requesting
+            && registered.sequence() < retired.sequence()
+            && !rooted.contains(&registered.reference())
+    };
+    let mut reached = BTreeSet::new();
+    let mut pending = actions
+        .values()
+        .copied()
+        .filter(|action| {
+            *action != retired
+                && (!older(action)
+                    || kept
+                        .iter()
+                        .any(|(kind, keep)| *kind == action.allocation().kind && *keep > 0))
+        })
+        .collect::<Vec<_>>();
+    while let Some(action) = pending.pop() {
+        if !reached.insert(action.reference()) {
+            continue;
+        }
+        let allocation = action.allocation();
+        let path = store
+            .join(super::action_relative(
+                allocation.kind,
+                ActionKey::from_bytes(allocation.key.as_bytes()),
+            ))
+            .join("envelope");
+        let Ok(envelope) = entry::read_whole(&path).and_then(|bytes| Envelope::decode(&bytes))
+        else {
+            return Ok(BTreeSet::new());
+        };
+        pending.extend(
+            envelope
+                .parent_actions()
+                .filter_map(|(kind, schema, parent)| {
+                    actions
+                        .get(&(kind, schema, Digest::from_bytes(parent.as_bytes())))
+                        .copied()
+                }),
+        );
+    }
+    let mut released = BTreeSet::new();
+    for action in actions.values().copied().filter(|action| {
+        *action != retired
+            && older(action)
+            && !reached.contains(&action.reference())
+            && !registrations
+                .iter()
+                .any(|bundle| action_owns_bundle(*action, *bundle))
+    }) {
+        released.insert(action.reference());
+        released.extend(
+            registrations
+                .iter()
+                .filter(|content| {
+                    content.allocation().class == Class::Content
+                        && content.allocation().kind == action.allocation().kind
+                        && content.allocation().schema == action.allocation().schema
+                        && content.content() == action.content()
+                        && !rooted.contains(&content.reference())
+                })
+                .map(|content| content.reference()),
+        );
+    }
+    released.extend(
+        registrations
+            .iter()
+            .filter(|content| {
+                content.allocation().class == Class::Content
+                    && older(content)
+                    && !actions.values().any(|action| {
+                        action.allocation().kind == content.allocation().kind
+                            && action.allocation().schema == content.allocation().schema
+                            && action.content() == content.content()
+                    })
+            })
+            .map(|content| content.reference()),
+    );
+    Ok(released)
 }
 
 /// The schema each executed kind's current value has. Every bundle is one of
@@ -1344,6 +1474,13 @@ fn retire_allocations(
             budget,
         )?;
     }
+    // A part goes with the last manifest that named it.
+    if allocations.iter().any(|registered| {
+        let allocation = registered.allocation();
+        super::parts::named_by(allocation.class, allocation.kind)
+    }) {
+        super::parts::collect(publication, store)?;
+    }
     Ok(())
 }
 
@@ -1530,3 +1667,6 @@ fn hard_linked(metadata: &fs::Metadata) -> bool {
 fn hard_linked(_metadata: &fs::Metadata) -> bool {
     false
 }
+
+#[cfg(test)]
+mod tests;
