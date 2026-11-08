@@ -91,6 +91,28 @@ pub enum Error {
         /// The unmarked `src/main.rs` or `src/lib.rs`.
         entry: PathBuf,
     },
+    /// Cargo could not describe the package of a manifest.
+    Cargo {
+        /// The manifest Cargo was asked about.
+        manifest: PathBuf,
+        /// What Cargo said.
+        source: super::cargo::Error,
+    },
+    /// A package has several binaries and no `default-run`, so which one
+    /// runs is not known, as `cargo run` says.
+    AmbiguousBinary {
+        /// The package's directory.
+        root: PathBuf,
+        /// Its binaries' names.
+        binaries: Box<[Box<str>]>,
+    },
+    /// `--bin` names no binary of the package.
+    NoBinary {
+        /// The name `--bin` gave.
+        name: Box<str>,
+        /// The package's binaries' names.
+        binaries: Box<[Box<str>]>,
+    },
     /// A project-owned symlink resolves outside its canonical root.
     EscapesRoot {
         /// Kind of resource that escaped.
@@ -190,6 +212,25 @@ impl fmt::Display for Error {
                 "`{}` is not a Rawr file. Its first line is not `// rawr`, and no module it declares starts with it.",
                 entry.display()
             ),
+            Self::Cargo { source, .. } => write!(formatter, "{source}"),
+            Self::AmbiguousBinary { binaries, .. } => write!(
+                formatter,
+                "`rawr run` could not determine which binary to run. \
+                 Use the `--bin` option to specify a binary, or the `default-run` manifest key.\n\
+                 available binaries: {}",
+                binaries.join(", ")
+            ),
+            Self::NoBinary { name, binaries } => {
+                write!(formatter, "no bin target named `{name}`")?;
+                if binaries.is_empty() {
+                    return Ok(());
+                }
+                write!(formatter, "\navailable bin targets:")?;
+                for binary in binaries {
+                    write!(formatter, "\n    {binary}")?;
+                }
+                Ok(())
+            }
             Self::EscapesRoot {
                 resource,
                 path,
@@ -212,6 +253,8 @@ impl std::error::Error for Error {
             Self::CurrentDirectory(source)
             | Self::InputNotFound { source, .. }
             | Self::Unreadable { source, .. } => Some(source),
+            Self::Cargo { source, .. } => Some(source),
+            Self::AmbiguousBinary { .. } | Self::NoBinary { .. } => None,
             Self::NotFound { .. }
             | Self::Ambiguous { .. }
             | Self::UnsupportedInput { .. }

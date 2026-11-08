@@ -38,6 +38,8 @@ pub struct Package {
     entry: Option<Box<str>>,
     cargo: Option<manifest::cargo::Cargo>,
     pub(crate) rust: Option<manifest::rust::Config>,
+    /// The profile's panic strategy, as Cargo builds the target.
+    panic: project::cargo::Panic,
     /// The crate root has a frontmatter block: a cargo script.
     script: bool,
 }
@@ -170,6 +172,13 @@ impl Package {
     #[must_use]
     pub const fn bin(&self) -> Option<&Bin> {
         self.bin.as_ref()
+    }
+
+    /// The profile's panic strategy, as Cargo builds the package's target:
+    /// with `panic = "abort"` a panic aborts the process.
+    #[must_use]
+    pub const fn panic(&self) -> project::cargo::Panic {
+        self.panic
     }
 
     /// The crate name the native modules are imported under, when the
@@ -474,6 +483,22 @@ fn file_root(source: &Path, text: &str, exists: impl Fn(&Path) -> bool) -> PathB
         .map_or(parent.clone(), Path::to_path_buf)
 }
 
+/// The package root of a runner snapshot's `entry`: the nearest directory
+/// above it whose `Cargo.toml` the snapshot holds, as its parent's graph
+/// read that package, else [`file_root`]'s.
+fn snapshot_root(entry: &Path, snapshot: &super::snapshot::Snapshot) -> PathBuf {
+    let text = snapshot.read(entry).unwrap_or_default();
+    if !crate::project::frontmatter::is_script(text)
+        && let Some(root) = entry
+            .ancestors()
+            .skip(1)
+            .find(|directory| snapshot.read(&directory.join("Cargo.toml")).is_some())
+    {
+        return root.to_path_buf();
+    }
+    file_root(entry, text, |manifest| snapshot.read(manifest).is_some())
+}
+
 struct Builder<'a> {
     engine: &'a Engine,
     cells: Option<&'a super::Cells>,
@@ -492,6 +517,8 @@ struct Builder<'a> {
 struct Request {
     root: PathBuf,
     source: PathBuf,
+    /// The package, as Cargo describes it, when discovery asked.
+    package: Option<project::cargo::Package>,
 }
 
 impl<'a> Builder<'a> {
@@ -523,10 +550,12 @@ impl<'a> Builder<'a> {
             project::Target::File(source) => Request {
                 root: file_root(source.path(), source.text(), |manifest| manifest.is_file()),
                 source: source.path().to_path_buf(),
+                package: None,
             },
             project::Target::Project(project) => Request {
                 root: project.root().as_path().to_path_buf(),
                 source: project.source().path().to_path_buf(),
+                package: Some(project.package().clone()),
             },
         };
         let entry_package = self.load_package(request)?;
@@ -549,12 +578,9 @@ impl<'a> Builder<'a> {
             .expect("snapshot builder retains its immutable input");
         let entry = snapshot.entry().to_path_buf();
         let request = Request {
-            root: file_root(
-                &entry,
-                snapshot.read(&entry).unwrap_or_default(),
-                |manifest| snapshot.read(manifest).is_some(),
-            ),
+            root: snapshot_root(&entry, snapshot),
             source: entry,
+            package: None,
         };
         let entry_package = self.load_package(request)?;
         let entry_source = self.packages[entry_package.0].source;
@@ -594,22 +620,48 @@ impl<'a> Builder<'a> {
         } else {
             root.clone()
         };
+        // The package and the target it runs, as Cargo describes them.
+        let described = match (request.package, &cargo) {
+            (Some(package), _) => Some(package),
+            (None, Some((cargo, _))) => {
+                // A script's package is its expanded manifest in rawr's
+                // area, which Cargo reads when there are tables to decide.
+                #[cfg(feature = "rust-import")]
+                if script && self.snapshot.is_none() && !cargo.targets.is_empty() {
+                    let _ = manifest::script::materialize(cargo);
+                }
+                self.described(&cargo.path)
+            }
+            (None, None) => None,
+        };
+        let target = described
+            .as_ref()
+            .and_then(|package| package.target_at(&canonical).cloned());
+        let library = target.as_ref().map_or_else(
+            || {
+                request
+                    .source
+                    .file_name()
+                    .is_some_and(|name| name == "lib.rs")
+            },
+            |target| target.kind() == project::cargo::Kind::Library,
+        );
+        let (cargo, panic) = match cargo {
+            Some((cargo, evidence)) => {
+                let (cargo, panic) =
+                    self.on_host(cargo, &evidence, described.as_ref(), target.as_ref())?;
+                (Some((cargo, evidence)), panic)
+            }
+            None => (None, project::cargo::Panic::default()),
+        };
         // The crate name rustc gives this target, so item paths read as
         // Rust's do. A file outside a Cargo package is `main`.
-        let library = request
-            .source
-            .file_name()
-            .is_some_and(|name| name == "lib.rs");
-        let name: ImmutableString = cargo.as_ref().map_or_else(
-            || "main".into(),
-            |(cargo, _)| {
-                if library {
-                    cargo.crate_name.as_str().into()
-                } else {
-                    cargo.package.replace('-', "_").into()
-                }
-            },
-        );
+        let name: ImmutableString = match (&target, &cargo) {
+            (Some(target), _) => target.crate_name().into(),
+            (None, Some((cargo, _))) if library => cargo.crate_name.as_str().into(),
+            (None, Some((cargo, _))) => cargo.package.replace('-', "_").into(),
+            (None, None) => "main".into(),
+        };
         let package = Id::from_index(self.packages.len());
         self.packages.push(Package {
             id: package,
@@ -622,6 +674,7 @@ impl<'a> Builder<'a> {
             entry: None,
             cargo: None,
             rust: None,
+            panic,
             script,
         });
 
@@ -633,7 +686,16 @@ impl<'a> Builder<'a> {
         // A library beside a binary whose tree has no marked module runs
         // from that binary, as `cargo run` does: its `main` is the program's.
         let bin = if library && !script && cargo.is_some() {
-            self.bin_root(&root, &module_root)?
+            let path = match &described {
+                Some(package) => package
+                    .run_binary()
+                    .map(|binary| binary.path().to_path_buf()),
+                None => Some(module_root.join("main.rs")),
+            };
+            match path {
+                Some(path) => self.bin_root(&root, &module_root, path)?,
+                None => None,
+            }
         } else {
             None
         };
@@ -671,7 +733,15 @@ impl<'a> Builder<'a> {
         )?;
         self.packages[package.0].source = root_source;
         if !library && !script && cargo.is_some() {
-            self.check_one_marked_tree(package, &root, &module_root)?;
+            let library = match &described {
+                Some(package) => package
+                    .library()
+                    .map(|library| library.path().to_path_buf()),
+                None => Some(module_root.join("lib.rs")),
+            };
+            if let Some(library) = library {
+                self.check_one_marked_tree(package, &root, &module_root, library)?;
+            }
         }
         if has_bin && marked {
             return Err(self.marked_library_root(package));
@@ -683,10 +753,16 @@ impl<'a> Builder<'a> {
         if let Some(cargo) = cargo {
             // A binary reaches its package's library by the library's crate
             // name, as a dependency Cargo builds before it (#1164).
-            let own_library = (!library && !script)
-                .then_some(cargo.0.library.as_deref())
-                .flatten()
-                .is_some_and(|path| self.is_file(path));
+            let own_library = !library
+                && !script
+                && match &described {
+                    Some(package) => package.library().is_some(),
+                    None => cargo
+                        .0
+                        .library
+                        .as_deref()
+                        .is_some_and(|path| self.is_file(path)),
+                };
             self.attach_cargo(package, cargo, own_library);
         }
         if self.packages[package.0].native_root.is_none() {
@@ -702,8 +778,8 @@ impl<'a> Builder<'a> {
         package: Id,
         root: &Path,
         module_root: &Path,
+        library: PathBuf,
     ) -> Result<(), Error> {
-        let library = module_root.join("lib.rs");
         if !self.is_file(&library) {
             return Ok(());
         }
@@ -765,11 +841,16 @@ impl<'a> Builder<'a> {
         )
     }
 
-    /// The package's binary root, `src/main.rs` beside the library root's
-    /// directory `module_root`, when it is native and its tree reaches no
-    /// marked module: then the binary runs the program.
-    fn bin_root(&self, root: &Path, module_root: &Path) -> Result<Option<RustModule>, Error> {
-        let path = module_root.join("main.rs");
+    /// The package's binary root at `path`, the binary `cargo run` runs,
+    /// when it is native and its tree reaches no marked module: then the
+    /// binary runs the program from the library whose root is in
+    /// `module_root`.
+    fn bin_root(
+        &self,
+        root: &Path,
+        module_root: &Path,
+        path: PathBuf,
+    ) -> Result<Option<RustModule>, Error> {
         if !self.is_file(&path) {
             return Ok(None);
         }
@@ -1408,6 +1489,58 @@ impl<'a> Builder<'a> {
             }
         }
         Ok(())
+    }
+
+    /// The package whose manifest is `manifest`, as Cargo describes it. A
+    /// manifest Cargo can't read has none; its own errors are reported as
+    /// Rawr reads it.
+    fn described(&self, manifest: &Path) -> Option<project::cargo::Package> {
+        project::cargo::Workspace::of(manifest)
+            .ok()?
+            .package(manifest)
+            .cloned()
+    }
+
+    /// `cargo` as Cargo builds `target` of `package` on the host: its
+    /// `[target.'<platform>']` dependencies Cargo links there joined, and
+    /// its profile's panic strategy, from Cargo's unit graph. A runner's
+    /// snapshot does not ask Cargo ([`manifest::cargo::Host::Unasked`]),
+    /// and a file that is no target of its package builds as the binary
+    /// `cargo run` runs, else the library.
+    fn on_host(
+        &mut self,
+        cargo: manifest::cargo::Cargo,
+        evidence: &diagnostic::Source,
+        package: Option<&project::cargo::Package>,
+        target: Option<&project::cargo::Target>,
+    ) -> Result<(manifest::cargo::Cargo, project::cargo::Panic), Error> {
+        let built = package
+            .filter(|_| self.snapshot.is_none())
+            .and_then(|package| {
+                target
+                    .or_else(|| package.run_binary())
+                    .or_else(|| package.library())
+                    .map(|target| project::cargo::Unit::of(package, target))
+            });
+        match built {
+            Some(Ok(unit)) => Ok((
+                cargo.on_host(manifest::cargo::Host::Built(&unit)),
+                unit.panic(),
+            )),
+            Some(Err(error)) => {
+                let evidence = self.push_evidence(evidence.clone());
+                Err(Error::manifest(
+                    self.evidence.clone(),
+                    evidence,
+                    error.to_string().into(),
+                    Span::new(Position::START, Position::START),
+                ))
+            }
+            None => Ok((
+                cargo.on_host(manifest::cargo::Host::Unasked),
+                project::cargo::Panic::default(),
+            )),
+        }
     }
 
     /// The crate's root `Cargo.toml`, when it is a package. Its

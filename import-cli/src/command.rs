@@ -38,6 +38,13 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     if std::env::var_os(rawr_import::universe::VARIABLE).is_some_and(|value| value == "1") {
         rawr_import::universe::set();
     }
+    let arguments = match rawr_cli::target_arguments(arguments) {
+        Ok(arguments) => arguments,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return ExitCode::from(2);
+        }
+    };
     // What follows `--` is the program's.
     let (arguments, program_arguments) = rawr_cli::split_program_arguments(&arguments);
     let words: Vec<_> = arguments

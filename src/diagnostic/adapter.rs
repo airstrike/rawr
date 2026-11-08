@@ -218,6 +218,14 @@ impl Report {
                 code::ENVIRONMENT_MISSING_SOURCE,
                 "add `// rawr` as the first line of the crate root, or of a module it declares, to run it with Rawr",
             ),
+            ProjectError::Cargo { .. } => (
+                code::ENVIRONMENT_UNREADABLE,
+                "fix what Cargo reports; `cargo metadata` and `cargo build` read the package as Rawr does",
+            ),
+            ProjectError::AmbiguousBinary { .. } | ProjectError::NoBinary { .. } => (
+                code::ENVIRONMENT_MISSING_SOURCE,
+                "pass `--bin <name>` or the binary's `.rs` file",
+            ),
             ProjectError::EscapesRoot { .. } => (
                 code::ENVIRONMENT_ESCAPES_ROOT,
                 "move the resource inside the project root or replace the escaping symlink",

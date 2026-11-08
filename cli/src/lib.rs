@@ -33,7 +33,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     if let Some(code) = supervise::child() {
         return code;
     }
-    let arguments = match package_arguments(arguments) {
+    let arguments = match target_arguments(arguments) {
         Ok(arguments) => arguments,
         Err(message) => {
             eprintln!("error: {message}");
@@ -75,6 +75,68 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// The arguments with `-p <package>` and `--bin <name>` in the places of
+/// the paths they select, as `cargo run` selects them: what every binary
+/// that is handed the program reads.
+pub fn target_arguments(arguments: Vec<OsString>) -> Result<Vec<OsString>, String> {
+    binary_arguments(package_arguments(arguments)?)
+}
+
+/// `rawr run --bin <name>`, `rawr check --bin <name>` and `rawr test --bin
+/// <name>`, as under `cargo run --bin`: the arguments with the crate root
+/// of the binary `name` in place of the option and of the directory the
+/// arguments name, if any, which is where the package is found from (else
+/// the current directory). A file a package lists as a binary runs as that
+/// package's binary.
+fn binary_arguments(arguments: Vec<OsString>) -> Result<Vec<OsString>, String> {
+    if !arguments
+        .first()
+        .is_some_and(|command| command == "run" || command == "check" || command == "test")
+    {
+        return Ok(arguments);
+    }
+    let end = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    let Some(option) = arguments[..end].iter().position(|argument| {
+        argument == "--bin" || argument.to_string_lossy().starts_with("--bin=")
+    }) else {
+        return Ok(arguments);
+    };
+    let (name, taken) = match arguments[option].to_string_lossy().strip_prefix("--bin=") {
+        Some(name) => (name.to_owned(), 1),
+        None => (
+            arguments[..end]
+                .get(option + 1)
+                .map(|name| name.to_string_lossy().into_owned())
+                .ok_or("`--bin` needs a binary name")?,
+            2,
+        ),
+    };
+    let directory = (1..end).find(|&index| {
+        !(option..option + taken).contains(&index) && Path::new(&arguments[index]).is_dir()
+    });
+    let start = match directory {
+        Some(index) => PathBuf::from(&arguments[index]),
+        None => std::env::current_dir().map_err(|error| error.to_string())?,
+    };
+    let binary = rawr::project::Target::binary(&start, &name).map_err(|error| error.to_string())?;
+    Ok(arguments
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, argument)| {
+            if index == option {
+                Some(binary.clone().into_os_string())
+            } else if (option + 1..option + taken).contains(&index) || Some(index) == directory {
+                None
+            } else {
+                Some(argument)
+            }
+        })
+        .collect())
 }
 
 /// `rawr run -p <name>`, `rawr check -p <name>` and `rawr test -p <name>`
@@ -337,6 +399,7 @@ fn help(installed: &[layer::Installed]) -> String {
          rawr test [path] [filter] [-- options]\n                                \
          Run the program's `#[test]` functions, as `cargo test`\n  \
          rawr run -p <package>         Run a package of this workspace, as `cargo run -p`\n  \
+         rawr run --bin <name>         Run a binary of the package, as `cargo run --bin`\n  \
          rawr new <path>               Create a crate with a marked `src/main.rs`\n  \
          rawr doctor [path]            Report on the environment and the project\n  \
          rawr mcp [path]               Serve coding agents over MCP on stdio\n  \
@@ -484,6 +547,7 @@ pub fn on_base(loaded: base::Loaded, check: bool, arguments: &[OsString]) -> Exi
 /// [`supervise::run`] starts.
 #[must_use]
 pub fn run_once(loaded: base::Loaded) -> ExitCode {
+    let panic = loaded.graph.entry_package().panic();
     match base::run(loaded) {
         Ok(None) => ExitCode::SUCCESS,
         Ok(Some(error)) => {
@@ -494,6 +558,11 @@ pub fn run_once(loaded: base::Loaded) -> ExitCode {
         Err(base::Failed::Panic(report)) => {
             // What a Cargo-built program prints when it panics.
             eprint!("{}", rawr::diagnostic::panic(&report));
+            // A profile's `panic = "abort"` aborts the process, as the
+            // binary Cargo builds with it does.
+            if panic == rawr::project::cargo::Panic::Abort {
+                std::process::abort();
+            }
             // Rust's exit status for a panic.
             ExitCode::from(101)
         }

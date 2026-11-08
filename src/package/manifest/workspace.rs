@@ -6,7 +6,6 @@
 //! Rawr asks `cargo metadata --no-deps` once and keeps the answer while
 //! neither manifest changes.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -24,89 +23,13 @@ pub(crate) struct Inherited {
     pub(crate) build_dependencies: BTreeMap<String, Dependency>,
 }
 
-struct Entry {
-    manifest: PathBuf,
-    text: String,
-    root: PathBuf,
-    root_text: String,
-    inherited: Inherited,
-}
-
-thread_local! {
-    /// One cell per member manifest. It is fresh while the member's text
-    /// and the workspace root manifest's text are the ones Cargo read.
-    static CACHE: RefCell<Vec<Entry>> = const { RefCell::new(Vec::new()) };
-}
-
-/// The fields `manifest` (whose text is `text`) inherits from its workspace.
-pub(crate) fn inherited(manifest: &Path, text: &str) -> Result<Inherited, String> {
-    let fresh = CACHE.with_borrow(|cache| {
-        cache
-            .iter()
-            .find(|entry| entry.manifest == manifest && entry.text == text)
-            .filter(|entry| {
-                std::fs::read_to_string(&entry.root).ok().as_deref()
-                    == Some(entry.root_text.as_str())
-            })
-            .map(|entry| entry.inherited.clone())
-    });
-    if let Some(inherited) = fresh {
-        return Ok(inherited);
-    }
-    let (root, inherited) = metadata(manifest)?;
-    let root_text = std::fs::read_to_string(&root).unwrap_or_default();
-    CACHE.with_borrow_mut(|cache| {
-        cache.retain(|entry| entry.manifest != manifest);
-        cache.push(Entry {
-            manifest: manifest.to_path_buf(),
-            text: text.to_owned(),
-            root,
-            root_text,
-            inherited: inherited.clone(),
-        });
-    });
-    Ok(inherited)
-}
-
-/// Ask Cargo for the package `manifest` describes: the workspace root
-/// manifest and the package's resolved fields.
-fn metadata(manifest: &Path) -> Result<(PathBuf, Inherited), String> {
-    let cargo = std::env::var_os("CARGO")
-        .filter(|cargo| !cargo.is_empty())
-        .unwrap_or_else(|| "cargo".into());
-    let output = std::process::Command::new(&cargo)
-        .args([
-            "metadata",
-            "--no-deps",
-            "--format-version",
-            "1",
-            "--offline",
-        ])
-        .arg("--manifest-path")
-        .arg(manifest)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|error| format!("could not run `cargo metadata`: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("`cargo metadata` failed: {}", stderr.trim()));
-    }
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("`cargo metadata` printed invalid JSON: {error}"))?;
-    let root = json["workspace_root"]
-        .as_str()
-        .map(|root| Path::new(root).join("Cargo.toml"))
-        .ok_or("`cargo metadata` names no workspace root")?;
-    let canonical = std::fs::canonicalize(manifest).unwrap_or_else(|_| manifest.to_path_buf());
-    let package = json["packages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|package| {
-            package["manifest_path"]
-                .as_str()
-                .is_some_and(|path| std::fs::canonicalize(path).ok().as_ref() == Some(&canonical))
-        })
+/// The fields `manifest` inherits from its workspace, from Cargo's
+/// description of it ([`crate::project::cargo::Workspace`]).
+pub(crate) fn inherited(manifest: &Path) -> Result<Inherited, String> {
+    let workspace = crate::project::cargo::Workspace::of(manifest)
+        .map_err(|error| format!("`cargo metadata` failed: {error}"))?;
+    let package = workspace
+        .package_json(manifest)
         .ok_or_else(|| format!("`cargo metadata` does not list {}", manifest.display()))?;
     let string = |value: &serde_json::Value| value.as_str().map(str::to_owned);
     let mut inherited = Inherited {
@@ -173,5 +96,5 @@ fn metadata(manifest: &Path) -> Result<(PathBuf, Inherited), String> {
             },
         );
     }
-    Ok((root, inherited))
+    Ok(inherited)
 }
