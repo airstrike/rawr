@@ -13,12 +13,14 @@ interface Props {
   /** The page's path, for its canonical URL. */
   path: string;
   current?: "docs" | "play";
+  /** The page has the docs' tree (#docs-nav), which the bar opens as a drawer on narrow screens. */
+  drawer?: boolean;
   /** The link preview's title and description, when they differ from the page's. */
   og?: { title?: string; description?: string; image?: string; alt?: string; twitter?: boolean };
   icon?: string;
   bodyClass?: string;
 }
-const { title, description, path, current, og = {}, icon = "/favicon.svg", bodyClass } = Astro.props;
+const { title, description, path, current, drawer = false, og = {}, icon = "/favicon.svg", bodyClass } = Astro.props;
 const url = `${SITE}${path}`;
 const image = og.image ?? `${SITE}/og/card.png`;
 const alt = og.alt ?? "rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.";
@@ -54,7 +56,7 @@ const alt = og.alt ?? "rawr is rust augmented with rust: a Rust interpreter for 
 </head>
 <body class={bodyClass}>
 <div class="bar-top" aria-hidden="true"></div>
-<Header current={current} />
+<Header current={current} drawer={drawer} />
 <slot />
 <script is:inline>
 // The bar takes its scrolled shade once the sentinel above it leaves the view.

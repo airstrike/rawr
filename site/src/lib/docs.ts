@@ -1,7 +1,8 @@
 // The docs' navigation and the build's passes over a page's HTML. A page is
 // src/content/docs/<path>.html: its description in a <meta> line, then its
-// <article>. The build gives it the site bar, the sidebar, the pager, a "#"
-// link on each section heading, "On this page" for narrow screens,
+// <article>. The build gives it the site bar, the sidebar (a drawer behind the
+// bar's "Docs" control on narrow screens), the breadcrumbs, the pager, each
+// section heading as a link to itself, "On this page" for narrow screens,
 // highlighted code, and the output of each runnable snippet, from running it.
 // A new page is a file there and an entry in GROUPS.
 import { highlight } from "./highlight.ts";
@@ -11,27 +12,21 @@ export const SITE = "https://rawr.airstrike.fyi";
 
 type Item = [path: string, title: string, children?: [string, string][]];
 
-/** Each group's pages, in reading order. */
+/** The groups, by what the reader came to do, and each group's pages in reading order. */
 export const GROUPS: [string, Item[]][] = [
-  ["Guides", [
+  ["Get started", [
     ["/docs/start", "Start"],
-    ["/docs/run", "Run"],
-    ["/docs/agents", "Agents"],
-    ["/docs/imports", "Imports"],
-    ["/docs/embedding", "Embedding"],
-    ["/docs/apps", "Apps and libraries"],
-    ["/docs/iced", "iced", [
-      ["/docs/iced/reload", "Reload"],
-      ["/docs/iced/previews", "Previews"],
-    ]],
-    ["/docs/ratatui", "ratatui"],
-    ["/docs/play", "Play", [
-      ["/docs/play/discord", "Discord"],
-    ]],
-    ["/docs/troubleshooting", "Troubleshooting"],
-    ["/docs/how-it-works", "How it works"],
   ]],
-  ["API Reference", [
+  ["Guides", [
+    ["/docs/run", "Run"],
+    ["/docs/imports", "Imports"],
+    ["/docs/apps", "Apps and libraries"],
+    ["/docs/embedding", "Embedding"],
+    ["/docs/agents", "Agents"],
+    ["/docs/how-it-works", "How it works"],
+    ["/docs/troubleshooting", "Troubleshooting"],
+  ]],
+  ["Reference", [
     ["/docs/reference/overview", "Overview", [
       ["/docs/reference/items", "Items"],
       ["/docs/reference/types", "Types"],
@@ -42,9 +37,14 @@ export const GROUPS: [string, Item[]][] = [
       ["/docs/reference/macros", "Macros"],
       ["/docs/reference/std", "std"],
     ]],
-    ["/docs/reference/play", "Play"],
     ["/docs/reference/commands", "Commands"],
     ["/docs/reference/requirements", "Requirements"],
+    ["/docs/reference/play", "Play sandbox"],
+  ]],
+  ["Tools", [
+    ["/docs/play", "Playground"],
+    ["/docs/play/discord", "?play in Discord"],
+    ["/docs/previews", "Editor previews"],
   ]],
 ];
 
@@ -66,8 +66,8 @@ for (const [group, items] of GROUPS) {
   }
 }
 
-/** The pages that are a directory's index: /docs/iced is docs/iced/index.html. */
-export const isIndex = (path: string) => ["/docs", "/docs/iced", "/docs/play"].includes(path);
+/** The pages that are a directory's index: /docs/play is docs/play/index.html. */
+export const isIndex = (path: string) => ["/docs", "/docs/play"].includes(path);
 
 /** The source file of a page, relative to src/content/docs. */
 export const source = (path: string) => {
@@ -76,27 +76,31 @@ export const source = (path: string) => {
 };
 
 export const fullTitle = (page: Page) =>
-  page === INDEX ? "rawr docs" : page.group === "API Reference" ? `${page.title} | rawr API Reference` : `${page.title} | rawr docs`;
+  page === INDEX ? "rawr docs" : page.group === "Reference" ? `${page.title} | rawr reference` : `${page.title} | rawr docs`;
 
 /** The page's h2 sections, as [id, inner HTML]. */
-const sections = (html: string) => [...html.matchAll(/<h2 id="([^"]+)">([\s\S]*?)<\/h2>/g)].map((m) => [m[1], m[2]] as const);
+const sections = (html: string) => [...html.matchAll(/<h2[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/h2>/g)].map((m) => [m[1], m[2]] as const);
 
+/**
+ * The docs' tree: each group under its head, the page marked, and its
+ * sections under it. On a narrow screen it is a popover, the drawer that the
+ * site bar's "Docs" control opens (Header.astro).
+ */
 export function sidebar(page: Page, article: string): string {
-  const out = ['<nav class="side" aria-label="Docs">'];
+  const out = ['<nav class="side" id="docs-nav" popover aria-label="Docs">'];
   const link = (path: string, title: string) => `<a href="${path}"${path === page.path ? ' aria-current="page"' : ""}>${title}</a>`;
   const secs = () => {
     const list = sections(article);
     return list.length > 1 ? `<ol class="secs">${list.map(([id, text]) => `<li><a href="#${id}">${text}</a></li>`).join("")}</ol>` : "";
   };
+  out.push(`  <a class="home" href="/docs"${page === INDEX ? ' aria-current="page"' : ""}>Docs home</a>`);
   for (const [group, items] of GROUPS) {
     const here = page.group === group ? " data-here" : "";
     out.push(`  <p class="grp"${here}>${group}</p>`, `  <ol${here}>`);
     for (const [path, title, kids = []] of items) {
-      let inner = "";
+      let inner = path === page.path ? secs() : "";
       if (kids.length > 0) {
-        inner = `<ol class="kids">${kids.map(([kid, kidTitle]) => `<li>${link(kid, kidTitle)}${kid === page.path ? secs() : ""}</li>`).join("")}</ol>`;
-      } else if (path === page.path) {
-        inner = secs();
+        inner += `<ol class="kids">${kids.map(([kid, kidTitle]) => `<li>${link(kid, kidTitle)}${kid === page.path ? secs() : ""}</li>`).join("")}</ol>`;
       }
       out.push(`    <li>${link(path, title)}${inner}</li>`);
     }
@@ -104,6 +108,15 @@ export function sidebar(page: Page, article: string): string {
   }
   out.push("</nav>");
   return out.join("\n");
+}
+
+/** Where the page sits: Docs, its group and its parent page. The index has none. */
+export function breadcrumbs(page: Page): string {
+  if (page === INDEX) return "";
+  const parent = page.parent && PAGES.find((other) => other.path === page.parent);
+  const crumbs = ['<li><a href="/docs">Docs</a></li>', `<li>${page.group}</li>`];
+  if (parent) crumbs.push(`<li><a href="${parent.path}">${parent.title}</a></li>`);
+  return `<nav class="crumbs label" aria-label="Breadcrumb"><ol>${crumbs.join("")}</ol></nav>`;
 }
 
 export function pager(page: Page): string {
@@ -210,9 +223,27 @@ export async function runOutputs(html: string, runs: Runs): Promise<string> {
   });
 }
 
-/** A "#" link before each section heading that has an id. */
+/** A heading's id from its text: lower case, its words joined by "-". */
+export const slug = (html: string) =>
+  decode(html.replace(/<[^>]+>/g, "")).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
+
+/** Gives each h2 and h3 that has no id one made from its text, unique on the page. */
+export function headingIds(html: string): string {
+  const taken = new Set([...html.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]));
+  return html.replace(/<(h[23])((?:\s[^>]*)?)>([\s\S]*?)<\/\1>/g, (whole, tag: string, attributes: string, inner: string) => {
+    if (/\bid="/.test(attributes)) return whole;
+    const base = slug(inner) || "section";
+    let id = base;
+    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+    taken.add(id);
+    return `<${tag}${attributes} id="${id}">${inner}</${tag}>`;
+  });
+}
+
+/** Each h2 and h3 with an id is a link to itself, so a reader can share the section. */
 export function anchors(html: string): string {
-  return html.replace(/<(h[23]) id="([^"]+)">/g, (_, tag, id) => `<${tag} id="${id}"><a class="anchor" href="#${id}" aria-label="Link to this section">#</a>`);
+  return html.replace(/<(h[23])([^>]*\bid="([^"]+)"[^>]*)>([\s\S]*?)<\/\1>/g, (whole, tag: string, attributes: string, id: string, inner: string) =>
+    inner.includes("<a ") ? whole : `<${tag}${attributes}><a class="anchor" href="#${id}">${inner}</a></${tag}>`);
 }
 
 /** "On this page": the page's sections after its lede, shown on narrow screens. */
@@ -220,7 +251,7 @@ export function toc(html: string): string {
   const list = sections(html);
   const lede = /<p class="lede">[\s\S]*?<\/p>/.exec(html);
   if (list.length <= 2 || !lede) return html;
-  const items = list.map(([id, text]) => `<li><a href="#${id}">${text.replace(/<a class="anchor"[^>]*>#<\/a>/, "").replace(/<[^>]+>/g, "")}</a></li>`).join("");
+  const items = list.map(([id, text]) => `<li><a href="#${id}">${text.replace(/<[^>]+>/g, "")}</a></li>`).join("");
   const at = lede.index + lede[0].length;
   return `${html.slice(0, at)}\n<details class="toc"><summary>On this page</summary><ol>${items}</ol></details>${html.slice(at)}`;
 }

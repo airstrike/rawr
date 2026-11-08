@@ -1,11 +1,10 @@
 ---
 // One docs page, from its file in src/content/docs and the navigation in
-// lib/docs.ts. pages/docs/[...slug].astro builds every page but the three
+// lib/docs.ts. pages/docs/[...slug].astro builds every page but the two
 // that are a directory's index.html, which have their own index.astro.
 import Base from "../layouts/Base.astro";
-import { anchors, fullTitle, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Page } from "../lib/docs.ts";
+import { INDEX, anchors, breadcrumbs, fullTitle, headingIds, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Page } from "../lib/docs.ts";
 import { runs } from "../lib/runs.ts";
-import { movedScript } from "../lib/moved.ts";
 import "../styles/docs.css";
 import Footer from "./Footer.astro";
 import RunBlocks from "./RunBlocks.astro";
@@ -16,17 +15,22 @@ const { page } = Astro.props as { page: Page };
 const file = `../content/docs/${source(page.path)}`;
 const text = files[file];
 if (text === undefined) throw new Error(`no ${file} for ${page.path}`);
-const { description, article } = parse(text, file);
-// Each snippet's output comes from running it (runOutputs).
-const body = toc(anchors(await runOutputs(highlightBlocks(article), runs)));
+const parsed = parse(text, file);
+const { description } = parsed;
+// A heading without an id gets one from its text, so every heading links to itself.
+const article = headingIds(parsed.article);
+// Each snippet's output comes from running it (runOutputs). The index is a
+// landing, with no "On this page".
+const built = anchors(await runOutputs(highlightBlocks(article), runs));
+const body = page === INDEX ? built : toc(built);
 const runnable = /<code[^>]*\bdata-run\b/.test(article);
-const moved = movedScript(page.path);
 ---
-<Base title={fullTitle(page)} description={description} path={page.path} current="docs">
+<Base title={fullTitle(page)} description={description} path={page.path} current="docs" drawer>
 <div class="docs">
 <Fragment set:html={sidebar(page, article)} />
 <main>
-<article>
+<article class:list={{ landing: page === INDEX }}>
+<Fragment set:html={breadcrumbs(page)} />
 <Fragment set:html={body} />
 <Fragment set:html={pager(page)} />
 </article>
@@ -34,5 +38,13 @@ const moved = movedScript(page.path);
 </div>
 <Footer />
 {runnable && <RunBlocks />}
-{moved && <script is:inline set:html={moved} />}
+<script is:inline>
+// The drawer closes on a pick, so a section link inside it shows its section.
+(() => {
+  const nav = document.getElementById("docs-nav");
+  nav?.addEventListener("click", (event) => {
+    if (event.target.closest("a") && nav.matches(":popover-open")) nav.hidePopover();
+  });
+})();
+</script>
 </Base>

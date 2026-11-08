@@ -7,7 +7,7 @@
 <p>The installer from <a href="/docs/start#install">Start</a> includes it:</p>
 <div class="block"><pre><code>curl -LsSf https://rawr.airstrike.fyi/install.sh | sh</code></pre></div>
 <div class="note"><p>rawr-import runs on 64-bit macOS and 64-bit Linux. It reads crate APIs with a Rust nightly and its <code>rustc-dev</code> and <code>rust-src</code> components: the nightly the project names, or the pinned <code>nightly-2026-07-11</code> when it names none. The first program that needs them installs them through rustup, once per machine. <a href="#toolchain">Which nightly</a> explains the choice. It has been tested on Apple Silicon Macs. CI runs it on x86_64 Linux. <a href="/docs/reference/requirements#platforms">Requirements</a> lists the platforms.</p></div>
-<p>An iced app runs on rawr-import too. <a href="/docs/iced">iced</a> says how.</p>
+<p>An iced app runs on rawr-import too. <a href="/docs/apps#iced">Apps and libraries</a> says how.</p>
 
 <h2 id="project">Project setup</h2>
 <p>A crate that <code>cargo run</code> runs needs only the marker. rawr-import adds no file to it.</p>

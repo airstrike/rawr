@@ -113,32 +113,6 @@ const OLD_HOST = "rawr-bot.airstrike.fyi";
 /** Old paths that moved under /bot; every other path is the same on the new host. */
 const MOVED: Record<string, string> = { "/": "/bot", "/invite": "/bot/invite", "/health": "/bot/health" };
 
-/**
- * Docs pages that moved. The FAQ's answers went to /docs/how-it-works and
- * elsewhere. rawr-iced's and ?play's pages became directories. The reference
- * pages went under /docs/reference, and /docs/language became its overview
- * and one page per topic. A redirect keeps the URL's #anchor, and the page
- * sends an anchor that moved on to its new page (the site's lib/moved.ts).
- */
-export const DOCS_MOVED: Record<string, string> = {
-  "/docs/faq": "/docs/how-it-works",
-  "/docs/faq.html": "/docs/how-it-works",
-  "/docs/iced.html": "/docs/iced",
-  "/docs/play.html": "/docs/play",
-  "/docs/language": "/docs/reference/overview",
-  "/docs/language.html": "/docs/reference/overview",
-  "/docs/cli": "/docs/reference/commands",
-  "/docs/cli.html": "/docs/reference/commands",
-  "/docs/requirements": "/docs/reference/requirements",
-  "/docs/requirements.html": "/docs/reference/requirements",
-  "/docs/iced/reference": "/docs/iced",
-  "/docs/iced/reference.html": "/docs/iced",
-  "/docs/reference/iced": "/docs/iced",
-  "/docs/reference/iced.html": "/docs/iced",
-  "/docs/play/reference": "/docs/reference/play",
-  "/docs/play/reference.html": "/docs/reference/play",
-  "/docs/reference": "/docs/reference/overview",
-};
 
 /**
  * A share's preview: a plain program's output (JSON), or a failure (kept
@@ -859,9 +833,6 @@ export default {
         allow: async (request) => getContainer(env.PLAY_BOT).allow("unlock", await ipHash(request, env)),
       });
       if (response) return response;
-    }
-    if (DOCS_MOVED[path]) {
-      return Response.redirect(`${SITE}${DOCS_MOVED[path]}${url.search}`, 301);
     }
     if (path.startsWith("/web/")) {
       return webAsset(request, env.ASSETS);

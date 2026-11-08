@@ -3,7 +3,7 @@
 <h1>Apps and libraries</h1>
 <p class="lede">rawr has no framework of its own. An app keeps the libraries it already uses, Cargo compiles them, and the files you mark call them. A save reaches the running app.</p>
 
-<h2 id="libraries">Libraries are compiled by Cargo</h2>
+<h2 id="libraries">How rawr runs an app</h2>
 <p>Every crate in <code>[dependencies]</code> is native Rust. <code>rawr run</code> builds it with Cargo, as <code>cargo run</code> does. The app&rsquo;s unmarked modules are native too. So is the package&rsquo;s own library: a marked <code>src/main.rs</code> names <code>src/lib.rs</code> by the crate name, as a Cargo binary does.</p>
 <p>rawr-import reads each library&rsquo;s API and generates the bindings your marked files call. Nothing in rawr is written by hand for a particular library. Your marked code calls the library&rsquo;s own functions, types and traits, under their own names.</p>
 <p>An app with dependencies needs rawr-import. <a href="/docs/imports">Imports</a> says how to install it, and lists the parts of Rust that don&rsquo;t cross yet. A library item rawr can&rsquo;t reach yet stops <code>rawr run</code> with an error at that item.</p>
@@ -17,7 +17,7 @@
 </ul>
 <p>In both shapes, the code that calls your marked functions is native. It runs at native speed, and so does every library call your marked code makes.</p>
 
-<h2 id="reload">Saves reach the running app</h2>
+<h2 id="reload">What a save does</h2>
 <p><code>rawr run</code> watches the files it runs. A save of a marked file reaches the app at its next call into marked code.</p>
 <ul>
   <li>An edit to a function body or to a private item swaps in place. The app keeps its state.</li>
@@ -30,20 +30,61 @@
 <p>When the edit shows depends on the loop. A loop that runs every frame shows it at the next frame. A library that redraws only after an event shows it at the next event. <a href="/docs/run#reload">Reload</a> has the details.</p>
 
 <h2 id="iced">iced</h2>
-<p>An iced app&rsquo;s marked <code>main</code> calls <code>iced::run</code> or <code>iced::application(..).run()</code>. iced runs the window and calls <code>update</code> and <code>view</code> back.</p>
+<p>iced is a Rust dependency like any other. <code>rawr run</code> and <code>rawr check</code> hand an iced app to <a href="/docs/imports">rawr-import</a>, as they hand over any program with dependencies in <code>Cargo.toml</code>. rawr-import reads iced&rsquo;s API and generates the bindings your marked files call. Nothing in rawr is written by hand for iced. Set <code>RAWR_VERBOSE=1</code> to see which binary ran a program.</p>
+<p>Your <code>main</code> calls iced&rsquo;s own <code>iced::run(update, view)</code> or <code>iced::application(..).run()</code>, as an ordinary generic call. iced runs the event loop, the window and the drawing. Your <code>State</code> and <code>Message</code> cross into it as Rust types of their own, named as you name them, so the window&rsquo;s title is iced&rsquo;s default for your crate. Your <code>update</code> and <code>view</code> cross as Rust functions the runner makes, which call the version of your code that is current. <a href="/docs/imports#generics">Generic items</a> says how.</p>
+
+<h3 id="iced-mark">Mark the file</h3>
+<p>An iced app needs rawr-import. <a href="/docs/imports#install">Imports</a> gives the commands. Install <a href="/docs/start#install">the <code>rawr</code> command</a> first.</p>
+<p>Make a crate and add iced to it:</p>
 <div class="block">
-  <div class="file"><b>src/main.rs</b><span>shortened</span></div>
+  <pre><code>rawr new counter &amp;&amp; cd counter
+cargo add iced --git https://github.com/iced-rs/iced --rev be88873d38544455e26c7a104eb757da2cbbac6b</code></pre>
+</div>
+<p><code>counter</code> is an ordinary Cargo crate. The examples on this page use iced master at revision <code>be88873d</code>.</p>
+<div class="block">
+  <div class="file"><b>Cargo.toml</b></div>
+  <pre><code data-lang="toml">[package]
+name = "counter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }</code></pre>
+</div>
+<p><code>rawr run</code> and <code>cargo build</code> share one build of iced, with no other file. Your own <code>cargo</code> builds rawr&rsquo;s runner with the project&rsquo;s toolchain and config, in the project&rsquo;s <code>target/</code>. <a href="/docs/imports#project">Imports</a> explains it.</p>
+<p>Replace <code>src/main.rs</code> with iced&rsquo;s own counter example, with <code>// rawr</code> as its first line:</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
   <pre><code data-lang="rust">// rawr
+use iced::Center;
 use iced::widget::{Widget, button, column, text};
 
 pub fn main() -&gt; iced::Result {
     iced::run(Counter::update, Counter::view)
 }
 
-// ...
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+    Decrement,
+}
 
 impl Counter {
-    // ...
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Increment =&gt; {
+                self.value += 1;
+            }
+            Message::Decrement =&gt; {
+                self.value -= 1;
+            }
+        }
+    }
 
     fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
         column![
@@ -51,32 +92,189 @@ impl Counter {
             text(self.value).size(50),
             button("Decrement").on_press(Message::Decrement)
         ]
+        .padding(20)
+        .align_x(Center)
     }
 }</code></pre>
 </div>
-<p>A save applies at iced&rsquo;s next message, with the state kept. iced builds the view again only when a message arrives, so the window shows the last view until then.</p>
-<p><a href="/docs/iced">iced</a> sets up a first app. <a href="/docs/iced/reload">Reload</a> covers what an iced app keeps.</p>
+
+
+<h3 id="iced-run">Run</h3>
+<div class="block"><pre><code>rawr run</code></pre></div>
+<p><code>cargo run</code> compiles the same app natively. A release build doesn&rsquo;t need the interpreter.</p>
+<p>The first <code>rawr run</code> compiles iced and the runner in the project&rsquo;s <code>target/</code>, and reads iced&rsquo;s API. That takes minutes. Later runs reuse the build.</p>
+
+<h3 id="iced-reload">What reloads</h3>
+<p>An iced app&rsquo;s marked <code>main</code> hands control to iced&rsquo;s event loop. iced calls your <code>update</code> and <code>view</code> back, so a save reaches the app as <a href="/docs/run#swap">A running marked main</a> describes.</p>
+<ul>
+  <li>A save applies at the next message, with the state kept.</li>
+  <li>iced builds the view again when a message arrives, so until then the window shows the last view.</li>
+  <li>A struct or enum with new fields or variants restarts the app, since iced may hold a value of the old shape.</li>
+  <li>An edit to <code>main</code> restarts the app, since <code>main</code> runs only once.</li>
+  <li>An edit to a native file or to <code>Cargo.toml</code> rebuilds it with Cargo and restarts the app.</li>
+</ul>
+<p>One line on stderr says why the app restarted.</p>
+<p>The save prints its error, and the last good code keeps running.</p>
+<p><code>rawr run</code> also runs <code>cargo check</code> beside the app. <a href="/docs/run#check">Checking</a> says when its errors are printed.</p>
+
+<h3 id="iced-limits">Limits</h3>
+<ul>
+  <li>iced&rsquo;s <code>counter</code>, <code>checkbox</code>, <code>slider</code>, <code>tooltip</code>, <code>pick_list</code> and <code>url_handler</code> examples run unchanged but for the <code>// rawr</code> line, with the title, the theme and the widgets <code>cargo run</code> gives them.</li>
+  <li><code>iced::application(..).subscription(App::subscription)</code> takes your method, which iced calls with your state. <code>Task</code>s work as iced gives them, so <code>update</code> can return <code>Task::none()</code> or <code>window::latest().and_then(window::close)</code>.</li>
+  <li>A function of iced&rsquo;s that gives an <code>impl Widget</code> or an <code>impl Program</code>, as <code>iced::widget::iced(..)</code> and <code>iced::application(..)</code> do, works as a value you pass on to iced.</li>
+  <li>iced&rsquo;s other examples run as the generated bindings reach the items they use. One that stops shows an error at the gap. <a href="/docs/imports#gaps">Imports</a> lists the known gaps.</li>
+</ul>
+<p>Previews don&rsquo;t render yet. <a href="/docs/previews">Previews</a> says what remains of them.</p>
 
 <h2 id="ratatui">ratatui</h2>
-<p>A ratatui app keeps its <code>main</code> native. <code>main</code> owns the terminal, the loop and the keys. A marked module says what the keys do, and a marked function draws on the <code>&amp;mut Frame</code> ratatui lends it.</p>
+<p>A ratatui app needs no rawr crate and no special API. You write it as ratatui&rsquo;s own examples do. <code>main</code> owns the terminal, the loop, the keys and the drawing. One module that starts with <code>// rawr</code> holds what the keys do and what the screen says. Under <code>rawr run</code> that module is interpreted, and <code>cargo build --release</code> compiles all of it natively.</p>
+
+<h3 id="ratatui-mark">Mark the file</h3>
+<p>The app is an ordinary Cargo crate with ratatui and crossterm:</p>
 <div class="block">
-  <div class="file"><b>src/ui.rs</b><span>shortened</span></div>
+  <div class="file"><b>Cargo.toml</b></div>
+  <pre><code data-lang="toml">[dependencies]
+crossterm = "0.29"
+ratatui = "0.30"</code></pre>
+</div>
+<p>rawr-import runs it, as it runs every crate with dependencies. <a href="/docs/imports#install">Imports</a> says how to install it. The crate needs no other file. <code>rawr run</code> and <code>cargo build</code> share one build of ratatui, as <a href="/docs/imports#project">Imports</a> explains.</p>
+<p>The <code>examples/tui</code> crate in rawr&rsquo;s repository is a to-do list. Its native <code>main.rs</code> is a plain ratatui loop:</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">mod app;
+mod ui;
+
+fn main() -&gt; std::io::Result&lt;()&gt; {
+    let terminal = ratatui::init();
+    let result = run(terminal);
+    ratatui::restore();
+    result
+}
+
+fn run(mut terminal: DefaultTerminal) -&gt; std::io::Result&lt;()&gt; {
+    let mut app = app::App::new();
+    loop {
+        terminal.draw(|frame| ui::draw(frame, &amp;mut app))?;
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        // q quits; other keys go to the app.
+        // ...
+        app::update(&amp;mut app, key);
+    }
+}</code></pre>
+</div>
+<p>Its marked <code>ui.rs</code> draws the screen on the <code>Frame</code> ratatui hands the closure, as any ratatui app does:</p>
+<div class="block">
+  <div class="file"><b>src/ui.rs</b></div>
   <pre><code data-lang="rust">// rawr
 use ratatui::Frame;
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::layout::{Constraint, Layout};
+use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 
 use crate::app::App;
 
 pub fn draw(frame: &amp;mut Frame, app: &amp;mut App) {
+    let areas = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(frame.area());
     frame.render_widget(
         Paragraph::new(app.input.clone()).block(Block::bordered().title(" New to-do ")),
-        frame.area(),
+        areas[0],
     );
+    let rows: Vec&lt;ListItem&gt; = app
+        .todos
+        .iter()
+        .map(|todo| ListItem::new(todo.text.clone()))
+        .collect();
+    let mut list = ListState::default().with_selected(app.selected);
+    frame.render_stateful_widget(List::new(rows).highlight_symbol("&gt; "), areas[1], &amp;mut list);
+    app.selected = list.selected();
+    // ...
 }</code></pre>
 </div>
-<p>A save repaints the terminal at once, with no key pressed. rawr leaves the terminal as it found it. <a href="/docs/ratatui">ratatui</a> has the whole example, <code>examples/tui</code> in rawr&rsquo;s repository.</p>
+<p>Its marked <code>app.rs</code> holds the to-dos and what each key does to them.</p>
+<p>Mark the modules you are working on, and keep <code>main</code> native.</p>
+<ul>
+  <li>Native code owns the terminal: <code>ratatui::init</code>, the loop, crossterm&rsquo;s events, <code>Terminal::draw</code> and <code>ratatui::restore</code>.</li>
+  <li>Marked code holds the app&rsquo;s state and what a key does to it.</li>
+  <li>Marked code draws, too. A marked function may take <code>&amp;mut Frame</code>, and build ratatui&rsquo;s widgets and layouts on it, as <code>ui::draw</code> does.</li>
+</ul>
+<p>Values cross between native and marked code as they do for any <a href="/docs/run#native-main">native main</a>. Numbers, <code>bool</code>, <code>char</code>, <code>String</code>, <code>Vec</code>, <code>Option</code>, <code>Result</code> and the structs and enums of marked modules cross. A key reaches the app as an enum of its own, which native code makes from crossterm&rsquo;s <code>KeyCode</code>.</p>
+<p id="frame">A <code>&amp;mut Frame</code> borrows the terminal&rsquo;s buffer, so it can&rsquo;t be copied into marked code. rawr lends it instead, for the length of the call. Each of <code>frame</code>&rsquo;s methods reaches the native frame itself, so what <code>draw</code> renders is in the buffer when the call returns. A borrowed parameter of any type your marked crate doesn&rsquo;t declare is lent the same way.</p>
+<p>The borrow ends with the call, as in Rust. A marked function can&rsquo;t keep the frame in what it returns, or in an argument native code takes back. rawr refuses that with Rust&rsquo;s borrow rule (E0515, E0521). A copy kept anywhere else is useless after the call, and using it says so (E0597).</p>
+<p>A widget&rsquo;s state works as in Rust. <code>render_stateful_widget</code> borrows the <code>ListState</code> for its call, and the list scrolls the selection into view in it. Here the app keeps the selection and the offset as plain numbers, and <code>draw</code> makes the <code>ListState</code> from them and reads them back.</p>
+<p>A lent value can be an argument of a native call, as well as the receiver of its methods. So native code can keep the <code>ListState</code> and lend it with the frame:</p>
+<div class="block">
+  <div class="file"><b>src/ui.rs</b></div>
+  <pre><code data-lang="rust">// rawr
+use ratatui::widgets::{Block, List, ListState};
+use ratatui::Frame;
 
-<h2 id="loop">A plain loop</h2>
+pub fn draw(frame: &amp;mut Frame, state: &amp;mut ListState) {
+    if state.selected().is_none() {
+        state.select(Some(1));
+    }
+    let list = List::new(["alpha", "beta", "gamma"])
+        .block(Block::bordered().title("list"))
+        .highlight_symbol("&gt; ");
+    frame.render_stateful_widget(list, frame.area(), state);
+}</code></pre>
+</div>
+<p><code>main</code> calls it as <code>terminal.draw(|frame| ui::draw(frame, &amp;mut state))</code>. The list changes <code>main</code>&rsquo;s own <code>ListState</code>, as in Rust.</p>
+
+<h3 id="ratatui-run">Run</h3>
+<p>The example is a package of rawr&rsquo;s Cargo workspace. Run it from the repository&rsquo;s root:</p>
+<div class="block"><pre><code>rawr run -p tui</code></pre></div>
+<p><code>rawr run examples/tui</code> runs it too. <code>cargo run -p tui</code> runs it natively.</p>
+<p>Change a title&rsquo;s text in <code>ui.rs</code> and save. The new title shows within a second or two, with no key pressed. The to-dos you added and the selected row stay as they were.</p>
+
+<h3 id="ratatui-reload">What reloads</h3>
+<p>A save of a marked file reaches the program at its next call into that file.</p>
+<ul>
+  <li>An edit to a function body or to a private item swaps in place. The app&rsquo;s state lives in native memory, so it carries on.</li>
+  <li>An edit that changes what native code sees needs a new native build. That covers a signature, a struct&rsquo;s fields and a public constant. rawr restarts the program and prints one line on the restored screen:</li>
+</ul>
+<div class="block"><pre><code>rawr: `app::App` changed its fields; restarting the program</code></pre></div>
+<ul>
+  <li>An edit to a native file restarts the program too.</li>
+  <li>A save that doesn&rsquo;t compile leaves the program running with its last good code.</li>
+</ul>
+<p id="wake">A loop that waits in <code>event::read()</code> draws only when an event comes. A save is no event, so the new code would wait for a key.</p>
+<p>After a save swaps in, rawr sends <code>SIGWINCH</code> to the program, as a resized terminal does. crossterm turns it into <code>Event::Resize</code>, and the loop draws again with the new code. Your loop needs nothing for this. Any event that ends <code>event::read()</code> draws the next frame.</p>
+<p><code>SIGWINCH</code> is ignored by default, so a program that doesn&rsquo;t listen for it doesn&rsquo;t notice. rawr sends it only to a program whose stdin is a terminal.</p>
+<p>A loop that ticks with <code>event::poll</code> draws on its next tick anyway.</p>
+<p id="terminal">rawr leaves the terminal as it found it, however the program ends.</p>
+<ul>
+  <li>Before the program starts, rawr saves the terminal&rsquo;s settings.</li>
+  <li>A restart ends the program with <code>SIGKILL</code>, so its <code>ratatui::restore()</code> never runs.</li>
+  <li>After the program ends for any reason, rawr puts the settings back when they changed. It then leaves the alternate screen and shows the cursor. It turns off mouse reports, bracketed paste, focus reports and the kitty keyboard flags.</li>
+  <li>On a panic, ratatui&rsquo;s own panic hook restores the terminal first.</li>
+</ul>
+<p>While the program holds the terminal raw, rawr writes nothing to it. Its own lines wait until the terminal is restored. That covers the restart line, a failing save&rsquo;s error and the build&rsquo;s progress line.</p>
+<p>At a terminal, the program writes to the terminal itself, as under <code>cargo run</code>. So crossterm, termion and colour detection see a terminal.</p>
+<p>A program that never touches the terminal costs nothing here. Its settings don&rsquo;t change, so rawr restores nothing.</p>
+<p><code>cargo build --release</code> compiles the marked module natively, like any other module. The binary has no rawr in it and behaves the same.</p>
+
+<h3 id="ratatui-limits">Limits</h3>
+<ul>
+  <li><code>Layout::areas</code>, which gives an array whose length is a const generic, isn&rsquo;t reached yet. <code>Layout::split</code> is.</li>
+  <li><code>Line::from</code> and other <code>From</code> conversions of ratatui&rsquo;s types aren&rsquo;t called directly yet. A widget that takes <code>impl Into&lt;Text&gt;</code> takes a <code>String</code>.</li>
+  <li>A marked struct can&rsquo;t hold a native value such as a <code>ListState</code> that native code keeps between calls yet.</li>
+  <li>A marked <code>impl Widget</code> doesn&rsquo;t reach native code yet.</li>
+  <li>A failing save&rsquo;s error shows when the program ends or restarts, not while it holds the screen.</li>
+  <li>rawr resets the terminal only when the program changed its settings. A program that enters the alternate screen without raw mode isn&rsquo;t reset.</li>
+  <li>The marked module may also be the crate root with a marked <code>main</code>. A loop that <code>main</code> drives itself never calls back into marked code, so each save restarts the program, and its state starts over. <a href="/docs/run#swap">A running marked main</a> says when a save swaps instead.</li>
+  <li>rawr-import runs on Unix systems.</li>
+</ul>
+
+<h2 id="others">Other libraries and loops</h2>
+<p>A library not on this page runs the same way, through the same generated bindings.</p>
+
+<h3 id="loop">A plain loop</h3>
 <p>A program needs no library to reload. The <code>examples/islands</code> crate is a native <code>main</code> with a loop that calls one marked module each tick:</p>
 <div class="block">
   <div class="file"><b>src/main.rs</b><span>shortened</span></div>
@@ -94,15 +292,19 @@ fn main() {
 <p>The real <code>main</code> stops after 20 seconds. Its marked <code>physics.rs</code> moves the ball and draws its line. A save takes effect at the next tick, and the ball carries on from where it was.</p>
 <div class="block"><pre><code>rawr run -p islands</code></pre></div>
 
-<h2 id="winit">winit</h2>
+<h3 id="winit">winit</h3>
 <p>The <code>examples/invaders</code> crate is a space-invaders game on winit and softbuffer. Its native <code>main.rs</code> owns the window, the keys and a pixel framebuffer. Four marked modules hold the game&rsquo;s rules, the invaders&rsquo; march, the hits and what each frame draws.</p>
 <div class="block"><pre><code>rawr run -p invaders</code></pre></div>
 <p>A save that changes a colour, a speed or a sprite&rsquo;s shape shows at the next frame. The game keeps its score and its invaders. A winit event loop must own the main thread, and under <code>rawr run</code> it does, as under <code>cargo run</code>.</p>
 
-<h2 id="async">Async runtimes</h2>
+<h3 id="freya">Freya</h3>
+<p>Freya, for example, starts its own winit loop from a marked <code>main</code>. It calls a component again only when the component&rsquo;s state changes, so an edit shows at the next click or key.</p>
+<p>A library that reaches a part of Rust rawr doesn&rsquo;t support yet stops with an error at that part. <a href="/docs/imports">Imports</a> lists the known gaps, and <a href="https://github.com/airstrike/rawr/issues">an issue</a> with a small reproduction helps close one.</p>
+
+<h3 id="async">Async runtimes</h3>
 <p>A marked crate root may have an <code>async fn main</code> under its runtime&rsquo;s attribute, such as <code>#[tokio::main]</code>. The runtime is the one in your <code>Cargo.toml</code>, built by Cargo. rawr adds none. <a href="/docs/run#async">An async main</a> says what works.</p>
 
-<h2 id="outcomes">An app that shows its reloads</h2>
+<h2 id="outcomes">Reload events</h2>
 <p>An app with an editor of its own can show what each save did. <code>rawr run</code> tells the running program through one environment variable.</p>
 <p><code>RAWR_RELOAD_EVENTS</code> names a Unix socket. It is set only under <code>rawr run</code>, and under <code>rawr start</code> from <a href="/docs/agents">rawr mcp</a>. Under <code>cargo run</code> it is absent. Its presence is the sign that the program runs under rawr.</p>
 <p>Each connection to the socket gets one JSON object per line, in order, from the moment it connects. The program may connect late, or never. rawr doesn&rsquo;t wait for it.</p>
@@ -131,8 +333,4 @@ fn main() {
 }</code></pre>
 </div>
 <p><code>outcomes()</code> is <code>None</code> outside <code>rawr run</code>. Each <code>next</code> blocks until rawr says what a save did, so read it on a thread of its own. <code>Outcome</code> has five variants: <code>Restarted { reason }</code>, <code>Queued</code>, <code>Swapped</code>, <code>Failed { message, at }</code> and <code>Restarting { reason }</code>. <code>at</code> is an <code>Option&lt;Span&gt;</code> with <code>file</code>, <code>line</code> and <code>column</code>. <code>running()</code> says whether the variable is set.</p>
-
-<h2 id="others">Other libraries</h2>
-<p>A library not on this page runs the same way, through the same generated bindings. Freya, for example, starts its own winit loop from a marked <code>main</code>. It calls a component again only when the component&rsquo;s state changes, so an edit shows at the next click or key.</p>
-<p>A library that reaches a part of Rust rawr doesn&rsquo;t support yet stops with an error at that part. <a href="/docs/imports">Imports</a> lists the known gaps, and <a href="https://github.com/airstrike/rawr/issues">an issue</a> with a small reproduction helps close one.</p>
 </article>

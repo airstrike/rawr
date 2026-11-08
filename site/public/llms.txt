@@ -2,6 +2,13 @@
 
 > rawr is a Rust interpreter for dev builds. Put `// rawr` on the first line of a file in a Cargo crate; `rawr run` checks the marked files (names, types, traits, borrows, match exhaustiveness, with rustc's error codes) and interprets them, while Cargo compiles everything else (dependencies, unmarked "native" modules). A save reloads the running program, in place when it can. `cargo build --release` compiles the same files natively; the marker is a comment, so no interpreter ships. rawr is pre-alpha and supports part of Rust; `rawr check` also runs `cargo check`, so rustc has the final word. Separately, the `rawr` crate can be embedded in an app to run user Rust scripts. Docs: https://rawr.airstrike.fyi/docs
 
+## Docs map
+
+- Get started: https://rawr.airstrike.fyi/docs/start
+- Guides: https://rawr.airstrike.fyi/docs/run, https://rawr.airstrike.fyi/docs/imports, https://rawr.airstrike.fyi/docs/apps (Apps and libraries: hot reload in an app on any library, iced and ratatui as worked examples), https://rawr.airstrike.fyi/docs/embedding, https://rawr.airstrike.fyi/docs/agents, https://rawr.airstrike.fyi/docs/how-it-works, https://rawr.airstrike.fyi/docs/troubleshooting
+- Reference: https://rawr.airstrike.fyi/docs/reference/overview (with /items, /types, /generics, /patterns, /moves, /closures, /macros, /std), https://rawr.airstrike.fyi/docs/reference/commands, https://rawr.airstrike.fyi/docs/reference/requirements, https://rawr.airstrike.fyi/docs/reference/play (the Play sandbox)
+- Tools: https://rawr.airstrike.fyi/docs/play (Playground), https://rawr.airstrike.fyi/docs/play/discord (?play in Discord), https://rawr.airstrike.fyi/docs/previews (Editor previews)
+
 ## What rawr is and isn't
 
 - Is: a tree-walking interpreter over a fully checked program; calls into native code (crates, native modules, std collections) run at native speed. Keep hot loops native.
@@ -27,7 +34,7 @@
 - A single `.rs` file passed to `rawr run` runs with or without the marker; it may hold top-level statements (run first, then `fn main`). Cargo won't build top-level statements.
 - Path dependencies are always native, even if marked. Only the crate you run is interpreted.
 - Inner attributes go after the marker. Lint attrs and build/doc attrs (`windows_subsystem`, `crate_name`, `recursion_limit`, `doc`...) are accepted and ignored. `#![cfg_attr(p, ..)]` applies when `p` holds: `debug_assertions` true, `feature = ".."` when Cargo's unit graph enables it for the package, `test` only under `rawr test`. The same holds for `cfg!`, `#[cfg]` on items and statements, and outer `#[cfg_attr]`. `no_std`, `no_implicit_prelude`, `no_main`, `feature` are errors.
-- Full: https://rawr.airstrike.fyi/docs/run#the-rawr-marker
+- Full: https://rawr.airstrike.fyi/docs/run#marker
 
 ## Commands
 
@@ -63,7 +70,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - `target/<host>/debug/`: compiled crates, shared with `cargo build`.
 - `target/rawr/`: cache + generated runner + rawr's copy of the crate (`target/rawr/crate`); workspace members under `target/rawr/members/<path>/`. `cargo clean` removes it. Your crate never depends on rawr.
 - `$RAWR_HOME`: shared runtime per rawr version + toolchain, shared bindings per crate, per-nightly drivers and check build, script manifests/lockfiles. Nothing is written beside a script.
-- Full: https://rawr.airstrike.fyi/docs/reference/commands#files-rawr-writes
+- Full: https://rawr.airstrike.fyi/docs/reference/commands#files
 
 ## Who runs a program
 
@@ -72,7 +79,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - rawr-import builds a runner with your own cargo, toolchain (Rust 1.95+, else `RAWR-ENVIRONMENT-PROJECT-BUILD`), config and profiles in your `target/`. A crate needs only the marker; no extra files.
 - First run with deps takes minutes (deps + runner + once-per-toolchain runtime, ~2 min). Later runs reuse builds; a marked-file edit needs no native build.
 - Nightly: the project's (as rustup picks it), else pinned `nightly-2026-07-11`; a stable/beta project also reads with the pinned one. Allowed range `nightly-2026-07-11`..`nightly-2026-11-02`; outside it the run stops naming the range. A non-pinned nightly builds its own `rawr-import-driver` once ("Building rawr-import-driver for <nightly>").
-- Full: https://rawr.airstrike.fyi/docs/imports#project-setup
+- Full: https://rawr.airstrike.fyi/docs/imports#project
 
 ## Native modules and a native main
 
@@ -82,7 +89,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - A fn whose values can't cross panics when called, naming it. A pub fn returning `impl Trait` stops `rawr run`.
 - Native main runs on the process main thread (winit works); the interpreter has its own thread.
 - Limits: a native module other than the root can't declare a marked module; marked code can't call items written in the native root.
-- Full: https://rawr.airstrike.fyi/docs/run#a-native-main
+- Full: https://rawr.airstrike.fyi/docs/run#native-main
 
 ## Hot reload: what swaps, what restarts
 
@@ -93,7 +100,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - Any other program: restarts on save with the same args ("rawr: the source changed; restarting the program"); stdin continues where the old one stopped.
 - A save that fails the check prints its error; the last good code keeps running.
 - ratatui loops blocked in `event::read()`: rawr sends SIGWINCH after a swap (only if stdin is a terminal) so the loop redraws. rawr saves/restores terminal settings, leaves alt screen, shows cursor, even after SIGKILL restarts; its own lines wait while the terminal is raw.
-- Full: https://rawr.airstrike.fyi/docs/run#reload, https://rawr.airstrike.fyi/docs/apps (any library: iced, ratatui, winit, a plain loop), https://rawr.airstrike.fyi/docs/iced/reload, https://rawr.airstrike.fyi/docs/ratatui
+- Full: https://rawr.airstrike.fyi/docs/run#reload, https://rawr.airstrike.fyi/docs/apps#reload (any library: iced, ratatui, winit, a plain loop)
 
 ## Scripts (cargo -Zscript)
 
@@ -108,7 +115,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - Works: async fn/blocks, `.await`, `tokio::spawn`, `spawn_blocking`, `sleep`, `join!`, channels; futures passed to `impl Future` params (e.g. iced `Task::future`).
 - Not yet: `try_join!`, `select!` (an `if` guard in `select!` is refused); imported values inside `spawn_blocking` closures; on multi-thread tokio a spawned future's steps see main's task id/locals.
 - async main without a runtime attribute: E0752. A lone file with no deps may write async code but `#[tokio::main]`/`tokio::join!` is E0433.
-- Full: https://rawr.airstrike.fyi/docs/run#an-async-main
+- Full: https://rawr.airstrike.fyi/docs/run#async
 
 ## Crates and imports
 
@@ -128,7 +135,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - `rawr check` accepts some calls rustc rejects (e.g. methods of an impl that fixes type args); cargo check reports them.
 - Full: https://rawr.airstrike.fyi/docs/imports
 
-## iced
+## Apps and libraries: iced
 
 - iced is an ordinary dependency handled by rawr-import with generated bindings; nothing in rawr is hand-written for iced. Docs use iced master `rev = "be88873d38544455e26c7a104eb757da2cbbac6b"`:
   `rawr new counter && cd counter && cargo add iced --git https://github.com/iced-rs/iced --rev be88873d38544455e26c7a104eb757da2cbbac6b`
@@ -136,9 +143,10 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - Known to run unchanged but for `// rawr`: counter, checkbox, slider, tooltip, pick_list, url_handler. Other examples run as bindings reach their items; a gap errors at the item.
 - Not available: a `#[widget]` written in a marked file; your impl of a crate trait at a type holding an opaque `impl Trait`; rendering previews.
 - `rawr check` checks an app without a window.
-- Full: https://rawr.airstrike.fyi/docs/iced, https://rawr.airstrike.fyi/docs/reference/iced
+- ratatui: `main` stays native and owns the terminal; marked modules hold the state and draw on the lent `&mut Frame`. See Hot reload above for SIGWINCH and the terminal restore.
+- Full: https://rawr.airstrike.fyi/docs/apps#iced, https://rawr.airstrike.fyi/docs/apps#ratatui
 
-## Previews (`#[preview]`) and the VS Code extension
+## Editor previews (`#[preview]`) and the VS Code extension
 
 - Declare: add `rawr-macros = { git = "https://github.com/airstrike/rawr" }` (library name `rawr`, not on crates.io), then put `#[rawr::preview(name = "empty", size = (320, 200))]` on a view fn, or `use rawr::preview;` and `#[preview]` / `#[preview(..)]`. Arguments `seed = f`, `update = f`, `theme = f`, `themes = [a, b]` name functions.
 - Under Cargo the attribute leaves the item as written, adds `#[allow(dead_code)]`, and references the named functions so cargo doesn't warn.
@@ -146,7 +154,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - Show: nothing renders previews today. `rawr preview`/`rawr snapshot` were removed with rawr-iced; `rawr preview` on the plain runner is open work.
 - VS Code extension (`editors/vscode-rawr`, local install by symlinking into `~/.vscode/extensions/rawr-0.0.2`): only sets the `rawr.marked` context key while the active editor is a `.rs` file whose first line is `// rawr`. The planned preview pane (dropdown of `#[preview]` items, rendered beside the code, following reloads) is not built.
 - `#[rawr::widget]` also exists in rawr-macros; under Cargo it is a no-op.
-- Full: https://rawr.airstrike.fyi/docs/iced/previews
+- Full: https://rawr.airstrike.fyi/docs/previews
 
 ## MCP server for agents (`rawr mcp`)
 
