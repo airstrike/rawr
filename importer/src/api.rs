@@ -20,8 +20,6 @@ pub(crate) mod cached;
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod memo;
 #[cfg(feature = "rustc-driver")]
-pub(crate) mod parts;
-#[cfg(feature = "rustc-driver")]
 pub(crate) mod retained;
 #[cfg(feature = "rustc-driver")]
 pub use retained::keep_graphs;

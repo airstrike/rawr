@@ -122,6 +122,7 @@ impl node::Value for Product {
         let contract = super::contract_versions();
         node::reader_schema(4, &[contract[0], contract[1], super::COMPILER_ABI])
     };
+    const PARTS: bool = true;
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         if self.canonical.is_empty() {
@@ -130,13 +131,22 @@ impl node::Value for Product {
         Ok(self.canonical.clone())
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
-        if bytes.is_empty() {
+    fn into_encoded(self) -> Result<Box<[u8]>, node::Error> {
+        if self.canonical.is_empty() {
             return Err(node::Error::Codec("cached generic contract is empty"));
         }
-        Ok(Self {
-            canonical: bytes.to_vec().into_boxed_slice(),
-        })
+        Ok(self.canonical)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
+        Self::decode_owned(bytes.into())
+    }
+
+    fn decode_owned(canonical: Box<[u8]>) -> Result<Self, node::Error> {
+        if canonical.is_empty() {
+            return Err(node::Error::Codec("cached generic contract is empty"));
+        }
+        Ok(Self { canonical })
     }
 }
 

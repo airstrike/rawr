@@ -1,6 +1,6 @@
 //! Capability-free stored API graph replay.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::cargo::resolution::BuildProduct;
 use crate::node::{self, Parent};
@@ -12,17 +12,17 @@ use super::{
 
 /// One canonical captured API graph without a current input-proof capability.
 ///
-/// The store keeps the manifest of its content-defined parts; the graph
+/// The store keeps it as content-defined parts (`store::parts`); the graph
 /// bytes are read back from the parts only when a consumer replays them.
 pub(crate) struct Product {
     form: Form,
 }
 
 enum Form {
-    /// Captured by this run, with the directory its parts are kept in.
-    Captured { stored: StoredGraph, parts: PathBuf },
-    /// Read from the store: the manifest of the parts.
-    Manifest(Box<[u8]>),
+    /// Captured by this run, or decoded from its bytes.
+    Captured { stored: StoredGraph },
+    /// Read from the store: the manifest of the parts and where they are kept.
+    Manifest { manifest: Box<[u8]>, parts: PathBuf },
     /// The parts a manifest names, read back for replay.
     Resolved {
         stored: StoredGraph,
@@ -61,9 +61,9 @@ pub(crate) fn evaluate_owner(
     let product = node::Evaluator::new(&context.open_store()?, sink).staged_direct(
         &recipe,
         retention,
-        || capture(context, &mut materialize, &mut current),
+        || capture(&mut materialize, &mut current),
     )?;
-    let graph = current_graph(context, &mut materialize, current, product.value())?;
+    let graph = current_graph(&mut materialize, current, product.value())?;
     Ok((product, graph))
 }
 
@@ -149,16 +149,15 @@ pub(crate) fn retain_under<O>(
                     return finish(Owned::Staged(staged), batch.retention().try_clone()?, graph);
                 }
                 (Outcome::Miss(miss), None) => {
-                    let staged = recipe.resume(batch, miss, || {
-                        capture(context, &mut materialize, &mut current)
-                    })?;
+                    let staged =
+                        recipe.resume(batch, miss, || capture(&mut materialize, &mut current))?;
                     if let Some(key) = memo {
                         super::memo::remember(context, &key, staged.content().digest());
                     }
                     Owned::Staged(staged)
                 }
             };
-            let graph = current_graph(context, &mut materialize, current, product.value())?;
+            let graph = current_graph(&mut materialize, current, product.value())?;
             let graph = super::retained::Lazy::Ready(graph);
             finish(product, batch.retention().try_clone()?, graph)
         }),
@@ -177,15 +176,14 @@ fn evaluate_with_parents(
     let mut materialize = Some(materialize);
     let mut current = None;
     let product = node::Evaluator::new(&context.open_store()?, sink)
-        .direct(&recipe, || capture(context, &mut materialize, &mut current))?;
-    let graph = current_graph(context, &mut materialize, current, product.value())?;
+        .direct(&recipe, || capture(&mut materialize, &mut current))?;
+    let graph = current_graph(&mut materialize, current, product.value())?;
     Ok((product, graph))
 }
 
 // Consume the already authenticated capture once, on either path. A miss keeps
 // its exact graph while moving only the semantic storage into the node value.
 fn capture<F>(
-    context: &Context,
     materialize: &mut Option<F>,
     current: &mut Option<Graph<Captured>>,
 ) -> Result<Product, node::Error>
@@ -199,15 +197,11 @@ where
     let stored = graph.take_stored()?;
     *current = Some(graph);
     Ok(Product {
-        form: Form::Captured {
-            stored,
-            parts: super::parts::directory(context),
-        },
+        form: Form::Captured { stored },
     })
 }
 
 fn current_graph<F>(
-    context: &Context,
     materialize: &mut Option<F>,
     current: Option<Graph<Captured>>,
     product: &Product,
@@ -218,7 +212,7 @@ where
     match current {
         Some(graph) => Ok(graph),
         None => {
-            let resolved = product.resolve(context)?;
+            let resolved = product.resolve()?;
             Ok(materialize.take().ok_or(node::Error::Codec(
                 "API capture was already consumed",
             ))?(Some(resolved.as_ref().unwrap_or(product)))?)
@@ -246,26 +240,21 @@ fn recipe(
 
 impl Product {
     #[cfg(test)]
-    pub(crate) fn capture(graph: Graph<Captured>, parts: PathBuf) -> crate::Result<Self> {
+    pub(crate) fn capture(graph: Graph<Captured>) -> crate::Result<Self> {
         Ok(Self {
             form: Form::Captured {
                 stored: graph.into_stored()?,
-                parts,
             },
         })
     }
 
     /// A product read from the store, with its graph bytes read back from its
     /// parts; `None` when this product already holds them.
-    pub(crate) fn resolve(&self, context: &Context) -> Result<Option<Self>, node::Error> {
-        self.resolve_in(&super::parts::directory(context))
-    }
-
-    fn resolve_in(&self, parts: &std::path::Path) -> Result<Option<Self>, node::Error> {
-        let Form::Manifest(manifest) = &self.form else {
+    pub(crate) fn resolve(&self) -> Result<Option<Self>, node::Error> {
+        let Form::Manifest { manifest, parts } = &self.form else {
             return Ok(None);
         };
-        let bytes = super::parts::read(parts, manifest)?;
+        let bytes = crate::store::parts::read(parts, manifest)?;
         Ok(Some(Self {
             form: Form::Resolved {
                 stored: graph_bytes(bytes)?,
@@ -277,15 +266,15 @@ impl Product {
     #[cfg(test)]
     fn stored_mut(&mut self) -> &mut StoredGraph {
         match &mut self.form {
-            Form::Captured { stored, .. } | Form::Resolved { stored, .. } => stored,
-            Form::Manifest(_) => panic!("the fixture product holds its graph"),
+            Form::Captured { stored } | Form::Resolved { stored, .. } => stored,
+            Form::Manifest { .. } => panic!("the fixture product holds its graph"),
         }
     }
 
     fn stored(&self) -> Result<&StoredGraph, node::Error> {
         match &self.form {
-            Form::Captured { stored, .. } | Form::Resolved { stored, .. } => Ok(stored),
-            Form::Manifest(_) => Err(node::Error::Codec("API parts were not read back")),
+            Form::Captured { stored } | Form::Resolved { stored, .. } => Ok(stored),
+            Form::Manifest { .. } => Err(node::Error::Codec("API parts were not read back")),
         }
     }
 
@@ -307,13 +296,55 @@ impl Product {
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Api;
     const SCHEMA: u32 = super::SCHEMA;
+    const PARTS: bool = true;
 
-    /// The manifest of the graph's parts; a captured graph keeps any part not
-    /// already kept.
+    /// The graph's bytes: the header, the semantic canonical, the selected
+    /// ledger.
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         match &self.form {
-            Form::Captured { stored, parts } => super::parts::write(parts, &graph_payload(stored)?),
-            Form::Manifest(manifest) | Form::Resolved { manifest, .. } => Ok(manifest.clone()),
+            Form::Captured { stored } | Form::Resolved { stored, .. } => {
+                Ok(graph_payload(stored)?.into_owned().into_boxed_slice())
+            }
+            Form::Manifest { .. } => Err(node::Error::Codec("API parts were not read back")),
+        }
+    }
+
+    /// A captured graph laid out contiguously hands its buffer over.
+    fn into_encoded(self) -> Result<Box<[u8]>, node::Error> {
+        let Form::Captured { stored } = self.form else {
+            return self.encode();
+        };
+        if !matches!(graph_payload(&stored)?, std::borrow::Cow::Borrowed(_)) {
+            return Ok(graph_payload(&stored)?.into_owned().into_boxed_slice());
+        }
+        let StoredGraph {
+            canonical,
+            selected,
+            ..
+        } = stored;
+        drop(canonical);
+        match std::sync::Arc::try_unwrap(selected.buffer) {
+            Ok(buffer) => Ok(buffer),
+            Err(buffer) => Ok((**buffer).into()),
+        }
+    }
+
+    /// A value read from the store is published again as its manifest.
+    fn into_payload(self) -> Result<crate::store::Payload, node::Error> {
+        match self.form {
+            Form::Manifest { manifest, .. } | Form::Resolved { manifest, .. } => {
+                Ok(crate::store::Payload::Manifest(manifest))
+            }
+            Form::Captured { .. } => self.into_encoded().map(crate::store::Payload::Parts),
+        }
+    }
+
+    fn payload(&self) -> Result<crate::store::Payload, node::Error> {
+        match &self.form {
+            Form::Manifest { manifest, .. } | Form::Resolved { manifest, .. } => {
+                Ok(crate::store::Payload::Manifest(manifest.clone()))
+            }
+            Form::Captured { .. } => self.encode().map(crate::store::Payload::Parts),
         }
     }
 
@@ -321,11 +352,22 @@ impl node::Value for Product {
         Self::decode_owned(bytes.into())
     }
 
-    /// The manifest is checked here; its parts are read on replay.
     fn decode_owned(bytes: Box<[u8]>) -> Result<Self, node::Error> {
-        super::parts::check(&bytes)?;
         Ok(Self {
-            form: Form::Manifest(bytes),
+            form: Form::Captured {
+                stored: graph_bytes(bytes)?,
+            },
+        })
+    }
+
+    /// The manifest is checked here; its parts are read on replay.
+    fn decode_parts(manifest: Box<[u8]>, parts: &Path) -> Result<Self, node::Error> {
+        crate::store::parts::check(&manifest)?;
+        Ok(Self {
+            form: Form::Manifest {
+                manifest,
+                parts: parts.to_path_buf(),
+            },
         })
     }
 }
@@ -442,7 +484,7 @@ mod tests {
     }
 
     fn capture(graph: Graph<crate::api::Captured>) -> Product {
-        Product::capture(graph, parts()).expect("the fixture product captures")
+        Product::capture(graph).expect("the fixture product captures")
     }
 
     fn product() -> Product {
@@ -451,11 +493,13 @@ mod tests {
         capture(graph)
     }
 
-    /// Decode a stored manifest and read its parts back.
+    /// Keep `bytes` as the store does, decode its manifest and read its
+    /// parts back.
     fn read(bytes: &[u8]) -> Product {
-        Product::decode(bytes)
+        let manifest = crate::store::parts::write(&parts(), bytes).expect("the parts are kept");
+        Product::decode_parts(manifest, &parts())
             .expect("the manifest decodes")
-            .resolve_in(&parts())
+            .resolve()
             .expect("the parts read back")
             .expect("a decoded product reads its parts")
     }
@@ -470,15 +514,24 @@ mod tests {
     }
 
     #[test]
-    fn captured_storage_is_published_as_the_manifest_of_its_parts() {
+    fn captured_storage_is_published_as_parts_and_read_back_as_their_manifest() {
         let product = product();
         let expected = product.encode().expect("the product encodes");
-        assert!(super::super::parts::check(&expected).is_ok());
+        let crate::store::Payload::Parts(payload) = product.payload().expect("it has a payload")
+        else {
+            panic!("a captured API is kept as parts");
+        };
+        assert_eq!(payload, expected);
         let encoded = product.into_encoded().expect("the product hands over");
         assert_eq!(encoded, expected);
-        let decoded = Product::decode(&encoded).expect("the manifest decodes");
-        assert!(matches!(decoded.form, Form::Manifest(_)));
-        assert_eq!(decoded.encode().expect("a manifest re-encodes"), expected);
+        let manifest = crate::store::parts::write(&parts(), &encoded).expect("the parts are kept");
+        let decoded = Product::decode_parts(manifest.clone(), &parts()).expect("it decodes");
+        assert!(matches!(decoded.form, Form::Manifest { .. }));
+        let crate::store::Payload::Manifest(again) = decoded.into_payload().expect("a payload")
+        else {
+            panic!("a stored API is published again as its manifest");
+        };
+        assert_eq!(again, manifest);
     }
 
     #[test]
@@ -533,16 +586,15 @@ mod tests {
             form: Form::Captured {
                 stored: super::graph_bytes(canonical.into())
                     .expect("the frame remains structurally complete"),
-                parts: parts(),
             },
         };
         assert!(replay(&decoded, &limits).is_err());
 
-        let manifest = product.encode().expect("the product encodes");
-        let mut tampered = manifest.to_vec();
+        let encoded = product.encode().expect("the product encodes");
+        let mut tampered = encoded.to_vec();
         tampered[0] ^= 1;
         assert!(Product::decode(&tampered).is_err());
-        let mut trailing = manifest.to_vec();
+        let mut trailing = encoded.to_vec();
         trailing.push(0);
         assert!(Product::decode(&trailing).is_err());
     }
@@ -616,7 +668,6 @@ mod tests {
         let current = Product {
             form: Form::Captured {
                 stored: current.take_stored().expect("current captures"),
-                parts: parts(),
             },
         };
         assert_eq!(
@@ -685,10 +736,7 @@ mod tests {
             panic!("the fixture product is captured")
         };
         let mut malformed = Product {
-            form: Form::Captured {
-                stored,
-                parts: parts(),
-            },
+            form: Form::Captured { stored },
         };
         // A syntactically valid but ill-typed ledger reaches serde only after
         // the independent debit, irrespective of its zero ownership header.

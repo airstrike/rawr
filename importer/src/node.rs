@@ -20,8 +20,8 @@ pub use content::{Chain, ContentRef, Parent, Receipt, Validated};
 pub use key::{ActionKey, Digest, ExecutionKey, LookupKey};
 pub use read_set::{Fragment, ReadSetProof};
 
-pub(crate) const STORAGE_SCHEMA: u16 = 3;
-pub(crate) const STORAGE_DIRECTORY: &str = "0003";
+pub(crate) const STORAGE_SCHEMA: u16 = 4;
+pub(crate) const STORAGE_DIRECTORY: &str = "0004";
 
 /// An executed value's schema with the versions its execution key carries
 /// folded in. A store entry whose schema differs from the current one was
@@ -141,6 +141,41 @@ pub trait Value: Sized {
     /// Decode owned store bytes; a value that can keep them avoids a copy.
     fn decode_owned(bytes: Box<[u8]>) -> Result<Self, Error> {
         Self::decode(&bytes)
+    }
+    /// Whether the store keeps this value's encoding as content-defined parts
+    /// (`store::parts`), so a value that differs from an earlier one in a few
+    /// regions costs only the parts it changed.
+    const PARTS: bool = false;
+    /// This value as the store keeps it, consuming it.
+    fn into_payload(self) -> Result<crate::store::Payload, Error> {
+        let bytes = self.into_encoded()?;
+        Ok(if Self::PARTS {
+            crate::store::Payload::Parts(bytes)
+        } else {
+            crate::store::Payload::Whole(bytes)
+        })
+    }
+    /// This value as the store keeps it.
+    fn payload(&self) -> Result<crate::store::Payload, Error> {
+        let bytes = self.encode()?;
+        Ok(if Self::PARTS {
+            crate::store::Payload::Parts(bytes)
+        } else {
+            crate::store::Payload::Whole(bytes)
+        })
+    }
+    /// Decode the stored manifest of a parted value whose parts are kept in
+    /// `parts`. The default reads them back; a part that is missing or
+    /// altered makes the entry one to rebuild, as Cargo rebuilds what was
+    /// deleted from its target.
+    fn decode_parts(manifest: Box<[u8]>, parts: &std::path::Path) -> Result<Self, Error> {
+        let bytes = crate::store::parts::read(parts, &manifest).map_err(|error| match error {
+            Error::Io { .. } | Error::Corrupt { .. } => {
+                Error::CleanupRequired("a stored value's part is missing or changed")
+            }
+            error => error,
+        })?;
+        Self::decode_owned(bytes)
     }
 }
 
@@ -502,11 +537,11 @@ impl<'store> Evaluator<'store> {
                 || {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
-                    let bytes = execute().map_err(Error::fresh)?.into_encoded()?;
+                    let payload = execute().map_err(Error::fresh)?.into_payload()?;
                     Ok(crate::store::Reserved::Publish {
                         result: (),
                         recipe: recipe.clone(),
-                        bytes,
+                        payload,
                         bundle: None,
                     })
                 },
@@ -611,11 +646,11 @@ impl<'store> Evaluator<'store> {
                     let transform = execute.take().ok_or(Error::State(
                         "direct node executor was consumed before the final miss",
                     ))?;
-                    let bytes = transform().map_err(Error::fresh)?.into_encoded()?;
+                    let payload = transform().map_err(Error::fresh)?.into_payload()?;
                     Ok(crate::store::Reserved::Publish {
                         result: (),
                         recipe: recipe.clone(),
-                        bytes,
+                        payload,
                         bundle: None,
                     })
                 })?;
@@ -713,7 +748,7 @@ impl<'store> Evaluator<'store> {
                             let discovered_inputs =
                                 validate(&value, budget, read_set::Scope::Consumer)?;
                             let complete = recipe.complete(&discovered_inputs)?;
-                            let bytes = value.encode()?;
+                            let payload = value.payload()?;
                             // An older entry at this action that no longer
                             // checks is replaced when this one publishes (#614).
                             match self.replay_discovered_scoped_exact(
@@ -734,7 +769,7 @@ impl<'store> Evaluator<'store> {
                             Ok(crate::store::Reserved::Publish {
                                 result: (complete.action(), true),
                                 recipe: complete,
-                                bytes,
+                                payload,
                                 bundle: None,
                             })
                         },
@@ -875,7 +910,7 @@ impl<'store> Evaluator<'store> {
                         let (value, bundle, discovered_inputs) =
                             transform(attempt).map_err(Error::fresh)?.into_parts();
                         let complete = recipe.complete(&discovered_inputs)?;
-                        let bytes = value.encode()?;
+                        let payload = value.payload()?;
                         if self
                             .replay_discovered_scoped_exact(recipe, &validate, complete.action())?
                             .is_some()
@@ -885,7 +920,7 @@ impl<'store> Evaluator<'store> {
                         Ok(crate::store::Reserved::Publish {
                             result: (complete.action(), true),
                             recipe: complete,
-                            bytes,
+                            payload,
                             bundle: Some(bundle),
                         })
                     };

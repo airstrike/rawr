@@ -160,13 +160,22 @@ impl node::Value for Product {
         let contract = crate::classify::contract_versions();
         node::reader_schema(1, &[super::SCHEMA, contract[0], contract[1]])
     };
+    const PARTS: bool = true;
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.bytes.clone())
     }
 
+    fn into_encoded(self) -> Result<Box<[u8]>, node::Error> {
+        Ok(self.bytes)
+    }
+
     fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         Self::capture(bytes.to_vec().into_boxed_slice())
+    }
+
+    fn decode_owned(bytes: Box<[u8]>) -> Result<Self, node::Error> {
+        Self::capture(bytes)
     }
 }
 

@@ -1815,7 +1815,9 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
                         Ok(crate::store::Reserved::Publish {
                             result: (),
                             recipe: recipe.clone(),
-                            bytes: b"bounded".to_vec().into_boxed_slice(),
+                            payload: crate::store::Payload::Whole(
+                                b"bounded".to_vec().into_boxed_slice(),
+                            ),
                             bundle: None,
                         })
                     })?;

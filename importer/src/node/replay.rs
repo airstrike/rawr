@@ -190,6 +190,8 @@ pub(crate) struct Stored<K> {
     envelope: Envelope,
     bytes: Box<[u8]>,
     bundled: bool,
+    /// Where a parted value's parts are kept; its bytes are their manifest.
+    parts: Option<std::path::PathBuf>,
     _kind: PhantomData<fn() -> K>,
 }
 
@@ -204,11 +206,17 @@ pub(crate) struct Replayed<K> {
 impl<K: Value> Stored<K> {
     /// Only the store reader constructs this, after authenticating the bytes'
     /// length and content digest against the envelope; nothing rehashes them.
-    pub(crate) fn new(envelope: Envelope, bytes: Box<[u8]>, bundled: bool) -> Self {
+    pub(crate) fn new(
+        envelope: Envelope,
+        bytes: Box<[u8]>,
+        bundled: bool,
+        parts: Option<std::path::PathBuf>,
+    ) -> Self {
         Self {
             envelope,
             bytes,
             bundled,
+            parts,
             _kind: PhantomData,
         }
     }
@@ -244,7 +252,10 @@ impl<K: Value> Stored<K> {
 
     /// Decode bytes whose content identity was authenticated by the store caller.
     pub(crate) fn inspect(self, graph: &super::GraphBudget) -> Result<Replayed<K>, Error> {
-        let value = Arc::new(K::decode_owned(self.bytes)?);
+        let value = Arc::new(match &self.parts {
+            Some(parts) => K::decode_parts(self.bytes, parts)?,
+            None => K::decode_owned(self.bytes)?,
+        });
         Ok(Replayed {
             envelope: self.envelope,
             value,

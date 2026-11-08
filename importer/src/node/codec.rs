@@ -60,6 +60,13 @@ impl Envelope {
         })
     }
 
+    /// Each parent's kind, output schema and action, in order.
+    pub(crate) fn parent_actions(&self) -> impl Iterator<Item = (Kind, u32, ActionKey)> + '_ {
+        self.parents
+            .iter()
+            .map(|parent| (parent.kind, parent.schema, parent.action))
+    }
+
     pub(crate) fn encode(&self) -> Result<Box<[u8]>, Error> {
         let length = encoded_length(self.parents.len())?;
         let mut bytes = Vec::new();
