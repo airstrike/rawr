@@ -969,14 +969,12 @@ impl Builder {
 
     /// Add a locally validated item declaration.
     pub fn item(&mut self, item: host::item::Definition) -> Result<&mut Self, host::Error> {
+        // An item lives in the value namespace and a type in the type
+        // namespace, so one path names both, as `lazy_static!` declares a
+        // hidden `struct NAME` beside its `static NAME: NAME`. rustc has
+        // already refused the crates where they clash (a unit or tuple
+        // struct's constructor beside a value of its name).
         let path = host::path::Path::qualify(&self.root, item.path_ref());
-        if self.type_index(&path).is_ok() {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "type",
-                incoming: "item",
-            });
-        }
         // A method whose impl fixes its receiver's type, as `and_then` of
         // `impl<T> Task<Option<T>>`, is a form the receiver picks. One that
         // the facade can't hold beside another form of the same name, as
@@ -1546,12 +1544,12 @@ impl Builder {
         path: &host::path::Path,
         incoming: &'static str,
     ) -> Result<(), host::Error> {
+        // Items are values, in a namespace of their own (see `item`), so
+        // only modules and types are taken in the type namespace.
         let existing = if self.modules.binary_search(path).is_ok() {
             Some("module")
         } else if self.type_index(path).is_ok() {
             Some("type")
-        } else if self.item_index(path).is_ok() {
-            Some("item")
         } else {
             None
         };

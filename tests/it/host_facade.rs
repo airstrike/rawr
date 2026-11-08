@@ -176,17 +176,24 @@ fn three_namespace_facade() -> facade::Definition {
 }
 
 #[test]
-fn module_type_and_type_item_collisions_remain_rejected() {
+fn a_module_and_a_type_collide_but_a_type_and_a_value_share_a_path() {
     let mut module_type = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
     module_type.module("widget").unwrap();
     assert!(matches!(module_type.type_::<Value>("widget", &[], &[]), Err(host::Error::DuplicateFacadeEntry { existing: "module", incoming: "type", .. })));
 
-    let mut type_item = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
-    type_item.type_::<Value>("button", &[], &[]).unwrap();
-    assert!(matches!(
-        type_item.item(item::Definition::value("button", type_ref::Type::builtin(type_ref::Builtin::I64),).unwrap()),
-        Err(host::Error::DuplicateFacadeEntry { existing: "type", incoming: "item", .. })
-    ));
+    // `lazy_static!` declares a hidden `struct NAME` beside `static NAME:
+    // NAME`: one path in the type namespace and the value namespace, in
+    // either order.
+    let mut type_first = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
+    type_first.type_::<Value>("SHOULD_COLORIZE", &[], &[]).unwrap();
+    type_first
+        .item(item::Definition::value("SHOULD_COLORIZE", type_ref::Type::builtin(type_ref::Builtin::I64)).unwrap())
+        .expect("a value beside a type of its name");
+    let mut value_first = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
+    value_first
+        .item(item::Definition::value("SHOULD_COLORIZE", type_ref::Type::builtin(type_ref::Builtin::I64)).unwrap())
+        .unwrap();
+    value_first.type_::<Value>("SHOULD_COLORIZE", &[], &[]).expect("a type beside a value of its name");
 }
 
 #[test]
