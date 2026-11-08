@@ -494,7 +494,7 @@ impl Parser<'_> {
     /// what it binds is left to rustc.
     pub(super) fn host_trace(
         &self,
-        compiled: &HostPattern,
+        compiled: &pattern::Host,
         written: &Ty,
         span: Span,
     ) -> PatternTrace {

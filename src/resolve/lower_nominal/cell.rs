@@ -498,7 +498,7 @@ impl Parser<'_> {
                             kind: BindingKind::Local,
                         },
                     );
-                    expression.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
+                    expression.lvalue = Some(Lvalue::Nested(Box::new(lvalue::Nested {
                         binding: place.as_str().into(),
                         base: borrow.clone(),
                         steps: vec![PlaceStep::Cell {
@@ -719,7 +719,7 @@ impl Parser<'_> {
             at,
         );
         if mutable {
-            value.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
+            value.lvalue = Some(Lvalue::Nested(Box::new(lvalue::Nested {
                 binding: name.clone(),
                 base: origin::Fragment::plain(guard),
                 steps: vec![PlaceStep::Cell {
@@ -789,4 +789,25 @@ pub(super) struct CellBorrow {
     pub(super) inner: Ty,
     /// An imported method's borrow guard, not a `RefCell`'s.
     pub(super) native: bool,
+}
+
+/// A `RefCell` of `value` (`resolve::cell_new`).
+pub(crate) fn cell_new(value: Dynamic) -> Dynamic {
+    new(value)
+}
+
+/// Whether the `RefCell` `value` is borrowed (`resolve::cell_held`).
+pub(crate) fn cell_held(value: &Dynamic) -> Option<bool> {
+    held(value)
+}
+
+/// A mutable borrow of the `RefCell` `value` when nothing borrows it
+/// (`resolve::cell_lock`).
+pub(crate) fn cell_lock(value: &Dynamic) -> Option<Dynamic> {
+    try_borrow_mut(value)
+}
+
+/// Whether `value` is a `RefCell` at runtime.
+pub(crate) fn is_cell(value: &Dynamic) -> bool {
+    value.is::<Cell>()
 }

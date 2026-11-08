@@ -319,7 +319,7 @@ impl Parser<'_> {
             .map(|name| origin::Fragment::plain(name.as_str()))
             .collect();
         parameters.push(self.temporary("resume").into());
-        self.lifted.push(LiftedClosure {
+        self.lifted.push(closure::Lifted {
             key: key.clone(),
             value: None,
             parameters,
@@ -2206,4 +2206,105 @@ impl Parser<'_> {
         });
         reversed
     }
+}
+
+impl<'a> Parser<'a> {
+    /// The item of the crate iterator `ty`: its `next`'s `Option<T>`'s `T`,
+    /// as `Product<I, J>`'s `next` gives `(I::Item, J::Item)`. `None` when
+    /// `ty` has no `next` Rawr has.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn host_iterator_item(&mut self, ty: &Ty, span: Span) -> Option<Ty> {
+        if !self.type_implements(ty, "Iterator") {
+            return None;
+        }
+        let definition = ty
+            .host_alias()
+            .cloned()
+            .or_else(|| self.imported_member_owner(ty, "next"))?;
+        let next = self
+            .models
+            .host_items(&format!("{}::next", definition.path()))?
+            .first()?
+            .clone();
+        let checkpoint = self.inference.checkpoint();
+        let Ok(signature) = self.instantiate_host_signature(&next, Some(ty), None, span) else {
+            self.inference.rollback(checkpoint);
+            return None;
+        };
+        self.inference.commit(checkpoint);
+        match self.inference.resolve(&signature.output) {
+            Ty::Option(item) => Some(*item),
+            _ => None,
+        }
+    }
+
+    /// Whether `ty` is an iterator: the program's own (`program_iterator`)
+    /// or a crate type that implements `Iterator`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn iterator_value(&self, ty: &Ty) -> bool {
+        let ty = self.inference.resolve(ty);
+        self.program_iterator(&ty)
+            || matches!(ty, Ty::Host { .. }) && self.type_implements(&ty, "Iterator")
+    }
+
+    /// Whether `ty` is an iterator of the program's own, which crosses into
+    /// a crate as a step function (`step_iterator`): an adaptor chain, an
+    /// integer range, or a script type that implements `Iterator`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn program_iterator(&self, ty: &Ty) -> bool {
+        match self.inference.resolve(ty) {
+            Ty::Iter(..) | Ty::InclusiveRange(_) => true,
+            ty @ Ty::Script(..) => self.type_implements(&ty, "Iterator"),
+            _ => false,
+        }
+    }
+}
+
+/// `CollectStop`'s and `CollectTry`'s code for a `Result` target.
+pub(super) const COLLECT_RESULT: INT = 1;
+/// Their code for an `Option` target.
+pub(super) const COLLECT_OPTION: INT = 2;
+
+/// `collect()` into a `Result` or an `Option` (`kinds[0]`) of `items`, which
+/// end at the first `Err` or `None` (`CollectStop`): that one, else `Ok` or
+/// `Some` of the payloads, concatenated when the payload's kind
+/// (`kinds[1]`) is a `String`'s.
+pub(super) fn collect_try(kinds: [INT; 2], items: Dynamic) -> RawrResult {
+    let items = items
+        .into_array()
+        .map_err(|_| invariant("collected items are not an array"))?;
+    let mut payloads = crate::Array::with_capacity(items.len());
+    for item in items {
+        let payload = if kinds[0] == COLLECT_RESULT {
+            match crate::result::read(&item) {
+                Some(Ok(payload)) => payload,
+                Some(Err(_)) => return Ok(item),
+                None => return Err(invariant("a collected item is not a `Result`")),
+            }
+        } else {
+            match crate::option::read(&item) {
+                Some(Some(payload)) => payload,
+                Some(None) => return Ok(item),
+                None => return Err(invariant("a collected item is not an `Option`")),
+            }
+        };
+        payloads.push(payload);
+    }
+    let collected = if kinds[1] == kind_code(Ty::String) {
+        let mut text = String::new();
+        for payload in &payloads {
+            match payload.as_char() {
+                Ok(character) => text.push(character),
+                Err(_) => text.push_str(&payload.to_string()),
+            }
+        }
+        Dynamic::from(ImmutableString::from(text))
+    } else {
+        Dynamic::from_array(payloads)
+    };
+    Ok(if kinds[0] == COLLECT_RESULT {
+        crate::result::ok(collected)
+    } else {
+        crate::option::some(collected)
+    })
 }

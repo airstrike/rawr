@@ -473,7 +473,7 @@ impl Parser<'_> {
             store,
         };
         let lvalue = match &lvalue {
-            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(NestedLvalue {
+            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(lvalue::Nested {
                 binding: binding.clone(),
                 base: origin::Fragment::plain(binding.to_string()),
                 steps: vec![step],
@@ -506,12 +506,12 @@ impl Parser<'_> {
     pub(super) fn resolve_cow_pattern(
         &self,
         owned: bool,
-        payload: &PatternSyntax,
+        payload: &pattern::Syntax,
         at: Span,
         expected: &Ty,
         bound_names: &mut BTreeMap<ImmutableString, Span>,
         binding_declarations: &mut Vec<PatternBinding>,
-    ) -> Result<(NominalPattern, CoveragePattern), Error> {
+    ) -> Result<(NominalPattern, coverage::Pattern), Error> {
         let variant = if owned { "Owned" } else { "Borrowed" };
         let expected = self.inference.resolve(expected);
         let Ty::Cow(borrowed) = &expected else {
@@ -527,14 +527,14 @@ impl Parser<'_> {
             reference_to((**borrowed).clone())
         };
         // The pattern tests the variant; its payload is below it.
-        self.trace_test(FactAccess::Read, None);
+        self.trace_test(borrowck::Access::Read, None);
         let path = self.trace_enter_at(
-            FactStep::Downcast(variant.into()),
-            borrows::TraceRegion::At(FactPath::of(&[FactRegion::Arg(0)])),
+            borrowck::Projection::Downcast(variant.into()),
+            borrows::TraceRegion::At(borrowck::Path::of(&[borrowck::Step::Arg(0)])),
         );
         self.trace_enter_at(
-            FactStep::Field("0".into()),
-            borrows::TraceRegion::At(FactPath::ROOT),
+            borrowck::Projection::Field("0".into()),
+            borrows::TraceRegion::At(borrowck::Path::ROOT),
         );
         let (child, coverage) = self.resolve_child_pattern(
             payload,
@@ -550,8 +550,8 @@ impl Parser<'_> {
                 owned,
                 payload: Box::new(child),
             },
-            CoveragePattern::Constructor {
-                key: CoverageKey::Cow(owned),
+            coverage::Pattern::Constructor {
+                key: coverage::Key::Cow(owned),
                 name: format!("Cow::{variant}").into(),
                 payload: Box::new([coverage]),
             },

@@ -1027,3 +1027,135 @@ impl Parser<'_> {
         ))
     }
 }
+
+/// The set methods `SetAlgebra` runs, by code: the first four give keys,
+/// the others a `bool`.
+pub(super) const SET_ALGEBRA: &[&str] = &[
+    "union",
+    "intersection",
+    "difference",
+    "symmetric_difference",
+    "is_subset",
+    "is_superset",
+    "is_disjoint",
+];
+
+/// `SetAlgebra` by merging two sets' sorted keys, and `KeyedRange` by
+/// binary search for the range's ends.
+pub(super) fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, keys: &Keys) -> RawrResult {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    let compare = |lhs: &Dynamic, rhs: &Dynamic| keys.order(lhs, rhs);
+    if op == PreludeOp::KeyedRange {
+        let flags = args[3].as_int().unwrap_or_default();
+        let (low, high) = (args[1].clone(), args[2].clone());
+        let entries = args[0]
+            .as_array_ref()
+            .map_err(|_| invariant("a map or set is not an array at runtime"))?;
+        let key = |entry: &Dynamic| entry_key(entry, flags & 8 != 0);
+        let start = if flags & 1 != 0 {
+            entries.partition_point(|entry| compare(&key(entry), &low) == Less)
+        } else {
+            0
+        };
+        let end = if flags & 2 == 0 {
+            entries.len()
+        } else if flags & 4 != 0 {
+            entries.partition_point(|entry| compare(&key(entry), &high) != Greater)
+        } else {
+            entries.partition_point(|entry| compare(&key(entry), &high) == Less)
+        };
+        keys.finish()?;
+        if flags & 3 == 3 && compare(&low, &high) == Greater {
+            return Err(EvalAltResult::ErrorRuntime(
+                "range start is greater than range end in BTreeMap".into(),
+                Position::NONE,
+            )
+            .into());
+        }
+        return Ok(Dynamic::from_array(entries[start..end.max(start)].to_vec()));
+    }
+    let code = usize::try_from(args[2].as_int().unwrap_or_default()).unwrap_or(0);
+    let other = args[1].clone().into_array().unwrap_or_default();
+    let comparer = keys;
+    let keys = args[0]
+        .as_array_ref()
+        .map_err(|_| invariant("a set is not an array at runtime"))?;
+    let (mut left, mut right) = (keys.iter().peekable(), other.iter().peekable());
+    let (mut only_left, mut both, mut only_right) = (Vec::new(), Vec::new(), Vec::new());
+    if comparer.hashed {
+        // Keys its `eq` finds equal, which their order may not place together.
+        for key in keys.iter() {
+            if other.iter().any(|other| comparer.same(key, other)) {
+                both.push(key.clone());
+            } else {
+                only_left.push(key.clone());
+            }
+        }
+        for key in &other {
+            if !keys.iter().any(|mine| comparer.same(mine, key)) {
+                only_right.push(key.clone());
+            }
+        }
+        left = [].iter().peekable();
+        right = [].iter().peekable();
+    }
+    loop {
+        let order = match (left.peek(), right.peek()) {
+            (Some(a), Some(b)) => compare(a, b),
+            (Some(_), None) => Less,
+            (None, Some(_)) => Greater,
+            (None, None) => break,
+        };
+        match order {
+            Less => only_left.extend(left.next().cloned()),
+            Greater => only_right.extend(right.next().cloned()),
+            Equal => {
+                both.extend(left.next().cloned());
+                right.next();
+            }
+        }
+    }
+    comparer.finish()?;
+    let keys = |mut parts: Vec<Vec<Dynamic>>| {
+        let mut keys: Vec<Dynamic> = parts.drain(..).flatten().collect();
+        keys.sort_by(|a, b| compare(a, b));
+        comparer.finish()?;
+        Ok(Dynamic::from_array(keys))
+    };
+    match SET_ALGEBRA.get(code).copied() {
+        Some("union") => keys(vec![only_left, both, only_right]),
+        Some("intersection") => keys(vec![both]),
+        Some("difference") => keys(vec![only_left]),
+        Some("symmetric_difference") => keys(vec![only_left, only_right]),
+        Some("is_subset") => Ok(only_left.is_empty().into()),
+        Some("is_superset") => Ok(only_right.is_empty().into()),
+        _ => Ok(both.is_empty().into()),
+    }
+}
+
+impl<'a> Parser<'a> {
+    /// A map's or set's operation `op` with keys of type `key`: the shape
+    /// its keys order at, and for a hashed kind whether they are found by
+    /// a hand-written `eq` (`Op::Shaped`, settled once inference has).
+    pub(in crate::resolve) fn keyed_op(&self, op: PreludeOp, kind: Keyed, key: &Ty) -> Op {
+        Op::Shaped {
+            op,
+            ty: key.clone(),
+            flags: if kind.hashed() { SHAPED_HASHED } else { 0 },
+        }
+    }
+
+    /// `keyed_op` for the collection type `collection`, through references.
+    pub(in crate::resolve) fn keyed_op_for(&self, op: PreludeOp, collection: &Ty) -> Op {
+        let mut ty = self.inference.resolve(collection);
+        while let Ty::Reference { target, .. } | Ty::Boxed(target) = ty {
+            ty = self.inference.resolve(&target);
+        }
+        match ty {
+            Ty::Keyed(kind, arguments) if !arguments.is_empty() => {
+                self.keyed_op(op, kind, &arguments[0])
+            }
+            _ => Op::Prelude(op),
+        }
+    }
+}

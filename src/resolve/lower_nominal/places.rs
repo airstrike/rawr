@@ -538,7 +538,7 @@ impl Parser<'_> {
                 (place.as_str().to_string(), binding.clone())
             }
             Some(Lvalue::Field(field)) => {
-                let nested = NestedLvalue {
+                let nested = lvalue::Nested {
                     binding: field.binding.clone(),
                     base: origin::Fragment::plain(field.binding.to_string()),
                     steps: vec![PlaceStep::Field { slot: field.slot }],
@@ -590,7 +590,7 @@ impl Parser<'_> {
         &mut self,
         name: ImmutableString,
         declaration: Span,
-        pattern: Option<&PatternSyntax>,
+        pattern: Option<&pattern::Syntax>,
         start: Span,
         label: Option<ImmutableString>,
     ) -> Result<Option<ParsedExpr>, Error> {
@@ -639,9 +639,9 @@ impl Parser<'_> {
         let mut parts = None;
         let element = match (pattern, &first) {
             (None, None) => Some((name, declaration)),
-            (Some(PatternSyntax::Tuple { members, .. }), Some(first)) if members.len() == 2 => {
+            (Some(pattern::Syntax::Tuple { members, .. }), Some(first)) if members.len() == 2 => {
                 match &members[0] {
-                    PatternSyntax::Binding {
+                    pattern::Syntax::Binding {
                         name,
                         span,
                         mutable,
@@ -660,7 +660,7 @@ impl Parser<'_> {
                             },
                         );
                     }
-                    PatternSyntax::Discard { .. } => {}
+                    pattern::Syntax::Discard { .. } => {}
                     other => {
                         self.bindings = outer;
                         return Err(Error::UnsupportedNominalSyntax {
@@ -670,8 +670,8 @@ impl Parser<'_> {
                     }
                 }
                 match &members[1] {
-                    PatternSyntax::Binding { name, span, .. } => Some((name.clone(), *span)),
-                    PatternSyntax::Discard { .. } => None,
+                    pattern::Syntax::Binding { name, span, .. } => Some((name.clone(), *span)),
+                    pattern::Syntax::Discard { .. } => None,
                     other => {
                         parts = Some(other.clone());
                         None
@@ -728,7 +728,7 @@ impl Parser<'_> {
             let last_type = self.last_type.clone();
             let last_expression = self.last_expression.take();
             let bound = self.bind_let_pattern(
-                PatternSite::For,
+                pattern::Site::For,
                 parts.span().start(),
                 &parts,
                 subject,
@@ -1040,7 +1040,7 @@ impl Parser<'_> {
             // A field or a nested place: its fields copied out around the
             // statement and stored back, as a mutable loop over it is.
             Some(Lvalue::Field(field)) => {
-                let nested = NestedLvalue {
+                let nested = lvalue::Nested {
                     binding: field.binding.clone(),
                     base: origin::Fragment::plain(field.binding.to_string()),
                     steps: vec![PlaceStep::Field { slot: field.slot }],
@@ -1279,7 +1279,7 @@ pub(super) struct PlacePattern {
     /// A place behind a borrow guard, which each use of a binding reaches
     /// through the guard again: the path is that of a copy of the guard's
     /// target, matched once.
-    guard: Option<NestedLvalue>,
+    guard: Option<lvalue::Nested>,
 }
 
 impl PlacePattern {
@@ -1530,7 +1530,7 @@ impl Parser<'_> {
     /// `nested` becomes the place through that held borrow, which each use
     /// of a binding reaches. `None` for a borrow made below the place's
     /// start, which each use would make again.
-    fn guarded_located(&mut self, nested: &mut NestedLvalue) -> Option<origin::Fragment> {
+    fn guarded_located(&mut self, nested: &mut lvalue::Nested) -> Option<origin::Fragment> {
         let copy = self.temporary("guarded");
         let mut before = format!("let {copy} = (); ");
         let mut after = String::new();
@@ -2015,7 +2015,7 @@ impl Parser<'_> {
     /// The statement making the call of `nested`'s step `index`, a
     /// `PlaceStep::Path` with its call, on the place before it: `let path =
     /// ..;`, with the places on the way read and stored back around it.
-    fn call_statement(&mut self, nested: &NestedLvalue, index: usize) -> origin::Fragment {
+    fn call_statement(&mut self, nested: &lvalue::Nested, index: usize) -> origin::Fragment {
         let PlaceStep::Path {
             path,
             call: Some((before, after)),
@@ -2024,7 +2024,7 @@ impl Parser<'_> {
             unreachable!("a call statement is made for a call's step")
         };
         let (path, before, after) = (path.clone(), before.clone(), after.clone());
-        let prefix = NestedLvalue {
+        let prefix = lvalue::Nested {
             steps: nested.steps[..index].to_vec(),
             ..nested.clone()
         };
@@ -2046,9 +2046,12 @@ impl Parser<'_> {
     /// statement making the calls that reach `nested`'s place, and running
     /// its setup, once; and the place they reached, which `r` names after
     /// it.
-    pub(super) fn hold_place(&mut self, nested: NestedLvalue) -> (origin::Fragment, NestedLvalue) {
+    pub(super) fn hold_place(
+        &mut self,
+        nested: lvalue::Nested,
+    ) -> (origin::Fragment, lvalue::Nested) {
         let mut statement = origin::Fragment::default();
-        let mut held = NestedLvalue {
+        let mut held = lvalue::Nested {
             steps: Vec::new(),
             ..nested.clone()
         };
@@ -2078,7 +2081,7 @@ impl Parser<'_> {
 
     /// Whether `nested` is reached by a call or a setup, which a held
     /// borrow of it makes once (`hold_place`).
-    pub(super) fn reached_once(nested: &NestedLvalue) -> bool {
+    pub(super) fn reached_once(nested: &lvalue::Nested) -> bool {
         nested.steps.iter().any(|step| {
             matches!(
                 step,
@@ -2376,21 +2379,21 @@ pub(super) fn place_step(lvalue: &Lvalue, step: PlaceStep, ty: Ty) -> Lvalue {
 
 /// `lvalue` as a nested place: its root binding, the place the runtime
 /// assigns directly, and the steps below that.
-pub(super) fn as_nested(lvalue: &Lvalue) -> NestedLvalue {
+pub(super) fn as_nested(lvalue: &Lvalue) -> lvalue::Nested {
     match lvalue {
-        Lvalue::Binding { binding, ty } => NestedLvalue {
+        Lvalue::Binding { binding, ty } => lvalue::Nested {
             binding: binding.clone(),
             base: origin::Fragment::plain(binding.to_string()),
             steps: Vec::new(),
             ty: ty.clone(),
         },
-        Lvalue::Place { binding, ty, place } => NestedLvalue {
+        Lvalue::Place { binding, ty, place } => lvalue::Nested {
             binding: binding.clone(),
             base: place.clone(),
             steps: Vec::new(),
             ty: ty.clone(),
         },
-        Lvalue::Field(field) => NestedLvalue {
+        Lvalue::Field(field) => lvalue::Nested {
             binding: field.binding.clone(),
             base: origin::Fragment::plain(field.binding.to_string()),
             steps: vec![PlaceStep::Field { slot: field.slot }],
