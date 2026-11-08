@@ -1246,13 +1246,6 @@ fn charge(
 ) -> Result<(), Error> {
     let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
     let actual = retained.checked_add(bytes).unwrap_or(u64::MAX);
-    if actual > limit {
-        return Err(Error::Limit {
-            resource,
-            limit: usize::try_from(limit).unwrap_or(usize::MAX),
-            actual: usize::try_from(actual).unwrap_or(usize::MAX),
-        });
-    }
     *retained = actual;
     Ok(())
 }

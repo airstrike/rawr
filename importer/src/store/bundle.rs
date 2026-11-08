@@ -439,7 +439,7 @@ impl Pending {
         validate_top_level(&root, State::Sealed)?;
         validate_lease(&root)?;
         let seal_path = root.join("seal");
-        let seal = super::entry::read_file(&seal_path, crate::node::MAX_CONTENT_BYTES)?;
+        let seal = super::entry::read_file(&seal_path, expected_seal_length)?;
         if seal.len() != expected_seal_length
             || <[u8; 32]>::from(sha2::Sha256::digest(&seal)) != expected_seal_digest
         {
@@ -494,7 +494,7 @@ impl Pending {
         validate_top_level_with_budget(&root, State::Sealed, Some(budget))?;
         validate_lease_with_budget(&root, Some(budget))?;
         let seal_path = path(&root, Path::new("seal"))?;
-        let seal = super::entry::read_file_budgeted(&seal_path, crate::node::MAX_CONTENT_BYTES)?;
+        let seal = super::entry::read_file_budgeted(&seal_path, expected_seal_length)?;
         if seal.len() != expected_seal_length
             || <[u8; 32]>::from(sha2::Sha256::digest(&seal)) != expected_seal_digest
         {
@@ -892,8 +892,7 @@ impl<'store> Completion<'store> {
                 validate_top_level_with_budget(root, State::Sealed, Some(budget))?;
                 validate_lease_with_budget(root, Some(budget))?;
                 let seal_path = path(root, Path::new("seal"))?;
-                let seal =
-                    super::entry::read_file_budgeted(&seal_path, crate::node::MAX_CONTENT_BYTES)?;
+                let seal = super::entry::read_file_budgeted(&seal_path, commitment.seal_bytes)?;
                 if seal.len() != commitment.seal_bytes
                     || <[u8; 32]>::from(sha2::Sha256::digest(&seal)) != commitment.seal_digest
                 {
@@ -1011,10 +1010,9 @@ fn read_commitment_with(
     validate_top_level_with_budget(&root, State::Published, Some(budget))?;
     validate_lease_with_budget(&root, Some(budget))?;
     let seal_path = path(&root, Path::new("seal"))?;
-    let seal =
-        super::entry::read_file_budgeted_with(&seal_path, crate::node::MAX_CONTENT_BYTES, |_| {
-            mismatch(&root, seal_path.clone())
-        })?;
+    let seal = super::entry::read_file_budgeted_with(&seal_path, commitment.seal_bytes, |_| {
+        mismatch(&root, seal_path.clone())
+    })?;
     if seal.len() != commitment.seal_bytes
         || <[u8; 32]>::from(sha2::Sha256::digest(&seal)) != commitment.seal_digest
     {

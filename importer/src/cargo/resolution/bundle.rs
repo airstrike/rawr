@@ -262,7 +262,7 @@ impl Stored {
             }
             let seal_bytes = usize::try_from(u64::from_le_bytes(part(bytes, 76)?))
                 .map_err(|_| stored::Error::Overflow)?;
-            if seal_bytes == 0 || seal_bytes > node::MAX_CONTENT_BYTES {
+            if seal_bytes == 0 {
                 return Err(stored::Error::Encoding(
                     "resolution bundle seal extent is invalid",
                 ));
@@ -382,7 +382,7 @@ impl Stored {
         let graph = budget.graph().clone();
         let seal_path =
             bundle::path(&root, std::path::Path::new("seal")).map_err(stored::Error::Bundle)?;
-        let bytes = store::read_file_budgeted(&seal_path, node::MAX_CONTENT_BYTES)
+        let bytes = store::read_file_budgeted(&seal_path, self.seal_bytes)
             .map_err(stored::Error::Bundle)?;
         let inventory = retained::Stored::decode_resolution(&bytes, &root, self.reference)
             .map_err(stored::Error::Bundle)?;

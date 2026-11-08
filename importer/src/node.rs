@@ -20,10 +20,8 @@ pub use content::{Chain, ContentRef, Parent, Receipt, Validated};
 pub use key::{ActionKey, Digest, ExecutionKey, LookupKey};
 pub use read_set::{Fragment, ReadSetProof};
 
-pub(crate) const STORAGE_SCHEMA: u16 = 2;
-pub(crate) const STORAGE_DIRECTORY: &str = "0002";
-const MAX_RECIPE_BYTES: usize = 16 * 1024 * 1024;
-pub(crate) const MAX_CONTENT_BYTES: usize = 1_207_959_552;
+pub(crate) const STORAGE_SCHEMA: u16 = 3;
+pub(crate) const STORAGE_DIRECTORY: &str = "0003";
 
 /// An executed value's schema with the versions its execution key carries
 /// folded in. A store entry whose schema differs from the current one was
@@ -129,19 +127,20 @@ pub trait Value: Sized {
     /// Version of this value's canonical output codec.
     const SCHEMA: u32;
 
-    /// Encode this value canonically within the recipe's retained-output limit.
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error>;
+    /// Encode this value canonically. Its size is never a reason to
+    /// refuse it: the store's sizes are eviction targets.
+    fn encode(&self) -> Result<Box<[u8]>, Error>;
     /// Encode a value that is about to be dropped; one already holding its
     /// encoding can hand that buffer over instead of copying it.
-    fn into_encoded(self, limit: usize) -> Result<Box<[u8]>, Error> {
-        self.encode(limit)
+    fn into_encoded(self) -> Result<Box<[u8]>, Error> {
+        self.encode()
     }
-    /// Decode one fully consumed canonical output within its transform's
-    /// prospective count, byte, depth, and allocation bounds.
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, Error>;
+    /// Decode one fully consumed canonical output. Every length it reads is
+    /// bounded by the bytes it was given.
+    fn decode(bytes: &[u8]) -> Result<Self, Error>;
     /// Decode owned store bytes; a value that can keep them avoids a copy.
-    fn decode_owned(bytes: Box<[u8]>, limit: usize) -> Result<Self, Error> {
-        Self::decode(&bytes, limit)
+    fn decode_owned(bytes: Box<[u8]>) -> Result<Self, Error> {
+        Self::decode(&bytes)
     }
 }
 
@@ -150,7 +149,6 @@ pub struct Direct<K> {
     action: ActionKey,
     recipe: Digest,
     context: Digest,
-    output_limit: usize,
     parents: Box<[content::Provenance]>,
     _kind: PhantomData<fn() -> K>,
 }
@@ -161,7 +159,6 @@ pub struct Discoverable<K> {
     execution: ExecutionKey,
     context: Digest,
     fixed_inputs: Box<[u8]>,
-    output_limit: usize,
     parents: Box<[Parent]>,
     _kind: PhantomData<fn() -> K>,
 }
@@ -199,7 +196,6 @@ impl<K> Clone for Direct<K> {
             action: self.action,
             recipe: self.recipe,
             context: self.context,
-            output_limit: self.output_limit,
             parents: self.parents.clone(),
             _kind: PhantomData,
         }
@@ -213,7 +209,6 @@ impl<K> Clone for Discoverable<K> {
             execution: self.execution,
             context: self.context,
             fixed_inputs: self.fixed_inputs.clone(),
-            output_limit: self.output_limit,
             parents: self.parents.clone(),
             _kind: PhantomData,
         }
@@ -225,37 +220,18 @@ impl<K: Value> Direct<K> {
     pub(crate) fn capture(
         context: [u8; 32],
         semantic_inputs: &[u8],
-        output_limit: usize,
         parents: &[Parent],
     ) -> Result<Self, Error> {
-        Self::capture_edges(context, semantic_inputs, output_limit, parents)
+        Self::capture_edges(context, semantic_inputs, parents)
     }
 
     fn capture_edges(
         context: [u8; 32],
         semantic_inputs: &[u8],
-        output_limit: usize,
         parents: &[impl content::Edge],
     ) -> Result<Self, Error> {
         if K::SCHEMA == 0 {
             return Err(Error::Codec("node output schema zero is reserved"));
-        }
-        if semantic_inputs.len() > MAX_RECIPE_BYTES {
-            return Err(Error::Limit {
-                resource: "node recipe bytes",
-                limit: MAX_RECIPE_BYTES,
-                actual: semantic_inputs.len(),
-            });
-        }
-        if output_limit == 0 {
-            return Err(Error::Codec("node content limit zero is reserved"));
-        }
-        if output_limit > MAX_CONTENT_BYTES {
-            return Err(Error::Limit {
-                resource: "node content bytes",
-                limit: MAX_CONTENT_BYTES,
-                actual: output_limit,
-            });
         }
         let mut retained_parents = Vec::new();
         retained_parents
@@ -269,14 +245,12 @@ impl<K: Value> Direct<K> {
             K::SCHEMA,
             context,
             semantic_inputs,
-            output_limit,
             parents,
         );
         Ok(Self {
             action,
             recipe,
             context,
-            output_limit,
             parents: retained_parents.into_boxed_slice(),
             _kind: PhantomData,
         })
@@ -286,10 +260,6 @@ impl<K: Value> Direct<K> {
     #[must_use]
     pub const fn action(&self) -> ActionKey {
         self.action
-    }
-
-    pub(crate) const fn output_limit(&self) -> usize {
-        self.output_limit
     }
 
     pub(crate) const fn parent_count(&self) -> usize {
@@ -309,10 +279,11 @@ impl<K: Value> Discoverable<K> {
     pub(crate) fn capture(
         context: [u8; 32],
         fixed_inputs: &[u8],
-        output_limit: usize,
         parents: &[Parent],
     ) -> Result<Self, Error> {
-        validate_recipe_bounds::<K>(fixed_inputs.len(), output_limit)?;
+        if K::SCHEMA == 0 {
+            return Err(Error::Codec("node output schema zero is reserved"));
+        }
         let mut retained_inputs = Vec::new();
         retained_inputs
             .try_reserve_exact(fixed_inputs.len())
@@ -329,7 +300,6 @@ impl<K: Value> Discoverable<K> {
             K::SCHEMA,
             context,
             fixed_inputs,
-            output_limit,
             parents,
         );
         Ok(Self {
@@ -337,7 +307,6 @@ impl<K: Value> Discoverable<K> {
             execution: ExecutionKey::derive(lookup),
             context,
             fixed_inputs: retained_inputs.into_boxed_slice(),
-            output_limit,
             parents: retained_parents.into_boxed_slice(),
             _kind: PhantomData,
         })
@@ -347,14 +316,7 @@ impl<K: Value> Discoverable<K> {
         let retained = 16_usize
             .checked_add(self.fixed_inputs.len())
             .and_then(|length| length.checked_add(discovered_inputs.len()))
-            .unwrap_or(usize::MAX);
-        if retained > MAX_RECIPE_BYTES {
-            return Err(Error::Limit {
-                resource: "node recipe bytes",
-                limit: MAX_RECIPE_BYTES,
-                actual: retained,
-            });
-        }
+            .ok_or(Error::Allocation)?;
         let mut semantic_inputs = Vec::new();
         semantic_inputs
             .try_reserve_exact(retained)
@@ -366,7 +328,6 @@ impl<K: Value> Discoverable<K> {
         Direct::capture(
             self.context.as_bytes(),
             &semantic_inputs,
-            self.output_limit,
             &self.parents,
         )
     }
@@ -375,10 +336,6 @@ impl<K: Value> Discoverable<K> {
     #[must_use]
     pub const fn lookup(&self) -> LookupKey {
         self.lookup
-    }
-
-    pub(crate) const fn output_limit(&self) -> usize {
-        self.output_limit
     }
 
     pub(crate) const fn parent_count(&self) -> usize {
@@ -401,30 +358,6 @@ impl<K: Value> Discoverable<K> {
     pub(crate) fn revalidate_parents(&self, store: &crate::store::Store) -> Result<(), Error> {
         self.in_flight(store).map(|_| ())
     }
-}
-
-fn validate_recipe_bounds<K: Value>(recipe_bytes: usize, output_limit: usize) -> Result<(), Error> {
-    if K::SCHEMA == 0 {
-        return Err(Error::Codec("node output schema zero is reserved"));
-    }
-    if recipe_bytes > MAX_RECIPE_BYTES {
-        return Err(Error::Limit {
-            resource: "node recipe bytes",
-            limit: MAX_RECIPE_BYTES,
-            actual: recipe_bytes,
-        });
-    }
-    if output_limit == 0 {
-        return Err(Error::Codec("node content limit zero is reserved"));
-    }
-    if output_limit > MAX_CONTENT_BYTES {
-        return Err(Error::Limit {
-            resource: "node content bytes",
-            limit: MAX_CONTENT_BYTES,
-            actual: output_limit,
-        });
-    }
-    Ok(())
 }
 
 /// One direct-node evaluator bound to a durable store and observational sink.
@@ -587,14 +520,7 @@ impl<'store> Evaluator<'store> {
                         .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
                     let bytes = execute()
                         .map_err(Error::fresh)?
-                        .into_encoded(recipe.output_limit)?;
-                    if bytes.len() > recipe.output_limit {
-                        return Err(Error::Limit {
-                            resource: "node content bytes",
-                            limit: recipe.output_limit,
-                            actual: bytes.len(),
-                        });
-                    }
+                        .into_encoded()?;
                     Ok(crate::store::Reserved::Publish {
                         result: (),
                         recipe: recipe.clone(),
@@ -705,14 +631,7 @@ impl<'store> Evaluator<'store> {
                     ))?;
                     let bytes = transform()
                         .map_err(Error::fresh)?
-                        .into_encoded(recipe.output_limit)?;
-                    if bytes.len() > recipe.output_limit {
-                        return Err(Error::Limit {
-                            resource: "node content bytes",
-                            limit: recipe.output_limit,
-                            actual: bytes.len(),
-                        });
-                    }
+                        .into_encoded()?;
                     Ok(crate::store::Reserved::Publish {
                         result: (),
                         recipe: recipe.clone(),
@@ -814,14 +733,7 @@ impl<'store> Evaluator<'store> {
                             let discovered_inputs =
                                 validate(&value, budget, read_set::Scope::Consumer)?;
                             let complete = recipe.complete(&discovered_inputs)?;
-                            let bytes = value.encode(recipe.output_limit)?;
-                            if bytes.len() > recipe.output_limit {
-                                return Err(Error::Limit {
-                                    resource: "node content bytes",
-                                    limit: recipe.output_limit,
-                                    actual: bytes.len(),
-                                });
-                            }
+                            let bytes = value.encode()?;
                             // An older entry at this action that no longer
                             // checks is replaced when this one publishes (#614).
                             match self.replay_discovered_scoped_exact(
@@ -983,14 +895,7 @@ impl<'store> Evaluator<'store> {
                         let (value, bundle, discovered_inputs) =
                             transform(attempt).map_err(Error::fresh)?.into_parts();
                         let complete = recipe.complete(&discovered_inputs)?;
-                        let bytes = value.encode(recipe.output_limit)?;
-                        if bytes.len() > recipe.output_limit {
-                            return Err(Error::Limit {
-                                resource: "node content bytes",
-                                limit: recipe.output_limit,
-                                actual: bytes.len(),
-                            });
-                        }
+                        let bytes = value.encode()?;
                         if self
                             .replay_discovered_scoped_exact(recipe, &validate, complete.action())?
                             .is_some()
@@ -1177,7 +1082,7 @@ impl<'store> Evaluator<'store> {
         // validation failure is an ordinary input change.
         let Some(inspected) = self
             .store
-            .inspect_candidate::<K>(action, recipe.output_limit, self.store.graph_budget())
+            .inspect_candidate::<K>(action, self.store.graph_budget())
             .map_err(|error| match error {
                 Error::Codec(reason) => Error::Corrupt {
                     path: self

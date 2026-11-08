@@ -488,7 +488,6 @@ fn downstream_rebuilds_evicted_demand_and_reuses_surviving_generated_output() {
             Some(&prefix.profile.graph_fingerprint()),
         )
         .expect("demand authority"),
-        limits.node_output_bytes(),
     )
     .expect("exact demand recipe");
     assert!(

@@ -223,7 +223,7 @@ impl<K: Value> Stored<K> {
                 "stored node does not match the current recipe",
             ));
         }
-        let replayed = self.inspect(current.output_limit, graph)?;
+        let replayed = self.inspect(graph)?;
         let content = ContentRef::new(replayed.envelope.content);
         let witness = Witness::direct(current, content, replayed.bundled);
         replayed.validate(current, witness, graph)
@@ -237,21 +237,14 @@ impl<K: Value> Stored<K> {
         if !self.envelope.matches(current) {
             return Err(Error::Codec("stored node does not match the staged recipe"));
         }
-        let replayed = self.inspect(current.output_limit, graph)?;
+        let replayed = self.inspect(graph)?;
         let witness = Witness::direct(current, replayed.content(), replayed.bundled);
         replayed.stage(current, witness, graph)
     }
 
     /// Decode bytes whose content identity was authenticated by the store caller.
-    pub(crate) fn inspect(
-        self,
-        output_limit: usize,
-        graph: &super::GraphBudget,
-    ) -> Result<Replayed<K>, Error> {
-        if self.envelope.output_limit != output_limit {
-            return Err(Error::Codec("stored node content limit changed"));
-        }
-        let value = Arc::new(K::decode_owned(self.bytes, output_limit)?);
+    pub(crate) fn inspect(self, graph: &super::GraphBudget) -> Result<Replayed<K>, Error> {
+        let value = Arc::new(K::decode_owned(self.bytes)?);
         Ok(Replayed {
             envelope: self.envelope,
             value,

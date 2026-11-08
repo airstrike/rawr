@@ -73,7 +73,7 @@ pub(super) fn build<B>(
     let inputs = Inputs::capture(&manifest)?;
     let authority = authority(&inputs, toolchain.as_ref(), parallelism, &context)?;
     let parents = [chain.parent(), node::Parent::validated(toolchain.as_ref())];
-    let recipe = context.discover_with_parents::<Product>(&authority, PRODUCT_BYTES, &parents)?;
+    let recipe = context.discover_with_parents::<Product>(&authority, &parents)?;
     let validation = inputs.clone();
     let store = context.open_store()?;
     let validation_store = store.clone();
@@ -162,7 +162,7 @@ pub(super) fn replay_hot<B>(
         .map_err(|error| node::Error::Importer(Box::new(error)))?;
     let authority = authority(&inputs, &toolchain, parallelism, context)?;
     let parents = [chain.parent(), node::Parent::validated(toolchain.as_ref())];
-    let recipe = context.discover_with_parents::<Product>(&authority, PRODUCT_BYTES, &parents)?;
+    let recipe = context.discover_with_parents::<Product>(&authority, &parents)?;
     let store = context.open_store()?;
     let validation_store = store.clone();
     let validate: node::read_set::Validator<Product> = std::sync::Arc::new(move |value, budget| {
@@ -710,7 +710,7 @@ impl Product {
     }
 
     fn decode_canonical(canonical: Box<[u8]>) -> Result<Self, node::Error> {
-        validate(&canonical, PRODUCT_BYTES)?;
+        validate(&canonical)?;
         let reference = crate::store::bundle::BundleRef::new(
             node::ExecutionKey::from_bytes(array_at(&canonical, 12)?),
             crate::store::bundle::BundleId::from_bytes(array_at(&canonical, 44)?),
@@ -805,7 +805,7 @@ impl Product {
 
     fn inventory(&self, root: &Path, inputs: &Inputs) -> Result<retained::Stored, node::Error> {
         let seal_path = crate::store::bundle::path(root, Path::new("seal"))?;
-        let seal = crate::store::read_file_budgeted(&seal_path, node::MAX_CONTENT_BYTES)?;
+        let seal = crate::store::read_whole(&seal_path)?;
         if seal.len() != self.seal_bytes
             || <[u8; 32]>::from(Sha256::digest(&seal)) != self.seal_digest
             || seal.get(..8) != Some(BUNDLE_MAGIC)
@@ -894,13 +894,13 @@ impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Runner;
     const SCHEMA: u32 = EXECUTION_SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        validate(&self.canonical, limit)?;
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
+        validate(&self.canonical)?;
         Ok(self.canonical.clone())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        validate(bytes, limit)?;
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
+        validate(bytes)?;
         Self::decode_canonical(bytes.to_vec().into_boxed_slice())
     }
 }
@@ -950,13 +950,6 @@ fn bundle_seal(
     let length = BUNDLE_HEADER_BYTES
         .checked_add(retained.bytes().len())
         .ok_or(node::Error::Allocation)?;
-    if length > node::MAX_CONTENT_BYTES {
-        return Err(node::Error::Limit {
-            resource: "runner bundle seal bytes",
-            limit: node::MAX_CONTENT_BYTES,
-            actual: length,
-        });
-    }
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(length)
@@ -980,13 +973,11 @@ fn bundle_seal(
     Ok(bytes.into_boxed_slice())
 }
 
-fn validate(bytes: &[u8], limit: usize) -> Result<(), node::Error> {
-    if bytes.len() > limit || bytes.len() != PRODUCT_BYTES {
-        return Err(node::Error::Limit {
-            resource: "cached runner bundle product bytes",
-            limit: PRODUCT_BYTES.min(limit),
-            actual: bytes.len(),
-        });
+fn validate(bytes: &[u8]) -> Result<(), node::Error> {
+    if bytes.len() != PRODUCT_BYTES {
+        return Err(node::Error::Codec(
+            "cached runner bundle product length changed",
+        ));
     }
     if bytes.get(..8) != Some(MAGIC) || u32_at(bytes, 8)? != SCHEMA {
         return Err(node::Error::Codec(
@@ -994,9 +985,7 @@ fn validate(bytes: &[u8], limit: usize) -> Result<(), node::Error> {
         ));
     }
     validate_mode(u32_at(bytes, 76)?)?;
-    if !(BUNDLE_HEADER_BYTES + 1..=node::MAX_CONTENT_BYTES)
-        .contains(&usize::try_from(u64_at(bytes, 120)?).unwrap_or(usize::MAX))
-    {
+    if usize::try_from(u64_at(bytes, 120)?).unwrap_or(usize::MAX) <= BUNDLE_HEADER_BYTES {
         return Err(node::Error::Codec("runner bundle seal length changed"));
     }
     Ok(())

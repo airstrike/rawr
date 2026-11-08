@@ -15,11 +15,6 @@ pub(super) fn classify<C: Checked, D: Definition<C>>(
         .node_chain()
         .cloned()
         .expect("the cached profile's graph has no node");
-    assert_eq!(
-        parent.output_limit(),
-        limits.node_output_bytes(),
-        "the profile's output limit differs from its graph's"
-    );
     let identity = definition.identity();
     let version = definition.version();
     let observations = graph.callback_observations(graph.freshness_fingerprint());
@@ -28,7 +23,7 @@ pub(super) fn classify<C: Checked, D: Definition<C>>(
         .direct::<Product>(&authority, || {
             let contract = super::classify_direct(definition, graph)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
-            Product::capture(&contract, limits.node_output_bytes())
+            Product::capture(&contract)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))
         })
         .map_err(|error| Error::Node(Box::new(error)))?;
@@ -68,18 +63,17 @@ pub(crate) struct Product {
 }
 
 impl Product {
-    pub(crate) fn capture(contract: &Contract, limit: usize) -> Result<Self, Error> {
+    pub(crate) fn capture(contract: &Contract) -> Result<Self, Error> {
         Ok(Self {
-            canonical: contract.encode(limit)?,
+            canonical: contract.encode()?,
         })
     }
 
     pub(crate) fn capture_parts(
         parts: &super::contract::Parts,
-        limit: usize,
     ) -> Result<Self, Error> {
         Ok(Self {
-            canonical: parts.encode(limit)?,
+            canonical: parts.encode()?,
         })
     }
 
@@ -102,7 +96,7 @@ impl Product {
         graph: (crate::api::Fingerprint, crate::api::Fingerprint),
         limits: &crate::cargo::Limits,
     ) -> Result<super::contract::Parts, Error> {
-        super::contract::Parts::decode_resolved(&self.canonical, identity, version, graph, limits)
+        super::contract::Parts::decode_resolved(&self.canonical, identity, version, graph)
     }
 
     fn replay(
@@ -121,25 +115,11 @@ impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Profile;
     const SCHEMA: u32 = 2;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        if self.canonical.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached profile contract bytes",
-                limit,
-                actual: self.canonical.len(),
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.canonical.clone())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached profile contract bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         if bytes.is_empty() {
             return Err(node::Error::Codec("cached profile contract is empty"));
         }
@@ -205,17 +185,17 @@ mod tests {
         let graph = crate::test_fixture::graph();
         let contract = crate::profile::classify_direct(&Definition, &graph)
             .expect("the empty profile contract seals");
-        let product = Product::capture(&contract, limits.node_output_bytes())
+        let product = Product::capture(&contract)
             .expect("the profile product captures");
         let bytes = product
-            .encode(limits.node_output_bytes())
+            .encode()
             .expect("the profile product encodes");
-        assert!(Product::decode(&bytes, limits.node_output_bytes()).is_ok());
-        assert!(Product::decode(&[], limits.node_output_bytes()).is_err());
+        assert!(Product::decode(&bytes).is_ok());
+        assert!(Product::decode(&[]).is_err());
 
         let mut trailing = bytes.into_vec();
         trailing.push(b' ');
-        let decoded = Product::decode(&trailing, limits.node_output_bytes())
+        let decoded = Product::decode(&trailing)
             .expect("framing alone retains bounded bytes");
         assert_ne!(decoded.canonical.as_ref(), product.canonical.as_ref());
     }
@@ -236,10 +216,10 @@ mod tests {
             .classify(&graph, &mut builder)
             .expect("classification succeeds");
         let parts = builder.seal_parts().expect("owned classification seals");
-        let product = Product::capture_parts(&parts, limits.node_output_bytes())
+        let product = Product::capture_parts(&parts)
             .expect("owned classification captures without a current contract");
         let expected = direct
-            .encode(limits.node_output_bytes())
+            .encode()
             .expect("contract encodes");
         assert_eq!(product.canonical, expected);
         let replay = product
@@ -247,7 +227,7 @@ mod tests {
             .expect("owned classification validates its exact graph identity");
         assert_eq!(
             replay
-                .encode(limits.node_output_bytes())
+                .encode()
                 .expect("parts encode"),
             expected
         );
@@ -268,7 +248,7 @@ mod tests {
         let mut trailing = product.canonical.into_vec();
         trailing.push(b' ');
         let product =
-            Product::decode(&trailing, limits.node_output_bytes()).expect("bounded framing");
+            Product::decode(&trailing).expect("bounded framing");
         assert!(stale(product.owned(identity, version, &graph, &limits)));
     }
 

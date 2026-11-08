@@ -146,7 +146,7 @@ pub(super) fn graph_with_change(
     .expect("context");
     let store = context.open_store().expect("store");
     let recipe = context
-        .discover::<Api>(b"composition-api", limits.node_output_bytes())
+        .discover::<Api>(b"composition-api")
         .expect("API recipe");
     let calls = Arc::clone(calls);
     let api = crate::node::Evaluator::new(&store, &crate::metrics::Current)

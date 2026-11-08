@@ -75,7 +75,6 @@ pub(crate) fn load(context: &crate::context::Context, key: &[u8; 32]) -> Option<
     }
     Product::decode_owned(
         bytes.into_boxed_slice(),
-        context.limits().node_canonical_bytes(),
     )
     .ok()
 }

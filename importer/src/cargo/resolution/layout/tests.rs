@@ -567,13 +567,13 @@ fn published_resolution_data_round_trips_without_recapture_and_checks_controls()
     impl node::Value for Data {
         const KIND: node::Kind = node::Kind::Resolution;
         const SCHEMA: u32 = 77; // test-only data node, never a semantic resolution
-        fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
+        fn encode(&self) -> Result<Box<[u8]>, node::Error> {
             if limit < self.0.len() {
                 return Err(node::Error::Codec("fixture limit"));
             }
             Ok(self.0.to_vec().into_boxed_slice())
         }
-        fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
+        fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
             if bytes.len() > limit {
                 return Err(node::Error::Codec("fixture limit"));
             }

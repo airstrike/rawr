@@ -80,7 +80,7 @@ pub(crate) fn write(directory: &Path, bytes: &[u8]) -> Result<Box<[u8]>, node::E
 }
 
 /// The total length a well-formed manifest names.
-pub(crate) fn check(manifest: &[u8], limit: usize) -> Result<usize, node::Error> {
+pub(crate) fn check(manifest: &[u8]) -> Result<usize, node::Error> {
     let scalar = |start: usize| {
         manifest
             .get(start..start + 8)
@@ -100,13 +100,6 @@ pub(crate) fn check(manifest: &[u8], limit: usize) -> Result<usize, node::Error>
         != Some(manifest.len())
     {
         return Err(node::Error::Codec("API parts manifest length is invalid"));
-    }
-    if total > limit {
-        return Err(node::Error::Limit {
-            resource: "cached API graph bytes",
-            limit,
-            actual: total,
-        });
     }
     let mut sum = 0_usize;
     for entry in manifest[HEADER_BYTES..].as_chunks::<ENTRY_BYTES>().0 {
@@ -128,9 +121,8 @@ pub(crate) fn check(manifest: &[u8], limit: usize) -> Result<usize, node::Error>
 pub(crate) fn read(
     directory: &Path,
     manifest: &[u8],
-    limit: usize,
 ) -> Result<Box<[u8]>, node::Error> {
-    let total = check(manifest, limit)?;
+    let total = check(manifest)?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(total)

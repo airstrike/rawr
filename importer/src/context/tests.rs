@@ -17,11 +17,11 @@ impl Value for ValueFixture {
     // wrote, which the store evicts (#630).
     const SCHEMA: u32 = crate::api::SCHEMA;
 
-    fn encode(&self, _limit: usize) -> Result<Box<[u8]>, crate::node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, crate::node::Error> {
         Ok(Box::default())
     }
 
-    fn decode(_bytes: &[u8], _limit: usize) -> Result<Self, crate::node::Error> {
+    fn decode(_bytes: &[u8]) -> Result<Self, crate::node::Error> {
         Ok(Self)
     }
 }

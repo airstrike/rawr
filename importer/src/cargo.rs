@@ -58,18 +58,11 @@ const UNITS: usize = 500_000;
 const EDGES: usize = 1_000_000;
 const ITEMS: usize = 2_500_000;
 const CANONICAL_ITEMS: usize = 19_000_000;
-/// The canonical bytes figure is an alias of the physical
-/// `node::MAX_CONTENT_BYTES` value, not a second spelling of it.
-const CANONICAL_BYTES: usize = crate::node::MAX_CONTENT_BYTES;
+/// The canonical bytes figure the driver's plan carries; an accounting
+/// figure, never a bound.
+const CANONICAL_BYTES: usize = 1_207_959_552;
 const INPUT_PROOF_BYTES: usize = 512 * 1024 * 1024;
-/// Physical bound on one typed-store node's recipe authority, discovered
-/// inputs and retained input evidence (the locked-metadata, unit-graph and
-/// build node authorities, the resolution evidence capture and the cached
-/// toolchain inputs). Fixed at 512 MiB, its effective value before the
-/// accounting-target series (at c1fedce0^ it was read through the then-default
-/// `input_proof_bytes`). It never follows `input_proof_bytes`, which only
-/// shares the figure.
-const NODE_INPUT_BYTES: usize = 512 * 1024 * 1024;
+
 const RETAINED_GRAPH_ITEMS: usize = 6_500_000;
 const RETAINED_GRAPH_BYTES: usize = 512 * 1024 * 1024;
 const CLASSIFIED_CONTRACT_ITEMS: usize = 6_500_000;
@@ -742,29 +735,6 @@ impl Limits {
         self.process
     }
 
-    /// The node content bound for every typed-store product recipe. This is
-    /// the physical `MAX_CONTENT_BYTES` ceiling, deliberately decoupled
-    /// from `json_bytes`.
-    pub(crate) const fn node_output_bytes(self) -> usize {
-        crate::node::MAX_CONTENT_BYTES
-    }
-
-    /// The node content bound for recipe authorities, discovered inputs and
-    /// retained input evidence of typed-store nodes. This is the physical
-    /// `NODE_INPUT_BYTES` ceiling (512 MiB, its pre-series value), deliberately
-    /// decoupled from `input_proof_bytes`.
-    /// Every file read feeding these nodes binds separately to
-    /// `process::TAIL_BYTES` or `process::CAPTURE_BYTES`.
-    pub(crate) const fn node_input_bytes(self) -> usize {
-        NODE_INPUT_BYTES
-    }
-
-    /// The node store payload ceiling for stored API graphs. This is the
-    /// physical `MAX_CONTENT_BYTES` bound, deliberately decoupled from
-    /// `canonical_bytes`.
-    pub(crate) const fn node_canonical_bytes(self) -> usize {
-        crate::node::MAX_CONTENT_BYTES
-    }
 
     pub(crate) fn bind_node_context(&self, digest: &mut Sha256) {
         // Only the physical bounds that still refuse bind node identity.
@@ -1363,7 +1333,6 @@ impl Request {
                     &toolchain,
                     self,
                     &manifest_path,
-                    limits,
                 )?;
                 let metadata_parent = match toolchain_parent {
                     Some(parent) => crate::cargo::resolution::cached_locked_with_toolchain(
@@ -1435,7 +1404,6 @@ impl Request {
                     &toolchain,
                     self,
                     &manifest_path,
-                    limits,
                 )?;
                 let mut materialized = None;
                 let execute = || {
@@ -1567,7 +1535,7 @@ impl Request {
         #[cfg(not(feature = "rustc-driver"))]
         let initial_target = harness_root.join("target");
         let authority =
-            unit_graph_node_authority(request, &toolchain, self, &manifest_path, limits)?;
+            unit_graph_node_authority(request, &toolchain, self, &manifest_path)?;
         let unit_parent = crate::cargo::resolution::cached_unit_graph(
             &node_context,
             &metadata_parent,
@@ -1903,7 +1871,6 @@ impl Request {
                 &toolchain,
                 &self,
                 &manifest_path,
-                limits,
             )?;
             let authority = workspace_node_authority(&authority, &workspace)?;
             let execution_environment = environment.clone();
@@ -3804,7 +3771,6 @@ fn locked_metadata_node_authority(
     toolchain: &toolchain::Proof,
     resolution: &Request,
     manifest: &Path,
-    limits: &Limits,
 ) -> Result<Box<[u8]>> {
     let arguments = process::Command::cargo_arguments(
         config_arguments(resolution.config.explicit_configs()),
@@ -3826,13 +3792,6 @@ fn locked_metadata_node_authority(
         bytes.extend_from_slice(&(argument.len() as u64).to_le_bytes());
         bytes.extend_from_slice(argument);
     }
-    if bytes.len() > limits.node_input_bytes() {
-        return Err(Error::Limit {
-            resource: "locked Cargo metadata node authority bytes",
-            limit: limits.node_input_bytes(),
-            actual: bytes.len(),
-        });
-    }
     Ok(bytes.into_boxed_slice())
 }
 
@@ -3841,7 +3800,6 @@ fn unit_graph_node_authority(
     toolchain: &toolchain::Proof,
     resolution: &Request,
     manifest: &Path,
-    limits: &Limits,
 ) -> Result<Box<[u8]>> {
     let arguments = process::Command::cargo_arguments(
         config_arguments(resolution.config.explicit_configs()),
@@ -3858,13 +3816,6 @@ fn unit_graph_node_authority(
         bytes.extend_from_slice(&(argument.len() as u64).to_le_bytes());
         bytes.extend_from_slice(argument);
     }
-    if bytes.len() > limits.node_input_bytes() {
-        return Err(Error::Limit {
-            resource: "Cargo unit-graph node authority bytes",
-            limit: limits.node_input_bytes(),
-            actual: bytes.len(),
-        });
-    }
     Ok(bytes.into_boxed_slice())
 }
 
@@ -3874,7 +3825,6 @@ fn authoritative_build_node_authority(
     toolchain: &toolchain::Proof,
     resolution: &Request,
     manifest: &Path,
-    limits: &Limits,
 ) -> Result<Box<[u8]>> {
     let arguments = process::Command::cargo_arguments(
         config_arguments(resolution.config.explicit_configs()),
@@ -3890,13 +3840,6 @@ fn authoritative_build_node_authority(
         let argument = argument.as_os_str().as_encoded_bytes();
         bytes.extend_from_slice(&(argument.len() as u64).to_le_bytes());
         bytes.extend_from_slice(argument);
-    }
-    if bytes.len() > limits.node_input_bytes() {
-        return Err(Error::Limit {
-            resource: "authoritative Cargo build node authority bytes",
-            limit: limits.node_input_bytes(),
-            actual: bytes.len(),
-        });
     }
     Ok(bytes.into_boxed_slice())
 }

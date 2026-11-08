@@ -186,6 +186,20 @@ pub(super) fn read_file_budgeted_with(
     read_file_with_budget(path, limit, None, oversized)
 }
 
+/// Read a whole file the store wrote whose length no fixed format bounds:
+/// an envelope, a payload or a seal. Its length is what the filesystem says.
+pub(crate) fn read_whole(path: &Path) -> Result<Box<[u8]>, Error> {
+    read_file_with_budget(path, usize::MAX, None, |actual| file_limit(usize::MAX, actual))
+}
+
+/// `read_whole` for a candidate entry, whose damage is corruption.
+pub(super) fn read_candidate_whole(path: &Path) -> Result<Box<[u8]>, Error> {
+    read_file_with_budget(path, usize::MAX, None, |_| Error::Corrupt {
+        path: path.to_path_buf(),
+        reason: "candidate stored file is not addressable",
+    })
+}
+
 pub(super) fn read_candidate_file_budgeted(path: &Path, limit: usize) -> Result<Box<[u8]>, Error> {
     read_file_budgeted_with(path, limit, |_| Error::Corrupt {
         path: path.to_path_buf(),
@@ -193,25 +207,27 @@ pub(super) fn read_candidate_file_budgeted(path: &Path, limit: usize) -> Result<
     })
 }
 
-/// Read exact typed output within its transform bound, outside the metadata ceiling.
+/// Read exact typed output whose length its envelope declares.
 /// Its allocation/content hashes must be charged before the typed decoder runs.
-pub(crate) fn read_payload_budgeted(
-    path: &Path,
-    content_length: usize,
-    output_limit: usize,
-) -> Result<Box<[u8]>, Error> {
-    read_file_with_budget(path, output_limit, Some(content_length), |actual| {
-        file_limit(output_limit, actual)
+pub(crate) fn read_payload_budgeted(path: &Path, content_length: usize) -> Result<Box<[u8]>, Error> {
+    read_file_with_budget(path, content_length, Some(content_length), |actual| {
+        Error::Corrupt {
+            path: path.to_path_buf(),
+            reason: if actual == usize::MAX {
+                "typed payload length is not addressable"
+            } else {
+                "typed payload length differs from its envelope"
+            },
+        }
     })
 }
 
 /// The shape and extent checks `read_payload_budgeted` applies before reading,
 /// without reading: the regular, non-symlink, singly linked file whose length
-/// equals its envelope's content length and fits its output limit.
+/// equals its envelope's content length.
 pub(crate) fn inspect_payload_budgeted(
     path: &Path,
     content_length: usize,
-    output_limit: usize,
 ) -> Result<fs::Metadata, Error> {
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect typed store file",
@@ -222,9 +238,6 @@ pub(crate) fn inspect_payload_budgeted(
         return Err(Error::Shape(path.to_path_buf()));
     }
     let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-    if length > output_limit {
-        return Err(file_limit(output_limit, length));
-    }
     if content_length != length {
         return Err(Error::Corrupt {
             path: path.to_path_buf(),
@@ -237,12 +250,11 @@ pub(crate) fn inspect_payload_budgeted(
 pub(super) fn read_candidate_payload_budgeted(
     path: &Path,
     content_length: usize,
-    output_limit: usize,
 ) -> Result<Box<[u8]>, Error> {
-    read_file_with_budget(path, output_limit, Some(content_length), |_| {
+    read_file_with_budget(path, content_length, Some(content_length), |_| {
         Error::Corrupt {
             path: path.to_path_buf(),
-            reason: "candidate typed payload exceeds its extent bound",
+            reason: "candidate typed payload differs from its envelope",
         }
     })
 }

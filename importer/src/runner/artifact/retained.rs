@@ -219,7 +219,6 @@ impl Stored {
                 .checked_add(RECORD)
                 .and_then(|size| size.checked_add(relative.len()))
                 .ok_or(node::Error::Allocation)?;
-            bounded(length)?;
             let relative = relative.to_vec().into_boxed_slice();
             let (kind, bytes, digest) = if metadata.is_dir() {
                 let remaining = (bundle::MAX_MEMBERS as usize)
@@ -314,7 +313,6 @@ impl Stored {
         reference: bundle::BundleRef,
         schema: u32,
     ) -> Result<Self, node::Error> {
-        bounded(bytes.len())?;
         if bytes.len() < HEADER
             || bytes.get(..8) != Some(MAGIC)
             || number::<4>(bytes, 8)? != schema.to_le_bytes()
@@ -1059,17 +1057,6 @@ fn push_path(
     paths.push(path)
 }
 
-fn bounded(length: usize) -> Result<(), node::Error> {
-    if length > node::MAX_CONTENT_BYTES {
-        Err(node::Error::Limit {
-            resource: "runner retained inventory bytes",
-            limit: node::MAX_CONTENT_BYTES,
-            actual: length,
-        })
-    } else {
-        Ok(())
-    }
-}
 
 fn number<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], node::Error> {
     bytes

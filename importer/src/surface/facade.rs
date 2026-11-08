@@ -1015,7 +1015,7 @@ impl Plan {
         contract: &crate::Contract<crate::Classified>,
         limits: &crate::cargo::Limits,
     ) -> crate::Result<Cached> {
-        cached::encode(contract, limits)
+        cached::encode(contract)
     }
 
     /// Encode one classified contract into the runner's bounded facade plan.

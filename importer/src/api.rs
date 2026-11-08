@@ -565,10 +565,9 @@ impl std::io::Write for ExactCanonical<'_> {
     }
 }
 
+/// Counts the bytes of an encoding without keeping them.
 struct Measured {
     bytes: usize,
-    limit: usize,
-    overflow: Option<usize>,
 }
 
 /// Charge a full intrinsic fact copy through the model's existing recursive
@@ -884,14 +883,8 @@ impl Graph<Captured> {
     }
 
     #[cfg(all(test, feature = "rustc-driver"))]
-    pub(crate) fn into_stored(mut self, limit: usize) -> Result<StoredGraph> {
-        let stored = self.take_stored()?;
-        limited_graph_usage(
-            "stored API graph bytes",
-            limit,
-            stored.canonical.len().saturating_add(stored.selected.len()),
-        )?;
-        Ok(stored)
+    pub(crate) fn into_stored(mut self) -> Result<StoredGraph> {
+        self.take_stored()
     }
 
     #[cfg(feature = "rustc-driver")]
@@ -903,11 +896,6 @@ impl Graph<Captured> {
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Self> {
         (|| {
-            limited_graph_usage(
-                "stored API graph bytes",
-                limits.node_canonical_bytes(),
-                stored.canonical.len().saturating_add(stored.selected.len()),
-            )?;
             // The scan folds the targets it crossed into this canonical
             // transaction on every exit, including a scan that then fails.
             let decode = crate::extract::protocol::selected_preflight_accounted(
@@ -948,7 +936,6 @@ impl Graph<Captured> {
                 &stored.canonical,
                 context,
                 &invocations,
-                limits.node_canonical_bytes(),
                 allocation,
             )?;
             let graph = Self::seal_canonical(
@@ -990,14 +977,9 @@ impl Graph<Captured> {
         scalar_predicate_proofs: Vec<model::ScalarPredicateProof>,
         support: Vec<ledger::Support>,
         anonymous: Vec<ledger::AnonymousImport>,
-        byte_limit: usize,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Self> {
-        let mut measured = Measured {
-            bytes: 0,
-            limit: byte_limit,
-            overflow: None,
-        };
+        let mut measured = Measured { bytes: 0 };
         let result = serde_json::to_writer(
             &mut measured,
             &Canonical {
@@ -1011,13 +993,6 @@ impl Graph<Captured> {
                 anonymous: &anonymous,
             },
         );
-        if let Some(actual) = measured.overflow {
-            return Err(Error::Limit {
-                resource: "canonical graph bytes",
-                limit: byte_limit,
-                actual,
-            });
-        }
         result.map_err(|error| Error::Extraction {
             code: "canonical-encoding",
             reason: error.to_string().into_boxed_str(),
@@ -1067,7 +1042,6 @@ impl Graph<Captured> {
                 support: &support,
                 anonymous: &anonymous,
             },
-            byte_limit,
             allocation,
         )?;
         Self::seal_canonical(
@@ -1176,12 +1150,10 @@ impl Graph<Captured> {
                 anonymous: &graph.anonymous,
                 index: &graph.index,
             };
-            // Physical: the selected ledger is stored as node content. Its
-            // size is measured against the canonical byte target by
-            // `allocation.bytes` inside `measure`, which only records.
-            let selected =
-                semantic::encode_once(&selected, crate::node::MAX_CONTENT_BYTES, allocation)?;
-            semantic::admit(selected.len(), crate::node::MAX_CONTENT_BYTES, allocation)?;
+            // The selected ledger is stored as node content; its size is
+            // recorded on `allocation`, never refused.
+            let selected = semantic::encode_once(&selected, allocation)?;
+            semantic::admit(selected.len(), allocation)?;
             let selected_usage = graph.selected_usage()?;
             let stored = stored(canonical, selected.len(), selected_usage, |output| {
                 output.extend_from_slice(&selected);
@@ -1438,17 +1410,6 @@ impl Graph<Captured> {
     }
 }
 
-fn limited_graph_usage(resource: &'static str, limit: usize, actual: usize) -> Result<()> {
-    if actual <= limit {
-        Ok(())
-    } else {
-        Err(Error::Limit {
-            resource,
-            limit,
-            actual,
-        })
-    }
-}
 
 fn retains_support_provenance(
     outcome: &ledger::Support,
@@ -1622,12 +1583,7 @@ impl<P: Phase> Graph<P> {
 
 impl Write for Measured {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let actual = self.bytes.saturating_add(buffer.len());
-        if actual > self.limit {
-            self.overflow = Some(actual);
-            return Err(io::Error::other("canonical graph byte limit exceeded"));
-        }
-        self.bytes = actual;
+        self.bytes = self.bytes.saturating_add(buffer.len());
         Ok(buffer.len())
     }
 

@@ -72,25 +72,11 @@ impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Checked;
     const SCHEMA: u32 = 0x5245_0001;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        if self.bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "resolved demand bytes",
-                limit,
-                actual: self.bytes.len(),
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.bytes.clone())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "resolved demand bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         let decoded: Decoding<serde::de::IgnoredAny> = serde_json::from_slice(bytes)
             .map_err(|_| node::Error::Codec("resolved demand bytes changed"))?;
         Ok(Self {
@@ -131,9 +117,8 @@ impl Lookup<'_> {
         &self,
         parents: &[node::staging::Input<'_>],
         authority: &[u8],
-        limit: usize,
     ) -> Result<Outcome<K>, node::Error> {
-        Recipe::from_inputs(self.context, parents, authority, limit)?.lookup_owned(self.evaluator)
+        Recipe::from_inputs(self.context, parents, authority)?.lookup_owned(self.evaluator)
     }
 }
 
@@ -170,9 +155,7 @@ where
     let cache =
         |error: node::Error| checked::Evaluation::Cache(checked::Error::Node(Box::new(error)));
     let context = api.publication.context.clone();
-    if !adapter.uses_semantic_api()
-        || context.limits().node_output_bytes() != limits.node_output_bytes()
-    {
+    if !adapter.uses_semantic_api() {
         return Ok(Err(api));
     }
     let store = context.open_store().map_err(cache)?;
@@ -205,7 +188,7 @@ where
     };
     let profile_identity = (adapter.identity(), adapter.version());
     let resolved = authority(policy, profile_identity, snapshot)
-        .and_then(|authority| lookup.at::<Product>(&input, &authority, limits.node_output_bytes()))
+        .and_then(|authority| lookup.at::<Product>(&input, &authority))
         .map_err(cache)?;
     let Outcome::Hit(Owned::Current(resolved)) = resolved else {
         return Ok(Err(api));
@@ -218,14 +201,14 @@ where
             crate::profile::cached::authority(profile_identity.0, profile_identity.1, None)
                 .map_err(|error| failure(&error))?;
         let Outcome::Hit(Owned::Current(profile)) =
-            lookup.at::<Profile>(&input, &profile, limits.node_output_bytes())?
+            lookup.at::<Profile>(&input, &profile)?
         else {
             return Ok(None);
         };
         let generic =
             crate::classify::cached::authority(policy).map_err(|error| failure(&error))?;
         let Outcome::Hit(Owned::Current(generic)) =
-            lookup.at::<Generic>(&input, &generic, node::MAX_CONTENT_BYTES)?
+            lookup.at::<Generic>(&input, &generic)?
         else {
             return Ok(None);
         };
@@ -234,7 +217,6 @@ where
         let Outcome::Hit(Owned::Current(facade)) = lookup.at::<Facade>(
             &[node::staging::Input::current(&parent)],
             &facade,
-            limits.node_output_bytes(),
         )?
         else {
             return Ok(None);
@@ -277,7 +259,6 @@ where
                 node::staging::Input::current(&parents[1]),
             ],
             &authority,
-            limits.node_output_bytes(),
         )?
         else {
             return Ok(None);

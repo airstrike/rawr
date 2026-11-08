@@ -23,13 +23,12 @@ pub(super) fn encode(
     write: impl Fn(&mut Writer<'_>) -> Result<()>,
 ) -> Result<Vec<u8>> {
     budget.check()?;
-    // The encoded baseline is node store content: its physical bound is
-    // `node::MAX_CONTENT_BYTES`. The `input_proof_bytes` target only records
-    // its measured length on the original account.
+    // Measuring is unbounded: the encoded baseline is node store content,
+    // whatever its size. The second pass writes exactly what was measured.
     let mut measure = Writer {
         output: None,
         length: 0,
-        limit: crate::node::MAX_CONTENT_BYTES,
+        limit: usize::MAX,
     };
     write(&mut measure).map_err(|error| budget.failure(error))?;
     let length = measure.length;

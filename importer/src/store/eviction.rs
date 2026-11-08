@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::accounting::{self, Allocation, Class, Reference, Registered};
 use super::{bundle, entry, index, lease, pins, recovery, session};
-use crate::node::codec::{Envelope, MAX_ENVELOPE_BYTES};
+use crate::node::codec::Envelope;
 use crate::node::{ActionKey, Digest, Error, Kind};
 
 #[derive(Clone, Eq, PartialEq)]
@@ -1383,7 +1383,7 @@ fn retire_action(
         ));
     }
     let envelope_path = directory.join("envelope");
-    let bytes = entry::read_file(&envelope_path, MAX_ENVELOPE_BYTES)?;
+    let bytes = entry::read_whole(&envelope_path)?;
     let envelope = Envelope::decode(&bytes)?;
     if envelope.kind != allocation.kind
         || envelope.output_schema != allocation.schema

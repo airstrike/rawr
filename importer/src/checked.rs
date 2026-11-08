@@ -296,15 +296,8 @@ impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Checked;
     const SCHEMA: u32 = 1;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         let length = self.encoded_len();
-        if length > limit {
-            return Err(node::Error::Limit {
-                resource: "cached checked application bytes",
-                limit,
-                actual: length,
-            });
-        }
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(length)
@@ -342,14 +335,7 @@ impl node::Value for Product {
         Ok(bytes.into_boxed_slice())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached checked application bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         if bytes.len() < HEADER_BYTES || &bytes[..8] != MAGIC || bytes[72..96] != [0; 24] {
             return Err(node::Error::Codec(
                 "cached checked application header changed",
@@ -628,16 +614,16 @@ mod tests {
         )
         .expect("the checked product captures");
         let bytes = product
-            .encode(limits.node_output_bytes())
+            .encode()
             .expect("the checked product encodes");
-        let decoded = Product::decode(&bytes, limits.node_output_bytes())
+        let decoded = Product::decode(&bytes)
             .expect("the checked product decodes");
         assert_eq!(decoded.checked, [0x63; 32]);
         assert_eq!(decoded.payload.as_ref(), b"checked-payload");
-        assert!(Product::decode(&bytes[..bytes.len() - 1], limits.node_output_bytes()).is_err());
+        assert!(Product::decode(&bytes[..bytes.len() - 1]).is_err());
         let mut reserved = bytes.into_vec();
         reserved[72] = 1;
-        assert!(Product::decode(&reserved, limits.node_output_bytes()).is_err());
+        assert!(Product::decode(&reserved).is_err());
     }
 
     #[test]

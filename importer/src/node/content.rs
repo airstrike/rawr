@@ -209,17 +209,15 @@ impl Chain {
         self.direct_with_parents(semantic_inputs, &[], execute)
     }
 
-    /// Evaluate one large artifact child under the existing store-wide content cap.
+    /// Evaluate one large artifact child under this chain alone.
     pub(crate) fn direct_artifact<K: Value>(
         &self,
         semantic_inputs: &[u8],
         execute: impl FnOnce() -> Result<K, super::Error>,
     ) -> Result<Validated<K>, super::Error> {
-        let recipe = self.context.direct_with_parents::<K>(
-            semantic_inputs,
-            super::MAX_CONTENT_BYTES,
-            std::slice::from_ref(&self.parent),
-        )?;
+        let recipe = self
+            .context
+            .direct_with_parents::<K>(semantic_inputs, std::slice::from_ref(&self.parent))?;
         super::Evaluator::new(&self.context.open_store()?, &crate::metrics::Current)
             .direct(&recipe, execute)
     }
@@ -237,11 +235,9 @@ impl Chain {
             .map_err(|_| super::Error::Allocation)?;
         parents.push(self.parent.clone());
         parents.extend_from_slice(additional);
-        let recipe = self.context.direct_with_parents::<K>(
-            semantic_inputs,
-            self.context.limits().node_output_bytes(),
-            &parents,
-        )?;
+        let recipe = self
+            .context
+            .direct_with_parents::<K>(semantic_inputs, &parents)?;
         super::Evaluator::new(&self.context.open_store()?, &crate::metrics::Current)
             .direct(&recipe, execute)
     }
@@ -264,9 +260,6 @@ impl Chain {
         super::read_set::Prepared::seal(self.context.clone(), self.parent.read_set.clone())
     }
 
-    pub(crate) const fn output_limit(&self) -> usize {
-        self.context.limits().node_output_bytes()
-    }
 
     pub(crate) const fn context(&self) -> &crate::context::Context {
         &self.context
@@ -276,10 +269,7 @@ impl Chain {
     #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
     pub fn fixture(context: crate::context::Context) -> Result<Self, super::Error> {
-        let recipe = context.direct::<FixtureParent>(
-            b"rawr.test.fixture-parent/v1",
-            context.limits().node_output_bytes(),
-        )?;
+        let recipe = context.direct::<FixtureParent>(b"rawr.test.fixture-parent/v1")?;
         let parent = super::Evaluator::new(&context.open_store()?, &crate::metrics::Current)
             .direct(&recipe, || Ok(FixtureParent))?;
         Ok(Self::validated(context, &parent))
@@ -294,20 +284,12 @@ impl Value for FixtureParent {
     const KIND: Kind = Kind::ProfileProof;
     const SCHEMA: u32 = u32::MAX;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, super::Error> {
-        const BYTES: &[u8] = b"rawr.test.fixture-parent/v1";
-        if BYTES.len() > limit {
-            return Err(super::Error::Limit {
-                resource: "fixture parent bytes",
-                limit,
-                actual: BYTES.len(),
-            });
-        }
-        Ok(Box::from(BYTES))
+    fn encode(&self) -> Result<Box<[u8]>, super::Error> {
+        Ok(Box::from(&b"rawr.test.fixture-parent/v1"[..]))
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, super::Error> {
-        if bytes.len() > limit || bytes != b"rawr.test.fixture-parent/v1" {
+    fn decode(bytes: &[u8]) -> Result<Self, super::Error> {
+        if bytes != b"rawr.test.fixture-parent/v1" {
             return Err(super::Error::Codec("fixture parent bytes changed"));
         }
         Ok(Self)

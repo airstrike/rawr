@@ -106,7 +106,7 @@ struct StoredCanonical {
 }
 
 impl Demand {
-    pub(super) fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
+    pub(super) fn encode(&self) -> Result<Box<[u8]>, Error> {
         let canonical = serde_json::to_vec(&Canonical {
             schema: 7,
             identity: self.identity.as_bytes(),
@@ -122,13 +122,6 @@ impl Demand {
             projections: &self.projections,
         })
         .expect("a profile demand serializes");
-        if canonical.len() > limit {
-            return Err(Error::Limit {
-                resource: "profile demand bytes",
-                limit,
-                actual: canonical.len(),
-            });
-        }
         assert_eq!(
             <[u8; 32]>::from(Sha256::digest(&canonical)),
             self.digest,
@@ -599,12 +592,12 @@ mod owned_tests {
             .expect("builder")
             .seal()
             .expect("demand");
-        let bytes = demand.encode(limits.json_bytes).expect("canonical demand");
+        let bytes = demand.encode().expect("canonical demand");
         let parts = Demand::decode_owned(&bytes, &contract, [7; 32], b"checked payload")
             .expect("owned replay");
         assert!(parts.value().node_chain().is_none());
         assert_eq!(
-            parts.value().encode(limits.json_bytes).expect("reencode"),
+            parts.value().encode().expect("reencode"),
             bytes
         );
         assert_eq!(parts.value().digest(), demand.digest());
@@ -628,14 +621,14 @@ mod owned_tests {
         for lifecycle in [false, true] {
             let proof = Generator::new(&demand).seal(lifecycle).expect("proof");
             let bytes = proof
-                .encode_owner(limits.json_bytes)
+                .encode_owner()
                 .expect("canonical owner");
             let parts = Proof::decode_owned(&bytes, &demand, lifecycle).expect("owned replay");
             assert!(parts.value().node_chain().is_none());
             assert_eq!(
                 parts
                     .value()
-                    .encode_owner(limits.json_bytes)
+                    .encode_owner()
                     .expect("reencode"),
                 bytes
             );

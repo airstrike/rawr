@@ -77,7 +77,6 @@ pub(crate) fn materialize_historical<B: crate::surface::Runner>(
         &context,
         &[pair.generated.input()],
         &authority(&key)?,
-        limits.node_output_bytes(),
     )
     .map_err(node_error)?;
     let store = context.open_store().map_err(node_error)?;
@@ -164,7 +163,7 @@ fn evaluate_retained(
         "retained overlay requires exact parent ownership",
     ))?;
     let recipe =
-        node::staging::Recipe::<Product>::from_chain(chain, authority, chain.output_limit())?;
+        node::staging::Recipe::<Product>::from_chain(chain, authority)?;
     let store = chain.context().open_store()?;
     let evaluator = node::Evaluator::new(&store, &crate::metrics::Current);
     match recipe.lookup(&evaluator)? {
@@ -257,15 +256,8 @@ impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Overlay;
     const SCHEMA: u32 = SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         let length = self.encoded_len();
-        if length > limit {
-            return Err(node::Error::Limit {
-                resource: "cached generated overlay bytes",
-                limit,
-                actual: length,
-            });
-        }
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(length)
@@ -292,13 +284,9 @@ impl node::Value for Product {
         Ok(bytes.into_boxed_slice())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit || bytes.len() < HEADER_BYTES {
-            return Err(node::Error::Limit {
-                resource: "cached generated overlay bytes",
-                limit,
-                actual: bytes.len(),
-            });
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
+        if bytes.len() < HEADER_BYTES {
+            return Err(node::Error::Codec("cached overlay is truncated"));
         }
         if bytes.get(..8) != Some(MAGIC) || bytes[104..112] != [0; 8] {
             return Err(node::Error::Codec("cached overlay header changed"));

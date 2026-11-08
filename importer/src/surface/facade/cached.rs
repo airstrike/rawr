@@ -13,7 +13,6 @@ pub struct Cached {
 
 pub(super) fn encode(
     contract: &crate::Contract<crate::Classified>,
-    limits: &crate::cargo::Limits,
 ) -> crate::Result<Cached> {
     let parent = contract
         .node_chain()
@@ -22,11 +21,6 @@ pub(super) fn encode(
             code: "missing-generic-node-parent",
             reason: "cached bindings selection requires a current generic-contract receipt".into(),
         })?;
-    assert_eq!(
-        parent.output_limit(),
-        limits.node_output_bytes(),
-        "bindings are cached under the limits of their API node"
-    );
     let authority =
         authority(contract.fingerprint().as_bytes()).map_err(|source| crate::Error::Node {
             operation: "capture bindings node authority",
@@ -91,7 +85,6 @@ impl Cached {
             <Product as node::Value>::SCHEMA,
             node::Digest::from_bytes(parent.context().identity()),
             &authority,
-            parent.output_limit(),
             std::slice::from_ref(parent.current_parent()),
         );
         if action != self.product.receipt().action() {
@@ -170,25 +163,11 @@ impl node::Value for Product {
         node::reader_schema(1, &[super::SCHEMA, contract[0], contract[1]])
     };
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        if self.bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached bindings plan bytes",
-                limit,
-                actual: self.bytes.len(),
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.bytes.clone())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached bindings plan bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         Self::capture(bytes.to_vec().into_boxed_slice())
     }
 }
@@ -207,13 +186,13 @@ mod tests {
         let bytes = Plan::encode(&contract).expect("the facade encodes");
         let product = Product::capture(bytes.clone()).expect("the facade product captures");
         let encoded = product
-            .encode(limits.node_output_bytes())
+            .encode()
             .expect("the facade product encodes");
         assert_eq!(encoded, bytes);
-        assert!(Product::decode(&encoded, limits.node_output_bytes()).is_ok());
+        assert!(Product::decode(&encoded).is_ok());
 
         let mut trailing = encoded.into_vec();
         trailing.push(b' ');
-        assert!(Product::decode(&trailing, limits.node_output_bytes()).is_err());
+        assert!(Product::decode(&trailing).is_err());
     }
 }

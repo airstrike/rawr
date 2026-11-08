@@ -134,8 +134,11 @@ impl Charge {
         }
     }
 
-    pub(crate) fn node(output_limit: usize, envelope_limit: usize) -> Result<Self, Error> {
-        Self::allocation(output_limit)?.checked_add(Self::allocation(envelope_limit)?)
+    /// A node's reservation before its content exists: its envelope, and
+    /// the content's allocation at no bytes. The committed records charge
+    /// what was written, whatever its size.
+    pub(crate) fn node(envelope_bytes: usize) -> Result<Self, Error> {
+        Self::allocation(0)?.checked_add(Self::allocation(envelope_bytes)?)
     }
 
     fn allocation(payload_bytes: usize) -> Result<Self, Error> {
@@ -204,11 +207,7 @@ impl Charge {
         })
     }
 
-    fn fits_within(self, limit: Self) -> bool {
-        self.bytes <= limit.bytes
-            && self.allocations <= limit.allocations
-            && self.members <= limit.members
-    }
+
 }
 
 impl LeaseKey {
@@ -907,11 +906,6 @@ impl Ledger {
         {
             return Err(Error::State(
                 "typed store publication omitted a planned allocation",
-            ));
-        }
-        if !actual.fits_within(reservation.charge) {
-            return Err(Error::State(
-                "typed store publication exceeded its reservation",
             ));
         }
         let used = self.used.checked_add(actual)?;
@@ -1925,7 +1919,6 @@ pub(crate) fn recover_key(
             Class::Action,
             Digest::from_bytes(plan.action.as_bytes()),
             "envelope",
-            crate::node::codec::MAX_ENVELOPE_BYTES,
             budget,
         )?;
         recover_planned(
@@ -1937,7 +1930,6 @@ pub(crate) fn recover_key(
             Class::Content,
             plan.content,
             "payload",
-            crate::node::MAX_CONTENT_BYTES,
             budget,
         )?;
         if plan.bundle {
@@ -2222,7 +2214,6 @@ fn recover_planned(
     class: Class,
     key: Digest,
     payload_name: &'static str,
-    payload_limit: usize,
     budget: &mut super::recovery::Budget,
 ) -> Result<(), Error> {
     let relative = match class {
@@ -2268,14 +2259,9 @@ fn recover_planned(
     let length = usize::try_from(record.length).map_err(|_| {
         Error::CleanupRequired("a planned typed store allocation length is not addressable")
     })?;
-    if length > payload_limit {
-        return Err(Error::CleanupRequired(
-            "a planned typed store allocation exceeds its payload limit",
-        ));
-    }
     let payload_path = directory.join(payload_name);
     let payload =
-        super::entry::read_file(&payload_path, payload_limit).map_err(recovery_record_error)?;
+        super::entry::read_file(&payload_path, length).map_err(recovery_record_error)?;
     let metadata = fs::metadata(&payload_path).map_err(|source| Error::Io {
         operation: "inspect planned typed store recovery payload",
         path: payload_path,

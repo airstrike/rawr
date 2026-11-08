@@ -77,7 +77,7 @@ pub fn cached(
     let parent = Parent::validated(toolchain);
     let fixed = fixed_recipe(context, &manifest, &target)?;
     let recipe =
-        context.discover_with_parents::<Metadata>(&fixed, limits.node_output_bytes(), &[parent])?;
+        context.discover_with_parents::<Metadata>(&fixed, &[parent])?;
     let validation_context = context.clone();
     node::Evaluator::new(&context.open_store()?, sink).discover_budgeted(
         &recipe,
@@ -173,15 +173,8 @@ impl node::Value for Metadata {
     const KIND: node::Kind = node::Kind::Resolution;
     const SCHEMA: u32 = OUTPUT_SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         let length = HEADER_BYTES.saturating_add(self.canonical.len());
-        if length > limit {
-            return Err(node::Error::Limit {
-                resource: "cached leaf Cargo metadata bytes",
-                limit,
-                actual: length,
-            });
-        }
         let canonical_length = u64::try_from(self.canonical.len())
             .map_err(|_| node::Error::Codec("Cargo metadata length is not encodable"))?;
         let mut bytes = Vec::new();
@@ -195,14 +188,7 @@ impl node::Value for Metadata {
         Ok(bytes.into_boxed_slice())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached leaf Cargo metadata bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         let manifest = bytes
             .get(..32)
             .and_then(|bytes| bytes.try_into().ok())
@@ -277,14 +263,6 @@ fn read_hashed_input(
         })?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(node::Error::Shape(path.to_path_buf()));
-        }
-        let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-        if length > limit {
-            return Err(node::Error::Limit {
-                resource,
-                limit,
-                actual: length,
-            });
         }
     }
     Ok(super::read_bounded(resource, path, limit)?)
@@ -469,7 +447,7 @@ fn cached_locked_with_parents(
     let limits = context.limits();
     let fixed = locked_recipe(authority, manifest, lock, target)?;
     let recipe =
-        context.discover_with_parents::<Locked>(&fixed, limits.node_input_bytes(), parents)?;
+        context.discover_with_parents::<Locked>(&fixed, parents)?;
     let validation_lock = lock.to_path_buf();
     node::Evaluator::new(&context.open_store()?, sink).discover_budgeted(
         &recipe,
@@ -494,7 +472,6 @@ pub(crate) fn cached_unit_graph(
     let parent = Parent::validated(parent);
     let recipe = context.direct_with_parents::<UnitGraph>(
         authority,
-        limits.node_output_bytes(),
         &[parent],
     )?;
     node::Evaluator::new(&context.open_store()?, sink)
@@ -518,29 +495,10 @@ impl Locked {
         manifests
             .try_reserve_exact(paths.len())
             .map_err(|_| node::Error::Allocation)?;
-        let mut retained = 0_usize;
         for path in paths.iter() {
-            let evidence = Evidence::capture(path, process::TAIL_BYTES)?;
-            retained =
-                retained.saturating_add(usize::try_from(evidence.length).unwrap_or(usize::MAX));
-            if retained > limits.node_input_bytes() {
-                return Err(node::Error::Limit {
-                    resource: "cached Cargo metadata input bytes",
-                    limit: limits.node_input_bytes(),
-                    actual: retained,
-                });
-            }
-            manifests.push(evidence);
+            manifests.push(Evidence::capture(path, process::TAIL_BYTES)?);
         }
         let lock = Evidence::capture(lock, process::CAPTURE_BYTES)?;
-        retained = retained.saturating_add(usize::try_from(lock.length).unwrap_or(usize::MAX));
-        if retained > limits.node_input_bytes() {
-            return Err(node::Error::Limit {
-                resource: "cached Cargo metadata input bytes",
-                limit: limits.node_input_bytes(),
-                actual: retained,
-            });
-        }
         let locked = Self {
             lock,
             manifests: manifests.into_boxed_slice(),
@@ -571,7 +529,7 @@ impl Locked {
                 ));
             }
         }
-        self.discovered_inputs(limits)
+        self.discovered_inputs()
     }
 
     fn validate_shape(&self, limits: &super::Limits) -> Result<(), node::Error> {
@@ -599,8 +557,8 @@ impl Locked {
         Ok(())
     }
 
-    fn discovered_inputs(&self, limits: &super::Limits) -> Result<Box<[u8]>, node::Error> {
-        let mut writer = LockedWriter::new(limits.node_input_bytes());
+    fn discovered_inputs(&self) -> Result<Box<[u8]>, node::Error> {
+        let mut writer = LockedWriter::new();
         writer.append(b"rawr.cargo.locked-metadata-inputs/v1")?;
         writer.evidence(&self.lock)?;
         writer.count(self.manifests.len())?;
@@ -630,25 +588,11 @@ impl node::Value for UnitGraph {
     const KIND: node::Kind = node::Kind::Resolution;
     const SCHEMA: u32 = UNIT_GRAPH_OUTPUT_SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        if self.raw.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached Cargo unit-graph bytes",
-                limit,
-                actual: self.raw.len(),
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.raw.clone())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached Cargo unit-graph bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         Ok(Self {
             raw: bytes.to_vec().into_boxed_slice(),
         })
@@ -659,8 +603,8 @@ impl node::Value for Locked {
     const KIND: node::Kind = node::Kind::Resolution;
     const SCHEMA: u32 = LOCKED_OUTPUT_SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        let mut writer = LockedWriter::new(limit);
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
+        let mut writer = LockedWriter::new();
         writer.evidence(&self.lock)?;
         writer.count(self.manifests.len())?;
         for manifest in self.manifests.iter() {
@@ -670,8 +614,8 @@ impl node::Value for Locked {
         Ok(writer.finish())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        let mut reader = LockedReader::new(bytes, limit)?;
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
+        let mut reader = LockedReader::new(bytes);
         let lock = reader.evidence()?;
         let count = reader.count()?;
         if count > bytes.len().saturating_sub(reader.offset) / 44 {
@@ -722,7 +666,7 @@ fn locked_recipe(
     lock: &Path,
     target: &Path,
 ) -> Result<Box<[u8]>, node::Error> {
-    let mut writer = LockedWriter::new(node::MAX_CONTENT_BYTES.min(16 * 1024 * 1024));
+    let mut writer = LockedWriter::new();
     writer.append(b"rawr.cargo.locked-metadata-resolution/v1")?;
     writer.append(&LOCKED_RECIPE_SCHEMA.to_le_bytes())?;
     writer.bytes(authority)?;
@@ -734,26 +678,14 @@ fn locked_recipe(
 
 struct LockedWriter {
     bytes: Vec<u8>,
-    limit: usize,
 }
 
 impl LockedWriter {
-    fn new(limit: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            limit,
-        }
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
     }
 
     fn append(&mut self, bytes: &[u8]) -> Result<(), node::Error> {
-        let next = self.bytes.len().saturating_add(bytes.len());
-        if next > self.limit {
-            return Err(node::Error::Limit {
-                resource: "cached locked Cargo metadata bytes",
-                limit: self.limit,
-                actual: next,
-            });
-        }
         self.bytes
             .try_reserve_exact(bytes.len())
             .map_err(|_| node::Error::Allocation)?;
@@ -799,15 +731,8 @@ struct LockedReader<'bytes> {
 }
 
 impl<'bytes> LockedReader<'bytes> {
-    fn new(bytes: &'bytes [u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached locked Cargo metadata bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
-        Ok(Self { bytes, offset: 0 })
+    fn new(bytes: &'bytes [u8]) -> Self {
+        Self { bytes, offset: 0 }
     }
 
     fn take(&mut self, length: usize) -> Result<&'bytes [u8], node::Error> {
@@ -1299,7 +1224,6 @@ mod tests {
                 .discover::<Locked>(
                     &locked_recipe(authority, &fixture.manifest, &fixture.lock, &fixture.target)
                         .expect("the recipe authority seals"),
-                    context.limits().node_input_bytes(),
                 )
                 .expect("the locked recipe seals");
             let exact = store
@@ -1703,7 +1627,6 @@ mod tests {
                                 Vec::new(),
                                 Vec::new(),
                                 Vec::new(),
-                                limits.node_canonical_bytes(),
                                 &mut allocation,
                             )
                         },

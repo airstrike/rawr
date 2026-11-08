@@ -37,7 +37,7 @@ pub fn cached(
     let store = context.open_store()?;
     let selected = process::Native::selected_in(context.project(), context.environment())
         .map_err(super::evidence_error)?;
-    let recipe = context.discover::<Attestation>(&recipe(&selected), limits.node_output_bytes())?;
+    let recipe = context.discover::<Attestation>(&recipe(&selected))?;
     let toolchain = node::Evaluator::new(&store, sink).discover_budgeted(
         &recipe,
         move |candidate, budget| candidate.revalidate(&selected, &limits, budget),
@@ -52,12 +52,12 @@ impl Attestation {
         let limits = context.limits();
         let store = context.open_store().expect("fixture replay store");
         let recipe = context
-            .discover::<Self>(&fixed_recipe(), limits.node_output_bytes())
+            .discover::<Self>(&fixed_recipe())
             .expect("fixture replay recipe");
         let validated = node::Evaluator::new(&store, &metrics::Noop)
             .discover_budgeted(
                 &recipe,
-                move |value, budget| value.revalidate_files_budgeted(&limits, Some(budget)),
+                move |value, budget| value.revalidate_files_budgeted(Some(budget)),
                 || {
                     Err(node::Error::State(
                         "fixture toolchain replay unexpectedly missed",
@@ -74,12 +74,12 @@ impl Attestation {
         let limits = context.limits();
         let store = context.open_store().expect("the fixture store opens");
         let recipe = context
-            .discover::<Self>(&fixed_recipe(), limits.node_output_bytes())
+            .discover::<Self>(&fixed_recipe())
             .unwrap();
         let validated = node::Evaluator::new(&store, &metrics::Noop)
             .discover_budgeted(
                 &recipe,
-                move |value, budget| value.revalidate_files_budgeted(&limits, Some(budget)),
+                move |value, budget| value.revalidate_files_budgeted(Some(budget)),
                 || Ok(attestation),
             )
             .expect("the fixture toolchain validates without a child");
@@ -110,19 +110,18 @@ impl Attestation {
                 Some(budget),
             )
             .map_err(super::evidence_error)?;
-        Self::capture(proof, limits, Some(budget))
+        Self::capture(proof, Some(budget))
     }
 
     fn capture(
         proof: Proof,
-        limits: &crate::cargo::Limits,
         budget: Option<&node::GraphBudget>,
     ) -> Result<Self, node::Error> {
         let target_directory = target_directory(&proof.rustc.path, proof.target())?;
         validate_directory("toolchain target", &target_directory)?;
         // One toolchain account per capture records the state targets
         // this capture crosses; nothing here refuses on one.
-        let state = state_files_with_budget(&proof.rustc.path, limits, budget)?;
+        let state = state_files_with_budget(&proof.rustc.path, budget)?;
         let attestation = Self {
             proof,
             target_directory,
@@ -146,17 +145,16 @@ impl Attestation {
                 field: "pinned toolchain selector",
             }));
         }
-        self.revalidate_files_budgeted(limits, Some(budget))
+        self.revalidate_files_budgeted(Some(budget))
     }
 
     #[cfg(test)]
     fn revalidate_files(&self, limits: &crate::cargo::Limits) -> Result<Box<[u8]>, node::Error> {
-        self.revalidate_files_budgeted(limits, None)
+        self.revalidate_files_budgeted(None)
     }
 
     fn revalidate_files_budgeted(
         &self,
-        limits: &crate::cargo::Limits,
         budget: Option<&node::GraphBudget>,
     ) -> Result<Box<[u8]>, node::Error> {
         self.validate_fixed_in()?;
@@ -167,12 +165,12 @@ impl Attestation {
                 return Err(node::Error::Codec("toolchain executable evidence changed"));
             }
         }
-        if state_files_with_budget(&self.proof.rustc.path, limits, budget)?.as_ref()
+        if state_files_with_budget(&self.proof.rustc.path, budget)?.as_ref()
             != self.state.as_ref()
         {
             return Err(node::Error::Codec("toolchain installation state changed"));
         }
-        self.encode(limits.node_output_bytes())
+        self.encode()
     }
 
     fn validate_fixed(&self) -> Result<(), node::Error> {
@@ -245,8 +243,8 @@ impl node::Value for Attestation {
         NO_DRIVER_SCHEMA
     };
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        let mut writer = Writer::new(limit);
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
+        let mut writer = Writer::new();
         for value in [
             self.proof.channel.as_ref(),
             self.proof.rustc_release.as_ref(),
@@ -281,8 +279,8 @@ impl node::Value for Attestation {
         Ok(writer.finish())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        let mut reader = Reader::new(bytes, limit)?;
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
+        let mut reader = Reader::new(bytes);
         let channel = reader.string()?;
         let rustc_release = reader.string()?;
         let rustc_commit = reader.string()?;
@@ -331,7 +329,7 @@ impl node::Value for Attestation {
             state,
         };
         attestation.validate_fixed()?;
-        if attestation.encode(limit)?.as_ref() != bytes {
+        if attestation.encode()?.as_ref() != bytes {
             return Err(node::Error::Codec("toolchain codec is not canonical"));
         }
         Ok(attestation)
@@ -394,7 +392,6 @@ fn target_directory(rustc: &Path, target: &str) -> Result<PathBuf, node::Error> 
 
 fn state_files_with_budget(
     rustc: &Path,
-    limits: &crate::cargo::Limits,
     budget: Option<&node::GraphBudget>,
 ) -> Result<Box<[FileEvidence]>, node::Error> {
     let root = rustc
@@ -445,13 +442,6 @@ fn state_files_with_budget(
     for path in paths {
         let evidence = evidence_with_budget("toolchain state file", &path, budget)?;
         total = total.saturating_add(evidence.length);
-        if total > limits.node_input_bytes() as u64 {
-            return Err(node::Error::Limit {
-                resource: "toolchain state bytes",
-                limit: limits.node_input_bytes(),
-                actual: usize::try_from(total).unwrap_or(usize::MAX),
-            });
-        }
         retained.push(evidence);
     }
     if retained.is_empty() {
@@ -492,26 +482,14 @@ fn validate_directory(field: &'static str, path: &Path) -> Result<(), node::Erro
 
 struct Writer {
     bytes: Vec<u8>,
-    limit: usize,
 }
 
 impl Writer {
-    fn new(limit: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            limit,
-        }
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
     }
 
     fn append(&mut self, bytes: &[u8]) -> Result<(), node::Error> {
-        let next = self.bytes.len().saturating_add(bytes.len());
-        if next > self.limit {
-            return Err(node::Error::Limit {
-                resource: "toolchain node bytes",
-                limit: self.limit,
-                actual: next,
-            });
-        }
         self.bytes
             .try_reserve_exact(bytes.len())
             .map_err(|_| node::Error::Allocation)?;
@@ -558,15 +536,8 @@ struct Reader<'bytes> {
 }
 
 impl<'bytes> Reader<'bytes> {
-    fn new(bytes: &'bytes [u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "toolchain node bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
-        Ok(Self { bytes, offset: 0 })
+    fn new(bytes: &'bytes [u8]) -> Self {
+        Self { bytes, offset: 0 }
     }
 
     fn take(&mut self, length: usize) -> Result<&'bytes [u8], node::Error> {
@@ -753,15 +724,15 @@ mod tests {
         let root = temporary("toolchain-historical-decode");
         let attestation = fixture_attestation(&root);
         let limits = crate::cargo::Limits::standard();
-        let bytes = attestation.encode(limits.node_output_bytes()).unwrap();
+        let bytes = attestation.encode().unwrap();
         fs::remove_dir_all(&attestation.target_directory)
             .expect("the historical target directory is removed");
-        let decoded = Attestation::decode(&bytes, limits.node_output_bytes())
+        let decoded = Attestation::decode(&bytes)
             .expect("historical decoding does not require a currently installed target");
-        assert_eq!(decoded.encode(limits.node_output_bytes()).unwrap(), bytes);
+        assert_eq!(decoded.encode().unwrap(), bytes);
         let budget = node::GraphBudget::new();
         assert!(matches!(
-            decoded.revalidate_files_budgeted(&limits, Some(&budget)),
+            decoded.revalidate_files_budgeted(Some(&budget)),
             Err(node::Error::Io {
                 operation: "inspect toolchain directory",
                 ..
@@ -777,11 +748,11 @@ mod tests {
         let attestation = fixture_attestation_in(&root, Some(&budget));
         let limits = crate::cargo::Limits::standard();
         let current = attestation
-            .revalidate_files_budgeted(&limits, Some(&budget))
+            .revalidate_files_budgeted(Some(&budget))
             .expect("the warm evidence is current");
         assert_eq!(
             current,
-            attestation.encode(limits.node_output_bytes()).unwrap()
+            attestation.encode().unwrap()
         );
         fs::remove_dir_all(root).expect("the capture fixture retires");
     }
@@ -813,7 +784,7 @@ mod tests {
         .expect("the read-set context seals");
         let store = context.open_store().expect("the typed store opens");
         let recipe = context
-            .discover::<Attestation>(&fixed_recipe(), limits.node_output_bytes())
+            .discover::<Attestation>(&fixed_recipe())
             .expect("the toolchain recipe seals");
         let counts = Counts::default();
         let validated = node::Evaluator::new(&store, &counts)
@@ -1018,7 +989,7 @@ mod tests {
         let evaluate = |attestation: Option<Attestation>, selected: process::Native| {
             let store = context.open_store().unwrap();
             let recipe = context
-                .discover::<Attestation>(&recipe(&selected), limits.node_output_bytes())
+                .discover::<Attestation>(&recipe(&selected))
                 .unwrap();
             node::Evaluator::new(&store, &counts).discover_budgeted(
                 &recipe,

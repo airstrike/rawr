@@ -271,10 +271,10 @@ mod tests {
             .expect("ordinary classification");
         assert_eq!(
             parts
-                .encode(limits.node_output_bytes())
+                .encode()
                 .expect("parts encode"),
             ordinary
-                .encode(limits.node_output_bytes())
+                .encode()
                 .expect("contract encodes")
         );
         let demand = adapter
@@ -287,10 +287,10 @@ mod tests {
         assert!(demand.node_chain().is_none());
         assert_eq!(
             demand
-                .encode(limits.node_output_bytes())
+                .encode()
                 .expect("owned demand encodes"),
             expected_demand
-                .encode(limits.node_output_bytes())
+                .encode()
                 .expect("ordinary demand encodes")
         );
         let generated = adapter.generate_owned(&demand).expect("owned generation");

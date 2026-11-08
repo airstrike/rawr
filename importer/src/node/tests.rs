@@ -32,14 +32,7 @@ impl Value for Artifact {
     const KIND: Kind = Kind::NativeProduct;
     const SCHEMA: u32 = 1;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
-        if self.0.len() > limit {
-            return Err(Error::Limit {
-                resource: "fixture artifact bytes",
-                limit,
-                actual: self.0.len(),
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, Error> {
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(self.0.len())
@@ -48,14 +41,7 @@ impl Value for Artifact {
         Ok(bytes.into_boxed_slice())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, Error> {
-        if bytes.len() > limit {
-            return Err(Error::Limit {
-                resource: "fixture artifact bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let mut retained = Vec::new();
         retained
             .try_reserve_exact(bytes.len())
@@ -74,11 +60,11 @@ impl Value for Derived {
     // rawr wrote, which the store evicts (#630).
     const SCHEMA: u32 = <crate::surface::facade::cached::Product as crate::node::Value>::SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
+    fn encode(&self) -> Result<Box<[u8]>, Error> {
         retain_fixture_bytes(&self.0, limit, "fixture derived bytes")
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
         retain_fixture_bytes(bytes, limit, "fixture derived bytes").map(Self)
     }
 }
@@ -137,14 +123,7 @@ impl Value for BundleValue {
     // older rawr wrote, which the store evicts (#577).
     const SCHEMA: u32 = crate::runner::EXECUTION_SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
-        if Self::BYTES > limit {
-            return Err(Error::Limit {
-                resource: "bundled fixture value bytes",
-                limit,
-                actual: Self::BYTES,
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, Error> {
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(Self::BYTES)
@@ -156,7 +135,7 @@ impl Value for BundleValue {
         Ok(bytes.into_boxed_slice())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() != Self::BYTES || bytes.len() > limit {
             return Err(Error::Codec("bundled fixture value shape changed"));
         }
@@ -218,11 +197,11 @@ impl Value for NativeBundleValue {
     // The current build execution schema, as for `BundleValue`.
     const SCHEMA: u32 = <crate::cargo::resolution::BuildProduct as Value>::SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
+    fn encode(&self) -> Result<Box<[u8]>, Error> {
         self.0.encode(limit)
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
         BundleValue::decode(bytes, limit).map(Self)
     }
 }
@@ -288,11 +267,11 @@ impl Value for OldBundleValue {
     const KIND: Kind = Kind::Runner;
     const SCHEMA: u32 = BundleValue::SCHEMA.wrapping_add(1);
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
+    fn encode(&self) -> Result<Box<[u8]>, Error> {
         self.0.encode(limit)
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
         BundleValue::decode(bytes, limit).map(Self)
     }
 }
@@ -333,13 +312,6 @@ fn retain_fixture_bytes(
     limit: usize,
     resource: &'static str,
 ) -> Result<Box<[u8]>, Error> {
-    if bytes.len() > limit {
-        return Err(Error::Limit {
-            resource,
-            limit,
-            actual: bytes.len(),
-        });
-    }
     let mut retained = Vec::new();
     retained
         .try_reserve_exact(bytes.len())
@@ -5387,11 +5359,11 @@ impl Value for OldDerived {
     const KIND: Kind = Kind::Facade;
     const SCHEMA: u32 = Derived::SCHEMA.wrapping_add(1);
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
+    fn encode(&self) -> Result<Box<[u8]>, Error> {
         self.0.encode(limit)
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
         Derived::decode(bytes, limit).map(Self)
     }
 }

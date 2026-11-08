@@ -66,7 +66,6 @@ pub(crate) fn evaluate_owner(
                 context,
                 &mut materialize,
                 &mut current,
-                context.limits().node_canonical_bytes(),
             )
         },
     )?;
@@ -161,7 +160,6 @@ pub(crate) fn retain_under<O>(
                             context,
                             &mut materialize,
                             &mut current,
-                            context.limits().node_canonical_bytes(),
                         )
                     })?;
                     if let Some(key) = memo {
@@ -193,7 +191,6 @@ fn evaluate_with_parents(
             context,
             &mut materialize,
             &mut current,
-            context.limits().node_canonical_bytes(),
         )
     })?;
     let graph = current_graph(context, &mut materialize, current, product.value())?;
@@ -206,7 +203,6 @@ fn capture<F>(
     context: &Context,
     materialize: &mut Option<F>,
     current: &mut Option<Graph<Captured>>,
-    limit: usize,
 ) -> Result<Product, node::Error>
 where
     F: FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>>,
@@ -216,11 +212,6 @@ where
         .ok_or(node::Error::Codec("API capture was already consumed"))?;
     let mut graph = materialize(None)?;
     let stored = graph.take_stored()?;
-    super::limited_graph_usage(
-        "stored API graph bytes",
-        limit,
-        stored.canonical.len().saturating_add(stored.selected.len()),
-    )?;
     *current = Some(graph);
     Ok(Product {
         form: Form::Captured {
@@ -267,7 +258,6 @@ fn recipe(
     authority.extend_from_slice(policy);
     context.direct_with_parents::<Product>(
         &authority,
-        context.limits().node_canonical_bytes(),
         parents,
     )
 }
@@ -276,12 +266,11 @@ impl Product {
     #[cfg(test)]
     pub(crate) fn capture(
         graph: Graph<Captured>,
-        limit: usize,
         parts: PathBuf,
     ) -> crate::Result<Self> {
         Ok(Self {
             form: Form::Captured {
-                stored: graph.into_stored(limit)?,
+                stored: graph.into_stored()?,
                 parts,
             },
         })
@@ -290,24 +279,20 @@ impl Product {
     /// A product read from the store, with its graph bytes read back from its
     /// parts; `None` when this product already holds them.
     pub(crate) fn resolve(&self, context: &Context) -> Result<Option<Self>, node::Error> {
-        self.resolve_in(
-            &super::parts::directory(context),
-            context.limits().node_canonical_bytes(),
-        )
+        self.resolve_in(&super::parts::directory(context))
     }
 
     fn resolve_in(
         &self,
         parts: &std::path::Path,
-        limit: usize,
     ) -> Result<Option<Self>, node::Error> {
         let Form::Manifest(manifest) = &self.form else {
             return Ok(None);
         };
-        let bytes = super::parts::read(parts, manifest, limit)?;
+        let bytes = super::parts::read(parts, manifest)?;
         Ok(Some(Self {
             form: Form::Resolved {
-                stored: graph_bytes(bytes, limit)?,
+                stored: graph_bytes(bytes)?,
                 manifest: manifest.clone(),
             },
         }))
@@ -349,22 +334,22 @@ impl node::Value for Product {
 
     /// The manifest of the graph's parts; a captured graph keeps any part not
     /// already kept.
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         match &self.form {
             Form::Captured { stored, parts } => {
-                super::parts::write(parts, &graph_payload(stored, limit)?)
+                super::parts::write(parts, &graph_payload(stored)?)
             }
             Form::Manifest(manifest) | Form::Resolved { manifest, .. } => Ok(manifest.clone()),
         }
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        Self::decode_owned(bytes.into(), limit)
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
+        Self::decode_owned(bytes.into())
     }
 
     /// The manifest is checked here; its parts are read on replay.
-    fn decode_owned(bytes: Box<[u8]>, limit: usize) -> Result<Self, node::Error> {
-        super::parts::check(&bytes, limit)?;
+    fn decode_owned(bytes: Box<[u8]>) -> Result<Self, node::Error> {
+        super::parts::check(&bytes)?;
         Ok(Self {
             form: Form::Manifest(bytes),
         })
@@ -372,21 +357,11 @@ impl node::Value for Product {
 }
 
 /// The graph's bytes: the header, the semantic canonical, the selected ledger.
-fn graph_payload(
-    stored: &StoredGraph,
-    limit: usize,
-) -> Result<std::borrow::Cow<'_, [u8]>, node::Error> {
+fn graph_payload(stored: &StoredGraph) -> Result<std::borrow::Cow<'_, [u8]>, node::Error> {
     let length = HEADER_BYTES
         .checked_add(stored.canonical.len())
         .and_then(|length| length.checked_add(stored.selected.len()))
         .unwrap_or(usize::MAX);
-    if length > limit {
-        return Err(node::Error::Limit {
-            resource: "cached API graph bytes",
-            limit,
-            actual: length,
-        });
-    }
     let StoredGraph {
         canonical,
         selected,
@@ -416,14 +391,7 @@ fn graph_payload(
 }
 
 /// The canonical and selected bytes stay views of the read buffer.
-fn graph_bytes(bytes: Box<[u8]>, limit: usize) -> Result<StoredGraph, node::Error> {
-    if bytes.len() > limit {
-        return Err(node::Error::Limit {
-            resource: "cached API graph bytes",
-            limit,
-            actual: bytes.len(),
-        });
-    }
+fn graph_bytes(bytes: Box<[u8]>) -> Result<StoredGraph, node::Error> {
     if bytes.get(..MAGIC.len()) != Some(MAGIC) {
         return Err(node::Error::Codec("cached API graph magic changed"));
     }
@@ -490,7 +458,6 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            Limits::standard().node_canonical_bytes(),
             allocation,
         )
         .expect("the fixture graph seals")
@@ -507,7 +474,7 @@ mod tests {
     fn product() -> Product {
         let limits = Limits::standard();
         let graph = graph(&Context::fixture(), &mut Allocation::new(&limits));
-        capture(graph, limits.node_canonical_bytes())
+        capture(graph)
     }
 
     /// Decode a stored manifest and read its parts back.
@@ -550,9 +517,9 @@ mod tests {
         let product = product();
         let expected = replay(&product, &limits).expect("the source product replays");
         let bytes = product
-            .encode(limits.node_canonical_bytes())
+            .encode()
             .expect("the product encodes");
-        let decoded = read(&bytes, limits.node_canonical_bytes());
+        let decoded = read(&bytes);
         let actual = replay(&decoded, &limits).expect("the stored graph replays");
 
         assert_eq!(actual.fingerprint(), expected.fingerprint());
@@ -656,11 +623,11 @@ mod tests {
         )
         .expect("the pre-policy raw graph seals");
         let expected_fingerprint = graph.fingerprint();
-        let product = capture(graph, limits.node_canonical_bytes());
+        let product = capture(graph);
         let bytes = product
-            .encode(limits.node_canonical_bytes())
+            .encode()
             .expect("the raw graph product encodes");
-        let decoded = read(&bytes, limits.node_canonical_bytes());
+        let decoded = read(&bytes);
         let replayed = decoded
             .replay(&context, Vec::new(), &limits, &mut Allocation::new(&limits))
             .expect("selected state replays");
@@ -684,7 +651,7 @@ mod tests {
         assert_ne!(first.fingerprint(), current.fingerprint());
         let expected_exact = current.canonical_bytes().to_vec();
         let expected_fingerprint = current.fingerprint();
-        let first = capture(first, limits.node_canonical_bytes());
+        let first = capture(first);
         let current = Product {
             form: Form::Captured {
                 stored: current.take_stored().expect("current captures"),
@@ -693,10 +660,10 @@ mod tests {
         };
         assert_eq!(
             first
-                .encode(limits.node_canonical_bytes())
+                .encode()
                 .expect("first encodes"),
             current
-                .encode(limits.node_canonical_bytes())
+                .encode()
                 .expect("current encodes")
         );
         let mut allocation = Allocation::new(&limits);
@@ -734,7 +701,6 @@ mod tests {
         let limits = Limits::standard();
         let mut product = capture(
             crate::test_fixture::captured_support_outcomes(),
-            limits.node_canonical_bytes(),
         );
         let decode = crate::extract::protocol::selected_preflight(
             &product.stored().unwrap().selected,
@@ -840,11 +806,10 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            limits.node_canonical_bytes(),
             &mut Allocation::new(&limits),
         )
         .unwrap();
-        let product = capture(graph, limits.node_canonical_bytes());
+        let product = capture(graph);
         let decode = crate::extract::protocol::selected_preflight(
             &product.stored().unwrap().selected,
             &limits,

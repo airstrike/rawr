@@ -440,7 +440,7 @@ impl Proof {
         output.seal(definition.owns_product_lifecycle())
     }
 
-    fn encode_owner(&self, limit: usize) -> Result<Box<[u8]>, Error> {
+    fn encode_owner(&self) -> Result<Box<[u8]>, Error> {
         let canonical = serde_json::to_vec(&OwnerCanonical {
             schema: 9,
             identity: self.identity.as_bytes(),
@@ -455,13 +455,6 @@ impl Proof {
             projections: &self.projections,
         })
         .expect("a generated profile proof serializes");
-        if canonical.len() > limit {
-            return Err(Error::Limit {
-                resource: "generated profile proof bytes",
-                limit,
-                actual: canonical.len(),
-            });
-        }
         assert_eq!(
             owner_digest(&canonical),
             self.owner,

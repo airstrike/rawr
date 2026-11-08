@@ -20,14 +20,7 @@ impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Resolution;
     const SCHEMA: u32 = EXECUTION_SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        if BYTES > limit {
-            return Err(node::Error::Limit {
-                resource: "resolution owner bytes",
-                limit,
-                actual: BYTES,
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(BYTES)
@@ -36,14 +29,7 @@ impl node::Value for Product {
         Ok(bytes.into_boxed_slice())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "resolution owner bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         let bytes: &[u8; BYTES] = bytes
             .try_into()
             .map_err(|_| node::Error::Codec("resolution owner extent differs"))?;
@@ -247,7 +233,7 @@ impl Product {
     // The schema-versioned owner wire binds fixed placement, sealed evidence,
     // and exact completion. Native semantic identity is a separate concern.
     fn completed(&self) -> Result<Box<[u8]>, node::Error> {
-        <Self as node::Value>::encode(self, BYTES)
+        <Self as node::Value>::encode(self)
     }
 
     fn wire(&self) -> [u8; BYTES] {
@@ -525,7 +511,6 @@ fn evaluate(
     let store = cached.context.open_store()?;
     let recipe = cached.context.discover_with_parents::<Product>(
         identity.as_bytes(),
-        BYTES,
         &[node::Parent::validated(cached.attestation.as_ref())],
     )?;
     let accounts = node::account::Key::new()?;
@@ -1371,11 +1356,11 @@ mod tests {
             const KIND: node::Kind = node::Kind::Resolution;
             const SCHEMA: u32 = 6;
 
-            fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
+            fn encode(&self) -> Result<Box<[u8]>, node::Error> {
                 <Product as node::Value>::encode(&self.0, limit)
             }
 
-            fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
+            fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
                 <Product as node::Value>::decode(bytes, limit).map(Self)
             }
         }

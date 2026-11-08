@@ -4,9 +4,7 @@ use super::{ActionKey, Digest, Direct, Error, Kind, Value, STORAGE_SCHEMA};
 const MAGIC: &[u8; 8] = b"RAWRNODE";
 const HEADER_BYTES: usize = 116;
 const PARENT_BYTES: usize = 104;
-const TAIL_BYTES: usize = 48;
-const MAX_PARENTS: usize = 65_536;
-pub(crate) const MAX_ENVELOPE_BYTES: usize = 16 * 1024 * 1024;
+const TAIL_BYTES: usize = 40;
 
 pub(crate) struct Envelope {
     pub(crate) kind: Kind,
@@ -17,7 +15,6 @@ pub(crate) struct Envelope {
     parents: Box<[HistoricalParent]>,
     pub(crate) content: Digest,
     pub(crate) content_length: usize,
-    pub(crate) output_limit: usize,
 }
 
 struct HistoricalParent {
@@ -60,7 +57,6 @@ impl Envelope {
             parents: parents.into_boxed_slice(),
             content,
             content_length,
-            output_limit: recipe.output_limit,
         })
     }
 
@@ -89,7 +85,6 @@ impl Envelope {
         }
         bytes.extend_from_slice(&self.content.as_bytes());
         bytes.extend_from_slice(&(self.content_length as u64).to_le_bytes());
-        bytes.extend_from_slice(&(self.output_limit as u64).to_le_bytes());
         if bytes.len() != length {
             return Err(Error::State("node envelope encoder length drifted"));
         }
@@ -160,15 +155,6 @@ impl Envelope {
             "node content length is truncated",
         )?)
         .map_err(|_| Error::Codec("node content length is not addressable"))?;
-        let output_limit = usize::try_from(u64_at(
-            bytes,
-            offset + 40,
-            "node content limit is truncated",
-        )?)
-        .map_err(|_| Error::Codec("node content limit is not addressable"))?;
-        if content_length > output_limit || output_limit > super::MAX_CONTENT_BYTES {
-            return Err(Error::Codec("node content length exceeds its sealed limit"));
-        }
         Ok(Self {
             kind,
             output_schema,
@@ -178,7 +164,6 @@ impl Envelope {
             parents: parents.into_boxed_slice(),
             content,
             content_length,
-            output_limit,
         })
     }
 
@@ -188,7 +173,6 @@ impl Envelope {
             && self.action == current.action
             && self.recipe == current.recipe
             && self.context == current.context
-            && self.output_limit == current.output_limit
             && self.parents.len() == current.parents.len()
             && self
                 .parents
@@ -203,26 +187,11 @@ impl Envelope {
 }
 
 fn encoded_length(parents: usize) -> Result<usize, Error> {
-    if parents > MAX_PARENTS {
-        return Err(Error::Limit {
-            resource: "node envelope parents",
-            limit: MAX_PARENTS,
-            actual: parents,
-        });
-    }
-    let length = parents
+    parents
         .checked_mul(PARENT_BYTES)
         .and_then(|parents| HEADER_BYTES.checked_add(parents))
         .and_then(|length| length.checked_add(TAIL_BYTES))
-        .unwrap_or(usize::MAX);
-    if length > MAX_ENVELOPE_BYTES {
-        return Err(Error::Limit {
-            resource: "node envelope bytes",
-            limit: MAX_ENVELOPE_BYTES,
-            actual: length,
-        });
-    }
-    Ok(length)
+        .ok_or(Error::Allocation)
 }
 
 fn array_at(bytes: &[u8], offset: usize, error: &'static str) -> Result<[u8; 32], Error> {
