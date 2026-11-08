@@ -1043,3 +1043,141 @@ fn an_imported_trait_module_leaves_a_re_export_its_path() {
         .imported_module("widget::Other", &mut allocation)
         .unwrap();
 }
+
+/// `native::identity<T>(T) -> T` and `native::measure<T>(&T) -> i64`, as
+/// jiff's `strftime` takes `&'f F` of an unsized `F`.
+fn instance_facade() -> facade::Definition {
+    let mut builder = facade::Builder::new("native", facade::Abi::new(1).unwrap()).unwrap();
+    let mut identity = signature::Builder::new();
+    identity.type_parameter("T", &[]).unwrap();
+    identity
+        .parameter(type_ref::Type::parameter("T").unwrap())
+        .output(type_ref::Type::parameter("T").unwrap());
+    builder
+        .item(
+            item::Definition::function("identity", identity.finish())
+                .unwrap()
+                .imported(selector(2)),
+        )
+        .unwrap();
+    let mut measure = signature::Builder::new();
+    measure.type_parameter("T", &[]).unwrap();
+    measure
+        .parameter(type_ref::Type::reference(
+            false,
+            type_ref::Type::parameter("T").unwrap(),
+        ))
+        .output(type_ref::Type::builtin(type_ref::Builtin::I64));
+    builder
+        .item(
+            item::Definition::function("measure", measure.finish())
+                .unwrap()
+                .imported(selector(6)),
+        )
+        .unwrap();
+    // `total<I: IntoIterator<Item = T>, T>(items: I)`, as rand's
+    // `WeightedIndex::new` reads `I::Item`: `T` is Rust's own type.
+    let mut total = signature::Builder::new();
+    total.type_parameter("I", &[]).unwrap();
+    total.type_parameter("T", &[]).unwrap();
+    total
+        .parameter(type_ref::Type::parameter("I").unwrap())
+        .output(type_ref::Type::builtin(type_ref::Builtin::I64))
+        .relation(
+            signature::Relation::new(
+                "I",
+                Box::new([signature::Pattern::Parameter("T".into())]),
+                Box::default(),
+            )
+            .of_associated(Some(([12; 32], "Item".into()))),
+        )
+        .unwrap();
+    builder
+        .item(
+            item::Definition::function("total", total.finish())
+                .unwrap()
+                .imported(selector(7)),
+        )
+        .unwrap();
+    builder.finish().unwrap()
+}
+
+#[test]
+fn every_instance_of_a_generic_crate_item_reaches_its_own_adapter() {
+    const SOURCE: &str = r#"
+use native::{identity, measure, total};
+#[derive(Clone)]
+struct Point { x: i64 }
+fn double(value: i64) -> i64 { value * 2 }
+pub fn run() -> i64 {
+    let mut sum = identity(1);
+    if identity(true) { sum += 1; }
+    sum += identity("text").len() as i64;
+    sum += identity(String::from("owned")).len() as i64;
+    sum += identity((1, false)).0;
+    sum += identity([1, 2, 3])[2];
+    sum += identity(vec![4, 5]).len() as i64;
+    sum += identity(Point { x: 6 }).x;
+    sum += identity(Some(7)).unwrap();
+    let _add = identity(|value: i64| value + 1);
+    let _twice = identity(double);
+    sum += measure("unsized");
+    sum += measure(&[1u8, 2][..]);
+    sum += measure(&Point { x: 0 });
+    sum += total([Some(1), None]);
+    sum += total(vec![(1, false)]);
+    sum
+}
+"#;
+    let mut engine = Engine::new();
+    engine.register_host_facade(instance_facade()).unwrap();
+    let engine = Shared::new(engine);
+    let (executable, collected) = parity(&engine, SOURCE);
+    let authority = crate::program::Authority::new(engine, executable).unwrap();
+    let run = authority
+        .items()
+        .find(|item| item.key().name() == "run")
+        .unwrap()
+        .clone();
+    // Every instance has its own adapter and the items no shared binding,
+    // so a call without its instance's key has nothing to reach.
+    let reached = Shared::new(std::sync::Mutex::new(Vec::new()));
+    let mut runtime = host::runtime::Builder::new(instance_facade());
+    let mut keys = std::collections::BTreeSet::new();
+    for used in &collected.uses {
+        let key = rawr_import::surface::instance::key_with_constants(
+            &used.types,
+            &used.constants,
+            &used.slots,
+        );
+        if !keys.insert((used.path.clone(), key)) {
+            continue;
+        }
+        let reached = reached.clone();
+        let measured = used.path != "native::identity";
+        runtime
+            .bind_imported_instance(
+                used.selector.fingerprint(),
+                key,
+                &used.path,
+                move |_, args| {
+                    reached.lock().unwrap().push(key);
+                    Ok(if measured {
+                        Dynamic::from(0_i64)
+                    } else {
+                        args[0].take()
+                    })
+                },
+            )
+            .unwrap();
+    }
+    let mut registry = host::runtime::Registry::new();
+    registry.install(runtime.finish()).unwrap();
+    let result = authority
+        .invoke_bound(&run, &mut [], Shared::new(registry))
+        .unwrap();
+    assert_eq!(result.as_int().unwrap(), 1 + 1 + 4 + 5 + 1 + 3 + 2 + 6 + 7);
+    let reached = reached.lock().unwrap();
+    assert_eq!(reached.len(), collected.uses.len());
+    assert!(keys.iter().all(|(_, key)| reached.contains(key)));
+}

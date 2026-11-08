@@ -3084,7 +3084,17 @@
     {"issue":1350,"title":"A new top-level file in a package tree beside its target/ is not seen before the next native read","state":"open","category":"Health"},
     {"issue":1351,"title":"A watched package tree covers its .git and nested packages","state":"open","category":"Health"},
     {"issue":1352,"title":"A crate generic called with a literal for an unsized str parameter reaches its own adapter in any registration order","state":"open","category":"Health"},
-    {"issue":1353,"title":"A call whose instance has no key takes whichever adapter of the item bound first","state":"open","category":"Health"}
+    {"issue":1353,"title":"A call whose instance has no key takes whichever adapter of the item bound first","state":"open","category":"Health"},
+    {"issue":1354,"title":"staged/ keeps only the keys a kept resolution names","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1355,"title":"One extraction table per key: staged/ keeps metadata, and an unchanged table is not written again","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1356,"title":"Generic, facade and overlay contents and runner sources are stored as content-defined parts","state":"open","category":"Health"},
+    {"issue":1357,"title":"A resolution bundle keeps each protocol sidecar once per content","state":"open","category":"Health"},
+    {"issue":1358,"title":"The store retires a product once no kept resolution, runner or pin reaches it","state":"open","category":"Health"},
+    {"issue":1359,"title":"Rawr's home keeps bindings and inventories per format and retires formats no installed rawr uses","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1360,"title":"The runner embeds a compact facade plan instead of a gigabyte of JSON","state":"open","category":"Importer"},
+    {"issue":1361,"title":"Stored parts and tables are compressed with zstd when written","state":"open","category":"Health"},
+    {"issue":1362,"title":"The generic classification and the facade plan store each fact once","state":"open","category":"Importer"},
+    {"issue":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3652,7 +3662,8 @@
             {"number":1336,"title":"Selecting among many generic From impls by the argument's type: `Into::<Slot<'_, _>>::into(icon().size(12))`","state":"closed"},
             {"number":1339,"title":"A crate function whose output is `[T; N]` of a const parameter only the output fixes is refused","state":"open"},
             {"number":1340,"title":"`&mut [T; N]` of crate values crosses as a lent place, not a copy","state":"open"},
-            {"number":1341,"title":"A program's generic impl of a std trait for a crate type can't pass its own parameter to the crate","state":"closed"}
+            {"number":1341,"title":"A program's generic impl of a std trait for a crate type can't pass its own parameter to the crate","state":"closed"},
+            {"number":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -4067,7 +4078,16 @@
             {"number":1121,"title":"An iced canvas::Program's State written through &mut in update isn't kept between events","state":"open"},
             {"number":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open"},
             {"number":1246,"title":"Generate the site's snippet outputs by running them at build, not by hand","state":"closed"},
-            {"number":1347,"title":"One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open"}
+            {"number":1347,"title":"One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open"},
+            {"number":1354,"title":"staged/ keeps only the keys a kept resolution names","state":"open"},
+            {"number":1355,"title":"One extraction table per key: staged/ keeps metadata, and an unchanged table is not written again","state":"open"},
+            {"number":1356,"title":"Generic, facade and overlay contents and runner sources are stored as content-defined parts","state":"open"},
+            {"number":1357,"title":"A resolution bundle keeps each protocol sidecar once per content","state":"open"},
+            {"number":1358,"title":"The store retires a product once no kept resolution, runner or pin reaches it","state":"open"},
+            {"number":1359,"title":"Rawr's home keeps bindings and inventories per format and retires formats no installed rawr uses","state":"open"},
+            {"number":1360,"title":"The runner embeds a compact facade plan instead of a gigabyte of JSON","state":"open"},
+            {"number":1361,"title":"Stored parts and tables are compressed with zstd when written","state":"open"},
+            {"number":1362,"title":"The generic classification and the facade plan store each fact once","state":"open"}
           ]
         },
         {
