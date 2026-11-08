@@ -34,7 +34,7 @@ where
     }
 
     fn press(&self, label: &str) -> Option<Message> {
-        self.content.press(label)
+        Widget::press(&self.content, label)
     }
 }
 

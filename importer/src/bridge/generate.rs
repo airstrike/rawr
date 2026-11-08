@@ -2845,7 +2845,7 @@ fn reach_lender_mut<T: 'static>(
 fn with_lent_arguments(
     arguments: &mut Arguments<'_, '_, '_>,
     lendable: &[(usize, bool, Reach)],
-    body: fn(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
+    body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, Error> {
     let found: Vec<_> = lendable
         .iter()
@@ -2865,7 +2865,7 @@ fn nest_lent(
     arguments: &mut Arguments<'_, '_, '_>,
     found: &[(usize, bool, Dynamic, Reach)],
     reached: &mut Vec<(usize, Option<Reached<'_>>)>,
-    body: fn(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
+    body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, Error> {
     let Some(((index, mutable, value, reach), rest)) = found.split_first() else {
         return body(arguments, reached);
@@ -3048,7 +3048,7 @@ fn frame_dispatch(arguments: &mut Arguments<'_, '_, '_>, position: usize, slot: 
 #[allow(dead_code)]
 fn static_pins() -> &'static __rawr_internal::scope::Pins {
     static PINS: std::sync::OnceLock<__rawr_internal::scope::Pins> = std::sync::OnceLock::new();
-    PINS.get_or_init(__rawr_internal::scope::Pins::default)
+    PINS.get_or_init(__rawr_internal::scope::Pins::lasting)
 }
 
 /// Bytes a call takes as `&'static [u8]`, as a font's are, kept for as long
@@ -8677,6 +8677,39 @@ fn byte_slice(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), request::Error> 
     output.write_all(b"]").map_err(request::unwritable)
 }
 
+/// `body`, a call's body that takes `lent` (`lent_inputs`), run with each
+/// argument native code lent reached where it is for the call, as an
+/// adapter reaches it, never moved out of its borrowed place (#913).
+fn within_lent(lent: &[(usize, bool, String)], body: String) -> String {
+    if lent.is_empty() {
+        return body;
+    }
+    let reach = lent
+        .iter()
+        .map(|(index, mutable, rust)| format!("({index}, {mutable}, {rust} as Reach)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "    with_lent_arguments(arguments, &[{reach}], &mut |arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>| -> Result<Dynamic, Error> {{\n    let _ = &mut *lent;\n{body}\n    }})"
+    )
+}
+
+/// The calls that are plain enough to reach what native code lent where it
+/// is (`lent_inputs`): neither a method that sends a message nor a replay.
+fn lent_inputs_of(
+    plan: &Plan,
+    cohort: &[Plan],
+    profile: &crate::profile::Proof,
+    facade: Option<&crate::surface::facade::Plan>,
+) -> Result<Vec<(usize, bool, String)>, request::Error> {
+    if method_message(plan, cohort, profile, facade)?.is_none() && replay(plan, profile)?.is_none()
+    {
+        lent_inputs(plan)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
 /// The receiver of an opaque type's method in a region (`family`): its
 /// family, and the call of it when the region holds it boxed, through its
 /// trait's method.
@@ -8694,6 +8727,7 @@ fn region_operand(
     plan: &Plan,
     operand: &convert::Type,
     consumer: usize,
+    lent: &[(usize, bool, String)],
 ) -> Result<String, request::Error> {
     let (signature, substitutions, constants, container_parameters) = match plan.operation() {
         Operation::Method {
@@ -8752,6 +8786,7 @@ fn region_operand(
     {
         let _region = InRegion::enter();
         let _arguments = RegionArguments::enter();
+        let _lent = LentArguments::enter(!lent.is_empty());
         match plan.operation() {
             Operation::Function { .. } => {
                 for (position, input) in signature.inputs().iter().enumerate().skip(1) {
@@ -8780,11 +8815,13 @@ fn region_operand(
             &mut body,
         )?;
     }
-    let body = String::from_utf8(body).map_err(request::unwritable)?;
+    let mut body = String::from_utf8(body).map_err(request::unwritable)?;
+    body.push_str("    Err(Error::TypeMismatch)");
+    let body = within_lent(lent, body);
     Ok(format!(
         "\n    if let Some(scoped) = scoped_value(arguments, 0) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
-{body}    Err(Error::TypeMismatch)
+{body}
         }})
         .map_err(|error| Error::Lent(scoped.name(), error))?;
     }}"
@@ -8841,7 +8878,8 @@ fn render_adapter(
             .map_err(encoding);
         }
         let scoped = if position == 0 {
-            region_operand(plan, &operand, index)?
+            let lent = lent_inputs_of(plan, cohort, profile, facade)?;
+            region_operand(plan, &operand, index, &lent)?
         } else {
             String::new()
         };
@@ -8921,7 +8959,7 @@ fn render_adapter(
         writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
-    with_lent_arguments(arguments, &[{reach}], {name}_lent)
+    with_lent_arguments(arguments, &[{reach}], &mut {name}_lent)
 }}
 
 fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>) -> Result<Dynamic, Error> {{
@@ -9426,7 +9464,9 @@ fn opaque_table_source(
         } else {
             None
         };
+        let lent = lent_inputs_of(consumer, cohort, profile, facade)?;
         let body = {
+            let _lent = LentArguments::enter(!lent.is_empty());
             let _producing = OpaqueProducing::enter(inner);
             let _consuming = OpaqueConsuming::enter(!other);
             let _witnessed = OpaqueWitnessed::enter(Some(returned.clone()));
@@ -9465,6 +9505,10 @@ fn opaque_table_source(
             render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
             String::from_utf8(body).map_err(request::unwritable)?
         };
+        // Each argument native code lent, as the `&mut Vec<String>` a
+        // program's impl of `labels` delegates to the value it holds, is
+        // reached where it is for the call (#913).
+        let body = within_lent(&lent, body);
         // A call that takes the value itself, where it doesn't implement
         // its trait through its proxy, can't take it from beside what it
         // borrows.
@@ -11410,6 +11454,14 @@ fn render_scoped_receiver(
             let _region = InRegion::enter();
             let mut converted = String::new();
             render_to_dynamic(&returned, "output", 0, &mut converted)?;
+            // What the call changed of a `&mut` array it took goes back
+            // after its value, as the arena's call gives it (#913).
+            let copied = copied_back(signature, substitutions)?;
+            if !copied.is_empty() {
+                converted = format!(
+                    "{{ let given = ({converted})?; Ok::<Dynamic, Error>(Dynamic::from_array(vec![given{copied}])) }}"
+                );
+            }
             (call, converted)
         }
     };
@@ -14017,7 +14069,10 @@ fn render_slot(
     // A view lent no program value, as `view(_: &())` of iced's `run((),
     // view)`, borrows only literals and constants, which outlive every
     // call, as rustc allows: the slot's own pins hold them for as long as
-    // the runner lives, one per text (`Pins::constant`).
+    // the runner lives, one per text (`Pins::constant`). The region the
+    // call opens is kept once its output is taken out, as a script value
+    // native code took of the view may hold one of its values
+    // (`Region::keep`, #1217).
     let mut constant_pins = String::new();
     let (generics, rust, body) = match &family {
         Some(family) => {
@@ -14037,9 +14092,12 @@ fn render_slot(
             .read_lock::<__rawr_internal::scope::Scoped>()
             .map(|scoped| *scoped)
             .unwrap_or_else(|| panic!(\"rawr: a script function gave native code a value that doesn't borrow what it was lent\"));
-        region
+        let output = region
             .take::<{family}>(scoped)
-            .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"))"
+            .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"));
+        static SITE: __rawr_internal::scope::Site = __rawr_internal::scope::Site::new();
+        region.keep(&SITE);
+        output"
                 ),
             );
             (
@@ -16870,21 +16928,8 @@ fn render_give_with(
     value: &str,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let mut copies = copied_inputs(signature);
-    // A program value lent `&mut` where a generic call takes `&mut T` moves
-    // into the call through its proxy and goes back after the call's value,
-    // with what native code changed in it (#1008).
-    for (position, input) in signature.inputs().iter().enumerate() {
-        if let convert::Type::Borrowed { mutable: true, ty } =
-            substituted(input, signature, substitutions)?
-            && matches!(*ty, convert::Type::Script { .. })
-            && !copies.iter().any(|(copied, _)| *copied == position)
-        {
-            copies.push((position, *ty));
-        }
-    }
-    copies.sort_by_key(|(position, _)| *position);
-    if copies.is_empty() {
+    let copied = copied_back(signature, substitutions)?;
+    if copied.is_empty() {
         return render_give(
             &substituted(signature.output(), signature, substitutions)?,
             value,
@@ -16899,6 +16944,35 @@ fn render_give_with(
         &mut given,
     )?;
     let given = String::from_utf8(given).map_err(request::unwritable)?;
+    writeln!(
+        output,
+        "    let given = (|| -> Result<Dynamic, Error> {{\n{given}    }})()?;\n    Ok(Dynamic::from_array(vec![given{copied}]))"
+    )
+    .map_err(request::unwritable)
+}
+
+/// What goes back to the program after a call's value, `, ..` of each
+/// `&mut` array the call took and changed (D558 slice 2) and each program
+/// value it took `&mut` through its proxy (#1008), in order: empty when
+/// the call gives its value alone.
+fn copied_back(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<String, request::Error> {
+    let mut copies = copied_inputs(signature);
+    // A program value lent `&mut` where a generic call takes `&mut T` moves
+    // into the call through its proxy and goes back after the call's value,
+    // with what native code changed in it (#1008).
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if let convert::Type::Borrowed { mutable: true, ty } =
+            substituted(input, signature, substitutions)?
+            && matches!(*ty, convert::Type::Script { .. })
+            && !copies.iter().any(|(copied, _)| *copied == position)
+        {
+            copies.push((position, *ty));
+        }
+    }
+    copies.sort_by_key(|(position, _)| *position);
     let mut copied = String::new();
     for (position, element) in &copies {
         if matches!(element, convert::Type::Script { .. }) {
@@ -16912,11 +16986,7 @@ fn render_give_with(
             copied.push_str(&format!(", ({converted})?"));
         }
     }
-    writeln!(
-        output,
-        "    let given = (|| -> Result<Dynamic, Error> {{\n{given}    }})()?;\n    Ok(Dynamic::from_array(vec![given{copied}]))"
-    )
-    .map_err(request::unwritable)
+    Ok(copied)
 }
 
 /// What goes back to the program of the `&mut String` or `&mut Vec<T>` at
@@ -19342,9 +19412,12 @@ fn render_impl_function(
             .read_lock::<__rawr_internal::scope::Scoped>()
             .map(|scoped| *scoped)
             .unwrap_or_else(|| panic!(\"rawr: a script function gave native code a value that doesn't borrow what it was lent\"));
-        region
+        let output = region
             .take::<{family}>(scoped)
-            .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"))"
+            .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"));
+        static SITE: __rawr_internal::scope::Site = __rawr_internal::scope::Site::new();
+        region.keep(&SITE);
+        output"
                 ),
             )
         }
