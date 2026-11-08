@@ -3110,7 +3110,8 @@
     {"issue":1371,"title":"The driver's extraction/ prune can remove an unsettled table a staged record names","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1372,"title":"The landing page's iced and ratatui snippets run on rawr's server, like its other snippets","state":"open","category":"Health"},
     {"issue":1373,"title":"Call ratatui's Terminal::draw from rawr, and resolve TestBackend's Error","state":"open","category":"Divergences from rustc"},
-    {"issue":1374,"title":"Generated adapters call a trait method two traits share by method syntax (ratatui List::render, E0034)","state":"open","category":"Divergences from rustc"}
+    {"issue":1374,"title":"Generated adapters call a trait method two traits share by method syntax (ratatui List::render, E0034)","state":"open","category":"Divergences from rustc"},
+    {"issue":1375,"title":"The watcher hands every input file to FSEvents (13,847 for a real app); watch roots and filter in rawr","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -4030,7 +4031,8 @@
             {"number":1350,"title":"A new top-level file in a package tree beside its target/ is not seen before the next native read","state":"open"},
             {"number":1351,"title":"A watched package tree covers its .git and nested packages","state":"open"},
             {"number":1364,"title":"A native trait object's `&[T]`/`&T` result that borrows the receiver comes back as a copy per call","state":"open"},
-            {"number":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open"}
+            {"number":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open"},
+            {"number":1375,"title":"The watcher hands every input file to FSEvents (13,847 for a real app); watch roots and filter in rawr","state":"open"}
           ]
         }
       ]
