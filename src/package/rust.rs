@@ -279,6 +279,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
                 files: Vec::new(),
                 shape: super::island::Shape::default(),
                 refused: Vec::new(),
+                objects: Vec::new(),
             });
         if !shadow.refused.is_empty() {
             return Err(rawr_import::Error::Request {
@@ -296,7 +297,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
             ),
             (
                 copies.join(relative),
-                native_root(root, package, !entry.is_library()),
+                native_root(root, package, !entry.is_library(), &shadow.objects),
             ),
         ];
         files.extend(
@@ -360,7 +361,7 @@ fn bin_crate(
         (directory.join("Cargo.toml"), bin_manifest(cargo, library)),
         (
             copies.join("main.rs"),
-            native_root(bin.root(), package, true),
+            native_root(bin.root(), package, true, &[]),
         ),
     ];
     // The binary's modules are beside its root, wherever Cargo finds it.
@@ -547,12 +548,18 @@ fn write_changed(files: Vec<(std::path::PathBuf, String)>) -> rawr_import::Resul
 /// `include_str!` paths absolute, and the island's runtime support at the
 /// end. A `forbid(unsafe_code)` becomes `deny`, which the support module's
 /// own `allow` can lift for its two calls into the runner. A binary's
-/// root (`main`) has the `main` the support runs.
-fn native_root(root: &super::graph::RustModule, package: &Path, main: bool) -> String {
+/// root (`main`) has the `main` the support runs, and `objects` are the
+/// makers of the crate's stand-ins (`island::Shadow::objects`).
+fn native_root(
+    root: &super::graph::RustModule,
+    package: &Path,
+    main: bool,
+    objects: &[(String, String)],
+) -> String {
     let text = super::polyglot::widened(root.text(), false, root.path(), package);
     let public = super::polyglot::root_items_public(&text);
     let public = public.replace("#![forbid(unsafe_code)]", "#![deny(unsafe_code)]");
-    format!("{public}\n{}", super::island::support(main))
+    format!("{public}\n{}", super::island::support(main, objects))
 }
 
 pub(super) fn app_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path) -> String {

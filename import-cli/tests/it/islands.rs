@@ -359,6 +359,59 @@ fn a_marked_module_names_the_items_of_a_native_module() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A marked type becomes a native trait's object (#1264): a marked leaf
+/// writes `impl page::Page for BadgePage` and `new() -> Box<dyn
+/// page::Page>`, and native code keeps the boxes beside a native page in a
+/// `Vec<Box<dyn Page>>`, calls their `&self` methods and their `&mut self`
+/// `update`, whose changes a later call reads, with a native `Message` in
+/// and a native `Task` out, and drops one. `rawr check` passes as `cargo
+/// check` does, and `rawr run` prints what `cargo run` prints.
+#[test]
+fn a_marked_type_becomes_a_native_trait_object() {
+    const OBJECTS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-objects"
+    );
+    let root = crate::support::scratch().join("islands-objects");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(OBJECTS), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert!(printed.contains("badge 1: clicks 8\n"), "{printed}");
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(&root, &[]);
+    for expected in printed.lines() {
+        let line = run.until(|_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 /// A marked leaf writes its page as a native module's enum, whose fields
 /// are `&'static str`, `Option<&'static str>` and `&'static [Block]`, from
 /// literals: a `pub static BLOCKS` native code reads as a Rust item, and
