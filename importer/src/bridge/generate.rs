@@ -9714,6 +9714,7 @@ fn render_adapter_body(
     facade: Option<&crate::surface::facade::Plan>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    REGIONAL_CLOSURES.with_borrow_mut(Vec::clear);
     let path = rust_path(plan);
     let continuation = method_message(plan, cohort, profile, facade)?;
     let replay = match continuation {
@@ -10433,15 +10434,31 @@ fn render_adapter_body(
                         )?;
                         let container =
                             String::from_utf8(container).map_err(request::unwritable)?;
-                        writeln!(
-                            output,
-                            "    let receiver: {container} = take_native(arguments, 0)?;"
-                        )
-                        .map_err(request::unwritable)?;
                         // A receiver of a type that carries no lifetime, as
                         // iced's `Table` or `Space`, borrows nothing a
                         // region must keep (#352).
                         let lifetime_free = container_family(&path, &container).is_none();
+                        // In a region an argument is in, a receiver made
+                        // outside it is at `'static`, which joins the
+                        // argument only when its type shortens, as
+                        // `region_arena` takes an argument: an invariant
+                        // one, as pane_grid's `Content<'a, ..>` that
+                        // `title_bar` takes, is the region's or none.
+                        let invariant = REGION_ARGUMENTS.get()
+                            && !lifetime_free
+                            && !container_shortens(&path, &container);
+                        let taken = if invariant {
+                            format!(
+                                "Err(Error::Value({:?}.to_owned()))",
+                                format!(
+                                    "`{container}` is invariant in its lifetime, so one made outside the view can't join those the view makes"
+                                )
+                            )
+                        } else {
+                            "take_native(arguments, 0)".to_owned()
+                        };
+                        writeln!(output, "    let receiver: {container} = {taken}?;")
+                            .map_err(request::unwritable)?;
                         // An implementation's parameter the call infers, as
                         // `Renderer` of iced's `Widget` for `Button`, is
                         // named by the output's type.
@@ -11096,11 +11113,14 @@ fn render_anchored_output(
     let inserted = format!("insert::<{family}>(made)");
     // The crate values the output borrows are shared with the region's
     // pins, which live as long as the view's borrow (`views_natives`).
-    let pins = if VIEWED_ARGUMENTS.get() {
-        "\n            let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;"
+    let mut pins = if VIEWED_ARGUMENTS.get() {
+        "\n            let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;".to_owned()
     } else {
-        ""
+        String::new()
     };
+    // A closure the call calls back, at the region's lifetime, as
+    // `PaneGrid::new`'s view gives each pane's `Content<'a, ..>`.
+    pins.extend(REGIONAL_CLOSURES.with_borrow_mut(std::mem::take));
     writeln!(
         output,
         "    if let Some(anchor) = __rawr_internal::scope::anchor() {{
@@ -11475,6 +11495,21 @@ fn render_scoped_receiver(
             pinned.push_str(&format!(
                 "\n        let argument_{position} = region.pins().ok_or(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch))?.pin(argument_{position}_owned.clone());"
             ));
+        }
+    }
+    // Out of the region, the arguments are the arena's, at `'static`: one
+    // of a type invariant in its lifetime can't join a receiver of the
+    // region, so a call of the two is the region branch's alone
+    // (`region_inputs`), as pane_grid's `content.title_bar(title_bar)` is.
+    if !REGION_ARGUMENTS.get() {
+        for input in signature.inputs().iter().skip(skip) {
+            let ty = substituted(input, signature, substitutions)?;
+            if matches!(ty, convert::Type::Nominal { .. })
+                && carries_lifetime(&ty)
+                && !shortens(&ty)
+            {
+                return Ok(());
+            }
         }
     }
     // In the region the adapter's body already runs in, which an argument
@@ -15392,13 +15427,49 @@ fn render_take_callable(
     substitutions: &[convert::Type],
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let closure = render_callable_closure(
-        index,
-        &format!("(**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take()"),
-        call,
-        signature,
-        substitutions,
-    )?;
+    let source =
+        format!("(**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take()");
+    // A closure whose output is at a lifetime of the call's own, as
+    // pane_grid's `PaneGrid::new(state, |id, pane, max| Content<'a, ..>)`
+    // takes: made where the call is, so in the region of a call made in
+    // one it gives its output at that region's lifetime (`regional`).
+    if boxed_callable(signature.output()).is_none()
+        && regional(call, signature, substitutions)?.is_some()
+    {
+        if REGION_ARGUMENTS.get() {
+            let closure = render_callable_closure(
+                index,
+                &source,
+                call,
+                signature,
+                substitutions,
+                Some("region.pins()"),
+            )?;
+            return writeln!(output, "    let argument_{local} = {closure};")
+                .map_err(request::unwritable);
+        }
+        // Out of a region the call may still be made in a slot's
+        // (`render_anchored_output`), which takes the closure again.
+        writeln!(output, "    let argument_{local}_source = {source};")
+            .map_err(request::unwritable)?;
+        let source = format!("argument_{local}_source.clone()");
+        let closure = render_callable_closure(
+            index,
+            &source,
+            call,
+            signature,
+            substitutions,
+            Some("region.pins()"),
+        )?;
+        REGIONAL_CLOSURES.with_borrow_mut(|closures| {
+            closures.push(format!("\n            let argument_{local} = {closure};"));
+        });
+        let closure =
+            render_callable_closure(index, &source, call, signature, substitutions, None)?;
+        return writeln!(output, "    let argument_{local} = {closure};")
+            .map_err(request::unwritable);
+    }
+    let closure = render_callable_closure(index, &source, call, signature, substitutions, None)?;
     // An output that names the closure's type, as iced's `Widget::map`
     // gives `Map<Self, F, Message>`: the closure boxed as the `Box<dyn
     // Fn(..) -> ..>` the classifier wrote there (T417).
@@ -15456,7 +15527,7 @@ fn render_take_optional_callable(
     substitutions: &[convert::Type],
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let closure = render_callable_closure(index, "inner", call, signature, substitutions)?;
+    let closure = render_callable_closure(index, "inner", call, signature, substitutions, None)?;
     writeln!(
         output,
         "    let argument_{local} = match __rawr_internal::option::take(&mut **arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).ok_or(Error::TypeMismatch)? {{\n        None => None,\n        Some(inner) => Some({closure}),\n    }};"
@@ -15464,15 +15535,44 @@ fn render_take_optional_callable(
     .map_err(request::unwritable)
 }
 
+/// The family of the output of the closure `call` fills when it is at a
+/// lifetime of the call's own, as `Content<'a, ..>` of pane_grid's
+/// `PaneGrid::new(state, view: impl Fn(..) -> Content<'a, ..>)` is: the
+/// closure is called while the call runs, so its output is made where the
+/// call is. Not one a type parameter names, as `W` of iced's `lazy` or
+/// `responsive`, whose closure-filled argument is at `'static` (D761).
+fn regional(
+    call: &crate::classify::representability::callable::Call,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<Option<String>, request::Error> {
+    if !matches!(call.output(), convert::Type::Nominal { .. }) {
+        return Ok(None);
+    }
+    let returned = substituted(call.output(), signature, substitutions)?;
+    if !carries_lifetime(&returned) {
+        return Ok(None);
+    }
+    Ok(written_family(&returned))
+}
+
 /// The block that makes a Rust closure calling the script callable
-/// `source` gives, for [`render_take_callable`].
+/// `source` gives, for [`render_take_callable`]. With `pins`, the pins of
+/// the region its call is made in, the closure's call runs in a region of
+/// its own anchored on them, as a slot's does (`render_slot`), and its
+/// output comes out of it at their lifetime (`regional`).
 fn render_callable_closure(
     index: usize,
     source: &str,
     call: &crate::classify::representability::callable::Call,
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
+    pins: Option<&str>,
 ) -> Result<String, request::Error> {
+    let regional = match pins {
+        Some(pins) => regional(call, signature, substitutions)?.map(|family| (pins, family)),
+        None => None,
+    };
     let by_value = |ty: &convert::Type| {
         !matches!(ty, convert::Type::Nominal { .. })
             || is_value(ty)
@@ -15639,12 +15739,34 @@ fn render_callable_closure(
     } else {
         ""
     };
-    let body = format!("{call_arena}let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));{restores}\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))");
+    let body = match &regional {
+        // The values the call makes go in the closure's region, which
+        // keeps the strings they borrow in the pins it is anchored on.
+        Some((_, family)) => format!(
+            "{call_arena}let mut values = {values};
+            let mut region = match pins {{
+                Some(pins) => __rawr_internal::scope::Region::anchored(pins),
+                None => __rawr_internal::scope::Region::new(),
+            }};
+            let value = __rawr_internal::scope::open_anchored(&mut region, || {call}).unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));{restores}
+            let scoped = value
+                .read_lock::<__rawr_internal::scope::Scoped>()
+                .map(|scoped| *scoped)
+                .unwrap_or_else(|| panic!(\"rawr: a closure gave native code a value that isn't of the region its call runs in\"));
+            region
+                .take::<{family}>(scoped)
+                .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"))"
+        ),
+        None => format!(
+            "{call_arena}let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));{restores}\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))"
+        ),
+    };
     // A script value the closure gives on a thread with no arena, as
     // iced's executor runs `Subscription::map`'s closure, is made on the
     // owner thread where it is first used (`DeferProbe`), as a slot's is:
     // its body may make native values, which only the owner's arena holds.
     let deferred = matches!(returned, convert::Type::Script { .. })
+        && regional.is_none()
         && places.is_empty()
         && lends.is_empty()
         && !inputs
@@ -15658,8 +15780,14 @@ fn render_callable_closure(
     let body = place::around(&places, "witnesses.clone()", body);
     let (items, body) = lent_around(&lends, body);
     let body = format!("{items}{body}");
+    // A regional output is at the lifetime of the pins, which rustc infers
+    // from them, as no Rust code here can name it.
+    let (pinned, returns) = match regional {
+        Some((pins, _)) => (format!("\n        let pins = {pins};"), String::new()),
+        None => (String::new(), format!(" -> {rust}")),
+    };
     Ok(format!(
-        "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            {body}\n        }}\n    }}",
+        "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}{pinned}\n        move |{}|{returns} {{\n            {body}\n        }}\n    }}",
         parameters.join(", "),
     ))
 }
@@ -17557,6 +17685,10 @@ thread_local! {
     /// which it shares with `pins` for as long as the output can borrow
     /// them (`views_natives`).
     static VIEWED_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The closures an adapter's call takes whose output is at a lifetime
+    /// of the call's own (`regional`), each made again in the region of a
+    /// slot the call is made in (`render_anchored_output`).
+    static REGIONAL_CLOSURES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Whether an adapter's opaque output borrows the crate values it
     /// takes from the one value that owns them (`lent_cell`): each such
     /// argument is named in the builder of that value.
@@ -18493,6 +18625,19 @@ fn shortens(ty: &convert::Type) -> bool {
             .get(definition.as_bytes())
             .is_some_and(|lifetimes| lifetimes.covariant)
     }) && !arguments.iter().any(carries_lifetime)
+}
+
+/// [`shortens`] of a method's container, the type at `path` spelled
+/// `container`: covariant in its own lifetimes, with no other lifetime or
+/// borrow among its arguments.
+fn container_shortens(path: &str, container: &str) -> bool {
+    let Some(lifetimes) = SCOPED_PATHS.with_borrow(|paths| paths.get(path).copied()) else {
+        return true;
+    };
+    let rest = container.strip_prefix(path).unwrap_or(container);
+    lifetimes.covariant
+        && rest.matches('\'').count() <= lifetimes.count as usize
+        && !rest.contains('&')
 }
 
 fn carries_lifetime(ty: &convert::Type) -> bool {
