@@ -74,8 +74,11 @@ pub enum Category {
     InvalidMethodSignature,
     /// A nominal operation requires a capability the type did not derive.
     MissingCapability,
-    /// A nominal enum match contains an invalid, unreachable, or incomplete pattern set.
+    /// A nominal enum match contains an invalid or unreachable pattern set.
     InvalidMatch,
+    /// A `match` whose arms miss some values of its scrutinee, as rustc's
+    /// E0004.
+    NonExhaustive,
     /// Source combines nominal operations with syntax not lowered in this phase.
     UnsupportedNominalSyntax,
     /// Syntax Rust does not have, as rustc reports it.
@@ -150,6 +153,7 @@ impl fmt::Display for Category {
             Self::InvalidMethodSignature => formatter.write_str("invalid method signature"),
             Self::MissingCapability => formatter.write_str("missing capability"),
             Self::InvalidMatch => formatter.write_str("invalid match"),
+            Self::NonExhaustive => formatter.write_str("non-exhaustive patterns"),
             Self::UnsupportedNominalSyntax => formatter.write_str("unsupported nominal syntax"),
             Self::Syntax => formatter.write_str("syntax error"),
             Self::UnlabeledJumpInWhileCondition => {
@@ -731,6 +735,16 @@ pub enum Error {
         /// Primary source span on the pattern or complete match.
         pattern: Span,
     },
+    /// A `match` whose arms miss some values of its scrutinee, which rustc
+    /// refuses (E0004).
+    NonExhaustive {
+        /// The patterns of the values no arm matches, as rustc writes them.
+        witnesses: Box<[ImmutableString]>,
+        /// The matched value's type.
+        ty: ImmutableString,
+        /// The scrutinee.
+        scrutinee: Span,
+    },
     /// A nominal script reaches syntax deliberately deferred to a later step.
     UnsupportedNominalSyntax {
         /// Stable description of the unsupported construct.
@@ -987,6 +1001,7 @@ impl Error {
             Self::InvalidMethodSignature { .. } => Category::InvalidMethodSignature,
             Self::MissingCapability { .. } => Category::MissingCapability,
             Self::InvalidMatch { .. } => Category::InvalidMatch,
+            Self::NonExhaustive { .. } => Category::NonExhaustive,
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
@@ -1031,6 +1046,7 @@ impl Error {
             | Self::InvalidConstruction { owner, .. }
             | Self::MissingCapability { owner, .. }
             | Self::InvalidMatch { owner, .. } => owner.as_str(),
+            Self::NonExhaustive { ty, .. } => ty.as_str(),
             Self::TypeMismatch { expected, .. } | Self::IfWithoutElse { expected, .. } => {
                 expected.as_str()
             }
@@ -1102,6 +1118,7 @@ impl Error {
             Self::InvalidMethodSignature { signature, .. } => *signature,
             Self::MissingCapability { operation, .. } => *operation,
             Self::InvalidMatch { pattern, .. } => *pattern,
+            Self::NonExhaustive { scrutinee, .. } => *scrutinee,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::AsyncMain { at } => *at,
             Self::StdPath { reference, .. } | Self::NotYet { reference, .. } => *reference,
@@ -1169,6 +1186,7 @@ impl Error {
             | Self::ReturnWithoutValue { .. }
             | Self::MissingCapability { .. }
             | Self::InvalidMatch { .. }
+            | Self::NonExhaustive { .. }
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
@@ -1187,6 +1205,69 @@ impl Error {
             | Self::SelfOutsideImpl { .. }
             | Self::InvalidMethodSignature { .. } => None,
         }
+    }
+}
+
+/// rustc's message for a `match` that misses the values of `witnesses`
+/// (E0004): `non-exhaustive patterns: `A` and `B` not covered`.
+pub(crate) struct NonExhaustive<'a>(pub(crate) &'a [ImmutableString]);
+
+impl NonExhaustive<'_> {
+    /// The witnesses rustc names: three at most, and how many more.
+    const SHOWN: usize = 3;
+
+    /// rustc's label on the scrutinee: `pattern `A` not covered`.
+    pub(crate) fn label(&self) -> String {
+        let noun = if self.0.len() == 1 {
+            "pattern"
+        } else {
+            "patterns"
+        };
+        format!("{noun} {} not covered", self.uncovered())
+    }
+
+    /// rustc's help, with the arm it suggests: the one witness, the
+    /// witnesses as one or-pattern, or `_` past three.
+    pub(crate) fn help(&self) -> String {
+        let (how, pattern) = match self.0 {
+            [one] => (" or an explicit pattern as shown", one.to_string()),
+            witnesses if witnesses.len() <= Self::SHOWN => (
+                ", a match arm with multiple or-patterns as shown, or multiple match arms",
+                witnesses.join(" | "),
+            ),
+            _ => (" as shown, or multiple match arms", "_".to_string()),
+        };
+        format!(
+            "ensure that all possible cases are being handled by adding a match arm \
+             with a wildcard pattern{how}: `{pattern} => todo!()`"
+        )
+    }
+
+    /// The witnesses as rustc joins them: `` `A`, `B` and `C` ``, or
+    /// `` `A`, `B`, `C` and 2 more ``.
+    fn uncovered(&self) -> String {
+        let quoted = |witnesses: &[ImmutableString]| witnesses.join("`, `");
+        match self.0 {
+            [one] => format!("`{one}`"),
+            [head @ .., last] if self.0.len() <= Self::SHOWN => {
+                format!("`{}` and `{last}`", quoted(head))
+            }
+            witnesses => format!(
+                "`{}` and {} more",
+                quoted(&witnesses[..Self::SHOWN]),
+                witnesses.len() - Self::SHOWN
+            ),
+        }
+    }
+}
+
+impl fmt::Display for NonExhaustive<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "non-exhaustive patterns: {} not covered",
+            self.uncovered()
+        )
     }
 }
 
@@ -1617,6 +1698,11 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "invalid match for `{owner}` at {pattern}: {reason}"
             ),
+            Error::NonExhaustive {
+                witnesses,
+                scrutinee,
+                ..
+            } => write!(formatter, "{} at {scrutinee} (E0004)", NonExhaustive(witnesses)),
             Error::UnsupportedNominalSyntax { construct, source } => {
                 write!(formatter, "{} at {source}", Unsupported(construct))
             }

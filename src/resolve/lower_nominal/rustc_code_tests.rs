@@ -609,3 +609,143 @@ fn the_old_engines_symbols_are_rustc_syntax_errors() {
         ("".into(), "unknown start of token: `".into(), None)
     );
 }
+
+#[test]
+fn a_non_exhaustive_match_is_e0004() {
+    // rustc's message, its label on the scrutinee, its note and its help.
+    let missing = |declarations: &str, scrutinee: &str, arms: &str| {
+        let source = format!(
+            "{declarations}\nfn main() {{\n    let value = {scrutinee};\n    match value {{\n        \
+             {arms}\n    }}\n}}\n"
+        );
+        let error = Engine::new()
+            .compile(&source)
+            .map(|_| ())
+            .expect_err("rawr refuses a non-exhaustive match");
+        let file = Source::new("main.rs", &source).expect("a test source has an identity");
+        let report = Report::from_parse(file, &error).expect("the error is in the source");
+        assert_eq!(report.code().as_str(), "E0004", "{source}");
+        let label = report.labels().first().expect("a label on the scrutinee");
+        assert_eq!(
+            label.span().start(),
+            crate::Position::new(4, 11),
+            "{source}"
+        );
+        let label = label.message().unwrap_or_default().to_string();
+        let notes = report.notes().map(str::to_string).collect::<Vec<_>>();
+        let help = report.help().unwrap_or_default().to_string();
+        (report.message().to_string(), label, notes, help)
+    };
+    let explicit = "ensure that all possible cases are being handled by adding a match arm with a \
+                    wildcard pattern or an explicit pattern as shown";
+    let or_patterns = "ensure that all possible cases are being handled by adding a match arm \
+                       with a wildcard pattern, a match arm with multiple or-patterns as shown, \
+                       or multiple match arms";
+    let wildcard = "ensure that all possible cases are being handled by adding a match arm with a \
+                    wildcard pattern as shown, or multiple match arms";
+    let message = |uncovered: &str| format!("non-exhaustive patterns: {uncovered} not covered");
+
+    // One variant.
+    let (text, label, notes, help) = missing(
+        "enum Message { Increment, Decrement }",
+        "Message::Increment",
+        "Message::Increment => {}",
+    );
+    assert_eq!(text, message("`Message::Decrement`"));
+    assert_eq!(label, "pattern `Message::Decrement` not covered");
+    assert_eq!(notes, ["the matched value is of type `Message`"]);
+    assert_eq!(help, format!("{explicit}: `Message::Decrement => todo!()`"));
+
+    // Two variants, as one or-pattern; past three, `and N more` and `_`.
+    let letters = "enum M { A, B, C, D, E }";
+    let (text, label, _, help) = missing(
+        letters,
+        "M::A",
+        "M::A => {}\n        M::B => {}\n        M::C => {}",
+    );
+    assert_eq!(text, message("`M::D` and `M::E`"));
+    assert_eq!(label, "patterns `M::D` and `M::E` not covered");
+    assert_eq!(help, format!("{or_patterns}: `M::D | M::E => todo!()`"));
+    let (text, label, _, help) = missing(letters, "M::A", "M::A => {}");
+    assert_eq!(text, message("`M::B`, `M::C`, `M::D` and 1 more"));
+    assert_eq!(
+        label,
+        "patterns `M::B`, `M::C`, `M::D` and 1 more not covered"
+    );
+    assert_eq!(help, format!("{wildcard}: `_ => todo!()`"));
+    // A variant an arm names in part isn't reported while others are
+    // missing, as in rustc.
+    let (text, ..) = missing("enum N { X(bool), Y, Z }", "N::Y", "N::X(true) => {}");
+    assert_eq!(text, message("`N::Y` and `N::Z`"));
+    let (text, ..) = missing("enum M { A, B }", "(true, M::A)", "(true, M::A) => {}");
+    assert_eq!(text, message("`(false, _)`"));
+
+    // `Option`'s variants.
+    let (text, _, notes, help) = missing("", "Some(1)", "Some(_) => {}");
+    assert_eq!(text, message("`None`"));
+    assert_eq!(notes, ["the matched value is of type `Option<i32>`"]);
+    assert_eq!(help, format!("{explicit}: `None => todo!()`"));
+    let (text, ..) = missing("", "Some(1)", "None => {}");
+    assert_eq!(text, message("`Some(_)`"));
+    let (text, ..) = missing("", "Some(1)", "Some(1) => {}");
+    assert_eq!(text, message("`None`"));
+    let (text, ..) = missing("", "&Some(true)", "Some(true) => {}");
+    assert_eq!(text, message("`&None`"));
+
+    // An integer's ranges, as rustc words them.
+    let (text, label, notes, help) = missing("", "1", "1 => {}");
+    assert_eq!(text, message("`i32::MIN..=0_i32` and `2_i32..=i32::MAX`"));
+    assert_eq!(
+        label,
+        "patterns `i32::MIN..=0_i32` and `2_i32..=i32::MAX` not covered"
+    );
+    assert_eq!(notes, ["the matched value is of type `i32`"]);
+    assert_eq!(
+        help,
+        format!("{or_patterns}: `i32::MIN..=0_i32 | 2_i32..=i32::MAX => todo!()`")
+    );
+    let (text, ..) = missing(
+        "",
+        "1_u8",
+        "0 => {}\n        5..=9 => {}\n        255 => {}",
+    );
+    assert_eq!(text, message("`1_u8..=4_u8` and `10_u8..=254_u8`"));
+    let (text, ..) = missing("", "1_u8", "0..=254 => {}");
+    assert_eq!(text, message("`u8::MAX`"));
+    let (text, ..) = missing("", "1_usize", "5 => {}");
+    assert_eq!(text, message("`0_usize..=4_usize` and `6_usize..`"));
+    let (text, ..) = missing("", "1_isize", "0 => {}");
+    assert_eq!(text, message("`..=-1_isize` and `1_isize..`"));
+    let (text, ..) = missing(
+        "",
+        "1",
+        "1 => {}\n        3 => {}\n        5 => {}\n        7 => {}",
+    );
+    assert_eq!(
+        text,
+        message("`i32::MIN..=0_i32`, `2_i32`, `4_i32` and 2 more")
+    );
+    let (text, ..) = missing("", "1", "-3 => {}\n        ..=-5 => {}\n        0.. => {}");
+    assert_eq!(text, message("`-4_i32` and `-2_i32..=-1_i32`"));
+    let (text, ..) = missing("", "1", "1 if true => {}");
+    assert_eq!(text, message("`_`"));
+    let (text, ..) = missing("", "'a'", "'a' => {}");
+    assert_eq!(
+        text,
+        message("`'\\0'..='`'`, `'b'..='\\u{d7ff}'` and `'\\u{e000}'..='\\u{10ffff}'`")
+    );
+    let (text, ..) = missing("", "true", "true => {}");
+    assert_eq!(text, message("`false`"));
+
+    // A string, through its reference.
+    let (text, label, notes, _) = missing("", "\"a\"", "\"a\" => {}");
+    assert_eq!(text, message("`&_`"));
+    assert_eq!(label, "pattern `&_` not covered");
+    assert_eq!(notes, ["the matched value is of type `&str`"]);
+
+    // Arms whose ranges cover every value need no `_`, as in rustc.
+    Engine::new()
+        .compile("fn f(x: u8) -> i32 {\n    match x {\n        0..=99 => 0,\n        100..=255 => 1,\n    }\n}\n")
+        .map(|_| ())
+        .unwrap_or_else(|error| panic!("{error}"));
+}

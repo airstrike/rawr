@@ -554,6 +554,9 @@ fn primary_label(
         }
         resolve::Error::AsyncMain { .. } => Some(resolve::ASYNC_MAIN.into()),
         resolve::Error::StdPath { label, .. } => label.clone(),
+        resolve::Error::NonExhaustive { witnesses, .. } => {
+            Some(resolve::NonExhaustive(witnesses).label().into())
+        }
         resolve::Error::CannotCompare { lhs, rhs, .. } => {
             Some(format!("no implementation for `{lhs} == {rhs}`").into())
         }
@@ -692,6 +695,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::InvalidMethodSignature => code::RESOLVE_METHOD_SIGNATURE,
         resolve::Category::MissingCapability => code::RESOLVE_CAPABILITY,
         resolve::Category::InvalidMatch => code::RESOLVE_MATCH,
+        resolve::Category::NonExhaustive => code::RESOLVE_NON_EXHAUSTIVE,
         resolve::Category::UnsupportedNominalSyntax => code::RESOLVE_UNSUPPORTED_SYNTAX,
         resolve::Category::Syntax => code::PARSE_SYNTAX,
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
@@ -750,6 +754,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::StdPath {
             note: Some(note), ..
         } => builder.note(note.clone()),
+        resolve::Error::NonExhaustive { witnesses, ty, .. } => builder
+            .note(format!("the matched value is of type `{ty}`"))
+            .help(resolve::NonExhaustive(witnesses).help()),
         resolve::Error::UnknownFunction {
             import: Some(path), ..
         } => builder.help(format!("consider importing this function: `use {path};`")),
@@ -1061,6 +1068,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         }
         resolve::Error::AsyncMain { .. } => resolve::ASYNC_MAIN.to_string(),
         resolve::Error::StdPath { message, .. } => message.to_string(),
+        resolve::Error::NonExhaustive { witnesses, .. } => {
+            resolve::NonExhaustive(witnesses).to_string()
+        }
         resolve::Error::NotYet { path, .. } => format!("rawr doesn't run `{path}` yet"),
         resolve::Error::TypeAnnotationsNeeded { parameter, .. } => {
             format!("type annotations needed: cannot infer the type of the type parameter `{parameter}`")

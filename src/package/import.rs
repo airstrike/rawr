@@ -1036,6 +1036,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::UnusedValue { .. }
         | R::SelfOutsideImpl { .. }
         | R::ImmutableReceiver { .. }
+        | R::NonExhaustive { .. }
         | R::UnsupportedNominalSyntax { .. }
         | R::Syntax { .. }
         | R::UnlabeledJumpInWhileCondition { .. }
