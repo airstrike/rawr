@@ -20,7 +20,7 @@ use std::fmt::Write;
 /// A `format!` piece whose value's type was not known yet where it was
 /// written: a closure parameter typed by a call later in the body. It is
 /// written over its placeholder once the callable's types are settled.
-pub(super) struct PendingFormat {
+pub(super) struct Pending {
     pub(super) placeholder: String,
     pub(super) ty: Ty,
     pub(super) name: String,
@@ -41,29 +41,29 @@ pub(super) fn format_placeholder(index: usize) -> String {
 
 /// An argument a format string names: `{0}`, `{name}`, `1$`, `name$`.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum FormatArgument {
+pub(super) enum Argument {
     Index(usize),
     Name(String),
 }
 
 /// A width or precision as written: `5`, `1$`, `name$` or `.*`.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum FormatCountRef {
+pub(super) enum CountRef {
     Literal(usize),
-    Argument(FormatArgument),
+    Argument(Argument),
     Star,
 }
 
 /// A width or precision: a literal or the argument holding it.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum FormatCount {
+pub(super) enum Count {
     Literal(usize),
     Argument(usize),
 }
 
 /// The trait a placeholder formats with.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum FormatKind {
+pub(super) enum Kind {
     Display,
     /// `?`.
     Debug,
@@ -79,18 +79,18 @@ pub(super) enum FormatKind {
 
 /// std::fmt's `format_spec`, before its arguments are resolved:
 /// `[[fill]align][sign]['#']['0'][width]['.' precision]type`.
-pub(super) struct RawFormatSpec {
+pub(super) struct RawSpec {
     pub(super) fill: char,
     pub(super) align: Option<char>,
     pub(super) sign: bool,
     pub(super) alternate: bool,
     pub(super) zero: bool,
-    pub(super) width: Option<FormatCountRef>,
-    pub(super) precision: Option<FormatCountRef>,
-    pub(super) kind: FormatKind,
+    pub(super) width: Option<CountRef>,
+    pub(super) precision: Option<CountRef>,
+    pub(super) kind: Kind,
 }
 
-impl RawFormatSpec {
+impl RawSpec {
     pub(super) fn parse(spec: &str) -> Result<Self, String> {
         let chars: Vec<char> = spec.chars().collect();
         let mut at = 0;
@@ -138,20 +138,20 @@ impl RawFormatSpec {
             Some((chars[start..end].iter().collect(), end))
         };
         // `count := integer | integer '$' | identifier '$'`.
-        let count = |at: &mut usize| -> Option<FormatCountRef> {
+        let count = |at: &mut usize| -> Option<CountRef> {
             let start = *at;
             if let Some(value) = integer(at) {
                 if chars.get(*at) == Some(&'$') {
                     *at += 1;
-                    return Some(FormatCountRef::Argument(FormatArgument::Index(value)));
+                    return Some(CountRef::Argument(Argument::Index(value)));
                 }
-                return Some(FormatCountRef::Literal(value));
+                return Some(CountRef::Literal(value));
             }
             if let Some((name, end)) = identifier(start)
                 && chars.get(end) == Some(&'$')
             {
                 *at = end + 1;
-                return Some(FormatCountRef::Argument(FormatArgument::Name(name)));
+                return Some(CountRef::Argument(Argument::Name(name)));
             }
             None
         };
@@ -160,7 +160,7 @@ impl RawFormatSpec {
             at += 1;
             if chars.get(at) == Some(&'*') {
                 at += 1;
-                Some(FormatCountRef::Star)
+                Some(CountRef::Star)
             } else {
                 Some(count(&mut at).ok_or_else(|| {
                     "invalid format string: expected a precision after `.`".to_string()
@@ -170,16 +170,16 @@ impl RawFormatSpec {
             None
         };
         let kind = match chars[at..].iter().collect::<String>().as_str() {
-            "" => FormatKind::Display,
-            "?" => FormatKind::Debug,
-            "x" => FormatKind::Radix(16),
-            "X" => FormatKind::Radix(-16),
-            "o" => FormatKind::Radix(8),
-            "b" => FormatKind::Radix(2),
-            "x?" => FormatKind::HexDebug(16),
-            "X?" => FormatKind::HexDebug(-16),
-            "e" => FormatKind::Exp { upper: false },
-            "E" => FormatKind::Exp { upper: true },
+            "" => Kind::Display,
+            "?" => Kind::Debug,
+            "x" => Kind::Radix(16),
+            "X" => Kind::Radix(-16),
+            "o" => Kind::Radix(8),
+            "b" => Kind::Radix(2),
+            "x?" => Kind::HexDebug(16),
+            "X?" => Kind::HexDebug(-16),
+            "e" => Kind::Exp { upper: false },
+            "E" => Kind::Exp { upper: true },
             other => return Err(format!("unknown format trait `{other}`")),
         };
         Ok(Self {
@@ -196,22 +196,18 @@ impl RawFormatSpec {
 
     /// The argument `key` (before the `:`) names: `None` for the next
     /// positional one.
-    pub(super) fn argument_of(&self, key: &str) -> Option<FormatArgument> {
+    pub(super) fn argument_of(&self, key: &str) -> Option<Argument> {
         if key.is_empty() {
             None
         } else if let Ok(index) = key.parse::<usize>() {
-            Some(FormatArgument::Index(index))
+            Some(Argument::Index(index))
         } else {
-            Some(FormatArgument::Name(key.to_string()))
+            Some(Argument::Name(key.to_string()))
         }
     }
 
-    pub(super) fn resolved(
-        self,
-        width: Option<FormatCount>,
-        precision: Option<FormatCount>,
-    ) -> FormatSpec {
-        FormatSpec {
+    pub(super) fn resolved(self, width: Option<Count>, precision: Option<Count>) -> Spec {
+        Spec {
             fill: self.fill,
             align: self.align,
             sign: self.sign,
@@ -226,18 +222,18 @@ impl RawFormatSpec {
 
 /// A placeholder's spec with its width and precision resolved.
 #[derive(Clone)]
-pub(super) struct FormatSpec {
+pub(super) struct Spec {
     pub(super) fill: char,
     pub(super) align: Option<char>,
     pub(super) sign: bool,
     pub(super) alternate: bool,
     pub(super) zero: bool,
-    pub(super) width: Option<FormatCount>,
-    pub(super) precision: Option<FormatCount>,
-    pub(super) kind: FormatKind,
+    pub(super) width: Option<Count>,
+    pub(super) precision: Option<Count>,
+    pub(super) kind: Kind,
 }
 
-impl FormatSpec {
+impl Spec {
     /// A Rawr block that pads the text named `name` as Rust would: `width`
     /// and `precision` are Rawr expressions (a literal or a local).
     pub(super) fn render(
@@ -259,7 +255,7 @@ impl FormatSpec {
                 out += " else { sign = \"+\"; }";
             }
             let radix = match self.kind {
-                FormatKind::Radix(radix) | FormatKind::HexDebug(radix) => Some(radix),
+                Kind::Radix(radix) | Kind::HexDebug(radix) => Some(radix),
                 _ => None,
             };
             if let (true, Some(radix)) = (self.alternate, radix) {
@@ -906,7 +902,7 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("positional `format!` arguments after named ones"));
         }
 
-        let mut pieces = Vec::<Result<String, (usize, FormatSpec)>>::new();
+        let mut pieces = Vec::<Result<String, (usize, Spec)>>::new();
         let mut text = String::new();
         let mut next_positional = 0;
         let mut counted = BTreeSet::<usize>::new();
@@ -944,7 +940,7 @@ impl<'a> Parser<'a> {
                         Some((name, spec)) => (name.trim().to_string(), spec.to_string()),
                         None => (written.trim().to_string(), String::new()),
                     };
-                    let spec = RawFormatSpec::parse(&raw).map_err(invalid)?;
+                    let spec = RawSpec::parse(&raw).map_err(invalid)?;
                     // Each `{}`/`{:.*}` takes the next positional argument;
                     // `.*` takes one for the precision first.
                     let take_positional = |next: &mut usize| {
@@ -953,10 +949,10 @@ impl<'a> Parser<'a> {
                     };
                     let resolve = |this: &mut Self,
                                    arguments: &mut Vec<(Option<ImmutableString>, ParsedExpr)>,
-                                   reference: &FormatArgument|
+                                   reference: &Argument|
                      -> Result<usize, Error> {
                         match reference {
-                            FormatArgument::Index(index) => {
+                            Argument::Index(index) => {
                                 if *index >= positional {
                                     return Err(invalid(format!(
                                         "invalid reference to positional argument {index} (there {})",
@@ -968,7 +964,7 @@ impl<'a> Parser<'a> {
                                 }
                                 Ok(*index)
                             }
-                            FormatArgument::Name(name) => {
+                            Argument::Name(name) => {
                                 if let Some(index) = arguments
                                     .iter()
                                     .position(|(named, _)| named.as_deref() == Some(name.as_str()))
@@ -1050,24 +1046,22 @@ impl<'a> Parser<'a> {
                     let count = |this: &mut Self,
                                  arguments: &mut Vec<(Option<ImmutableString>, ParsedExpr)>,
                                  next: &mut usize,
-                                 count: &Option<FormatCountRef>|
-                     -> Result<Option<FormatCount>, Error> {
+                                 count: &Option<CountRef>|
+                     -> Result<Option<Count>, Error> {
                         Ok(match count {
                             None => None,
-                            Some(FormatCountRef::Literal(value)) => {
-                                Some(FormatCount::Literal(*value))
-                            }
-                            Some(FormatCountRef::Star) => {
+                            Some(CountRef::Literal(value)) => Some(Count::Literal(*value)),
+                            Some(CountRef::Star) => {
                                 let index = take_positional(next);
                                 if index >= positional {
                                     return Err(invalid(
                                         "`.*` needs a precision argument before the value".into(),
                                     ));
                                 }
-                                Some(FormatCount::Argument(index))
+                                Some(Count::Argument(index))
                             }
-                            Some(FormatCountRef::Argument(reference)) => {
-                                Some(FormatCount::Argument(resolve(this, arguments, reference)?))
+                            Some(CountRef::Argument(reference)) => {
+                                Some(Count::Argument(resolve(this, arguments, reference)?))
                             }
                         })
                     };
@@ -1095,7 +1089,7 @@ impl<'a> Parser<'a> {
                         Some(reference) => resolve(self, &mut arguments, reference)?,
                     };
                     for count in [&width, &precision].into_iter().flatten() {
-                        if let FormatCount::Argument(argument) = count {
+                        if let Count::Argument(argument) = count {
                             counted.insert(*argument);
                         }
                     }
@@ -1188,10 +1182,10 @@ impl<'a> Parser<'a> {
                 });
             }
             let name = origin::Fragment::plain(names[index].as_str());
-            let count = |count: &Option<FormatCount>| {
+            let count = |count: &Option<Count>| {
                 count.as_ref().map(|count| match count {
-                    FormatCount::Literal(value) => value.to_string(),
-                    FormatCount::Argument(argument) => names[*argument].clone(),
+                    Count::Literal(value) => value.to_string(),
+                    Count::Argument(argument) => names[*argument].clone(),
                 })
             };
             let width = count(&spec.width);
@@ -1210,16 +1204,16 @@ impl<'a> Parser<'a> {
             // A value whose type a later call settles, as a closure
             // parameter: its piece is written once the types are known.
             if matches!(ty, Ty::Infer(_))
-                && matches!(spec.kind, FormatKind::Display | FormatKind::Debug)
+                && matches!(spec.kind, Kind::Display | Kind::Debug)
                 && spec.width.is_none()
                 && !spec.sign
             {
                 let placeholder = format_placeholder(self.pending_formats.len());
-                self.pending_formats.push(PendingFormat {
+                self.pending_formats.push(Pending {
                     placeholder: placeholder.clone(),
                     ty: types[index].0.clone(),
                     name: names[index].clone(),
-                    debug: spec.kind == FormatKind::Debug,
+                    debug: spec.kind == Kind::Debug,
                     alternate: spec.alternate,
                     precision: precision.clone(),
                     span: at,
@@ -1235,10 +1229,10 @@ impl<'a> Parser<'a> {
             // A spec on `{:?}` of a value other than a number, which Rust's
             // `Formatter` passes down to each leaf, as in `Some(       1)`.
             let hex = match spec.kind {
-                FormatKind::HexDebug(radix) => Some(radix),
+                Kind::HexDebug(radix) => Some(radix),
                 _ => None,
             };
-            let spread = matches!(spec.kind, FormatKind::Debug | FormatKind::HexDebug(_))
+            let spread = matches!(spec.kind, Kind::Debug | Kind::HexDebug(_))
                 && !number
                 && !matches!(ty, Ty::Infer(_))
                 && (hex.is_some()
@@ -1276,7 +1270,7 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 match spec.kind {
-                    FormatKind::Exp { upper } => {
+                    Kind::Exp { upper } => {
                         if !number {
                             return Err(mismatch("a number for `{:e}`"));
                         }
@@ -1291,7 +1285,7 @@ impl<'a> Parser<'a> {
                             [name, precision.into(), mode.to_string().into()],
                         )
                     }
-                    FormatKind::HexDebug(_) if float => {
+                    Kind::HexDebug(_) if float => {
                         let debug = 1 + f32_mode;
                         let precision = precision.clone().unwrap_or_else(|| "-1".into());
                         self.prelude_op(
@@ -1299,9 +1293,9 @@ impl<'a> Parser<'a> {
                             [name, precision.into(), debug.to_string().into()],
                         )
                     }
-                    FormatKind::Radix(radix) | FormatKind::HexDebug(radix) => {
+                    Kind::Radix(radix) | Kind::HexDebug(radix) => {
                         let Some(kind) = int else {
-                            return Err(mismatch(if matches!(spec.kind, FormatKind::Radix(_)) {
+                            return Err(mismatch(if matches!(spec.kind, Kind::Radix(_)) {
                                 "an integer for this `format!` spec"
                             } else {
                                 "an integer for `{:x?}`"
@@ -1322,15 +1316,15 @@ impl<'a> Parser<'a> {
                             ],
                         )
                     }
-                    FormatKind::Debug | FormatKind::Display if float => {
-                        let debug = i64::from(spec.kind == FormatKind::Debug) + f32_mode;
+                    Kind::Debug | Kind::Display if float => {
+                        let debug = i64::from(spec.kind == Kind::Debug) + f32_mode;
                         let precision = precision.clone().unwrap_or_else(|| "-1".into());
                         self.prelude_op(
                             PreludeOp::FormatFloat,
                             [name, precision.into(), debug.to_string().into()],
                         )
                     }
-                    FormatKind::Debug => {
+                    Kind::Debug => {
                         if spec.width.is_some()
                             && !matches!(
                                 ty,
@@ -1346,7 +1340,7 @@ impl<'a> Parser<'a> {
                             rendered
                         }
                     }
-                    FormatKind::Display => match self.display_piece(&ty, name) {
+                    Kind::Display => match self.display_piece(&ty, name) {
                         Some(text) => text,
                         None => {
                             return Err(Error::TypeMismatch {
@@ -1360,11 +1354,10 @@ impl<'a> Parser<'a> {
             };
             let prefixed = spec.alternate
                 && int.is_some()
-                && matches!(spec.kind, FormatKind::Radix(_) | FormatKind::HexDebug(_));
-            let truncated = precision.is_some() && !number && spec.kind == FormatKind::Display;
+                && matches!(spec.kind, Kind::Radix(_) | Kind::HexDebug(_));
+            let truncated = precision.is_some() && !number && spec.kind == Kind::Display;
             // `str`'s and `char`'s `Debug` ignore width and precision.
-            let quoted =
-                spec.kind == FormatKind::Debug && matches!(ty, Ty::String | Ty::Str | Ty::Char);
+            let quoted = spec.kind == Kind::Debug && matches!(ty, Ty::String | Ty::Str | Ty::Char);
             if !quoted
                 && !spread
                 && (width.is_some() || spec.sign && number || prefixed || truncated)

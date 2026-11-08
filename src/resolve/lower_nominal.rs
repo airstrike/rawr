@@ -104,7 +104,6 @@ use dispatch::{
     builtin_conversions_from, builtin_operator, write_closures, write_default_dispatcher,
     write_function, write_method, write_trait_dispatchers, BUILTIN_CONVERSIONS,
 };
-use format::PendingFormat;
 #[cfg(feature = "rust-import")]
 pub(super) use imported::imported;
 #[cfg(all(test, feature = "rust-import"))]
@@ -3253,7 +3252,7 @@ struct Parser<'a> {
     temporaries: usize,
     /// `.into()` conversions, chosen once their target types are known.
     pending_conversions: Vec<PendingConversion>,
-    pending_formats: Vec<PendingFormat>,
+    pending_formats: Vec<format::Pending>,
     /// Each `s.parse()`'s target and error type, the error settled by the
     /// target (`settle_parse`).
     pending_parses: Vec<(Ty, Ty, Span, String)>,
