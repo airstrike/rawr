@@ -19026,7 +19026,11 @@ impl<'a> Parser<'a> {
     /// `from` that takes it. `None` when neither converts it. More than one
     /// that fits, or a target the program has not fixed where the forms
     /// are a trait method's instances, is rustc's E0283: rustc infers
-    /// `Into<U>`'s `U` before it selects an impl, never a first fit.
+    /// `Into<U>`'s `U` before it selects an impl, never a first fit. A
+    /// target whose type is known but whose arguments are still open, as
+    /// `Slot<'_, _>` in a row whose message only a later child fixes, is
+    /// fixed enough: rustc selects the one impl that unifies, and its
+    /// unification binds what it can (#1403).
     fn host_into_helper(
         &mut self,
         host: &HostInto,
@@ -19051,7 +19055,7 @@ impl<'a> Parser<'a> {
         let instances = false;
         match fitting[..] {
             [] => {}
-            [item] if !(instances && contains_unsettled(&self.inference.resolve(target))) => {
+            [item] if !(instances && is_unsettled(&self.inference.resolve(target))) => {
                 let signature =
                     self.instantiate_host_signature(item, Some(source), Some(&[]), Span::NONE)?;
                 self.unify_type(&signature.output, target);
@@ -58184,6 +58188,15 @@ fn contains_open_literal(ty: &Ty) -> bool {
     contains(ty, &|ty| {
         matches!(ty, Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_)))
     })
+}
+
+/// Whether `ty` is itself a variable inference has not settled: an
+/// unknown type, or a literal whose kind is still open.
+fn is_unsettled(ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::Infer(_) | Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_))
+    )
 }
 
 /// Whether `ty` holds a variable inference has not settled: an unknown
