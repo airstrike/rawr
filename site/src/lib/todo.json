@@ -139,7 +139,9 @@
         {"text":"A string literal passed to a crate call that borrows it, as `badge![icon(), \"Verified\"]` or `Slot::from(\"x\")` does, is `'static` text, as in Rust: no scope frame opens for it, so nested view code such as `row![badge![..].style(..), ..].spacing(8).into()` checks and runs as cargo runs it.","issues":[1363]},
         {"text":"A long-running rawr (such as `rawr mcp`) no longer loses its host directory when another rawr prunes old hosts. Each process leases its host for as long as it runs, and prune and `rawr cache clean` skip leased hosts.","issues":[1389]},
         {"text":"The landing page gets its snippets ready once it has loaded: it fetches rawr-web and runs each snippet in the background. Run then shows the result at once instead of waiting for the download or the server.","issues":[1385]},
-        {"text":"The site's Run strips no longer say where a snippet runs: the \"on rawr's server\" label is gone from the landing page and the docs.","issues":[1392],"refs":[1384]}
+        {"text":"The site's Run strips no longer say where a snippet runs: the \"on rawr's server\" label is gone from the landing page and the docs.","issues":[1392],"refs":[1384]},
+        {"text":"A `use` or path whose crate isn't a dependency now reads as rustc's E0433, with rustc's `cargo add` help. A missing item or module in a present module reads as rustc's E0432 or E0425, with rustc's labels. The help \"isn't available in Rawr yet\" is gone.","issues":[1386]},
+        {"text":"`rawr cache warm` builds what the first run with dependencies used to build: it installs the nightly rawr reads crate APIs with (the one the current directory names, or the pinned one), gets that nightly's driver and std table, and compiles rawr's runtime for your Rust compiler. It prints the same progress lines, or one line when everything is built. The installer runs it, so a fresh install's first `rawr run` no longer stops to compile rawr's runtime.","issues":[1388]}
       ]
     },
     "releases": [
@@ -3133,16 +3135,23 @@
     {"issue":1383,"title":"`rawr check` no longer spins for minutes on a thousand-package workspace while counting facade roots","state":"open","category":"Health"},
     {"issue":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open","category":"Health"},
     {"issue":1385,"title":"The landing page warms its snippets after load so Run answers at once","state":"closed","category":"Health"},
-    {"issue":1386,"title":"Unresolved imports and paths get rustc's E0432/E0433 wording; the help \"isn't available in Rawr…","state":"open","category":"Health"},
+    {"issue":1386,"title":"Unresolved imports and paths get rustc's E0432/E0433 wording; the help \"isn't available in Rawr…","state":"closed","category":"Health"},
     {"issue":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"open","category":"Importer"},
-    {"issue":1388,"title":"A rawr command warms the runtime, driver and std table for the active toolchain after cargo…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1388,"title":"A rawr command warms the runtime, driver and std table for the active toolchain after cargo…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1389,"title":"A host in rawr's home is pruned by mtime while a running rawr uses it; a live process leases its…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1390,"title":"A program's From<String> call reaches the crate's From<Cow<str>> adapter: a Cow<str> input looks…","state":"open","category":"No glue (D593)"},
     {"issue":1391,"title":"A literal lent to a crate method whose output borrows its &str arguments still opens a scope frame","state":"open","category":"No glue (D593)"},
     {"issue":1392,"title":"The site's Run strips say nothing about where a snippet runs","state":"open","category":"Health"},
     {"issue":1393,"title":"rawr-import's runner-side model builds for wasm32, split from the host's build and store code…","state":"open","category":"Importer"},
     {"issue":1394,"title":"rawr-import extracts bindings for a selected target other than the host, such as wasm32 (blocks…","state":"open","category":"Importer"},
-    {"issue":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"open","category":"Importer"}
+    {"issue":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"open","category":"Importer"},
+    {"issue":1396,"title":"The universe runner fails E0597: an iced adapter's `pins` drops while `made` (Button<'_, Script…","state":"open","category":"No glue (D593)"},
+    {"issue":1397,"title":"A body or type path through a present module with a missing middle segment reads as rustc's…","state":"open","category":"Divergences from rustc"},
+    {"issue":1398,"title":"E0599 for a missing associated item uses rustc's current wording and labels (struct or enum…","state":"open","category":"Divergences from rustc"},
+    {"issue":1399,"title":"An unknown field in a struct literal or pattern on a qualified type reads as rustc's E0560 and E0026","state":"open","category":"Divergences from rustc"},
+    {"issue":1400,"title":"The importer's unresolved import in a dependency reads as rustc's E0432 label and help","state":"open","category":"Importer"},
+    {"issue":1401,"title":"A rawr-import built from source at an unreleased patch can't get the pinned nightly's driver (404)","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1402,"title":"Installing from source with cargo install gives rawr alone, with no rawr-import and no warm…","state":"open","category":"Health"}
   ],
   "groups": [
     {

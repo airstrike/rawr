@@ -133,6 +133,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A long-running rawr (such as `rawr mcp`) no longer loses its host directory when another rawr prunes old hosts. Each process leases its host for as long as it runs, and prune and `rawr cache clean` skip leased hosts. (#1389)
 - The landing page gets its snippets ready once it has loaded: it fetches rawr-web and runs each snippet in the background. Run then shows the result at once instead of waiting for the download or the server. (#1385)
 - The site's Run strips no longer say where a snippet runs: the "on rawr's server" label is gone from the landing page and the docs. (#1392; part of #1384)
+- A `use` or path whose crate isn't a dependency now reads as rustc's E0433, with rustc's `cargo add` help. A missing item or module in a present module reads as rustc's E0432 or E0425, with rustc's labels. The help "isn't available in Rawr yet" is gone. (#1386)
+- `rawr cache warm` builds what the first run with dependencies used to build: it installs the nightly rawr reads crate APIs with (the one the current directory names, or the pinned one), gets that nightly's driver and std table, and compiles rawr's runtime for your Rust compiler. It prints the same progress lines, or one line when everything is built. The installer runs it, so a fresh install's first `rawr run` no longer stops to compile rawr's runtime. (#1388)
 
 ## 0.3.171 (2026-11-07)
 
