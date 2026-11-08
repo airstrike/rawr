@@ -1402,6 +1402,7 @@
     {"t":"T1399","issue":1399,"title":"T1399: An unknown field in a struct literal or pattern on a qualified type reads as rustc's E0560 and E0026","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1400","issue":1400,"title":"T1400: The importer's unresolved import in a dependency reads as rustc's E0432 label and help","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1401","issue":1401,"title":"T1401: A rawr-import built from source at an unreleased patch can't get the pinned nightly's driver (404)","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1402","issue":1402,"title":"T1402: Installing from source with cargo install gives rawr alone, with no rawr-import and no warm…","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1402","issue":1402,"title":"T1402: Installing from source with cargo install gives rawr alone, with no rawr-import and no warm…","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1403","issue":1403,"title":"T1403: A free type parameter in an argument (`Text<'a, Theme>`) is fixed by the one `From` impl that…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

@@ -3151,7 +3151,8 @@
     {"issue":1399,"title":"An unknown field in a struct literal or pattern on a qualified type reads as rustc's E0560 and E0026","state":"open","category":"Divergences from rustc"},
     {"issue":1400,"title":"The importer's unresolved import in a dependency reads as rustc's E0432 label and help","state":"open","category":"Importer"},
     {"issue":1401,"title":"A rawr-import built from source at an unreleased patch can't get the pinned nightly's driver (404)","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1402,"title":"Installing from source with cargo install gives rawr alone, with no rawr-import and no warm…","state":"open","category":"Health"}
+    {"issue":1402,"title":"Installing from source with cargo install gives rawr alone, with no rawr-import and no warm…","state":"open","category":"Health"},
+    {"issue":1403,"title":"A free type parameter in an argument (`Text<'a, Theme>`) is fixed by the one `From` impl that…","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4128,7 +4129,7 @@
           "start": 84,
           "size": 2,
           "state": "now",
-          "note": "A shared store keeps only the projects in use (#960); runtimes no installed rawr links are collected (#963)",
+          "note": "inboard (1016 packages) target/rawr: 35G before protocol 60, 16G after one check on #1354, #1355, #1356, #1358 and #1359 (store 21G to 4.5G, api-parts gone); left: #1357, #1360, #1361, #1362",
           "issues": [
             {"number":959,"title":"rawr run inside a git worktree under another workspace fails with 'malformed filesystem observation transport'","state":"closed"},
             {"number":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"closed"},
