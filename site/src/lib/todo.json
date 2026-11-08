@@ -2900,7 +2900,8 @@
     {"issue":1228,"title":"The site redirects plain http to https","state":"open","category":"Health"},
     {"issue":1229,"title":"runtime cleanup test flakes under the parallel lib suite","state":"open","category":"Health"},
     {"issue":1230,"title":"A failed manifest probe was cached as a permanent negative, so rawr called an installed rawr-import 'not installed'","state":"closed","category":"Health"},
-    {"issue":1231,"title":"A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"open","category":"Health"}
+    {"issue":1231,"title":"A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"open","category":"Health"},
+    {"issue":1232,"title":"One method's opaque types in two impls share a facade name (swash parse_list); text examples fail check","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3482,7 +3483,8 @@
             {"number":1190,"title":"Hold a region value whose type contains an opaque type behind a boxed proxy (D745.4b; modal, pane_grid, loupe)","state":"closed"},
             {"number":1215,"title":"ratatui's Line::styled_graphemes and Span::styled_graphemes are left out of the facade","state":"open"},
             {"number":1216,"title":"A crate function that takes a boxed region value in another position than the first doesn't take it","state":"open"},
-            {"number":1217,"title":"A script value that holds a value of a view's region is reached after the region ends (loupe)","state":"open"}
+            {"number":1217,"title":"A script value that holds a value of a view's region is reached after the region ends (loupe)","state":"open"},
+            {"number":1232,"title":"One method's opaque types in two impls share a facade name (swash parse_list); text examples fail check","state":"open"}
           ]
         }
       ]
