@@ -143,7 +143,9 @@ pub(super) fn attempt(
         // these exact identities still stands; a Rawr edit derives only its own.
         if !native_current || native_inputs.as_ref().is_none_or(|(key, _)| *key != watch) {
             let outputs = rawr_import::location::outputs_here(&project);
-            let derived = source::Inputs::imported(watch.iter().cloned()).outside(&outputs);
+            let derived = source::Inputs::imported(watch.iter().cloned())
+                .outside(&outputs)
+                .with_checkouts(&rawr_import::location::checkouts_here());
             *native_inputs = Some((watch, derived));
         }
         let native = &native_inputs.as_ref().expect("derived above").1;

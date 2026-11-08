@@ -119,6 +119,7 @@ fn observation_encoder_checks_bounds_order_and_omits_derived_directories() {
         directories: Box::from([PathBuf::from("not-an-authoritative-identity")]),
         trees: Box::default(),
         sources: Box::default(),
+        unwatched: Box::default(),
     };
     assert_eq!(
         input(Box::from([PathBuf::from("/b"), PathBuf::from("/a")]))

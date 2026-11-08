@@ -256,6 +256,17 @@ impl Read<'_> {
         trees.into_iter().collect()
     }
 
+    /// Return the stable union of current and staged unwatched directories.
+    #[must_use]
+    pub fn unwatched(&self) -> Box<[std::path::PathBuf]> {
+        std::iter::once(&self.0.current)
+            .chain(self.0.staged.iter().map(|entry| &entry.inputs))
+            .flat_map(|inputs| inputs.unwatched().iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     /// Return every exact input with more than a Rawr source role across
     /// current and staged publications.
     #[must_use]
