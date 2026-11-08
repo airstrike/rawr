@@ -6223,11 +6223,11 @@ fn language_slice_and_rest_patterns() {
     for (source, expected) in [
         (
             "fn f(v: &[i64]) -> i64 { match v { [] => 0, [x] => *x } }",
-            "missing [_, _, ..]",
+            "`&[_, _, ..]` not covered",
         ),
         (
             "fn f(v: [bool; 2]) -> i64 { match v { [true, _] => 1, [_, true] => 2 } }",
-            "missing [false, false]",
+            "`[false, false]` not covered",
         ),
         (
             "fn f(v: [i64; 3]) -> i64 { match v { [a, b] => a } }",
