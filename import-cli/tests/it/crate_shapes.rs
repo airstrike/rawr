@@ -446,6 +446,12 @@ fn a_forwarding_impls_parameters_are_its_own() {
 /// selection binds it, and a `Label` borrowing a literal opens its frame
 /// in the macro's array. A `TextLike` no impl takes is rustc's E0277, with
 /// the types the impls take (#1336).
+///
+/// The program's own `fn check<'a, Theme>() -> Text<'a, Theme>` leaves the
+/// theme to the impl its text converts by, in a badge as in a row. In a
+/// row whose message type only its last child's impl fixes (`From<Rule>
+/// for Slot<'a, ()>`), each child before it still selects the one impl
+/// that unifies with its type, as rustc does, rather than E0283 (#1403).
 #[test]
 fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     runs_as_cargo_does(
@@ -455,7 +461,9 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
          text check 12 | str Verified\nlabel own | string mine 7 | text plain 16\n\
          text into 16 | string mine 3 | label from\n\
          row 8 [string badge secondary 4 [icon 12 | str Verified] | \
-         string badge ghost 4 [str Bookmark | icon 12]]\n107997\n",
+         string badge ghost 4 [str Bookmark | icon 12]]\n\
+         row 0 [string badge secondary 4 [text check 12 | str Verified]]\n\
+         text check 12 | icon 12 | rule\n107997\n",
     );
     let program = "// rawr\nuse natives::compose::{self, Row, Theme};\nuse natives::slots;\n\n\
                    fn main() {\n    let row: Row<'_, ()> = \

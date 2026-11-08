@@ -10,6 +10,13 @@ impl<'a, M> From<Mine> for Slot<'a, M> {
     }
 }
 
+/// An icon the program makes, generic over the theme as a generated icon
+/// module's `badge_check` is: the `From` impl the slot takes it by fixes
+/// the theme.
+fn check<'a, Theme>() -> compose::Text<'a, Theme> {
+    compose::text("check")
+}
+
 /// A component crate's plainest view: badges of an icon and a literal in a
 /// row, each literal `'static` text the program holds once.
 fn badges<'a>() -> Slot<'a, ()> {
@@ -62,6 +69,12 @@ fn main() {
     println!("{}", row.draw());
     let row: Row<()> = Row::with_children([badges()]);
     println!("{}", row.draw());
+    let checked: Slot<()> =
+        slots![badge![check().size(12), "Verified"].style(badge::Secondary)].into();
+    let row: Row<()> = Row::with_children([checked]);
+    println!("{}", row.draw());
+    let ruled = slots![check().size(12), compose::icon().size(12), compose::rule()];
+    println!("{}", ruled.draw());
     let mut many = Vec::new();
     for _ in 0..1000 {
         let view: Slot<()> = slots![

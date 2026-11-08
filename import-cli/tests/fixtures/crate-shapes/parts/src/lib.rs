@@ -129,3 +129,17 @@ impl<'a, Message: 'a> From<Row<'a, Message>> for Slot<'a, Message> {
         Slot::new(format!("row {} [{}]", row.spacing, row.draw()))
     }
 }
+
+/// A rule between children, whose slot has no message: its `From` impl
+/// fixes the slot's message type at `()`, so a row it is in has that one.
+pub struct Rule;
+
+pub fn rule() -> Rule {
+    Rule
+}
+
+impl<'a> From<Rule> for Slot<'a, ()> {
+    fn from(_: Rule) -> Self {
+        Slot::new("rule".to_owned())
+    }
+}

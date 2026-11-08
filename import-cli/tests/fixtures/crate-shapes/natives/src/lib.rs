@@ -1343,7 +1343,7 @@ pub mod badge {
 /// `Into::<$crate::compose::Slot<'_, _>>::into` in an array a row takes as
 /// `impl IntoIterator`, as iced's `Row::with_children` does.
 pub mod compose {
-    pub use parts::{badge_check, icon, label, Icon, Label, Row, Slot, Theme};
+    pub use parts::{badge_check, icon, label, rule, Icon, Label, Row, Rule, Slot, Theme};
     pub use widgets::{text, text_like, Text, TextLike};
 }
 
