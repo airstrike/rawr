@@ -1109,6 +1109,14 @@ struct Rejected {
     span: model::Span,
 }
 
+impl Rejected {
+    /// Whether `self` and `other` reject one definition alike, their spans
+    /// compared by place (`model::Span::same_place`).
+    fn same(&self, other: &Self) -> bool {
+        self.reason == other.reason && self.span.same_place(&other.span)
+    }
+}
+
 enum ClosureOutcome {
     Complete,
     Rejected(Box<Rejected>),
@@ -6206,7 +6214,7 @@ fn reject(
         ));
     }
     match rejected.get(id) {
-        Some(previous) if previous.value != outcome => Err(extraction(
+        Some(previous) if !previous.value.same(&outcome) => Err(extraction(
             "conflicting-definition",
             &conflict::rejection(
                 id,

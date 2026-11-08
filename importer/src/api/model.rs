@@ -32,6 +32,26 @@ pub enum Origin {
     Synthesized(Box<str>),
 }
 
+impl Origin {
+    /// Whether `self` and `other` name the same origin, with their spans
+    /// compared by [`Span::same_place`].
+    fn same_place(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Expansion {
+                    call_site,
+                    definition_site,
+                },
+                Self::Expansion {
+                    call_site: other_call,
+                    definition_site: other_definition,
+                },
+            ) => call_site.same_place(other_call) && definition_site.same_place(other_definition),
+            _ => self == other,
+        }
+    }
+}
+
 /// Effective visibility after compiler name resolution.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum Visibility {
@@ -650,6 +670,38 @@ pub enum Trait {
 }
 
 impl Span {
+    /// Whether `self` and `other` are the same place in the same source.
+    /// A file of Rust's own library is named by the toolchain directory it
+    /// was read from (`.rustup/toolchains/<name>/lib/rustlib/src/rust/..`),
+    /// and two names of one toolchain (`nightly` and the dated nightly it
+    /// resolves to) read the same file under different directories, so
+    /// such files compare by their path below `lib/rustlib/src/rust/`.
+    pub(crate) fn same_place(&self, other: &Self) -> bool {
+        const LIBRARY: &str = "/lib/rustlib/src/rust/";
+        fn below_library(file: &str) -> &str {
+            match file.find(LIBRARY) {
+                Some(index) => &file[index..],
+                None => file,
+            }
+        }
+        below_library(&self.file) == below_library(&other.file)
+            && (
+                self.byte_start,
+                self.byte_end,
+                self.line_start,
+                self.column_start,
+                self.line_end,
+                self.column_end,
+            ) == (
+                other.byte_start,
+                other.byte_end,
+                other.line_start,
+                other.column_start,
+                other.line_end,
+                other.column_end,
+            )
+    }
+
     pub(super) fn retain(&self, retained: &mut Retained) -> Option<()> {
         retained.node()?;
         retained.string(&self.file)
@@ -1267,8 +1319,8 @@ impl Definition {
             && self.owner == other.owner
             && self.visibility == other.visibility
             && self.kind == other.kind
-            && self.span == other.span
-            && self.origin == other.origin
+            && self.span.same_place(&other.span)
+            && self.origin.same_place(&other.origin)
     }
 
     pub(crate) fn new(
@@ -2164,5 +2216,34 @@ impl Binder {
             index,
             name,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Span;
+
+    fn at(file: &str) -> Span {
+        Span::new(file.into(), 15704, 15800, 436, 0, 436, 96)
+    }
+
+    #[test]
+    fn a_library_file_is_one_place_under_two_names_of_its_toolchain() {
+        let dated = at("/home/.rustup/toolchains/nightly-2026-07-11-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs");
+        let channel = at("/home/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs");
+        assert!(
+            dated.same_place(&channel),
+            "one std file read through two toolchain names"
+        );
+        assert_ne!(
+            dated, channel,
+            "the spans keep the path they were read from"
+        );
+        let other = at("/home/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/vec/into_iter.rs");
+        assert!(!dated.same_place(&other), "another file is another place");
+        assert!(
+            !at("/src/a.rs").same_place(&at("/src/b.rs")),
+            "files outside the library compare whole"
+        );
     }
 }
