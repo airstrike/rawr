@@ -36,7 +36,7 @@ No `into_inner() -> String`. No `impl Deref<Target = String>` on a newtype whose
 `Result<T, String>` makes the caller pattern-match on bytes. Use `#[derive(thiserror::Error)]` enums, or types that carry what the handler needs (request id, responder, the rejected value).
 
 **N4. Functions with 4+ scalar parameters or >2 underscores in the name are smells.**
-Four `String`s in a signature say "bundle me into a validated type." `insert_object_for_undo_with_history_recording(edit, doc, history, ctx, ...)` says "some of these should have been one type; there's a transformation hiding in the name."
+Four `String`s in a signature say "bundle me into a validated type." `insert_object_for_undo_with_history_recording(edit, doc, history, ctx, ...)` says "some of these should have been one type; there's a transformation hiding in the name." A `bool` parameter whose meaning the call site doesn't show is the same smell at its smallest: make it an enum.
 
 **N5. A type with no fields is not a type — it's a namespace.**
 `struct Foo; impl Foo { pub fn parse(x) -> Y }` is `fn parse_foo(x) -> Y` with extra syntax. If the type has no invariants to hold, move its methods onto the type that does.
@@ -58,6 +58,8 @@ do_thing(&name);
 ```
 
 Violates **N1**. After the check, `name` is still `&str`. Anyone in another call site skips the check and nothing complains.
+
+The same smell inside one expression is `if x.is_some() { use(x.unwrap()) }`. Match instead (`if let Some(v) = x`), so the pattern is the proof.
 
 → `smart-constructor-newtype`.
 
@@ -181,7 +183,7 @@ impl Email {
 }
 ```
 
-One field, one validating constructor, read-only accessor. `TryFrom<String>` is a common equivalent:
+One field, one validating constructor, read-only accessor. The constructor is `new`, not `try_new`, because the checked constructor is the only one. `TryFrom<String>` is a common equivalent:
 
 ```rust
 impl TryFrom<String> for Email {
