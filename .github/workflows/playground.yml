@@ -68,7 +68,23 @@ jobs:
           key: web-${{ steps.key.outputs.deps }}
           restore-keys: web-
 
+      # The browser's universe (#1395) is built by rawr-import, which reads
+      # the universe with its driver on the extraction nightly, as the bot
+      # image's universe stage does (play/Dockerfile).
+      - name: Install the extraction nightly
+        run: rustup toolchain install nightly-2026-07-11 --profile minimal --component rustc-dev,rust-src --target wasm32-unknown-unknown --no-self-update
+
+      - name: Build rawr-import and its driver
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "off"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: |
+          cargo build --release --locked -p rawr-import-cli --bin rawr-import
+          cargo +nightly-2026-07-11 build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver
+
       - name: Build rawr-web
+        env:
+          RAWR_IMPORT: ${{ github.workspace }}/target/release/rawr-import
         run: time web/build.sh target/web
 
       - uses: actions/upload-artifact@v4
