@@ -120,6 +120,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A call of a crate's generic item always reaches the adapter of its own instance. A parameter an associated type reads no longer misses its adapter, and a type argument that keys no instance is a check error at the call, never a call into another instance's adapter at run time. (#1353, #1087)
 - A marked type behind a native trait object lends its strings in place: `fn label(&self) -> &str` reads the program's own text with no copy, and a `&self` method returning a native type that borrows the value, as `view(&self) -> Element<'_, Message>` does, works and keeps what it borrows only to the next `&mut self` call. (#1322, #1321)
 - Two `let`s of a crate value that borrows what it takes, such as an invariant `Text<'a>` or what `explain` gives, go to one call outside a view too, as Rust infers one lifetime for both. (#1335)
+- rawr keeps one copy of each crate's bindings: the home's for a shared crate, target/rawr/bindings for a path crate, and the file the nightly compiler wrote for bindings that haven't settled. target/rawr/staged holds only a small record for each, keeps those of the last four resolutions that ran the nightly compiler, and drops the rest. A check whose bindings are unchanged writes none of them again. (#1354, #1355)
 
 ## 0.3.171 (2026-11-07)
 
