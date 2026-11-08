@@ -3072,7 +3072,9 @@
     {"issue":1342,"title":"A `self::` path in a body names an item of the current module","state":"closed","category":"Divergences from rustc"},
     {"issue":1343,"title":"A program's generic impl of a std trait other than From for a crate type passes its own parameter to the crate","state":"open","category":"Divergences from rustc"},
     {"issue":1344,"title":"A file without `mod` items resolves `crate::`, `self::` and `super::` paths","state":"open","category":"Divergences from rustc"},
-    {"issue":1345,"title":"`pub use Enum::Variant;` re-exports a crate enum's variant","state":"open","category":"Divergences from rustc"}
+    {"issue":1345,"title":"`pub use Enum::Variant;` re-exports a crate enum's variant","state":"open","category":"Divergences from rustc"},
+    {"issue":1346,"title":"The file watcher fails to start on a large project: `unable to start FSEvent stream`; watch the inputs, not the tree","state":"open","category":"Health"},
+    {"issue":1347,"title":"One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3978,7 +3980,8 @@
             {"number":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"closed"},
             {"number":1331,"title":"`#[cfg(..)]` on a struct-literal field, a match arm, an array element or an expression statement","state":"closed"},
             {"number":1337,"title":"Native-module scanning reads target cfgs from rustc's cfg set","state":"closed"},
-            {"number":1338,"title":"cfg: RUSTFLAGS --cfg values and a disabled multi-parameter closure argument","state":"open"}
+            {"number":1338,"title":"cfg: RUSTFLAGS --cfg values and a disabled multi-parameter closure argument","state":"open"},
+            {"number":1346,"title":"The file watcher fails to start on a large project: `unable to start FSEvent stream`; watch the inputs, not the tree","state":"open"}
           ]
         }
       ]
@@ -4050,7 +4053,8 @@
             {"number":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"closed"},
             {"number":1121,"title":"An iced canvas::Program's State written through &mut in update isn't kept between events","state":"open"},
             {"number":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open"},
-            {"number":1246,"title":"Generate the site's snippet outputs by running them at build, not by hand","state":"closed"}
+            {"number":1246,"title":"Generate the site's snippet outputs by running them at build, not by hand","state":"closed"},
+            {"number":1347,"title":"One project's target/rawr grows to 41 GB (store 27 GB, staged 7 GB)","state":"open"}
           ]
         },
         {
