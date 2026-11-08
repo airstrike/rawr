@@ -319,7 +319,7 @@ impl Parser<'_> {
             .map(|name| origin::Fragment::plain(name.as_str()))
             .collect();
         parameters.push(self.temporary("resume").into());
-        self.lifted.push(LiftedClosure {
+        self.lifted.push(closure::Lifted {
             key: key.clone(),
             value: None,
             parameters,

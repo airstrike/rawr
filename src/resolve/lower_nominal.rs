@@ -94,8 +94,6 @@ use crate::{
     calc_fn_hash, capability, method, receiver, type_def, Dynamic, Engine, EvalAltResult,
     ImmutableString, Module, Position, RawrResult, Scope, Shared, Span, AST, INT,
 };
-pub(crate) use closure::ClosureCallable;
-use closure::{ClosureOutput, ClosureScope, LiftedClosure};
 use compare::Shape;
 use coverage::{
     bool_literals, field_order, reject_empty_range, scalar_text, tuple_members, Scalar,
@@ -1763,7 +1761,7 @@ pub(crate) struct Output {
     pub(crate) dependencies: Box<[crate::host::facade::Dependency]>,
     pub(crate) runtime_requirements: Box<[crate::host::runtime::Requirement]>,
     pub(crate) projection_requirements: Box<[crate::host::projection::Site]>,
-    pub(crate) closures: Box<[ClosureCallable]>,
+    pub(crate) closures: Box<[closure::Callable]>,
 }
 
 /// Compiler-created evidence translating one generated callback range.
@@ -2237,7 +2235,7 @@ struct Lowered {
     locations: Vec<location::Output>,
     ops: Vec<ExecutableOp>,
     patterns: Vec<NominalPattern>,
-    closures: Vec<LiftedClosure>,
+    closures: Vec<closure::Lifted>,
 }
 
 /// Whether `member` of the imported enum `definition` is one of its
@@ -3014,7 +3012,7 @@ struct Parser<'a> {
     #[cfg(feature = "rust-import")]
     revealing: Option<Ty>,
     loops: Vec<LoopFrame>,
-    closures: Vec<ClosureScope>,
+    closures: Vec<closure::Scope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
     moved_at: BTreeMap<Span, Span>,
     /// The type of a capture rawr knows isn't `Send`, of each closure
@@ -3062,7 +3060,7 @@ struct Parser<'a> {
     /// declaration (T179).
     shared_call_fns: BTreeSet<Span>,
     closure_count: usize,
-    lifted: Vec<LiftedClosure>,
+    lifted: Vec<closure::Lifted>,
     /// Parameter types of the host callable each call argument fills.
     closure_hints: Vec<Option<Box<[Ty]>>>,
     /// The local holding a `{:?}` spec (`DebugSpec`) that `debug_source`
@@ -3082,8 +3080,8 @@ struct Parser<'a> {
     local_macros: Vec<(ImmutableString, Shared<crate::resolve::macro_rules::Rules>)>,
     /// The host type a host callable returns, as iced's `Element`, at each
     /// argument: a closure's body is converted into it, as Rust's `Into`.
-    closure_outputs: Vec<Option<ClosureOutput>>,
-    closure_output: Option<ClosureOutput>,
+    closure_outputs: Vec<Option<closure::Output>>,
+    closure_output: Option<closure::Output>,
     /// The closure about to be parsed is an async body's step function
     /// (`parse_async_block`), with its output type when it is known.
     async_step: Option<Option<Ty>>,
@@ -27197,7 +27195,7 @@ impl<'a> Parser<'a> {
         body.cover(value.span);
         let mut parameters = vec![pointer];
         parameters.extend(arguments);
-        self.lifted.push(LiftedClosure {
+        self.lifted.push(closure::Lifted {
             key: key.clone(),
             value: None,
             parameters,

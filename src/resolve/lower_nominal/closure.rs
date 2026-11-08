@@ -20,7 +20,7 @@ use std::rc::Rc;
 /// item the host invokes like a named function, after the values it
 /// captured.
 #[derive(Clone)]
-pub(super) struct LiftedClosure {
+pub(super) struct Lifted {
     pub(super) key: crate::item::Key,
     pub(super) value: Option<crate::item::Value>,
     /// The captures' parameters first, then the closure's own.
@@ -38,7 +38,7 @@ pub(super) struct LiftedClosure {
 }
 
 /// An executable callable for a lifted closure.
-pub(crate) struct ClosureCallable {
+pub(crate) struct Callable {
     pub(crate) value: crate::item::Value,
     pub(crate) arity: usize,
     pub(crate) dispatch: ImmutableString,
@@ -47,14 +47,14 @@ pub(crate) struct ClosureCallable {
 
 /// The host type a host callable returns, and how many type arguments it
 /// takes.
-pub(super) type ClosureOutput = (Rc<HostTyProof>, usize);
+pub(super) type Output = (Rc<HostTyProof>, usize);
 
 /// A host callable parameter's input types, when known, and its output.
-pub(super) type ClosureHint = (Option<Box<[Ty]>>, Option<ClosureOutput>);
+pub(super) type Hint = (Option<Box<[Ty]>>, Option<Output>);
 
 /// A closure body being parsed: the bindings declared outside it, and the
 /// ones it uses (captures).
-pub(super) struct ClosureScope {
+pub(super) struct Scope {
     pub(super) outer: BTreeMap<ImmutableString, Span>,
     pub(super) captures: BTreeSet<ImmutableString>,
     /// The captures the body moves out, which a closure that is not
@@ -81,10 +81,10 @@ impl<'a> Parser<'a> {
         receiver: Option<&Ty>,
     ) {
         self.deferred_hints = (!items.is_empty()).then(|| (items.into(), receiver.cloned()));
-        let mut overloads = Vec::<Vec<Option<ClosureHint>>>::new();
+        let mut overloads = Vec::<Vec<Option<Hint>>>::new();
         for item in items {
             let checkpoint = self.inference.checkpoint();
-            let hints: Vec<Option<ClosureHint>> = self
+            let hints: Vec<Option<Hint>> = self
                 .instantiate_host_signature(item, receiver, None, Span::NONE)
                 .map(|signature| {
                     signature
@@ -113,7 +113,7 @@ impl<'a> Parser<'a> {
             // a `Sender<P>` whose `P` the body settles.
             let hints = hints
                 .into_iter()
-                .map(|hint: Option<ClosureHint>| {
+                .map(|hint: Option<Hint>| {
                     hint.and_then(|(inputs, output)| {
                         let mut fresh = BTreeMap::new();
                         let inputs = inputs.and_then(|inputs| {
@@ -273,7 +273,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The closures this body passed to the host.
-    pub(super) fn take_lifted(&mut self) -> Vec<LiftedClosure> {
+    pub(super) fn take_lifted(&mut self) -> Vec<Lifted> {
         std::mem::take(&mut self.lifted)
             .into_iter()
             .filter(|closure| closure.value.is_some())
@@ -497,7 +497,7 @@ impl<'a> Parser<'a> {
         let outer_returns = std::mem::replace(&mut self.returns, 0);
         let outer_blocked = self.return_blocked.take();
         let outer_bindings = self.bindings.clone();
-        self.closures.push(ClosureScope {
+        self.closures.push(Scope {
             outer: outer_bindings
                 .iter()
                 .map(|(name, binding)| (name.clone(), binding.declaration))
@@ -942,7 +942,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 lifted_parameters.extend(names_list);
-                self.lifted.push(LiftedClosure {
+                self.lifted.push(Lifted {
                     key: key.clone(),
                     value: None,
                     parameters: lifted_parameters,

@@ -1,6 +1,7 @@
 //! Function and method writers: the generated dispatchers of trait, instance,
 //! `Into` and static calls, and the text of each lowered function and method.
 
+use super::closure;
 use super::models::{Models, Nominal};
 use super::op::{builtin_code, owner_id, owner_key, ExecutableOp, PreludeOp, COUNTED_KEY};
 use super::ty::Ty;
@@ -8,8 +9,8 @@ use super::{
     copied_parameters, default_value, drops, instance_dispatcher_name, instance_text,
     item_generics, location, mentions_parameter, method_copied, method_name, origin,
     retain_locations, static_dispatcher_name, static_instance_dispatcher_name, this_parameter,
-    trait_dispatcher_name, witness_generics, witness_variable, ClosureCallable, LiftedClosure,
-    Lowered, ParsedExpr, Parser, CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL,
+    trait_dispatcher_name, witness_generics, witness_variable, Lowered, ParsedExpr, Parser,
+    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL,
 };
 use crate::resolve::{item, type_ref, Error, Program};
 use crate::{capability, method, ImmutableString, Span};
@@ -21,8 +22,8 @@ pub(super) fn write_closures(
     output: &mut location::Generated,
     retained: &mut Vec<location::Pending>,
     source: crate::program::source::Id,
-    lifted: Vec<LiftedClosure>,
-    closures: &mut Vec<ClosureCallable>,
+    lifted: Vec<closure::Lifted>,
+    closures: &mut Vec<closure::Callable>,
     rewrites: &mut BTreeMap<ImmutableString, ImmutableString>,
 ) {
     for closure in lifted {
@@ -43,7 +44,7 @@ pub(super) fn write_closures(
         retain_locations(retained, offset, Some(&closure.key), source, locations);
         output.declaration(source, closure.span, "\n}\n");
         rewrites.insert(generated.into(), dispatch.clone());
-        closures.push(ClosureCallable {
+        closures.push(closure::Callable {
             arity: closure.parameters.len(),
             value,
             dispatch,
