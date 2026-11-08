@@ -22,6 +22,8 @@
 //! where the program makes it, as on `?play`: the bindings cover what the
 //! program called when they were generated.
 
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
 mod error;
 mod outcome;
 mod program;
@@ -126,6 +128,19 @@ impl Universe {
         files: Vec<(PathBuf, Box<str>)>,
     ) -> Result<Program, Error> {
         Program::load(self, program::Sources::given(entry, text.into(), files))
+    }
+
+    /// Send what every program it loads prints to `output`, as
+    /// [`Engine::on_output`] does, which a page shows (#1395). Set before
+    /// the first program loads, while the engine is the universe's alone;
+    /// `false` once a program shares it.
+    pub fn on_output(
+        &mut self,
+        output: impl Fn(crate::Output, &str) + Send + Sync + 'static,
+    ) -> bool {
+        Shared::get_mut(&mut self.engine)
+            .map(|engine| engine.on_output(output))
+            .is_some()
     }
 
     /// The runtime the next program loaded binds: the first one, and a

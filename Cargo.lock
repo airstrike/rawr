@@ -2986,6 +2986,7 @@ dependencies = [
  "thin-vec",
  "thiserror 2.0.19",
  "unicode-xid",
+ "wasm-bindgen",
  "web-time",
 ]
 

@@ -106,6 +106,20 @@ pub(crate) fn prepare(
     let Some((root, dependency)) = internal(&document) else {
         return Ok(None);
     };
+    // The shared runtime is compiled for the host. A runner Cargo builds
+    // for another target, such as a browser's wasm32 (#1395), compiles
+    // rawr for that target with its own dependencies.
+    if context.target() != crate::cargo::toolchain::HOST {
+        crate::progress::note(
+            "runtime-local",
+            &format!(
+                "rawr: this runner builds for `{}`, and rawr's shared runtime is the host's, so \
+                 rawr compiles in this project",
+                context.target()
+            ),
+        );
+        return Ok(None);
+    }
     let lock_text = std::str::from_utf8(lock).map_err(|error| transform(error.to_string()))?;
     if let Some(dependent) = rawr_dependent(lock_text) {
         crate::progress::note(
