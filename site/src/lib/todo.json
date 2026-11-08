@@ -3213,7 +3213,8 @@
     {"issue":1442,"title":"A native trait method a marked type implements can't return a reference (`&'static Meta`…","state":"closed","category":"No glue (D593)"},
     {"issue":1443,"title":"A stand-in's `&[T]` result of native elements borrowed from self (`&self.rows`) is refused; lend…","state":"open","category":"Divergences from rustc"},
     {"issue":1444,"title":"A `&'static T` result that is an element or field of a static (`&BLOCKS[0]`, `&META.inner`)…","state":"open","category":"No glue (D593)"},
-    {"issue":1445,"title":"A value a stand-in lent in place (`&self.state`) can't also be shared by a view in the same…","state":"open","category":"Divergences from rustc"}
+    {"issue":1445,"title":"A value a stand-in lent in place (`&self.state`) can't also be shared by a view in the same…","state":"open","category":"Divergences from rustc"},
+    {"issue":1446,"title":"Two lower_nominal collected_tests fail with \"missing runtime binding for `native::identity`\"…","state":"open","category":"Health"}
   ],
   "groups": [
     {
