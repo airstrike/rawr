@@ -855,3 +855,45 @@ main();
         "{report}"
     );
 }
+
+/// The first lines of the panic `cargo run` of `source` prints, from
+/// `thread 'main' panicked at main.rs:<line>:<column>:` to its message.
+fn panicked(source: &str) -> String {
+    let engine = Engine::new();
+    let evidence = crate::diagnostic::Source::new("main.rs", source).unwrap();
+    let unit = engine.parse_unit(source).unwrap();
+    let (ast, positions) = engine
+        .compile_unit_with_positions(unit, evidence.clone())
+        .unwrap_or_else(|error| panic!("{error}"));
+    let error = engine
+        .call_fn::<crate::Dynamic>(&mut crate::Scope::new(), &ast, "main", ())
+        .expect_err("the program panics");
+    let report = crate::diagnostic::Report::from_evaluation_located(
+        evidence,
+        positions.translate(&error),
+        &error,
+    )
+    .unwrap();
+    let panic = crate::diagnostic::panic(&report);
+    panic.lines().take(2).collect::<Vec<_>>().join("\n")
+}
+
+/// An index past a slice's end panics at the expression's start, as
+/// rustc places a built-in index's panic and as an array's does (#35).
+#[test]
+fn language_a_slice_index_panics_at_the_expression_start() {
+    assert_eq!(
+        panicked(
+            "fn get(s: &[i32], i: usize) -> i32 {\n    let x = 0;\n    s[i] + x\n}\nfn main() {\n    \
+             let i: usize = \"5\".parse().unwrap();\n    println!(\"{}\", get(&[1, 2, 3], i));\n}\n"
+        ),
+        "thread 'main' panicked at main.rs:3:5:\nindex out of bounds: the len is 3 but the index is 5"
+    );
+    assert_eq!(
+        panicked(
+            "fn main() {\n    let i: usize = \"5\".parse().unwrap();\n    let v = vec![1, 2, 3];\n    \
+             let s: &[i32] = &v;\n    println!(\"{}\", s[i]);\n}\n"
+        ),
+        "thread 'main' panicked at main.rs:5:20:\nindex out of bounds: the len is 3 but the index is 5"
+    );
+}

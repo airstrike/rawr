@@ -42047,10 +42047,10 @@ impl<'a> Parser<'a> {
             return self.keyed_index(value, keyed, index, end);
         }
         self.require_type(&Ty::Int(Int::Usize), &index.ty, index.span)?;
-        let (element, length) = match self.inference.resolve(&value.ty) {
-            Ty::Array { element, kind } => (*element, kind.length()),
+        let (element, kind) = match self.inference.resolve(&value.ty) {
+            Ty::Array { element, kind } => (*element, kind),
             Ty::Reference { target, .. } => match *target {
-                Ty::Array { element, kind } => (*element, kind.length()),
+                Ty::Array { element, kind } => (*element, kind),
                 ty => {
                     return Err(Error::TypeMismatch {
                         expected: "an array, Vec or slice".into(),
@@ -42070,15 +42070,16 @@ impl<'a> Parser<'a> {
         // Rust panics on a negative or out-of-range index. The index is a
         // block, so the evaluator places that panic at the block, which
         // stands for the whole expression, whose `[` a `Vec`'s panic names,
-        // or for an array's start alone, where rustc places its panic.
-        // Rawr types a slice as a `Vec`.
+        // or for an array's or a slice's start alone, where rustc places
+        // its panic: their index is built in, a `Vec`'s is `Index::index`.
         let mut checked = origin::Fragment::plain("{ let i = ");
         checked.push(index.rendered_source());
         checked.push_text("; if i < 0 { __rawr_throw \"index out of bounds\" } i }");
-        checked.cover(match length {
-            Some(_) => point_span(value.span.start()),
-            None => span(value.span.start(), end),
+        checked.cover(match kind {
+            sequence::Kind::Array(_) | sequence::Kind::Slice => point_span(value.span.start()),
+            sequence::Kind::Vec | sequence::Kind::Deque => span(value.span.start(), end),
         });
+        let length = kind.length();
         let mut source = value.rendered_source().surrounded("(", ")");
         source.push_text("[");
         source.push(checked.clone());
