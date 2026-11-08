@@ -445,13 +445,15 @@ fn a_forwarding_impls_parameters_are_its_own() {
 /// impl gives takes it, so the theme is the crate's, as rustc's impl
 /// selection binds it, and a `Label` borrowing a literal opens its frame
 /// in the macro's array. A `TextLike` no impl takes is rustc's E0277, with
-/// the types the impls take (#1336).
+/// the types the impls take (#1336). A `String` takes `From<String>` and
+/// a literal `From<&str>`, and only the program's own `Cow<str>` takes
+/// `From<Cow<str>>` (#1390).
 #[test]
 fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     runs_as_cargo_does(
         "slots",
         "icon 12 | str Verified | string Verified\nstr into\nstr from | string qualified\n\
-         str a | str b\nstr lent | str literal\nstr first | str second\n\
+         cow borrowed | cow owned\nstr a | str b\nstr lent | str literal\nstr first | str second\n\
          text check 12 | str Verified\nlabel own | string mine 7 | text plain 16\n\
          text into 16 | string mine 3 | label from\n\
          row 8 [string badge secondary 4 [icon 12 | str Verified] | \

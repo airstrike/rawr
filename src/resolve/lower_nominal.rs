@@ -20479,6 +20479,11 @@ impl<'a> Parser<'a> {
                 };
                 intrinsic::Type::array(entry, None)
             }
+            // A `Cow<str>` a crate's `Cow<'_, str>` input takes (#1390):
+            // std's runtime `Cow`, whose text the binding reads.
+            Ty::Cow(ref borrowed) if matches!(**borrowed, Ty::UnsizedStr) => {
+                intrinsic::Type::builtin("Cow<str>", TypeId::of::<cow::Value>())
+            }
             Ty::Reverse(_) | Ty::Cow(_) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }
@@ -22439,6 +22444,9 @@ impl<'a> Parser<'a> {
             Shape::Builtin(Builtin::Instant) => Ty::Time(Time::Instant),
             Shape::Builtin(Builtin::Never) => Ty::Never,
             Shape::Builtin(Builtin::String) => Ty::String,
+            // A crate's `Cow<'_, str>` input: std's `Cow<str>`, which a
+            // `String` or a `&str` doesn't fill (E0277), as rustc has it.
+            Shape::Builtin(Builtin::Text) => Ty::Cow(Box::new(Ty::UnsizedStr)),
             Shape::Builtin(Builtin::InclusiveRange) => {
                 Ty::InclusiveRange(Int::Var(self.inference.fresh_id()))
             }

@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 51;
+const SCHEMA: u32 = 52;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -853,6 +853,10 @@ pub enum Type {
     InclusiveRange,
     /// Immutable string.
     String,
+    /// A `Cow<'_, str>` an item takes: the program's `Cow<str>`, apart
+    /// from a `String` and a `&str`, so `From<String>`, `From<&'a str>`
+    /// and `From<Cow<'a, str>>` of one type stay three forms (#1390).
+    Text,
     /// Another Rust numeric primitive by name (`u32`, `f32`, ...).
     Primitive(Box<str>),
     /// Imported nominal type with exact semantic identity.
@@ -3896,7 +3900,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         .try_reserve_exact(source.inputs().len())
         .map_err(|_| super::Error::Allocation)?;
     for input in source.inputs() {
-        inputs.push(input_ty(input, source.parameters())?);
+        inputs.push(item_input_ty(input, source.parameters())?);
     }
     Ok(Signature {
         parameters,
@@ -4077,7 +4081,7 @@ fn callable_signature(
             representability::convert::Type::Option(inner) if let Some(call) = made(inner) => {
                 Type::Option(Box::new(closure(call)?))
             }
-            input => input_ty(input, all)?,
+            input => item_input_ty(input, all)?,
         });
     }
     Ok(Signature {
@@ -4212,6 +4216,19 @@ fn defaults(
         );
     }
     Ok(output.into_boxed_slice())
+}
+
+/// An item's input: a `Cow<'a, str>` is its own type (`Type::Text`), and
+/// another is `input_ty`'s.
+fn item_input_ty(
+    source: &representability::convert::Type,
+    parameters: &[representability::signature::Parameter],
+) -> Result<Type, Unwritten> {
+    use representability::convert::{Builtin, Type as Source};
+    if matches!(source, Source::Builtin(Builtin::Text)) {
+        return Ok(Type::Text);
+    }
+    input_ty(source, parameters)
 }
 
 /// An item's input. A `&str` or `&'static str` is a shared reference to

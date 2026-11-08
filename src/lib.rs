@@ -120,6 +120,11 @@ pub mod diagnostic;
 mod engine;
 mod eval;
 mod func;
+/// std's `Cow` at runtime, as a generated binding reads one.
+#[doc(hidden)]
+pub mod cow {
+    pub use crate::resolve::lower_nominal::cow::text;
+}
 /// Async code: what async bodies return, how they resume, and how a
 /// runtime polls them.
 pub mod future;

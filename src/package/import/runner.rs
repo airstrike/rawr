@@ -1289,6 +1289,7 @@ fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
             host::type_ref::Type::builtin(host::type_ref::Builtin::InclusiveRange)
         }
         facade::Type::String => host::type_ref::Type::builtin(host::type_ref::Builtin::String),
+        facade::Type::Text => host::type_ref::Type::builtin(host::type_ref::Builtin::Text),
         facade::Type::Primitive(name) => host::type_ref::Type::builtin(
             host::type_ref::Builtin::primitive(name)
                 .expect("a generated primitive type is unknown"),

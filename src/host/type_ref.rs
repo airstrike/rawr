@@ -23,6 +23,11 @@ pub enum Builtin {
     FloatInclusiveRange,
     /// `String`.
     String,
+    /// `std::borrow::Cow<'_, str>` a crate's item takes, as `impl
+    /// From<Cow<'a, str>> for Slot<'a, M>` does: the program's `Cow<str>`,
+    /// apart from a `String` and a `&str`, so the impl rustc selects for an
+    /// argument is the one the call reaches (#1390).
+    Text,
     /// `i8`.
     I8,
     /// `i16`.
@@ -49,7 +54,8 @@ pub enum Builtin {
 }
 
 impl Builtin {
-    /// The Rust name of a builtin `primitive` reads, or `None` for a range.
+    /// The Rust name of a builtin `primitive` reads, or `None` for a range,
+    /// a time or a `Cow<str>`.
     pub(crate) const fn name(self) -> Option<&'static str> {
         Some(match self {
             Self::Bool => "bool",
@@ -68,9 +74,11 @@ impl Builtin {
             Self::Usize => "usize",
             Self::F32 => "f32",
             Self::Never => crate::item::type_ref::NEVER_TYPE,
-            Self::InclusiveRange | Self::FloatInclusiveRange | Self::Duration | Self::Instant => {
-                return None
-            }
+            Self::InclusiveRange
+            | Self::FloatInclusiveRange
+            | Self::Duration
+            | Self::Instant
+            | Self::Text => return None,
         })
     }
 
@@ -1063,6 +1071,7 @@ impl crate::digest::Write for Type {
                 Builtin::Duration => 0x2333,
                 Builtin::Instant => 0x2334,
                 Builtin::Never => 0x2335,
+                Builtin::Text => 0x2336,
             }),
             Shape::Registered { path, arguments } => {
                 writer.tag(0x2305);

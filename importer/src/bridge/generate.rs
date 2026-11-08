@@ -2691,6 +2691,15 @@ fn take_range<T: Int>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Re
     range_from(take_primitive::<std::ops::RangeInclusive<i64>>(arguments, index)?)
 }
 
+/// A `Cow<'_, str>`'s text: a program's `Cow<str>`, or the string a
+/// struct's `Cow<str>` field is given.
+#[allow(dead_code)]
+fn take_text(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<String, Error> {
+    let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
+    **value = __rawr_internal::cow::text((**value).take());
+    take_string(arguments, index)
+}
+
 #[allow(dead_code)]
 fn take_string(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<String, Error> {
     let value = (**arguments.values.get_mut(index).ok_or(Error::MissingArgument)?).take();
@@ -16471,12 +16480,13 @@ fn render_take(
         .map_err(request::unwritable);
     }
     // A `Cow<'a, str>` input, as `impl From<Cow<'a, str>> for Slot<'a, M>`
-    // takes: Rawr's string, owned, at the type the call names, so the impl
-    // rustc selects is that one beside the item's other `From` impls.
+    // takes: the program's `Cow<str>`'s text, owned, at the type the call
+    // names, so the impl rustc selects is that one beside the item's other
+    // `From` impls (#1390).
     if matches!(ty, convert::Type::Builtin(convert::Builtin::Text)) {
         return writeln!(
             output,
-            "    let argument_{local} = std::borrow::Cow::<'static, str>::Owned(take_string(arguments, {index})?);"
+            "    let argument_{local} = std::borrow::Cow::<'static, str>::Owned(take_text(arguments, {index})?);"
         )
         .map_err(request::unwritable);
     }

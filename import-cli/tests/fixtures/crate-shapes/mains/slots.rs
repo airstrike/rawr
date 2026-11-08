@@ -1,4 +1,6 @@
 // rawr
+use std::borrow::Cow;
+
 use natives::compose::{self, Row, Slot, Theme};
 use natives::{badge, slots};
 
@@ -31,6 +33,10 @@ fn main() {
     let from: Slot<()> = From::from("from");
     let owned = <Slot<_> as From<_>>::from(String::from("qualified"));
     let row: Row<()> = Row::with_children([from, owned]);
+    println!("{}", row.draw());
+    let borrowed: Slot<()> = Slot::from(Cow::Borrowed("borrowed"));
+    let owned: Slot<()> = Slot::from(Cow::from(String::from("owned")));
+    let row: Row<()> = Row::with_children([borrowed, owned]);
     println!("{}", row.draw());
     let a: Slot<()> = "a".into();
     let b: Slot<()> = From::from("b");

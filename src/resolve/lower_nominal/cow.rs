@@ -43,6 +43,16 @@ pub(super) fn payload(value: &Dynamic) -> Option<Dynamic> {
     value.read_lock::<Value>().map(|cow| cow.payload().clone())
 }
 
+/// A program's `Cow<str>` as a crate's `Cow<'_, str>` input takes it: its
+/// text, which a generated binding takes as it takes a `String` (#1390).
+/// Another value, as the `String` a crate struct's `Cow<str>` field is
+/// given, is itself.
+pub fn text(value: Dynamic) -> Dynamic {
+    value
+        .try_cast_result::<Value>()
+        .map_or_else(|value| value, Value::into_payload)
+}
+
 /// `Cow::Borrowed(value)`, `Cow::Owned(value)`, and a `Cow`'s payload.
 pub(super) fn run(op: PreludeOp, value: &mut Dynamic) -> RawrResult {
     Ok(match op {
