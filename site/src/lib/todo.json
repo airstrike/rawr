@@ -89,7 +89,9 @@
         {"text":"A crate whose generic trait has a provided method giving an opaque type, where that type's supertrait binds an associated type to Self (as `Add<Output = Self>` does), no longer panics rawr check while building its API. An item whose signature names another item's type parameter is left out with a can't-be-used-yet note.","issues":[1278]},
         {"text":"A std trait works as a trait object, as in Rust. `Box<dyn Error>` with `?` from `parse`, `&dyn Debug` of a derived or builtin value, `&dyn Display` of the program's own impl, and `Vec<Box<dyn Display>>` of mixed values all work, with no `impl Error` needed in the program. Formatting, `to_string()` and the trait's methods call the value's own impl.","issues":[1251]},
         {"text":"A `match` that misses values reports rustc's E0004 in rustc's words: the patterns not covered (`Message::Decrement`, `None`, `i32::MIN..=0_i32` and `2_i32..=i32::MAX`, `&_`), the label on the scrutinee, the matched type and the arm to add. Integer and `char` arms whose ranges cover the whole type no longer need a `_`.","issues":[1256]},
-        {"text":"A marked module builds a native module's structs and enums whose fields are `&'static str`, `Option<&'static str>` and `&'static [T]` from literals, and a marked `pub static` of them is compiled natively, so native code reads it as a Rust item.","issues":[1283]}
+        {"text":"A marked module builds a native module's structs and enums whose fields are `&'static str`, `Option<&'static str>` and `&'static [T]` from literals, and a marked `pub static` of them is compiled natively, so native code reads it as a Rust item.","issues":[1283]},
+        {"text":"An array or `vec!` literal's elements coerce to the trait object a parameter, a `let` or a function's return type expects: `all(&[&A, &B])` for `&[&dyn Named]`, and `vec![Box::new(A), Box::new(B)]` returned as `Vec<Box<dyn Named>>`.","issues":[1285]},
+        {"text":"A refutable pattern in a `let`, a `for` loop or a function argument is rustc's E0005, naming the values it misses and suggesting `let else` or `if let`.","issues":[1289]}
       ]
     },
     "releases": [
@@ -2982,14 +2984,16 @@
     {"issue":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open","category":"Divergences from rustc"},
     {"issue":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"closed","category":"Divergences from rustc"},
     {"issue":1284,"title":"`dyn Any`: coercion and `downcast_ref`/`is`","state":"open","category":"Divergences from rustc"},
-    {"issue":1285,"title":"A literal passed to a trait-object parameter coerces each element","state":"open","category":"Divergences from rustc"},
+    {"issue":1285,"title":"A literal passed to a trait-object parameter coerces each element","state":"closed","category":"Divergences from rustc"},
     {"issue":1286,"title":"A declared std trait sends a std receiver's method through the program dispatcher","state":"open","category":"Divergences from rustc"},
     {"issue":1287,"title":"A non-exhaustive match names integer ranges inside a constructor as `_`, not rustc's ranges","state":"open","category":"Divergences from rustc"},
     {"issue":1288,"title":"A constant path in a range pattern (`i32::MIN..=-5`) is refused with E0308","state":"open","category":"Divergences from rustc"},
-    {"issue":1289,"title":"A refutable pattern in `let` is RAWR-RESOLVE-UNSUPPORTED-SYNTAX, not rustc's E0005","state":"open","category":"Divergences from rustc"},
+    {"issue":1289,"title":"A refutable pattern in `let` is RAWR-RESOLVE-UNSUPPORTED-SYNTAX, not rustc's E0005","state":"closed","category":"Divergences from rustc"},
     {"issue":1290,"title":"A variant pattern with the wrong number of fields is RAWR-RESOLVE-MATCH, not rustc's E0023","state":"open","category":"Divergences from rustc"},
     {"issue":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"open","category":"Divergences from rustc"},
-    {"issue":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open","category":"Divergences from rustc"}
+    {"issue":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open","category":"Divergences from rustc"},
+    {"issue":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"open","category":"Divergences from rustc"},
+    {"issue":1294,"title":"The remaining refutable binding patterns are rustc's E0005","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
