@@ -155,7 +155,8 @@
         {"text":"An unsuffixed literal that several `From` impls fit takes rustc's fallback type, i32 or f64, and selects that impl.","issues":[8]},
         {"text":"An index past a slice's end panics at the expression's start, as rustc places it.","issues":[35]},
         {"text":"Integer division and remainder by zero or overflow, out-of-range slice ranges, `pow` overflow and a reversed `clamp` panic in rustc's words and at rustc's position.","issues":[37]},
-        {"text":"A project whose `.cargo/config.toml` sets `build.target` (or that runs with `CARGO_BUILD_TARGET`) is read, extracted and generated for that target, as Cargo builds it, such as wasm32-unknown-unknown.","issues":[1394]}
+        {"text":"A project whose `.cargo/config.toml` sets `build.target` (or that runs with `CARGO_BUILD_TARGET`) is read, extracted and generated for that target, as Cargo builds it, such as wasm32-unknown-unknown.","issues":[1394]},
+        {"text":"A crate value generic over a program's types can call a script function it kept, such as elevato's `Simulation::frame` calling the program's `update`, and that function can make crate values like a `Task` and give them back. Before, the program panicked with `Stale`.","issues":[1432]}
       ]
     },
     "releases": [
@@ -3195,8 +3196,9 @@
     {"issue":1429,"title":"Two blocks' uses binding one name to different items collide, and items declared in a block are…","state":"open","category":"Divergences from rustc"},
     {"issue":1430,"title":"Err(value) with a bare error in an if/match arm where Result<_, Box<dyn Error>> is expected is…","state":"open","category":"Divergences from rustc"},
     {"issue":1431,"title":"Panics inside std (pow, sum, step_by, drain) name the call site where rustc names core's source file","state":"open","category":"Divergences from rustc"},
-    {"issue":1432,"title":"A script fn lent a native `&T` returns a crate value the slot takes after the lend ends: Stale…","state":"open","category":"No glue (D593)"},
-    {"issue":1433,"title":"A selected target that isn't installed fails with rawr's error, not rustc's E0463 with its…","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1432,"title":"A script fn lent a native `&T` returns a crate value the slot takes after the lend ends: Stale…","state":"closed","category":"No glue (D593)"},
+    {"issue":1433,"title":"A selected target that isn't installed fails with rawr's error, not rustc's E0463 with its…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1434,"title":"A native value keeping a script closure under a non-generic type doesn't lend the arena when its…","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
