@@ -1009,7 +1009,18 @@ impl<'a> Parser<'a> {
         }
         let captures = closure.captures.clone();
         self.lifted[index].value = Some(item.clone());
-        let symbolic = self.symbolic_expr(item, inputs, *output, value.span, captures);
+        let mut symbolic = self.symbolic_expr(item, inputs, *output, value.span, captures);
+        // A block's tail closure captures what the block's statements bind,
+        // as `{ let todo = Rc::clone(&todo); move |key| .. }`: they run
+        // first, in the block (#1450).
+        if let Some(statements) = self.closure_blocks.get(&value.span) {
+            let mut block = origin::Fragment::plain("{\n");
+            block.push(statements.clone());
+            block.push(std::mem::take(&mut symbolic.prelude));
+            block.push(symbolic.source);
+            block.push_text("\n}");
+            symbolic.source = block;
+        }
         value.source = symbolic.source;
         // The closure's own prelude binds what it captures, as `f.with(x)`
         // binds `f` and `x`.

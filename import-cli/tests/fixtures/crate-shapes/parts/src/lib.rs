@@ -230,3 +230,46 @@ widgets! {
     W32 W33 W34 W35 W36 W37 W38 W39 W40 W41 W42 W43 W44 W45 W46 W47
     W48 W49 W50 W51 W52 W53 W54 W55 W56 W57 W58 W59 W60 W61 W62 W63
 }
+
+/// A terminal generic over its backend, as ratatui's `Terminal<B>` is,
+/// which another crate's trait gives methods by a generic impl.
+pub mod terminal {
+    /// What a terminal draws on.
+    pub trait Backend {
+        fn name(&self) -> String;
+    }
+
+    /// One frame's lines.
+    pub struct Frame {
+        lines: Vec<String>,
+    }
+
+    impl Frame {
+        pub fn write(&mut self, line: &str) {
+            self.lines.push(line.to_owned());
+        }
+    }
+
+    pub struct Terminal<B: Backend> {
+        backend: B,
+    }
+
+    impl<B: Backend> Terminal<B> {
+        pub fn new(backend: B) -> std::io::Result<Self> {
+            Ok(Self { backend })
+        }
+
+        pub fn backend_mut(&mut self) -> &mut B {
+            &mut self.backend
+        }
+
+        /// Draw one frame with `render` and print its lines.
+        pub fn draw(&mut self, mut render: impl FnMut(&mut Frame)) {
+            let mut frame = Frame { lines: Vec::new() };
+            render(&mut frame);
+            for line in frame.lines {
+                println!("{} | {line}", self.backend.name());
+            }
+        }
+    }
+}

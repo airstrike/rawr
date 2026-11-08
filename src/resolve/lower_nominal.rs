@@ -443,6 +443,9 @@ struct Parser<'a> {
     /// A tuple expression's field spans, by its span: where it has an
     /// expected type, each field is coerced to its own (`coerce_expr`).
     tuple_fields: BTreeMap<Span, Vec<Span>>,
+    /// A block whose tail is a closure, by its span: its statements, which
+    /// bind what the closure captures where the host takes it (#1450).
+    closure_blocks: BTreeMap<Span, origin::Fragment>,
     /// The expression depth of a let chain's link being read: `&&` there
     /// ends the link (`parse_chain`).
     chain_link: Option<usize>,
@@ -884,6 +887,7 @@ impl<'a> Parser<'a> {
             optional_subjects: BTreeMap::new(),
             lent_places: BTreeMap::new(),
             tuple_fields: BTreeMap::new(),
+            closure_blocks: BTreeMap::new(),
             chain_link: None,
             self_changed: std::cell::Cell::new(false),
             lend_self: false,

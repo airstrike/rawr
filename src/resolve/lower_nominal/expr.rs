@@ -761,6 +761,10 @@ impl<'a> Parser<'a> {
             }
         }
         let block = block?;
+        if matches!(self.inference.resolve(&block.value.ty), Ty::FnItem { .. }) {
+            self.closure_blocks
+                .insert(block.syntax, block.value.prelude.clone());
+        }
         let source = block.value.rendered_block();
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),

@@ -737,6 +737,28 @@ fn language_closures_in_variables_are_values() {
 }
 
 #[test]
+fn language_a_blocks_tail_closure_takes_the_parameter_types_its_place_gives() {
+    // The closure a block gives where a function takes `impl FnMut(Key)`
+    // has a `Key` parameter, which the `match` reads at once, after the
+    // block's own statements made calls of their own (#1450).
+    let value = run(r#"
+        enum Key { Char(i64), Enter }
+        fn feed(f: impl Fn(Key) -> i64) -> i64 { f(Key::Char(2)) * 10 + f(Key::Enter) }
+        pub fn run() -> i64 {
+            feed({
+                let scale = i64::max(1, 3);
+                move |key| match key {
+                    Key::Char(n) => n * scale,
+                    Key::Enter => 1,
+                }
+            })
+        }
+        run()
+    "#);
+    assert_eq!(value, 61);
+}
+
+#[test]
 fn language_associated_functions_are_values() {
     // `Db::from` of a user `From` impl and an inherent `Db::new` are
     // function values: passed to `map`, bound to a local, and coerced to

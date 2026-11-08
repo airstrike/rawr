@@ -157,6 +157,57 @@ impl Contract<Classified> {
         })
     }
 
+    /// `owner` (`alias::a::Type`) under each other selected root whose
+    /// table names `alias`'s crate by its hidden segment:
+    /// `other::__rawr_crate_<name>_<id>::a::Type`. A trait of that other
+    /// crate may give the type a member by an impl for it, as ratzilla's
+    /// `impl<B> WebRenderer for Terminal<B>` gives ratatui's terminal
+    /// `draw_web`, and only that crate's table reaches the trait (#1450).
+    #[must_use]
+    pub fn hidden_owner_paths(&self, owner: &str) -> Vec<String> {
+        let mut segments = owner.split("::");
+        let Some(root) = segments.next() else {
+            return Vec::new();
+        };
+        let rest = segments.collect::<Vec<_>>();
+        let exports = || {
+            self.graph.exports().filter_map(|outcome| match outcome {
+                api::ledger::Path::Imported(export) => Some(export),
+                _ => None,
+            })
+        };
+        // `alias`'s own paths, each with what it names.
+        let own = exports()
+            .filter(|export| export.key().root_alias() == root)
+            .map(|export| (export.key().path().collect::<Vec<_>>(), export.target()))
+            .collect::<std::collections::HashMap<_, _>>();
+        // A hidden segment is `alias`'s crate where a path below it names
+        // what `alias` names at the same path.
+        let mut hidden = exports()
+            .filter(|export| export.key().root_alias() != root)
+            .filter_map(|export| {
+                let mut path = export.key().path();
+                let segment = path
+                    .next()
+                    .filter(|segment| segment.starts_with(api::ledger::CRATE_SEGMENT))?;
+                let below = path.collect::<Vec<_>>();
+                (own.get(&below) == Some(&export.target()))
+                    .then(|| format!("{}::{segment}", export.key().root_alias()))
+            })
+            .collect::<Vec<_>>();
+        hidden.sort_unstable();
+        hidden.dedup();
+        hidden
+            .into_iter()
+            .map(|prefix| {
+                std::iter::once(prefix.as_str())
+                    .chain(rest.iter().copied())
+                    .collect::<Vec<_>>()
+                    .join("::")
+            })
+            .collect()
+    }
+
     /// What the name index of the dependency `path` (`alias::a::b`)
     /// starts with says about it, or `None` when that dependency was extracted
     /// whole (its exports are then complete) or is not a dependency.
