@@ -29302,7 +29302,14 @@ impl<'a> Parser<'a> {
             self.next();
         }
 
-        let mut segments = vec![self.expect_name("payload binding or enum name in match pattern")?];
+        let head = if matches!(self.peek(), Token::SelfValue)
+            && matches!(self.peek_second(), Token::DoubleColon)
+        {
+            ("self".into(), point_span(self.next().1))
+        } else {
+            self.expect_name("payload binding or enum name in match pattern")?
+        };
+        let mut segments = vec![head];
         while matches!(self.peek(), Token::DoubleColon) {
             self.next();
             segments.push(self.expect_qualified_name()?);
@@ -41808,6 +41815,10 @@ impl<'a> Parser<'a> {
             {
                 self.parse_qualified("super".into(), token_span)
             }
+            // `self::m::f()`: a path from this module, never the receiver.
+            Token::SelfValue if matches!(self.peek(), Token::DoubleColon) => {
+                self.parse_qualified("self".into(), token_span)
+            }
             Token::SelfValue => {
                 // A free function's `&mut` parameter is `this` too.
                 let Some(binding) = self
@@ -53889,6 +53900,10 @@ impl<'a> Parser<'a> {
                 let position = self.next().1;
                 ("super".into(), point_span(position))
             }
+            Token::SelfValue if matches!(self.peek_second(), Token::DoubleColon) => {
+                let position = self.next().1;
+                ("self".into(), point_span(position))
+            }
             // `let a := 1;`, `let a:;`: no type starts there.
             token @ (Token::Equals | Token::SemiColon) => {
                 let at = self.position();
@@ -57390,6 +57405,14 @@ impl<'a> Parser<'a> {
             Token::Identifier(name) | Token::Reserved(name) => {
                 Ok(((*name).into(), point_span(position)))
             }
+            Token::SelfValue => Err(Error::StdPath {
+                code: "E0433",
+                message: "`self` in paths can only be used in start position or last position"
+                    .into(),
+                label: Some("can only be used in path start position or last position".into()),
+                note: None,
+                reference: Span::new(position, text_end(position, "self")),
+            }),
             token => Err(Error::UnsupportedNominalSyntax {
                 construct: format!("qualified nominal member; found `{token}`").into(),
                 source: point_span(position),

@@ -3927,7 +3927,7 @@ fn expect_type_path(input: &mut TokenStream) -> ParseResult<()> {
     }
     let (token, position) = input.peek().expect("token streams always end with EOF");
     let path = is_name(token)
-        || matches!(token, Token::DoubleColon)
+        || matches!(token, Token::DoubleColon | Token::SelfValue)
         || matches!(token, Token::Reserved(keyword) if keyword.as_str() == "super");
     if path || matches!(token, Token::LexError(_)) {
         return Ok(());
@@ -4525,7 +4525,18 @@ fn parse_path_bindings(
     }
 
     loop {
-        let name = parse_use_segment(input, "as a type path segment")?;
+        // `self::m::Item`: a path from this module, as rustc reads it.
+        let name = match input.peek() {
+            Some((Token::SelfValue, position)) if segments.is_empty() && !global => {
+                let span = token_span(*position, "self");
+                input.next();
+                crate::item::Name {
+                    span,
+                    text: "self".into(),
+                }
+            }
+            _ => parse_use_segment(input, "as a type path segment")?,
+        };
         let mut end = name.span.end();
         let mut arguments = Vec::new();
 
