@@ -3,9 +3,8 @@
 <h1>Overview</h1>
 <p class="lede">rawr checks a program before it runs it. This reference lists the Rust that passes that check.</p>
 <h2 id="glance">At a glance</h2>
-<p>Code that rawr doesn&rsquo;t support fails the check with an error that names the construct. These are the largest gaps:</p>
+<p>Code that rawr doesn&rsquo;t support fails the check before anything runs. These are the largest gaps:</p>
 <ul>
-  <li><code>async</code> code runs in iced apps and in a crate whose <code>main</code> is <code>#[tokio::main] async fn main</code> or another runtime&rsquo;s.</li>
   <li>Only part of <code>std</code> works. <a href="/docs/reference/std">std</a> lists it.</li>
   <li>Borrow checking covers the borrows of a function&rsquo;s locals, ended where rustc ends them, including those a call&rsquo;s result keeps, those a struct, a collection or an <code>Option</code> holds, and those a closure captures. It covers temporaries and what a function returns against its signature too. <a href="#lenient">A few borrows</a> aren&rsquo;t checked yet, so <code>rawr check</code> also runs <code>cargo check</code>. <a href="/docs/how-it-works#borrowing">How it works</a> explains the check.</li>
 </ul>
@@ -49,21 +48,15 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 </div>
 
 <h2 id="not-supported">Not supported yet</h2>
-<p>These are valid Rust that rawr rejects today. Each one fails the check with an error that names the construct. rawr reports one error per check.</p>
+<p>These are valid Rust that rawr rejects today. Each one fails the check. rawr reports one error per check.</p>
 <h3 id="missing-syntax">Syntax and items</h3>
 <ul>
   <li>A <code>static mut</code>.</li>
-  <li>A macro call where an item, a type or a pattern goes. <a href="/docs/reference/macros#macro-rules">Macros</a> in expressions and statements expand.</li>
-  <li>A crate&rsquo;s derive whose expansion is generic over the crate&rsquo;s traits, such as serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code>. The check reports the expansion&rsquo;s error at the derive. A derive whose expansion is a plain impl, such as one that names the type, works.</li>
-  <li>Passing your own type to a crate function that is generic over the crate&rsquo;s trait, as in <code>shapes::name_of(&amp;square)</code>. Call the trait&rsquo;s methods on it directly.</li>
-  <li><code>async</code> and <code>.await</code> outside iced, except under a runtime&rsquo;s <code>async fn main</code> in a crate.</li>
-  <li><code>try_join!</code> and <code>select!</code>.</li>
-  <li>A <code>const</code> captured in a format string, as in <code>"{LIMIT}"</code>. Pass it as an argument instead.</li>
+  <li>A macro call where an item, a type or a pattern goes. The check reports what the macro would have defined as not found. <a href="/docs/reference/macros#macro-rules">Macros</a> in expressions and statements expand.</li>
 </ul>
 <h3 id="missing-types">Types and borrowing</h3>
 <ul>
-  <li>A range of floats that excludes its end, as in <code>0.5..1.0</code>. <code>0.5..=1.0</code> works.</li>
-  <li>Returning a <code>&amp;mut</code> to a map&rsquo;s entry, as in <code>self.counts.entry(k).or_insert(0)</code>.</li>
+  <li><code>contains</code> and <code>{:?}</code> of a range of floats that excludes its end, as in <code>(0.5..1.0).contains(&amp;x)</code>. <code>(0.5..=1.0).contains(&amp;x)</code> works.</li>
   <li>Returning a <code>&amp;mut</code> borrowed from a parameter other than <code>&amp;mut self</code> or a free function&rsquo;s first <code>&amp;mut</code> parameter.</li>
   <li>Giving a new borrow to a <code>&amp;mut</code> local that borrows a field or an element, as in <code>let mut r = &amp;mut s.left; r = &amp;mut s.right;</code>. A <code>&amp;mut</code> local of a whole local can be given new borrows, as in <code>r = &amp;mut b;</code> or <code>prev = r;</code>, except in an async body.</li>
   <li>A <code>&amp;mut</code> chosen by a branch, as in <code>r = if c { &amp;mut a } else { &amp;mut b };</code>. Assign it in each branch instead.</li>
@@ -72,22 +65,24 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>A closure that uses a <code>&amp;mut</code> borrow declared outside it inside an async block, or a borrow of a range of elements or of a place behind a <code>RefCell</code> borrow. Such a closure can&rsquo;t be passed to a native function either.</li>
   <li>A closure that returns a future, passed to a crate function, as in sipper&rsquo;s <code>sipper(|sender| async move { .. })</code>. The error names the function and says it takes a closure that returns a future.</li>
   <li>A <code>&amp;mut</code> borrow in a struct literal&rsquo;s field, as in <code>W { v: &amp;mut v }</code>.</li>
-  <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
+  <li>A trait object of a std trait, as in <code>&amp;dyn Display</code> or <code>Box&lt;dyn Debug&gt;</code>. <code>Box&lt;dyn Error&gt;</code> works in a program that implements <code>Error</code> for a type of its own. A trait object of your own trait works, as <code>&amp;dyn Shape</code> or <code>Box&lt;dyn Shape&gt;</code>.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
-  <li>A value whose type implements <code>Drop</code> inside an <code>Rc</code>, <code>Arc</code>, <code>RefCell</code>, map or set, or taken by a <code>move</code> closure. See <a href="/docs/reference/moves#drop">Drop</a>.</li>
+  <li>A value whose type implements <code>Drop</code> inside an <code>Rc</code>, <code>Arc</code>, <code>RefCell</code>, map or set, or taken by a <code>move</code> closure or an <code>async</code> block. See <a href="/docs/reference/moves#drop">Drop</a>.</li>
 </ul>
 <h3 id="missing-std">Standard library</h3>
 <ul>
   <li><code>Mutex</code> methods other than <code>new</code>, <code>default</code> and <code>lock().unwrap()</code> (or <code>.expect(..)</code>), and a <code>LockResult</code> kept as it is. rawr says it doesn&rsquo;t run them yet.</li>
+  <li><code>RwLock</code>.</li>
   <li><code>Receiver::try_recv</code>, <code>recv_timeout</code> and <code>sync_channel</code>.</li>
   <li>The file and line in a spawned thread&rsquo;s panic message.</li>
   <li>Cloning a struct, enum or <code>Vec</code> that holds a <code>Cell</code> or <code>RefCell</code> outside an <code>Rc</code>.</li>
   <li><code>Rc</code> and <code>Arc</code> functions other than <code>new</code>, <code>from</code>, <code>clone</code>, the counts, <code>ptr_eq</code>, <code>downgrade</code>, <code>get_mut</code>, <code>make_mut</code>, <code>try_unwrap</code>, <code>into_inner</code> and <code>unwrap_or_clone</code>, as <code>Rc::as_ptr</code>. rawr says it doesn&rsquo;t run them yet.</li>
   <li>An <code>Arc</code> of a crate&rsquo;s value passed to a crate function.</li>
-  <li><code>std::fs</code>, and <code>std::io</code> beyond <code>Error</code> and <code>ErrorKind</code>.</li>
+  <li><code>std::fs::File</code>, <code>metadata</code>, <code>read_dir</code> and the rest of <code>std::fs</code> beyond the functions <a href="/docs/reference/std#path-io">std</a> lists.</li>
+  <li><code>write!</code> into <code>std::io::stdout()</code>, and the readers and writers of <code>std::io</code> other than <code>stdin</code> and <code>stdout</code>.</li>
   <li><code>BinaryHeap</code>.</li>
   <li><code>Formatter::pad</code>.</li>
-  <li><code>char::from(u8)</code> and <code>char::from_u32</code>. <code>byte as char</code> works.</li>
+  <li><code>char::from(u8)</code>. <code>byte as char</code> and <code>char::from_u32</code> work.</li>
   <li><code>Vec::binary_search</code>.</li>
 </ul>
 
@@ -96,7 +91,6 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 <ul>
   <li><strong><code>HashMap</code> order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust&rsquo;s order is random.</li>
   <li><strong>Width on your own <code>Display</code>.</strong> rawr pads a user <code>Display</code> impl&rsquo;s output to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
-  <li><strong>The column of an index panic.</strong> rawr places a panic from indexing at the <code>[</code>, as Rust does for a <code>Vec</code>. For an array or a slice Rust places it at the start of the expression.</li>
   <li><strong>Drops in a panic.</strong> rawr stops at a panic without running <code>drop</code>. Rust runs it for each value the panic unwinds past.</li>
   <li><strong>A large integer in generic code.</strong> Inside a generic function, adding or multiplying <code>u64</code> or <code>usize</code> values through <code>T: Add</code> panics once the result passes <code>i64::MAX</code>. With <code>i128</code> or <code>u128</code> values it panics when both values fit an <code>i64</code> and the result doesn&rsquo;t. Rust gives the result.</li>
   <li><strong>Arithmetic on literals alone.</strong> An operation whose operands are all unsuffixed literals is computed as an <code>i64</code>. So <code>let x: i128 = 10_000_000_000 * 10_000_000_000;</code> panics where Rust gives the result. A suffix, as in <code>10_000_000_000i128</code>, gives Rust&rsquo;s result.</li>
@@ -120,13 +114,11 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>A struct&rsquo;s field whose type leaves out a struct&rsquo;s lifetime, as <code>w: Wrapper</code> of <code>struct Wrapper&lt;'a&gt;</code>, is accepted. rustc refuses it with E0106. A field written as a reference without a lifetime is refused, as in rustc.</li>
   <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
   <li>Private struct fields can be read and set from another module. Private functions are rejected, as in rustc.</li>
-  <li><code>HashMap</code> can be used without a <code>use</code> line.</li>
   <li>Arithmetic on constants that overflows or divides by zero, as in <code>let x: u8 = 255 + 1;</code>, and an index of an array past its length, as in <code>a[5]</code> of a <code>[i32; 3]</code>, are accepted. rustc refuses them with its deny-by-default <code>arithmetic_overflow</code> and <code>unconditional_panic</code> lints. In rawr they panic when they run. <code>cargo check</code> doesn&rsquo;t report them either, since rustc finds them only when it builds.</li>
   <li><code>Sync</code> bounds are not checked. A <code>Send</code> bound refuses an <code>Rc</code>, an <code>Arc</code> of a <code>RefCell</code> and what holds one, and accepts every other type.</li>
-
   <li>A <code>&amp;str</code>, a <code>String</code> or an error is accepted where a <code>Box&lt;dyn Error&gt;</code> is expected, without <code>Box::new</code> or <code>.into()</code>.</li>
   <li>Top-level statements are accepted.</li>
-  <li>Returning a field of <code>&amp;self</code> by value, as in <code>fn name(&amp;self) -&gt; String { self.name }</code>, is accepted. rustc reports E0507.</li>
+  <li>A local whose type nothing settles, as <code>let v = Vec::new();</code> used only through <code>v.len()</code>, is accepted. rustc refuses it with E0282.</li>
   <li>A method of an imported <code>impl</code> that fixes its type&rsquo;s arguments is accepted on every instance of the type. quick-xml&rsquo;s <code>read_event</code> belongs to <code>impl&lt;'a&gt; Reader&lt;&amp;'a [u8]&gt;</code>, and rawr accepts it on a <code>Reader&lt;String&gt;</code> too. Such a program stops with an error before the call runs, and <code>cargo check</code> reports rustc&rsquo;s E0599.</li>
   <li><code>into_owned()</code> is accepted on any <code>String</code>, since rawr reads a crate&rsquo;s <code>Cow&lt;str&gt;</code> as a <code>String</code>.</li>
   <li>A value that borrows an imported call&rsquo;s input, kept past the scope it was made in, is accepted by the check. Using it stops the program with an error that names rustc&rsquo;s E0597, where rustc rejects the program.</li>

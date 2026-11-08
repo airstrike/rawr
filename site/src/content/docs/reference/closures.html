@@ -115,5 +115,5 @@ println!("{} {}", c.r, c.g);</code></pre>
 <h2 id="async">Async code</h2>
 <p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. An <code>async</code> block gives a Rust future that iced can run as a task. <a href="/docs/run#async">Run</a> describes how such a future runs.</p>
 <p>A crate whose <code>main</code> is <code>#[tokio::main] async fn main</code>, or another runtime&rsquo;s <code>main</code>, runs on the runtime in its <code>Cargo.toml</code>. There, an <code>async</code> block or an <code>async fn</code> gives a Rust future, <code>.await</code> takes a future&rsquo;s output, <code>join!</code> runs futures together, and <code>tokio::spawn</code> runs one of yours as a task. A closure you pass to <code>spawn_blocking</code> runs on a worker thread. <a href="/docs/run#async">Run</a> describes how.</p>
-<p>Other programs can&rsquo;t use <code>async</code> yet.</p>
+<p>A program with no dependencies can write <code>async fn</code>, <code>async</code> blocks and <code>.await</code> too, and they check as rustc checks them. There, <code>#[tokio::main]</code> and <code>tokio::join!</code> are rustc&rsquo;s E0433, since the program doesn&rsquo;t depend on tokio, and an <code>async fn main</code> is E0752.</p>
 </article>

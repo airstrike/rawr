@@ -7,6 +7,9 @@
 <ul>
   <li>Widgets, <code>Element</code>, <code>Task</code> and <code>Subscription</code> are iced&rsquo;s own types. Their methods are iced&rsquo;s own.</li>
   <li>Your <code>State</code> and <code>Message</code> cross into iced as Rust types the runner makes for them. <a href="/docs/imports#generics">Generic items and your own types</a> says how.</li>
+  <li>Values cross both ways between native code and a marked function. A marked function takes native values by value or lent as <code>&amp;</code> or <code>&amp;mut</code>, and a change it makes through <code>&amp;mut</code> reaches the caller. It can give back a native type, such as a native <code>Message</code> or an <code>iced::Element&lt;'a, Message&gt;</code>, bare or inside an <code>Option</code>, a <code>Vec</code>, a tuple or a <code>Result</code>.</li>
+  <li>A function written <code>-&gt; impl Widget&lt;Message&gt;</code> works, and so does a widget that iced&rsquo;s own functions wrap and hold past the call, as the <code>modal</code>, <code>pane_grid</code> and <code>loupe</code> examples do.</li>
+  <li>A project has one iced, the one Cargo builds in the project&rsquo;s <code>target/</code>. <code>rawr run</code> and <code>cargo build</code> share it. Nothing of iced is prebuilt or written into rawr.</li>
   <li>iced&rsquo;s macros, such as <code>column!</code> and <code>row!</code>, are iced&rsquo;s own. <a href="/docs/reference/macros">Macros</a> describes how rawr expands a crate&rsquo;s macros.</li>
   <li>An item the bindings don&rsquo;t reach yet fails with an error.</li>
 </ul>
@@ -33,7 +36,7 @@ iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a1
  <span class="c">26 |</span>         }
     <span class="c">|</span> <span class="e">^^^^^^^^</span></code></pre>
 </div>
-<p>An error rustc would give has rustc&rsquo;s code and wording, such as <code>error[E0308]: mismatched types</code>. One rustc gives without a code, as a syntax error or <code>cannot find macro</code>, prints a plain <code>error:</code>. Only an error rustc has no counterpart for keeps a <code>RAWR-</code> code, which names the stage that failed. Those codes will change while rawr is pre-alpha.</p>
+<p>Most errors rustc would give have rustc&rsquo;s code and wording, such as <code>error[E0308]: mismatched types</code>. One rustc gives without a code, as a syntax error or <code>cannot find macro</code>, prints a plain <code>error:</code>. An error rustc has no counterpart for keeps a <code>RAWR-</code> code, which names the stage that failed. So does the missing arm above, where rustc gives E0004. Those codes will change while rawr is pre-alpha.</p>
 
 <h2 id="examples">iced&rsquo;s own examples</h2>
 <p>iced&rsquo;s examples run as the generated bindings reach the items they use. <a href="/docs/iced#works">iced</a> names the ones known to run unchanged but for the <code>// rawr</code> line.</p>
