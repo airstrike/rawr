@@ -1211,12 +1211,13 @@ impl Registry {
         }
         match &requirement.binding {
             #[cfg(feature = "rust-import")]
+            // A call of an instance reaches that instance's adapter, never
+            // the item's other instances'.
             Binding::Item(item) => match requirement.instance {
                 Some(instance) => facade
                     .instances
                     .get(&(item.clone(), instance))
-                    .or_else(|| facade.applications.get(&instance))
-                    .or_else(|| facade.bindings.get(item)),
+                    .or_else(|| facade.applications.get(&instance)),
                 None => facade.bindings.get(item),
             },
             #[cfg(not(feature = "rust-import"))]

@@ -2452,10 +2452,16 @@ fn host_surface_definition(
 #[cfg(feature = "rust-import")]
 fn unsupported_type_argument(ty: ImmutableString, operation: Span) -> Error {
     Error::InvalidHostOperation {
-        reason: format!("`{ty}` is not supported in Rawr yet as a crate's type argument").into(),
+        reason: unsupported_type_argument_reason(&ty),
         item: ty,
         operation,
     }
+}
+
+/// Why a crate's generic item can't take `ty` as its type argument.
+#[cfg(feature = "rust-import")]
+fn unsupported_type_argument_reason(ty: &str) -> ImmutableString {
+    format!("`{ty}` is not supported in Rawr yet as a crate's type argument").into()
 }
 
 /// A value of type `ty` that the crate item `item` takes or gives, which
@@ -2562,6 +2568,110 @@ fn fixed_surface_type(
         }
         _ => imported_surface_type(inference, models, ty, operation, imported)?,
     })
+}
+
+/// An instance type as `fixed_surface_type` converts it, without
+/// allocation accounting: the key of a call's instance whose parameter an
+/// associated type reads.
+#[cfg(feature = "rust-import")]
+fn fixed_instance_surface_type(
+    inference: &Inference,
+    models: &Models,
+    ty: &Ty,
+) -> Option<rawr_import::classify::representability::convert::Type> {
+    use rawr_import::classify::representability::convert::Type;
+    let fixed = |ty| fixed_instance_surface_type(inference, models, ty);
+    Some(match inference.resolved_ref(ty) {
+        Ty::Option(element) => Type::Option(Box::new(fixed(element)?)),
+        Ty::Result(ok, err) => Type::Result(Box::new(fixed(ok)?), Box::new(fixed(err)?)),
+        Ty::Tuple(members) if !members.is_empty() => {
+            Type::Tuple(members.iter().map(fixed).collect::<Option<_>>()?)
+        }
+        Ty::Array { element, .. } => Type::Sequence {
+            element: Box::new(fixed(element)?),
+            owned: true,
+            length: None,
+        },
+        _ => instance_surface_type(inference, models, ty)?,
+    })
+}
+
+/// The requirements that are an imported item's instance, in the order its
+/// instance names them: the item's declared order, or the requirements' own
+/// when a declared parameter has none. Its const lengths are its constants,
+/// never its types (#1330).
+#[cfg(feature = "rust-import")]
+fn instance_parameters<'r>(
+    item: &crate::host::item::Definition,
+    requirements: &'r [(ImmutableString, Ty, capability::Set)],
+) -> Vec<&'r (ImmutableString, Ty, capability::Set)> {
+    let lengths = item
+        .signature()
+        .declared_length_parameters()
+        .collect::<Vec<_>>();
+    let typed = requirements
+        .iter()
+        .filter(|(name, _, _)| !lengths.contains(name))
+        .collect::<Vec<_>>();
+    let ordered = item
+        .signature()
+        .declared_type_parameters()
+        .filter_map(|name| {
+            requirements
+                .iter()
+                .find(|(candidate, _, _)| *candidate == name)
+        })
+        .collect::<Vec<_>>();
+    if ordered.len() == typed.len() {
+        ordered
+    } else {
+        typed
+    }
+}
+
+/// Whether an associated type a relation reads names `parameter`, as
+/// `S::Output` of the type filling `S` does: that type is the crate's,
+/// Rust's own (`fixed_surface_type`).
+#[cfg(feature = "rust-import")]
+fn fixed_parameter(item: &crate::host::item::Definition, parameter: &str) -> bool {
+    item.signature().relations().iter().any(|relation| {
+        relation.associated().is_some()
+            && matches!(relation.arguments(),
+                [crate::host::signature::Pattern::Parameter(name)] if name == parameter)
+    })
+}
+
+/// A type argument of a crate's generic item that keys none of its
+/// instances, in rustc's words: one it can't infer, or one Rawr can't pass
+/// to Rust yet.
+#[cfg(feature = "rust-import")]
+fn keyless_type_argument(
+    inference: &Inference,
+    models: &Models,
+    item: &crate::host::item::Definition,
+    parameter: &str,
+    ty: &Ty,
+    operation: Span,
+) -> Error {
+    let reason = match inference.resolve(ty) {
+        Ty::Unknown => "type annotations needed: a crate's type argument is unknown (E0282)".into(),
+        ty => unsupported_type_argument_reason(&ty.name(models)),
+    };
+    Error::InvalidHostOperation {
+        item: format!("{}'s `{parameter}`", item.path()).into(),
+        reason,
+        operation,
+    }
+}
+
+/// A const argument of a crate's generic item rustc can't infer either.
+#[cfg(feature = "rust-import")]
+fn unknown_const_argument(item: &crate::host::item::Definition, operation: Span) -> Error {
+    Error::InvalidHostOperation {
+        item: item.path().into(),
+        reason: "type annotations needed: a const argument of it is unknown (E0282)".into(),
+        operation,
+    }
 }
 
 /// A value type Rust can't name in the runner, as a script struct or a
@@ -19900,7 +20010,8 @@ impl<'a> Parser<'a> {
                         .iter()
                         .map(|slot| slot.served())
                         .collect::<Box<[_]>>(),
-                );
+                    span,
+                )?;
                 let operands = operands
                     .iter()
                     .filter(|(ty, _, _)| !ty.is_imported_static_operand())
@@ -22569,38 +22680,48 @@ impl<'a> Parser<'a> {
     }
 
     /// The key of the instance a call of a generic imported item uses:
-    /// its types in the item's declared order, as the bridge keys the
-    /// adapter it generated for them.
+    /// its types as `collect_imported_call` gives them to the bridge, which
+    /// keys the adapter it generates for them by them. `None` for a call of
+    /// an item with no instance, which reaches the item's one adapter.
+    ///
+    /// A type no instance is keyed by is an error at the call, as rustc's
+    /// own is: a call never reaches another instance's adapter.
     #[cfg(feature = "rust-import")]
     fn imported_instance_key(
         &self,
         item: &crate::host::item::Definition,
         requirements: &[(ImmutableString, Ty, capability::Set)],
         slots: &[rawr_import::surface::instance::Slot],
-    ) -> Option<[u8; 32]> {
+        span: Span,
+    ) -> Result<Option<[u8; 32]>, Error> {
         // A proof-backed application's call reaches its own adapter.
         if let Some(identity) = item.application() {
-            return Some(*identity);
+            return Ok(Some(*identity));
         }
         if item.imported_identity().is_none() || (requirements.is_empty() && slots.is_empty()) {
-            return None;
+            return Ok(None);
         }
-        let types = item
-            .signature()
-            .declared_type_parameters()
-            .map(|name| {
-                let (_, ty, _) = requirements
-                    .iter()
-                    .find(|(candidate, _, _)| *candidate == name)?;
-                let mut surface = instance_surface_type(&self.inference, &self.models, ty)?;
-                fix_array_length(&mut surface, self.related_array_length(item, &name, ty));
-                Some(surface)
+        let types = instance_parameters(item, requirements)
+            .into_iter()
+            .map(|(name, ty, _)| {
+                let convert = if fixed_parameter(item, name) {
+                    fixed_instance_surface_type
+                } else {
+                    instance_surface_type
+                };
+                let mut surface = convert(&self.inference, &self.models, ty).ok_or_else(|| {
+                    keyless_type_argument(&self.inference, &self.models, item, name, ty, span)
+                })?;
+                fix_array_length(&mut surface, self.related_array_length(item, name, ty));
+                Ok(surface)
             })
-            .collect::<Option<Vec<_>>>()?;
-        let constants = self.imported_constants(item, requirements)?;
-        Some(rawr_import::surface::instance::key_with_constants(
+            .collect::<Result<Vec<_>, Error>>()?;
+        let constants = self
+            .imported_constants(item, requirements)
+            .ok_or_else(|| unknown_const_argument(item, span))?;
+        Ok(Some(rawr_import::surface::instance::key_with_constants(
             &types, &constants, slots,
-        ))
+        )))
     }
 
     /// The values of an imported item's const parameters, in declared
@@ -57293,52 +57414,17 @@ impl<'a> Parser<'a> {
         }
         // The instance's types in the item's declared parameter order, and
         // its const lengths (#1330).
-        let constants = self.imported_constants(item, requirements).ok_or_else(|| {
-            Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: "type annotations needed: a const argument of it is unknown (E0282)".into(),
-                operation: span,
-            }
-        })?;
-        let lengths = item
-            .signature()
-            .declared_length_parameters()
-            .collect::<Vec<_>>();
-        let typed = requirements
-            .iter()
-            .filter(|(name, _, _)| !lengths.contains(name))
-            .collect::<Vec<_>>();
-        let mut types = self.imported_entries(typed.len())?;
-        let declared = item
-            .signature()
-            .declared_type_parameters()
-            .collect::<Vec<_>>();
-        let ordered = declared
-            .iter()
-            .filter_map(|name| {
-                requirements
-                    .iter()
-                    .find(|(candidate, _, _)| candidate == name)
-            })
-            .collect::<Vec<_>>();
-        let ordered = if ordered.len() == typed.len() {
-            ordered
-        } else {
-            typed
-        };
+        let constants = self
+            .imported_constants(item, requirements)
+            .ok_or_else(|| unknown_const_argument(item, span))?;
+        let ordered = instance_parameters(item, requirements);
+        let mut types = self.imported_entries(ordered.len())?;
         for (name, ty, _) in ordered {
             if reaches_param(&self.inference.resolve(ty)) {
                 self.reaches_host = true;
             }
             let length = self.related_array_length(item, name, ty);
-            // An associated type a relation reads, as `S::Output` of the
-            // type filling `S`, is the crate's: Rust's own type.
-            let fixed = item.signature().relations().iter().any(|relation| {
-                relation.associated().is_some()
-                    && matches!(relation.arguments(),
-                        [crate::host::signature::Pattern::Parameter(parameter)] if parameter == name)
-            });
-            let convert = if fixed {
+            let convert = if fixed_parameter(item, name) {
                 fixed_surface_type
             } else {
                 imported_surface_type
