@@ -347,6 +347,7 @@ impl Model {
     /// The types native values a marked function takes by value are
     /// attested as, by whether it belongs to a type and its path, as
     /// [`Self::inputs`] keeps them.
+    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
     pub(crate) fn island_inputs(
         &self,
     ) -> &BTreeMap<(bool, String), Box<[Option<crate::host::runtime::type_ref::Type>]>> {
@@ -1248,6 +1249,74 @@ fn identity_name(identity: &type_def::Identity) -> ImmutableString {
     }
 }
 
+/// [`Model::inputs`] of `program`: only the public functions with a native
+/// parameter taken by value, each such parameter's runtime type.
+fn inputs(
+    program: &Program,
+    model: &Model,
+) -> BTreeMap<(bool, String), Box<[Option<crate::host::runtime::type_ref::Type>]>> {
+    let native = |ty: &type_ref::Type| match ty {
+        type_ref::Type::Path(path) if matches!(path.target, type_ref::Target::Host { .. }) => {
+            crate::host::runtime::type_ref::Type::from_resolved_in(ty, model, &[]).ok()
+        }
+        _ => None,
+    };
+    let join = |modules: &[ImmutableString], name: &str| {
+        modules
+            .iter()
+            .map(ImmutableString::as_str)
+            .chain([name])
+            .collect::<Vec<_>>()
+            .join("::")
+    };
+    let mut inputs = BTreeMap::new();
+    let mut keep = |key: (bool, String), types: Vec<Option<_>>| {
+        if types.iter().any(Option::is_some) {
+            inputs.insert(key, types.into_boxed_slice());
+        }
+    };
+    for shell in program.items() {
+        let (Some(key), crate::resolve::item::Kind::Function(function)) = (&shell.key, &shell.kind)
+        else {
+            continue;
+        };
+        if function.header.visibility.is_none() {
+            continue;
+        }
+        let types = function
+            .parameters
+            .iter()
+            .map(|parameter| native(&parameter.ty))
+            .collect();
+        keep((false, join(key.modules(), key.name())), types);
+    }
+    for method in program.methods() {
+        let Some(type_def::Identity::Script(owner)) = method.key().owner() else {
+            continue;
+        };
+        let receiver = method.receiver().map(|_| None);
+        let types = receiver
+            .into_iter()
+            .chain(
+                method
+                    .parameters()
+                    .iter()
+                    .map(|parameter| native(&parameter.ty)),
+            )
+            .collect();
+        keep(
+            (
+                true,
+                join(
+                    owner.modules(),
+                    &format!("{}::{}", owner.name(), method.key().name()),
+                ),
+            ),
+            types,
+        );
+    }
+    inputs
+}
 #[cfg(test)]
 mod tests {
     use super::Model;
@@ -1514,73 +1583,4 @@ mod tests {
     fn identity(definition: &type_def::Definition) -> type_def::Identity {
         type_def::Identity::Script(definition.key().clone())
     }
-}
-
-/// [`Model::inputs`] of `program`: only the public functions with a native
-/// parameter taken by value, each such parameter's runtime type.
-fn inputs(
-    program: &Program,
-    model: &Model,
-) -> BTreeMap<(bool, String), Box<[Option<crate::host::runtime::type_ref::Type>]>> {
-    let native = |ty: &type_ref::Type| match ty {
-        type_ref::Type::Path(path) if matches!(path.target, type_ref::Target::Host { .. }) => {
-            crate::host::runtime::type_ref::Type::from_resolved_in(ty, model, &[]).ok()
-        }
-        _ => None,
-    };
-    let join = |modules: &[ImmutableString], name: &str| {
-        modules
-            .iter()
-            .map(ImmutableString::as_str)
-            .chain([name])
-            .collect::<Vec<_>>()
-            .join("::")
-    };
-    let mut inputs = BTreeMap::new();
-    let mut keep = |key: (bool, String), types: Vec<Option<_>>| {
-        if types.iter().any(Option::is_some) {
-            inputs.insert(key, types.into_boxed_slice());
-        }
-    };
-    for shell in program.items() {
-        let (Some(key), crate::resolve::item::Kind::Function(function)) = (&shell.key, &shell.kind)
-        else {
-            continue;
-        };
-        if function.header.visibility.is_none() {
-            continue;
-        }
-        let types = function
-            .parameters
-            .iter()
-            .map(|parameter| native(&parameter.ty))
-            .collect();
-        keep((false, join(key.modules(), key.name())), types);
-    }
-    for method in program.methods() {
-        let Some(type_def::Identity::Script(owner)) = method.key().owner() else {
-            continue;
-        };
-        let receiver = method.receiver().map(|_| None);
-        let types = receiver
-            .into_iter()
-            .chain(
-                method
-                    .parameters()
-                    .iter()
-                    .map(|parameter| native(&parameter.ty)),
-            )
-            .collect();
-        keep(
-            (
-                true,
-                join(
-                    owner.modules(),
-                    &format!("{}::{}", owner.name(), method.key().name()),
-                ),
-            ),
-            types,
-        );
-    }
-    inputs
 }

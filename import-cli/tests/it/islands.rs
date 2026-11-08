@@ -233,7 +233,10 @@ fn a_native_main_calls_marked_modules_named_as_old_engine_keywords() {
 /// prints.
 #[test]
 fn a_native_main_takes_and_gives_its_own_values_to_a_marked_leaf() {
-    const NATIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-natives");
+    const NATIVES: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-natives"
+    );
     let root = crate::support::scratch().join("islands-natives");
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(NATIVES), &root);
@@ -250,7 +253,10 @@ fn a_native_main_takes_and_gives_its_own_values_to_a_marked_leaf() {
         "{}",
         String::from_utf8_lossy(&native.stderr)
     );
-    assert!(printed.ends_with("view [press 7] -> Some(Pressed(7))\n"), "{printed}");
+    assert!(
+        printed.ends_with("view [press 7] -> Some(Pressed(7))\n"),
+        "{printed}"
+    );
     let mut run = start(&root, &[]);
     for expected in printed.lines() {
         let line = run.until(Duration::from_secs(900), |_| true);
