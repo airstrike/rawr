@@ -91,6 +91,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A `let` with `ref mut` and a refutable part, a slice pattern on a slice of unknown length, a native struct pattern with refutable fields, and an enum variant in a function parameter are rustc's E0005, with rustc's witnesses. Their irrefutable forms (`let [all @ ..] = s;`, `fn f(One::Only(x): One)`) now run. (#1294)
 - A tuple variant or tuple struct pattern with the wrong number of fields is rustc's E0023 (`this pattern has 1 field, but the corresponding tuple variant has 2 fields`), with the declared fields marked and rustc's help to add `_` or wrap the fields in parentheses. (#1290)
 - A marked function's `&mut` parameter whose type is a native alias of a plain type, such as `&mut Width` for `type Width = usize`, now crosses as `&mut usize` does. Native callers see the change after the call. A `&mut` of a native type is still lent. (#1297)
+- `rawr check` no longer stalls after reading parse cells on an app over iced: a type from another crate's facade is named by that facade's fingerprint, never by re-walking that facade's contract at each mention. (#1309)
 
 ## 0.3.171 (2026-11-07)
 
