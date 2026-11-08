@@ -42,6 +42,8 @@ pub struct Package {
     panic: project::cargo::Panic,
     /// The crate is the package's library, not a binary.
     library: bool,
+    /// The package's target the crate is, as Cargo lists it.
+    target: Option<project::cargo::Target>,
     /// The crate root has a frontmatter block: a cargo script.
     script: bool,
 }
@@ -174,6 +176,13 @@ impl Package {
     #[must_use]
     pub const fn bin(&self) -> Option<&Bin> {
         self.bin.as_ref()
+    }
+
+    /// The package's target the crate is, as Cargo lists it: `None` for a
+    /// file no package lists, or when Cargo is not installed.
+    #[must_use]
+    pub const fn cargo_target(&self) -> Option<&project::cargo::Target> {
+        self.target.as_ref()
     }
 
     /// Whether the crate is the package's library, not one of its binaries.
@@ -684,6 +693,7 @@ impl<'a> Builder<'a> {
             rust: None,
             panic,
             library,
+            target: target.clone(),
             script,
         });
 
