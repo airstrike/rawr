@@ -526,7 +526,10 @@ fn a_crate_without_dependencies_produces_no_import_request() {
 fn manifest_cannot_claim_the_reserved_internal_alias() {
     let project = Project::new("reserved-rust-alias");
     project.write("src/main.rs", "");
-    project.write("Cargo.toml", &format!("[package]\nname = \"reserved-rust-alias\"\n[dependencies]\n__rawr_internal = {{ path = {:?} }}\n", project.path()));
+    // A real package of that name, so Cargo resolves it and rawr's own refusal is what fails.
+    project.write("internal/Cargo.toml", "[package]\nname = \"__rawr_internal\"\nedition = \"2024\"\n");
+    project.write("internal/src/lib.rs", "");
+    project.write("Cargo.toml", "[package]\nname = \"reserved-rust-alias\"\nedition = \"2024\"\n[workspace]\n[dependencies]\n__rawr_internal = { path = \"internal\" }\n");
     let target = rawr::project::Target::discover(project.path()).unwrap();
     let graph = Graph::load(&Engine::new(), &target).unwrap();
 
@@ -544,7 +547,7 @@ fn canonical_module_targets_cannot_escape_or_alias() {
 
     let workspace = Project::new("canonical-modules");
     let escaping = workspace.path().join("escaping");
-    write(&escaping.join("Cargo.toml"), "[package]\nname = \"escaping\"\n");
+    write(&escaping.join("Cargo.toml"), "[package]\nname = \"escaping\"\nedition = \"2024\"\n[workspace]\n");
     let outside = workspace.path().join("outside.rs");
     write(&outside, "pub struct Outside;\n");
     write(&escaping.join("src/main.rs"), "mod outside;\n");
