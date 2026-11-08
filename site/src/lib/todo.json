@@ -144,7 +144,9 @@
         {"text":"`rawr cache warm` builds what the first run with dependencies used to build: it installs the nightly rawr reads crate APIs with (the one the current directory names, or the pinned one), gets that nightly's driver and std table, and compiles rawr's runtime for your Rust compiler. It prints the same progress lines, or one line when everything is built. The installer runs it, so a fresh install's first `rawr run` no longer stops to compile rawr's runtime.","issues":[1388]},
         {"text":"A crate value's `.into()` whose target type is known but has open arguments, as `Slot<'_, _>` in a row whose message type only a later child fixes, picks the one `From` impl that fits, as rustc does, instead of reporting E0283.","issues":[1403]},
         {"text":"A crate's `From<String>`, `From<&str>` and `From<Cow<str>>` impls stay three: a `String` reaches `From<String>`, a literal `From<&str>`, and only a program's own `Cow<str>` (`Cow::Borrowed`, `Cow::from`) reaches `From<Cow<str>>`, as rustc selects them. Before, a `String` could reach the crate's Cow impl.","issues":[1390]},
-        {"text":"A crate value passed to `impl Into<T>` where it already is a `T`, as a component crate's `badge!` passes its `Slot::new(row)` to `badge(content: impl Into<Slot<'a, Message>>)`, takes the target's type arguments, so a later use fixes the row's message as rustc does. A crate value whose type nothing settles is rustc's E0282 at its `let` instead of a runner cargo refuses.","issues":[1404]}
+        {"text":"A crate value passed to `impl Into<T>` where it already is a `T`, as a component crate's `badge!` passes its `Slot::new(row)` to `badge(content: impl Into<Slot<'a, Message>>)`, takes the target's type arguments, so a later use fixes the row's message as rustc does. A crate value whose type nothing settles is rustc's E0282 at its `let` instead of a runner cargo refuses.","issues":[1404]},
+        {"text":"A crate that calls your function with a `&` or `&mut` of its own value, as a simulation's `update(&mut self, message, building: &Building)` does, lends you that value for the call: its type needs no `Clone`, nothing is copied, and each call sees the value as the crate holds it then. Its methods, its fields, `{}`, `{:?}` and `==` reach it where it is, and you can pass it on to the crate's functions that take `&Building`, as a view's `draw(building)` does.","issues":[1405,1406]},
+        {"text":"The ?play universe runner builds again: a widget made from a borrowed `&str`, as iced's `button(label)` gives a `Button<'_, Message, &str>`, no longer fails E0597 in its generated adapter, and the generated runner compiles without warnings.","issues":[1396]}
       ]
     },
     "releases": [
@@ -3148,7 +3150,7 @@
     {"issue":1393,"title":"rawr-import's runner-side model builds for wasm32, split from the host's build and store code…","state":"open","category":"Importer"},
     {"issue":1394,"title":"rawr-import extracts bindings for a selected target other than the host, such as wasm32 (blocks…","state":"open","category":"Importer"},
     {"issue":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"open","category":"Importer"},
-    {"issue":1396,"title":"The universe runner fails E0597: an iced adapter's `pins` drops while `made` (Button<'_, Script…","state":"open","category":"No glue (D593)"},
+    {"issue":1396,"title":"The universe runner fails E0597: an iced adapter's `pins` drops while `made` (Button<'_, Script…","state":"closed","category":"No glue (D593)"},
     {"issue":1397,"title":"A body or type path through a present module with a missing middle segment reads as rustc's…","state":"open","category":"Divergences from rustc"},
     {"issue":1398,"title":"E0599 for a missing associated item uses rustc's current wording and labels (struct or enum…","state":"open","category":"Divergences from rustc"},
     {"issue":1399,"title":"An unknown field in a struct literal or pattern on a qualified type reads as rustc's E0560 and E0026","state":"open","category":"Divergences from rustc"},
@@ -3157,8 +3159,8 @@
     {"issue":1402,"title":"Installing from source with cargo install gives rawr alone, with no rawr-import and no warm…","state":"open","category":"Health"},
     {"issue":1403,"title":"A free type parameter in an argument (`Text<'a, Theme>`) is fixed by the one `From` impl that…","state":"closed","category":"No glue (D593)"},
     {"issue":1404,"title":"A crate fn's `impl Trait<Arg>` parameter links `Arg` through the trait's impls …","state":"closed","category":"No glue (D593)"},
-    {"issue":1405,"title":"A native `&T` lent to a script fn is a borrow for the call: no Clone, no arena copy, valid on…","state":"open","category":"Imported lifetimes after slice 2"},
-    {"issue":1406,"title":"A native `&T` a script fn was lent passes straight back to a native fn taking `&T` (elevato…","state":"open","category":"Imported lifetimes after slice 2"},
+    {"issue":1405,"title":"A native `&T` lent to a script fn is a borrow for the call: no Clone, no arena copy, valid on…","state":"closed","category":"Imported lifetimes after slice 2"},
+    {"issue":1406,"title":"A native `&T` a script fn was lent passes straight back to a native fn taking `&T` (elevato…","state":"closed","category":"Imported lifetimes after slice 2"},
     {"issue":1407,"title":"inboard after one run: store.parts 7.4G beside store/executions 6.8G; parts should replace whole…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1408,"title":"A rawr blocked on another rawr's shared runtime or API build says so once, naming the builder's…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1409,"title":"A program `Cow<str>`'s `.into()` into a crate type reaches `From<&str>`: the member chain derefs…","state":"open","category":"No glue (D593)"},
@@ -3170,7 +3172,9 @@
     {"issue":1415,"title":"`rawr mcp`'s `type` tool drops text past 722 characters without an error; take any length or…","state":"open","category":"Health"},
     {"issue":1416,"title":"`rawr mcp`'s `wait` advertises a client timeout it ignores and blocks with no event; honor it or…","state":"open","category":"Health"},
     {"issue":1417,"title":"`rawr check` passes where the runner build fails: a check that also compiles the generated…","state":"open","category":"Health"},
-    {"issue":1418,"title":"A save whose text is unchanged sends no event, so a host showing \"applying\" can't resolve it…","state":"open","category":"Hot reload of a marked `main` (D555)"}
+    {"issue":1418,"title":"A save whose text is unchanged sends no event, so a host showing \"applying\" can't resolve it…","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":1419,"title":"A generic filled through a `let`'s annotation takes the annotated type…","state":"open","category":"Divergences from rustc"},
+    {"issue":1420,"title":"A test checks that a generated runner compiles without warnings; rawr shows cargo's warnings…","state":"open","category":"Health"}
   ],
   "groups": [
     {
