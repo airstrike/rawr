@@ -924,6 +924,28 @@ function addItem(ctx, op, { category, text, title, labels, decisions, gantt, rel
   return item;
 }
 
+// How each kind of retirement reads before what retired it.
+const RETIRE_PHRASE = { superseded: "superseded by", duplicate: "duplicate of", fixed: "fixed by", "not-applicable": "not applicable after" };
+
+// What retired an item, checked against its kind: an issue (#N), a decision
+// (D662) or a commit. Returns how the issue comment and TODO.md name it.
+function retiredBy(ctx, op, item) {
+  const allowed = { superseded: ["issue"], duplicate: ["issue"], fixed: ["commit", "issue"], "not-applicable": ["decision", "issue", "commit"] }[op.kind];
+  const what = op.by.startsWith("#") ? "issue" : op.by.startsWith("D") ? "decision" : "commit";
+  if (!allowed.includes(what)) fail(`a ${op.kind} retirement names ${allowed.map((a) => `a${a === "issue" ? "n" : ""} ${a}`).join(" or ")} in "by", not ${op.by}`);
+  if (what === "commit") {
+    try { git("cat-file", "-e", `${op.by}^{commit}`); } catch { fail(`commit ${op.by} isn't in this repository`); }
+    return { github: op.by, todo: `\`${op.by}\`` };
+  }
+  if (what === "decision") return { github: op.by, todo: op.by };
+  const n = +op.by.slice(1);
+  if (n === item.issue) fail(`#${n} can't retire itself`);
+  const other = byIssue(ctx.plan, n) ?? fail(`${op.by} is no item's issue`);
+  if (other.state === "retired") fail(`${other.t} (${op.by}) is retired too; name what carries the work now`);
+  if (op.kind === "fixed" && other.state !== "closed") fail(`${other.t} (${op.by}) is open; a fixed retirement names the closed issue or the commit that shipped the fix`);
+  return { github: op.by, todo: op.by };
+}
+
 const OPS = {
   add(ctx, op) {
     const item = addItem(ctx, op, op);
@@ -946,29 +968,25 @@ const OPS = {
     return `${item.t} (#${item.issue}) closed in ${op.commit}`;
   },
 
-  // An item whose premise is gone, or that another issue covers. It ships
-  // nothing: no commit, no release and no changelog entry.
+  // An item retired for one of four reasons, each naming what retired it.
+  // It ships nothing: no commit, no release and no changelog entry.
   retire(ctx, op) {
     const item = itemFor(ctx, op);
     if (item.state !== "open") fail(`${op.t} is already ${item.state}`);
     const entry = ctx.plan.changelog.unreleased.entries.findIndex((e) => e.issues.includes(item.issue));
     if (entry >= 0) fail(`entry ${entry} under Unreleased ships #${item.issue}; remove the entry, or close the item instead`);
-    const reason = publicText(op.reason.trim());
-    checkRefs(ctx, reason, item.t);
-    let duplicate = null;
-    if (op.duplicate !== undefined) {
-      if (op.duplicate === item.issue) fail(`#${item.issue} can't duplicate itself`);
-      duplicate = byIssue(ctx.plan, op.duplicate) ?? fail(`#${op.duplicate} is no item's issue`);
-      if (duplicate.state === "retired") fail(`${duplicate.t} (#${duplicate.issue}) is retired too; give ${op.t} its own reason`);
-    }
+    const by = retiredBy(ctx, op, item);
+    const note = op.note ? publicText(op.note.trim()) : null;
+    if (note) checkRefs(ctx, note, item.t);
+    const said = `${RETIRE_PHRASE[op.kind]} ${by.github}`;
+    const tail = note ? ` ${/[.!?]$/.test(note) ? note : `${note}.`}` : "";
     const line = ctx.todo.parsed.items.get(op.t) ?? fail(`${op.t} isn't in TODO.md`);
-    // "Retired 2026-11-08: <reason>." as close's "Done in `abc`." opens the line.
-    const said = `${/[.!?]$/.test(reason) ? reason : `${reason}.`}${duplicate ? ` Duplicate of ${duplicate.t}.` : ""}`;
-    ctx.retire(item.issue, duplicate ? `Duplicate of #${duplicate.issue}\n\n${reason}` : reason);
-    ctx.todo.set({ ...line, done: true, text: `Retired ${today()}: ${said} ${line.text}` });
+    ctx.retire(item.issue, `Retired: ${said}.${tail}`);
+    // "Retired 2026-11-08: superseded by #1234." opens the line, as close's "Done in `abc`." does.
+    ctx.todo.set({ ...line, done: true, text: `Retired ${today()}: ${RETIRE_PHRASE[op.kind]} ${by.todo}.${tail} ${line.text}` });
     item.state = "retired";
     ctx.sync(item);
-    return `${item.t} (#${item.issue}) retired: ${reason}${duplicate ? ` (duplicate of #${duplicate.issue})` : ""}`;
+    return `${item.t} (#${item.issue}) retired: ${said}`;
   },
 
   edit(ctx, op) {

@@ -47,19 +47,24 @@ test("a change picks its schema by op, and names a real issue or \"new\"", () =>
   assert.ok(errors.some((e) => e.startsWith("$.changes[2].issue")), errors.join("\n"));
 });
 
-test("a retire names its reason, on one line of at most 500 characters, and may name the issue it duplicates", () => {
+test("a retire names one of four kinds and what retired it, with an optional one-line note", () => {
   const change = schema("change");
-  const ok = { changes: [{ op: "retire", t: "T031", issue: 31, reason: "rawr-iced is gone (D662)." }, { op: "retire", t: "T032", issue: 32, reason: "Covered there.", duplicate: 1234 }] };
+  const ok = { changes: [
+    { op: "retire", t: "T031", issue: 31, kind: "not-applicable", by: "D662" },
+    { op: "retire", t: "T032", issue: 32, kind: "superseded", by: "#1234", note: "The newer issue names the real cause." },
+    { op: "retire", t: "T033", issue: 33, kind: "fixed", by: "607e319ab" },
+  ] };
   assert.deepEqual(validate(change, ok, change), []);
   const bad = { changes: [
-    { op: "retire", t: "T031", issue: 31 },
-    { op: "retire", t: "T031", issue: 31, reason: "x".repeat(501) },
-    { op: "retire", t: "T031", issue: 31, reason: "one\ntwo" },
-    { op: "retire", t: "T031", issue: 31, reason: "Covered.", duplicate: "new" },
-    { op: "retire", t: "T031", issue: 31, reason: "Gone.", commit: "607e319ab" },
+    { op: "retire", t: "T031", issue: 31, kind: "superseded" },
+    { op: "retire", t: "T031", issue: 31, kind: "gone", by: "#1" },
+    { op: "retire", t: "T031", issue: 31, kind: "fixed", by: "1234" },
+    { op: "retire", t: "T031", issue: 31, kind: "duplicate", by: "#2", note: "x".repeat(301) },
+    { op: "retire", t: "T031", issue: 31, kind: "duplicate", by: "#2", note: "one\ntwo" },
+    { op: "retire", t: "T031", issue: 31, kind: "duplicate", by: "#2", reason: "free text" },
   ] };
   const errors = validate(change, bad, change);
-  for (const [i, start] of [[0, '$.changes[0]: missing "reason"'], [1, "$.changes[1].reason: longer than 500"], [2, "$.changes[2].reason"], [3, "$.changes[3].duplicate"], [4, '$.changes[4]: unknown property "commit"']]) {
+  for (const [i, start] of [[0, '$.changes[0]: missing "by"'], [1, "$.changes[1].kind"], [2, "$.changes[2].by"], [3, "$.changes[3].note: longer than 300"], [4, "$.changes[4].note"], [5, '$.changes[5]: unknown property "reason"']]) {
     assert.ok(errors.some((e) => e.startsWith(start)), `${i}: ${errors.join("\n")}`);
   }
   const items = schema("items");
