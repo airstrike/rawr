@@ -252,6 +252,26 @@ streaming    -15.49</span></div>
 </div>
 <p>With <code>scripts/wrong.rs</code> as the edit, the reload fails with E0308 and the second report uses the old rules.</p>
 
+<h2 id="universe">A program against your crates</h2>
+<p>A script that uses only std and your exports loads with <code>Engine::load</code>. A program that calls your dependencies, such as iced, loads in a <code>rawr::universe::Universe</code>. A universe holds the generated bindings of those crates, linked into your binary and installed once in an engine. The bindings are the ones <code>rawr-import</code> generates for <code>rawr run</code>, and Cargo builds them with your crates, so there is one iced in the project. The module needs the crate&rsquo;s <code>rust-import</code> and <code>sync</code> features.</p>
+<ul>
+  <li><code>Universe::new(&amp;bindings, access)</code> installs the bindings. A generated runner implements the <code>Bindings</code> trait over its adapters.</li>
+  <li><code>universe.load(path)</code> loads a marked file with its package: the nearest <code>Cargo.toml</code> above it and the Rust files beside and below it. It compiles the program and evaluates its top-level items. The thread that loads it owns it, as the main thread owns a program <code>rawr run</code> runs. <code>universe.program(entry, text, files)</code> does the same with text.</li>
+  <li><code>program.call(name, &amp;mut args)</code> calls a function at the program&rsquo;s crate root. <code>program.run()</code> runs its <code>main</code>, as Rust runs it, and gives the status the process would end with. A <code>main</code> that hands native code its loop, as <code>iced::run</code> does, runs that loop here.</li>
+  <li><code>program.reloader()</code> gives a <code>Reloader</code>, which any thread can hold. <code>reload()</code> rereads the files, and <code>replace(text)</code> gives the crate root new text. The new text compiles on that thread, against the same engine. The thread that owns the program takes it at its next call from native code into the program, as under <code>rawr run</code>.</li>
+</ul>
+<p>Each reload returns an <code>Outcome</code>. <code>program.outcomes()</code> gives every outcome as it comes. The words are those <code>rawr-reload</code> gives a program under <code>rawr run</code>.</p>
+<table>
+  <tr><th>Outcome</th><th>What happened</th></tr>
+  <tr><td><code>Unchanged</code></td><td>The files hold the running text, or the text a reload refused last. Nothing compiled.</td></tr>
+  <tr><td><code>Queued</code></td><td>The new text compiled. The owner takes it at its next call, and then <code>Swapped</code> follows.</td></tr>
+  <tr><td><code>Swapped</code></td><td>The program runs the new text, with its state kept.</td></tr>
+  <tr><td><code>Failed</code></td><td>The new text doesn&rsquo;t compile. The message is rustc&rsquo;s error. The last good text keeps running.</td></tr>
+  <tr><td><code>Restarting</code></td><td>The new text can&rsquo;t replace the running one in this process, for example because a struct&rsquo;s fields changed. The last good text keeps running until the program starts again.</td></tr>
+</table>
+<p>A native call that the bindings don&rsquo;t cover is the program&rsquo;s compile error, where the program makes it. The bindings cover the calls the program made when they were generated. The <code class="nw">?play</code> bot runs every snippet this way, in a universe of iced, iced_test, tokio and ratatui.</p>
+<p>Today a generated runner links the bindings. A <code>build.rs</code> step that links them into your own crate is not built yet, so a plain <code>cargo build</code> can&rsquo;t produce them.</p>
+
 <h2 id="export">Export your types</h2>
 <p>Put <code>#[rawr::export]</code> on a struct, on its impl block and on a free function.</p>
 <ul>
