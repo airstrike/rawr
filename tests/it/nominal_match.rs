@@ -380,9 +380,9 @@ fn recursive_pattern_owner_variant_arity_type_and_binding_failures_are_positione
         ),
         (
             "enum Inner { Value(i64) } enum Outer { Wrap(Inner) } pub fn f(value: Outer) { match value { Outer::Wrap(Inner::Value) => () } }",
-            "Value) =>",
-            Category::InvalidMatch,
-            "expects 1 binding(s), found 0",
+            "Inner::Value) =>",
+            Category::PatternFields,
+            "this pattern has 0 fields, but the corresponding tuple variant has 1 field",
         ),
         (
             "enum Inner { Value } enum Other { Value } enum Outer { Wrap(Inner) } pub fn f(value: Outer) { match value { Outer::Wrap(Other::Value) => () } }",
@@ -571,7 +571,7 @@ fn names_arity_owner_and_arm_types_are_compile_checked() {
     let cases = [
         ("enum Message { Tick } pub fn f(message: Message) { match message { Missing::Tick => () } }", Category::UnknownType, "Missing"),
         ("enum Message { Tick } pub fn f(message: Message) { match message { Message::Missing => () } }", Category::UnknownMember, "Message::Missing"),
-        ("enum Message { Move(i64, i64) } pub fn f(message: Message) { match message { Message::Move(value) => () } }", Category::InvalidMatch, "expects 2 binding(s), found 1"),
+        ("enum Message { Move(i64, i64) } pub fn f(message: Message) { match message { Message::Move(value) => () } }", Category::PatternFields, "this pattern has 1 field, but the corresponding tuple variant has 2 fields"),
         (
             "enum Message { Tick, Tock } pub fn f(message: Message) -> i64 { match message { Message::Tick => 1, Message::Tock => false } }",
             Category::TypeMismatch,
