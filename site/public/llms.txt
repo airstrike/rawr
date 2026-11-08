@@ -141,7 +141,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
   `rawr new counter && cd counter && cargo add iced --git https://github.com/iced-rs/iced --rev be88873d38544455e26c7a104eb757da2cbbac6b`
 - Write iced as usual: `iced::run(App::update, App::view)` or `iced::application(..).subscription(..).run()`. Tasks, subscriptions, `column!`/`row!`/`text!` (iced's own macros), custom widgets in native Rust, imported values in `Message` all work.
 - Known to run unchanged but for `// rawr`: counter, checkbox, slider, tooltip, pick_list, url_handler. Other examples run as bindings reach their items; a gap errors at the item.
-- Not available: a `#[widget]` written in a marked file; your impl of a crate trait at a type holding an opaque `impl Trait`; rendering previews.
+- Not available: your impl of a crate trait at a type holding an opaque `impl Trait`; rendering previews.
 - `rawr check` checks an app without a window.
 - ratatui: `main` stays native and owns the terminal; marked modules hold the state and draw on the lent `&mut Frame`. See Hot reload above for SIGWINCH and the terminal restore.
 - Full: https://rawr.airstrike.fyi/docs/apps#iced, https://rawr.airstrike.fyi/docs/apps#ratatui
@@ -153,7 +153,6 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 - Under rawr the attribute (and `use rawr::preview;`) is parsed and ignored.
 - Show: nothing renders previews today. `rawr preview`/`rawr snapshot` were removed with rawr-iced; `rawr preview` on the plain runner is open work.
 - VS Code extension (`editors/vscode-rawr`, local install by symlinking into `~/.vscode/extensions/rawr-0.0.2`): only sets the `rawr.marked` context key while the active editor is a `.rs` file whose first line is `// rawr`. The planned preview pane (dropdown of `#[preview]` items, rendered beside the code, following reloads) is not built.
-- `#[rawr::widget]` also exists in rawr-macros; under Cargo it is a no-op.
 - Full: https://rawr.airstrike.fyi/docs/previews
 
 ## MCP server for agents (`rawr mcp`)
