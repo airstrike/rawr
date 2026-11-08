@@ -9053,6 +9053,63 @@ fn language_cfg_on_statements_and_cfg_macro() {
 }
 
 #[test]
+fn language_cfg_on_fields_arms_elements_and_statements_follows_rustc() {
+    // `rustc --print cfg` decides, as for `cargo run` on this host.
+    let source = r#"
+        struct Point {
+            x: i64,
+            #[cfg(target_os = "OS")]
+            y: i64,
+            #[cfg(not(target_os = "OS"))]
+            z: i64,
+        }
+        fn one(value: i64) -> i64 { value }
+        pub fn run() -> i64 {
+            let p = Point {
+                x: 1,
+                #[cfg(target_os = "OS")]
+                y: 10,
+                #[cfg(not(target_os = "OS"))]
+                z: 5,
+            };
+            let array = [
+                100,
+                #[cfg(target_os = "OS")] 200,
+                #[cfg(target_os = "nowhere")] 7,
+                #[cfg_attr(target_os = "OS", cfg(target_os = "nowhere"))] 9,
+            ];
+            let tuple = (#[cfg(target_os = "nowhere")] 7, 1000, #[cfg(target_os = "OS")] 2000);
+            let arm = match p.x {
+                #[cfg(target_os = "nowhere")]
+                1 => 7,
+                #[cfg(target_os = "OS")]
+                1 => { 10000 }
+                _ => 0,
+            };
+            let mut n = p.x + p.y + array[0] + array[1] + array.len() as i64
+                + tuple.0 + tuple.1 + arm
+                + one(#[cfg(target_os = "nowhere")] 7, 20000);
+            #[cfg(target_os = "OS")]
+            n += 100000;
+            #[cfg(target_os = "nowhere")]
+            n += 7;
+            if cfg!(target_os = "OS") { n += 1000000; }
+            if cfg!(unix) { n += 10000000; }
+            n
+        }
+        run()
+    "#
+    .replace("\"OS\"", &format!("{:?}", std::env::consts::OS));
+    let unix = if cfg!(unix) { 10_000_000 } else { 0 };
+    let fields = 1 + 10;
+    let elements = 100 + 200 + 2 + 1000 + 2000;
+    assert_eq!(
+        run(&source),
+        fields + elements + 10_000 + 20_000 + 100_000 + 1_000_000 + unix
+    );
+}
+
+#[test]
 fn language_phantom_data_is_a_field_of_no_value() {
     let value = run(r#"
         use std::marker::PhantomData;

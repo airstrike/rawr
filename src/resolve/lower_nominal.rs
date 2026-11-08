@@ -4466,70 +4466,6 @@ fn body_source(source: &str, body: &item::Body) -> String {
     output
 }
 
-/// Whether `cfg(name = "value")` holds on the target Rawr runs on.
-pub(crate) fn cfg_value(name: &str, value: &str) -> bool {
-    let actual = match name {
-        "target_arch" => {
-            if cfg!(target_arch = "aarch64") {
-                "aarch64"
-            } else if cfg!(target_arch = "x86_64") {
-                "x86_64"
-            } else if cfg!(target_arch = "wasm32") {
-                "wasm32"
-            } else if cfg!(target_arch = "x86") {
-                "x86"
-            } else {
-                "unknown"
-            }
-        }
-        "target_os" => {
-            if cfg!(target_os = "macos") {
-                "macos"
-            } else if cfg!(target_os = "linux") {
-                "linux"
-            } else if cfg!(target_os = "windows") {
-                "windows"
-            } else if cfg!(target_os = "ios") {
-                "ios"
-            } else if cfg!(target_os = "android") {
-                "android"
-            } else {
-                "unknown"
-            }
-        }
-        "target_family" => {
-            if cfg!(target_family = "unix") {
-                "unix"
-            } else if cfg!(target_family = "windows") {
-                "windows"
-            } else if cfg!(target_family = "wasm") {
-                "wasm"
-            } else {
-                "unknown"
-            }
-        }
-        "target_pointer_width" => {
-            if cfg!(target_pointer_width = "64") {
-                "64"
-            } else {
-                "32"
-            }
-        }
-        _ => return false,
-    };
-    actual == value
-}
-
-/// Whether the `cfg` flag `name` is set on the target Rawr runs on.
-pub(crate) fn cfg_flag(name: &str) -> bool {
-    match name {
-        "unix" => cfg!(unix),
-        "windows" => cfg!(windows),
-        "debug_assertions" => true,
-        _ => false,
-    }
-}
-
 /// Whether a library function's numeric `parameter` takes a `source`
 /// number: an integer or a float, as Rust's literal settles.
 fn host_number_accepts(parameter: &crate::host::type_ref::Type, source: &Ty) -> bool {
@@ -27035,42 +26971,170 @@ impl<'a> Parser<'a> {
         matches!(self.peek(), Token::Hash)
     }
 
+    /// The outer attributes ahead, read as rustc reads them: whether what
+    /// they are on is configured in. A `#[cfg(..)]` that does not hold
+    /// leaves it out, a `#[cfg_attr(..)]` whose predicate holds applies the
+    /// attributes it lists, and every other attribute has no effect here.
+    fn outer_attributes(&mut self) -> Result<bool, Error> {
+        let mut configured = true;
+        while self.attribute_ahead() {
+            self.next();
+            self.expect(Token::LeftBracket, "`[` to open an attribute")?;
+            configured &= self.attribute()?;
+            self.expect(Token::RightBracket, "`]` to close an attribute")?;
+        }
+        Ok(configured)
+    }
+
+    /// One attribute inside `#[..]` or a `cfg_attr(..)`, up to the `,`,
+    /// `)` or `]` after it: whether it keeps what it is on.
+    fn attribute(&mut self) -> Result<bool, Error> {
+        let name = match self.peek() {
+            Token::Identifier(name) if matches!(self.peek_second(), Token::LeftParen) => Some(name),
+            _ => None,
+        };
+        match name.as_ref().map(|name| name.as_str()) {
+            Some("cfg") => {
+                self.next();
+                self.next();
+                let holds = self.cfg_predicate()?;
+                self.expect(Token::RightParen, "`)` to close `cfg`")?;
+                Ok(holds)
+            }
+            Some("cfg_attr") => {
+                self.next();
+                self.next();
+                let holds = self.cfg_predicate()?;
+                let mut configured = true;
+                while matches!(self.peek(), Token::Comma) {
+                    self.next();
+                    if matches!(self.peek(), Token::RightParen) {
+                        break;
+                    }
+                    if holds {
+                        configured &= self.attribute()?;
+                    } else {
+                        self.skip_listed()?;
+                    }
+                }
+                self.expect(Token::RightParen, "`)` to close `cfg_attr`")?;
+                Ok(configured)
+            }
+            _ => {
+                self.skip_listed()?;
+                Ok(true)
+            }
+        }
+    }
+
+    /// Whether the element ahead in a list (a struct expression's field,
+    /// an array's or a tuple's element, a call's argument) is left out by
+    /// its attributes, as rustc leaves it out where a `#[cfg(..)]` does not
+    /// hold. Its attributes are read; a left-out element is passed over
+    /// with the `,` after it.
+    fn element_left_out(&mut self) -> Result<bool, Error> {
+        if !self.attribute_ahead() || self.outer_attributes()? {
+            return Ok(false);
+        }
+        self.skip_listed()?;
+        if matches!(self.peek(), Token::Comma) {
+            self.next();
+        }
+        Ok(true)
+    }
+
+    /// Whether the match arm ahead is left out by its attributes, as
+    /// [`Self::element_left_out`] reads them. A left-out arm is passed over
+    /// with its `,`.
+    fn arm_left_out(&mut self) -> Result<bool, Error> {
+        if !self.attribute_ahead() || self.outer_attributes()? {
+            return Ok(false);
+        }
+        let start = self.position();
+        let mut depth = 0usize;
+        loop {
+            match self.next() {
+                (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
+                    depth += 1;
+                }
+                (Token::RightBrace | Token::RightParen | Token::RightBracket, _) => {
+                    depth = depth.saturating_sub(1);
+                }
+                (Token::DoubleArrow, _) if depth == 0 => break,
+                (Token::EOF, position) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a match arm under `#[cfg(..)]` without its end".into(),
+                        source: span(start, position),
+                    });
+                }
+                _ => {}
+            }
+        }
+        // A block body ends the arm; any other runs to its `,`.
+        let block = matches!(self.peek(), Token::LeftBrace);
+        if block {
+            self.next();
+            self.skip_listed()?;
+            self.expect(Token::RightBrace, "`}` to close a match arm's block")?;
+        } else {
+            self.skip_listed()?;
+        }
+        if matches!(self.peek(), Token::Comma) {
+            self.next();
+        }
+        Ok(true)
+    }
+
+    /// Pass over the tokens of one element of a list, up to the `,` or the
+    /// closing delimiter at its depth, which it leaves. A turbofish's `<..>`
+    /// is a depth, as its `,`s separate its own arguments.
+    fn skip_listed(&mut self) -> Result<(), Error> {
+        let start = self.position();
+        let mut depth = 0usize;
+        let mut angles = 0usize;
+        loop {
+            match self.peek() {
+                Token::Comma | Token::RightParen | Token::RightBracket | Token::RightBrace
+                    if depth == 0 && angles == 0 =>
+                {
+                    return Ok(());
+                }
+                Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightBrace | Token::RightParen | Token::RightBracket => {
+                    depth = depth.saturating_sub(1);
+                }
+                Token::DoubleColon if matches!(self.peek_second(), Token::LessThan) => {
+                    self.next();
+                    angles += 1;
+                }
+                Token::GreaterThan if angles > 0 => angles -= 1,
+                Token::RightShift if angles > 0 => angles = angles.saturating_sub(2),
+                Token::EOF => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "an element under `#[cfg(..)]` without its end".into(),
+                        source: span(start, self.position()),
+                    });
+                }
+                _ => {}
+            }
+            self.next();
+        }
+    }
+
     /// A `struct`, `enum`, `impl`, `trait` or `type` item inside a body,
     /// with its attributes: the item parser hoisted it to the file's items,
     /// so its tokens are passed over here. A statement's attributes have no
     /// effect and are passed over too, except a `#[cfg(..)]` that is false,
-    /// which leaves the statement out.
+    /// which leaves the statement out (`outer_attributes`).
     fn skip_nested_item(&mut self) -> Result<(), Error> {
         let start = self.position();
         let unclosed = |position| Error::UnsupportedNominalSyntax {
             construct: "an item inside a body without its end".into(),
             source: span(start, position),
         };
-        let mut configured = true;
-        while self.attribute_ahead() {
-            self.next();
-            if matches!(self.peek(), Token::LeftBracket)
-                && matches!(self.peek_second(), Token::Identifier(name) if name.as_str() == "cfg")
-            {
-                self.next();
-                self.next();
-                self.expect(Token::LeftParen, "`(` after `cfg`")?;
-                configured &= self.cfg_predicate()?;
-                self.expect(Token::RightParen, "`)` to close `cfg`")?;
-                self.expect(Token::RightBracket, "`]` to close an attribute")?;
-                continue;
-            }
-            let mut depth = 0usize;
-            loop {
-                match self.next() {
-                    (Token::LeftBracket, _) => depth += 1,
-                    (Token::RightBracket, _) if depth == 1 => break,
-                    (Token::RightBracket, _) => depth = depth.saturating_sub(1),
-                    (Token::EOF, position) => return Err(unclosed(position)),
-                    _ => {}
-                }
-            }
-        }
+        let configured = self.outer_attributes()?;
         if !configured && !self.nested_item_ahead() {
             return self.skip_statement();
         }
@@ -27305,9 +27369,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// The predicate of `cfg(..)` or `cfg!(..)` for the target Rawr runs
-    /// on, `test` holding as the engine builds and `feature = ".."` for
-    /// each feature Cargo enables for the package.
+    /// The predicate of `cfg(..)` or `cfg!(..)`: `test` holding as the
+    /// engine builds, `feature = ".."` for each feature Cargo enables for
+    /// the package, and every other option as rustc sets it for the target
+    /// Cargo builds the package for.
     fn cfg_predicate(&mut self) -> Result<bool, Error> {
         let (name, at) = match self.next() {
             (Token::Identifier(name), position) => (name.to_string(), position),
@@ -27353,10 +27418,10 @@ impl<'a> Parser<'a> {
                 if name == "feature" {
                     return Ok(self.models.features.holds(&value));
                 }
-                Ok(cfg_value(&name, &value))
+                Ok(self.models.features.option(&name, Some(&value)))
             }
             "test" => Ok(self.models.test),
-            _ => Ok(cfg_flag(&name)),
+            _ => Ok(self.models.features.option(&name, None)),
         }
     }
 
@@ -30983,6 +31048,9 @@ impl<'a> Parser<'a> {
         let mut match_after = String::new();
 
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
+            if self.arm_left_out()? {
+                continue;
+            }
             if wildcard {
                 return Err(Error::InvalidMatch {
                     owner: owner.clone(),
@@ -32760,6 +32828,9 @@ impl<'a> Parser<'a> {
         let scalar = Scalar::of(&subject_ty);
         let mut covered = Some(Vec::new());
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
+            if self.arm_left_out()? {
+                continue;
+            }
             let pattern_start = self.position();
             self.flow().arm(tested);
             tested = self.flow().split();
@@ -34046,6 +34117,9 @@ impl<'a> Parser<'a> {
         let mut exhaustive = false;
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
+            if self.arm_left_out()? {
+                continue;
+            }
             let pattern_start = self.position();
             self.flow().arm(tested);
             tested = self.flow().split();
@@ -41717,7 +41791,17 @@ impl<'a> Parser<'a> {
 
     /// `(value)`, or a tuple `(a, b, ..)`, which is an array at runtime.
     fn parse_parenthesized(&mut self, open: Position) -> Result<ParsedExpr, Error> {
+        // A tuple keeps its form when a `#[cfg(..)]` leaves elements out.
+        let mut left_out = false;
+        while self.element_left_out()? {
+            left_out = true;
+        }
         let mut value = self.parse_expr()?;
+        if left_out && !matches!(self.peek(), Token::Comma) {
+            let end = self.expect(Token::RightParen, "')' after a tuple")?;
+            self.move_local(&mut value)?;
+            return Ok(self.tuple_of(open, end, vec![value]));
+        }
         if !matches!(self.peek(), Token::Comma) {
             let end = self.expect(Token::RightParen, "')' after expression")?;
             let before = value.source.as_str().to_string();
@@ -41735,6 +41819,7 @@ impl<'a> Parser<'a> {
         let mut members = vec![value];
         while matches!(self.peek(), Token::Comma) {
             self.next();
+            while self.element_left_out()? {}
             if matches!(self.peek(), Token::RightParen) {
                 break;
             }
@@ -41744,6 +41829,12 @@ impl<'a> Parser<'a> {
         for member in &mut members {
             self.move_local(member)?;
         }
+        Ok(self.tuple_of(open, end, members))
+    }
+
+    /// The tuple of `members`, which have moved into it, written from
+    /// `open` to `end`.
+    fn tuple_of(&mut self, open: Position, end: Position, members: Vec<ParsedExpr>) -> ParsedExpr {
         let ty = Ty::Tuple(
             members
                 .iter()
@@ -41767,7 +41858,7 @@ impl<'a> Parser<'a> {
         );
         let source = origin::Fragment::join(members.iter().map(ParsedExpr::rendered_source), ", ")
             .surrounded("[", "]");
-        Ok(self.operator_expr(source, ty, span(open, end)))
+        self.operator_expr(source, ty, span(open, end))
     }
 
     fn parse_name_primary(
@@ -45113,6 +45204,9 @@ impl<'a> Parser<'a> {
         let mut repeat = None;
         let mut counted = None;
         while self.peek() != *close {
+            if self.element_left_out()? {
+                continue;
+            }
             let frames = self.frames.last().map_or(0, Vec::len);
             let element = (self.position(), elements.len(), frames);
             if let Some(array) = self.frame_arrays.last_mut() {
@@ -49527,6 +49621,9 @@ impl<'a> Parser<'a> {
         let mut base = None;
 
         while !matches!(self.peek(), Token::RightBrace) {
+            if self.element_left_out()? {
+                continue;
+            }
             if matches!(self.peek(), Token::ExclusiveRange) {
                 self.next();
                 let mut value = self.parse_expr()?;
@@ -49801,6 +49898,9 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::<(ImmutableString, Span, ParsedExpr)>::new();
         let mut base = None;
         while !matches!(self.peek(), Token::RightBrace) {
+            if self.element_left_out()? {
+                continue;
+            }
             if matches!(self.peek(), Token::ExclusiveRange) {
                 self.next();
                 base = Some(self.parse_expr()?);
@@ -50161,6 +50261,9 @@ impl<'a> Parser<'a> {
                 } else {
                     self.expect(Token::LeftParen, "'(' after imported tuple struct")?;
                     while !matches!(self.peek(), Token::RightParen) {
+                        if self.element_left_out()? {
+                            continue;
+                        }
                         arguments.push(self.parse_expr()?);
                         if matches!(self.peek(), Token::Comma) {
                             self.next();
@@ -50177,6 +50280,9 @@ impl<'a> Parser<'a> {
                 let mut values = BTreeMap::<ImmutableString, (ParsedExpr, Span)>::new();
                 let mut order = Vec::new();
                 while !matches!(self.peek(), Token::RightBrace) {
+                    if self.element_left_out()? {
+                        continue;
+                    }
                     if matches!(self.peek(), Token::ExclusiveRange) {
                         self.next();
                         base = Some(self.parse_expr()?);
@@ -50444,6 +50550,9 @@ impl<'a> Parser<'a> {
         let mut hints = std::mem::take(&mut self.closure_hints).into_iter();
         let mut outputs = std::mem::take(&mut self.closure_outputs).into_iter();
         while !matches!(self.peek(), Token::RightParen) {
+            if self.element_left_out()? {
+                continue;
+            }
             let outer = std::mem::replace(&mut self.no_struct, false);
             self.closure_hint = hints.next().flatten();
             if self.closure_hint.is_none()
@@ -53255,6 +53364,9 @@ impl<'a> Parser<'a> {
                 } else {
                     self.expect(Token::LeftParen, "'(' after imported tuple variant")?;
                     while !matches!(self.peek(), Token::RightParen) {
+                        if self.element_left_out()? {
+                            continue;
+                        }
                         arguments.push(self.parse_expr()?);
                         if matches!(self.peek(), Token::Comma) {
                             self.next();

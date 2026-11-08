@@ -3900,7 +3900,8 @@ fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package
     input = &input[domain.len()..];
     let entry = std::str::from_utf8(snapshot_bytes(&mut input, 1024 * 1024)?)
         .map_err(|_| std::io::Error::other("snapshot entry UTF-8"))?;
-    // The features the parent's Cargo enabled for the entry package.
+    // The entry package's configuration, as `rustc --print cfg` lines: the
+    // features the parent's Cargo enabled and the options rustc sets.
     if input.len() < 8 { return Err(std::io::Error::other("snapshot features")); }
     let count = u64::from_le_bytes(input[..8].try_into().map_err(|_| std::io::Error::other("snapshot features"))?);
     input = &input[8..];
@@ -3924,7 +3925,7 @@ fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package
     }
     if files.is_empty() { return Err(std::io::Error::other("snapshot files")); }
     __rawr_internal::package::snapshot::Snapshot::new(std::path::PathBuf::from(entry), files)
-        .map(|snapshot| snapshot.with_features(__rawr_internal::project::cargo::features::Enabled::of_names(features)))
+        .map(|snapshot| snapshot.with_features(__rawr_internal::project::cargo::features::Enabled::of_lines(features)))
         .map_err(|error| std::io::Error::other(error.to_string()))
 }
 

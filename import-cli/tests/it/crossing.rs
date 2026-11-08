@@ -393,6 +393,24 @@ fn a_crate_s_features_follow_cargo_s_feature_flags() {
     }
 }
 
+/// iced's `window::Settings { #[cfg(target_os = "macos")]
+/// platform_specific: .., ..Default::default() }` (#1331): a crate struct
+/// built with a field under `#[cfg(..)]`, and an arm and an array element
+/// under one, follow the options rustc sets for the target Cargo builds
+/// for. The output is `cargo run`'s.
+#[test]
+fn a_crate_struct_built_with_a_cfg_field_follows_the_target() {
+    let (rawr, cargo) = both_printed("configured.rs", "");
+    assert_eq!(rawr, cargo);
+    let (radius, family) = if cfg!(unix) {
+        (4, "unix")
+    } else {
+        (5, "windows")
+    };
+    let wide = cfg!(target_pointer_width = "64");
+    assert_eq!(rawr, format!("quad 3 {radius}\nsizes 2\n{family} {wide}"));
+}
+
 /// iced's tour (#1074): `padded_button("Back")`, a generic function of the
 /// program's own compiled per instantiation, takes the message that a
 /// later `.on_press(..)` fixes, as rustc infers it. The output is `cargo
