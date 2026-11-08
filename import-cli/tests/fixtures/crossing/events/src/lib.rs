@@ -1283,6 +1283,88 @@ pub mod widgets {
         }
     }
 
+    /// The panes of a grid, each a value of the program's, as iced's
+    /// `pane_grid::State<S>`.
+    pub struct Board<S> {
+        panes: Vec<S>,
+    }
+
+    impl<S> Board<S> {
+        /// A board of one pane, as iced's `State::new(first)`.
+        pub fn new(first: S) -> Self {
+            Self { panes: vec![first] }
+        }
+
+        /// The board with `pane` after the others, as iced's
+        /// `State::split`.
+        pub fn split(&mut self, pane: S) {
+            self.panes.push(pane);
+        }
+
+        /// How many panes the board has.
+        pub fn len(&self) -> usize {
+            self.panes.len()
+        }
+
+        /// Whether the board has no panes.
+        pub fn is_empty(&self) -> bool {
+            self.panes.is_empty()
+        }
+    }
+
+    /// A pane of a board's for each of its panes, as iced's
+    /// `PaneGrid<'a, Message, T, W, Theme>`, whose panes are at its own
+    /// `'a`.
+    pub struct Panes<'a, T, W, Theme = crate::Theme> {
+        contents: Vec<Pane<'a, T, W, Theme>>,
+        spacing: u16,
+    }
+
+    impl<'a, T, W, Theme> Panes<'a, T, W, Theme> {
+        /// What `view` makes of each pane of `board`, as iced's
+        /// `PaneGrid::new(state, view)` calls `view` with each pane's
+        /// index, a borrow of its state and whether it is the last one.
+        pub fn new<S>(
+            board: &'a Board<S>,
+            view: impl Fn(usize, &'a S, bool) -> Pane<'a, T, W, Theme>,
+        ) -> Self {
+            let last = board.panes.len().saturating_sub(1);
+            let contents = board
+                .panes
+                .iter()
+                .enumerate()
+                .map(|(index, pane)| view(index, pane, index == last))
+                .collect();
+            Self {
+                contents,
+                spacing: 0,
+            }
+        }
+
+        /// The panes with `spacing` between them.
+        pub fn spacing(mut self, spacing: u16) -> Self {
+            self.spacing = spacing;
+            self
+        }
+    }
+
+    impl<T, W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Panes<'_, T, W, Theme>
+    where
+        T: Widget<Message, Theme, Renderer>,
+        W: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("panes {}", self.spacing));
+            for content in &self.contents {
+                content.labels(labels);
+            }
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.contents.iter().find_map(|content| content.press(label))
+        }
+    }
+
     /// A text field, as iced's `TextInput<'a, Message>`, which borrows its
     /// placeholder and value for `'a`.
     pub struct Field<'a, Message> {

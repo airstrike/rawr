@@ -685,6 +685,36 @@ pub struct Item {
     member: Option<super::identity::Definition>,
 }
 
+/// Which of the opaque types that items at `path` give `identity` is, in
+/// the order the items are: an inherent method of each impl of a generic
+/// type gives one by the same name, as swash's `Setting<u16>::parse_list`
+/// and `Setting<f32>::parse_list` each give an `impl Iterator`.
+fn opaque_sibling(items: &[Item], path: &str, identity: &[u8; 32]) -> usize {
+    let mut given = Vec::new();
+    for item in items.iter().filter(|item| *item.path == *path) {
+        if let Type::Nominal { identity, .. } = &item.signature.output
+            && !given.contains(&identity)
+        {
+            given.push(identity);
+        }
+    }
+    given
+        .iter()
+        .position(|given| *given == identity)
+        .unwrap_or_default()
+}
+
+/// The name an opaque type is declared beside, `owner`, apart for each
+/// `sibling` after the first (`opaque_sibling`), so each type and its
+/// members have a path of their own.
+fn opaque_owner(owner: &str, sibling: usize) -> String {
+    if sibling == 0 {
+        owner.to_owned()
+    } else {
+        format!("{owner}__{sibling}")
+    }
+}
+
 /// Closed static item family.
 #[derive(Clone, Copy, Deserialize, Serialize)]
 pub enum ItemKind {
@@ -1294,15 +1324,24 @@ impl Plan {
                     relative.to_string()
                 };
                 let associated_path = format!("{owner}::{}", associated.name());
+                let mut sibling = 0;
                 if let Some(item) = item(&associated_path, associated)? {
+                    let given = item.signature.output.clone();
                     let mut items = std::mem::take(&mut facade.items).into_vec();
                     items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                     items.push(item);
                     facade.items = items.into_boxed_slice();
+                    if let Type::Nominal { identity, .. } = &given {
+                        sibling = opaque_sibling(&facade.items, &associated_path, identity);
+                    }
                 }
                 // The members of the opaque type an inherent method gives,
-                // in its owner's module, as Rawr declares them.
-                let opaque = super::opaque::path(&format!("{owner}__{}", associated.name()), 0);
+                // in its owner's module, as Rawr declares them, each impl's
+                // apart (`opaque_owner`).
+                let opaque = super::opaque::path(
+                    &opaque_owner(&format!("{owner}__{}", associated.name()), sibling),
+                    0,
+                );
                 for member in associated
                     .implementations()
                     .flat_map(crate::classify::ImplementationOutcome::associated)
@@ -1471,6 +1510,10 @@ impl Plan {
                         _ => item.path.to_string(),
                     };
                     for (index, (identity, parameters)) in found.into_iter().enumerate() {
+                        let owner = opaque_owner(
+                            &owner,
+                            opaque_sibling(&facade.items, &item.path, &identity),
+                        );
                         let path = super::opaque::path(&owner, index);
                         if types.iter().any(|ty| {
                             *ty.path == *path
