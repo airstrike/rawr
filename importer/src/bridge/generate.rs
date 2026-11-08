@@ -648,7 +648,7 @@ impl<T> WithoutEqual for &DebugProbe<T> {
 type HashValue = fn(&dyn Any) -> Option<u64>;
 
 fn hash_value<T: std::hash::Hash + 'static>(value: &dyn Any) -> Option<u64> {
-    use std::hash::{Hash as _, Hasher as _};
+    use std::hash::Hasher as _;
     let mut hasher = std::hash::DefaultHasher::new();
     value.downcast_ref::<T>()?.hash(&mut hasher);
     Some(hasher.finish())
@@ -778,11 +778,6 @@ macro_rules! lent_reads {
     }};
 }
 
-/// A copy of what a borrow guard dereferences to, made inside the call that
-/// holds the guard: its `Clone`, or an error naming the type when it has
-/// none, so a target without `Clone` fails where it is read and not where
-/// the runner compiles.
-#[allow(unused_macros)]
 /// A copy of a borrowed std value Rawr's std holds (`crossing::Std`): its
 /// owned form, as `&Path` gives a `PathBuf`.
 #[allow(unused_macros)]
@@ -792,6 +787,11 @@ macro_rules! std_copy {
     }};
 }
 
+/// A copy of what a borrow guard dereferences to, made inside the call that
+/// holds the guard: its `Clone`, or an error naming the type when it has
+/// none, so a target without `Clone` fails where it is read and not where
+/// the runner compiles.
+#[allow(unused_macros)]
 macro_rules! guard_copy {
     ($target:expr) => {{
         #[allow(unused_imports)]
@@ -5133,7 +5133,6 @@ fn run_protocol(
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
-                    pending = Some(candidate);
                     return Err(std::io::Error::other("stale hot commit"));
                 }
                 if let Some(candidate_program) = &mut candidate.program {
@@ -5155,7 +5154,6 @@ fn run_protocol(
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
-                    pending = Some(candidate);
                     return Err(std::io::Error::other("stale hot abort"));
                 }
                 drop(candidate.program);
@@ -5570,7 +5568,6 @@ fn run_protocol() -> std::io::Result<()> {
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
-                    pending = Some(candidate);
                     return Err(std::io::Error::other("stale hot commit"));
                 }
                 if let Some(candidate_program) = &mut candidate.program {
@@ -5594,7 +5591,6 @@ fn run_protocol() -> std::io::Result<()> {
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
-                    pending = Some(candidate);
                     return Err(std::io::Error::other("stale hot abort"));
                 }
                 drop(candidate.program);
@@ -6018,7 +6014,6 @@ fn live_protocol(
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
-                    pending = Some(candidate);
                     return Err(std::io::Error::other("stale hot commit"));
                 }
                 let installed = transport.install(candidate.installation, candidate.candidate);
@@ -6056,7 +6051,6 @@ fn live_protocol(
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
-                    pending = Some(candidate);
                     return Err(std::io::Error::other("stale hot abort"));
                 }
                 drop(candidate.candidate);
@@ -7187,7 +7181,7 @@ fn render_source(
     }
     output
         .write_all(
-            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT, PROFILE_FINGERPRINT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\nmod rawr_families;\n#[allow(unused_imports)]\nuse rawr_families::*;\n",
+            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\nmod rawr_families;\n#[allow(unused_imports)]\nuse rawr_families::*;\n",
         )
         .map_err(request::unwritable)?;
     // The facade plan is megabytes of data: rustc reads it with
@@ -7631,9 +7625,12 @@ const PROXIES_PATH: &str = "src/rawr_proxies.rs";
 /// at the crate root, where the proxies are (#1163).
 const RUNNER_PATH: &str = "src/rawr_runner.rs";
 /// The runner's crate root: the proxies and the runner's module, whose
-/// name no program spells.
+/// name no program spells. The runner's own support is written whole, and
+/// each runner uses the part its program needs, so what it leaves unused
+/// is no finding.
 const ROOT_SOURCE: &[u8] = b"#![forbid(unsafe_code)]\n\
 include!(\"rawr_proxies.rs\");\n\
+#[allow(dead_code)]\n\
 #[path = \"rawr_runner.rs\"]\n\
 mod __rawr_runner;\n\
 \n\
@@ -8899,7 +8896,7 @@ fn render_projection(
         #[allow(unused_imports)]
         use crate::__rawr_runner::{{ViaDebug as _, ViaDisplay as _, WithoutDebug as _, WithoutDisplay as _}};
         let mut text = None;
-        reach_lender::<{ty}>(&Lender::of(parent).ok()?, &mut |input| {{
+        let _ = reach_lender::<{ty}>(&Lender::of(parent).ok()?, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
             let {pattern} = input else {{ return Ok(Dynamic::UNIT); }};
             let format = if display {{
@@ -8918,7 +8915,7 @@ fn render_projection(
         witness: Option<&__rawr_internal::host::runtime::Witness>,
     ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
         let mut copied = None;
-        reach_lender::<{ty}>(&Lender::of(parent).map_err(place_error)?, &mut |input| {{
+        let _ = reach_lender::<{ty}>(&Lender::of(parent).map_err(place_error)?, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
             let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};
             copied = Some(guard_copy!(field_0));
@@ -10543,8 +10540,12 @@ fn render_adapter_body(
             let _viewed = ViewedArguments::enter(
                 !opens && replay.is_none() && views_natives(signature, substitutions)?,
             );
-            if (opens || pins) && replay.is_none() {
-                render_anchored_opening(
+            // An opening that returns on every path, as a call pinned for
+            // the runner's life out of any region does, ends the adapter:
+            // a frame written after it would never run.
+            if (opens || pins)
+                && replay.is_none()
+                && render_anchored_opening(
                     plan,
                     signature,
                     substitutions,
@@ -10554,7 +10555,9 @@ fn render_adapter_body(
                     *container_parameters,
                     *associated,
                     output,
-                )?;
+                )? == Ending::Returns
+            {
+                return Ok(());
             }
             if replay.is_some() {
                 render_function_arguments(
@@ -11039,14 +11042,16 @@ fn render_adapter_body(
                         // title("list")` keeps its title, is pinned for the
                         // runner's life, as a function's is
                         // (`lends_str_to_output`): the output the arena
-                        // keeps borrows it at `'static`.
+                        // keeps borrows it at `'static`. The take's own
+                        // `&str` of it is set aside, as the region's branch
+                        // pins the string too.
                         let returned = substituted(signature.output(), signature, substitutions)?;
                         if carries_lifetime(&returned) {
                             for (position, input) in signature.inputs().iter().enumerate() {
                                 if lends_str(input, signature, substitutions) {
                                     writeln!(
                                         output,
-                                        "    let argument_{position} = static_pins().pin(argument_{position}_owned);"
+                                        "    let _ = argument_{position};\n    let argument_{position} = static_pins().pin(argument_{position}_owned);"
                                     )
                                     .map_err(request::unwritable)?;
                                 }
@@ -11417,12 +11422,15 @@ fn render_opening(
     }
     let before = format!("{parked}{before}");
     let rebound = format!("{unparked}{rebound}");
+    // The region's pins are declared before the output, which goes in the
+    // region at the pins' borrow: locals drop in reverse, so the output,
+    // whose type may carry that lifetime and drop on an error, drops first.
     writeln!(
         output,
         "    {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
-        let made = {call};
         let pins = __rawr_internal::scope::Pins::new();
         let mut region = __rawr_internal::scope::Region::anchored(&pins);
+        let made = {call};
         let value = with_arena(|arena| {{
             let mut values: [&mut Dynamic; 0] = [];
             #[allow(unused_variables)]
@@ -11539,7 +11547,7 @@ fn render_anchored_opening(
     container_parameters: usize,
     associated: bool,
     output: &mut Vec<u8>,
-) -> Result<(), request::Error> {
+) -> Result<Ending, request::Error> {
     let encoding = request::unwritable;
     // A script closure, as `table::column(header, |event| ..)` takes with
     // its `&str` header, is made by the call's own slot, outside this path.
@@ -11549,7 +11557,7 @@ fn render_anchored_opening(
             parameter.kind() == crate::classify::representability::signature::Kind::Callable
         })
     {
-        return Ok(());
+        return Ok(Ending::Falls);
     }
     let mut call = Vec::new();
     render_function_path(
@@ -11633,12 +11641,13 @@ fn render_anchored_opening(
         return {converted};
     }}"
         )
-        .map_err(encoding);
+        .map_err(encoding)
+        .map(|()| Ending::Falls);
     }
     // Out of any region, such an input is at `'static`, which a string
     // pinned at the slot's lifetime can't join.
     if lifetime_inputs(signature, substitutions)? {
-        return Ok(());
+        return Ok(Ending::Falls);
     }
     // A call that would open a frame is made in the region of the frame
     // whose scope it is in, when no slot's region is open: a second `let`
@@ -11668,7 +11677,7 @@ fn render_anchored_opening(
     // leave the scope it was made in. An item whose own signature borrows
     // its inputs, as `Parser::new(&text)`, keeps its scope frame.
     if signature.scope().is_some() || !instance_opens(signature, substitutions) {
-        return Ok(());
+        return Ok(Ending::Falls);
     }
     let mut owned = String::new();
     render_to_dynamic(&returned, "made", 0, &mut owned)?;
@@ -11680,7 +11689,16 @@ fn render_anchored_opening(
         return {owned};
     }}"
     )
-    .map_err(encoding)
+    .map_err(encoding)?;
+    Ok(Ending::Returns)
+}
+
+/// Whether the code an adapter's opening wrote returns on every path, so
+/// nothing written after it could run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    Falls,
+    Returns,
 }
 
 /// A call whose own signature borrows its `&str` inputs for its output's
@@ -11893,12 +11911,17 @@ fn frame_copies(
 ) -> Result<FrameCopies, request::Error> {
     let copies = copied_inputs(signature);
     let mut rebound = String::new();
+    // The take's own borrow of a string or value the frame owns is set
+    // aside: the frame borrows what it moves in.
+    let mut set_aside = String::new();
     for (position, input) in signature.inputs().iter().enumerate() {
         if lends_str(input, signature, substitutions) {
+            set_aside.push_str(&format!("let _ = argument_{position};\n    "));
             rebound.push_str(&format!(
                 "\n        let argument_{position} = argument_{position}_owned.as_str();"
             ));
         } else if lends_made(input, signature, substitutions) {
+            set_aside.push_str(&format!("let _ = argument_{position};\n    "));
             rebound.push_str(&format!(
                 "\n        let argument_{position} = &argument_{position}_made;"
             ));
@@ -11912,7 +11935,7 @@ fn frame_copies(
     if copies.is_empty() {
         return Ok(FrameCopies {
             rebound,
-            before: String::new(),
+            before: set_aside,
             back: String::new(),
             with: String::new(),
         });
@@ -11926,7 +11949,9 @@ fn frame_copies(
     }
     Ok(FrameCopies {
         rebound,
-        before: "let copies = __rawr_internal::scope::Copies::new();\n    let frame_copies = copies.clone();\n    ".to_owned(),
+        before: format!(
+            "{set_aside}let copies = __rawr_internal::scope::Copies::new();\n    let frame_copies = copies.clone();\n    "
+        ),
         back: format!(
             "\n        drop(region);\n        let given = with_arena(|arena| {{ let mut values: [&mut Dynamic; 0] = []; #[allow(unused_variables)] let arguments = &mut Arguments {{ values: &mut values, arena }}; Ok::<_, Error>(vec![{}]) }}).map_err(runtime_error)?;\n        frame_copies.set(given);",
             given.join(", ")
@@ -16223,6 +16248,9 @@ fn render_callable_closure(
     let mut lent = Vec::new();
     let mut lends = Vec::new();
     let mut restores = String::new();
+    // Whether an input takes its parameter's witness, which a lent one
+    // doesn't.
+    let mut attested = false;
     for (position, input) in inputs.iter().enumerate() {
         // A borrow of a script value, as `.theme(|state| ..)` takes the
         // program's `&State`: lent by its handle, as a slot lends it, and
@@ -16278,6 +16306,7 @@ fn render_callable_closure(
         // code reads it as its type, as a `match` on an imported enum does.
         // So does a value that holds one, as a slot's input does.
         if native(input) || holds_native(input) {
+            attested = true;
             converted = format!(
                 "({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position})))"
             );
@@ -16301,7 +16330,7 @@ fn render_callable_closure(
             ),
             "callable.call_checked(&mut values, &witnesses)",
         )
-    } else if native_inputs || !places.is_empty() {
+    } else if attested || !places.is_empty() {
         (
             format!(
                 "\n        let witnesses = closure_inputs({index}, {});",
@@ -17759,7 +17788,7 @@ fn render_give_task(
     };
     writeln!(
         output,
-        "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::{wrap}(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| {materialize}(witness, move |arguments| {converted}))\n    }})))"
+        "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::{wrap}(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| {materialize}(witness, move |arguments| {{ let _ = &arguments; {converted} }}))\n    }})))"
     )
     .map_err(request::unwritable)
 }

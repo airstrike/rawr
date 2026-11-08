@@ -1564,3 +1564,59 @@ pub mod simulation {
         }
     }
 }
+
+/// A widget of iced's `Button<'a, Message, W, Theme>` shape: generic over
+/// its content, which a `&str` fills, holding a closure at `'a` and its
+/// theme's class at `'a`, an associated type that makes it invariant in
+/// `'a`. Its destructor runs at `'a`, so whatever its label is pinned in
+/// has to outlive it (#1396).
+pub mod pressable {
+    pub trait Catalog {
+        type Class<'a>;
+
+        fn default<'a>() -> Self::Class<'a>;
+    }
+
+    pub struct Plain;
+
+    impl Catalog for Plain {
+        type Class<'a> = Box<dyn Fn(&Plain) -> u32 + 'a>;
+
+        fn default<'a>() -> Self::Class<'a> {
+            Box::new(|_| 1)
+        }
+    }
+
+    pub struct Pressable<'a, Message, W, Theme: Catalog = Plain> {
+        content: W,
+        on_press: Option<Box<dyn Fn() -> Message + 'a>>,
+        class: Theme::Class<'a>,
+    }
+
+    pub fn pressable<'a, Message, W, Theme>(content: W) -> Pressable<'a, Message, W, Theme>
+    where
+        Theme: Catalog + 'a,
+    {
+        Pressable {
+            content,
+            on_press: None,
+            class: Theme::default(),
+        }
+    }
+
+    /// One whose own signature borrows its label, so its `let` opens a
+    /// scope frame for it.
+    pub fn labeled<'a, Message, Theme>(label: &'a str) -> Pressable<'a, Message, &'a str, Theme>
+    where
+        Theme: Catalog + 'a,
+    {
+        pressable(label)
+    }
+
+    impl<'a, Message, W: std::fmt::Display> Pressable<'a, Message, W, Plain> {
+        pub fn describe(&self) -> String {
+            let pressable = if self.on_press.is_some() { "on" } else { "off" };
+            format!("{} {pressable} {}", self.content, (self.class)(&Plain))
+        }
+    }
+}
