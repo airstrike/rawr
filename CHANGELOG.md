@@ -96,6 +96,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A `&self` method of a marked type's native trait object can call back into the same object through native code: `&self` calls share the value, as shared borrows do. (#1302)
 - A crate's impl with a `Future<Output = T>` bound is no longer left out when another future's `Output` names a parameter only its where clause fixes. futures_util's forwarding impls for `TakeWhile`, `Fold`, `PollImmediate` and the `&mut`/`Pin`/`Box` blankets are declared now. (#1295)
 - Marked code reads a marked `pub static` of native values, such as a page's `BLOCKS: &[page::Block]`, where native code holds it. It reads the length, indexes, iterates, matches, and reads a block's `children`, with no copy. `&BLOCKS[1..2]` lends a range of it to a native function. (#1291)
+- A crate's unit struct is a value, as `badge::Secondary` is, through a module or a re-export: it is passed where a method takes `impl Into<T>` through the crate's `From`, compared, printed and matched as a pattern. A tuple struct's constructor is a function value, as in `.map(Wrap)`. (#1317)
+- A native trait's `&self` method can return a borrow of the marked value, as `fn label(&self) -> &str` or `fn items(&self) -> &[String]`; native code reads it after the call, and calling a `&mut self` method while it is still in use is rustc's E0502, as under cargo. (#1305)
 
 ## 0.3.171 (2026-11-07)
 
