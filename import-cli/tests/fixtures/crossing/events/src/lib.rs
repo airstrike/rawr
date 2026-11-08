@@ -806,6 +806,13 @@ pub mod widgets {
     pub type Element<'a, Message, Theme = crate::Theme, Renderer = crate::widgets::Renderer> =
         element::Element<'a, Message, Theme, Renderer>;
 
+    /// The labels `element` shows, one after another.
+    pub fn shown<Message>(element: Element<'_, Message>) -> String {
+        let mut labels = Vec::new();
+        element.labels(&mut labels);
+        labels.join(" ")
+    }
+
     impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
         for element::Element<'_, Message, Theme, Renderer>
     {
@@ -933,6 +940,32 @@ pub mod widgets {
         /// Text showing `value`, as iced's `Text::new`.
         pub fn new(value: impl ToString) -> Self {
             text(value)
+        }
+    }
+
+    /// Text that borrows what it shows, invariant in `'a` as iced's
+    /// `Text<'a>` is through its `Theme::Class<'a>`, whose fragment borrows
+    /// a `&'a str`.
+    pub struct Span<'a, Theme = crate::Theme> {
+        content: &'a str,
+        look: std::marker::PhantomData<fn(&'a Theme) -> &'a Theme>,
+    }
+
+    /// Text borrowing `content`.
+    pub fn span<'a, Theme>(content: &'a str) -> Span<'a, Theme> {
+        Span {
+            content,
+            look: std::marker::PhantomData,
+        }
+    }
+
+    impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Span<'_, Theme> {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("'{}'", self.content));
+        }
+
+        fn press(&self, _label: &str) -> Option<Message> {
+            None
         }
     }
 
