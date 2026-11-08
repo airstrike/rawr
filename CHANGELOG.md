@@ -100,6 +100,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A native trait's `&self` method can return a borrow of the marked value, as `fn label(&self) -> &str` or `fn items(&self) -> &[String]`; native code reads it after the call, and calling a `&mut self` method while it is still in use is rustc's E0502, as under cargo. (#1305)
 - `rawr check` on a marked type that lacks a native trait's supertrait shows only cargo's error at the program's own paths, not a failed build of rawr's copy of the crate with generated names. (#1310)
 - A `&mut` that a crate method returns, such as image's `get_pixel_mut(x, y)`, is a place: `.0 = v`, `*p = v`, `.0[3] += 1` and passing it on to another crate call change the crate's own value, as in Rust. (#1318)
+- `use m::badge::{self, badge};` binds the module and the function of one name, as Rust does: `badge::Secondary` goes through the module and `badge("..")` calls the function. Two `use` lines and a glob beside the module's import do the same. Two imports of one name in one namespace are rustc's E0252. (#1319)
 
 ## 0.3.171 (2026-11-07)
 

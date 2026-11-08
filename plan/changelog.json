@@ -99,7 +99,8 @@
       {"text":"A crate's unit struct is a value, as `badge::Secondary` is, through a module or a re-export: it is passed where a method takes `impl Into<T>` through the crate's `From`, compared, printed and matched as a pattern. A tuple struct's constructor is a function value, as in `.map(Wrap)`.","issues":[1317]},
       {"text":"A native trait's `&self` method can return a borrow of the marked value, as `fn label(&self) -> &str` or `fn items(&self) -> &[String]`; native code reads it after the call, and calling a `&mut self` method while it is still in use is rustc's E0502, as under cargo.","issues":[1305]},
       {"text":"`rawr check` on a marked type that lacks a native trait's supertrait shows only cargo's error at the program's own paths, not a failed build of rawr's copy of the crate with generated names.","issues":[1310]},
-      {"text":"A `&mut` that a crate method returns, such as image's `get_pixel_mut(x, y)`, is a place: `.0 = v`, `*p = v`, `.0[3] += 1` and passing it on to another crate call change the crate's own value, as in Rust.","issues":[1318]}
+      {"text":"A `&mut` that a crate method returns, such as image's `get_pixel_mut(x, y)`, is a place: `.0 = v`, `*p = v`, `.0[3] += 1` and passing it on to another crate call change the crate's own value, as in Rust.","issues":[1318]},
+      {"text":"`use m::badge::{self, badge};` binds the module and the function of one name, as Rust does: `badge::Secondary` goes through the module and `badge(\"..\")` calls the function. Two `use` lines and a glob beside the module's import do the same. Two imports of one name in one namespace are rustc's E0252.","issues":[1319]}
     ]
   },
   "releases": [
