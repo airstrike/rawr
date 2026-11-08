@@ -103,7 +103,7 @@ drop(tx);
 let mut ids: Vec&lt;i32&gt; = rx.iter().collect();
 ids.sort();
 println!("{ids:?} {}", *counter.lock().unwrap()); // [0, 10, 20, 30] 4</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-threads" data-out="out-threads" aria-label="Run threads.rs on rawr's server" hidden></button><small>on rawr&rsquo;s server</small><b>rawr run threads.rs</b><span id="out-threads" aria-live="polite"></span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-threads" data-out="out-threads" aria-label="Run threads.rs" hidden></button><b>rawr run threads.rs</b><span id="out-threads" aria-live="polite"></span></div>
 </div>
 <h2 id="time"><code>Duration</code>, <code>Instant</code> and <code>SystemTime</code></h2>
 <p><code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code> and <code>duration_since</code> work. So do <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>std::thread::sleep(duration)</code> pauses the program. In an iced app, these are <code>iced::time</code>&rsquo;s, which are std&rsquo;s own.</p>
@@ -116,7 +116,7 @@ let step = Duration::from_millis(500) * 3;
 println!("{step:?}"); // 1.5s
 let spent = start.elapsed();
 println!("{}", spent &lt; step);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-time" data-out="out-time" aria-label="Run time.rs on rawr's server" hidden></button><small>on rawr&rsquo;s server</small><b>rawr run time.rs</b><span id="out-time" aria-live="polite"></span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-time" data-out="out-time" aria-label="Run time.rs" hidden></button><b>rawr run time.rs</b><span id="out-time" aria-live="polite"></span></div>
 </div>
 <h2 id="futures">Futures</h2>
 <p><code>std::future::Future</code> is the type of an <code>async</code> block and of an <code>async fn</code>&rsquo;s result, written <code>impl Future&lt;Output = T&gt;</code>. Under a runtime&rsquo;s <code>async fn main</code>, such as <code>#[tokio::main]</code>, it is a Rust future that the runtime polls, as <a href="/docs/run#async">Run</a> describes. A program with no dependencies can write <code>async fn</code>, <code>async</code> blocks and <code>.await</code> too, and they check as rustc checks them. tokio&rsquo;s <code>join!</code> and the futures crate&rsquo;s <code>join!</code> run two to five futures together and give their outputs as a tuple.</p>
