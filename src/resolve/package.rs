@@ -1114,6 +1114,7 @@ impl<'a> Resolver<'a> {
         context: &Context,
         segments: &[ImmutableString],
     ) -> Option<Vec<ImmutableString>> {
+        let segments = through_self(segments);
         let first = segments.first()?;
         let modules = context.namespace.modules.as_ref();
         let supers = segments
@@ -1726,6 +1727,7 @@ impl<'a> Resolver<'a> {
     ) -> Option<Vec<ImmutableString>> {
         let package = &self.packages[context.package.index()];
         let alias = package.rust_crate()?;
+        let path = through_self(path);
         let first = path.first()?;
         let supers = path
             .iter()
@@ -1738,6 +1740,9 @@ impl<'a> Resolver<'a> {
         } else if supers > 0 {
             absolute.extend_from_slice(&modules[..modules.len().checked_sub(supers)?]);
             absolute.extend_from_slice(&path[supers..]);
+        } else if first == "self" && path.len() > 1 {
+            absolute.extend_from_slice(modules);
+            absolute.extend_from_slice(&path[1..]);
         } else if self.is_child_module(context, first) {
             absolute.extend_from_slice(modules);
             absolute.extend_from_slice(path);
@@ -1758,6 +1763,7 @@ impl<'a> Resolver<'a> {
         reference: Span,
         active: &mut BTreeSet<Address>,
     ) -> Result<Target, Failure> {
+        let path = through_self(path);
         let Some(first) = path.first() else {
             return Err(self.unknown_import(context, path, reference));
         };
@@ -2011,13 +2017,40 @@ impl<'a> Resolver<'a> {
     }
 }
 
+/// `self::super::m` is `super::m`: a leading `self` stays in the module
+/// the next `super` leaves.
+fn through_self(path: &[ImmutableString]) -> &[ImmutableString] {
+    match path {
+        [first, second, ..] if first == "self" && second == "super" => &path[1..],
+        _ => path,
+    }
+}
+
+/// The first segment of a path in a body: a name, or `self` before `::`,
+/// which names the current module as rustc reads it.
+fn path_head(tokens: &[crate::item::BodyToken], index: usize) -> Option<ImmutableString> {
+    use crate::item::BodyTokenKind as Kind;
+
+    match tokens[index].kind() {
+        Kind::Identifier(name) => Some(name.clone()),
+        Kind::SelfValue
+            if tokens
+                .get(index + 1)
+                .is_some_and(|token| matches!(token.kind(), Kind::DoubleColon)) =>
+        {
+            Some("self".into())
+        }
+        _ => None,
+    }
+}
+
 fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
     fn collect(syntax: &crate::item::BodySyntax, output: &mut Vec<QualifiedCall>) {
         let tokens = syntax.tokens();
         let mut index = 0;
 
         while index < tokens.len() {
-            let crate::item::BodyTokenKind::Identifier(first) = tokens[index].kind() else {
+            let Some(first) = path_head(tokens, index) else {
                 index += 1;
                 continue;
             };
@@ -2031,7 +2064,7 @@ fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
                 continue;
             }
 
-            let mut segments = vec![(first.clone(), tokens[index].span())];
+            let mut segments = vec![(first, tokens[index].span())];
             let mut end = index;
             while end + 2 < tokens.len()
                 && matches!(
@@ -2089,7 +2122,7 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
     ) {
         let mut index = 0;
         while index < tokens.len() {
-            let crate::item::BodyTokenKind::Identifier(first) = tokens[index].kind() else {
+            let Some(first) = path_head(tokens, index) else {
                 index += 1;
                 continue;
             };
@@ -2103,7 +2136,7 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
                 continue;
             }
 
-            let mut segments = vec![(first.clone(), tokens[index].span())];
+            let mut segments = vec![(first, tokens[index].span())];
             let mut end = index;
             while end + 2 < tokens.len()
                 && matches!(
