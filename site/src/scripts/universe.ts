@@ -17,6 +17,13 @@
 // WebKit's WebGPU fails a command buffer that copies twice out of one
 // still-mapped buffer, which is how wgpu's StagingBelt uploads iced's quads
 // and glyphs, and the canvas stays black.
+//
+// The program's window is sized in device pixels: winit reads the canvas's
+// `devicePixelContentBoxSize`. Chrome's device emulation (DevTools, and
+// Playwright's `deviceScaleFactor`) sets `devicePixelRatio` but leaves that
+// size in CSS pixels, so there iced draws at twice the size it hit-tests
+// (#1449). A real display at that scale doesn't: check scale 2 in a Chrome
+// started with `--force-device-scale-factor=2` and no viewport override.
 
 /** The universe's files, beside rawr-web's (web/build.sh). */
 export const UNIVERSE_GLUE = "/web/universe.js";
