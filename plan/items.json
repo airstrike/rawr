@@ -1383,6 +1383,9 @@
     {"t":"T1380","issue":1380,"title":"T1380: The ?play image builds and deploys on a push that changes the universe or the bot, not only in a release","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1381","issue":1381,"title":"T1381: A package with no file directly in src/ gets one watch root per input subdirectory instead of…","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1382","issue":1382,"title":"T1382: `rawr check` spun for minutes on a thousand-package workspace: install rescanned every prior…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"001e8f303","release":null},
-    {"t":"T1383","issue":1383,"title":"T1383: `rawr check` no longer spins for minutes on a thousand-package workspace while counting facade roots","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1383","issue":1383,"title":"T1383: `rawr check` no longer spins for minutes on a thousand-package workspace while counting facade roots","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1384","issue":1384,"title":"T1384: The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1385","issue":1385,"title":"T1385: The landing page warms its snippets after load so Run answers at once","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1386","issue":1386,"title":"T1386: Unresolved imports and paths get rustc's E0432/E0433 wording; the help \"isn't available in Rawr…","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
