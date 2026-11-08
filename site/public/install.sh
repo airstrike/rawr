@@ -6,8 +6,9 @@
 #   curl -LsSf https://rawr.airstrike.fyi/install.sh | sh -s -- --version 0.3.115
 #
 # They go to $RAWR_INSTALL_DIR, else $CARGO_HOME/bin, else ~/.cargo/bin.
-# rawr-import installs the Rust nightly it reads crate APIs with through
-# rustup the first time a program needs it.
+# Then `rawr-import cache warm` installs the Rust nightly it reads crate
+# APIs with through rustup and compiles rawr's runtime, so the first run
+# with dependencies does not wait for them.
 set -eu
 
 repository="https://github.com/airstrike/rawr"
@@ -101,5 +102,9 @@ case ":$PATH:" in
 esac
 if ! command -v rustup >/dev/null 2>&1; then
   say "programs with dependencies also need rustup, from https://rustup.rs"
+elif [ -x "$directory/rawr-import" ]; then
+  # What a first run with dependencies would build once per toolchain: the
+  # nightly that reads crate APIs, its driver and rawr's runtime.
+  "$directory/rawr-import" cache warm || say "rawr cache warm failed; the first run builds what it needs"
 fi
 say "start with: rawr new hello && cd hello && rawr run"

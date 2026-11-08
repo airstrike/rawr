@@ -17,7 +17,7 @@ const HELP: &str = "rawr-import: runs Rawr programs that use Rust crates\n\n\
 frontmatter, or native modules. The program runs in a runner that links the\n\
 rawr crate and the program's own dependencies, built in the project's build\n\
 directory beside `cargo build`.\n\n\
-Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import check [path]             Check a program without running it\n  rawr-import cache clean              Remove what rawr's home holds that no build is using\n\n\
+Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import check [path]             Check a program without running it\n  rawr-import cache warm               Build what a first run here builds once per toolchain\n  rawr-import cache clean              Remove what rawr's home holds that no build is using\n\n\
 Options:\n  -h, --help       Show this help\n  -V, --version    Show the version";
 
 /// Run `rawr-import` with `arguments`, the executable name excluded.
@@ -83,18 +83,23 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     }
 }
 
-/// `rawr cache clean`: remove what rawr's home holds per machine and no
-/// build is using now (hosts, runtimes, bindings and the nightly check
-/// build), as D608.7 lets cleanup do. `cargo clean` removes the rest.
+/// What `rawr cache warm` says when everything was built already.
+const WARMED: &str = "rawr: what a first run builds for this toolchain is built; nothing to do";
+
+/// `rawr cache warm`: build what [`warm`] builds. `rawr cache clean`:
+/// remove what rawr's home holds per machine and no build is using now
+/// (hosts, runtimes, bindings and the nightly check build), as D608.7 lets
+/// cleanup do. `cargo clean` removes the rest.
 fn cache(words: &[String]) -> ExitCode {
     match words {
+        [word] if word == "warm" => return warm(),
         [clean] if clean == "clean" => {}
         [help] if matches!(help.as_str(), "-h" | "--help") => {
             println!("{HELP}");
             return ExitCode::SUCCESS;
         }
         _ => {
-            eprintln!("error: `cache` takes `clean`; run `rawr-import --help` for usage");
+            eprintln!("error: `cache` takes `warm` or `clean`; run `rawr-import --help` for usage");
             return ExitCode::from(2);
         }
     }
@@ -106,6 +111,34 @@ fn cache(words: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
     rawr_import::host::clean(&cargo_home);
+    ExitCode::SUCCESS
+}
+
+/// `rawr cache warm`: build what a project's first run here builds once per
+/// toolchain, printing what that run prints: the nightly that reads crate
+/// APIs here (the pinned one outside a project) with its driver and std
+/// table, and rawr's runtime for the compiler this directory builds with.
+/// `cargo install` has no step that could do it (#1388).
+fn warm() -> ExitCode {
+    let directory = match std::env::current_dir() {
+        Ok(directory) => directory,
+        Err(error) => {
+            eprintln!("error: the current directory can't be read: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let said = rawr_import::progress::said();
+    if let Err(message) = crate::project::toolchain(&directory) {
+        eprintln!("error: {message}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(error) = rawr_import::runner::runtime::warm(&directory) {
+        eprintln!("error: {error}");
+        return ExitCode::FAILURE;
+    }
+    if rawr_import::progress::said() == said {
+        eprintln!("{WARMED}");
+    }
     ExitCode::SUCCESS
 }
 
@@ -144,4 +177,25 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
 fn failure(report: &rawr::diagnostic::Report) -> ExitCode {
     rawr_cli::diagnostic::emit(report);
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::ExitCode;
+
+    /// `cache warm` takes no other word, and `cache` names both of its
+    /// commands when it gets neither.
+    #[test]
+    fn cache_takes_warm_or_clean_alone() {
+        let words = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(super::cache(&words(&["warm", "now"])), ExitCode::from(2));
+        assert_eq!(super::cache(&words(&["heat"])), ExitCode::from(2));
+        assert!(super::HELP.contains("rawr-import cache warm"));
+        assert!(super::WARMED.ends_with("nothing to do"));
+    }
 }

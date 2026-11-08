@@ -103,18 +103,7 @@ pub(crate) fn prepare(
     let document = text
         .parse::<DocumentMut>()
         .map_err(|error| transform(error.to_string()))?;
-    let Some(dependency) = document
-        .get("dependencies")
-        .and_then(|table| table.get(INTERNAL_ALIAS))
-        .and_then(Item::as_table_like)
-    else {
-        return Ok(None);
-    };
-    let Some(root) = dependency
-        .get("path")
-        .and_then(Item::as_str)
-        .map(PathBuf::from)
-    else {
+    let Some((root, dependency)) = internal(&document) else {
         return Ok(None);
     };
     let lock_text = std::str::from_utf8(lock).map_err(|error| transform(error.to_string()))?;
@@ -145,8 +134,6 @@ pub(crate) fn prepare(
         }
         let _ = fs::remove_file(&marker);
     }
-    let environment = context.environment();
-    let level = opt_level(environment).map_err(transform)?;
     let Some(toolchain) = Toolchain::for_context(context)? else {
         crate::progress::note(
             "runtime-local",
@@ -154,7 +141,69 @@ pub(crate) fn prepare(
         );
         return Ok(None);
     };
-    let wrapper = wrapper_manifest(&root, dependency, &level);
+    shared(&root, dependency, &toolchain, context.environment()).map(|(runtime, _)| Some(runtime))
+}
+
+/// Compile the shared runtime the project in `directory` links, as its
+/// first `rawr run` would: rawr's crate as a runner names it, on the
+/// compiler and with the environment the project's `cargo build` uses. In a
+/// directory outside any project, that is the compiler rustup picks there.
+/// `Ok(true)` when this call compiled it, `Ok(false)` when it was built.
+pub fn warm(directory: &Path) -> Result<bool, node::Error> {
+    let limits = crate::cargo::Limits::standard();
+    let provenance = crate::cargo::config::Provenance::discover(
+        directory,
+        None,
+        crate::cargo::config::Environment::capture()?,
+        crate::cargo::toolchain::HOST,
+        "dev",
+        crate::process::parallelism::Proof::discover()?,
+        &limits,
+    )?;
+    let toolchain = Toolchain::query_program(
+        directory,
+        provenance.environment(),
+        provenance
+            .compiler(directory)
+            .configured()
+            .map(Path::to_path_buf),
+    )?;
+    let manifest = crate::cargo::internal_manifest()?;
+    let document = manifest
+        .parse::<DocumentMut>()
+        .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
+    let (root, dependency) = internal(&document).ok_or(node::Error::State(
+        "the manifest of rawr's own crate names no rawr dependency",
+    ))?;
+    shared(&root, dependency, &toolchain, provenance.environment()).map(|(_, compiled)| compiled)
+}
+
+/// The runner's dependency on rawr's crate in its manifest `document`, with
+/// the path of rawr's sources.
+fn internal(document: &DocumentMut) -> Option<(PathBuf, &dyn toml_edit::TableLike)> {
+    let dependency = document
+        .get("dependencies")
+        .and_then(|table| table.get(INTERNAL_ALIAS))
+        .and_then(Item::as_table_like)?;
+    let root = dependency
+        .get("path")
+        .and_then(Item::as_str)
+        .map(PathBuf::from)?;
+    Some((root, dependency))
+}
+
+/// The shared runtime of rawr at `root`, as `dependency` names it, for
+/// `toolchain` in `environment`, compiled first on a miss, with whether
+/// this call compiled it.
+fn shared(
+    root: &Path,
+    dependency: &dyn toml_edit::TableLike,
+    toolchain: &Toolchain,
+    environment: &crate::cargo::config::Environment,
+) -> Result<(Runtime, bool), node::Error> {
+    let transform = |reason: String| node::Error::Transform(reason.into_boxed_str());
+    let level = opt_level(environment).map_err(transform)?;
+    let wrapper = wrapper_manifest(root, dependency, &level);
     let source_lock = fs::read(root.join("Cargo.lock")).map_err(|source| node::Error::Io {
         operation: "read the lockfile of rawr's runtime",
         path: root.join("Cargo.lock"),
@@ -196,7 +245,7 @@ pub(crate) fn prepare(
         &key,
         &wrapper,
         &source_lock,
-        &toolchain,
+        toolchain,
         environment,
         development,
     )?;
@@ -208,7 +257,7 @@ pub(crate) fn prepare(
             .name("rawr-runtime-cleanup".into())
             .spawn(move || prune(&runtimes, &[keep.as_path()], RECENT));
     }
-    Ok(Some(runtime))
+    Ok((runtime, compiled))
 }
 
 /// Record that the runner of `manifest` and `lock` could not link the shared
