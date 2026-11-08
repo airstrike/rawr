@@ -23,6 +23,8 @@ pub struct Package {
     rust_modules: Box<[(PathBuf, String)]>,
     /// The root `Cargo.toml` of a package app: a Rust input.
     cargo: Option<(PathBuf, String)>,
+    /// The features Cargo enables for the package's target.
+    features: crate::project::cargo::features::Enabled,
 }
 
 /// One exact Rawr source snapshot in the resolved graph.
@@ -66,6 +68,10 @@ pub struct Snapshot {
     files: Box<[File]>,
     #[cfg(feature = "rust-import")]
     entry: PathBuf,
+    /// The entry package's features, which a runner's compile of the
+    /// snapshot holds its `cfg(feature = "..")`s under.
+    #[cfg(feature = "rust-import")]
+    features: crate::project::cargo::features::Enabled,
 }
 
 /// Failure to revalidate one compiled source snapshot.
@@ -122,6 +128,7 @@ impl Graph {
                 cargo: package
                     .cargo_manifest()
                     .map(|(path, text)| (path.to_path_buf(), text.to_owned())),
+                features: package.features().clone(),
             })
             .collect();
         let sources = graph
@@ -376,6 +383,8 @@ impl Snapshot {
             files: files.into_boxed_slice(),
             #[cfg(feature = "rust-import")]
             entry: graph.entry_source().path().to_path_buf(),
+            #[cfg(feature = "rust-import")]
+            features: graph.entry_package().features.clone(),
         }
     }
 
@@ -406,6 +415,7 @@ impl Snapshot {
                 .to_str()
                 .ok_or(rawr_import::surface::Error::NonUtf8Path)?,
         )?;
+        builder.features(self.features.names())?;
         for file in &self.files {
             builder.file(
                 file.path
@@ -432,6 +442,7 @@ impl Snapshot {
                 .to_str()
                 .ok_or(rawr_import::supervisor::snapshot::Error::Malformed)?,
         )?;
+        capture.features(self.features.names())?;
         for file in &self.files {
             capture.file(
                 file.path
@@ -445,7 +456,7 @@ impl Snapshot {
 
     #[cfg(feature = "rust-import")]
     pub(crate) fn exactly_matches(&self, other: &Self) -> bool {
-        self.entry == other.entry && self.files == other.files
+        self.entry == other.entry && self.files == other.files && self.features == other.features
     }
 
     /// Re-read every exact source and manifest and reject any content drift.
@@ -793,6 +804,7 @@ mod tests {
             }),
             files,
             entry,
+            features: crate::project::cargo::features::Enabled::default(),
         };
 
         assert!(matches!(

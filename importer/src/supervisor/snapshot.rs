@@ -10,7 +10,7 @@ mod freshness;
 
 pub(crate) use freshness::Freshness;
 
-const ENTRY_DOMAIN: &[u8] = b"rawr.snapshot.entry/v1";
+const ENTRY_DOMAIN: &[u8] = b"rawr.snapshot.entry/v2";
 const KEY_BYTES: usize = 64;
 
 /// Owned exact snapshot frames whose digest equals one sealed snapshot.
@@ -23,6 +23,9 @@ pub struct Bytes {
 pub struct Capture {
     framed: Vec<u8>,
     entry: bool,
+    /// Whether the entry package's features are framed, which they are
+    /// before the first file.
+    features: bool,
     files: usize,
     previous: Option<Range<usize>>,
     items: usize,
@@ -52,6 +55,7 @@ impl Bytes {
         Capture {
             framed: Vec::new(),
             entry: false,
+            features: false,
             files: 0,
             previous: None,
             items: 0,
@@ -86,10 +90,53 @@ impl Capture {
         Ok(())
     }
 
+    /// Frame the features Cargo enabled for the entry package, after the
+    /// entry and before any file: their count, then each name. A capture
+    /// that frames none has none.
+    pub fn features<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) -> Result<(), Error> {
+        if !self.entry {
+            return Err(Error::MissingEntry);
+        }
+        if self.features || self.files != 0 {
+            return Err(Error::Order);
+        }
+        let names = names.into_iter().collect::<Vec<_>>();
+        let oversized = Error::Oversized {
+            limit: frame_limit(),
+            actual: usize::MAX,
+        };
+        let Some(retained) = names
+            .iter()
+            .try_fold(0_usize, |bytes, name| bytes.checked_add(name.len()))
+        else {
+            return Err(oversized);
+        };
+        // The count's length and each name's.
+        let additional = names
+            .len()
+            .checked_add(1)
+            .and_then(|lengths| lengths.checked_mul(8))
+            .and_then(|lengths| lengths.checked_add(retained))
+            .ok_or(oversized)?;
+        let charge = self.charged(0, retained)?;
+        self.reserve(additional)?;
+        push_length(&mut self.framed, names.len())?;
+        for name in names {
+            push_length(&mut self.framed, name.len())?;
+            self.framed.extend_from_slice(name.as_bytes());
+        }
+        (self.items, self.bytes) = charge;
+        self.features = true;
+        Ok(())
+    }
+
     /// Frame one canonically ordered file without cloning its contents.
     pub fn file(&mut self, path: &str, contents: &[u8]) -> Result<(), Error> {
         if !self.entry {
             return Err(Error::MissingEntry);
+        }
+        if !self.features {
+            self.features([])?;
         }
         if self.previous.as_ref().is_some_and(|range| {
             self.framed
@@ -193,6 +240,7 @@ fn validate(framed: &[u8]) -> Result<(), Error> {
         return Err(Error::Malformed);
     };
     let entry = take_string(&mut cursor)?;
+    take_features(&mut cursor)?;
     let mut items = 1_usize;
     let mut retained = entry.len();
     let mut files = 0_usize;
@@ -215,6 +263,16 @@ fn validate(framed: &[u8]) -> Result<(), Error> {
         return Err(Error::EmptySnapshot);
     }
     Ok(())
+}
+
+/// The entry package's feature names, framed after the entry.
+pub(super) fn take_features<'a>(cursor: &mut &'a [u8]) -> Result<Vec<&'a str>, Error> {
+    let count = take_length(cursor)?;
+    // Each name takes at least its length's eight bytes.
+    if count > cursor.len() / 8 {
+        return Err(Error::Malformed);
+    }
+    (0..count).map(|_| take_string(cursor)).collect()
 }
 
 fn take_string<'a>(cursor: &mut &'a [u8]) -> Result<&'a str, Error> {

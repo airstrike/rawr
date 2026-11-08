@@ -7,6 +7,9 @@ use std::path::{Component, Path, PathBuf};
 pub struct Snapshot {
     entry: PathBuf,
     files: Box<[(PathBuf, Box<str>)]>,
+    /// The features Cargo enabled for the entry package, under which its
+    /// `cfg(feature = "..")`s hold. None unless the parent hands them on.
+    features: crate::project::cargo::features::Enabled,
 }
 
 impl Snapshot {
@@ -32,7 +35,21 @@ impl Snapshot {
         Ok(Self {
             entry,
             files: files.into_boxed_slice(),
+            features: crate::project::cargo::features::Enabled::default(),
         })
+    }
+
+    /// The snapshot with `features` enabled for its entry package: the
+    /// ones Cargo enabled for the parent's compile of the same package.
+    #[must_use]
+    pub fn with_features(self, features: crate::project::cargo::features::Enabled) -> Self {
+        Self { features, ..self }
+    }
+
+    /// The features enabled for the entry package.
+    #[must_use]
+    pub const fn features(&self) -> &crate::project::cargo::features::Enabled {
+        &self.features
     }
 
     /// Return the exact target path selected by the parent compiler.

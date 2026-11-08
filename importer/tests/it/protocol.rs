@@ -146,8 +146,10 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
 }
 
 fn snapshot_frames(files: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut bytes = Vec::from(b"rawr.snapshot.entry/v1".as_slice());
+    let mut bytes = Vec::from(b"rawr.snapshot.entry/v2".as_slice());
     push(&mut bytes, b"application.rs");
+    // No features.
+    bytes.extend_from_slice(&0_u64.to_le_bytes());
     for (path, contents) in files {
         push(&mut bytes, path.as_bytes());
         push(&mut bytes, contents);

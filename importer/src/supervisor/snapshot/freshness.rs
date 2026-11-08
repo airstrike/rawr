@@ -29,6 +29,7 @@ impl super::Bytes {
         // The transport was validated when it was bound; this re-parse only
         // reads the exact framed fields.
         super::take_string_field(&mut cursor).map_err(malformed)?;
+        super::take_features(&mut cursor).map_err(malformed)?;
         let mut files = Vec::new();
         while !cursor.is_empty() {
             let path = super::take_string_field(&mut cursor).map_err(malformed)?;

@@ -211,7 +211,8 @@ impl Package {
 
     /// The features Cargo enables for the package's target, under which
     /// its `cfg(feature = "..")`s hold: none for a file outside a package,
-    /// and none for a runner's snapshot, which does not ask Cargo.
+    /// and for a runner's snapshot, which does not ask Cargo, the ones its
+    /// parent's Cargo enabled for the entry package.
     #[must_use]
     pub const fn features(&self) -> &project::cargo::features::Enabled {
         &self.features
@@ -701,7 +702,13 @@ impl<'a> Builder<'a> {
         let panic = unit
             .as_ref()
             .map_or_else(project::cargo::Panic::default, project::cargo::Unit::panic);
-        let features = unit.map(|unit| unit.features().clone()).unwrap_or_default();
+        // A runner's snapshot asks no Cargo: its entry package has the
+        // features the parent's Cargo enabled, which the snapshot carries.
+        let features = match (unit, self.snapshot) {
+            (Some(unit), _) => unit.features().clone(),
+            (None, Some(snapshot)) if self.packages.is_empty() => snapshot.features().clone(),
+            (None, _) => project::cargo::features::Enabled::default(),
+        };
         // The crate name rustc gives this target, so item paths read as
         // Rust's do. A file outside a Cargo package is `main`.
         let name: ImmutableString = match (&target, &cargo) {

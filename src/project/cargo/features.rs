@@ -124,12 +124,20 @@ impl Selection {
 impl Enabled {
     /// The features of a unit as Cargo's unit graph lists them.
     pub(super) fn of_unit(unit: &serde_json::Value) -> Self {
-        let mut names = unit["features"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|name| name.as_str().map(Box::from))
-            .collect::<Vec<_>>();
+        Self::of_names(
+            unit["features"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str),
+        )
+    }
+
+    /// The features named: a set Cargo resolved, handed on to a runner in
+    /// its snapshot.
+    #[must_use]
+    pub fn of_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut names = names.into_iter().map(Box::from).collect::<Vec<_>>();
         names.sort_unstable();
         names.dedup();
         Self {
