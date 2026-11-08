@@ -13202,13 +13202,8 @@ impl<'a> Parser<'a> {
         if let Some(error) = self.std_not_yet(&written, reference) {
             return Some(error);
         }
-        if self.program_macro(name, at.start()).is_some() {
-            return Some(Error::WrongKind {
-                expected: "function",
-                found: "macro",
-                name: written.as_ref().into(),
-                reference,
-            });
+        if let Some(error) = self.macro_without_bang(name, "function", reference) {
+            return Some(error);
         }
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
         imports.sort_by_key(|path| (path.len(), path.clone()));
@@ -13216,6 +13211,32 @@ impl<'a> Parser<'a> {
             name: written.as_ref().into(),
             import: imports.into_iter().next().map(Into::into),
             reference: Span::new(at.start(), text_end(at.start(), &written)),
+        })
+    }
+
+    /// rustc's E0423 for a macro's name used without `!` where a function
+    /// or a value is `expected`: the program's own macro, or std's, as
+    /// `print` or `std::print`.
+    fn macro_without_bang(
+        &self,
+        name: &str,
+        expected: &'static str,
+        reference: Span,
+    ) -> Option<Error> {
+        let written = crate::tokenizer::raw_names(name);
+        let std_macro = || {
+            let first = name.split("::").next().unwrap_or(name);
+            let binding = self.models.import(first);
+            let binding = binding.map(|binding| binding.qualified.as_str());
+            super::std_path::qualified(&written, binding)
+                .is_some_and(|path| super::std_path::is_macro(&path))
+        };
+        let is_macro = self.program_macro(name, reference.start()).is_some() || std_macro();
+        is_macro.then(|| Error::WrongKind {
+            expected,
+            found: "macro",
+            name: written.as_ref().into(),
+            reference,
         })
     }
 
@@ -13248,6 +13269,9 @@ impl<'a> Parser<'a> {
             return error;
         }
         if let Some(error) = self.std_not_yet(&written, reference) {
+            return error;
+        }
+        if let Some(error) = self.macro_without_bang(name, "value", reference) {
             return error;
         }
         // A struct with fields isn't a value: rustc's E0423.
@@ -50215,7 +50239,7 @@ impl<'a> Parser<'a> {
         first: ImmutableString,
         first_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        let (path, reference, _) = self.peek_path(&first, first_span);
+        let (path, reference, next) = self.peek_path(&first, first_span);
         match self.parse_qualified_path(first, first_span) {
             Err(
                 error @ (Error::UnknownType { .. }
@@ -50224,7 +50248,14 @@ impl<'a> Parser<'a> {
                 | Error::UnknownMember { .. }
                 | Error::NotInModule { .. }),
             ) if error.primary_span().start() <= reference.end() => {
-                Err(self.std_not_yet(&path, reference).unwrap_or(error))
+                let expected = match next {
+                    Some(Token::LeftParen) => "function",
+                    _ => "value",
+                };
+                Err(self
+                    .std_not_yet(&path, reference)
+                    .or_else(|| self.macro_without_bang(&path, expected, reference))
+                    .unwrap_or(error))
             }
             parsed => parsed,
         }

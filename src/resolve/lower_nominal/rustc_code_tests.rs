@@ -201,6 +201,23 @@ fn a_name_used_as_another_kind_of_item_is_e0423() {
         (code.as_str(), message.as_str()),
         ("E0423", "expected function, found macro `my_macro`")
     );
+    // std's macros, called or named without `!` (#1252).
+    for (body, expected, name) in [
+        ("print(\"hi\");", "function", "print"),
+        ("println(\"hi\");", "function", "println"),
+        ("std::print(\"hi\");", "function", "std::print"),
+        ("let f = eprintln;", "value", "eprintln"),
+    ] {
+        assert_eq!(
+            refused(&format!("fn main() {{\n    {body}\n}}\nmain();\n")),
+            (
+                "E0423".into(),
+                format!("expected {expected}, found macro `{name}`"),
+                label(&format!("not a {expected}"))
+            ),
+            "{body}"
+        );
+    }
 }
 
 #[test]

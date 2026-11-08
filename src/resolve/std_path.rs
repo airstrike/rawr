@@ -384,9 +384,12 @@ pub(crate) fn not_yet(
     if let Some(error) = unstable(resolved.stability(), reference) {
         return Some(error);
     }
-    // A module is no value or type of its own, and a member the table
-    // doesn't list may be no member at all.
+    // A module is no value or type of its own, a macro is no value or type
+    // either (its use without `!` is E0423, see `is_macro`), and a member
+    // the table doesn't list may be no member at all.
     if matches!(resolved, Resolved::Path(path) if path.kind == "mod")
+        || matches!(resolved, Resolved::Path(path)
+            if path.kind == "macro" && namespace != Namespace::Macro)
         || matches!(resolved, Resolved::Member { member: None, .. })
     {
         return None;
@@ -395,6 +398,11 @@ pub(crate) fn not_yet(
         path: written.into(),
         reference,
     })
+}
+
+/// Whether the std path `path` names a macro, as `std::prelude::rust_2024::print`.
+pub(crate) fn is_macro(path: &str) -> bool {
+    std_segments(path).is_some() && std_table::path(path, Namespace::Macro).is_some()
 }
 
 /// The std path a name the program writes stands for, through the `use`
