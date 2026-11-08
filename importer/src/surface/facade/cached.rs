@@ -11,9 +11,7 @@ pub struct Cached {
     chain: node::Chain,
 }
 
-pub(super) fn encode(
-    contract: &crate::Contract<crate::Classified>,
-) -> crate::Result<Cached> {
+pub(super) fn encode(contract: &crate::Contract<crate::Classified>) -> crate::Result<Cached> {
     let parent = contract
         .node_chain()
         .cloned()
@@ -185,9 +183,7 @@ mod tests {
             .expect("the fixture graph classifies");
         let bytes = Plan::encode(&contract).expect("the facade encodes");
         let product = Product::capture(bytes.clone()).expect("the facade product captures");
-        let encoded = product
-            .encode()
-            .expect("the facade product encodes");
+        let encoded = product.encode().expect("the facade product encodes");
         assert_eq!(encoded, bytes);
         assert!(Product::decode(&encoded).is_ok());
 

@@ -13,7 +13,6 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
     definition: &D,
     contract: &Contract,
     checked: &C,
-    limits: &crate::cargo::Limits,
 ) -> Result<Demand, Error> {
     let parent = checked
         .node_chain()
@@ -21,8 +20,7 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
         .cloned()
         .expect("the cached profile's contract has no node");
     assert!(
-        definition.identity() == contract.identity()
-            && definition.version() == contract.version(),
+        definition.identity() == contract.identity() && definition.version() == contract.version(),
         "the profile demanding hooks differs from the one that classified the contract"
     );
     let checked_fingerprint = checked.profile_fingerprint();
@@ -53,15 +51,13 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
 pub(crate) fn generate<C: crate::profile::Checked, D: crate::profile::Definition<C>>(
     definition: &D,
     demand: &Demand,
-    limits: &crate::cargo::Limits,
 ) -> Result<crate::profile::Proof, Error> {
     let parent = demand
         .node_chain()
         .cloned()
         .expect("the cached profile's demand has no node");
     assert!(
-        definition.identity() == demand.identity()
-            && definition.version() == demand.version(),
+        definition.identity() == demand.identity() && definition.version() == demand.version(),
         "the profile generating the source differs from the one that demanded it"
     );
     let product_lifecycle = definition.owns_product_lifecycle();
@@ -307,10 +303,10 @@ mod tests {
         let product = Product {
             canonical: br#"{"schema":7}"#.to_vec().into_boxed_slice(),
         };
-        let bytes = product.encode(1024).expect("the demand product encodes");
-        assert!(Product::decode(&bytes, 1024).is_ok());
-        assert!(Product::decode(&[], 1024).is_err());
-        assert!(Product::decode(&bytes, 1).is_err());
+        let bytes = product.encode().expect("the demand product encodes");
+        assert!(Product::decode(&bytes).is_ok());
+        assert!(Product::decode(&[]).is_err());
+        assert!(Product::decode(&bytes).is_err());
     }
 
     #[test]
@@ -319,10 +315,10 @@ mod tests {
             canonical: br#"{"schema":9}"#.to_vec().into_boxed_slice(),
         };
         let bytes = product
-            .encode(1024)
+            .encode()
             .expect("the generated profile product encodes");
-        assert!(GeneratedProduct::decode(&bytes, 1024).is_ok());
-        assert!(GeneratedProduct::decode(&[], 1024).is_err());
-        assert!(GeneratedProduct::decode(&bytes, 1).is_err());
+        assert!(GeneratedProduct::decode(&bytes).is_ok());
+        assert!(GeneratedProduct::decode(&[]).is_err());
+        assert!(GeneratedProduct::decode(&bytes).is_err());
     }
 }

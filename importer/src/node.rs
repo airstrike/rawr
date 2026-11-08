@@ -240,13 +240,7 @@ impl<K: Value> Direct<K> {
         retained_parents.extend(parents.iter().map(content::Provenance::from_edge));
         let context = Digest::from_bytes(context);
         let recipe = Digest::recipe(context, semantic_inputs, parents);
-        let action = ActionKey::derive(
-            K::KIND,
-            K::SCHEMA,
-            context,
-            semantic_inputs,
-            parents,
-        );
+        let action = ActionKey::derive(K::KIND, K::SCHEMA, context, semantic_inputs, parents);
         Ok(Self {
             action,
             recipe,
@@ -295,13 +289,7 @@ impl<K: Value> Discoverable<K> {
             .map_err(|_| Error::Allocation)?;
         retained_parents.extend_from_slice(parents);
         let context = Digest::from_bytes(context);
-        let lookup = LookupKey::derive(
-            K::KIND,
-            K::SCHEMA,
-            context,
-            fixed_inputs,
-            parents,
-        );
+        let lookup = LookupKey::derive(K::KIND, K::SCHEMA, context, fixed_inputs, parents);
         Ok(Self {
             lookup,
             execution: ExecutionKey::derive(lookup),
@@ -325,11 +313,7 @@ impl<K: Value> Discoverable<K> {
         semantic_inputs.extend_from_slice(&self.fixed_inputs);
         semantic_inputs.extend_from_slice(&(discovered_inputs.len() as u64).to_le_bytes());
         semantic_inputs.extend_from_slice(discovered_inputs);
-        Direct::capture(
-            self.context.as_bytes(),
-            &semantic_inputs,
-            &self.parents,
-        )
+        Direct::capture(self.context.as_bytes(), &semantic_inputs, &self.parents)
     }
 
     /// Non-authoritative bounded candidate-bucket identity.
@@ -518,9 +502,7 @@ impl<'store> Evaluator<'store> {
                 || {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
-                    let bytes = execute()
-                        .map_err(Error::fresh)?
-                        .into_encoded()?;
+                    let bytes = execute().map_err(Error::fresh)?.into_encoded()?;
                     Ok(crate::store::Reserved::Publish {
                         result: (),
                         recipe: recipe.clone(),
@@ -629,9 +611,7 @@ impl<'store> Evaluator<'store> {
                     let transform = execute.take().ok_or(Error::State(
                         "direct node executor was consumed before the final miss",
                     ))?;
-                    let bytes = transform()
-                        .map_err(Error::fresh)?
-                        .into_encoded()?;
+                    let bytes = transform().map_err(Error::fresh)?.into_encoded()?;
                     Ok(crate::store::Reserved::Publish {
                         result: (),
                         recipe: recipe.clone(),

@@ -641,13 +641,9 @@ fn prepare(
     }
     let adapter =
         current_adapter.ok_or_else(|| Error::other("no adapter was prepared for the program"))?;
-    let profile = rawr_import::composition::profile::prepare_retained(
-        &adapter,
-        &profile_contract,
-        &cached,
-        &limits,
-    )
-    .map_err(Error::cache)?;
+    let profile =
+        rawr_import::composition::profile::prepare_retained(&adapter, &profile_contract, &cached)
+            .map_err(Error::cache)?;
     let request = demand
         .request_retained(native, profile, revision)
         .map_err(Error::cache)?;

@@ -60,7 +60,7 @@ fn consuming_builder_generates_one_ordered_single_invocation_replay() {
     let manifest = demand
         .request(proof, rawr_import::profile::Proof::neutral(), revision)
         .expect("the builder request seals")
-        .generate(&limits)
+        .generate()
         .expect("the builder runner generates");
     // The runner is `src/main.rs` plus one module per imported crate (D415).
     let source = manifest

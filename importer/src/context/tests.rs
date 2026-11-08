@@ -157,19 +157,19 @@ fn environment_target_and_limit_drift_change_context_and_direct_action_identity(
     let limits_changed = context(environment("one"), "target-a", &bounded);
     let actions = [
         first
-            .direct::<ValueFixture>(b"same semantic input", 64)
+            .direct::<ValueFixture>(b"same semantic input")
             .expect("the action seals")
             .action(),
         environment_changed
-            .direct::<ValueFixture>(b"same semantic input", 64)
+            .direct::<ValueFixture>(b"same semantic input")
             .expect("the action seals")
             .action(),
         target_changed
-            .direct::<ValueFixture>(b"same semantic input", 64)
+            .direct::<ValueFixture>(b"same semantic input")
             .expect("the action seals")
             .action(),
         limits_changed
-            .direct::<ValueFixture>(b"same semantic input", 64)
+            .direct::<ValueFixture>(b"same semantic input")
             .expect("the action seals")
             .action(),
     ];

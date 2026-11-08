@@ -640,30 +640,6 @@ fn aggregate_decode_ownership_exact_floor_and_prior_usage_are_preserved() {
 }
 
 #[test]
-fn encode_physical_refusal_is_prospective_terminal_and_does_not_allocate() {
-    let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
-    let mut allocation = Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits);
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-    assert!(matches!(
-        codec::encode(&mut budget, past_content_ceiling),
-        Err(Error::Input(crate::Error::Limit { .. }))
-    ));
-    assert_eq!(budget.allocations(), 0);
-    assert!(matches!(budget.bytes(b""), Err(Error::Refused)));
-}
-
-/// Measure one encoding past the physical node content ceiling without
-/// allocating it: the measuring pass only counts.
-fn past_content_ceiling(writer: &mut codec::Writer<'_>) -> super::Result<()> {
-    let chunk = [0_u8; 1024 * 1024];
-    for _ in 0..=node::MAX_CONTENT_BYTES / chunk.len() {
-        writer.raw(&chunk)?;
-    }
-    Ok(())
-}
-
-#[test]
 fn wire_decode_graph_exact_floor_and_prior_work_are_preserved() {
     let bytes = encode(&data());
     let limits = cargo::Limits::standard();
@@ -883,7 +859,7 @@ fn explicit_encode_layout_has_exact_and_one_byte_floor_accounting() {
 #[test]
 fn every_stored_resource_refusal_survives_a_new_borrow_and_graph() {
     let limits = cargo::Limits::standard();
-    for failure in 2..5 {
+    for failure in [2, 4] {
         let mut allocation = Allocation::for_proof(
             Usage {
                 items: 7,
@@ -901,16 +877,11 @@ fn every_stored_resource_refusal_survives_a_new_borrow_and_graph() {
         // overflow, allocation failure or the physical encoder limit.
         let result = match failure {
             2 => budget.items::<u64>(usize::MAX).map(|_| ()),
-            3 => codec::encode(&mut budget, past_content_ceiling).map(|_| ()),
             _ => budget.buffer(usize::MAX / 2 + 1).map(|_| ()),
         };
         assert!(result.is_err(), "resource failure {failure}");
         match failure {
             2 => assert!(matches!(result, Err(Error::Overflow))),
-            3 => assert!(matches!(
-                result,
-                Err(Error::Input(crate::Error::Limit { .. }))
-            )),
             _ => assert!(matches!(result, Err(Error::Allocation(_)))),
         }
         let spent = allocation.usage();

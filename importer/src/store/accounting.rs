@@ -206,8 +206,6 @@ impl Charge {
                 .ok_or(Error::State("typed store member accounting underflowed"))?,
         })
     }
-
-
 }
 
 impl LeaseKey {
@@ -2260,8 +2258,7 @@ fn recover_planned(
         Error::CleanupRequired("a planned typed store allocation length is not addressable")
     })?;
     let payload_path = directory.join(payload_name);
-    let payload =
-        super::entry::read_file(&payload_path, length).map_err(recovery_record_error)?;
+    let payload = super::entry::read_file(&payload_path, length).map_err(recovery_record_error)?;
     let metadata = fs::metadata(&payload_path).map_err(|source| Error::Io {
         operation: "inspect planned typed store recovery payload",
         path: payload_path,
@@ -2922,7 +2919,7 @@ mod tests {
                     publication,
                     &root,
                     abandoned,
-                    Charge::node(4096, 4096).expect("abandoned charge"),
+                    Charge::node(4096).expect("abandoned charge"),
                 )
             });
             let mut budget = super::super::recovery::Budget::new();
@@ -2937,7 +2934,7 @@ mod tests {
                     publication,
                     &root,
                     key,
-                    Charge::node(4096, 4096).expect("live charge"),
+                    Charge::node(4096).expect("live charge"),
                 )
             });
             published(&root, |publication| {
@@ -3091,7 +3088,7 @@ mod tests {
                 publication,
                 &root,
                 key,
-                Charge::node(4_096, 4_096).expect("the fixture reservation fits"),
+                Charge::node(4_096).expect("the fixture reservation fits"),
             )
         });
         published(&root, |publication| {
@@ -3156,7 +3153,7 @@ mod tests {
                 publication,
                 &root,
                 first_key,
-                Charge::node(4_096, 4_096).expect("the first reservation fits"),
+                Charge::node(4_096).expect("the first reservation fits"),
             )
         });
         published(&root, |publication| {
@@ -3213,7 +3210,7 @@ mod tests {
                 publication,
                 &root,
                 second_key,
-                Charge::node(4_096, 4_096).expect("the second reservation fits"),
+                Charge::node(4_096).expect("the second reservation fits"),
             )
         });
         published(&root, |publication| {
@@ -3325,7 +3322,7 @@ mod tests {
                 publication,
                 &root,
                 key,
-                Charge::node(4_096, 4_096).expect("the runner reservation fits"),
+                Charge::node(4_096).expect("the runner reservation fits"),
             )
         });
         published(&root, |publication| {
@@ -3402,7 +3399,7 @@ mod tests {
                 publication,
                 &root,
                 key,
-                Charge::node(4_096, 4_096).expect("the fixture reservation fits"),
+                Charge::node(4_096).expect("the fixture reservation fits"),
             )
         });
         published(&root, |publication| {
@@ -3435,7 +3432,7 @@ mod tests {
                 publication,
                 &root,
                 key,
-                Charge::node(4_096, 4_096).expect("the fixture reservation fits"),
+                Charge::node(4_096).expect("the fixture reservation fits"),
             )
         });
         published(&root, |publication| {

@@ -200,24 +200,18 @@ where
         let profile =
             crate::profile::cached::authority(profile_identity.0, profile_identity.1, None)
                 .map_err(|error| failure(&error))?;
-        let Outcome::Hit(Owned::Current(profile)) =
-            lookup.at::<Profile>(&input, &profile)?
-        else {
+        let Outcome::Hit(Owned::Current(profile)) = lookup.at::<Profile>(&input, &profile)? else {
             return Ok(None);
         };
         let generic =
             crate::classify::cached::authority(policy).map_err(|error| failure(&error))?;
-        let Outcome::Hit(Owned::Current(generic)) =
-            lookup.at::<Generic>(&input, &generic)?
-        else {
+        let Outcome::Hit(Owned::Current(generic)) = lookup.at::<Generic>(&input, &generic)? else {
             return Ok(None);
         };
         let facade = surface::facade::cached::authority(&header.contract)?;
         let parent = node::Parent::validated(&generic);
-        let Outcome::Hit(Owned::Current(facade)) = lookup.at::<Facade>(
-            &[node::staging::Input::current(&parent)],
-            &facade,
-        )?
+        let Outcome::Hit(Owned::Current(facade)) =
+            lookup.at::<Facade>(&[node::staging::Input::current(&parent)], &facade)?
         else {
             return Ok(None);
         };
@@ -232,7 +226,6 @@ where
                 api_fingerprint,
                 crate::api::Fingerprint::from_bytes(header.semantic),
             ),
-            limits,
         ) {
             Ok(parts) => parts,
             Err(crate::profile::Error::Stale) => return Ok(None),
@@ -400,8 +393,8 @@ mod tests {
             demand: [6; 32],
         };
         let product = Product::capture(header, cached.adapter_plans()).expect("capture");
-        let stored = product.encode(usize::MAX).expect("encode");
-        let product = Product::decode(&stored, usize::MAX).expect("decode");
+        let stored = product.encode().expect("encode");
+        let product = Product::decode(&stored).expect("decode");
         assert_eq!(product.header.demand, [6; 32]);
         let resolved = crate::Demand::replay_resolved(
             bytes,
@@ -427,6 +420,6 @@ mod tests {
             resolved.cached_retained_usage(),
             cached.cached_retained_usage()
         );
-        assert!(Product::decode(&stored[1..], usize::MAX).is_err());
+        assert!(Product::decode(&stored[1..]).is_err());
     }
 }

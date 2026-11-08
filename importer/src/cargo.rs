@@ -735,7 +735,6 @@ impl Limits {
         self.process
     }
 
-
     pub(crate) fn bind_node_context(&self, digest: &mut Sha256) {
         // Only the physical bounds that still refuse bind node identity.
         digest.update(b"rawr.import.cargo.limits/v3");
@@ -1328,12 +1327,8 @@ impl Request {
         ) = match state {
             PlacementState::Persisted { lock, receipt } => {
                 let target_dir = versioned_target_directory(&harness_root);
-                let authority = locked_metadata_node_authority(
-                    request,
-                    &toolchain,
-                    self,
-                    &manifest_path,
-                )?;
+                let authority =
+                    locked_metadata_node_authority(request, &toolchain, self, &manifest_path)?;
                 let metadata_parent = match toolchain_parent {
                     Some(parent) => crate::cargo::resolution::cached_locked_with_toolchain(
                         &node_context,
@@ -1399,12 +1394,8 @@ impl Request {
             }
             PlacementState::Fresh => {
                 let target_dir = versioned_target_directory(&harness_root);
-                let authority = locked_metadata_node_authority(
-                    request,
-                    &toolchain,
-                    self,
-                    &manifest_path,
-                )?;
+                let authority =
+                    locked_metadata_node_authority(request, &toolchain, self, &manifest_path)?;
                 let mut materialized = None;
                 let execute = || {
                     let provisional_root = prepare_versioned_roots(self, &harness_root, exclusive)?;
@@ -1534,8 +1525,7 @@ impl Request {
         let initial_target = harness_root.join(AUTHORITATIVE_TARGET_DIRECTORY);
         #[cfg(not(feature = "rustc-driver"))]
         let initial_target = harness_root.join("target");
-        let authority =
-            unit_graph_node_authority(request, &toolchain, self, &manifest_path)?;
+        let authority = unit_graph_node_authority(request, &toolchain, self, &manifest_path)?;
         let unit_parent = crate::cargo::resolution::cached_unit_graph(
             &node_context,
             &metadata_parent,
@@ -1866,12 +1856,8 @@ impl Request {
                 request,
                 unit,
             } = dag;
-            let authority = authoritative_build_node_authority(
-                request,
-                &toolchain,
-                &self,
-                &manifest_path,
-            )?;
+            let authority =
+                authoritative_build_node_authority(request, &toolchain, &self, &manifest_path)?;
             let authority = workspace_node_authority(&authority, &workspace)?;
             let execution_environment = environment.clone();
             let build = crate::cargo::resolution::cached_build(
@@ -4249,6 +4235,12 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// Read a whole input file, whatever its size: a large valid project's
+/// manifest, lock or receipt is never refused (#1231).
+fn read_whole(resource: &'static str, path: &Path) -> Result<Vec<u8>> {
+    read_bounded(resource, path, usize::MAX)
 }
 
 fn read_bounded(resource: &'static str, path: &Path, limit: usize) -> Result<Vec<u8>> {

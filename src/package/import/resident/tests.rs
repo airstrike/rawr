@@ -498,7 +498,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
         supervisor.revision().unwrap(),
     )
     .unwrap()
-    .generate(&limits)
+    .generate()
     .unwrap();
     let carrier = rawr_import::runner::manifest::Carrier::transform(
         &generated.generated_manifest().carrier().unwrap(),

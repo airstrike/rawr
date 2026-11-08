@@ -63,9 +63,7 @@ fn publish(
     let root = temporary(label);
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<BundleValue>(label.as_bytes(), 4096)
-        .unwrap();
+    let recipe = context.discover::<BundleValue>(label.as_bytes()).unwrap();
     let current = store.clone();
     let value = Evaluator::new(&store, &Counts::default())
         .discover_bundled(&recipe, move |value| validate(value, &current), execute)
@@ -211,7 +209,7 @@ fn release_passes_candidate_sites_and_the_ledger_keeps_the_recorded_charge() {
     let store = fixture_context(&published.root).open_store().unwrap();
     let recipe = published
         .context
-        .discover::<BundleValue>(b"release-release", 4096)
+        .discover::<BundleValue>(b"release-release")
         .unwrap();
     let counts = Counts::default();
     let current = store.clone();
@@ -391,7 +389,7 @@ fn geometry_mismatch_drives_retirement_but_release_and_refusals_do_not() {
     let store = fixture_context(&published.root).open_store().unwrap();
     let recipe = published
         .context
-        .discover::<BundleValue>(b"release-provenance", 4096)
+        .discover::<BundleValue>(b"release-provenance")
         .unwrap();
     let counts = Counts::default();
     let current = store.clone();
@@ -452,7 +450,7 @@ fn one_released_bundle_among_several_admits_imports_enrollment_and_eviction() {
         (b"release-wide-b", plain),
         (b"release-wide-c", plain),
     ] {
-        let recipe = context.discover::<BundleValue>(label, 4096).unwrap();
+        let recipe = context.discover::<BundleValue>(label).unwrap();
         let current = store.clone();
         let value = Evaluator::new(&store, &Counts::default())
             .discover_bundled(&recipe, move |value| validate(value, &current), execute)
@@ -466,9 +464,7 @@ fn one_released_bundle_among_several_admits_imports_enrollment_and_eviction() {
     let fresh = fixture_context(&root).open_store().unwrap();
     fresh.fixture_ledger_total().expect("the store inventories");
     // A new import publishes.
-    let recipe = context
-        .discover::<BundleValue>(b"release-wide-d", 4096)
-        .unwrap();
+    let recipe = context.discover::<BundleValue>(b"release-wide-d").unwrap();
     let current = fresh.clone();
     Evaluator::new(&fresh, &Counts::default())
         .discover_bundled(&recipe, move |value| validate(value, &current), plain)
@@ -476,9 +472,7 @@ fn one_released_bundle_among_several_admits_imports_enrollment_and_eviction() {
     // A previously unseen project enrolls and imports.
     let other = project_context(&root, "project-two");
     let other_store = other.open_store().unwrap();
-    let recipe = other
-        .discover::<BundleValue>(b"release-wide-e", 4096)
-        .unwrap();
+    let recipe = other.discover::<BundleValue>(b"release-wide-e").unwrap();
     let current = other_store.clone();
     Evaluator::new(&other_store, &Counts::default())
         .discover_bundled(&recipe, move |value| validate(value, &current), plain)
@@ -499,7 +493,7 @@ fn one_truncated_bundle_does_not_refuse_the_store() {
     seam::clear_all();
     let mut bundles = Vec::new();
     for label in [&b"release-trunc-a"[..], b"release-trunc-b"] {
-        let recipe = context.discover::<BundleValue>(label, 4096).unwrap();
+        let recipe = context.discover::<BundleValue>(label).unwrap();
         let current = store.clone();
         let value = Evaluator::new(&store, &Counts::default())
             .discover_bundled(&recipe, move |value| validate(value, &current), plain)
@@ -514,9 +508,7 @@ fn one_truncated_bundle_does_not_refuse_the_store() {
     // consumers' to refuse, so an unrelated import proceeds.
     let fresh = fixture_context(&root).open_store().unwrap();
     fresh.fixture_ledger_total().unwrap();
-    let recipe = context
-        .discover::<BundleValue>(b"release-trunc-c", 4096)
-        .unwrap();
+    let recipe = context.discover::<BundleValue>(b"release-trunc-c").unwrap();
     let current = fresh.clone();
     Evaluator::new(&fresh, &Counts::default())
         .discover_bundled(&recipe, move |value| validate(value, &current), plain)

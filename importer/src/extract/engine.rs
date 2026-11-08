@@ -43,9 +43,8 @@ pub(crate) const TABLE_SCHEMA: u32 = 8;
 /// lists it as a derive a program may name (`protocol::DERIVE_MACRO`).
 pub(crate) const DERIVE_MACRO: &str = "derive-macro";
 
-const MAX_DEFINITIONS: usize = 500_000;
-const MAX_PACKAGES: usize = 4_096;
-const MAX_EDGES: usize = 1_000_000;
+/// The deepest module nesting a walk follows: the walk recurses per module,
+/// so this guards the stack against a malformed module graph, never a size.
 const MAX_DEPTH: usize = 256;
 /// A macro's `$crate`: the leading segment of a demanded path that names the
 /// root of the crate the macro is defined in.
@@ -965,11 +964,6 @@ impl<'o, O: Oracle> Engine<'o, O> {
                             "duplicate external definition identity".to_owned(),
                         ));
                     }
-                    if self.definitions.len() >= MAX_DEFINITIONS {
-                        return Err(Fault::Error(
-                            "compiler definition limit exceeded".to_owned(),
-                        ));
-                    }
                     self.definitions.insert(
                         *key,
                         Defined {
@@ -1043,11 +1037,6 @@ impl<'o, O: Oracle> Engine<'o, O> {
 
     fn register(&mut self, krate: Crate) -> Result<(), Fault> {
         if !krate.sysroot && !self.external.contains(&krate.stable_crate_id) {
-            if self.external.len() >= MAX_PACKAGES {
-                return Err(Fault::Error(
-                    "external compiler crate limit exceeded".to_owned(),
-                ));
-            }
             self.external.insert(krate.stable_crate_id.clone());
         }
         self.crates.insert(krate);
@@ -1085,11 +1074,6 @@ impl<'o, O: Oracle> Engine<'o, O> {
                 }
             }
             None => {
-                if self.scheduler.len() >= MAX_DEFINITIONS {
-                    return Err(Fault::Error(
-                        "compiler definition limit exceeded".to_owned(),
-                    ));
-                }
                 self.scheduler.insert(
                     request.key,
                     Scheduled {
@@ -1266,19 +1250,9 @@ impl<'o, O: Oracle> Engine<'o, O> {
             self.apply_emissions(&emissions)?;
         }
         if let Some(record) = &mut record {
-            if record.relevance.len().saturating_add(relevance.len()) > MAX_EDGES {
-                return Err(Fault::Error(
-                    "implementation relevance edge limit exceeded".to_owned(),
-                ));
-            }
             record.relevance.extend(relevance);
             record.relevance.sort_unstable();
             record.relevance.dedup();
-            if record.associated.len().saturating_add(associated.len()) > MAX_EDGES {
-                return Err(Fault::Error(
-                    "implementation associated edge limit exceeded".to_owned(),
-                ));
-            }
             record.associated.extend(associated);
             record.associated.sort_unstable();
             record.associated.dedup();

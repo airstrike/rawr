@@ -288,7 +288,7 @@ fn execute_request<B: rawr_import::surface::Runner>(
     start: bool,
 ) {
     let manifest = request
-        .generate(&rawr_import::cargo::Limits::standard())
+        .generate()
         .expect("the generated-owner fixture materializes");
     let built = manifest
         .build_on_demand(cache)
@@ -682,7 +682,7 @@ fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
     .expect("the cold generated-owner request seals");
     let build = cold_request.build_request_key();
     let generated = cold_request
-        .generate(&rawr_import::cargo::Limits::standard())
+        .generate()
         .expect("the cold generated-owner fixture materializes");
     let built = generated
         .build_on_demand(&cache)

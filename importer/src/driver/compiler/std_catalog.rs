@@ -131,7 +131,7 @@ struct Walk<'tcx, 'a, 'b, 'c> {
 }
 
 fn catalog(tcx: TyCtxt<'_>, invocation: &Invocation, out: &Path) -> Result<(), String> {
-    let mut budget = Budget::unlimited();
+    let mut budget = Budget::standard();
     let mut diagnostic = None;
     let named = |name: &str| {
         tcx.crates(())

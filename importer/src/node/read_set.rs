@@ -601,21 +601,11 @@ impl Budget {
     }
 
     pub(crate) fn decode(&mut self, bytes: usize) -> Result<(), Error> {
-        charge(
-            &mut self.decoded,
-            bytes,
-            MAX_DECODE_BYTES,
-            "node read-set decoded bytes",
-        )
+        charge(&mut self.decoded, bytes)
     }
 
     pub(crate) fn hash(&mut self, bytes: usize) -> Result<(), Error> {
-        charge(
-            &mut self.hashed,
-            bytes,
-            MAX_HASH_BYTES,
-            "node read-set hashed bytes",
-        )
+        charge(&mut self.hashed, bytes)
     }
 }
 
@@ -1238,12 +1228,7 @@ fn digest(entries: &[Entry]) -> Digest {
 }
 
 #[cfg(test)]
-fn charge(
-    retained: &mut u64,
-    bytes: usize,
-    limit: u64,
-    resource: &'static str,
-) -> Result<(), Error> {
+fn charge(retained: &mut u64, bytes: usize) -> Result<(), Error> {
     let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
     let actual = retained.checked_add(bytes).unwrap_or(u64::MAX);
     *retained = actual;
@@ -1269,10 +1254,10 @@ mod tests {
     impl Value for LineageValue {
         const KIND: Kind = Kind::Api;
         const SCHEMA: u32 = 1;
-        fn encode(&self, _: usize) -> Result<Box<[u8]>, Error> {
+        fn encode(&self) -> Result<Box<[u8]>, Error> {
             Ok(Box::default())
         }
-        fn decode(_: &[u8], _: usize) -> Result<Self, Error> {
+        fn decode(_: &[u8]) -> Result<Self, Error> {
             Ok(Self)
         }
     }

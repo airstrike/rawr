@@ -98,7 +98,6 @@ pub fn classification_implementation_outcomes() -> api::Graph<api::Extracted> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        usize::MAX,
         &mut allocation,
     )
     .expect("implementation-outcome classifier fixture seals")
@@ -631,7 +630,6 @@ fn iced_profile_graph_with_universe(
         Vec::new(),
         Vec::new(),
         anonymous,
-        usize::MAX,
         &mut allocation,
     )?
     .publish(crate::input::proof::Proof::fixture())
@@ -1028,7 +1026,6 @@ fn captured_graph_with_support_order(
         Vec::new(),
         support,
         Vec::new(),
-        usize::MAX,
         &mut allocation,
     )
     .expect("canonical classifier fixture seals")
@@ -1161,7 +1158,6 @@ pub fn representability_families() -> api::Graph<api::Extracted> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        usize::MAX,
         &mut allocation,
     )
     .expect("representability-family fixture seals")
@@ -1213,7 +1209,6 @@ pub fn derive_exports() -> api::Graph<api::Extracted> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        usize::MAX,
         &mut allocation,
     )
     .expect("derive fixture seals")
@@ -1286,7 +1281,6 @@ pub fn option_function() -> api::Graph<api::Extracted> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        usize::MAX,
         &mut allocation,
     )
     .expect("option fixture seals")
@@ -1375,7 +1369,6 @@ pub fn result_function() -> api::Graph<api::Extracted> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        usize::MAX,
         &mut allocation,
     )
     .expect("result fixture seals")
@@ -1538,7 +1531,6 @@ pub fn future_parameter_functions() -> api::Graph<api::Extracted> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        usize::MAX,
         &mut allocation,
     )
     .expect("future parameter fixture seals")
@@ -1721,7 +1713,6 @@ pub fn future_closure_functions() -> api::Graph<api::Extracted> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        usize::MAX,
         &mut allocation,
     )
     .expect("future closure fixture seals")
@@ -2047,7 +2038,6 @@ pub fn native_shapes() -> api::Graph<api::Extracted> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        usize::MAX,
         &mut allocation,
     )
     .expect("native shapes fixture seals")
@@ -2078,7 +2068,6 @@ pub fn representability_generic() -> api::Graph<api::Extracted> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        usize::MAX,
         &mut allocation,
     )
     .expect("generic free-function fixture seals")

@@ -932,12 +932,8 @@ impl Graph<Captured> {
                     reason: "current API universe differs".into(),
                 });
             }
-            let canonical = semantic::current(
-                &stored.canonical,
-                context,
-                &invocations,
-                allocation,
-            )?;
+            let canonical =
+                semantic::current(&stored.canonical, context, &invocations, allocation)?;
             let graph = Self::seal_canonical(
                 invocations,
                 selected.definitions.into_vec(),
@@ -1409,7 +1405,6 @@ impl Graph<Captured> {
         Ok(())
     }
 }
-
 
 fn retains_support_provenance(
     outcome: &ledger::Support,
@@ -1915,7 +1910,6 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            usize::MAX,
             allocation,
         )
     }
@@ -2034,7 +2028,6 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            usize::MAX,
             &mut allocation,
         );
         assert!(matches!(

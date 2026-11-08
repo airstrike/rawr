@@ -512,7 +512,7 @@ mod tests {
     fn owned_checked_authority_preserves_canonical_bytes_and_rejects_graph_drift() {
         let limits = crate::cargo::Limits::standard();
         let graph = crate::test_fixture::graph();
-        let profile = crate::profile::classify(&Definition, &graph, &limits)
+        let profile = crate::profile::classify(&Definition, &graph)
             .expect("the checked authority profile classifies");
         let contract = graph
             .classify(&crate::classify::Policy::standard(), &limits)
@@ -613,11 +613,8 @@ mod tests {
             source,
         )
         .expect("the checked product captures");
-        let bytes = product
-            .encode()
-            .expect("the checked product encodes");
-        let decoded = Product::decode(&bytes)
-            .expect("the checked product decodes");
+        let bytes = product.encode().expect("the checked product encodes");
+        let decoded = Product::decode(&bytes).expect("the checked product decodes");
         assert_eq!(decoded.checked, [0x63; 32]);
         assert_eq!(decoded.payload.as_ref(), b"checked-payload");
         assert!(Product::decode(&bytes[..bytes.len() - 1]).is_err());
@@ -649,12 +646,12 @@ mod tests {
         let parent =
             crate::node::Chain::fixture(context).expect("the checked DAG fixture parent validates");
         let graph = crate::test_fixture::graph().with_node_chain_for_test(parent);
-        let profile = crate::profile::classify(&Definition, &graph, &limits)
-            .expect("the checked profile classifies");
+        let profile =
+            crate::profile::classify(&Definition, &graph).expect("the checked profile classifies");
         let contract = graph
             .classify(&crate::classify::Policy::standard(), &limits)
             .expect("the checked generic contract classifies");
-        let facade = crate::surface::facade::Plan::encode_cached(&contract, &limits)
+        let facade = crate::surface::facade::Plan::encode_cached(&contract)
             .expect("the checked facade seals");
         let source = snapshot(&limits);
         let executions = AtomicUsize::new(0);

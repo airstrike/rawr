@@ -279,7 +279,7 @@ where
         (Outcome::Hit(profile), Some((_, Outcome::Hit(facade), parts))) => {
             let profile_parts = profile
                 .value()
-                .owned(adapter.identity(), adapter.version(), graph.graph(), limits)
+                .owned(adapter.identity(), adapter.version(), graph.graph())
                 .map_err(|error| cache(failure(error.fresh())))?;
             let authority = checked::authority(
                 parts.fingerprint,
@@ -376,7 +376,7 @@ where
                     None => {
                         let profile_parts = profile
                             .value()
-                            .owned(adapter.identity(), adapter.version(), graph.graph(), limits)
+                            .owned(adapter.identity(), adapter.version(), graph.graph())
                             .map_err(|error| failure(error.fresh()))?;
                         let authority = checked::authority(
                             parts.fingerprint,

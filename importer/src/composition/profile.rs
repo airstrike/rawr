@@ -17,7 +17,6 @@ pub fn evaluate<T: crate::profile::trusted::Operations>(
     adapter: &crate::profile::trusted::Adapter<T>,
     contract: &crate::profile::Contract,
     checked: &crate::checked::Cached,
-    limits: &crate::cargo::Limits,
 ) -> Result<(Demand, Proof), Error> {
     let parent = checked.node_chain();
     evaluate_parts(
@@ -30,7 +29,6 @@ pub fn evaluate<T: crate::profile::trusted::Operations>(
         node::staging::Input::current(parent.current_parent()),
         checked.checked_fingerprint(),
         checked.checked_payload(),
-        limits,
     )
 }
 
@@ -39,7 +37,6 @@ pub fn evaluate_retained<T: crate::profile::trusted::Operations>(
     adapter: &crate::profile::trusted::Adapter<T>,
     contract: &crate::profile::Contract,
     checked: &crate::checked::Retained,
-    limits: &crate::cargo::Limits,
 ) -> Result<(Demand, Proof), Error> {
     evaluate_parts(
         adapter,
@@ -49,7 +46,6 @@ pub fn evaluate_retained<T: crate::profile::trusted::Operations>(
         checked.product.input(),
         checked.checked_fingerprint(),
         checked.checked_payload(),
-        limits,
     )
 }
 
@@ -58,7 +54,6 @@ pub fn prepare_retained<T: crate::profile::trusted::Operations>(
     adapter: &crate::profile::trusted::Adapter<T>,
     contract: &crate::profile::Contract,
     checked: &crate::checked::Retained,
-    limits: &crate::cargo::Limits,
 ) -> Result<Pair, Error> {
     evaluate_parts(
         adapter,
@@ -68,7 +63,6 @@ pub fn prepare_retained<T: crate::profile::trusted::Operations>(
         checked.product.input(),
         checked.checked_fingerprint(),
         checked.checked_payload(),
-        limits,
     )
 }
 
@@ -84,7 +78,6 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
     input: node::staging::Input<'_>,
     fingerprint: [u8; 32],
     payload: &[u8],
-    limits: &crate::cargo::Limits,
 ) -> Result<O, Error> {
     assert!(
         adapter.identity() == contract.identity() && adapter.version() == contract.version(),
@@ -171,9 +164,8 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                             .value()
                             .owned(contract, fingerprint, payload)
                             .map_err(|error| failure(error.fresh()))?;
-                        let recipe =
-                            generated_recipe(context, adapter, &demand, parts.value())
-                                .map_err(failure)?;
+                        let recipe = generated_recipe(context, adapter, &demand, parts.value())
+                            .map_err(failure)?;
                         let outcome = recipe.lookup_owned(&evaluator)?;
                         (recipe, outcome, parts)
                     }
@@ -183,8 +175,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                     Outcome::Miss(miss) => {
                         Owned::Staged(generated_recipe.resume(batch, miss, || {
                             let proof = adapter.generate_owned(parts.value()).map_err(failure)?;
-                            GeneratedProduct::capture(&proof)
-                                .map_err(failure)
+                            GeneratedProduct::capture(&proof).map_err(failure)
                         })?)
                     }
                 };

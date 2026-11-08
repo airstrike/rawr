@@ -419,10 +419,9 @@ impl Proof {
     pub fn generate<C: Checked, D: Definition<C>>(
         definition: &D,
         demand: &Demand,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
         if demand.node_chain().is_some() {
-            return demand::cached::generate(definition, demand, limits);
+            return demand::cached::generate(definition, demand);
         }
         Self::generate_direct(definition, demand)
     }
@@ -680,10 +679,9 @@ impl Default for Proof {
 pub fn classify<C: Checked, D: Definition<C>>(
     definition: &D,
     graph: &crate::api::Graph<crate::api::Extracted>,
-    limits: &crate::cargo::Limits,
 ) -> Result<Contract, Error> {
     if graph.node_chain().is_some() {
-        return cached::classify(definition, graph, limits);
+        return cached::classify(definition, graph);
     }
     classify_direct(definition, graph)
 }
@@ -704,10 +702,9 @@ pub fn demand<C: Checked, D: Definition<C>>(
     definition: &D,
     contract: &Contract,
     checked: &C,
-    limits: &crate::cargo::Limits,
 ) -> Result<Demand, Error> {
     if contract.node_chain().is_some() {
-        return demand::cached::evaluate(definition, contract, checked, limits);
+        return demand::cached::evaluate(definition, contract, checked);
     }
     demand_direct(definition, contract, checked)
 }

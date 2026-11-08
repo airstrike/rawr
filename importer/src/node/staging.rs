@@ -128,15 +128,12 @@ impl<K: Value> Recipe<K> {
         parent: &Staged<P>,
         inputs: &[u8],
     ) -> Result<Self, Error> {
-        Direct::capture_edges(
-            context.identity(),
-            inputs,
-            std::slice::from_ref(parent),
+        Direct::capture_edges(context.identity(), inputs, std::slice::from_ref(parent)).map(
+            |direct| Self {
+                direct,
+                current: false,
+            },
         )
-        .map(|direct| Self {
-            direct,
-            current: false,
-        })
     }
 
     pub(crate) fn from_inputs(
@@ -298,10 +295,10 @@ mod tests {
     impl Value for Bytes {
         const KIND: super::super::Kind = super::super::Kind::Generic;
         const SCHEMA: u32 = 1;
-        fn encode(&self, _: usize) -> Result<Box<[u8]>, Error> {
+        fn encode(&self) -> Result<Box<[u8]>, Error> {
             Ok(Box::from(&b"bytes"[..]))
         }
-        fn decode(bytes: &[u8], _: usize) -> Result<Self, Error> {
+        fn decode(bytes: &[u8]) -> Result<Self, Error> {
             if bytes == b"bytes" {
                 Ok(Self)
             } else {
@@ -328,15 +325,12 @@ mod tests {
         let store = context.open_store().unwrap();
         let evaluator = Evaluator::new(&store, &crate::metrics::Current);
         let owner = evaluator
-            .direct(&context.direct::<Bytes>(b"owner", 64).unwrap(), || {
-                Ok(Bytes)
-            })
+            .direct(&context.direct::<Bytes>(b"owner").unwrap(), || Ok(Bytes))
             .unwrap();
         let retained = super::super::read_set::Retention::from_validated(&owner, None).unwrap();
         let parent = Parent::validated(&owner);
         let first =
-            Recipe::<Bytes>::from_inputs(&context, &[Input::current(&parent)], b"first")
-                .unwrap();
+            Recipe::<Bytes>::from_inputs(&context, &[Input::current(&parent)], b"first").unwrap();
         assert!(matches!(first.lookup(&evaluator).unwrap(), Lookup::Miss(_)));
         store
             .with_staged_batch(&retained, &crate::metrics::Current, |batch| {

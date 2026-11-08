@@ -21,11 +21,11 @@ impl<const KIND: u8> node::Value for Value<KIND> {
     };
     const SCHEMA: u32 = 99;
 
-    fn encode(&self, _: usize) -> Result<Box<[u8]>, node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.0.clone())
     }
 
-    fn decode(bytes: &[u8], _: usize) -> Result<Self, node::Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         Ok(Self(bytes.into()))
     }
 }
@@ -89,7 +89,7 @@ impl Fixture {
             .map(|parent| vec![parent.parent()])
             .unwrap_or_default();
         let recipe = context
-            .discover_with_parents::<Value<9>>(b"native", 4096, &parents)
+            .discover_with_parents::<Value<9>>(b"native", &parents)
             .unwrap();
         let native_path = self.root.join("native.rs");
         let validations = Arc::clone(&self.validations);
@@ -163,7 +163,7 @@ impl Fixture {
             &limits,
         )
         .unwrap();
-        let manifest = request.generate(&limits).unwrap();
+        let manifest = request.generate().unwrap();
         assert_eq!(
             manifest.chain.as_ref().unwrap().parent().action(),
             profile.parent().action(),
@@ -250,7 +250,7 @@ fn build_fixture(
     let authority = authority(&inputs, &toolchain, parallelism, context).unwrap();
     let parents = [chain.parent(), node::Parent::validated(toolchain.as_ref())];
     let recipe = context
-        .discover_with_parents::<Product>(&authority, PRODUCT_BYTES, &parents)
+        .discover_with_parents::<Product>(&authority, &parents)
         .unwrap();
     let validation_store = store.clone();
     let validation = inputs.clone();

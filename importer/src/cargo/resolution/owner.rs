@@ -781,10 +781,7 @@ impl Evaluation {
                         lock.clone()
                     }
                     None => {
-                        // Lock reads are I/O retention bounded by the
-                        // physical capture constant, never by the JSON target.
-                        let lock_bytes =
-                            read(paths.final_form().lock(), crate::process::CAPTURE_BYTES)?;
+                        let lock_bytes = read(paths.final_form().lock())?;
                         observed.require_bytes(paths.final_form().lock(), &lock_bytes)?;
                         let lock = definition.candidate(lock_bytes.into_boxed_slice())?;
                         stage.lock = Some((self.limits, lock.clone()));
@@ -801,7 +798,7 @@ impl Evaluation {
                         staged.receipt.clone()
                     }
                     _ => {
-                        let receipt_bytes = read(paths.receipt(), crate::process::CAPTURE_BYTES)?;
+                        let receipt_bytes = read(paths.receipt())?;
                         observed.require_bytes(paths.receipt(), &receipt_bytes)?;
                         let receipt = cargo::universe::Receipt::parse(&receipt_bytes, definition)?;
                         stage.receipt = Some(StagedReceipt {
@@ -1060,8 +1057,8 @@ impl Evaluation {
     }
 }
 
-fn read(path: &Path, limit: usize) -> Result<Vec<u8>, node::Error> {
-    cargo::read_bounded("resolution replay control", path, limit).map_err(Into::into)
+fn read(path: &Path) -> Result<Vec<u8>, node::Error> {
+    cargo::read_whole("resolution replay control", path).map_err(Into::into)
 }
 
 fn error(error: stored::Error) -> node::Error {
@@ -1340,13 +1337,8 @@ mod tests {
         };
         let facts = product.completed().unwrap();
         assert_eq!(facts.as_ref(), product.wire());
-        let decoded = <Product as node::Value>::decode(&facts, BYTES).unwrap();
+        let decoded = <Product as node::Value>::decode(&facts).unwrap();
         assert_eq!(decoded.completed().unwrap(), facts);
-        // The node content bound is physical and still refuses.
-        assert!(matches!(
-            <Product as node::Value>::encode(&product, BYTES - 1),
-            Err(node::Error::Limit { actual: BYTES, .. })
-        ));
     }
 
     #[test]
@@ -1357,21 +1349,20 @@ mod tests {
             const SCHEMA: u32 = 6;
 
             fn encode(&self) -> Result<Box<[u8]>, node::Error> {
-                <Product as node::Value>::encode(&self.0, limit)
+                <Product as node::Value>::encode(&self.0)
             }
 
             fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
-                <Product as node::Value>::decode(bytes, limit).map(Self)
+                <Product as node::Value>::decode(bytes).map(Self)
             }
         }
 
-        let old = node::Discoverable::<Legacy>::capture([1; 32], &[2; 32], BYTES, &[]).unwrap();
-        let current =
-            node::Discoverable::<Product>::capture([1; 32], &[2; 32], BYTES, &[]).unwrap();
+        let old = node::Discoverable::<Legacy>::capture([1; 32], &[2; 32], &[]).unwrap();
+        let current = node::Discoverable::<Product>::capture([1; 32], &[2; 32], &[]).unwrap();
         assert_ne!(old.lookup(), current.lookup());
         assert_ne!(old.execution(), current.execution());
-        let old = node::Direct::<Legacy>::capture([1; 32], &[2; 32], BYTES, &[]).unwrap();
-        let current = node::Direct::<Product>::capture([1; 32], &[2; 32], BYTES, &[]).unwrap();
+        let old = node::Direct::<Legacy>::capture([1; 32], &[2; 32], &[]).unwrap();
+        let current = node::Direct::<Product>::capture([1; 32], &[2; 32], &[]).unwrap();
         let legacy = node::codec::Envelope::direct(&old, node::Digest::from_bytes([3; 32]), BYTES)
             .unwrap()
             .encode()
@@ -1457,7 +1448,7 @@ mod tests {
     #[test]
     fn wrapped_control_graph_refusal_remains_terminal() {
         // The control read fails only for its own reason.
-        let error = read(Path::new("/nonexistent-rawr-owner-control"), 1024).unwrap_err();
+        let error = read(Path::new("/nonexistent-rawr-owner-control")).unwrap_err();
         assert!(
             !refusal(&error),
             "a missing control is not a refusal: {error:?}"
@@ -1473,8 +1464,8 @@ mod tests {
         let root = std::fs::canonicalize(&root).unwrap();
         let control = root.join("control");
         std::fs::write(&control, b"sixteen bytes!!!").unwrap();
-        assert_eq!(read(&control, 1024).unwrap(), b"sixteen bytes!!!");
-        let physical = read(&control, 8).unwrap_err();
+        assert_eq!(read(&control).unwrap(), b"sixteen bytes!!!");
+        let physical = read(&control).unwrap_err();
         assert!(matches!(&physical, node::Error::Importer(inner)
             if matches!(inner.as_ref(), crate::Error::Limit { limit: 8, actual: 16, .. })));
         assert!(refusal(&physical));

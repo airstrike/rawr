@@ -61,11 +61,11 @@ impl Value for Derived {
     const SCHEMA: u32 = <crate::surface::facade::cached::Product as crate::node::Value>::SCHEMA;
 
     fn encode(&self) -> Result<Box<[u8]>, Error> {
-        retain_fixture_bytes(&self.0, limit, "fixture derived bytes")
+        retain_fixture_bytes(&self.0)
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        retain_fixture_bytes(bytes, limit, "fixture derived bytes").map(Self)
+        retain_fixture_bytes(bytes).map(Self)
     }
 }
 
@@ -97,11 +97,11 @@ impl BundleValue {
         pending: &crate::store::bundle::Pending,
     ) -> Result<Box<[u8]>, Error> {
         pending.validate_unpublished(self.reference, self.seal_length, self.seal_digest)?;
-        self.encode(4_096)
+        self.encode()
     }
 
     fn validate_published(&self, store: &crate::store::Store) -> Result<Box<[u8]>, Error> {
-        let canonical = self.encode(4_096)?;
+        let canonical = self.encode()?;
         crate::store::bundle::validate_complete(
             store.root(),
             self.reference,
@@ -112,7 +112,7 @@ impl BundleValue {
             self.seal_digest,
             store.graph_budget(),
         )?;
-        self.encode(4_096)
+        self.encode()
     }
 }
 
@@ -136,7 +136,7 @@ impl Value for BundleValue {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() != Self::BYTES || bytes.len() > limit {
+        if bytes.len() != Self::BYTES {
             return Err(Error::Codec("bundled fixture value shape changed"));
         }
         let array = |offset: usize| {
@@ -172,11 +172,11 @@ impl NativeBundleValue {
         pending: &crate::store::bundle::Pending,
     ) -> Result<Box<[u8]>, Error> {
         pending.validate_unpublished(self.0.reference, self.0.seal_length, self.0.seal_digest)?;
-        self.encode(4_096)
+        self.encode()
     }
 
     fn validate_published(&self, store: &crate::store::Store) -> Result<Box<[u8]>, Error> {
-        let canonical = self.encode(4_096)?;
+        let canonical = self.encode()?;
         crate::store::bundle::validate_complete(
             store.root(),
             self.0.reference,
@@ -198,11 +198,11 @@ impl Value for NativeBundleValue {
     const SCHEMA: u32 = <crate::cargo::resolution::BuildProduct as Value>::SCHEMA;
 
     fn encode(&self) -> Result<Box<[u8]>, Error> {
-        self.0.encode(limit)
+        self.0.encode()
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        BundleValue::decode(bytes, limit).map(Self)
+        BundleValue::decode(bytes).map(Self)
     }
 }
 
@@ -240,7 +240,7 @@ pub(super) fn registered_retention_parent_in(
     crate::store::bundle::BundleCommitment,
 ) {
     let recipe =
-        super::Discoverable::capture(context, b"retention-bundled-parent", 4_096, parents).unwrap();
+        super::Discoverable::capture(context, b"retention-bundled-parent", parents).unwrap();
     let validation_store = store.clone();
     let value = Evaluator::new(store, &crate::metrics::Current)
         .discover_bundled(
@@ -268,11 +268,11 @@ impl Value for OldBundleValue {
     const SCHEMA: u32 = BundleValue::SCHEMA.wrapping_add(1);
 
     fn encode(&self) -> Result<Box<[u8]>, Error> {
-        self.0.encode(limit)
+        self.0.encode()
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        BundleValue::decode(bytes, limit).map(Self)
+        BundleValue::decode(bytes).map(Self)
     }
 }
 
@@ -290,7 +290,7 @@ fn old_bundled_fixture(
             value.0.seal_length,
             value.0.seal_digest,
         )?;
-        value.encode(4_096)
+        value.encode()
     })
 }
 
@@ -307,11 +307,7 @@ fn native_bundled_fixture(
     })
 }
 
-fn retain_fixture_bytes(
-    bytes: &[u8],
-    limit: usize,
-    resource: &'static str,
-) -> Result<Box<[u8]>, Error> {
+fn retain_fixture_bytes(bytes: &[u8]) -> Result<Box<[u8]>, Error> {
     let mut retained = Vec::new();
     retained
         .try_reserve_exact(bytes.len())
@@ -369,10 +365,7 @@ fn fresh_process_worker() {
     let transforms = AtomicUsize::new(0);
     let children = AtomicUsize::new(0);
     let recipe = context
-        .direct::<Artifact>(
-            b"rawr.phase9.native-product.synthetic/v1\0exact-demand",
-            4_096,
-        )
+        .direct::<Artifact>(b"rawr.phase9.native-product.synthetic/v1\0exact-demand")
         .expect("the direct recipe seals");
     let evaluator = Evaluator::new(&store, &counts);
     let validated = evaluator
@@ -473,7 +466,7 @@ fn legacy_action_namespace_clean_misses_without_upgrade_or_mutation() {
     let context = prepare_fixture(&root);
     let store = context.open_store().expect("the typed store opens");
     let recipe = context
-        .direct::<Artifact>(b"legacy-action-namespace", 4_096)
+        .direct::<Artifact>(b"legacy-action-namespace")
         .expect("the current direct recipe seals");
     let legacy = store
         .root()
@@ -528,7 +521,7 @@ fn legacy_allocation_is_a_bounded_first_class_reclamation_candidate() {
     let context = prepare_fixture(&root);
     let store = context.open_store().expect("the typed store opens");
     let recipe = context
-        .direct::<Artifact>(b"legacy-allocation-reclamation", 4_096)
+        .direct::<Artifact>(b"legacy-allocation-reclamation")
         .expect("the current direct recipe seals");
     let legacy = store
         .root()
@@ -553,7 +546,7 @@ fn unrooted_non_runner_allocation_is_reclaimed_as_one_whole_unit() {
     let counts = Counts::default();
     let executions = AtomicUsize::new(0);
     let recipe = context
-        .direct::<Artifact>(b"unrooted-non-runner", 4_096)
+        .direct::<Artifact>(b"unrooted-non-runner")
         .expect("the non-runner recipe seals");
     let evaluator = Evaluator::new(&store, &counts);
     evaluator
@@ -589,7 +582,7 @@ fn a_project_keeps_only_its_newest_unrooted_units_of_a_kind() {
     let recipes = (0..6)
         .map(|index| {
             context
-                .direct::<Artifact>(format!("excess-{index}").as_bytes(), 4_096)
+                .direct::<Artifact>(format!("excess-{index}").as_bytes())
                 .expect("the recipe seals")
         })
         .collect::<Vec<_>>();
@@ -656,9 +649,7 @@ fn a_shared_store_collects_the_projects_no_process_has_open() {
     let counts = Counts::default();
     let executions = AtomicUsize::new(0);
     let evaluate = |store: &crate::store::Store, context: &Context, request: &str, output: &str| {
-        let recipe = context
-            .direct::<Artifact>(request.as_bytes(), 4_096)
-            .unwrap();
+        let recipe = context.direct::<Artifact>(request.as_bytes()).unwrap();
         Evaluator::new(store, &counts)
             .direct(&recipe, || {
                 executions.fetch_add(1, Ordering::Relaxed);
@@ -730,7 +721,7 @@ fn physical_inventory_checks_registered_placement_and_consumers_check_bytes() {
         let context = prepare_fixture(root);
         let store = context.open_store().expect("the physical store opens");
         let recipe = context
-            .direct::<Artifact>(request, 16 * 1024)
+            .direct::<Artifact>(request)
             .expect("the physical recipe seals");
         let validated = Evaluator::new(&store, &Counts::default())
             .direct(&recipe, || {
@@ -755,7 +746,7 @@ fn physical_inventory_checks_registered_placement_and_consumers_check_bytes() {
     assert!(bytes_store.fixture_physical_inventory().is_ok());
     let fresh = fixture_context(&bytes_root);
     let recipe = fresh
-        .direct::<Artifact>(b"physical-bytes", 16 * 1024)
+        .direct::<Artifact>(b"physical-bytes")
         .expect("the physical recipe seals again");
     let consumed = Evaluator::new(&fresh.open_store().unwrap(), &Counts::default())
         .direct(&recipe, || {
@@ -801,9 +792,7 @@ fn direct_hit_charges_corrupt_path_decode_or_payload_hash_work() {
         let root = temporary("direct-precharge");
         let context = prepare_fixture(&root);
         let store = context.open_store().unwrap();
-        let recipe = context
-            .direct::<Artifact>(b"direct-precharge", 4_096)
-            .unwrap();
+        let recipe = context.direct::<Artifact>(b"direct-precharge").unwrap();
         let value = Evaluator::new(&store, &Counts::default())
             .direct(&recipe, || {
                 Ok(Artifact(b"bounded".to_vec().into_boxed_slice()))
@@ -884,22 +873,20 @@ fn parent_refresh_schedule_covers_cold_child_and_warm_publication() {
     let evaluator = Evaluator::new(&store, &counts);
     let refreshes = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&refreshes);
-    let recipe = context
-        .discover::<Artifact>(b"refresh-parent", 4_096)
-        .unwrap();
+    let recipe = context.discover::<Artifact>(b"refresh-parent").unwrap();
     let parent = evaluator
         .discover(
             &recipe,
             move |value| {
                 observed.fetch_add(1, Ordering::Relaxed);
-                value.encode(4_096)
+                value.encode()
             },
             || Ok(Artifact(Box::from(b"parent".as_slice()))),
         )
         .unwrap();
     let before_child = refreshes.load(Ordering::Relaxed);
     let recipe = context
-        .direct_with_parents::<Derived>(b"refresh-child", 4_096, &[Parent::validated(&parent)])
+        .direct_with_parents::<Derived>(b"refresh-child", &[Parent::validated(&parent)])
         .unwrap();
     let child = evaluator
         .direct(&recipe, || {
@@ -945,14 +932,14 @@ fn retained_bundle_reservation_refreshes_parents_only_at_the_consumer() {
     let parent = evaluator
         .discover(
             &context
-                .discover::<Artifact>(b"retained-consumer-parent", 4096)
+                .discover::<Artifact>(b"retained-consumer-parent")
                 .unwrap(),
             move |value| {
                 observed.fetch_add(1, Ordering::Relaxed);
                 if rejected.load(Ordering::Relaxed) {
                     return Err(Error::State("parent changed"));
                 }
-                value.encode(4096)
+                value.encode()
             },
             || Ok(Artifact(Box::from(b"parent".as_slice()))),
         )
@@ -963,7 +950,7 @@ fn retained_bundle_reservation_refreshes_parents_only_at_the_consumer() {
     let independent = evaluator
         .direct(
             &context
-                .direct::<Derived>(b"retained-extra-toolchain", 4096)
+                .direct::<Derived>(b"retained-extra-toolchain")
                 .unwrap(),
             || Ok(Derived(Box::from(b"toolchain".as_slice()))),
         )
@@ -974,7 +961,7 @@ fn retained_bundle_reservation_refreshes_parents_only_at_the_consumer() {
         Parent::validated(&independent),
     ];
     let recipe = context
-        .discover_with_parents::<BundleValue>(b"retained-consumer-child", 4096, &parents)
+        .discover_with_parents::<BundleValue>(b"retained-consumer-child", &parents)
         .unwrap();
     let validation_store = store.clone();
     let validate = move |value: &BundleValue, _: &super::GraphBudget| {
@@ -1011,7 +998,7 @@ fn retained_bundle_reservation_refreshes_parents_only_at_the_consumer() {
     assert_eq!(refreshes.load(Ordering::Relaxed) - before, 1);
 
     let missing = context
-        .discover_with_parents::<BundleValue>(b"retained-consumer-refused", 4096, &parents)
+        .discover_with_parents::<BundleValue>(b"retained-consumer-refused", &parents)
         .unwrap();
     reject.store(true, Ordering::Relaxed);
     let pins = store.fixture_pin_counts().unwrap();
@@ -1048,18 +1035,16 @@ fn lookup_outcome_returns_the_usable_hit_without_mutable_witness_replay() {
     let observed = Arc::clone(&refreshes);
     let parent = evaluator
         .discover(
-            &context
-                .discover::<Artifact>(b"lookup-parent", 4_096)
-                .unwrap(),
+            &context.discover::<Artifact>(b"lookup-parent").unwrap(),
             move |value| {
                 observed.fetch_add(1, Ordering::Relaxed);
-                value.encode(4_096)
+                value.encode()
             },
             || Ok(Artifact(Box::from(b"parent".as_slice()))),
         )
         .unwrap();
     let recipe = context
-        .direct_with_parents::<Derived>(b"lookup-child", 4_096, &[Parent::validated(&parent)])
+        .direct_with_parents::<Derived>(b"lookup-child", &[Parent::validated(&parent)])
         .unwrap();
     let published = evaluator
         .direct(&recipe, || Ok(Derived(Box::from(b"child".as_slice()))))
@@ -1094,9 +1079,7 @@ fn lookup_outcome_preserves_absence_recovery_and_operational_refusal() {
     let store = context.open_store().unwrap();
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
-    let recipe = context
-        .direct::<Artifact>(b"lookup-disposition", 4_096)
-        .unwrap();
+    let recipe = context.direct::<Artifact>(b"lookup-disposition").unwrap();
     assert!(matches!(
         evaluator.lookup(&recipe).unwrap(),
         super::Lookup::Miss(super::Miss::Absent)
@@ -1133,20 +1116,20 @@ fn discoverable_and_final_union_validation_share_exact_work_caps_and_reuse_uncha
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
     let recipe = context
-        .discover::<Artifact>(b"discovered-union-budget", 4_096)
+        .discover::<Artifact>(b"discovered-union-budget")
         .unwrap();
-    let validate: super::read_set::Validator<Artifact> = Arc::new(|value, _| value.encode(4_096));
+    let validate: super::read_set::Validator<Artifact> = Arc::new(|value, _| value.encode());
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let value = evaluator
         .discover(
             &recipe,
-            |value| value.encode(4_096),
+            |value| value.encode(),
             || Ok(Artifact(Box::from(b"discovered".as_slice()))),
         )
         .unwrap();
     let child = context
-        .direct_with_parents::<Derived>(b"union-child", 4_096, &[Parent::validated(&value)])
+        .direct_with_parents::<Derived>(b"union-child", &[Parent::validated(&value)])
         .unwrap();
     let child = evaluator
         .direct(&child, || Ok(Derived(Box::from(b"child".as_slice()))))
@@ -1170,7 +1153,7 @@ fn discoverable_and_final_union_validation_share_exact_work_caps_and_reuse_uncha
             .unwrap()
             .unwrap();
         let child_recipe = context
-            .direct_with_parents::<Derived>(b"union-child", 4_096, &[Parent::validated(&parent)])
+            .direct_with_parents::<Derived>(b"union-child", &[Parent::validated(&parent)])
             .unwrap();
         let child = evaluator
             .direct(&child_recipe, || panic!("the stored child must replay"))
@@ -1186,11 +1169,7 @@ fn discoverable_and_final_union_validation_share_exact_work_caps_and_reuse_uncha
     touch_payload(&calibration, parent);
     {
         assert!(calibration
-            .inspect_candidate::<Artifact>(
-                value.receipt().action(),
-                4_096,
-                calibration.graph_budget()
-            )
+            .inspect_candidate::<Artifact>(value.receipt().action(), calibration.graph_budget())
             .unwrap()
             .is_some());
     }
@@ -1242,22 +1221,20 @@ fn discoverable_and_final_validation_precharge_metadata_before_corrupt_payload_h
         let root = temporary("discovered-before-decode");
         let context = prepare_fixture(&root);
         let store = context.open_store().unwrap();
-        let recipe = context
-            .discover::<Artifact>(b"before-decode", 4_096)
-            .unwrap();
+        let recipe = context.discover::<Artifact>(b"before-decode").unwrap();
         let counts = Counts::default();
         let evaluator = Evaluator::new(&store, &counts);
         let value = evaluator
             .discover(
                 &recipe,
-                |value| value.encode(4_096),
+                |value| value.encode(),
                 || Ok(Artifact(Box::from(b"bounded".as_slice()))),
             )
             .unwrap();
         let fresh = fixture_context(&root).open_store().unwrap();
         let proof = if final_union {
             let validate: super::read_set::Validator<Artifact> =
-                Arc::new(|value, _| value.encode(4_096));
+                Arc::new(|value, _| value.encode());
             let counts = Counts::default();
             let evaluator = Evaluator::new(&fresh, &counts);
             let value = evaluator
@@ -1281,11 +1258,7 @@ fn discoverable_and_final_validation_precharge_metadata_before_corrupt_payload_h
             proof.as_ref().unwrap().revalidate(&fresh)
         } else {
             fresh
-                .inspect_candidate::<Artifact>(
-                    value.receipt().action(),
-                    4_096,
-                    fresh.graph_budget(),
-                )
+                .inspect_candidate::<Artifact>(value.receipt().action(), fresh.graph_budget())
                 .map(|_| ())
         };
         // The validation charges the metadata and the payload in full. The
@@ -1310,9 +1283,7 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
     let store = context.open_store().unwrap();
     // Above the 32 MiB metadata figure.
     let length = 32 * 1024 * 1024 + 1;
-    let recipe = context
-        .direct::<Artifact>(b"large-typed-payload", length)
-        .unwrap();
+    let recipe = context.direct::<Artifact>(b"large-typed-payload").unwrap();
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let value = evaluator
@@ -1344,7 +1315,7 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
     touch_payload(&calibration, entry);
     {
         assert!(calibration
-            .inspect_candidate::<Artifact>(recipe.action(), length, calibration.graph_budget())
+            .inspect_candidate::<Artifact>(recipe.action(), calibration.graph_budget())
             .unwrap()
             .is_some());
         calibration_proof.revalidate(&calibration).unwrap();
@@ -1368,7 +1339,7 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
         .unwrap();
     touch_payload(&fresh, entry);
     let hit = fresh
-        .inspect_candidate::<Artifact>(recipe.action(), length, fresh.graph_budget())
+        .inspect_candidate::<Artifact>(recipe.action(), fresh.graph_budget())
         .unwrap()
         .unwrap();
     assert_eq!(hit.value().0.len(), length);
@@ -1382,9 +1353,7 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
         .set_len(length as u64 + 1)
         .unwrap();
     let fresh = fixture_context(&root).open_store().unwrap();
-    assert!(matches!(fresh.lookup(&recipe, fresh.graph_budget()),
-        Err(Error::Limit { resource: "typed store file bytes", limit, actual })
-            if limit == length && actual == length + 1));
+    assert!(fresh.lookup(&recipe, fresh.graph_budget()).is_err());
     store.retire_fixture().unwrap();
     fs::remove_dir_all(root).unwrap();
 }
@@ -1399,7 +1368,7 @@ fn registered_bundle_commitment_retains_records_without_granting_current_admissi
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
     let recipe = context
-        .discover::<BundleValue>(b"registered-retention", 4_096)
+        .discover::<BundleValue>(b"registered-retention")
         .unwrap();
     let validation_store = store.clone();
     let value = Evaluator::new(&store, &Counts::default())
@@ -1497,11 +1466,11 @@ fn bundled_discoverable_and_final_replay_charge_controls_and_every_repeated_walk
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
     let recipe = context
-        .discover::<BundleValue>(b"bundled-validation-budget", 4_096)
+        .discover::<BundleValue>(b"bundled-validation-budget")
         .unwrap();
     let bundle_store = store.root().to_path_buf();
     let validate: super::read_set::Validator<BundleValue> = Arc::new(move |value, budget| {
-        let canonical = value.encode(4_096)?;
+        let canonical = value.encode()?;
         crate::store::bundle::validate_complete(
             &bundle_store,
             value.reference,
@@ -1623,7 +1592,7 @@ fn existing_pin_roles_preserve_unrelated_orphans_above_recovery_cap() {
         let context = prepare_fixture(&root);
         let store = context.open_store().unwrap();
         let recipe = context
-            .direct::<Artifact>(b"healthy-pins-ignore-orphans", 4_096)
+            .direct::<Artifact>(b"healthy-pins-ignore-orphans")
             .unwrap();
         let value = Evaluator::new(&store, &Counts::default())
             .direct(&recipe, || Ok(Artifact(Box::from(b"healthy".as_slice()))))
@@ -1684,9 +1653,7 @@ fn existing_pin_roles_leave_a_journaled_retirement_for_miss_side_recovery() {
     let root = temporary("pins-preserve-journaled-temporary");
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
-    let runner_recipe = context
-        .discover::<BundleValue>(b"retired-runner", 4_096)
-        .unwrap();
+    let runner_recipe = context.discover::<BundleValue>(b"retired-runner").unwrap();
     let current = store.clone();
     Evaluator::new(&store, &Counts::default())
         .discover_bundled(
@@ -1695,7 +1662,7 @@ fn existing_pin_roles_leave_a_journaled_retirement_for_miss_side_recovery() {
             bundled_fixture,
         )
         .unwrap();
-    let recipe = context.direct::<Artifact>(b"retained-node", 4_096).unwrap();
+    let recipe = context.direct::<Artifact>(b"retained-node").unwrap();
     let value = Evaluator::new(&store, &Counts::default())
         .direct(&recipe, || Ok(Artifact(Box::from(b"retained".as_slice()))))
         .unwrap();
@@ -1736,7 +1703,7 @@ fn existing_pin_roles_leave_a_journaled_retirement_for_miss_side_recovery() {
     );
 
     let next = fixture_context(&root)
-        .direct::<Artifact>(b"miss-after-retirement", 4_096)
+        .direct::<Artifact>(b"miss-after-retirement")
         .unwrap();
     Evaluator::new(&fresh_store, &Counts::default())
         .direct(&next, || {
@@ -1767,7 +1734,7 @@ fn miss_reservation_recovers_every_unrelated_temporary() {
             fs::write(orphan.join("payload"), b"dead publication").unwrap();
         }
         let recipe = context
-            .direct::<Artifact>(b"miss-recovers-orphans", 4_096)
+            .direct::<Artifact>(b"miss-recovers-orphans")
             .unwrap();
         let executions = AtomicUsize::new(0);
         let result = Evaluator::new(&store, &Counts::default()).direct(&recipe, || {
@@ -1789,7 +1756,7 @@ fn direct_post_publication_recheck_spends_the_same_graph_budget() {
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
     let recipe = context
-        .direct::<Artifact>(b"direct-published-budget", 4_096)
+        .direct::<Artifact>(b"direct-published-budget")
         .unwrap();
     let counts = Counts::default();
     let result = Evaluator::new(&store, &counts).direct(&recipe, || {
@@ -1830,9 +1797,7 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
     let root = temporary("direct-lease-budget");
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
-    let recipe = context
-        .direct::<Artifact>(b"direct-lease-budget", 4_096)
-        .unwrap();
+    let recipe = context.direct::<Artifact>(b"direct-lease-budget").unwrap();
     store
         .fixture_stage_uncommitted(&recipe, b"bounded")
         .unwrap();
@@ -1891,7 +1856,7 @@ fn legacy_project_local_entry_is_ignored_and_never_upgraded() {
     let project_before = project_snapshot(&root.join("project"));
     let store = context.open_store().expect("the shared store opens");
     let recipe = context
-        .direct::<Artifact>(b"legacy-project-local", 4_096)
+        .direct::<Artifact>(b"legacy-project-local")
         .expect("the shared direct recipe seals");
     let executions = AtomicUsize::new(0);
 
@@ -1921,7 +1886,7 @@ fn deleting_the_shared_store_preserves_project_sources_and_causes_one_cold_miss(
     fs::write(root.join("project/main.rs"), b"window source").expect("the project source exists");
     let project_before = project_snapshot(&root.join("project"));
     let recipe = context
-        .direct::<Artifact>(b"source-safe-store-deletion", 4_096)
+        .direct::<Artifact>(b"source-safe-store-deletion")
         .expect("the deletion recipe seals");
     let first_executions = AtomicUsize::new(0);
     let first_store = context.open_store().expect("the first shared store opens");
@@ -1979,7 +1944,7 @@ fn node_publication_reserves_before_execution_and_commits_exactly_once() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let recipe = context
-        .direct::<Artifact>(b"accounted-publication", 4_096)
+        .direct::<Artifact>(b"accounted-publication")
         .expect("the accounted recipe seals");
     evaluator
         .direct(&recipe, || {
@@ -2032,7 +1997,7 @@ fn one_dead_publication_temporary_recovers_before_transform_reservation() {
     fs::create_dir(&dead).expect("the dead publication temporary exists");
     fs::write(dead.join("partial"), b"incomplete").expect("the dead publication payload exists");
     let recipe = context
-        .direct::<Artifact>(b"dead-publication-temporary", 4_096)
+        .direct::<Artifact>(b"dead-publication-temporary")
         .expect("the direct recipe seals");
     let executions = AtomicUsize::new(0);
 
@@ -2062,7 +2027,7 @@ fn transform_failure_cancels_its_preexecution_reservation() {
     let store = context.open_store().expect("the typed store opens");
     let counts = Counts::default();
     let recipe = context
-        .direct::<Artifact>(b"cancelled-reservation", 4_096)
+        .direct::<Artifact>(b"cancelled-reservation")
         .expect("the failing recipe seals");
     let result = Evaluator::new(&store, &counts).direct(&recipe, || {
         assert_eq!(
@@ -2105,7 +2070,7 @@ fn publication_failure_preserves_its_reservation_for_recovery() {
     let store = context.open_store().expect("the typed store opens");
     let counts = Counts::default();
     let recipe = context
-        .direct::<Artifact>(b"preserved-reservation", 4_096)
+        .direct::<Artifact>(b"preserved-reservation")
         .expect("the publication-failure recipe seals");
     let result = Evaluator::new(&store, &counts).direct(&recipe, || {
         assert_eq!(
@@ -2174,7 +2139,7 @@ fn retry_recovers_the_current_keys_whole_unregistered_publication() {
     let context = prepare_fixture(&root);
     let store = context.open_store().expect("the typed store opens");
     let recipe = context
-        .direct::<Artifact>(b"recovered-publication", 4_096)
+        .direct::<Artifact>(b"recovered-publication")
         .expect("the recovered recipe seals");
     store
         .fixture_stage_uncommitted(&recipe, b"recovered")
@@ -2224,7 +2189,7 @@ fn retry_recovers_a_partially_deleted_staged_planned_publication() {
     let context = prepare_fixture(&root);
     let store = context.open_store().expect("the staged store opens");
     let recipe = context
-        .direct::<Artifact>(b"recovered-staged-publication", 4_096)
+        .direct::<Artifact>(b"recovered-staged-publication")
         .expect("the staged recipe seals");
     store
         .fixture_stage_uncommitted(&recipe, b"staged")
@@ -2295,7 +2260,7 @@ fn different_key_mutation_recovers_one_dead_foreign_installation_reservation() {
         .expect("project B context seals");
     let first_store = first.open_store().expect("project A store opens");
     let abandoned = first
-        .direct::<Artifact>(b"abandoned-foreign", 4_096)
+        .direct::<Artifact>(b"abandoned-foreign")
         .expect("the abandoned recipe seals");
     first_store
         .fixture_stage_uncommitted(&abandoned, b"abandoned")
@@ -2310,7 +2275,7 @@ fn different_key_mutation_recovers_one_dead_foreign_installation_reservation() {
 
     let second_store = second.open_store().expect("project B store opens");
     let current = second
-        .direct::<Artifact>(b"current-foreign", 4_096)
+        .direct::<Artifact>(b"current-foreign")
         .expect("the current recipe seals");
     Evaluator::new(&second_store, &Counts::default())
         .direct(&current, || {
@@ -2401,7 +2366,7 @@ fn equal_parent_content_reuses_downstream_and_rebinds_the_current_read_set() {
     let downstream_executions = AtomicUsize::new(0);
 
     let upstream_a = context
-        .direct::<Artifact>(b"upstream-request-a", 4_096)
+        .direct::<Artifact>(b"upstream-request-a")
         .expect("the first upstream recipe seals");
     let upstream_action_a = upstream_a.action();
     let validated_a = evaluator
@@ -2412,7 +2377,7 @@ fn equal_parent_content_reuses_downstream_and_rebinds_the_current_read_set() {
         .expect("the first upstream action publishes");
     let parent_a = Parent::validated(&validated_a);
     let downstream_a = context
-        .direct_with_parents::<Derived>(b"downstream-request", 4_096, &[parent_a])
+        .direct_with_parents::<Derived>(b"downstream-request", &[parent_a])
         .expect("the first downstream recipe seals");
     let downstream_action = downstream_a.action();
     let first = evaluator
@@ -2426,7 +2391,7 @@ fn equal_parent_content_reuses_downstream_and_rebinds_the_current_read_set() {
     assert!(first.receipt().read_set().contains(downstream_action));
 
     let upstream_b = context
-        .direct::<Artifact>(b"upstream-request-b", 4_096)
+        .direct::<Artifact>(b"upstream-request-b")
         .expect("the changed upstream recipe seals");
     let upstream_action_b = upstream_b.action();
     assert_ne!(upstream_action_a, upstream_action_b);
@@ -2442,7 +2407,7 @@ fn equal_parent_content_reuses_downstream_and_rebinds_the_current_read_set() {
     );
     let parent_b = Parent::validated(&validated_b);
     let downstream_b = context
-        .direct_with_parents::<Derived>(b"downstream-request", 4_096, &[parent_b])
+        .direct_with_parents::<Derived>(b"downstream-request", &[parent_b])
         .expect("the rebound downstream recipe seals");
     assert_eq!(downstream_action, downstream_b.action());
     let second = evaluator
@@ -2501,7 +2466,7 @@ fn discoverable_oversized_historical_files_miss_while_exact_reads_refuse() {
         let root = temporary("discoverable-file-extent");
         let context = prepare_fixture(&root);
         let store = context.open_store().unwrap();
-        let recipe = context.discover::<Derived>(b"file-extent", 64).unwrap();
+        let recipe = context.discover::<Derived>(b"file-extent").unwrap();
         let first = Evaluator::new(&store, &Counts::default())
             .discover(
                 &recipe,
@@ -2519,10 +2484,11 @@ fn discoverable_oversized_historical_files_miss_while_exact_reads_refuse() {
             .join(format!("content/facade/{:08x}", Derived::SCHEMA))
             .join(first.content().digest().directory());
         let (path, length) = match kind {
-            0 => (
-                action.join("envelope"),
-                super::codec::MAX_ENVELOPE_BYTES as u64 + 1,
-            ),
+            0 => {
+                let path = action.join("envelope");
+                let length = fs::metadata(&path).unwrap().len() + 1;
+                (path, length)
+            }
             1 => {
                 let path = action.join("allocation");
                 let length = fs::metadata(&path).unwrap().len() + 1;
@@ -2554,9 +2520,7 @@ fn discoverable_oversized_historical_files_miss_while_exact_reads_refuse() {
         assert_eq!(counts.miss.load(Ordering::Relaxed), 0);
         let exact = fixture_context(&root).open_store().unwrap();
         let complete = recipe.complete(b"current").unwrap();
-        assert!(matches!(exact.lookup(&complete, exact.graph_budget()),
-            Err(Error::Limit { resource: "typed store file bytes", actual, .. })
-                if actual as u64 == length));
+        assert!(exact.lookup(&complete, exact.graph_budget()).is_err());
         assert_eq!(fs::metadata(&path).unwrap().len(), length);
         fs::remove_dir_all(root).unwrap();
     }
@@ -2567,9 +2531,7 @@ fn discoverable_replay_preserves_first_genuine_failure_without_executing() {
     let root = temporary("discoverable-graph-refusal");
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<Derived>(b"graph-refusal", 4_096)
-        .unwrap();
+    let recipe = context.discover::<Derived>(b"graph-refusal").unwrap();
     Evaluator::new(&store, &Counts::default())
         .discover(
             &recipe,
@@ -2657,9 +2619,7 @@ fn discoverable_replay_preserves_nested_account_and_operational_failures() {
     let root = temporary("discoverable-account-refusal");
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<Derived>(b"account-refusal", 4_096)
-        .unwrap();
+    let recipe = context.discover::<Derived>(b"account-refusal").unwrap();
     Evaluator::new(&store, &Counts::default())
         .discover(
             &recipe,
@@ -2706,7 +2666,7 @@ fn discoverable_node_rejects_stale_candidates_and_reuses_the_current_one() {
     let evaluator = Evaluator::new(&store, &counts);
     let executions = AtomicUsize::new(0);
     let recipe = context
-        .discover::<Derived>(b"discoverable-fixture", 4_096)
+        .discover::<Derived>(b"discoverable-fixture")
         .expect("the discoverable recipe seals");
 
     let current_a = b"discovered-a".as_slice();
@@ -2717,7 +2677,7 @@ fn discoverable_node_rejects_stale_candidates_and_reuses_the_current_one() {
                 if candidate.0.as_ref() != current_a {
                     return Err(Error::Codec("discoverable fixture is stale"));
                 }
-                retain_fixture_bytes(&candidate.0, 4_096, "fixture discovered inputs")
+                retain_fixture_bytes(&candidate.0)
             },
             || {
                 executions.fetch_add(1, Ordering::Relaxed);
@@ -2746,7 +2706,7 @@ fn discoverable_node_rejects_stale_candidates_and_reuses_the_current_one() {
                     counted.fetch_add(1, Ordering::Relaxed);
                     return Err(Error::Codec("discoverable fixture is stale"));
                 }
-                retain_fixture_bytes(&candidate.0, 4_096, "fixture discovered inputs")
+                retain_fixture_bytes(&candidate.0)
             },
             || {
                 executions.fetch_add(1, Ordering::Relaxed);
@@ -2771,7 +2731,7 @@ fn discoverable_node_rejects_stale_candidates_and_reuses_the_current_one() {
                 if candidate.0.as_ref() != current_b {
                     return Err(Error::Codec("discoverable fixture is stale"));
                 }
-                retain_fixture_bytes(&candidate.0, 4_096, "fixture discovered inputs")
+                retain_fixture_bytes(&candidate.0)
             },
             || {
                 executions.fetch_add(1, Ordering::Relaxed);
@@ -2801,7 +2761,7 @@ fn final_read_set_revalidates_external_facts_without_mutating_the_store() {
         b"current-discovered-fact".to_vec().into_boxed_slice(),
     ));
     let recipe = context
-        .discover::<Derived>(b"final-read-set", 4_096)
+        .discover::<Derived>(b"final-read-set")
         .expect("the discoverable recipe seals");
     let validate_current = Arc::clone(&current);
     let validated = evaluator
@@ -2814,7 +2774,7 @@ fn final_read_set_revalidates_external_facts_without_mutating_the_store() {
                 if candidate.0.as_ref() != current.as_ref() {
                     return Err(Error::Codec("fixture external fact changed"));
                 }
-                retain_fixture_bytes(&current, 4_096, "fixture discovered inputs")
+                retain_fixture_bytes(&current)
             },
             || {
                 Ok(Derived(
@@ -2854,7 +2814,7 @@ fn final_read_set_rejects_content_drift_after_it_was_sealed() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let recipe = context
-        .direct::<Artifact>(b"final-read-set-content", 4_096)
+        .direct::<Artifact>(b"final-read-set-content")
         .expect("the direct recipe seals");
     let validated = evaluator
         .direct(&recipe, || {
@@ -2885,7 +2845,7 @@ fn four_pin_roles_deduplicate_one_exact_closure_and_repeat_without_mutation() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let recipe = context
-        .direct::<Artifact>(b"project-pins", 4_096)
+        .direct::<Artifact>(b"project-pins")
         .expect("the pinned recipe seals");
     let validated = evaluator
         .direct(&recipe, || {
@@ -2950,7 +2910,7 @@ fn four_pin_roles_deduplicate_one_exact_closure_and_repeat_without_mutation() {
     assert_eq!((all.1, all.2, all.3, all.4), (7, 11, 0, 3));
 
     let replacement = context
-        .direct::<Artifact>(b"project-pins-replacement", 4_096)
+        .direct::<Artifact>(b"project-pins-replacement")
         .expect("the replacement recipe seals");
     let replacement = evaluator
         .direct(&replacement, || {
@@ -2974,7 +2934,7 @@ fn four_pin_roles_deduplicate_one_exact_closure_and_repeat_without_mutation() {
     );
 
     let cleanup = context
-        .direct::<Artifact>(b"project-pins-cleanup", 4_096)
+        .direct::<Artifact>(b"project-pins-cleanup")
         .expect("the cleanup recipe seals");
     evaluator
         .direct(&cleanup, || {
@@ -3004,7 +2964,7 @@ fn project_pin_owner_authenticates_its_exact_referenced_closure() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let recipe = context
-        .direct::<Artifact>(b"project-pin-owner", 4_096)
+        .direct::<Artifact>(b"project-pin-owner")
         .expect("the pinned recipe seals");
     let validated = evaluator
         .direct(&recipe, || {
@@ -3046,7 +3006,7 @@ fn prepared_chain_pins_its_final_transitive_closure_across_admission_failure() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let recipe = context
-        .direct::<Artifact>(b"prepared-chain", 4_096)
+        .direct::<Artifact>(b"prepared-chain")
         .expect("the final recipe seals");
     let validated = evaluator
         .direct(&recipe, || {
@@ -3133,7 +3093,7 @@ fn prepared_chain_promotes_live_and_last_good_as_one_exact_closure() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let recipe = context
-        .direct::<Artifact>(b"prepared-promotion", 4_096)
+        .direct::<Artifact>(b"prepared-promotion")
         .expect("the promotion recipe seals");
     let validated = evaluator
         .direct(&recipe, || {
@@ -3190,7 +3150,7 @@ fn miss_execution_releases_its_exact_in_flight_parent_closure_on_completion() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let parent_recipe = context
-        .direct::<Artifact>(b"in-flight-parent", 4_096)
+        .direct::<Artifact>(b"in-flight-parent")
         .expect("the parent recipe seals");
     let parent = evaluator
         .direct(&parent_recipe, || {
@@ -3198,7 +3158,7 @@ fn miss_execution_releases_its_exact_in_flight_parent_closure_on_completion() {
         })
         .expect("the parent publishes");
     let child_recipe = context
-        .direct_with_parents::<Artifact>(b"in-flight-child", 4_096, &[Parent::validated(&parent)])
+        .direct_with_parents::<Artifact>(b"in-flight-child", &[Parent::validated(&parent)])
         .expect("the child recipe seals");
 
     evaluator
@@ -3240,7 +3200,7 @@ fn in_flight_pin_admission_recovers_a_crash_staged_temporary_first() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let parent_recipe = context
-        .direct::<Artifact>(b"in-flight-staged-parent", 4_096)
+        .direct::<Artifact>(b"in-flight-staged-parent")
         .expect("the staged parent recipe seals");
     let parent = evaluator
         .direct(&parent_recipe, || {
@@ -3248,11 +3208,7 @@ fn in_flight_pin_admission_recovers_a_crash_staged_temporary_first() {
         })
         .expect("the staged parent publishes");
     let child_recipe = context
-        .direct_with_parents::<Artifact>(
-            b"in-flight-staged-child",
-            4_096,
-            &[Parent::validated(&parent)],
-        )
+        .direct_with_parents::<Artifact>(b"in-flight-staged-child", &[Parent::validated(&parent)])
         .expect("the staged child recipe seals");
     store
         .with_action_lease(child_recipe.action(), || Ok(()))
@@ -3282,7 +3238,7 @@ fn failed_miss_execution_releases_in_flight_without_masking_the_failure() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let parent_recipe = context
-        .direct::<Artifact>(b"in-flight-failure-parent", 4_096)
+        .direct::<Artifact>(b"in-flight-failure-parent")
         .expect("the failure parent recipe seals");
     let parent = evaluator
         .direct(&parent_recipe, || {
@@ -3290,11 +3246,7 @@ fn failed_miss_execution_releases_in_flight_without_masking_the_failure() {
         })
         .expect("the failure parent publishes");
     let child_recipe = context
-        .direct_with_parents::<Artifact>(
-            b"in-flight-failure-child",
-            4_096,
-            &[Parent::validated(&parent)],
-        )
+        .direct_with_parents::<Artifact>(b"in-flight-failure-child", &[Parent::validated(&parent)])
         .expect("the failing child recipe seals");
 
     let failure = match evaluator.direct(&child_recipe, || {
@@ -3337,11 +3289,9 @@ fn poisoned_candidate_index_clean_misses_without_denying_the_valid_action() {
     let evaluator = Evaluator::new(&store, &counts);
     let executions = AtomicUsize::new(0);
     let recipe = context
-        .discover::<Derived>(b"discoverable-poison", 4_096)
+        .discover::<Derived>(b"discoverable-poison")
         .expect("the discoverable recipe seals");
-    let validate = |candidate: &Derived| {
-        retain_fixture_bytes(&candidate.0, 4_096, "fixture discovered inputs")
-    };
+    let validate = |candidate: &Derived| retain_fixture_bytes(&candidate.0);
     evaluator
         .discover(&recipe, validate, || {
             executions.fetch_add(1, Ordering::Relaxed);
@@ -3397,7 +3347,7 @@ fn fresh_build_replaces_a_stale_entry_at_its_action() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let recipe = context
-        .discover::<Derived>(b"discoverable-stale-same-action", 4_096)
+        .discover::<Derived>(b"discoverable-stale-same-action")
         .expect("the discoverable recipe seals");
     // Both values discover the same inputs, so they share one action, and
     // the older value stops checking once its external fact changes.
@@ -3405,7 +3355,7 @@ fn fresh_build_replaces_a_stale_entry_at_its_action() {
         if candidate.0.as_ref() == b"older" && CHANGED.load(Ordering::Relaxed) {
             return Err(Error::Codec("fixture external fact changed"));
         }
-        retain_fixture_bytes(b"same-inputs", 4_096, "fixture discovered inputs")
+        retain_fixture_bytes(b"same-inputs")
     };
     let older = evaluator
         .discover(&recipe, validate, || {
@@ -3506,7 +3456,7 @@ fn same_bundled_key_contenders_allocate_execute_and_publish_once() {
             let executions = &executions;
             scope.spawn(move || {
                 let recipe = context
-                    .discover::<BundleValue>(b"bundled-contender", 4_096)
+                    .discover::<BundleValue>(b"bundled-contender")
                     .expect("the bundled contender recipe seals");
                 let store = context.open_store().expect("the contender store opens");
                 let current = store.clone();
@@ -3556,7 +3506,7 @@ fn native_product_bundle_is_part_of_the_exact_project_pin_closure() {
     let store = context.open_store().expect("the bundled store opens");
     let counts = Counts::default();
     let recipe = context
-        .discover::<NativeBundleValue>(b"native-bundle-pin-closure", 4_096)
+        .discover::<NativeBundleValue>(b"native-bundle-pin-closure")
         .expect("the native bundle recipe seals");
     let validation_context = store.clone();
     let product = Evaluator::new(&store, &counts)
@@ -3599,7 +3549,7 @@ fn runner_eviction_uses_seal_order_and_removes_one_whole_unpinned_unit() {
     let evaluate = |semantic: &'static [u8]| {
         let current = store.clone();
         let recipe = context
-            .discover::<BundleValue>(semantic, 4_096)
+            .discover::<BundleValue>(semantic)
             .expect("the runner recipe seals");
         let validated = evaluator
             .discover_bundled(
@@ -3692,7 +3642,7 @@ fn runner_eviction_skips_an_active_os_pinned_root() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let first_recipe = context
-        .discover::<BundleValue>(b"runner-eviction-pinned", 4_096)
+        .discover::<BundleValue>(b"runner-eviction-pinned")
         .expect("the pinned runner recipe seals");
     let current = store.clone();
     let first = evaluator
@@ -3709,7 +3659,7 @@ fn runner_eviction_skips_an_active_os_pinned_root() {
         .acquire_pin(crate::store::PinRole::Live, &proof)
         .expect("the runner Live root pins");
     let second_recipe = context
-        .discover::<BundleValue>(b"runner-eviction-unpinned", 4_096)
+        .discover::<BundleValue>(b"runner-eviction-unpinned")
         .expect("the unpinned runner recipe seals");
     let current = store.clone();
     let second = evaluator
@@ -3753,7 +3703,7 @@ fn runner_eviction_acquires_the_bundle_exclusively_before_publication() {
         .expect("the bundle-lease eviction store opens");
     let counts = Counts::default();
     let recipe = context
-        .discover::<BundleValue>(b"runner-eviction-bundle-lease", 4_096)
+        .discover::<BundleValue>(b"runner-eviction-bundle-lease")
         .expect("the bundle-lease runner recipe seals");
     let current = store.clone();
     let runner = Evaluator::new(&store, &counts)
@@ -3799,7 +3749,7 @@ fn project_local_eviction_retires_its_stale_logical_root_and_whole_bundle() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let recipe = context
-        .discover::<BundleValue>(b"runner-eviction-project-root", 4_096)
+        .discover::<BundleValue>(b"runner-eviction-project-root")
         .expect("the retained runner recipe seals");
     let current = store.clone();
     let runner = evaluator
@@ -3866,7 +3816,7 @@ fn stale_runner_retirement_reclaims_its_newly_unreachable_native_bundle_closure(
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let native_recipe = context
-        .discover::<NativeBundleValue>(b"runner-eviction-native-parent", 4_096)
+        .discover::<NativeBundleValue>(b"runner-eviction-native-parent")
         .expect("the native parent recipe seals");
     let validation_context = store.clone();
     let native = evaluator
@@ -3879,7 +3829,6 @@ fn stale_runner_retirement_reclaims_its_newly_unreachable_native_bundle_closure(
     let runner_recipe = context
         .discover_with_parents::<BundleValue>(
             b"runner-eviction-native-child",
-            4_096,
             &[Parent::validated(&native)],
         )
         .expect("the runner child recipe seals");
@@ -3947,7 +3896,7 @@ fn released_runner_preserves_a_native_bundle_reachable_from_another_root() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let native_recipe = context
-        .discover::<NativeBundleValue>(b"runner-eviction-shared-native", 4_096)
+        .discover::<NativeBundleValue>(b"runner-eviction-shared-native")
         .expect("the shared native recipe seals");
     let validation_context = store.clone();
     let native = evaluator
@@ -3959,7 +3908,7 @@ fn released_runner_preserves_a_native_bundle_reachable_from_another_root() {
         .expect("the shared native bundle publishes");
     let evaluate_runner = |semantic: &'static [u8]| {
         let recipe = context
-            .discover_with_parents::<BundleValue>(semantic, 4_096, &[Parent::validated(&native)])
+            .discover_with_parents::<BundleValue>(semantic, &[Parent::validated(&native)])
             .expect("the shared-native runner recipe seals");
         let validation_context = store.clone();
         evaluator
@@ -4032,7 +3981,7 @@ fn active_upstream_bundle_lease_blocks_the_entire_released_closure() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let native_recipe = context
-        .discover::<NativeBundleValue>(b"runner-eviction-upstream-lease", 4_096)
+        .discover::<NativeBundleValue>(b"runner-eviction-upstream-lease")
         .expect("the leased native recipe seals");
     let validation_context = store.clone();
     let native = evaluator
@@ -4045,7 +3994,6 @@ fn active_upstream_bundle_lease_blocks_the_entire_released_closure() {
     let runner_recipe = context
         .discover_with_parents::<BundleValue>(
             b"runner-eviction-upstream-lease-child",
-            4_096,
             &[Parent::validated(&native)],
         )
         .expect("the leased runner recipe seals");
@@ -4107,7 +4055,7 @@ fn one_stale_pin_root_reclaims_its_complete_multi_runner_closure_in_one_pass() {
     let evaluate = |semantic: &'static [u8]| {
         let current = store.clone();
         let recipe = context
-            .discover::<BundleValue>(semantic, 4_096)
+            .discover::<BundleValue>(semantic)
             .expect("the multi-root runner recipe seals");
         evaluator
             .discover_bundled(
@@ -4180,7 +4128,7 @@ fn interrupted_runner_eviction_recovers_exactly_one_journaled_unit() {
         .expect("the interrupted eviction store opens");
     let counts = Counts::default();
     let recipe = context
-        .discover::<BundleValue>(b"runner-eviction-interrupted", 4_096)
+        .discover::<BundleValue>(b"runner-eviction-interrupted")
         .expect("the interrupted runner recipe seals");
     let current = store.clone();
     let runner = Evaluator::new(&store, &counts)
@@ -4252,7 +4200,7 @@ fn ordinary_mutation_recovers_a_pending_eviction_before_reserving() {
         .open_store()
         .expect("the pending-eviction store opens");
     let runner_recipe = context
-        .discover::<BundleValue>(b"runner-eviction-before-reserve", 4_096)
+        .discover::<BundleValue>(b"runner-eviction-before-reserve")
         .expect("the runner recipe seals");
     let current = store.clone();
     Evaluator::new(&store, &Counts::default())
@@ -4267,7 +4215,7 @@ fn ordinary_mutation_recovers_a_pending_eviction_before_reserving() {
         .expect("the runner eviction journal persists");
 
     let direct = context
-        .direct::<Artifact>(b"mutation-after-interruption", 4_096)
+        .direct::<Artifact>(b"mutation-after-interruption")
         .expect("the direct recipe seals");
     Evaluator::new(&store, &Counts::default())
         .direct(&direct, || {
@@ -4295,7 +4243,7 @@ fn interrupted_bundle_root_thaw_is_one_journaled_recoverable_transition() {
     let context = prepare_fixture(&root);
     let store = context.open_store().expect("the root-thaw store opens");
     let recipe = context
-        .discover::<BundleValue>(b"runner-eviction-root-thaw", 4_096)
+        .discover::<BundleValue>(b"runner-eviction-root-thaw")
         .expect("the root-thaw runner recipe seals");
     let current = store.clone();
     Evaluator::new(&store, &Counts::default())
@@ -4333,7 +4281,7 @@ fn interrupted_eviction_recovers_a_partially_removed_staged_action() {
     let context = prepare_fixture(&root);
     let store = context.open_store().expect("the staged-crash store opens");
     let recipe = context
-        .discover::<BundleValue>(b"runner-eviction-staged-crash", 4_096)
+        .discover::<BundleValue>(b"runner-eviction-staged-crash")
         .expect("the staged-crash runner recipe seals");
     let current = store.clone();
     Evaluator::new(&store, &Counts::default())
@@ -4384,7 +4332,7 @@ fn interrupted_released_closure_recovers_native_and_runner_units_once() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let native_recipe = context
-        .discover::<NativeBundleValue>(b"runner-eviction-interrupted-native", 4_096)
+        .discover::<NativeBundleValue>(b"runner-eviction-interrupted-native")
         .expect("the interrupted native recipe seals");
     let validation_context = store.clone();
     let native = evaluator
@@ -4397,7 +4345,6 @@ fn interrupted_released_closure_recovers_native_and_runner_units_once() {
     let runner_recipe = context
         .discover_with_parents::<BundleValue>(
             b"runner-eviction-interrupted-child",
-            4_096,
             &[Parent::validated(&native)],
         )
         .expect("the interrupted runner recipe seals");
@@ -4490,7 +4437,7 @@ fn corrupt_bundled_candidate_repairs_once_and_then_reuses_the_repair() {
     let counts = Counts::default();
     let executions = AtomicUsize::new(0);
     let recipe = context
-        .discover::<BundleValue>(b"bundled-repair", 4_096)
+        .discover::<BundleValue>(b"bundled-repair")
         .expect("the bundled repair recipe seals");
 
     let current = store.clone();
@@ -4569,12 +4516,12 @@ fn evaluate_discoverable_contender<'store>(
     executions: &AtomicUsize,
 ) -> super::Validated<Derived> {
     let recipe = context
-        .discover::<Derived>(b"discoverable-contender", 4_096)
+        .discover::<Derived>(b"discoverable-contender")
         .expect("the discoverable contender recipe seals");
     Evaluator::new(store, counts)
         .discover(
             &recipe,
-            |candidate| retain_fixture_bytes(&candidate.0, 4_096, "fixture discovered inputs"),
+            |candidate| retain_fixture_bytes(&candidate.0),
             || {
                 executions.fetch_add(1, Ordering::Relaxed);
                 std::thread::sleep(Duration::from_millis(100));
@@ -4592,7 +4539,7 @@ fn corrupt_content_rejects_before_the_transform_can_execute_again() {
     let counts = Counts::default();
     let executions = AtomicUsize::new(0);
     let recipe = context
-        .direct::<Artifact>(b"rawr.phase9.native-product.synthetic/v1\0tamper", 4_096)
+        .direct::<Artifact>(b"rawr.phase9.native-product.synthetic/v1\0tamper")
         .expect("the direct recipe seals");
     Evaluator::new(&store, &counts)
         .direct(&recipe, || {
@@ -4622,7 +4569,7 @@ fn allocation_registry_rejects_a_rewritten_immutable_record() {
     let counts = Counts::default();
     let executions = AtomicUsize::new(0);
     let recipe = context
-        .direct::<Artifact>(b"corrupt-allocation-record", 4_096)
+        .direct::<Artifact>(b"corrupt-allocation-record")
         .expect("the direct recipe seals");
     Evaluator::new(&store, &counts)
         .direct(&recipe, || {
@@ -4673,7 +4620,7 @@ fn symlinked_dynamic_store_directory_rejects_before_execution() {
     let counts = Counts::default();
     let executions = AtomicUsize::new(0);
     let recipe = context
-        .direct::<Artifact>(b"rawr.phase9.native-product.synthetic/v1\0symlink", 4_096)
+        .direct::<Artifact>(b"rawr.phase9.native-product.synthetic/v1\0symlink")
         .expect("the direct recipe seals");
     assert!(matches!(
         Evaluator::new(&store, &counts).direct(&recipe, || {
@@ -4846,14 +4793,12 @@ fn replay_tells_ordinary_input_changes_from_damaged_entries() {
     let root = temporary("replay-damage");
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<Artifact>(b"replay-damage", 4_096)
-        .unwrap();
+    let recipe = context.discover::<Artifact>(b"replay-damage").unwrap();
     let counts = Counts::default();
     let value = Evaluator::new(&store, &counts)
         .discover(
             &recipe,
-            |value| value.encode(4_096),
+            |value| value.encode(),
             || Ok(Artifact(Box::from(b"bounded".as_slice()))),
         )
         .unwrap();
@@ -4874,7 +4819,7 @@ fn replay_tells_ordinary_input_changes_from_damaged_entries() {
     )
     .unwrap();
     let current: super::read_set::ScopedValidator<Artifact> =
-        Arc::new(|value, _, _| value.encode(4_096));
+        Arc::new(|value, _, _| value.encode());
     assert!(matches!(
         evaluator.replay_discovered(&recipe, &current, action),
         Err(Error::Corrupt { .. })
@@ -4900,7 +4845,7 @@ fn store_growth_runners(
         .iter()
         .map(|name| {
             let recipe = context
-                .discover::<BundleValue>(name, 4_096)
+                .discover::<BundleValue>(name)
                 .expect("the runner recipe seals");
             let current = store.clone();
             let runner = evaluator
@@ -5084,7 +5029,7 @@ fn store_missing_its_executions_rebuilds_them() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let rebuild = |name: &'static [u8]| {
-        let recipe = context.discover::<BundleValue>(name, 4_096).unwrap();
+        let recipe = context.discover::<BundleValue>(name).unwrap();
         let current = store.clone();
         evaluator.discover_bundled(
             &recipe,
@@ -5116,7 +5061,7 @@ fn store_missing_one_execution_rebuilds_it() {
     drop(runners);
     let context = fixture_context(&root);
     let execution = context
-        .discover::<BundleValue>(b"store-lost-execution", 4_096)
+        .discover::<BundleValue>(b"store-lost-execution")
         .unwrap()
         .execution();
     let lost = store.root().join("executions").join(execution.directory());
@@ -5129,7 +5074,7 @@ fn store_missing_one_execution_rebuilds_it() {
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let rebuild = |name: &'static [u8]| {
-        let recipe = context.discover::<BundleValue>(name, 4_096).unwrap();
+        let recipe = context.discover::<BundleValue>(name).unwrap();
         let current = store.clone();
         evaluator.discover_bundled(
             &recipe,
@@ -5162,14 +5107,14 @@ fn old_runner(
 ) -> (PathBuf, super::Validated<OldBundleValue>) {
     let counts = Counts::default();
     let recipe = context
-        .discover::<OldBundleValue>(name, 4_096)
+        .discover::<OldBundleValue>(name)
         .expect("the old runner recipe seals");
     let current = store.clone();
     let runner = Evaluator::new(store, &counts)
         .discover_bundled(
             &recipe,
             move |candidate| {
-                let canonical = candidate.encode(4_096)?;
+                let canonical = candidate.encode()?;
                 crate::store::bundle::validate_complete(
                     current.root(),
                     candidate.0.reference,
@@ -5294,7 +5239,7 @@ fn a_store_over_its_recency_bound_evicts_the_oldest_unpinned_execution() {
     let evaluator = Evaluator::new(&store, &counts);
     let publish = |name: String| {
         let recipe = context
-            .discover::<BundleValue>(name.as_bytes(), 4_096)
+            .discover::<BundleValue>(name.as_bytes())
             .expect("the runner recipe seals");
         let current = store.clone();
         let runner = evaluator
@@ -5360,11 +5305,11 @@ impl Value for OldDerived {
     const SCHEMA: u32 = Derived::SCHEMA.wrapping_add(1);
 
     fn encode(&self) -> Result<Box<[u8]>, Error> {
-        self.0.encode(limit)
+        self.0.encode()
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        Derived::decode(bytes, limit).map(Self)
+        Derived::decode(bytes).map(Self)
     }
 }
 
@@ -5381,7 +5326,7 @@ fn a_store_evicts_plain_entries_an_older_rawr_wrote_when_it_opens() {
     let current = evaluator
         .direct(
             &context
-                .direct::<Derived>(b"plain-current", 4_096)
+                .direct::<Derived>(b"plain-current")
                 .expect("the current recipe seals"),
             || Ok(Derived(Box::from(b"current".as_slice()))),
         )
@@ -5391,7 +5336,7 @@ fn a_store_evicts_plain_entries_an_older_rawr_wrote_when_it_opens() {
     let old = evaluator
         .direct(
             &context
-                .direct::<OldDerived>(b"plain-old", 4_096)
+                .direct::<OldDerived>(b"plain-old")
                 .expect("the old recipe seals"),
             || Ok(OldDerived(Derived(Box::from(b"old".as_slice())))),
         )

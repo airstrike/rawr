@@ -1274,11 +1274,11 @@ mod tests {
         const KIND: crate::node::Kind = crate::node::Kind::NativeProduct;
         const SCHEMA: u32 = 1;
 
-        fn encode(&self, _: usize) -> Result<Box<[u8]>, Error> {
+        fn encode(&self) -> Result<Box<[u8]>, Error> {
             Ok(vec![self.0].into_boxed_slice())
         }
 
-        fn decode(bytes: &[u8], _: usize) -> Result<Self, Error> {
+        fn decode(bytes: &[u8]) -> Result<Self, Error> {
             match bytes {
                 [value] => Ok(Self(*value)),
                 _ => Err(Error::Codec("project-cap fixture content changed")),
@@ -1312,8 +1312,7 @@ mod tests {
         let store = fixture_store("first-parentless-ledger-cap");
         let last = fill_project_ledgers(&store, true);
         let recipe =
-            crate::node::Direct::<Artifact>::capture([0x32; 32], b"first-parentless", 4_096, &[])
-                .unwrap();
+            crate::node::Direct::<Artifact>::capture([0x32; 32], b"first-parentless", &[]).unwrap();
         let value = crate::node::Evaluator::new(&store, &crate::metrics::Noop)
             .direct(&recipe, || {
                 assert!(!last.exists(), "recovery precedes the transform");
@@ -1349,7 +1348,6 @@ mod tests {
         let recipe = crate::node::Direct::<Artifact>::capture(
             [0x32; 32],
             b"first-parentless-no-reclaim",
-            4_096,
             &[],
         )
         .unwrap();
@@ -1389,7 +1387,6 @@ mod tests {
             let recipe = crate::node::Discoverable::<Artifact>::capture(
                 [0x32; 32],
                 b"first-parentless-bundle",
-                4_096,
                 &[],
             )
             .unwrap();

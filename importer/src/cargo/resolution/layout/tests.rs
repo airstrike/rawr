@@ -62,7 +62,7 @@ impl Fixture {
         // this test never publishes a product or constructs a current receipt.
         let recipe = self
             .context
-            .discover::<resolution::BuildProduct>(b"rawr.resolution.layout-test/v1", 4096)?;
+            .discover::<resolution::BuildProduct>(b"rawr.resolution.layout-test/v1")?;
         self.store.with_ownership(|ownership| {
             self.store.with_heavy_lease(|| {
                 self.store.with_execution_lease(recipe.execution(), || {
@@ -568,15 +568,9 @@ fn published_resolution_data_round_trips_without_recapture_and_checks_controls()
         const KIND: node::Kind = node::Kind::Resolution;
         const SCHEMA: u32 = 77; // test-only data node, never a semantic resolution
         fn encode(&self) -> Result<Box<[u8]>, node::Error> {
-            if limit < self.0.len() {
-                return Err(node::Error::Codec("fixture limit"));
-            }
             Ok(self.0.to_vec().into_boxed_slice())
         }
         fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
-            if bytes.len() > limit {
-                return Err(node::Error::Codec("fixture limit"));
-            }
             Ok(Self(
                 bytes
                     .try_into()
@@ -588,7 +582,7 @@ fn published_resolution_data_round_trips_without_recapture_and_checks_controls()
     let limits = cargo::Limits::standard();
     let recipe = fixture
         .context
-        .discover::<Data>(b"resolution-data-test/v1", 4096)
+        .discover::<Data>(b"resolution-data-test/v1")
         .unwrap();
     let execute = |attempt| {
         let graph = fixture.store.graph_budget();

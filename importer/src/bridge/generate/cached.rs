@@ -65,7 +65,6 @@ pub(crate) fn materialize<B: crate::surface::Runner>(
 /// Carry owned profile generation to the fresh harness-render consumer.
 pub(crate) fn materialize_historical<B: crate::surface::Runner>(
     key: super::super::GenerationRequestKey<B>,
-    limits: &crate::cargo::Limits,
 ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, super::request::Error> {
     use node::staging::{Outcome, Owned, Recipe};
     let super::super::profile::Profile::Historical(pair) = &key.profile else {
@@ -73,12 +72,9 @@ pub(crate) fn materialize_historical<B: crate::surface::Runner>(
     };
     let context = pair.context.clone();
     let initial = pair.retention.try_clone().map_err(node_error)?;
-    let recipe = Recipe::<Product>::from_inputs(
-        &context,
-        &[pair.generated.input()],
-        &authority(&key)?,
-    )
-    .map_err(node_error)?;
+    let recipe =
+        Recipe::<Product>::from_inputs(&context, &[pair.generated.input()], &authority(&key)?)
+            .map_err(node_error)?;
     let store = context.open_store().map_err(node_error)?;
     let evaluator = node::Evaluator::new(&store, &crate::metrics::Current);
     let outcome = recipe.lookup_owned(&evaluator).map_err(node_error)?;
@@ -162,8 +158,7 @@ fn evaluate_retained(
     let initial = chain.retention().ok_or(node::Error::State(
         "retained overlay requires exact parent ownership",
     ))?;
-    let recipe =
-        node::staging::Recipe::<Product>::from_chain(chain, authority)?;
+    let recipe = node::staging::Recipe::<Product>::from_chain(chain, authority)?;
     let store = chain.context().open_store()?;
     let evaluator = node::Evaluator::new(&store, &crate::metrics::Current);
     match recipe.lookup(&evaluator)? {
@@ -488,16 +483,15 @@ mod tests {
 
     #[test]
     fn overlay_product_roundtrips_and_rejects_framing_drift() {
-        let limit = crate::cargo::Limits::standard().node_output_bytes();
         let product = product();
-        let bytes = product.encode(limit).expect("the overlay product encodes");
-        let decoded = Product::decode(&bytes, limit).expect("the overlay product decodes");
+        let bytes = product.encode().expect("the overlay product encodes");
+        let decoded = Product::decode(&bytes).expect("the overlay product decodes");
         assert_eq!(decoded.aggregate, [1; 32]);
         assert_eq!(decoded.source.as_ref(), b"source");
-        assert!(Product::decode(&bytes[..bytes.len() - 1], limit).is_err());
+        assert!(Product::decode(&bytes[..bytes.len() - 1]).is_err());
         let mut reserved = bytes.into_vec();
         reserved[104] = 1;
-        assert!(Product::decode(&reserved, limit).is_err());
+        assert!(Product::decode(&reserved).is_err());
     }
 
     #[test]

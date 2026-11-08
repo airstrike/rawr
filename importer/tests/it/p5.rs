@@ -177,8 +177,8 @@ pub fn profile_contract(
         .and_then(|resolution| extract::from_resolution(resolution, &native, &limits))
         .expect("real profile anchor evidence canonicalizes");
     let definition = Definition::new(mode, lease);
-    let contract = profile::classify(&definition, &graph, &limits)
-        .expect("the exact synthetic profile contract seals");
+    let contract =
+        profile::classify(&definition, &graph).expect("the exact synthetic profile contract seals");
     (definition, contract)
 }
 
@@ -194,7 +194,7 @@ pub fn generated(
 ) {
     let (request, snapshot) = generation_request(project, mode, lease, source, revision);
     let manifest = request
-        .generate(&rawr_import::cargo::Limits::standard())
+        .generate()
         .expect("the profile runner files generate");
     (manifest, snapshot)
 }
@@ -216,8 +216,8 @@ pub fn generation_request(
         .and_then(|resolution| extract::from_resolution(resolution, &native, &limits))
         .expect("real profile anchor evidence canonicalizes");
     let definition = Definition::new(mode, lease);
-    let profile_contract = profile::classify(&definition, &graph, &limits)
-        .expect("the exact synthetic profile contract seals");
+    let profile_contract =
+        profile::classify(&definition, &graph).expect("the exact synthetic profile contract seals");
     let contract = graph
         .classify(&Policy::standard(), &limits)
         .expect("the profile anchor graph classifies");
@@ -258,9 +258,9 @@ pub fn generation_request(
     let demand = compiler.seal().expect("the synthetic surface demand seals");
     let native = contract.into_native_proof();
     let checked = Checked([0x5a; 32]);
-    let profile_demand = profile::demand(&definition, &profile_contract, &checked, &limits)
+    let profile_demand = profile::demand(&definition, &profile_contract, &checked)
         .expect("the checked profile demand seals");
-    let profile = profile::Proof::generate::<Checked, _>(&definition, &profile_demand, &limits)
+    let profile = profile::Proof::generate::<Checked, _>(&definition, &profile_demand)
         .expect("the demanded profile projections generate");
     let profile = match &project.1 {
         Some(chain) => profile.with_chain(chain.clone()),

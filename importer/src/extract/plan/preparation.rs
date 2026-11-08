@@ -57,7 +57,7 @@ impl Fixture {
             .expect("fixture proof is retained");
         let recipe = self
             .context
-            .discover::<resolution::BuildProduct>(b"rawr.extraction.preparation-test/v1", 4096)?;
+            .discover::<resolution::BuildProduct>(b"rawr.extraction.preparation-test/v1")?;
         // Exercise the actual owner, project lease, capacity reservation, and
         // Attempt cleanup. No fixture publishes a Product or current authority.
         self.store.with_ownership(|ownership| {

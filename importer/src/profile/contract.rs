@@ -232,7 +232,6 @@ impl Parts {
         identity: Identity,
         version: Version,
         graph: &crate::api::Graph<impl crate::api::Phase>,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
         Self::decode_with(
             bytes,
@@ -369,9 +368,8 @@ impl Contract {
         version: Version,
         graph: &crate::api::Graph<crate::api::Extracted>,
         chain: crate::node::Chain,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        Ok(Parts::decode(bytes, identity, version, graph, limits)?.into_current(chain))
+        Ok(Parts::decode(bytes, identity, version, graph)?.into_current(chain))
     }
 
     /// Borrow the current profile-classification node for demand joins.

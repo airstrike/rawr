@@ -63,11 +63,8 @@ const PROTOCOL_SCHEMA: u32 = 58;
 /// The commit of the nightly this driver was built with, which it reads
 /// metadata of and names in its version.
 const COMPILER_COMMIT: &str = env!("RAWR_RUSTC_COMMIT");
-const MAX_BYTES: usize = 256 * 1024 * 1024;
-const MAX_ITEMS: usize = 2_500_000;
 const CANONICAL_ITEMS: usize = 19_000_000;
 const CANONICAL_BYTES: usize = 1_207_959_552;
-const MAX_STRING: usize = 1024 * 1024;
 // The host's PATH_MAX: 1024 on macOS, 4096 on Linux.
 const CANONICAL_PATH_BYTES: usize = libc::PATH_MAX as usize;
 const RUST_MIN_STACK_VALUE: &str = "67108864";
@@ -510,19 +507,10 @@ fn validate_rustc_stack_authority(value: Option<&OsStr>) -> Result<(), String> {
 
 fn bounded_arguments(budget: &mut compiler::Budget) -> Result<Vec<String>, String> {
     let mut arguments = Vec::new();
-    let mut bytes = 0_usize;
     for argument in env::args_os() {
-        if arguments.len() >= MAX_ITEMS {
-            return Err("metadata probe argument count limit exceeded".to_owned());
-        }
         let argument = argument
             .into_string()
             .map_err(|_| "metadata probe argument is not UTF-8".to_owned())?;
-        checked_string(&argument)?;
-        bytes = bytes.saturating_add(argument.len());
-        if bytes > MAX_BYTES {
-            return Err("metadata probe argument byte limit exceeded".to_owned());
-        }
         capture_argument(&mut arguments, argument, budget)?;
     }
     Ok(arguments)
@@ -552,18 +540,10 @@ fn capture_argument(
     Ok(())
 }
 
+/// Read a whole file the importer wrote for this probe, whatever its size.
 fn read_bounded_file(
     path: &Path,
     label: &str,
-    budget: &mut compiler::Budget,
-) -> Result<Vec<u8>, String> {
-    read_bounded_file_with_limit(path, label, MAX_BYTES, budget)
-}
-
-fn read_bounded_file_with_limit(
-    path: &Path,
-    label: &str,
-    limit: usize,
     budget: &mut compiler::Budget,
 ) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
@@ -573,9 +553,6 @@ fn read_bounded_file_with_limit(
     }
     let length = usize::try_from(metadata.len())
         .map_err(|_| format!("{label} length is not addressable"))?;
-    if length > limit {
-        return Err(format!("{label} byte limit exceeded"));
-    }
     budget.items(1)?;
     budget.bytes(length)?;
     let mut bytes = Vec::new();
@@ -610,10 +587,7 @@ fn read_expected_length(
 fn artifact_matches(path: &Path, artifact: &Artifact) -> Result<bool, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect selected rmeta: {error}"))?;
-    if !metadata.is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.len() != artifact.length
-        || metadata.len() > MAX_BYTES as u64
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() != artifact.length
     {
         return Ok(false);
     }
@@ -632,7 +606,7 @@ fn artifact_matches(path: &Path, artifact: &Artifact) -> Result<bool, String> {
         length = length
             .checked_add(count as u64)
             .ok_or_else(|| "selected rmeta length overflow".to_owned())?;
-        if length > MAX_BYTES as u64 {
+        if length > artifact.length {
             return Ok(false);
         }
         digest.update(&buffer[..count]);
@@ -659,16 +633,9 @@ fn preflight_json(bytes: &[u8]) -> Result<JsonUsage, String> {
             } else if byte == b'\\' {
                 escaped = true;
             } else if byte == b'"' {
-                let length = index.saturating_sub(start);
-                if length > MAX_STRING {
-                    return Err("metadata probe JSON string limit exceeded".to_owned());
-                }
                 strings = strings
-                    .checked_add(length)
+                    .checked_add(index.saturating_sub(start))
                     .ok_or_else(|| "metadata probe JSON string bytes overflow".to_owned())?;
-                if strings > MAX_BYTES {
-                    return Err("metadata probe JSON aggregate string limit exceeded".to_owned());
-                }
                 string_start = None;
                 items = items.saturating_add(1);
             }
@@ -679,6 +646,8 @@ fn preflight_json(bytes: &[u8]) -> Result<JsonUsage, String> {
             b'{' | b'[' => {
                 depth = depth.saturating_add(1);
                 items = items.saturating_add(1);
+                // serde's decoder recurses per level: a stack guard
+                // against a malformed plan, never a size.
                 if depth > 256 {
                     return Err("metadata probe JSON depth limit exceeded".to_owned());
                 }
@@ -686,9 +655,6 @@ fn preflight_json(bytes: &[u8]) -> Result<JsonUsage, String> {
             b'}' | b']' => depth = depth.saturating_sub(1),
             b',' => items = items.saturating_add(1),
             _ => {}
-        }
-        if items > MAX_ITEMS {
-            return Err("metadata probe JSON item limit exceeded".to_owned());
         }
     }
     if string_start.is_some() || depth != 0 {
@@ -709,9 +675,6 @@ fn validate_plan(plan: &Plan, budget: &mut compiler::Budget) -> Result<(), Strin
         || plan.host != include_str!(concat!(env!("OUT_DIR"), "/toolchain-host"))
         || plan.selected_target != plan.host
         || plan.entries.is_empty()
-        || plan.entries.len() > MAX_ITEMS
-        || plan.dependency_directories.len() > MAX_ITEMS
-        || plan.demand.len() > MAX_ITEMS
         || plan
             .demand
             .iter()
@@ -811,14 +774,6 @@ fn path_text(path: &Path) -> Result<&str, String> {
         .ok_or_else(|| format!("path is not UTF-8: {}", path.display()))
 }
 
-fn checked_string(value: &str) -> Result<(), String> {
-    if value.len() > MAX_STRING {
-        Err("metadata probe string limit exceeded".to_owned())
-    } else {
-        Ok(())
-    }
-}
-
 fn reserve<T>(values: &mut Vec<T>, additional: usize) -> Result<(), String> {
     values
         .try_reserve_exact(additional)
@@ -856,7 +811,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        canonical_file, capture_argument, compiler, decode_plan, read_bounded_file_with_limit,
+        canonical_file, capture_argument, compiler, decode_plan, read_bounded_file,
         read_expected_length, validate_plan, validate_rustc_stack_authority, CANONICAL_BYTES,
         CANONICAL_ITEMS, CANONICAL_PATH_BYTES, PLAN_SCHEMA, PROTOCOL_SCHEMA, RUST_MIN_STACK_VALUE,
     };
@@ -901,24 +856,10 @@ mod tests {
     }
 
     #[test]
-    fn plan_decode_budget_has_an_exact_byte_boundary() {
-        let bytes = plan_bytes(&["root"]);
-        let mut measured = compiler::Budget::with_limits(usize::MAX);
-        decode_plan(&bytes, &mut measured).expect("the fixture plan is measurable");
-        let (bytes, _, _) = measured.usage();
-
-        let mut exact = compiler::Budget::with_limits(bytes);
-        decode_plan(&plan_bytes(&["root"]), &mut exact)
-            .expect("the exact allocation boundary accepts");
-        let mut short_bytes = compiler::Budget::with_limits(bytes - 1);
-        assert!(decode_plan(&plan_bytes(&["root"]), &mut short_bytes).is_err());
-    }
-
-    #[test]
     fn prior_plan_and_protocol_authority_reject_before_filesystem_validation() {
         assert_eq!(CANONICAL_ITEMS, 19_000_000);
         assert_eq!(CANONICAL_BYTES, 1_207_959_552);
-        let mut budget = compiler::Budget::with_limits(usize::MAX);
+        let mut budget = compiler::Budget::standard();
         let mut old_plan = decode_plan(&plan_bytes(&["root"]), &mut budget)
             .expect("the current fixture plan decodes");
         old_plan.schema = PLAN_SCHEMA - 1;
@@ -927,7 +868,7 @@ mod tests {
             Err("metadata probe plan authority is invalid".to_owned())
         );
 
-        let mut budget = compiler::Budget::with_limits(usize::MAX);
+        let mut budget = compiler::Budget::standard();
         let mut old_protocol = decode_plan(&plan_bytes(&["root"]), &mut budget)
             .expect("the current fixture plan decodes");
         old_protocol.protocol_schema = PROTOCOL_SCHEMA - 1;
@@ -936,7 +877,7 @@ mod tests {
             Err("metadata probe plan authority is invalid".to_owned())
         );
 
-        let mut budget = compiler::Budget::with_limits(usize::MAX);
+        let mut budget = compiler::Budget::standard();
         let mut old_canonical = decode_plan(&plan_bytes(&["root"]), &mut budget)
             .expect("the current fixture plan decodes");
         old_canonical.canonical_items = CANONICAL_ITEMS - 1;
@@ -945,7 +886,7 @@ mod tests {
             Err("metadata probe plan authority is invalid".to_owned())
         );
 
-        let mut budget = compiler::Budget::with_limits(usize::MAX);
+        let mut budget = compiler::Budget::standard();
         let mut old_canonical_bytes = decode_plan(&plan_bytes(&["root"]), &mut budget)
             .expect("the current fixture plan decodes");
         old_canonical_bytes.canonical_bytes = CANONICAL_BYTES - 1;
@@ -956,38 +897,31 @@ mod tests {
     }
 
     #[test]
-    fn argument_path_and_validation_nodes_are_prospectively_bounded() {
-        let mut measured = compiler::Budget::with_limits(usize::MAX);
+    fn arguments_and_paths_are_counted() {
+        let mut measured = compiler::Budget::standard();
         let mut arguments = Vec::new();
         capture_argument(&mut arguments, "argument".to_owned(), &mut measured)
-            .expect("the argument is measurable");
-        let (argument_bytes, _, _) = measured.usage();
-        let mut exact = compiler::Budget::with_limits(argument_bytes);
-        capture_argument(&mut Vec::new(), "argument".to_owned(), &mut exact)
-            .expect("the exact argument boundary accepts");
-        let mut short = compiler::Budget::with_limits(argument_bytes - 1);
-        assert!(capture_argument(&mut Vec::new(), "argument".to_owned(), &mut short).is_err());
+            .expect("the argument is captured");
+        assert!(measured.usage().0 >= "argument".len());
 
         let executable = std::env::current_exe().expect("the test executable has a path");
-        let mut exact_path = compiler::Budget::with_limits(CANONICAL_PATH_BYTES);
-        canonical_file(&executable, "test executable", &mut exact_path)
-            .expect("the exact prospective path boundary accepts");
-        let mut short_path = compiler::Budget::with_limits(CANONICAL_PATH_BYTES - 1);
-        assert!(canonical_file(&executable, "test executable", &mut short_path).is_err());
+        let mut path = compiler::Budget::standard();
+        canonical_file(&executable, "test executable", &mut path)
+            .expect("the executable canonicalizes");
+        assert!(path.usage().0 >= CANONICAL_PATH_BYTES);
     }
 
     #[test]
-    fn file_read_allocation_is_exact_and_drift_uses_a_stack_probe() {
+    fn file_read_is_exact_and_drift_uses_a_stack_probe() {
         let path =
             std::env::temp_dir().join(format!("rawr-import-driver-read-{}", std::process::id()));
         std::fs::write(&path, b"four").expect("the bounded-read fixture is written");
 
-        let mut exact = compiler::Budget::with_limits(4);
-        let bytes = read_bounded_file_with_limit(&path, "test plan", 4, &mut exact)
-            .expect("the exact file-read allocation accepts");
+        let mut budget = compiler::Budget::standard();
+        let bytes =
+            read_bounded_file(&path, "test plan", &mut budget).expect("the file reads whole");
         assert_eq!(bytes, b"four");
-        let mut byte_short = compiler::Budget::with_limits(3);
-        assert!(read_bounded_file_with_limit(&path, "test plan", 4, &mut byte_short).is_err());
+        assert_eq!(budget.usage().0, 4);
 
         std::fs::remove_file(&path).expect("the bounded-read fixture is retired");
 

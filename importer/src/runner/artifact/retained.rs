@@ -1057,7 +1057,6 @@ fn push_path(
     paths.push(path)
 }
 
-
 fn number<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], node::Error> {
     bytes
         .get(offset..offset.saturating_add(N))

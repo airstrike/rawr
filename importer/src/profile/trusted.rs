@@ -258,7 +258,6 @@ mod tests {
 
     #[test]
     fn explicit_adapter_classifies_owned_parts_without_current_authority() {
-        let limits = crate::cargo::Limits::standard();
         let graph = crate::test_fixture::graph();
         let identity = Identity::new("trusted.empty");
         let version = Version::new(1);
@@ -270,12 +269,8 @@ mod tests {
             .seal()
             .expect("ordinary classification");
         assert_eq!(
-            parts
-                .encode()
-                .expect("parts encode"),
-            ordinary
-                .encode()
-                .expect("contract encodes")
+            parts.encode().expect("parts encode"),
+            ordinary.encode().expect("contract encodes")
         );
         let demand = adapter
             .demand_owned(&ordinary, [3; 32], &[])
@@ -286,12 +281,8 @@ mod tests {
             .expect("ordinary demand");
         assert!(demand.node_chain().is_none());
         assert_eq!(
-            demand
-                .encode()
-                .expect("owned demand encodes"),
-            expected_demand
-                .encode()
-                .expect("ordinary demand encodes")
+            demand.encode().expect("owned demand encodes"),
+            expected_demand.encode().expect("ordinary demand encodes")
         );
         let generated = adapter.generate_owned(&demand).expect("owned generation");
         let expected_generated = demand::Generator::new(&expected_demand)

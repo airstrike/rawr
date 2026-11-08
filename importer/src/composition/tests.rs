@@ -32,10 +32,10 @@ impl crate::node::Value for Api {
     // The current API schema: an action with another is one an older rawr
     // wrote, which the store evicts (#630).
     const SCHEMA: u32 = crate::api::SCHEMA;
-    fn encode(&self, _: usize) -> Result<Box<[u8]>, crate::node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, crate::node::Error> {
         Ok(Box::from(&b"composition-api"[..]))
     }
-    fn decode(bytes: &[u8], _: usize) -> Result<Self, crate::node::Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, crate::node::Error> {
         if bytes == b"composition-api" {
             Ok(Self)
         } else {
@@ -218,13 +218,12 @@ fn connected_prefix_reuses_warm_receipts_without_mutable_union_or_source_work() 
         let policy = crate::classify::Policy::standard();
         let seed = graph(&root.0, &witnesses, &limits);
         if has_profile {
-            profile::classify(&definition, &seed, &limits).expect("seed profile");
+            profile::classify(&definition, &seed).expect("seed profile");
         }
         if has_generic {
             let contract = seed.classify(&policy, &limits).expect("seed generic");
             if has_facade {
-                crate::surface::facade::Plan::encode_cached(&contract, &limits)
-                    .expect("seed facade");
+                crate::surface::facade::Plan::encode_cached(&contract).expect("seed facade");
             }
         } else {
             drop(seed);

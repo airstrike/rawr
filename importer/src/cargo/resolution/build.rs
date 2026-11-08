@@ -59,8 +59,7 @@ pub(crate) fn cached(
 ) -> Result<node::Validated<Product>, node::Error> {
     let limits = context.limits();
     let parent = Parent::validated(parent);
-    let recipe =
-        context.discover_with_parents::<Product>(authority, &[parent])?;
+    let recipe = context.discover_with_parents::<Product>(authority, &[parent])?;
     let store = context.open_store()?;
     let validation_store = store.clone();
     let product = node::Evaluator::new(&store, sink).discover_bundled_budgeted(
@@ -815,7 +814,6 @@ struct Evidence {
     digest: [u8; 32],
 }
 
-
 impl Evidence {
     fn capture(path: &Path) -> Result<Self, node::Error> {
         Self::capture_with_budget(path)
@@ -1217,15 +1215,12 @@ mod tests {
         fs::write(bundle_root.join("target/extra"), b"extra").expect("extra bundle file writes");
         assert!(super::validate_bundle_root(&bundle_root, &limits, false).is_err());
         fs::remove_file(bundle_root.join("target/extra")).expect("extra bundle file retires");
-        let encoded = product
-            .encode()
-            .expect("product encodes");
+        let encoded = product.encode().expect("product encodes");
         assert_eq!(
             encoded.len(),
             PRODUCT_HEADER_BYTES + b"{\"compiler-artifact\":true}\n".len()
         );
-        let replayed =
-            Product::decode(&encoded).expect("product decodes");
+        let replayed = Product::decode(&encoded).expect("product decodes");
         assert_eq!(replayed.raw(), b"{\"compiler-artifact\":true}\n");
 
         fs::remove_dir_all(&target).expect("target retires");
@@ -1286,16 +1281,10 @@ mod tests {
             .restore(&store, &target, &protocol, &limits)
             .is_err());
 
-        let mut trailing = product
-            .encode()
-            .expect("product encodes")
-            .into_vec();
+        let mut trailing = product.encode().expect("product encodes").into_vec();
         trailing.push(0);
         assert!(Product::decode(&trailing).is_err());
-        let mut schema = product
-            .encode()
-            .expect("product encodes")
-            .into_vec();
+        let mut schema = product.encode().expect("product encodes").into_vec();
         schema[8..12].copy_from_slice(&SCHEMA.saturating_add(1).to_le_bytes());
         assert!(Product::decode(&schema).is_err());
         fs::remove_dir_all(root).expect("fixture retires");

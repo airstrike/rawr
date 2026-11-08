@@ -1178,15 +1178,13 @@ mod tests {
         bytes[8..12].copy_from_slice(&SCHEMA.to_le_bytes());
         bytes[76..80].copy_from_slice(&frozen_mode(0o755).to_le_bytes());
         bytes[120..128].copy_from_slice(&((BUNDLE_HEADER_BYTES + 1000) as u64).to_le_bytes());
-        let product = Product::decode(&bytes, PRODUCT_BYTES).unwrap();
-        assert_eq!(product.encode(PRODUCT_BYTES).unwrap().as_ref(), bytes);
+        let product = Product::decode(&bytes).unwrap();
+        assert_eq!(product.encode().unwrap().as_ref(), bytes);
         let mut old = bytes.clone();
         old[8..12].copy_from_slice(&2_u32.to_le_bytes());
-        assert!(Product::decode(&old, PRODUCT_BYTES).is_err());
-        assert!(Product::decode(&bytes[..224], PRODUCT_BYTES).is_err());
+        assert!(Product::decode(&old).is_err());
+        assert!(Product::decode(&bytes[..224]).is_err());
         bytes[120..128].copy_from_slice(&228_u64.to_le_bytes());
-        assert!(Product::decode(&bytes, PRODUCT_BYTES).is_err());
-        bytes[120..128].copy_from_slice(&((node::MAX_CONTENT_BYTES + 1) as u64).to_le_bytes());
-        assert!(Product::decode(&bytes, PRODUCT_BYTES).is_err());
+        assert!(Product::decode(&bytes).is_err());
     }
 }

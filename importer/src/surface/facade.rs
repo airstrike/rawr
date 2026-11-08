@@ -1011,10 +1011,7 @@ impl Type {
 
 impl Plan {
     /// Reuse the exact facade selected from a current content-addressed API graph.
-    pub fn encode_cached(
-        contract: &crate::Contract<crate::Classified>,
-        limits: &crate::cargo::Limits,
-    ) -> crate::Result<Cached> {
+    pub fn encode_cached(contract: &crate::Contract<crate::Classified>) -> crate::Result<Cached> {
         cached::encode(contract)
     }
 

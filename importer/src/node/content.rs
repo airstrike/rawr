@@ -260,7 +260,6 @@ impl Chain {
         super::read_set::Prepared::seal(self.context.clone(), self.parent.read_set.clone())
     }
 
-
     pub(crate) const fn context(&self) -> &crate::context::Context {
         &self.context
     }

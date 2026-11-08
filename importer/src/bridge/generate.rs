@@ -21513,8 +21513,8 @@ mod tests {
                 .expect("fixture contract")
         };
         let contract = classify(context());
-        let facade = crate::surface::facade::Plan::encode_cached(&contract, &limits)
-            .expect("authenticated facade");
+        let facade =
+            crate::surface::facade::Plan::encode_cached(&contract).expect("authenticated facade");
         let calls = Cell::new(0);
         let demand = || {
             contract
@@ -21615,7 +21615,7 @@ mod tests {
             .with_node_chain_for_test(other_parent)
             .classify(&crate::classify::Policy::standard(), &limits)
             .expect("same account alternate contract");
-        let other_facade = crate::surface::facade::Plan::encode_cached(&other_contract, &limits)
+        let other_facade = crate::surface::facade::Plan::encode_cached(&other_contract)
             .expect("same account alternate facade");
         assert!(matches!(
             demand().with_trusted_runner(true, &other_facade, &contract),
@@ -21625,7 +21625,7 @@ mod tests {
         let foreign = classify(context());
         assert_eq!(foreign.fingerprint(), contract.fingerprint());
         let foreign_facade =
-            crate::surface::facade::Plan::encode_cached(&foreign, &limits).expect("foreign facade");
+            crate::surface::facade::Plan::encode_cached(&foreign).expect("foreign facade");
         assert!(matches!(
             demand().with_trusted_runner(true, &foreign_facade, &contract),
             Err(crate::surface::Error::ForeignRunner)

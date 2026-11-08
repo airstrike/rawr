@@ -9,7 +9,6 @@ const DOMAIN: &[u8] = b"rawr.profile.classification/v2";
 pub(super) fn classify<C: Checked, D: Definition<C>>(
     definition: &D,
     graph: &crate::api::Graph<crate::api::Extracted>,
-    limits: &crate::cargo::Limits,
 ) -> Result<Contract, Error> {
     let parent = graph
         .node_chain()
@@ -30,7 +29,7 @@ pub(super) fn classify<C: Checked, D: Definition<C>>(
     let chain = parent.child(&product);
     product
         .value()
-        .replay(identity, version, graph, chain, limits)
+        .replay(identity, version, graph, chain)
         .map_err(Error::fresh)
 }
 
@@ -69,9 +68,7 @@ impl Product {
         })
     }
 
-    pub(crate) fn capture_parts(
-        parts: &super::contract::Parts,
-    ) -> Result<Self, Error> {
+    pub(crate) fn capture_parts(parts: &super::contract::Parts) -> Result<Self, Error> {
         Ok(Self {
             canonical: parts.encode()?,
         })
@@ -82,9 +79,8 @@ impl Product {
         identity: super::Identity,
         version: super::Version,
         graph: &crate::api::Graph<impl crate::api::Phase>,
-        limits: &crate::cargo::Limits,
     ) -> Result<super::contract::Parts, Error> {
-        super::contract::Parts::decode(&self.canonical, identity, version, graph, limits)
+        super::contract::Parts::decode(&self.canonical, identity, version, graph)
     }
 
     /// Decode under the API identities recorded by a resolved product (no graph).
@@ -94,7 +90,6 @@ impl Product {
         identity: super::Identity,
         version: super::Version,
         graph: (crate::api::Fingerprint, crate::api::Fingerprint),
-        limits: &crate::cargo::Limits,
     ) -> Result<super::contract::Parts, Error> {
         super::contract::Parts::decode_resolved(&self.canonical, identity, version, graph)
     }
@@ -105,9 +100,8 @@ impl Product {
         version: super::Version,
         graph: &crate::api::Graph<crate::api::Extracted>,
         chain: node::Chain,
-        limits: &crate::cargo::Limits,
     ) -> Result<Contract, Error> {
-        Contract::decode(&self.canonical, identity, version, graph, chain, limits)
+        Contract::decode(&self.canonical, identity, version, graph, chain)
     }
 }
 
@@ -181,22 +175,17 @@ mod tests {
 
     #[test]
     fn profile_product_roundtrips_and_rejects_empty_payload() {
-        let limits = crate::cargo::Limits::standard();
         let graph = crate::test_fixture::graph();
         let contract = crate::profile::classify_direct(&Definition, &graph)
             .expect("the empty profile contract seals");
-        let product = Product::capture(&contract)
-            .expect("the profile product captures");
-        let bytes = product
-            .encode()
-            .expect("the profile product encodes");
+        let product = Product::capture(&contract).expect("the profile product captures");
+        let bytes = product.encode().expect("the profile product encodes");
         assert!(Product::decode(&bytes).is_ok());
         assert!(Product::decode(&[]).is_err());
 
         let mut trailing = bytes.into_vec();
         trailing.push(b' ');
-        let decoded = Product::decode(&trailing)
-            .expect("framing alone retains bounded bytes");
+        let decoded = Product::decode(&trailing).expect("framing alone retains bounded bytes");
         assert_ne!(decoded.canonical.as_ref(), product.canonical.as_ref());
     }
 
@@ -204,7 +193,6 @@ mod tests {
     fn owned_profile_parts_preserve_canonical_contract_and_reject_drift() {
         use crate::profile::Definition as _;
 
-        let limits = crate::cargo::Limits::standard();
         let graph = crate::test_fixture::graph();
         let definition = Definition;
         let identity = definition.identity();
@@ -218,38 +206,28 @@ mod tests {
         let parts = builder.seal_parts().expect("owned classification seals");
         let product = Product::capture_parts(&parts)
             .expect("owned classification captures without a current contract");
-        let expected = direct
-            .encode()
-            .expect("contract encodes");
+        let expected = direct.encode().expect("contract encodes");
         assert_eq!(product.canonical, expected);
         let replay = product
-            .owned(identity, version, &graph, &limits)
+            .owned(identity, version, &graph)
             .expect("owned classification validates its exact graph identity");
-        assert_eq!(
-            replay
-                .encode()
-                .expect("parts encode"),
-            expected
-        );
-        assert!(replay.encode(expected.len() - 1).is_err());
+        assert_eq!(replay.encode().expect("parts encode"), expected);
         // Read under other inputs, a stored contract is stale: the replay
         // rebuilds it, and no message reaches the program (#538).
         let stale = |result: Result<crate::profile::contract::Parts, crate::profile::Error>| {
             matches!(result, Err(crate::profile::Error::Stale))
         };
         let foreign = crate::profile::Identity::new("foreign.profile");
-        assert!(stale(product.owned(foreign, version, &graph, &limits)));
+        assert!(stale(product.owned(foreign, version, &graph)));
         assert!(stale(product.owned(
             identity,
             crate::profile::Version::new(2),
-            &graph,
-            &limits
+            &graph
         )));
         let mut trailing = product.canonical.into_vec();
         trailing.push(b' ');
-        let product =
-            Product::decode(&trailing).expect("bounded framing");
-        assert!(stale(product.owned(identity, version, &graph, &limits)));
+        let product = Product::decode(&trailing).expect("bounded framing");
+        assert!(stale(product.owned(identity, version, &graph)));
     }
 
     /// An entry keyed by every input it decodes under can't be stale, so a

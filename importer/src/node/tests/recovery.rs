@@ -26,9 +26,7 @@ fn same_action_equal_size_frozen_corruption_retires_once_then_reuses() {
     let root = temporary("same-action-corruption");
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<BundleValue>(b"same-action", 4096)
-        .unwrap();
+    let recipe = context.discover::<BundleValue>(b"same-action").unwrap();
     let current = store.clone();
     let first = Evaluator::new(&store, &Counts::default())
         .discover_bundled(&recipe, move |value| validate(value, &current), stable)
@@ -73,9 +71,7 @@ fn unknown_operational_refusal_and_external_drift_never_nominate_retirement() {
         let root = temporary("nonnominating-rejection");
         let context = prepare_fixture(&root);
         let store = context.open_store().unwrap();
-        let recipe = context
-            .discover::<BundleValue>(b"nonnominating", 4096)
-            .unwrap();
+        let recipe = context.discover::<BundleValue>(b"nonnominating").unwrap();
         let current = store.clone();
         let first = Evaluator::new(&store, &Counts::default())
             .discover_bundled(&recipe, move |value| validate(value, &current), stable)
@@ -148,15 +144,14 @@ fn validate_inventory(
     use crate::runner::artifact::retained;
     value.validate_published(store)?;
     let root = store.root().join(value.reference.relative());
-    let bytes =
-        crate::store::read_file_budgeted(&root.join("seal"), super::super::MAX_CONTENT_BYTES)?;
+    let bytes = crate::store::read_whole(&root.join("seal"))?;
     let inventory = retained::Stored::decode(&bytes, &root, value.reference)?;
     inventory.replay_published(
         &root,
         store,
         BundleValue::KIND,
         BundleValue::SCHEMA,
-        super::super::content_digest::<BundleValue>(&value.encode(4096)?),
+        super::super::content_digest::<BundleValue>(&value.encode()?),
         store.graph_budget(),
     )?;
     Ok(Box::from(COMPLETE))
@@ -167,9 +162,7 @@ fn same_size_frozen_owned_member_digest_corruption_repairs_same_action() {
     let root = temporary("same-action-member-corruption");
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<BundleValue>(b"owned-member", 4096)
-        .unwrap();
+    let recipe = context.discover::<BundleValue>(b"owned-member").unwrap();
     let current = store.clone();
     let first = Evaluator::new(&store, &Counts::default())
         .discover_bundled(
@@ -223,9 +216,7 @@ fn oversized_frozen_seal_classifies_corruption_then_repairs_and_reuses() {
     let root = temporary("oversized-seal-corruption");
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<BundleValue>(b"oversized-seal", 4096)
-        .unwrap();
+    let recipe = context.discover::<BundleValue>(b"oversized-seal").unwrap();
     let current = store.clone();
     let first = Evaluator::new(&store, &Counts::default())
         .discover_bundled(&recipe, move |value| validate(value, &current), stable)
@@ -234,7 +225,7 @@ fn oversized_frozen_seal_classifies_corruption_then_repairs_and_reuses() {
     let seal = old_root.join("seal");
     let frozen = fs::metadata(&seal).unwrap().permissions();
     fs::set_permissions(&seal, fs::Permissions::from_mode(0o600)).unwrap();
-    let oversized = super::super::MAX_CONTENT_BYTES as u64 + 1;
+    let oversized = first.value().seal_length as u64 + 1;
     fs::OpenOptions::new()
         .write(true)
         .open(&seal)

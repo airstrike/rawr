@@ -40,7 +40,7 @@ pub fn cached(
     let recipe = context.discover::<Attestation>(&recipe(&selected))?;
     let toolchain = node::Evaluator::new(&store, sink).discover_budgeted(
         &recipe,
-        move |candidate, budget| candidate.revalidate(&selected, &limits, budget),
+        move |candidate, budget| candidate.revalidate(&selected, budget),
         || Attestation::discover(context, &limits),
     )?;
     Ok(context.retain_toolchain(Arc::new(toolchain)))
@@ -49,7 +49,6 @@ pub fn cached(
 impl Attestation {
     #[cfg(test)]
     pub(crate) fn fixture_replay(context: &Context) {
-        let limits = context.limits();
         let store = context.open_store().expect("fixture replay store");
         let recipe = context
             .discover::<Self>(&fixed_recipe())
@@ -71,11 +70,8 @@ impl Attestation {
     #[cfg(test)]
     pub(crate) fn fixture_current(context: &Context, root: &Path) {
         let attestation = tests::fixture_attestation(root);
-        let limits = context.limits();
         let store = context.open_store().expect("the fixture store opens");
-        let recipe = context
-            .discover::<Self>(&fixed_recipe())
-            .unwrap();
+        let recipe = context.discover::<Self>(&fixed_recipe()).unwrap();
         let validated = node::Evaluator::new(&store, &metrics::Noop)
             .discover_budgeted(
                 &recipe,
@@ -113,10 +109,7 @@ impl Attestation {
         Self::capture(proof, Some(budget))
     }
 
-    fn capture(
-        proof: Proof,
-        budget: Option<&node::GraphBudget>,
-    ) -> Result<Self, node::Error> {
+    fn capture(proof: Proof, budget: Option<&node::GraphBudget>) -> Result<Self, node::Error> {
         let target_directory = target_directory(&proof.rustc.path, proof.target())?;
         validate_directory("toolchain target", &target_directory)?;
         // One toolchain account per capture records the state targets
@@ -134,7 +127,6 @@ impl Attestation {
     fn revalidate(
         &self,
         selected: &process::Native,
-        limits: &crate::cargo::Limits,
         budget: &node::GraphBudget,
     ) -> Result<Box<[u8]>, node::Error> {
         // The selection is part of the key; a record under it naming other
@@ -149,7 +141,7 @@ impl Attestation {
     }
 
     #[cfg(test)]
-    fn revalidate_files(&self, limits: &crate::cargo::Limits) -> Result<Box<[u8]>, node::Error> {
+    fn revalidate_files(&self) -> Result<Box<[u8]>, node::Error> {
         self.revalidate_files_budgeted(None)
     }
 
@@ -165,8 +157,7 @@ impl Attestation {
                 return Err(node::Error::Codec("toolchain executable evidence changed"));
             }
         }
-        if state_files_with_budget(&self.proof.rustc.path, budget)?.as_ref()
-            != self.state.as_ref()
+        if state_files_with_budget(&self.proof.rustc.path, budget)?.as_ref() != self.state.as_ref()
         {
             return Err(node::Error::Codec("toolchain installation state changed"));
         }
@@ -700,20 +691,19 @@ mod tests {
     fn canonical_codec_round_trips_and_current_file_drift_rejects() {
         let root = temporary("toolchain-codec");
         let attestation = fixture_attestation(&root);
-        let limit = crate::cargo::Limits::standard().node_output_bytes();
-        let bytes = attestation.encode(limit).expect("the attestation encodes");
-        let decoded = Attestation::decode(&bytes, limit).expect("the attestation decodes");
-        assert_eq!(decoded.encode(limit).expect("the replay reencodes"), bytes);
+        let bytes = attestation.encode().expect("the attestation encodes");
+        let decoded = Attestation::decode(&bytes).expect("the attestation decodes");
+        assert_eq!(decoded.encode().expect("the replay reencodes"), bytes);
         let mut trailing = bytes.to_vec();
         trailing.push(0);
         assert!(matches!(
-            Attestation::decode(&trailing, limit),
+            Attestation::decode(&trailing),
             Err(node::Error::Codec(_))
         ));
         fs::write(root.join("lib/rustlib/components"), b"changed")
             .expect("the state fixture changes");
         assert!(matches!(
-            decoded.revalidate_files(&crate::cargo::Limits::standard()),
+            decoded.revalidate_files(),
             Err(node::Error::Codec("toolchain installation state changed"))
         ));
         fs::remove_dir_all(root).expect("the codec fixture retires");
@@ -723,7 +713,6 @@ mod tests {
     fn historical_decode_does_not_observe_the_current_target_directory() {
         let root = temporary("toolchain-historical-decode");
         let attestation = fixture_attestation(&root);
-        let limits = crate::cargo::Limits::standard();
         let bytes = attestation.encode().unwrap();
         fs::remove_dir_all(&attestation.target_directory)
             .expect("the historical target directory is removed");
@@ -746,14 +735,10 @@ mod tests {
         let root = temporary("toolchain-capture-account");
         let budget = node::GraphBudget::new();
         let attestation = fixture_attestation_in(&root, Some(&budget));
-        let limits = crate::cargo::Limits::standard();
         let current = attestation
             .revalidate_files_budgeted(Some(&budget))
             .expect("the warm evidence is current");
-        assert_eq!(
-            current,
-            attestation.encode().unwrap()
-        );
+        assert_eq!(current, attestation.encode().unwrap());
         fs::remove_dir_all(root).expect("the capture fixture retires");
     }
 
@@ -790,7 +775,7 @@ mod tests {
         let validated = node::Evaluator::new(&store, &counts)
             .discover(
                 &recipe,
-                move |candidate| candidate.revalidate_files(&limits),
+                move |candidate| candidate.revalidate_files(),
                 || Ok(attestation),
             )
             .expect("the fixture toolchain node publishes");
@@ -988,12 +973,10 @@ mod tests {
         let counts = Counts::default();
         let evaluate = |attestation: Option<Attestation>, selected: process::Native| {
             let store = context.open_store().unwrap();
-            let recipe = context
-                .discover::<Attestation>(&recipe(&selected))
-                .unwrap();
+            let recipe = context.discover::<Attestation>(&recipe(&selected)).unwrap();
             node::Evaluator::new(&store, &counts).discover_budgeted(
                 &recipe,
-                move |candidate, budget| candidate.revalidate(&selected, &limits, budget),
+                move |candidate, budget| candidate.revalidate(&selected, budget),
                 move || attestation.ok_or(node::Error::State("unexpected miss")),
             )
         };
@@ -1078,8 +1061,7 @@ mod tests {
             #[cfg(feature = "rustc-driver")]
             driver: executable("rawr-import-driver"),
         };
-        Attestation::capture(proof, &crate::cargo::Limits::standard(), budget)
-            .expect("the fixture attestation seals")
+        Attestation::capture(proof, budget).expect("the fixture attestation seals")
     }
 
     #[derive(Debug, Eq, PartialEq)]

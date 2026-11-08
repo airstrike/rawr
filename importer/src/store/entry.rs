@@ -189,7 +189,9 @@ pub(super) fn read_file_budgeted_with(
 /// Read a whole file the store wrote whose length no fixed format bounds:
 /// an envelope, a payload or a seal. Its length is what the filesystem says.
 pub(crate) fn read_whole(path: &Path) -> Result<Box<[u8]>, Error> {
-    read_file_with_budget(path, usize::MAX, None, |actual| file_limit(usize::MAX, actual))
+    read_file_with_budget(path, usize::MAX, None, |actual| {
+        file_limit(usize::MAX, actual)
+    })
 }
 
 /// `read_whole` for a candidate entry, whose damage is corruption.
@@ -209,7 +211,10 @@ pub(super) fn read_candidate_file_budgeted(path: &Path, limit: usize) -> Result<
 
 /// Read exact typed output whose length its envelope declares.
 /// Its allocation/content hashes must be charged before the typed decoder runs.
-pub(crate) fn read_payload_budgeted(path: &Path, content_length: usize) -> Result<Box<[u8]>, Error> {
+pub(crate) fn read_payload_budgeted(
+    path: &Path,
+    content_length: usize,
+) -> Result<Box<[u8]>, Error> {
     read_file_with_budget(path, content_length, Some(content_length), |actual| {
         Error::Corrupt {
             path: path.to_path_buf(),

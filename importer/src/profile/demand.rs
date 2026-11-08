@@ -586,7 +586,6 @@ mod owned_tests {
 
     #[test]
     fn owned_demand_replays_exact_captured_checked_data_without_current_authority() {
-        let limits = crate::cargo::Limits::standard();
         let contract = contract();
         let demand = Builder::new(&contract, [7; 32], b"checked payload")
             .expect("builder")
@@ -596,10 +595,7 @@ mod owned_tests {
         let parts = Demand::decode_owned(&bytes, &contract, [7; 32], b"checked payload")
             .expect("owned replay");
         assert!(parts.value().node_chain().is_none());
-        assert_eq!(
-            parts.value().encode().expect("reencode"),
-            bytes
-        );
+        assert_eq!(parts.value().encode().expect("reencode"), bytes);
         assert_eq!(parts.value().digest(), demand.digest());
         assert!(Demand::decode_owned(&bytes, &contract, [8; 32], b"checked payload").is_err());
         assert!(Demand::decode_owned(&bytes, &contract, [7; 32], b"other payload").is_err());
@@ -612,7 +608,6 @@ mod owned_tests {
 
     #[test]
     fn owned_generated_replay_preserves_digests_and_rejects_lifecycle_and_version_drift() {
-        let limits = crate::cargo::Limits::standard();
         let contract = contract();
         let demand = Builder::new(&contract, [7; 32], &[7; 32])
             .expect("builder")
@@ -620,18 +615,10 @@ mod owned_tests {
             .expect("demand");
         for lifecycle in [false, true] {
             let proof = Generator::new(&demand).seal(lifecycle).expect("proof");
-            let bytes = proof
-                .encode_owner()
-                .expect("canonical owner");
+            let bytes = proof.encode_owner().expect("canonical owner");
             let parts = Proof::decode_owned(&bytes, &demand, lifecycle).expect("owned replay");
             assert!(parts.value().node_chain().is_none());
-            assert_eq!(
-                parts
-                    .value()
-                    .encode_owner()
-                    .expect("reencode"),
-                bytes
-            );
+            assert_eq!(parts.value().encode_owner().expect("reencode"), bytes);
             assert_eq!(parts.value().fingerprint(), proof.fingerprint());
             assert_eq!(parts.value().owner_fingerprint(), proof.owner_fingerprint());
             assert_eq!(

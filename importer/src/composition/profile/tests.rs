@@ -33,9 +33,8 @@ fn owned_runner_overlay_uses_retained_composition_on_cold_and_warm_requests() {
         )
         .expect("checked prefix");
         witnesses.store(0, Ordering::Relaxed);
-        let generated =
-            super::prepare_retained(&adapter, &prefix.profile, &prefix.checked, &limits)
-                .expect("historical generated profile");
+        let generated = super::prepare_retained(&adapter, &prefix.profile, &prefix.checked)
+            .expect("historical generated profile");
         assert_eq!(
             witnesses.load(Ordering::Relaxed),
             0,
@@ -55,7 +54,7 @@ fn owned_runner_overlay_uses_retained_composition_on_cold_and_warm_requests() {
             )
             .expect("owned request");
         witnesses.store(0, Ordering::Relaxed);
-        let manifest = request.generate(&limits).expect("retained overlay");
+        let manifest = request.generate().expect("retained overlay");
         let overlay = manifest.overlay.as_ref().expect("overlay receipt");
         assert!(overlay.retention().is_some());
         assert_eq!(witnesses.load(Ordering::Relaxed), if warm { 0 } else { 1 });
@@ -189,17 +188,16 @@ fn downstream_cold_mixed_and_warm_reuse_exact_owned_outputs() {
                 &definition,
                 &prefix.profile,
                 &CachedChecked(&prefix.checked),
-                &limits,
             )
             .expect("seed admitted demand");
             if seed_generated {
-                profile::Proof::generate::<CachedChecked<'_>, _>(&definition, &seeded, &limits)
+                profile::Proof::generate::<CachedChecked<'_>, _>(&definition, &seeded)
                     .expect("seed admitted generated proof");
             }
         }
         witnesses.store(0, Ordering::Relaxed);
         let (first_demand, first_generated) =
-            super::evaluate(&adapter, &prefix.profile, &prefix.checked, &limits)
+            super::evaluate(&adapter, &prefix.profile, &prefix.checked)
                 .expect("connected downstream");
         assert_eq!(calls.demand.load(Ordering::Relaxed), 1);
         assert_eq!(calls.generated.load(Ordering::Relaxed), 1);
@@ -230,8 +228,7 @@ fn downstream_cold_mixed_and_warm_reuse_exact_owned_outputs() {
             .contains(prefix.checked.node_chain().parent().action()));
         witnesses.store(0, Ordering::Relaxed);
         let (warm_demand, warm_generated) =
-            super::evaluate(&adapter, &prefix.profile, &prefix.checked, &limits)
-                .expect("warm downstream");
+            super::evaluate(&adapter, &prefix.profile, &prefix.checked).expect("warm downstream");
         assert_eq!(witnesses.load(Ordering::Relaxed), 0);
         assert_eq!(calls.demand.load(Ordering::Relaxed), 1);
         assert_eq!(calls.generated.load(Ordering::Relaxed), 1);
@@ -278,8 +275,7 @@ fn downstream_cold_mixed_and_warm_reuse_exact_owned_outputs() {
         )
         .expect("edited checked prefix");
         let (edited_demand, edited_generated) =
-            super::evaluate(&adapter, &prefix.profile, &prefix.checked, &limits)
-                .expect("edited downstream");
+            super::evaluate(&adapter, &prefix.profile, &prefix.checked).expect("edited downstream");
         assert_eq!(
             calls.demand.load(Ordering::Relaxed),
             2,
@@ -294,7 +290,7 @@ fn downstream_cold_mixed_and_warm_reuse_exact_owned_outputs() {
         );
         witnesses.store(0, Ordering::Relaxed);
         let (edited_warm_demand, edited_warm_generated) =
-            super::evaluate(&adapter, &prefix.profile, &prefix.checked, &limits)
+            super::evaluate(&adapter, &prefix.profile, &prefix.checked)
                 .expect("edited warm downstream");
         assert_eq!(calls.demand.load(Ordering::Relaxed), 2);
         assert_eq!(calls.generated.load(Ordering::Relaxed), generated_calls);
@@ -335,7 +331,7 @@ fn downstream_promotion_rejects_mutated_external_ancestor() {
     changed.store(true, Ordering::Relaxed);
     witnesses.store(0, Ordering::Relaxed);
     assert!(
-        super::evaluate(&adapter, &prefix.profile, &prefix.checked, &limits).is_err(),
+        super::evaluate(&adapter, &prefix.profile, &prefix.checked).is_err(),
         "staged owned computation cannot grant current authority after external drift"
     );
     assert!(
@@ -394,14 +390,14 @@ fn downstream_rejects_foreign_profile_with_matching_semantics_before_callbacks()
     );
     for warm in [false, true] {
         if warm {
-            super::evaluate(&adapter, &first.profile, &first.checked, &limits)
+            super::evaluate(&adapter, &first.profile, &first.checked)
                 .expect("seed valid downstream hits");
         }
         let demand_calls = calls.demand.load(Ordering::Relaxed);
         let generated_calls = calls.generated.load(Ordering::Relaxed);
         witnesses.store(0, Ordering::Relaxed);
         assert!(
-            super::evaluate(&adapter, &second.profile, &first.checked, &limits).is_err(),
+            super::evaluate(&adapter, &second.profile, &first.checked).is_err(),
             "foreign profile must not reuse or construct outputs from checked A"
         );
         assert_eq!(calls.demand.load(Ordering::Relaxed), demand_calls);
@@ -448,11 +444,10 @@ fn downstream_rebuilds_evicted_demand_and_reuses_surviving_generated_output() {
         &definition,
         &prefix.profile,
         &CachedChecked(&prefix.checked),
-        &limits,
     )
     .expect("seed admitted demand");
     let seeded_generated =
-        profile::Proof::generate::<CachedChecked<'_>, _>(&definition, &seeded_demand, &limits)
+        profile::Proof::generate::<CachedChecked<'_>, _>(&definition, &seeded_demand)
             .expect("seed newer admitted generated output");
     let store = prefix
         .checked
@@ -507,7 +502,7 @@ fn downstream_rebuilds_evicted_demand_and_reuses_surviving_generated_output() {
         generated_bytes
     );
     let (rebuilt_demand, reused_generated) =
-        super::evaluate(&adapter, &prefix.profile, &prefix.checked, &limits)
+        super::evaluate(&adapter, &prefix.profile, &prefix.checked)
             .expect("recover missing demand with surviving generated output");
     assert_eq!(calls.demand.load(Ordering::Relaxed), 2);
     assert_eq!(
@@ -563,7 +558,7 @@ fn historical_checked_continuation_saves_one_cold_replay_and_reuses_warm_outputs
                 |contract, _, _| Ok::<_, ()>((demand(contract, source, &limits), Checked)),
             )
             .unwrap();
-            super::evaluate(&adapter, &prefix.profile, &prefix.checked, &limits).unwrap();
+            super::evaluate(&adapter, &prefix.profile, &prefix.checked).unwrap();
             ordinary_checks = witnesses.load(Ordering::Relaxed);
             continue;
         }
@@ -585,7 +580,7 @@ fn historical_checked_continuation_saves_one_cold_replay_and_reuses_warm_outputs
             "checked bytes remain historical"
         );
         let (selected, generated) =
-            super::evaluate_retained(&adapter, &prefix.profile, &prefix.checked, &limits).unwrap();
+            super::evaluate_retained(&adapter, &prefix.profile, &prefix.checked).unwrap();
         assert_eq!(witnesses.load(Ordering::Relaxed) + 1, ordinary_checks);
         let warm_api = graph(&root.0, &witnesses, &limits);
         witnesses.store(0, Ordering::Relaxed);
@@ -601,7 +596,7 @@ fn historical_checked_continuation_saves_one_cold_replay_and_reuses_warm_outputs
         )
         .unwrap();
         let (warm_selected, warm_generated) =
-            super::evaluate_retained(&adapter, &warm.profile, &warm.checked, &limits).unwrap();
+            super::evaluate_retained(&adapter, &warm.profile, &warm.checked).unwrap();
         assert_eq!(witnesses.load(Ordering::Relaxed), 0);
         assert_eq!(selected.digest(), warm_selected.digest());
         assert_eq!(generated.fingerprint(), warm_generated.fingerprint());
@@ -637,7 +632,7 @@ fn historical_checked_mutation_rejects_at_profile_promotion() {
         },
     )
     .expect("owned output does not claim current ancestry");
-    assert!(super::evaluate_retained(&adapter, &prefix.profile, &prefix.checked, &limits).is_err());
+    assert!(super::evaluate_retained(&adapter, &prefix.profile, &prefix.checked).is_err());
 }
 
 #[test]
@@ -710,8 +705,7 @@ fn pair_continuation_combines_promotion_with_render_check() {
             symbolic
                 .request_retained(
                     native,
-                    super::prepare_retained(&adapter, &prefix.profile, &prefix.checked, &limits)
-                        .unwrap(),
+                    super::prepare_retained(&adapter, &prefix.profile, &prefix.checked).unwrap(),
                     owner.revision().unwrap(),
                 )
                 .unwrap()
@@ -719,14 +713,14 @@ fn pair_continuation_combines_promotion_with_render_check() {
             symbolic
                 .request(
                     native,
-                    super::evaluate_retained(&adapter, &prefix.profile, &prefix.checked, &limits)
+                    super::evaluate_retained(&adapter, &prefix.profile, &prefix.checked)
                         .unwrap()
                         .1,
                     owner.revision().unwrap(),
                 )
                 .unwrap()
         };
-        let manifest = request.generate(&limits).unwrap();
+        let manifest = request.generate().unwrap();
         assert!(
             manifest.profile.node_chain().is_some(),
             "current proof before runner build"
@@ -760,8 +754,7 @@ fn pair_request_rejects_arbitrary_runner_before_callbacks() {
         |contract, _, _| Ok::<_, ()>((demand(contract, source, &limits), Checked)),
     )
     .unwrap();
-    let pair =
-        super::prepare_retained(&adapter, &prefix.profile, &prefix.checked, &limits).unwrap();
+    let pair = super::prepare_retained(&adapter, &prefix.profile, &prefix.checked).unwrap();
     let symbolic = prefix
         .checked
         .replay_demand(Arbitrary, &prefix.contract, source, &limits)
@@ -819,8 +812,7 @@ fn stale_entries_after_the_check_report_stale() {
     // The profile and the request retain what the check read; the runner's
     // source is where it is used, and finds it stale.
     let checked = prefix();
-    let pair =
-        super::prepare_retained(&adapter, &checked.profile, &checked.checked, &limits).unwrap();
+    let pair = super::prepare_retained(&adapter, &checked.profile, &checked.checked).unwrap();
     let request = checked
         .checked
         .replay_demand((), &checked.contract, source, &limits)
@@ -831,7 +823,7 @@ fn stale_entries_after_the_check_report_stale() {
         .unwrap();
     changed.store(true, Ordering::Relaxed);
     let error = request
-        .generate(&limits)
+        .generate()
         .map(drop)
         .expect_err("a stale request is never generated");
     assert!(error.is_stale(), "{error:?}");
@@ -861,8 +853,7 @@ fn historical_pair_rejects_drift_at_actual_render_boundary() {
         |contract, _, _| Ok::<_, ()>((demand(contract, source, &limits), Checked)),
     )
     .unwrap();
-    let pair =
-        super::prepare_retained(&adapter, &prefix.profile, &prefix.checked, &limits).unwrap();
+    let pair = super::prepare_retained(&adapter, &prefix.profile, &prefix.checked).unwrap();
     let symbolic = prefix
         .checked
         .replay_demand((), &prefix.contract, source, &limits)
@@ -878,5 +869,5 @@ fn historical_pair_rejects_drift_at_actual_render_boundary() {
         )
         .unwrap();
     changed.store(true, Ordering::Relaxed);
-    assert!(request.generate(&limits).is_err());
+    assert!(request.generate().is_err());
 }

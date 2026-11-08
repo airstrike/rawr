@@ -6,11 +6,6 @@
 use std::io::{self, Write};
 
 const MAGIC: &[u8; 8] = b"RAWRA002";
-pub(crate) const MAX_PATH_BYTES: usize = 4 * 1024 * 1024;
-pub(crate) const MAX_ATTEMPTS: usize = 65_536;
-pub(crate) const MAX_INVOCATIONS: usize = 4096;
-pub(crate) const MAX_WIRE_BYTES: usize =
-    85 + MAX_INVOCATIONS * 128 + MAX_ATTEMPTS * 4 + MAX_PATH_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Invocation<'a> {
@@ -47,9 +42,6 @@ impl<'a> Completion<'a> {
     }
 
     pub(crate) fn decode(bytes: &'a [u8]) -> Result<Self, &'static str> {
-        if bytes.len() > MAX_WIRE_BYTES {
-            return Err("attempt completion exceeds wire limit");
-        }
         let mut cursor = bytes;
         if take(&mut cursor, 8)? != MAGIC {
             return Err("unsupported attempt completion version");
@@ -61,25 +53,23 @@ impl<'a> Completion<'a> {
             _ => return Err("invalid attempt completion flags"),
         };
         let count = number(&mut cursor)?;
-        if count == 0 || count > MAX_INVOCATIONS {
+        if count == 0 {
             return Err("invalid attempt invocation count");
         }
-        let invocations = take(&mut cursor, count * 128)?;
+        let invocations = take(
+            &mut cursor,
+            count
+                .checked_mul(128)
+                .ok_or("invalid attempt invocation count")?,
+        )?;
         for row in invocations.as_chunks::<128>().0 {
             identity(&row[..64])?;
             identity(&row[64..])?;
         }
         let count = number(&mut cursor)?;
-        if count > MAX_ATTEMPTS {
-            return Err("attempt count exceeds limit");
-        }
-        let mut total = 0usize;
-        let paths = population(&mut cursor, count, &mut total)?;
+        let paths = population(&mut cursor, count)?;
         let query_count = number(&mut cursor)?;
-        if query_count > MAX_ATTEMPTS - count {
-            return Err("combined attempt and query count exceeds limit");
-        }
-        let queries = population(&mut cursor, query_count, &mut total)?;
+        let queries = population(&mut cursor, query_count)?;
         if !cursor.is_empty() {
             return Err("trailing attempt completion bytes");
         }
@@ -112,18 +102,13 @@ impl<'a> Completion<'a> {
     }
 }
 
-fn population<'a>(
-    cursor: &mut &'a [u8],
-    count: usize,
-    total: &mut usize,
-) -> Result<&'a [u8], &'static str> {
+/// `count` framed paths. Each is read from the bytes it was given, so a
+/// count the bytes cannot hold is truncation, whatever its size.
+fn population<'a>(cursor: &mut &'a [u8], count: usize) -> Result<&'a [u8], &'static str> {
     let start = *cursor;
     for _ in 0..count {
         let length = number(cursor)?;
-        *total = total
-            .checked_add(length)
-            .ok_or("attempt path length overflow")?;
-        if length == 0 || *total > MAX_PATH_BYTES {
+        if length == 0 {
             return Err("invalid attempt path population");
         }
         std::str::from_utf8(take(cursor, length)?).map_err(|_| "attempt path is not UTF-8")?;
@@ -157,41 +142,38 @@ pub(crate) fn encode<'a>(
 ) -> io::Result<()> {
     let invalid = |reason| io::Error::new(io::ErrorKind::InvalidInput, reason);
     identity(arguments_digest.as_bytes()).map_err(invalid)?;
-    if invocations.is_empty() || invocations.len() > MAX_INVOCATIONS {
+    let count = |length: usize| {
+        u32::try_from(length).map_err(|_| invalid("attempt count is not encodable"))
+    };
+    if invocations.is_empty() {
         return Err(invalid("invalid attempt invocation count"));
     }
     for row in invocations {
         identity(row.nonce.as_bytes()).map_err(invalid)?;
         identity(row.correlation.as_bytes()).map_err(invalid)?;
     }
-    if paths.len() > MAX_ATTEMPTS || queries.len() > MAX_ATTEMPTS - paths.len() {
-        return Err(invalid("attempt count exceeds limit"));
-    }
-    let mut total = 0usize;
     for path in paths.clone().chain(queries.clone()) {
-        total = total
-            .checked_add(path.len())
-            .ok_or_else(|| invalid("attempt path length overflow"))?;
-        if path.is_empty() || total > MAX_PATH_BYTES {
+        count(path.len())?;
+        if path.is_empty() {
             return Err(invalid("invalid attempt path population"));
         }
     }
     writer.write_all(MAGIC)?;
     writer.write_all(arguments_digest.as_bytes())?;
     writer.write_all(&[u8::from(conservative)])?;
-    writer.write_all(&(invocations.len() as u32).to_le_bytes())?;
+    writer.write_all(&count(invocations.len())?.to_le_bytes())?;
     for row in invocations {
         writer.write_all(row.nonce.as_bytes())?;
         writer.write_all(row.correlation.as_bytes())?;
     }
-    writer.write_all(&(paths.len() as u32).to_le_bytes())?;
+    writer.write_all(&count(paths.len())?.to_le_bytes())?;
     for path in paths {
-        writer.write_all(&(path.len() as u32).to_le_bytes())?;
+        writer.write_all(&count(path.len())?.to_le_bytes())?;
         writer.write_all(path.as_bytes())?;
     }
-    writer.write_all(&(queries.len() as u32).to_le_bytes())?;
+    writer.write_all(&count(queries.len())?.to_le_bytes())?;
     for path in queries {
-        writer.write_all(&(path.len() as u32).to_le_bytes())?;
+        writer.write_all(&count(path.len())?.to_le_bytes())?;
         writer.write_all(path.as_bytes())?;
     }
     Ok(())
@@ -315,13 +297,17 @@ mod tests {
         assert!(Completion::decode(&old).is_err());
     }
 
+    /// A completion past every figure a large project reaches (more than
+    /// 65,536 attempts, more than 4 MiB of paths) encodes and decodes: the
+    /// wire is bounded by its own bytes, never by a count (#1231).
     #[test]
-    fn both_populations_share_count_and_byte_limits() {
+    fn a_population_past_the_old_limits_round_trips() {
         let row = [Invocation {
             nonce: ID,
             correlation: ID,
         }];
-        let attempts = vec!["a"; MAX_ATTEMPTS - 1];
+        let attempts = vec!["a"; 70_000];
+        let path = "x".repeat(5 * 1024 * 1024);
         let mut bytes = Vec::new();
         encode(
             &mut bytes,
@@ -329,46 +315,16 @@ mod tests {
             false,
             &row,
             attempts.iter().copied(),
-            ["b"].into_iter(),
+            [path.as_str(), "b"].into_iter(),
         )
         .unwrap();
         let decoded = Completion::decode(&bytes).unwrap();
-        assert_eq!(decoded.paths().count(), MAX_ATTEMPTS - 1);
-        assert_eq!(decoded.queries().collect::<Vec<_>>(), ["b"]);
+        assert_eq!(decoded.paths().count(), 70_000);
+        assert_eq!(decoded.queries().collect::<Vec<_>>(), [path.as_str(), "b"]);
         let query_count = 209 + attempts.len() * 5;
-        let mut excessive = bytes.clone();
-        excessive[query_count..query_count + 4].copy_from_slice(&2u32.to_le_bytes());
-        assert!(Completion::decode(&excessive).is_err());
-        bytes.clear();
-        assert!(encode(
-            &mut bytes,
-            ID,
-            false,
-            &row,
-            attempts.iter().copied(),
-            ["b", "c"].into_iter()
-        )
-        .is_err());
-        assert!(bytes.is_empty());
-
-        let path = "x".repeat(MAX_PATH_BYTES - 1);
-        encode(
-            &mut bytes,
-            ID,
-            true,
-            &row,
-            [path.as_str()].into_iter(),
-            ["y"].into_iter(),
-        )
-        .unwrap();
-        assert_eq!(
-            Completion::decode(&bytes).unwrap().queries().next(),
-            Some("y")
-        );
-        let query_length = bytes.len() - 5;
-        bytes[query_length..query_length + 4].copy_from_slice(&2u32.to_le_bytes());
-        bytes.push(b'z');
-        assert!(Completion::decode(&bytes).is_err());
+        let mut truncated = bytes.clone();
+        truncated[query_count..query_count + 4].copy_from_slice(&3u32.to_le_bytes());
+        assert!(Completion::decode(&truncated).is_err());
     }
 
     #[test]
@@ -405,17 +361,17 @@ mod tests {
             nonce: ID,
             correlation: ID,
         }];
-        let path = "x".repeat(MAX_PATH_BYTES);
         assert!(encode(
             &mut bytes,
             ID,
             false,
             &row,
-            [path.as_str()].into_iter(),
+            [""].into_iter(),
             ["x"].into_iter()
         )
         .is_err());
         assert!(bytes.is_empty());
+        let path = "x".repeat(1024);
         encode(
             &mut bytes,
             ID,

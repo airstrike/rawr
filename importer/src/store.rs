@@ -27,7 +27,9 @@ mod pins;
 mod recovery;
 mod session;
 
-pub(crate) use entry::{existing_directory_budgeted, read_file_budgeted, read_whole};
+#[cfg(any(test, feature = "rustc-driver"))]
+pub(crate) use entry::read_file_budgeted;
+pub(crate) use entry::{existing_directory_budgeted, read_whole};
 
 pub(crate) use pins::{transaction, Guard as PinGuard, Role as PinRole};
 
@@ -1035,14 +1037,7 @@ impl Store {
     ) -> Result<T, Error> {
         ownership.require(&self.root, self.project)?;
         lease::with_project(&self.root, self.project, || {
-            self.with_node_reservation_locked(
-                ownership,
-                key,
-                parent_count,
-                in_flight,
-                evaluate,
-                Ok,
-            )
+            self.with_node_reservation_locked(ownership, key, parent_count, in_flight, evaluate, Ok)
         })
     }
 

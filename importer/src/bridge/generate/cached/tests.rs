@@ -50,7 +50,7 @@ impl Fixture {
         let observed_checks = Arc::clone(&checks);
         let observed_revision = Arc::clone(&revision);
         let recipe = context
-            .discover::<Parent>(b"mutable-overlay-ancestor", 64)
+            .discover::<Parent>(b"mutable-overlay-ancestor")
             .expect("the observed ancestor recipe seals");
         let ancestor = evaluator
             .discover(
@@ -67,7 +67,6 @@ impl Fixture {
         let recipe = context
             .direct_with_parents::<Parent>(
                 b"owned-overlay-parent",
-                64,
                 &[node::Parent::validated(&ancestor)],
             )
             .expect("the intermediate parent recipe seals");
@@ -105,11 +104,11 @@ impl node::Value for Parent {
     const KIND: node::Kind = node::Kind::ProfileProof;
     const SCHEMA: u32 = u32::MAX;
 
-    fn encode(&self, _: usize) -> Result<Box<[u8]>, node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(Box::from(&b"owned-parent"[..]))
     }
 
-    fn decode(bytes: &[u8], _: usize) -> Result<Self, node::Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         if bytes == b"owned-parent" {
             Ok(Self)
         } else {

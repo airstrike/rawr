@@ -39,7 +39,7 @@ fn native_waits_for_heavy_before_action_and_releases_publication_during_executio
     let context = prepare_fixture(&root);
     let store = context.open_store().expect("the order store opens");
     let recipe = context
-        .direct::<Artifact>(b"native-order", 4_096)
+        .direct::<Artifact>(b"native-order")
         .expect("recipe seals");
     let heavy = store.root().join("locks/heavy.lock");
     let action = store
@@ -97,24 +97,20 @@ fn retained_bundle_rejects_parent_drift_after_execution_wait() {
     let observed = Arc::clone(&refreshes);
     let parent = Evaluator::new(&store, &counts)
         .discover(
-            &context.discover::<Artifact>(b"wait-parent", 4096).unwrap(),
+            &context.discover::<Artifact>(b"wait-parent").unwrap(),
             move |value| {
                 observed.fetch_add(1, Ordering::Relaxed);
                 if rejected.load(Ordering::Relaxed) {
                     return Err(Error::State("parent changed while waiting"));
                 }
-                value.encode(4096)
+                value.encode()
             },
             value,
         )
         .unwrap();
     let retention = Retention::from_validated(&parent, None).unwrap();
     let recipe = context
-        .discover_with_parents::<super::BundleValue>(
-            b"wait-child",
-            4096,
-            &[Parent::validated(&parent)],
-        )
+        .discover_with_parents::<super::BundleValue>(b"wait-child", &[Parent::validated(&parent)])
         .unwrap();
     let validation_store = store.clone();
     let heavy = store.root().join("locks/heavy.lock");
@@ -176,10 +172,10 @@ fn native_same_key_contenders_execute_once_and_different_heavy_actions_cannot_ov
     let first_store = context.open_store().expect("first store opens");
     let other_store = other.open_store().expect("other store opens");
     let recipe = context
-        .direct::<Artifact>(b"same-native", 4_096)
+        .direct::<Artifact>(b"same-native")
         .expect("first recipe seals");
     let different = other
-        .direct::<Artifact>(b"different-native", 4_096)
+        .direct::<Artifact>(b"different-native")
         .expect("different recipe seals");
     let counts = Counts::default();
     let executed = AtomicUsize::new(0);
@@ -246,13 +242,13 @@ fn healthy_native_hits_and_unrelated_pure_work_do_not_wait_for_heavy() {
     let context = prepare_fixture(&root);
     let store = context.open_store().expect("the hit store opens");
     let warm = context
-        .direct::<Artifact>(b"warm-native", 4_096)
+        .direct::<Artifact>(b"warm-native")
         .expect("warm recipe seals");
     Evaluator::new(&store, &Counts::default())
         .native(&warm, value)
         .expect("warm value seeds");
     let pure = context
-        .direct::<Artifact>(b"pure-independent", 4_096)
+        .direct::<Artifact>(b"pure-independent")
         .expect("pure recipe seals");
     let counts = Counts::default();
     let (sent, received) = mpsc::channel();
