@@ -571,7 +571,11 @@ fn names_arity_owner_and_arm_types_are_compile_checked() {
     let cases = [
         ("enum Message { Tick } pub fn f(message: Message) { match message { Missing::Tick => () } }", Category::UnknownType, "Missing"),
         ("enum Message { Tick } pub fn f(message: Message) { match message { Message::Missing => () } }", Category::UnknownMember, "Message::Missing"),
-        ("enum Message { Move(i64, i64) } pub fn f(message: Message) { match message { Message::Move(value) => () } }", Category::PatternFields, "this pattern has 1 field, but the corresponding tuple variant has 2 fields"),
+        (
+            "enum Message { Move(i64, i64) } pub fn f(message: Message) { match message { Message::Move(value) => () } }",
+            Category::PatternFields,
+            "this pattern has 1 field, but the corresponding tuple variant has 2 fields",
+        ),
         (
             "enum Message { Tick, Tock } pub fn f(message: Message) -> i64 { match message { Message::Tick => 1, Message::Tock => false } }",
             Category::TypeMismatch,
