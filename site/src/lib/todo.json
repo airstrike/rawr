@@ -4250,7 +4250,7 @@
           "start": 58,
           "size": 6,
           "state": "now",
-          "note": "The universe's generated bindings built for wasm32 and loaded by rawr-web: the playground, the landing page and an embedding site get iced, ratatui and any declared crate in the browser. #1393 (the runner model builds for wasm32), #1394 (extraction for a selected target), #1395 (a page entry, one instance per Run), #435, #1384",
+          "note": "The universe's generated bindings built for wasm32 and loaded by rawr-web: the playground, the landing page and an embedding site get iced, ratatui and any declared crate in the browser. #1393: rawr and rawr-import compile for wasm32 (host code behind a target cfg); next #1394 (extraction for a selected target), #1395 (a browser shell, the runtime as a wasm library); #435, #1384",
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"},
             {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open"},
