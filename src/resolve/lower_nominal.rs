@@ -10526,6 +10526,28 @@ enum BindingKind {
     Receiver { owner: ImmutableString },
 }
 
+/// An array literal being parsed, for the frames its elements open: a
+/// call that opens one runs ahead of the statement, so each element before
+/// its own is bound ahead of that frame, as Rust evaluates elements in
+/// order (`[icon().size(12), Slot::from("Verified")]`).
+struct FrameArray {
+    /// Where the literal starts.
+    start: Position,
+    /// How many statements' frames were open when it started: a call
+    /// opening a frame of the same statement binds its elements.
+    depth: usize,
+    /// Where the element being parsed starts, its index, and how many
+    /// frames its statement had then.
+    element: (Position, usize, usize),
+    /// Each element whose frame needs the elements before it bound first,
+    /// with how many frames its statement had when it started.
+    bound: Vec<(usize, usize)>,
+}
+
+/// An array literal's elements, its array's repeat count and a `vec!`'s
+/// count expression (`[x; 3]`, `vec![x; n]`).
+type ArrayElements = (Vec<ParsedExpr>, Option<usize>, Option<ParsedExpr>);
+
 /// A scope frame a statement's call opens (D558 tier 1): `outer` declares
 /// what keeps the frame, `inner` binds and opens it ahead of the statement,
 /// and `after` stores the copies it gives back once it has ended.
@@ -11729,6 +11751,12 @@ struct PendingConversion {
 }
 
 /// The `into` forms of a facade value's type, and the value's span.
+/// A library type's `from` functions and the dependency that owns them.
+type FromItems = (
+    Vec<crate::host::item::Definition>,
+    Option<crate::host::facade::Dependency>,
+);
+
 struct HostInto {
     forms: Vec<crate::host::item::Definition>,
     owner: Option<crate::host::facade::Dependency>,
@@ -12778,6 +12806,10 @@ struct Parser<'a> {
     /// ahead of its statement, so one written before the call that opens
     /// it would run after it.
     frame_effects: Vec<(Position, Vec<Position>)>,
+    /// The array literals being parsed, innermost last: a call that opens
+    /// a frame in one element is preceded by the calls of the elements
+    /// before it, which are bound ahead of the frame in their order.
+    frame_arrays: Vec<FrameArray>,
     /// For each `(` open, where the call it starts begins, if it is one.
     call_parens: Vec<Option<Position>>,
     /// Where the last token was, if a `(` after it calls something, and
@@ -13135,6 +13167,7 @@ impl<'a> Parser<'a> {
             pending_arguments: None,
             frames: Vec::new(),
             frame_effects: Vec::new(),
+            frame_arrays: Vec::new(),
             call_parens: Vec::new(),
             callee: None,
             temporaries: 0,
@@ -17735,6 +17768,15 @@ impl<'a> Parser<'a> {
             if let Some(source) = &source {
                 self.coerce_expr(source, &mut argument)?;
             }
+            let call = span(start, close);
+            if let Some(target) = &target
+                && let Some((items, owner)) = self.text_from_target(&argument.ty, target, call)?
+            {
+                self.move_local(&mut argument)?;
+                let mut value = self.call_host_function(&items, owner, vec![argument], call)?;
+                self.coerce_expr(target, &mut value)?;
+                return Ok(value);
+            }
             self.splice_tokens(vec![
                 (Token::Period, close),
                 (Token::Identifier(Box::new("into".into())), close),
@@ -18796,23 +18838,9 @@ impl<'a> Parser<'a> {
             }
             _ => return Err(self.ambiguous_conversion(target, source, call, fitting.len())),
         }
-        let Ty::Host { proof, .. } = target else {
+        let Some((items, owner)) = self.target_from(target) else {
             return Ok(None);
         };
-        let path = format!("{}::from", proof.definition.path());
-        // An imported type no alias of the program names, as a field's
-        // `Background` is, has its `from` at one of its crate's paths.
-        #[cfg(feature = "rust-import")]
-        let path = match self.imported_member_owner(target, "from") {
-            Some(owner) if self.models.host_items(&path).is_none() => {
-                format!("{}::from", owner.path())
-            }
-            _ => path,
-        };
-        let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
-            return Ok(None);
-        };
-        let owner = self.models.item_owner(&path).cloned();
         let argument =
             self.operator_expr(origin::Fragment::default(), source.clone(), host.receiver);
         let fits = |parser: &mut Self, item: &crate::host::item::Definition| {
@@ -18847,6 +18875,22 @@ impl<'a> Parser<'a> {
                 return Err(self.ambiguous_conversion(target, source, call, fitting.len()));
             }
         };
+        // A value that borrows the text opens a scope frame (D558 tier 1),
+        // which only a conversion whose target is known as it is parsed
+        // opens ahead of its statement (`text_from_target`).
+        if item.opens() && source.is_text() {
+            let target = target.name(&self.models);
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: format!(
+                    "a `{target}` that borrows the text it converts, where only a later use \
+                     gives the type, is not supported in Rawr yet; name the type where the \
+                     conversion is written, by `T::from(..)`, `Into::<T>::into(..)` or a `let` \
+                     annotation"
+                )
+                .into(),
+                source: call,
+            });
+        }
         let signature =
             fits(self, &item).ok_or_else(|| self.ambiguous_conversion(target, source, call, 1))?;
         let output = self.inference.resolve(&signature.output);
@@ -18860,6 +18904,52 @@ impl<'a> Parser<'a> {
             call,
         )
         .map(Some)
+    }
+
+    /// The library type `target`'s `from` functions and their owner: at
+    /// the path its alias names, or for an imported type no alias of the
+    /// program names, as a field's `Background` is, at one of its crate's
+    /// paths. `None` when neither has one.
+    fn target_from(&self, target: &Ty) -> Option<FromItems> {
+        let Ty::Host { proof, .. } = target else {
+            return None;
+        };
+        let path = format!("{}::from", proof.definition.path());
+        #[cfg(feature = "rust-import")]
+        let path = match self.imported_member_owner(target, "from") {
+            Some(owner) if self.models.host_items(&path).is_none() => {
+                format!("{}::from", owner.path())
+            }
+            _ => path,
+        };
+        let items = self.models.host_items(&path)?.to_vec();
+        Some((items, self.models.item_owner(&path).cloned()))
+    }
+
+    /// The `from` functions of the library type `target` for a conversion
+    /// of text of type `source` whose target the context gives as it is
+    /// parsed (`Into::<T>::into(x)`, `<T as From<S>>::from(x)`, `let t: T
+    /// = x.into()`): called as `T::from(x)` is, so the impl for the text's
+    /// own type is selected as rustc selects it (`From<&'a str>` for a
+    /// literal, `From<String>` for a `String`) and a value that borrows
+    /// the text opens its scope frame ahead of the statement. `None` for
+    /// another source or target. An imported target whose `from` the
+    /// program never named is demanded, as `finish_conversions` demands it.
+    fn text_from_target(
+        &mut self,
+        source: &Ty,
+        target: &Ty,
+        call: Span,
+    ) -> Result<Option<FromItems>, Error> {
+        let target = self.inference.resolve(target);
+        if !self.inference.resolve(source).is_text() || !matches!(target, Ty::Host { .. }) {
+            return Ok(None);
+        }
+        let from = self.target_from(&target);
+        if from.is_none() {
+            self.demand_from(&target, call)?;
+        }
+        Ok(from)
     }
 
     /// rustc's E0283 for a conversion of `source` whose target the program
@@ -18976,6 +19066,39 @@ impl<'a> Parser<'a> {
         !fitting.is_empty()
     }
 
+    /// The helper of a `text.into()` into the library type `target`: the
+    /// target's one `from` that takes the text's own type. `None` when none
+    /// does. An imported target whose `from` the program never named is
+    /// demanded, as `finish_conversions` demands it.
+    fn text_host_from(&mut self, into: &TextInto, target: &Ty) -> Result<Option<String>, Error> {
+        let host = HostInto {
+            forms: Vec::new(),
+            owner: None,
+            receiver: into.span,
+        };
+        let helper = self.host_into_helper(&host, &into.source, target, into.span)?;
+        if helper.is_none() {
+            self.demand_from(target, into.span)?;
+        }
+        Ok(helper)
+    }
+
+    /// The `from` of the imported type `target` the program never named,
+    /// demanded at `at` (`UnknownMember`), which the importer brings for
+    /// the next pass. `Ok` when one of its paths has one.
+    #[cfg_attr(not(feature = "rust-import"), allow(unused_variables))]
+    fn demand_from(&self, target: &Ty, at: Span) -> Result<(), Error> {
+        #[cfg(feature = "rust-import")]
+        if let Some(owner) = self.imported_public_path(target, "from") {
+            return Err(Error::UnknownMember {
+                owner,
+                member: "from".into(),
+                reference: at,
+            });
+        }
+        Ok(())
+    }
+
     /// The generic parameters `T` in scope with a bound `T: From<S>` that
     /// takes `source`, each with its `S`.
     fn generic_from_sources(&mut self, source: &Ty) -> Vec<(ImmutableString, Ty)> {
@@ -19027,6 +19150,16 @@ impl<'a> Parser<'a> {
                     Some(op) => op
                         .map(|op| self.push_op(Op::Prelude(op)))
                         .unwrap_or_default(),
+                    // A crate type's `From` of the text, as a component
+                    // crate's `impl<'a, M> From<&'a str> for Slot<'a, M>`
+                    // takes a literal and its `From<String>` a `String`: the
+                    // impl for the text's own type, its parameters inferred
+                    // from it, as rustc selects it.
+                    None if matches!(target, Ty::Host { .. })
+                        && let Some(helper) = self.text_host_from(&into, &target)? =>
+                    {
+                        helper
+                    }
                     None => {
                         return Err(Error::TypeMismatch {
                             expected: target.name(&self.models),
@@ -24890,6 +25023,24 @@ impl<'a> Parser<'a> {
         let start = value.span.start();
         if let Some((statement, effects)) = self.frame_effects.last_mut() {
             effects.retain(|at| *at < start);
+            // The calls of an array's earlier elements, bound ahead of the
+            // frame (`FrameArray`).
+            let depth = self.frames.len();
+            if let Some(array) = self
+                .frame_arrays
+                .last_mut()
+                .filter(|array| array.depth == depth && array.start >= *statement)
+            {
+                let (element, index, mark) = array.element;
+                if !effects.is_empty()
+                    && effects.iter().all(|at| array.start <= *at && *at < element)
+                {
+                    effects.clear();
+                    if array.bound.last().is_none_or(|(last, _)| *last != index) {
+                        array.bound.push((index, mark));
+                    }
+                }
+            }
             if let Some(&earlier) = effects.first() {
                 let line = statement.line().unwrap_or_default();
                 return Err(Error::UnsupportedNominalSyntax {
@@ -44840,35 +44991,20 @@ impl<'a> Parser<'a> {
             .array_hint
             .take()
             .filter(|_| !self.postfix_after_literal());
-        let mut elements = Vec::<ParsedExpr>::new();
-        let mut repeat = None;
-        // `vec![x; n]` takes any `usize` count; an array's is a constant.
-        let mut counted = None;
-        while self.peek() != close {
-            let outer = std::mem::replace(&mut self.no_struct, false);
-            let element = self.parse_expr();
-            self.no_struct = outer;
-            elements.push(element?);
-            if matches!(self.peek(), Token::SemiColon) && elements.len() == 1 {
-                self.next();
-                if array.is_some() {
-                    repeat = Some(self.parse_array_length("repeat count")?);
-                } else {
-                    let outer = std::mem::replace(&mut self.no_struct, false);
-                    let count = self.parse_expr();
-                    self.no_struct = outer;
-                    let mut count = count?;
-                    self.coerce_expr(&Ty::Int(Int::Usize), &mut count)?;
-                    counted = Some(count);
-                }
-                break;
-            }
-            if matches!(self.peek(), Token::Comma) {
-                self.next();
-            } else if self.peek() != close {
-                return Err(self.unsupported("array elements without ','"));
-            }
-        }
+        self.frame_arrays.push(FrameArray {
+            start: open,
+            depth: self.frames.len(),
+            element: (open, 0, 0),
+            bound: Vec::new(),
+        });
+        let parsed = self.parse_array_elements(&close, array);
+        let bound = self
+            .frame_arrays
+            .pop()
+            .map(|array| array.bound)
+            .unwrap_or_default();
+        let (mut elements, repeat, counted) = parsed?;
+        self.bind_framed_elements(&mut elements, bound)?;
         let end = self.expect(close, "the end of an array")?;
         // Elements naming different functions of one signature meet at a
         // `fn` pointer, as `if` arms do.
@@ -44964,6 +45100,99 @@ impl<'a> Parser<'a> {
             None => sequence::Kind::Vec,
         };
         Ok(self.operator_expr(source, Ty::sequence(kind, element), span(open, end)))
+    }
+
+    /// An array literal's elements up to `close`, and its repeat count:
+    /// a constant for an array, any `usize` for `vec![x; n]`.
+    fn parse_array_elements(
+        &mut self,
+        close: &Token,
+        array: Option<usize>,
+    ) -> Result<ArrayElements, Error> {
+        let mut elements = Vec::<ParsedExpr>::new();
+        let mut repeat = None;
+        let mut counted = None;
+        while self.peek() != *close {
+            let frames = self.frames.last().map_or(0, Vec::len);
+            let element = (self.position(), elements.len(), frames);
+            if let Some(array) = self.frame_arrays.last_mut() {
+                array.element = element;
+            }
+            let outer = std::mem::replace(&mut self.no_struct, false);
+            let element = self.parse_expr();
+            self.no_struct = outer;
+            elements.push(element?);
+            if matches!(self.peek(), Token::SemiColon) && elements.len() == 1 {
+                self.next();
+                if array.is_some() {
+                    repeat = Some(self.parse_array_length("repeat count")?);
+                } else {
+                    let outer = std::mem::replace(&mut self.no_struct, false);
+                    let count = self.parse_expr();
+                    self.no_struct = outer;
+                    let mut count = count?;
+                    self.coerce_expr(&Ty::Int(Int::Usize), &mut count)?;
+                    counted = Some(count);
+                }
+                break;
+            }
+            if matches!(self.peek(), Token::Comma) {
+                self.next();
+            } else if self.peek() != *close {
+                return Err(self.unsupported("array elements without ','"));
+            }
+        }
+        Ok((elements, repeat, counted))
+    }
+
+    /// Bind the elements before each of `bound`'s, whose call opens a
+    /// frame ahead of the statement, ahead of that frame, in order: `let
+    /// element = icon().size(12);` before the frame of
+    /// `Slot::from("Verified")`, so the elements run as Rust runs them.
+    fn bind_framed_elements(
+        &mut self,
+        elements: &mut [ParsedExpr],
+        bound: Vec<(usize, usize)>,
+    ) -> Result<(), Error> {
+        let mut done = 0;
+        let mut added = 0;
+        for (index, mark) in bound {
+            let mut frames = Vec::new();
+            for element in &mut elements[done..index] {
+                // The element moves into its binding, as into the array.
+                self.move_local(element)?;
+                let name = self.temporary("element");
+                let mut frame = Frame::default();
+                frame.inner.push_text(format!("let {name} = "));
+                frame.inner.push(element.rendered_source());
+                frame.inner.push_text("; ");
+                frames.push(frame);
+                self.bindings.insert(
+                    name.as_str().into(),
+                    Binding {
+                        ty: element.ty.clone(),
+                        mutable: true,
+                        available: true,
+                        declaration: element.span,
+                        kind: BindingKind::Local,
+                    },
+                );
+                element.prelude = origin::Fragment::default();
+                element.lvalue = Some(Lvalue::Binding {
+                    binding: name.as_str().into(),
+                    ty: element.ty.clone(),
+                });
+                element.source = origin::Fragment::plain(name);
+            }
+            done = done.max(index);
+            let count = frames.len();
+            if let Some(statement) = self.frames.last_mut() {
+                let at = (mark + added).min(statement.len());
+                statement.splice(at..at, frames);
+            }
+            added += count;
+        }
+        Ok(())
     }
 
     /// An array length or repeat count: an integer literal, or a `const`
@@ -55268,6 +55497,20 @@ impl<'a> Parser<'a> {
             }
             value.ty = target;
             return Ok(value.retain_origin());
+        }
+        // Text converts into the library type its `let` or caller expects
+        // through that type's `From` of it, as `T::from(text)` does.
+        if let Some(target) = self
+            .collect_hint
+            .as_ref()
+            .filter(|(_, depth)| *depth == self.expression_stack.len())
+            .map(|(target, _)| target.clone())
+            && let Some((items, owner)) = self.text_from_target(&source, &target, value.span)?
+        {
+            let call = value.span;
+            let mut converted = self.call_host_function(&items, owner, vec![value], call)?;
+            self.coerce_expr(&target, &mut converted)?;
+            return Ok(converted);
         }
         // Text converts into a `String`, through `From<&str>` or
         // `From<T> for T` (or into a boxed error, `box_returned_error`):
