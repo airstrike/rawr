@@ -9,6 +9,10 @@ pub trait Page: Debug + PageClone + Send {
     fn view(&self) -> String;
     /// What the page says of the shown page at `index`, which it may be.
     fn summary(&self, index: usize) -> String;
+    /// What the page is called, borrowed from it.
+    fn label(&self) -> &str;
+    /// The names the page had, borrowed from it.
+    fn items(&self) -> &[String];
 }
 
 /// A page's clone as a box, which a `Clone` page has.
@@ -71,5 +75,13 @@ impl Page for Home {
 
     fn summary(&self, index: usize) -> String {
         format!("home beside {}", title_of(index))
+    }
+
+    fn label(&self) -> &str {
+        "home"
+    }
+
+    fn items(&self) -> &[String] {
+        &[]
     }
 }

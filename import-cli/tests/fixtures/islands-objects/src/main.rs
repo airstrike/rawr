@@ -34,6 +34,16 @@ fn main() {
     let mut copy = pages[1].clone();
     copy.update(Message::Bump(10));
     println!("{:?} {:?}", pages[1], copy);
+    // Results that borrow a page, read after their calls, while the page
+    // is shared; it is reached `&mut` once they are gone.
+    let label = pages[1].label();
+    let items = pages[1].items();
+    for page in &pages {
+        println!("{} {:?}", page.label(), page.items());
+    }
+    println!("{label} {items:?} {}", pages[1].title());
+    pages[1].update(Message::Rename("held".to_string()));
+    println!("{} {:?}", pages[1].label(), pages[1].items());
     pages.push(copy);
     page::SHOWN.with_borrow_mut(|shown| shown.extend(pages));
     page::SHOWN.with_borrow(|shown| {
