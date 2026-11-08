@@ -1276,3 +1276,182 @@ impl<'a> Parser<'a> {
         Ok(Some(self.operator_expr(source, ty, expression)))
     }
 }
+
+pub(super) fn kind_code(ty: Ty) -> INT {
+    match ty {
+        Ty::Int(Int::I128) => WIDE_I128,
+        Ty::Int(Int::U128) => WIDE_U128,
+        Ty::Int(kind) => Int::KINDS
+            .iter()
+            .position(|(_, candidate)| *candidate == kind)
+            .map_or(3, |index| index as INT),
+        Ty::Float(Float::F32) => 10,
+        Ty::Char => 12,
+        Ty::Bool => 15,
+        Ty::String | Ty::Str => 16,
+        _ => 11,
+    }
+}
+
+/// rustc's message for arithmetic `symbol` of `left` and `right` that no
+/// impl covers, and the operator's trait.
+pub(super) fn arithmetic_trait(
+    symbol: &str,
+    left: &str,
+    right: &str,
+) -> Option<(String, &'static str)> {
+    Some(match symbol {
+        "+" => (format!("cannot add `{right}` to `{left}`"), "Add"),
+        "-" => (format!("cannot subtract `{right}` from `{left}`"), "Sub"),
+        "*" => (format!("cannot multiply `{left}` by `{right}`"), "Mul"),
+        "/" => (format!("cannot divide `{left}` by `{right}`"), "Div"),
+        "%" => (
+            format!("cannot calculate the remainder of `{left}` divided by `{right}`"),
+            "Rem",
+        ),
+        _ => return None,
+    })
+}
+
+/// `value as` the kind of `code` (`kind_code`), Rust's `as`: integers wrap
+/// to the width, floats saturate (`NaN` is `0`), `char` and `bool` are their
+/// numbers, a `u8` is a `char`, an `f32` is rounded.
+pub(super) fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
+    let fail = |message: &str| -> RawrResult {
+        Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    // Into an `i128` or a `u128` (from a `u64`'s or a `usize`'s bits when
+    // `UNSIGNED_SOURCE` is added), or out of a boxed one.
+    let (code, source) = match code {
+        code if code >= UNSIGNED_SOURCE => (code - UNSIGNED_SOURCE, Int::U64),
+        code => (code, Int::I64),
+    };
+    let target = Int::from_code(code).filter(|kind| kind.wide());
+    if let (Some(target), Ok(float)) = (target, value.as_float()) {
+        // Rust's `as` saturates, and `NaN` is `0`.
+        return Ok(if target == Int::I128 {
+            wide_i128(float as i128)
+        } else {
+            wide_u128(float as u128)
+        });
+    }
+    if (target.is_some() || matches!(value.0, Union::Variant(..)))
+        && let Some(number) = wide_value(value).map(|_| kind_value(value, source))
+    {
+        return Ok(match (code, Int::from_code(code)) {
+            (_, Some(kind)) => number.store(kind),
+            (10, _) => Dynamic::from_float(match number {
+                Wide::Signed(value) => value as f32 as crate::FLOAT,
+                Wide::Unsigned(value) => value as f32 as crate::FLOAT,
+            }),
+            (12, _) => Dynamic::from(char::from(number.unsigned() as u8)),
+            _ => Dynamic::from_float(match number {
+                Wide::Signed(value) => value as crate::FLOAT,
+                Wide::Unsigned(value) => value as crate::FLOAT,
+            }),
+        });
+    }
+    if let Ok(float) = value.as_float() {
+        return Ok(match code {
+            10 => Dynamic::from_float(float as f32 as crate::FLOAT),
+            11 => Dynamic::from_float(float),
+            _ if matches!(Int::KINDS[code as usize].1, Int::U64 | Int::Usize) => {
+                (float as u64 as INT).into()
+            }
+            _ => {
+                let (low, high) = Int::KINDS[code as usize].1.range();
+                let saturated = if float.is_nan() {
+                    0
+                } else if float <= low as crate::FLOAT {
+                    low
+                } else if float >= high as crate::FLOAT {
+                    high
+                } else {
+                    float as INT
+                };
+                saturated.into()
+            }
+        });
+    }
+    let integer = match (value.as_int(), value.as_char(), value.as_bool()) {
+        (Ok(integer), ..) => integer,
+        (_, Ok(c), _) => INT::from(u32::from(c)),
+        (.., Ok(b)) => INT::from(b),
+        _ => return fail("an `as` operand is not a number at runtime"),
+    };
+    Ok(match code {
+        10 => Dynamic::from_float(integer as f32 as crate::FLOAT),
+        11 => Dynamic::from_float(integer as crate::FLOAT),
+        12 => Dynamic::from(char::from(integer as u8)),
+        // A char range's item by its code point (`iterator::CHAR_OF_CODE`).
+        15 => {
+            match u32::try_from(integer).ok().and_then(char::from_u32) {
+                Some(c) => Dynamic::from(c),
+                None => return fail(
+                    "a `char` range across the surrogates U+D800 to U+DFFF is not supported in \
+                     Rawr yet",
+                ),
+            }
+        }
+        // A `u64`'s or a `usize`'s bits as an `f32` or an `f64`.
+        13 => Dynamic::from_float(integer as u64 as f32 as crate::FLOAT),
+        14 => Dynamic::from_float(integer as u64 as crate::FLOAT),
+        // A `char` or a `bool` into an `i128` or a `u128`.
+        _ if target.is_some() => integer.into(),
+        _ => {
+            let kind = Int::KINDS[code as usize].1;
+            let wrapped = match kind {
+                Int::I8 => integer as i8 as INT,
+                Int::I16 => integer as i16 as INT,
+                Int::I32 => integer as i32 as INT,
+                Int::U8 => integer as u8 as INT,
+                Int::U16 => integer as u16 as INT,
+                Int::U32 => integer as u32 as INT,
+                _ => integer,
+            };
+            wrapped.into()
+        }
+    })
+}
+
+pub(super) fn compound_operator(assignment: &Token) -> Option<Token> {
+    Some(match assignment {
+        Token::PlusAssign => Token::Plus,
+        Token::MinusAssign => Token::Minus,
+        Token::MultiplyAssign => Token::Multiply,
+        Token::DivideAssign => Token::Divide,
+        Token::ModuloAssign => Token::Modulo,
+        Token::AndAssign => Token::Ampersand,
+        Token::OrAssign => Token::Pipe,
+        Token::XOrAssign => Token::XOr,
+        Token::LeftShiftAssign => Token::LeftShift,
+        Token::RightShiftAssign => Token::RightShift,
+        _ => return None,
+    })
+}
+
+pub(super) fn binary_precedence(token: &Token) -> Option<u8> {
+    Some(match token {
+        Token::Or => 1,
+        Token::And => 2,
+        Token::EqualsTo
+        | Token::NotEqualsTo
+        | Token::LessThan
+        | Token::GreaterThan
+        | Token::LessThanEqualsTo
+        | Token::GreaterThanEqualsTo => COMPARISON,
+        Token::Pipe => 4,
+        Token::XOr => 5,
+        Token::Ampersand => 6,
+        Token::LeftShift | Token::RightShift => 7,
+        Token::Plus | Token::Minus => 8,
+        Token::Multiply | Token::Divide | Token::Modulo => 9,
+        _ => return None,
+    })
+}
+
+/// A `u64`'s or a `usize`'s bits with the sign bit flipped, which orders
+/// them as `i64`s the way they order as unsigned numbers.
+pub(super) fn unsigned_order(value: origin::Fragment) -> origin::Fragment {
+    value.surrounded("((", ") ^ (-9223372036854775807 - 1))")
+}
