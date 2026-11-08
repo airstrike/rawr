@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 128;
+const CLASSIFIER_VERSION: u32 = 129;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -294,11 +294,13 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
     opaque_self: std::cell::RefCell<Option<model::Type>>,
-    /// The opaque types `opaque_projection` gives that are being converted,
-    /// so a projection their own bounds reach again, as `A: From<Self::B>`
-    /// and `B: From<Self::A>` of one trait do, is refused, not converted
-    /// without end.
-    opaque_projecting: std::cell::RefCell<Vec<api::identity::Definition>>,
+    /// The opaque types being converted, so one their own bounds reach
+    /// again is left as its projection, not converted without end: a
+    /// projection `opaque_projection` gives, as `A: From<Self::B>` and `B:
+    /// From<Self::A>` of one trait reach, or the opaque type itself, as
+    /// `impl Number` binds `Add::Output` to it through `Number: Add<Output
+    /// = Self>` (#1262).
+    opaque_converting: std::cell::RefCell<Vec<api::identity::Definition>>,
     /// While a function's output is converted: the associated types each
     /// opaque `impl Trait` type it gives binds, as arguments of that type.
     opaque_associated: std::cell::RefCell<Vec<representability::signature::Opaque>>,
@@ -631,7 +633,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             opaque_output: std::cell::RefCell::new(None),
             opaque_excluded: std::cell::RefCell::new(BTreeMap::new()),
             opaque_self: std::cell::RefCell::new(None),
-            opaque_projecting: std::cell::RefCell::new(Vec::new()),
+            opaque_converting: std::cell::RefCell::new(Vec::new()),
             opaque_associated: std::cell::RefCell::new(Vec::new()),
             core_traits: std::cell::OnceCell::new(),
             callable_traits: std::cell::OnceCell::new(),
@@ -5834,28 +5836,14 @@ impl<P: api::Phase> Context<'_, P> {
 
     /// `projected`, the type `opaque_projection` gives, converted as a
     /// function's output is. An opaque type of its own that its own bounds
-    /// reach again while it is converted is refused (`opaque_projecting`).
+    /// reach again while it is converted is refused (`opaque_converting`).
     fn convert_projected(
         &self,
         projected: &model::Type,
     ) -> Result<representability::convert::Type, Failure> {
-        let opened = match projected {
-            model::Type::ImplTrait { id, .. } => {
-                let mut projecting = self.opaque_projecting.borrow_mut();
-                if projecting.contains(id) {
-                    return Err(representability::reject::Kind::Projection.into());
-                }
-                projecting.push(id.clone());
-                true
-            }
-            _ => false,
-        };
         let outer = self.opaque_output.replace(Some(Box::default()));
         let converted = self.convert(projected);
         *self.opaque_output.borrow_mut() = outer;
-        if opened {
-            self.opaque_projecting.borrow_mut().pop();
-        }
         converted
     }
 
@@ -9138,167 +9126,18 @@ impl<P: api::Phase> Context<'_, P> {
                 bounds,
                 captures,
             } => {
-                // The bounds name the opaque type's own parameters, which
-                // its captures fill: a trait's provided method reached as a
-                // member of a type, as `Button::explain` of `Framed`,
-                // captures the trait's parameters at that type's arguments.
-                let bindings = captures
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, capture)| match capture {
-                        model::Argument::Type(ty) => Some((u32::try_from(index).ok()?, ty.clone())),
-                        _ => None,
-                    })
-                    .collect::<BTreeMap<_, _>>();
-                let bounds = &bounds
-                    .iter()
-                    .map(|predicate| {
-                        mapped_predicate(predicate, &|ty| substitute_bindings(ty, &bindings))
-                    })
-                    .collect::<Vec<_>>();
-                let excluded = self.opaque_output.borrow().clone();
-                let Some(excluded) = excluded else {
-                    return Err(representability::reject::Kind::OpaqueType.into());
-                };
-                // The captures a script callable or future fills, by their
-                // positions: where the function that gives the opaque type
-                // converts its output, those its excluded parameters are,
-                // and the same positions wherever else the type is named,
-                // as a member of it names it as its `Self`.
-                let known = self.opaque_excluded.borrow().get(id).cloned();
-                let left_out = match known {
-                    Some(positions) => positions,
-                    None => {
-                        let positions = captures
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, capture)| {
-                                matches!(capture, model::Argument::Type(model::Type::Parameter { index, .. })
-                                    if excluded.contains(index))
-                            })
-                            .filter_map(|(position, _)| u32::try_from(position).ok())
-                            .collect::<Box<[u32]>>();
-                        if !positions.is_empty() {
-                            self.opaque_excluded
-                                .borrow_mut()
-                                .insert(id.clone(), positions.clone());
-                        }
-                        positions
-                    }
-                };
-                let mut arguments = Vec::new();
-                for (position, capture) in captures.iter().enumerate() {
-                    let model::Argument::Type(ty) = capture else {
-                        continue;
-                    };
-                    if u32::try_from(position).is_ok_and(|position| left_out.contains(&position)) {
-                        continue;
-                    }
-                    arguments.push(self.convert(ty)?);
+                // An opaque type its own conversion reaches again, as `impl
+                // Number` does where `Number: Add<Output = Self>` binds
+                // `Output` to the opaque type itself, is left as the
+                // projection that names it, as rustc leaves one it cannot
+                // normalize (#1262).
+                if self.opaque_converting.borrow().contains(id) {
+                    return Err(representability::reject::Kind::Projection.into());
                 }
-                // Each associated type its bounds bind, as `impl Program<
-                // State = S>` binds `State`, is one more argument, so a
-                // call that takes the opaque type's value reads `P::State`
-                // from it, as rustc does. So is each one a bound's
-                // supertraits bind, as `impl Straw<(), Progress, Error>`
-                // binds `Future::Output` through `Sipper` and `Core`.
-                let mut associated = Vec::new();
-                for (trait_id, item, ty) in self.bound_associated(bounds) {
-                    let Some(name) = self.definition_name(&item) else {
-                        continue;
-                    };
-                    let identity = *crate::surface::identity::Definition::of(&trait_id).as_bytes();
-                    if associated.iter().any(
-                        |(known, _): &(representability::signature::Associated, u32)| {
-                            known.trait_identity() == identity && known.name() == name
-                        },
-                    ) {
-                        continue;
-                    }
-                    // A value that is a tuple, as `timed(..)`'s `impl
-                    // Program<Message = (Message, Instant)>` binds, is one
-                    // as a call's value is.
-                    let Ok(value) = self.convert_value(&ty) else {
-                        continue;
-                    };
-                    let Ok(position) = u32::try_from(arguments.len()) else {
-                        continue;
-                    };
-                    self.retain_str(name)?;
-                    associated.push((
-                        representability::signature::Associated::new(identity, name.into()),
-                        position,
-                    ));
-                    // The type is a future, whatever bound makes it one, as
-                    // `impl Straw<..>` is through `Core`: its value is taken
-                    // where a future of its `Output` is, as rustc takes it
-                    // for iced's `Task::future(impl Future<Output = T>)`.
-                    if name == "Output" && self.is_core_trait(&trait_id, "Future") {
-                        associated.push((
-                            representability::signature::Associated::new(
-                                *crate::surface::identity::Definition::future().as_bytes(),
-                                name.into(),
-                            ),
-                            position,
-                        ));
-                    }
-                    // So is an iterator, whose `Item` a `for` loop and the
-                    // iterator's adaptors take, as rustc reads them from
-                    // `impl Iterator<Item = T>`.
-                    if name == "Item" && self.is_core_trait(&trait_id, "Iterator") {
-                        associated.push((
-                            representability::signature::Associated::new(
-                                *crate::surface::identity::Definition::iterator().as_bytes(),
-                                name.into(),
-                            ),
-                            position,
-                        ));
-                    }
-                    arguments.push(value);
-                }
-                // An `impl Fn(A..) -> B`, as iced's `Function::with` gives:
-                // each input one more argument, marked with the output's,
-                // so the value fills a callable parameter of that shape
-                // as itself (`Definition::callable`).
-                if let Some((inputs, output)) = self.opaque_call(bounds) {
-                    let callable = *crate::surface::identity::Definition::callable().as_bytes();
-                    let names = (0..inputs.len())
-                        .map(|index| format!("Input{index}"))
-                        .chain(["Output".to_owned()]);
-                    for (name, ty) in names.zip(inputs.into_iter().chain([output])) {
-                        let position =
-                            u32::try_from(arguments.len()).map_err(|_| Error::Cardinality)?;
-                        self.retain_str(&name)?;
-                        associated.push((
-                            representability::signature::Associated::new(callable, name.into()),
-                            position,
-                        ));
-                        arguments.push(ty);
-                    }
-                }
-                let definition = crate::surface::identity::Definition::of(id);
-                let traits = self.opaque_traits(bounds).unwrap_or_default();
-                let forwards = (traits.len() == 1)
-                    .then(|| self.opaque_forwards(bounds))
-                    .flatten();
-                if !associated.is_empty() || !traits.is_empty() {
-                    let mut opaques = self.opaque_associated.borrow_mut();
-                    if !opaques
-                        .iter()
-                        .any(|opaque| opaque.definition() == definition.as_bytes())
-                    {
-                        opaques.push(representability::signature::Opaque::new(
-                            *definition.as_bytes(),
-                            associated.into_boxed_slice(),
-                            traits,
-                            forwards,
-                        ));
-                    }
-                }
-                Type::Nominal {
-                    definition,
-                    arguments: arguments.into_boxed_slice(),
-                }
+                self.opaque_converting.borrow_mut().push(id.clone());
+                let converted = self.convert_opaque(id, bounds, captures);
+                self.opaque_converting.borrow_mut().pop();
+                converted?
             }
             // `<T as Trait>::Name` of an impl of the trait for `T` that sets
             // `Name`, as `next`'s `Option<Self::Item>` names an iterator's
@@ -9359,6 +9198,176 @@ impl<P: api::Phase> Context<'_, P> {
                 return Err(representability::reject::Kind::ArrayType.into())
             }
             model::Type::Never => return Err(representability::reject::Kind::NeverType.into()),
+        })
+    }
+
+    /// An opaque `impl Trait` type (`convert`): a type of its own, named by
+    /// its compiler definition, at the captures a caller's types fix and
+    /// each associated type its bounds bind.
+    fn convert_opaque(
+        &self,
+        id: &api::identity::Definition,
+        bounds: &[model::Predicate],
+        captures: &[model::Argument],
+    ) -> Result<representability::convert::Type, Failure> {
+        use representability::convert::Type;
+        // The bounds name the opaque type's own parameters, which
+        // its captures fill: a trait's provided method reached as a
+        // member of a type, as `Button::explain` of `Framed`,
+        // captures the trait's parameters at that type's arguments.
+        let bindings = captures
+            .iter()
+            .enumerate()
+            .filter_map(|(index, capture)| match capture {
+                model::Argument::Type(ty) => Some((u32::try_from(index).ok()?, ty.clone())),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let bounds = &bounds
+            .iter()
+            .map(|predicate| mapped_predicate(predicate, &|ty| substitute_bindings(ty, &bindings)))
+            .collect::<Vec<_>>();
+        let excluded = self.opaque_output.borrow().clone();
+        let Some(excluded) = excluded else {
+            return Err(representability::reject::Kind::OpaqueType.into());
+        };
+        // The captures a script callable or future fills, by their
+        // positions: where the function that gives the opaque type
+        // converts its output, those its excluded parameters are,
+        // and the same positions wherever else the type is named,
+        // as a member of it names it as its `Self`.
+        let known = self.opaque_excluded.borrow().get(id).cloned();
+        let left_out = match known {
+            Some(positions) => positions,
+            None => {
+                let positions = captures
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, capture)| {
+                        matches!(capture, model::Argument::Type(model::Type::Parameter { index, .. })
+                            if excluded.contains(index))
+                    })
+                    .filter_map(|(position, _)| u32::try_from(position).ok())
+                    .collect::<Box<[u32]>>();
+                if !positions.is_empty() {
+                    self.opaque_excluded
+                        .borrow_mut()
+                        .insert(id.clone(), positions.clone());
+                }
+                positions
+            }
+        };
+        let mut arguments = Vec::new();
+        for (position, capture) in captures.iter().enumerate() {
+            let model::Argument::Type(ty) = capture else {
+                continue;
+            };
+            if u32::try_from(position).is_ok_and(|position| left_out.contains(&position)) {
+                continue;
+            }
+            arguments.push(self.convert(ty)?);
+        }
+        // Each associated type its bounds bind, as `impl Program<
+        // State = S>` binds `State`, is one more argument, so a
+        // call that takes the opaque type's value reads `P::State`
+        // from it, as rustc does. So is each one a bound's
+        // supertraits bind, as `impl Straw<(), Progress, Error>`
+        // binds `Future::Output` through `Sipper` and `Core`.
+        let mut associated = Vec::new();
+        for (trait_id, item, ty) in self.bound_associated(bounds) {
+            let Some(name) = self.definition_name(&item) else {
+                continue;
+            };
+            let identity = *crate::surface::identity::Definition::of(&trait_id).as_bytes();
+            if associated.iter().any(
+                |(known, _): &(representability::signature::Associated, u32)| {
+                    known.trait_identity() == identity && known.name() == name
+                },
+            ) {
+                continue;
+            }
+            // A value that is a tuple, as `timed(..)`'s `impl
+            // Program<Message = (Message, Instant)>` binds, is one
+            // as a call's value is.
+            let Ok(value) = self.convert_value(&ty) else {
+                continue;
+            };
+            let Ok(position) = u32::try_from(arguments.len()) else {
+                continue;
+            };
+            self.retain_str(name)?;
+            associated.push((
+                representability::signature::Associated::new(identity, name.into()),
+                position,
+            ));
+            // The type is a future, whatever bound makes it one, as
+            // `impl Straw<..>` is through `Core`: its value is taken
+            // where a future of its `Output` is, as rustc takes it
+            // for iced's `Task::future(impl Future<Output = T>)`.
+            if name == "Output" && self.is_core_trait(&trait_id, "Future") {
+                associated.push((
+                    representability::signature::Associated::new(
+                        *crate::surface::identity::Definition::future().as_bytes(),
+                        name.into(),
+                    ),
+                    position,
+                ));
+            }
+            // So is an iterator, whose `Item` a `for` loop and the
+            // iterator's adaptors take, as rustc reads them from
+            // `impl Iterator<Item = T>`.
+            if name == "Item" && self.is_core_trait(&trait_id, "Iterator") {
+                associated.push((
+                    representability::signature::Associated::new(
+                        *crate::surface::identity::Definition::iterator().as_bytes(),
+                        name.into(),
+                    ),
+                    position,
+                ));
+            }
+            arguments.push(value);
+        }
+        // An `impl Fn(A..) -> B`, as iced's `Function::with` gives:
+        // each input one more argument, marked with the output's,
+        // so the value fills a callable parameter of that shape
+        // as itself (`Definition::callable`).
+        if let Some((inputs, output)) = self.opaque_call(bounds) {
+            let callable = *crate::surface::identity::Definition::callable().as_bytes();
+            let names = (0..inputs.len())
+                .map(|index| format!("Input{index}"))
+                .chain(["Output".to_owned()]);
+            for (name, ty) in names.zip(inputs.into_iter().chain([output])) {
+                let position = u32::try_from(arguments.len()).map_err(|_| Error::Cardinality)?;
+                self.retain_str(&name)?;
+                associated.push((
+                    representability::signature::Associated::new(callable, name.into()),
+                    position,
+                ));
+                arguments.push(ty);
+            }
+        }
+        let definition = crate::surface::identity::Definition::of(id);
+        let traits = self.opaque_traits(bounds).unwrap_or_default();
+        let forwards = (traits.len() == 1)
+            .then(|| self.opaque_forwards(bounds))
+            .flatten();
+        if !associated.is_empty() || !traits.is_empty() {
+            let mut opaques = self.opaque_associated.borrow_mut();
+            if !opaques
+                .iter()
+                .any(|opaque| opaque.definition() == definition.as_bytes())
+            {
+                opaques.push(representability::signature::Opaque::new(
+                    *definition.as_bytes(),
+                    associated.into_boxed_slice(),
+                    traits,
+                    forwards,
+                ));
+            }
+        }
+        Ok(Type::Nominal {
+            definition,
+            arguments: arguments.into_boxed_slice(),
         })
     }
 

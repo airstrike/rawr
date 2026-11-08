@@ -174,6 +174,16 @@ fn an_opaque_types_members_import() {
     runs_as_cargo_does("opaque", "7\nvalue 8\n2\n");
 }
 
+/// A function's opaque `impl Number` whose trait's supertrait binds
+/// `Add::Output` to `Self`, as num-traits' `Num` does: the opaque type's
+/// `Output` is the opaque type itself, left as its projection, and its
+/// members import. Converting it used to convert the opaque type again
+/// inside itself until the stack overflowed (#1262).
+#[test]
+fn an_opaque_type_whose_supertrait_binds_self_imports() {
+    runs_as_cargo_does("numbers", "7\n");
+}
+
 /// A crate's opaque `impl Iterator<Item = u32>`, as a function gives it
 /// and as a generic type's method gives one: `next`, a `for` loop and the
 /// iterator's adaptors (`count`, `map`, `filter`) pull from it as rustc's
