@@ -1951,6 +1951,9 @@ impl Fingerprint {
         + shared_slice_overhead::<TypeProof>()
         + shared_slice_overhead::<host::item::Fingerprint>();
 
+    /// The bytes of this facade's contract. A type of another facade it
+    /// names is that facade's export, which counts its fingerprint as a
+    /// handle, so this walks this facade's own contract alone (#1309).
     #[cfg(feature = "rust-import")]
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         let modules = self.modules.iter().try_fold(

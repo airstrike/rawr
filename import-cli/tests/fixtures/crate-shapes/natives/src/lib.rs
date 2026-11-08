@@ -1100,3 +1100,40 @@ pub mod doubling {
         }
     }
 }
+
+pub mod pages {
+    /// One block of a page, whose group holds more blocks of its own type.
+    #[derive(Debug)]
+    pub enum Block {
+        Md(&'static str),
+        Example {
+            id: &'static str,
+            description: Option<&'static str>,
+        },
+        Group {
+            title: &'static str,
+            children: &'static [Self],
+        },
+    }
+
+    /// How many blocks `blocks` holds, each group's children counted.
+    pub fn count(blocks: &[Block]) -> usize {
+        blocks
+            .iter()
+            .map(|block| match block {
+                Block::Group { children, .. } => 1 + count(children),
+                Block::Md(_) | Block::Example { .. } => 1,
+            })
+            .sum()
+    }
+
+    /// What a block is called: a group's title, an example's id, or its
+    /// text.
+    pub fn heading(block: &Block) -> &'static str {
+        match block {
+            Block::Md(text) => text,
+            Block::Example { id, .. } => id,
+            Block::Group { title, .. } => title,
+        }
+    }
+}
