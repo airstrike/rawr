@@ -1,9 +1,12 @@
 //! Assignment places: what the left side of `=` names, the steps that
 //! reach it, and how the assigned value is written back.
 
+use super::op::{Op, PreludeOp};
 use super::ty::Ty;
-use super::{field_place, origin};
-use crate::{type_def, ImmutableString};
+use super::{field_place, origin, BindingKind, ParsedExpr, Parser};
+use crate::resolve::Error;
+use crate::tokenizer::Token;
+use crate::{type_def, ImmutableString, Span};
 
 #[derive(Clone)]
 pub(super) struct Field {
@@ -170,4 +173,295 @@ pub(super) enum Writeback {
     /// A place the runtime changes in place: `v[0]`, a field `s[1]`, a
     /// nested place's leaf.
     Place(origin::Fragment),
+}
+
+impl<'a> Parser<'a> {
+    /// The statement storing `value` into `lvalue`.
+    pub(super) fn store_lvalue(
+        &mut self,
+        lvalue: &Lvalue,
+        value: origin::Fragment,
+    ) -> Result<origin::Fragment, Error> {
+        Ok(match lvalue {
+            Lvalue::Binding { binding, .. } => {
+                let mut rendered = origin::Fragment::plain(format!("{binding} = "));
+                rendered.push(value);
+                rendered.push_text(";");
+                rendered
+            }
+            Lvalue::Place { place, .. } => {
+                let mut rendered = place.clone();
+                rendered.push_text(" = ");
+                rendered.push(value);
+                rendered.push_text(";");
+                rendered
+            }
+            Lvalue::Field(field) => {
+                let mut rendered = field.place();
+                rendered.push_text(" = ");
+                rendered.push(value);
+                rendered.push_text(";");
+                rendered
+            }
+            Lvalue::Slice(_) => return Err(self.unsupported("changing a slice range in place")),
+            Lvalue::Nested(nested) => self.store_nested(nested, value),
+        })
+    }
+
+    /// `place = value` of a nested place: each field on the way copied
+    /// into a local, the leaf set, and the fields stored back.
+    pub(super) fn store_nested(
+        &mut self,
+        nested: &Nested,
+        replacement: origin::Fragment,
+    ) -> origin::Fragment {
+        let (read, place, store) = self.nested_parts_with(nested, true, None);
+        let mut rendered = origin::Fragment::plain("{ ");
+        rendered.push(read);
+        rendered.push(place);
+        rendered.push_text(" = ");
+        rendered.push(replacement);
+        rendered.push_text("; ");
+        rendered.push(store);
+        rendered.push_text("}");
+        rendered
+    }
+
+    /// The left operand of `place op= value` through a `RefCell` borrow
+    /// or a borrow guard, and the statement's parts. The place's own read
+    /// gives the value the operator changes, so `*cell.borrow_mut() += 1`
+    /// borrows once. Through a borrow guard (D554.7(f)) the right operand
+    /// is evaluated first, as rustc evaluates a primitive `op=`'s, and the
+    /// guard's method is called once to read, change and store the value.
+    pub(super) fn open_compound(
+        &mut self,
+        nested: &Nested,
+        at: Span,
+        replacement: &mut ParsedExpr,
+    ) -> (ParsedExpr, OpenedPlace) {
+        let native = nested
+            .steps
+            .iter()
+            .any(|step| matches!(step, PlaceStep::Cell { native: true, .. }));
+        let mut evaluated = origin::Fragment::default();
+        let rhs = native.then(|| {
+            let rhs = self.temporary("rhs");
+            evaluated.push_text(format!("let {rhs} = "));
+            evaluated.push(replacement.rendered_source());
+            evaluated.push_text("; ");
+            let mut operand = self.operator_expr(
+                rhs.as_str().into(),
+                replacement.ty.clone(),
+                replacement.span,
+            );
+            operand.outcome = replacement.outcome;
+            operand.evaluation = replacement.evaluation;
+            *replacement = operand;
+            rhs
+        });
+        let (read, place, store) = self.nested_parts_with(nested, false, rhs.as_deref());
+        let target = self.operator_expr(place.clone(), nested.ty.clone(), at);
+        let mut opening = evaluated;
+        opening.push(read);
+        (
+            target,
+            OpenedPlace {
+                opening,
+                place,
+                store,
+            },
+        )
+    }
+
+    /// A nested place as one the runtime assigns and calls methods on: the
+    /// statements copying each field on the way into a local, the leaf's
+    /// place, and the statements storing the fields back, innermost first.
+    pub(super) fn nested_parts(
+        &mut self,
+        nested: &Nested,
+    ) -> (origin::Fragment, origin::Fragment, origin::Fragment) {
+        self.nested_parts_with(nested, false, None)
+    }
+
+    /// [`Self::nested_parts`] of a place the statement `overwrite`s: a
+    /// cell's or a borrow guard's value at the leaf is stored without being
+    /// read first, so `*state.write() = v` calls the guard's method once.
+    /// A place an `op=` `updates` with its evaluated right operand, so named,
+    /// changes a borrow guard's value inside one call of its method
+    /// ([`Self::cell_update_step`]).
+    pub(super) fn nested_parts_with(
+        &mut self,
+        nested: &Nested,
+        overwrite: bool,
+        updates: Option<&str>,
+    ) -> (origin::Fragment, origin::Fragment, origin::Fragment) {
+        let mut place = nested.base.clone();
+        let mut read = origin::Fragment::default();
+        let mut stores = Vec::new();
+        let leaf = nested.steps.len().saturating_sub(1);
+        for (index, step) in nested.steps.iter().enumerate() {
+            match step {
+                PlaceStep::Index(index) => {
+                    place.push_text("[");
+                    place.push(index.clone());
+                    place.push_text("]");
+                }
+                // The field itself, below the place before it (D568).
+                PlaceStep::Field { slot, .. } => place = field_place(place, *slot),
+                PlaceStep::Cell { release, native } => {
+                    let reads = !(overwrite && index == leaf);
+                    let (cell_read, cell_store, local) = match updates {
+                        Some(rhs) if *native => self.cell_update_step(&place, rhs),
+                        _ => self.cell_step(&place, *release, reads),
+                    };
+                    read.push(cell_read);
+                    stores.push(cell_store);
+                    place = origin::Fragment::plain(local);
+                }
+                PlaceStep::Path { path, call } => {
+                    if let Some((before, after)) = call {
+                        read.push_text(format!("let {} = ", path.as_str()));
+                        read.push(before.clone());
+                        read.push(place.clone());
+                        read.push(after.clone());
+                        read.push_text("; ");
+                    }
+                    let local = self.temporary("part");
+                    if overwrite && index == leaf {
+                        read.push_text(format!("let {local} = (); "));
+                    } else {
+                        let getter = self.push_op(Op::Prelude(PreludeOp::PathGet));
+                        read.push_text(format!("let {local} = "));
+                        read.push(place.clone());
+                        read.push_text(format!(".{getter}("));
+                        read.push(path.clone());
+                        read.push_text("); ");
+                    }
+                    let setter = self.push_op(Op::Prelude(PreludeOp::PathSet));
+                    let mut store = place.clone();
+                    store.push_text(format!(".{setter}("));
+                    store.push(path.clone());
+                    store.push_text(format!(", {local}); "));
+                    stores.push(store);
+                    place = origin::Fragment::plain(local);
+                }
+                PlaceStep::Setup(setup) => {
+                    read.push(setup.clone());
+                    read.push_text(" ");
+                }
+                PlaceStep::Member(member) => place.push_text(format!("[{member}]")),
+                PlaceStep::Accessor {
+                    place: bound,
+                    stored,
+                    read: reader,
+                    store: writer,
+                } => {
+                    let local = self.temporary("part");
+                    read.push_text(format!("let {local} = {{ let {bound} = "));
+                    read.push(place.clone());
+                    read.push_text("; ");
+                    read.push(reader.clone());
+                    read.push_text(" }; ");
+                    let mut store = place.clone();
+                    store.push_text(format!(" = {{ let {bound} = "));
+                    store.push(place.clone());
+                    store.push_text(format!("; let {stored} = {local}; "));
+                    store.push(writer.clone());
+                    store.push_text(" }; ");
+                    stores.push(store);
+                    place = origin::Fragment::plain(local);
+                }
+            }
+        }
+        let mut store = origin::Fragment::default();
+        for part in stores.into_iter().rev() {
+            store.push(part);
+        }
+        (read, place, store)
+    }
+
+    /// A nested place changed by the statement being read (a method on it,
+    /// `push`): its fields copied out before the statement and stored back
+    /// after it (`field_entries`); the leaf's place.
+    pub(super) fn nested_place(&mut self, nested: &Nested) -> origin::Fragment {
+        let (read, place, store) = self.nested_parts(nested);
+        self.field_entries.push((read, store));
+        place
+    }
+
+    /// `place op= value`'s new value: through the left operand's
+    /// `AddAssign` (and kin) on a crate type, else the binary operator's.
+    pub(super) fn compound_assignment(
+        &mut self,
+        operator: Token,
+        target: ParsedExpr,
+        mut replacement: ParsedExpr,
+    ) -> Result<ParsedExpr, Error> {
+        let symbol = match operator {
+            Token::Plus => "+=",
+            Token::Minus => "-=",
+            Token::Multiply => "*=",
+            Token::Divide => "/=",
+            Token::Modulo => "%=",
+            Token::Ampersand => "&=",
+            Token::Pipe => "|=",
+            Token::XOr => "^=",
+            Token::LeftShift => "<<=",
+            Token::RightShift => ">>=",
+            _ => "",
+        };
+        if let Some(value) = self.operator_impl(symbol, &target, Some(&mut replacement))? {
+            return Ok(value);
+        }
+        self.apply_binary(operator, None, target, replacement)
+    }
+
+    /// `place = replacement;` for a mutable local, element or field.
+    pub(super) fn assign_place(
+        &mut self,
+        lvalue: &Lvalue,
+        replacement: origin::Fragment,
+        mutation: Span,
+    ) -> Result<origin::Fragment, Error> {
+        let binding_name = lvalue.binding().clone();
+        let Some(binding) = self.mutation_binding(&binding_name) else {
+            return Err(self.unsupported("assignment through an unknown binding"));
+        };
+        if !binding.mutable {
+            return Err(match &binding.kind {
+                BindingKind::Receiver { owner } => Error::ImmutableReceiver {
+                    owner: owner.clone(),
+                    mutation,
+                    receiver: binding.declaration,
+                },
+                BindingKind::Local | BindingKind::Invocation => {
+                    self.immutable_assignment(lvalue, binding.declaration, mutation)
+                }
+            });
+        }
+        Ok(match lvalue {
+            Lvalue::Binding { .. } => {
+                let mut rendered = origin::Fragment::plain(format!("{binding_name} = "));
+                rendered.push(replacement);
+                rendered.push_text(";");
+                rendered
+            }
+            Lvalue::Place { place, .. } => {
+                let mut rendered = place.clone();
+                rendered.push_text(" = ");
+                rendered.push(replacement);
+                rendered.push_text(";");
+                rendered
+            }
+            Lvalue::Field(field) => {
+                let mut rendered = field.place();
+                rendered.push_text(" = ");
+                rendered.push(replacement);
+                rendered.push_text(";");
+                rendered
+            }
+            Lvalue::Slice(_) => return Err(self.unsupported("assigning to a slice range")),
+            Lvalue::Nested(nested) => self.store_nested(nested, replacement),
+        })
+    }
 }
