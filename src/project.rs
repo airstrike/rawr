@@ -290,8 +290,8 @@ enum Entry {
     Script(PathBuf),
     /// A Cargo package's crate root without the `// rawr` marker.
     Unmarked(PathBuf),
-    /// A package with marked code and several binaries, none of them its
-    /// `default-run`: these.
+    /// A package with several binaries, none of them its `default-run`:
+    /// these, as `cargo run` names them.
     Ambiguous(Box<[Box<str>]>),
     None,
 }
@@ -305,8 +305,8 @@ enum Entry {
 /// that may start with a shebang or frontmatter is read whole. An unmarked
 /// one is read whole, with the native modules it declares, until a marked
 /// module turns up. With neither marked, the first that exists is the
-/// unmarked entry. With several binaries and no `default-run`, any marked
-/// target makes the package's entry ambiguous, as `cargo run` finds it.
+/// unmarked entry. With several binaries and no `default-run`, the
+/// package's entry is ambiguous, as `cargo run` finds it.
 fn entry(root: &Path) -> Result<Entry, Error> {
     let manifest = root.join(CARGO_NAME);
     if !path_exists(&manifest, Resource::Manifest)? {
@@ -315,7 +315,7 @@ fn entry(root: &Path) -> Result<Entry, Error> {
     let Some(workspace) = workspace(&manifest)? else {
         // Without Cargo, Rawr knows only Cargo's default crate roots.
         let source = root.join(SOURCE_DIRECTORY);
-        return marked_root([source.join("main.rs"), source.join("lib.rs")], None, None);
+        return marked_root([source.join("main.rs"), source.join("lib.rs")], None);
     };
     let Some(package) = workspace.package(&manifest) else {
         return Ok(Entry::None);
@@ -331,8 +331,7 @@ fn entry(root: &Path) -> Result<Entry, Error> {
             .binaries()
             .map(|binary| binary.name().into())
             .collect();
-        let roots = paths(package.binaries().chain(package.library()).collect());
-        return marked_root(roots, Some(binaries), None);
+        return Ok(Entry::Ambiguous(binaries));
     }
     let roots = paths(
         package
@@ -341,15 +340,13 @@ fn entry(root: &Path) -> Result<Entry, Error> {
             .chain(package.library())
             .collect(),
     );
-    marked_root(roots, None, Some(package))
+    marked_root(roots, Some(package))
 }
 
-/// The entry the first of `roots` that is marked or reaches a marked
-/// module makes, as [`entry`] picks it: `package`'s, or when the package
-/// has several `binaries` and no `default-run`, an ambiguous one.
+/// The entry of `package` (`None` without Cargo) that the first of `roots`
+/// that is marked or reaches a marked module makes, as [`entry`] picks it.
 fn marked_root(
     roots: impl IntoIterator<Item = PathBuf>,
-    binaries: Option<Box<[Box<str>]>>,
     package: Option<&cargo::Package>,
 ) -> Result<Entry, Error> {
     let mut unmarked = None;
@@ -366,10 +363,10 @@ fn marked_root(
             unmarked.get_or_insert(path);
             continue;
         }
-        return Ok(match binaries {
-            Some(binaries) => Entry::Ambiguous(binaries),
-            None if marking.script => Entry::Script(path),
-            None => Entry::Found(path, package.cloned()),
+        return Ok(if marking.script {
+            Entry::Script(path)
+        } else {
+            Entry::Found(path, package.cloned())
         });
     }
     Ok(unmarked.map_or(Entry::None, Entry::Unmarked))
