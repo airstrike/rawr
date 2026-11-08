@@ -3,6 +3,7 @@
 use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
 use sha2::{Digest as _, Sha256};
 
 #[cfg(feature = "rustc-driver")]
@@ -13,6 +14,7 @@ pub(crate) mod decode;
 pub mod identity;
 pub mod ledger;
 pub mod model;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod semantic;
 
 #[cfg(feature = "rustc-driver")]
@@ -70,8 +72,9 @@ impl Phase for Extracted {
 /// Fresh input proof plus the optional current content-addressed API receipt.
 #[doc(hidden)]
 pub struct FreshEvidence {
+    #[cfg(not(target_arch = "wasm32"))]
     input: crate::input::proof::Proof,
-    chain: Option<crate::node::Chain>,
+    chain: Option<crate::node_parts::Chain>,
 }
 
 /// A SHA-256 identity of canonical semantic API evidence.
@@ -653,6 +656,7 @@ impl<P: Phase> Graph<P> {
 
     /// Existing callback-visible exact evidence and accounting, without changing
     /// when a callback runs or certifying its treatment of external inputs.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn callback_observations(
         &self,
         input: crate::input::fingerprint::Fingerprint,
@@ -819,6 +823,7 @@ impl Fingerprint {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Graph<Captured> {
     /// A copy of this captured graph, as a long-running owner keeps it (see
     /// [`keep_graphs`]).
@@ -1178,7 +1183,7 @@ impl Graph<Captured> {
     pub(crate) fn publish_with_chain(
         self,
         input: crate::input::proof::Proof,
-        chain: Option<crate::node::Chain>,
+        chain: Option<crate::node_parts::Chain>,
     ) -> Result<Graph<Extracted>> {
         Ok(Graph {
             invocations: self.invocations,
@@ -1404,6 +1409,7 @@ impl Graph<Captured> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn retains_support_provenance(
     outcome: &ledger::Support,
     definitions: &[model::Definition],
@@ -1421,10 +1427,12 @@ fn retains_support_provenance(
 
 impl Graph<Extracted> {
     /// The content identity of the exact normal-build inputs sealed at publication.
+    #[cfg(not(target_arch = "wasm32"))]
     pub const fn freshness_fingerprint(&self) -> crate::input::fingerprint::Fingerprint {
         self.evidence.input.fingerprint()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn into_freshness_proof(self) -> crate::input::proof::Proof {
         self.evidence.input
     }
@@ -1433,13 +1441,14 @@ impl Graph<Extracted> {
     /// through the shared DAG rather than a legacy or evidence-only path.
     #[doc(hidden)]
     #[must_use]
-    pub const fn node_chain(&self) -> Option<&crate::node::Chain> {
+    pub const fn node_chain(&self) -> Option<&crate::node_parts::Chain> {
         self.evidence.chain.as_ref()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
-    pub fn with_node_chain_for_test(mut self, chain: crate::node::Chain) -> Self {
+    pub fn with_node_chain_for_test(mut self, chain: crate::node_parts::Chain) -> Self {
         self.evidence.chain = Some(chain);
         self
     }
@@ -1801,7 +1810,7 @@ mod selected_preflight {
     /// A stored selected ledger that fails to scan charges nothing.
     #[test]
     fn scan_failure_charges_nothing() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         for selected in [
             &br#"[[],["ab","\"#[..],
             &br#"["abc","\"#[..],

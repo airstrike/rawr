@@ -1,34 +1,46 @@
 //! Typestate-sealed generated runner manifests.
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod artifact;
+#[cfg(not(target_arch = "wasm32"))]
 mod build;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use build::EXECUTION_SCHEMA;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(all(test, feature = "test-fixtures"))]
 pub(crate) use build::fixture_build;
 pub mod manifest;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mirror;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod overlay;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod runtime;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "test-fixtures")]
 #[doc(hidden)]
 pub use build::share_build_directory;
+#[cfg(not(target_arch = "wasm32"))]
 pub use build::Error as BuildError;
 
 /// A manifest whose normalized source exists but has not been linked.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Generated {
     pub(crate) _private: (),
 }
 
 /// A manifest whose executable has been independently sealed.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Built {
     native: Native,
     read_set: Option<crate::node::read_set::Prepared>,
 }
 
 // One value per launched runner, held for its life; boxing would only add an allocation.
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Native {
     Legacy {
@@ -42,6 +54,7 @@ pub(crate) enum Native {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Native {
     fn revalidate(&self) -> Result<(), artifact::Error> {
         match self {
@@ -57,6 +70,7 @@ impl Native {
 }
 
 /// Phase-indexed ownership of one exact runner request and its generated files.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Manifest<P, B> {
     pub(crate) request: crate::surface::Request<B>,
     pub(crate) native: crate::input::proof::Proof,
@@ -69,6 +83,7 @@ pub struct Manifest<P, B> {
     pub(crate) phase: P,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<B> Manifest<Generated, B> {
     /// Borrow the exact pre-link manifest embedded in the runner.
     #[must_use]
@@ -82,6 +97,7 @@ impl<B> Manifest<Generated, B> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<B> Manifest<Built, B> {
     /// Bind the startup snapshot and retain its complete Prepared allocation.
     /// This is ownership only; watcher and pre-spawn current checks still apply.
@@ -205,6 +221,7 @@ impl<B> Manifest<Built, B> {
 }
 
 /// Build one minimal deterministic runner manifest under a supplied test DAG parent.
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "test-fixtures")]
 #[doc(hidden)]
 pub fn fixture(

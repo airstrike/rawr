@@ -650,7 +650,7 @@ fn scan(mut bytes: &[u8], entries: &[super::Entry]) -> Result<usize, super::Erro
     let rows = count
         .checked_add(endpoint_count)
         .ok_or(super::Error::Carrier)?;
-    if rows > crate::cargo::Limits::standard().items {
+    if rows > crate::limits::Limits::standard().items {
         return Err(super::Error::Carrier);
     }
     let mut previous = None;
@@ -730,7 +730,7 @@ fn equal(facts: &impl Serialize, encoded: &[u8]) -> bool {
 }
 
 fn concrete(ty: &convert::Type, depth: usize) -> bool {
-    if depth >= crate::cargo::Limits::standard().depth {
+    if depth >= crate::limits::Limits::standard().depth {
         return false;
     }
     match ty {
@@ -806,7 +806,7 @@ mod tests {
     use crate::surface::{self, identity, instance};
 
     fn snapshot() -> surface::Snapshot {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let mut snapshot = surface::Snapshot::builder(&limits);
         snapshot.entry("/fixture/main.rs").unwrap();
         snapshot.file("/fixture/main.rs", b"fixture").unwrap();
@@ -906,7 +906,7 @@ mod tests {
         .unwrap()
         .classify(
             &crate::classify::Policy::standard(),
-            &crate::cargo::Limits::standard(),
+            &crate::limits::Limits::standard(),
         )
         .unwrap()
     }
@@ -931,7 +931,7 @@ mod tests {
 
     #[test]
     fn native_inventory_projects_checked_nominal_declarations() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let contract = static_contract();
         let structure = contract
             .outcomes()
@@ -979,7 +979,7 @@ mod tests {
 
     #[test]
     fn native_inventory_projects_checked_static_operands_without_rawr_ranges() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let contract = static_contract();
         let outcome = |name| {
             contract
@@ -1081,7 +1081,7 @@ mod tests {
 
     #[test]
     fn native_inventory_projects_moved_checked_generic_calls_and_rejects_changed_types() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let contract = crate::test_fixture::representability_families()
             .classify(&crate::classify::Policy::standard(), &limits)
             .unwrap();

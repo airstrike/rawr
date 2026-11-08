@@ -484,7 +484,7 @@ impl Arguments {
         constants: Box<[convert::Constant]>,
         binders: Box<[Binder]>,
         callable: Option<super::callable::Class>,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Self, super::Error> {
         for ty in &types {
             concrete_type(ty, 0, limits.depth)?;
@@ -567,7 +567,7 @@ impl Arguments {
         types: Box<[convert::Type]>,
         constants: Box<[convert::Constant]>,
         binders: Box<[Binder]>,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Self, super::Error> {
         let proof = super::callable::borrowed::Proof::input_only(!binders.is_empty());
         Self::new(
@@ -586,7 +586,7 @@ impl Arguments {
         constants: Box<[convert::Constant]>,
         binders: Box<[Binder]>,
         scope: super::callable::shared::Scope,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Self, super::Error> {
         let proof = super::callable::shared::Proof::static_owned(scope);
         Self::new(
@@ -604,7 +604,7 @@ impl Arguments {
         types: Box<[convert::Type]>,
         constants: Box<[convert::Constant]>,
         binders: Box<[Binder]>,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Self, super::Error> {
         Self::new(
             types,
@@ -623,7 +623,7 @@ impl Arguments {
         types: Box<[convert::Type]>,
         constants: Box<[convert::Constant]>,
         binders: Box<[Binder]>,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Self, super::Error> {
         Self::new(
             types,
@@ -1087,7 +1087,7 @@ mod tests {
     #[test]
     fn instance_arguments_are_sealed() {
         let types: Box<[convert::Type]> = Box::new([convert::Type::Unit, convert::Type::Unit]);
-        let standard = crate::cargo::Limits::standard();
+        let standard = crate::limits::Limits::standard();
         let arguments =
             super::Arguments::new(types, Box::default(), Box::default(), None, &standard)
                 .expect("arguments seal");

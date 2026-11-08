@@ -20,6 +20,7 @@ pub mod identity;
 pub mod instance;
 pub mod member;
 pub mod opaque;
+#[cfg(not(target_arch = "wasm32"))]
 mod runner;
 pub mod text;
 
@@ -196,7 +197,9 @@ fn unique_applications(applied: &[Applied]) -> Vec<&application::Invocation> {
 /// ```
 pub struct Demand<P: Phase, B> {
     _brand: B,
+    #[cfg(not(target_arch = "wasm32"))]
     contract_chain: Option<runner::Binding>,
+    #[cfg(not(target_arch = "wasm32"))]
     runner: Option<runner::Inputs>,
     contract: crate::contract::fingerprint::Fingerprint,
     snapshot: Snapshot,
@@ -211,6 +214,7 @@ pub struct Demand<P: Phase, B> {
 /// Consumed demand parts available only to the generated-bridge transform.
 pub(crate) struct Request<B> {
     pub(crate) _brand: B,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) runner: Option<runner::Inputs>,
     pub(crate) contract: crate::contract::fingerprint::Fingerprint,
     pub(crate) snapshot: Snapshot,
@@ -223,10 +227,11 @@ pub(crate) struct Request<B> {
 
 #[cfg(feature = "test-fixtures")]
 impl<B> Request<B> {
-    pub(crate) fn fixture(brand: B, limits: &crate::cargo::Limits) -> Self {
+    pub(crate) fn fixture(brand: B, limits: &crate::limits::Limits) -> Self {
         let contract = crate::contract::fingerprint::Fingerprint([0x43; 32]);
         Self {
             _brand: brand,
+            #[cfg(not(target_arch = "wasm32"))]
             runner: None,
             contract,
             snapshot: Snapshot::from_rawr_digest([0x53; 32]),
@@ -347,7 +352,7 @@ impl Snapshot {
     /// Start exact, length-framed hashing of canonically ordered Rawr inputs.
     #[doc(hidden)]
     #[must_use]
-    pub fn builder(limits: &crate::cargo::Limits) -> SnapshotBuilder {
+    pub fn builder(limits: &crate::limits::Limits) -> SnapshotBuilder {
         SnapshotBuilder {
             digest: Sha256::new(),
             entry: false,
@@ -594,7 +599,7 @@ impl Contract<Classified> {
         &self,
         brand: B,
         snapshot: Snapshot,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Compiler<'_, B>, Error> {
         let allocation = self.allocation(limits)?;
         self.compiler_with_allocation(brand, snapshot, limits, allocation)
@@ -606,7 +611,7 @@ impl Contract<Classified> {
         &self,
         brand: B,
         snapshot: Snapshot,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
         mut allocation: crate::contract::Allocation,
     ) -> Result<Compiler<'_, B>, Error> {
         if !allocation.matches(self.fingerprint()) {
@@ -927,7 +932,9 @@ impl<'contract, B> Compiler<'contract, B> {
         let fingerprint = Fingerprint(surface.digest.finalize().into());
         Ok(Demand {
             _brand: self.brand,
+            #[cfg(not(target_arch = "wasm32"))]
             contract_chain: self.contract.node_chain().map(runner::Binding::capture),
+            #[cfg(not(target_arch = "wasm32"))]
             runner: None,
             contract,
             snapshot: self.snapshot,
@@ -1542,7 +1549,7 @@ impl<B> Demand<Sealed, B> {
         brand: B,
         contract: &Contract<Classified>,
         snapshot: Snapshot,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
     ) -> Result<Self, Error> {
         Self::replay_with(
             bytes,
@@ -1592,11 +1599,11 @@ impl<B> Demand<Sealed, B> {
         brand: B,
         contract: (
             crate::contract::fingerprint::Fingerprint,
-            &crate::node::Chain,
+            &crate::node_parts::Chain,
         ),
         allocation: crate::contract::Allocation,
         snapshot: Snapshot,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
         resolved: Vec<adapter::Plan>,
     ) -> Result<Self, Error> {
         Self::replay_with(
@@ -1624,13 +1631,15 @@ impl<B> Demand<Sealed, B> {
         brand: B,
         contract: (
             crate::contract::fingerprint::Fingerprint,
-            Option<&crate::node::Chain>,
+            Option<&crate::node_parts::Chain>,
         ),
         mut allocation: crate::contract::Allocation,
         snapshot: Snapshot,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
         resolve: impl FnOnce(&StoredCanonical, &mut Vec<adapter::Plan>) -> Result<(), Error>,
     ) -> Result<Self, Error> {
+        // A runner on wasm has no node chain to bind.
+        #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
         let (fingerprint, chain) = contract;
         let stored: StoredCanonical =
             serde_json::from_slice(bytes).map_err(|_| Error::Canonical)?;
@@ -1701,7 +1710,9 @@ impl<B> Demand<Sealed, B> {
         result.map_err(|_| Error::Encoding)?;
         Ok(Self {
             _brand: brand,
+            #[cfg(not(target_arch = "wasm32"))]
             contract_chain: chain.map(runner::Binding::capture),
+            #[cfg(not(target_arch = "wasm32"))]
             runner: None,
             contract: fingerprint,
             snapshot,
@@ -1747,6 +1758,7 @@ impl<B> Demand<Sealed, B> {
     pub(crate) fn into_request(self) -> Request<B> {
         Request {
             _brand: self._brand,
+            #[cfg(not(target_arch = "wasm32"))]
             runner: self.runner,
             contract: self.contract,
             snapshot: self.snapshot,
@@ -1916,11 +1928,11 @@ mod tests {
 
     fn contract() -> crate::Contract<crate::Classified> {
         crate::test_fixture::graph()
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("fixture graph classifies")
     }
 
-    fn snapshot(contents: &[u8], limits: &crate::cargo::Limits) -> Snapshot {
+    fn snapshot(contents: &[u8], limits: &crate::limits::Limits) -> Snapshot {
         let mut builder = Snapshot::builder(limits);
         builder
             .entry("/fixture/Cargo.toml")
@@ -1935,9 +1947,9 @@ mod tests {
         retained_bytes: usize,
         retained_items: usize,
         string_bytes: usize,
-    ) -> crate::cargo::Limits {
+    ) -> crate::limits::Limits {
         let mut limits =
-            crate::cargo::Limits::fixture(retained_bytes, retained_items, string_bytes);
+            crate::limits::Limits::fixture(retained_bytes, retained_items, string_bytes);
         limits.classified_contract_items = retained_items;
         limits.classified_contract_bytes = retained_bytes;
         limits
@@ -1945,7 +1957,7 @@ mod tests {
 
     #[test]
     fn body_change_rebinds_demand_without_changing_its_surface() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let contract = contract();
         let identity = contract
             .outcomes()
@@ -1976,7 +1988,7 @@ mod tests {
 
     #[test]
     fn cached_demand_replays_exact_entries_plans_fingerprint_and_allocation() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let contract = contract();
         let identity = contract
             .outcomes()
@@ -2013,7 +2025,7 @@ mod tests {
 
     #[test]
     fn sealed_demand_retains_one_exact_plan_per_unique_operation() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let contract = contract();
         let outcomes = contract.outcomes().collect::<Vec<_>>();
         let structure = outcomes[0];
@@ -2163,7 +2175,7 @@ mod tests {
 
     #[test]
     fn unresolved_generic_structure_is_rejected_before_demand_or_adapter() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         // A struct whose every parameter has a default is reached at that
         // instance, as iced's `Rectangle<T = f32>` is `Rectangle<f32>`.
         let contract = crate::test_fixture::iced_profile()
@@ -2250,7 +2262,7 @@ mod tests {
 
     #[test]
     fn exact_receiver_plan_and_surface_fingerprint_remain_stable() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let contract = crate::test_fixture::representability_families()
             .classify(&Policy::standard(), &limits)
             .expect("receiver fixture classifies");
@@ -2284,7 +2296,7 @@ mod tests {
 
     #[test]
     fn adapter_plan_allocation_accepts_its_exact_usage() {
-        let standard = crate::cargo::Limits::standard();
+        let standard = crate::limits::Limits::standard();
         let contract = contract();
         let identity = contract
             .outcomes()
@@ -2292,7 +2304,7 @@ mod tests {
             .expect("fixture function exists")
             .identity()
             .clone();
-        let seal = |limits: &crate::cargo::Limits| {
+        let seal = |limits: &crate::limits::Limits| {
             let mut compiler = contract
                 .compiler((), snapshot(b"plan allocation", limits), limits)
                 .expect("allocation compiler starts");
@@ -2312,7 +2324,7 @@ mod tests {
 
     #[test]
     fn demand_is_sorted_and_deduplicated() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let contract = contract();
         let identities = contract
             .outcomes()
@@ -2340,7 +2352,7 @@ mod tests {
 
     #[test]
     fn snapshot_and_origin_reject_noncanonical_evidence() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let mut order = Snapshot::builder(&limits);
         order.entry("e").unwrap();
         order.file("b", b"").unwrap();

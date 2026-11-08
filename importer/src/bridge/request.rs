@@ -7,7 +7,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
-    Node(#[source] Box<crate::node::Error>),
+    Node(#[source] Box<crate::node_parts::Error>),
     #[error("{0}")]
     Native(#[from] crate::Error),
     #[error(transparent)]

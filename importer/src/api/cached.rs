@@ -282,7 +282,7 @@ impl Product {
         &self,
         context: &super::Context,
         invocations: Vec<super::Invocation>,
-        limits: &crate::cargo::Limits,
+        limits: &crate::limits::Limits,
         allocation: &mut crate::extract::Allocation,
     ) -> crate::Result<Graph<Captured>> {
         let stored = self.stored().map_err(|source| crate::Error::Node {
@@ -461,8 +461,8 @@ mod tests {
 
     use super::{Form, Product};
     use crate::api::{Context, Graph};
-    use crate::cargo::Limits;
     use crate::extract::Allocation;
+    use crate::limits::Limits;
 
     fn graph(context: &Context, allocation: &mut Allocation) -> Graph<crate::api::Captured> {
         Graph::seal(

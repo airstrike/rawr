@@ -64,6 +64,10 @@ pub enum ReexportKind {
     MacroExport,
 }
 
+/// The compiler kind of an unsupported export that is a derive macro, as
+/// serde's `Serialize`: the driver's engine writes it (`engine::DERIVE_MACRO`).
+pub(crate) const DERIVE_MACRO: &str = "derive-macro";
+
 /// Stable positioned reasons for a selected path or support rejection.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum Reason {

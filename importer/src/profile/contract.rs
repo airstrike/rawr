@@ -158,7 +158,7 @@ pub struct Contract {
     endpoints: Box<[OperationEndpoint]>,
     projections: Box<[Projection]>,
     rules: [u8; 32],
-    chain: Option<crate::node::Chain>,
+    chain: Option<crate::node_parts::Chain>,
 }
 
 /// Graph-bound profile classification builder.
@@ -317,11 +317,11 @@ impl Parts {
 
     /// The internal caller supplies this product's exact authenticated or promoted
     /// profile receipt, never an API ancestor or an unrelated current chain.
-    pub(crate) fn into_current(self, chain: crate::node::Chain) -> Contract {
+    pub(crate) fn into_current(self, chain: crate::node_parts::Chain) -> Contract {
         self.into_contract(Some(chain))
     }
 
-    fn into_contract(self, chain: Option<crate::node::Chain>) -> Contract {
+    fn into_contract(self, chain: Option<crate::node_parts::Chain>) -> Contract {
         Contract {
             identity: self.identity,
             version: self.version,
@@ -367,7 +367,7 @@ impl Contract {
         identity: Identity,
         version: Version,
         graph: &crate::api::Graph<crate::api::Extracted>,
-        chain: crate::node::Chain,
+        chain: crate::node_parts::Chain,
     ) -> Result<Self, Error> {
         Ok(Parts::decode(bytes, identity, version, graph)?.into_current(chain))
     }
@@ -375,7 +375,7 @@ impl Contract {
     /// Borrow the current profile-classification node for demand joins.
     #[doc(hidden)]
     #[must_use]
-    pub const fn node_chain(&self) -> Option<&crate::node::Chain> {
+    pub const fn node_chain(&self) -> Option<&crate::node_parts::Chain> {
         self.chain.as_ref()
     }
 

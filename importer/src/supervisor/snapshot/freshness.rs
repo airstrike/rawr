@@ -151,7 +151,7 @@ mod tests {
         let root = fs::canonicalize(root).unwrap();
         let path = root.join("main.rs");
         fs::write(&path, b"before").unwrap();
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let path = path.to_str().unwrap();
         let mut snapshot = crate::surface::Snapshot::builder(&limits);
         snapshot.entry(path).unwrap();

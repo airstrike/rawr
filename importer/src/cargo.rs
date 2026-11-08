@@ -13,6 +13,13 @@ use sha2::Digest as _;
 use sha2::Sha256;
 use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, Value};
 
+pub use crate::limits::Limits;
+use crate::limits::JSON_BYTES;
+#[cfg(all(test, feature = "rustc-driver"))]
+use crate::limits::{
+    CANONICAL_BYTES, CANONICAL_ITEMS, CLASSIFIED_CONTRACT_BYTES, CLASSIFIED_CONTRACT_ITEMS,
+    INPUT_PROOF_BYTES, ITEMS, RETAINED_GRAPH_BYTES, RETAINED_GRAPH_ITEMS,
+};
 use crate::process::{self, Native, ProductionReplay, Program, ToolPaths};
 use crate::{Error, Result};
 
@@ -42,34 +49,13 @@ const HARNESS_EDITION: &str = "2024";
 /// runner moves to its `[dependencies]`.
 pub(crate) const BUILD_DEPENDENCIES: &str = "build-dependencies";
 const PROFILE_DEFAULT: &str = "dev";
-/// The standard Cargo JSON figure. It is distinct from the physical child
-/// capture bound `process::CAPTURE_BYTES`, which refuses.
-const JSON_BYTES: usize = 32 * 1024 * 1024;
-const _: () = assert!(JSON_BYTES <= process::CAPTURE_BYTES);
-const MANIFEST_BYTES: usize = 1024 * 1024;
-const PACKAGES: usize = 4_096;
 /// Physical bound on the directory entries swept when retiring stale
 /// temporaries from a Rawr-owned resolution harness. Fixed at the 4,096 figure
 /// (the standard package envelope) this sweep has always refused at; it is a
 /// finite-work ceiling over a directory Rawr owns, not an input measure, so it
 /// never follows the `packages` figure.
 const HARNESS_ENTRIES: usize = 4_096;
-const UNITS: usize = 500_000;
-const EDGES: usize = 1_000_000;
-const ITEMS: usize = 2_500_000;
-const CANONICAL_ITEMS: usize = 19_000_000;
-/// The canonical bytes figure the driver's plan carries; an accounting
-/// figure, never a bound.
-const CANONICAL_BYTES: usize = 1_207_959_552;
-const INPUT_PROOF_BYTES: usize = 512 * 1024 * 1024;
-
-const RETAINED_GRAPH_ITEMS: usize = 6_500_000;
-const RETAINED_GRAPH_BYTES: usize = 512 * 1024 * 1024;
-const CLASSIFIED_CONTRACT_ITEMS: usize = 6_500_000;
-const CLASSIFIED_CONTRACT_BYTES: usize = 640 * 1024 * 1024;
-const CONTAINERS: usize = 1_500_000;
-const STRING_BYTES: usize = 1024 * 1024;
-const DEPTH: usize = 256;
+const _: () = assert!(JSON_BYTES <= process::CAPTURE_BYTES);
 const LEASE_FILE: &str = ".resolution.lock";
 const AUTHORITATIVE_TARGET_DIRECTORY: &str = "authoritative-target";
 // 2: the build runs in the shared build directory and relocates what it reads.
@@ -95,44 +81,6 @@ std::thread_local! {
 /// A SHA-256 content identity retained without exposing mutable bytes.
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Digest([u8; 32]);
-
-/// Frozen allocation and subprocess limits required by Cargo resolution.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Limits {
-    pub(crate) json_bytes: usize,
-    pub(crate) manifest_bytes: usize,
-    pub(crate) packages: usize,
-    pub(crate) units: usize,
-    pub(crate) edges: usize,
-    pub(crate) items: usize,
-    pub(crate) canonical_items: usize,
-    pub(crate) canonical_bytes: usize,
-    pub(crate) input_proof_bytes: usize,
-    pub(crate) retained_graph_items: usize,
-    pub(crate) retained_graph_bytes: usize,
-    pub(crate) classified_contract_items: usize,
-    pub(crate) classified_contract_bytes: usize,
-    pub(crate) containers: usize,
-    pub(crate) string_bytes: usize,
-    pub(crate) depth: usize,
-    process: process::Limits,
-}
-
-impl Limits {
-    /// Return the aggregate retained-item ceiling for generated consumers.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn item_limit(&self) -> usize {
-        self.items
-    }
-
-    /// Return the aggregate retained-byte ceiling for generated consumers.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn byte_limit(&self) -> usize {
-        self.json_bytes
-    }
-}
 
 impl Owner {
     /// Try to acquire the one native Cargo lane without waiting.
@@ -704,68 +652,6 @@ impl fmt::Display for Digest {
             write!(formatter, "{byte:02x}")?;
         }
         Ok(())
-    }
-}
-
-impl Limits {
-    /// The frozen Phase-1 resolution envelope.
-    pub const fn standard() -> Self {
-        Self {
-            json_bytes: JSON_BYTES,
-            manifest_bytes: MANIFEST_BYTES,
-            packages: PACKAGES,
-            units: UNITS,
-            edges: EDGES,
-            items: ITEMS,
-            canonical_items: CANONICAL_ITEMS,
-            canonical_bytes: CANONICAL_BYTES,
-            input_proof_bytes: INPUT_PROOF_BYTES,
-            retained_graph_items: RETAINED_GRAPH_ITEMS,
-            retained_graph_bytes: RETAINED_GRAPH_BYTES,
-            classified_contract_items: CLASSIFIED_CONTRACT_ITEMS,
-            classified_contract_bytes: CLASSIFIED_CONTRACT_BYTES,
-            containers: CONTAINERS,
-            string_bytes: STRING_BYTES,
-            depth: DEPTH,
-            process: process::Limits::capture(),
-        }
-    }
-
-    pub(crate) const fn process_limits(self) -> process::Limits {
-        self.process
-    }
-
-    pub(crate) fn bind_node_context(&self, digest: &mut Sha256) {
-        // Only the physical bounds that still refuse bind node identity.
-        digest.update(b"rawr.import.cargo.limits/v3");
-        for value in [
-            self.depth as u64,
-            self.process.stdout() as u64,
-            self.process.stderr() as u64,
-        ] {
-            digest.update(value.to_le_bytes());
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn with_depth(self, depth: usize) -> Self {
-        Self { depth, ..self }
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn fixture(json_bytes: usize, items: usize, string_bytes: usize) -> Self {
-        Self {
-            json_bytes,
-            items,
-            string_bytes,
-            ..Self::standard()
-        }
-    }
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self::standard()
     }
 }
 

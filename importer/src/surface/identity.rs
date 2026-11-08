@@ -1798,7 +1798,7 @@ mod tests {
     #[test]
     fn closed_selectors_produce_distinct_operation_identities() {
         let contract = crate::test_fixture::graph()
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .classify(&Policy::standard(), &crate::limits::Limits::standard())
             .expect("fixture classifies");
         let base = contract
             .outcomes()

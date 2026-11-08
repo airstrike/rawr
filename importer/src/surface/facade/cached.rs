@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn facade_product_roundtrips_and_rejects_noncanonical_or_trailing_bytes() {
-        let limits = crate::cargo::Limits::standard();
+        let limits = crate::limits::Limits::standard();
         let contract = crate::test_fixture::graph()
             .classify(&crate::classify::Policy::standard(), &limits)
             .expect("the fixture graph classifies");
