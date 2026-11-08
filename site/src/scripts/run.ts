@@ -16,6 +16,12 @@
 // playground's checks: its pass cookie or a Turnstile token, and its per-IP
 // limits.
 //
+// A page that asks for it (`warm`) warms its snippets once it has loaded, so
+// Run answers at once: rawr-web is fetched and instantiated, and each
+// snippet runs unseen, in rawr-web or through /play/run. The first Run of an
+// unedited snippet shows that run; a later Run, or one after an edit, runs
+// it again.
+//
 // After a run the play icon becomes an ×, which clears the output. A Reset
 // button at the code's top-right shows while the code differs from the
 // original, and restores it. An edited snippet is highlighted again when it
@@ -35,11 +41,30 @@ export interface Env {
   fetch: typeof fetch;
   /** Imports rawr-web and initializes it. Without it every run goes to the server. */
   web?: () => Promise<Web>;
+  /** Warm the snippets once the page has loaded, so Run answers at once. */
+  warm?: boolean;
 }
 
 const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
-export function setup({ document, window, fetch, web }: Env): void {
+/**
+ * A run started ahead of its Run button: `warm` starts it, and the next
+ * `take` answers with it. Each later `take` runs again, and so does one
+ * whose warmed run gave nothing or failed.
+ */
+export function ahead(run: () => Promise<any>): { warm(): Promise<any>; take(): Promise<any> } {
+  let early: Promise<any> | null = null;
+  return {
+    warm: () => (early ??= run()),
+    take: async () => {
+      const warmed = await early?.catch(() => null);
+      early = null;
+      return warmed && warmed.failed === undefined ? warmed : run();
+    },
+  };
+}
+
+export function setup({ document, window, fetch, web, warm = false }: Env): void {
   const SVG = "http://www.w3.org/2000/svg";
   const icon = (cls: string, d: string) => {
     const svg = document.createElementNS(SVG, "svg");
@@ -128,6 +153,24 @@ export function setup({ document, window, fetch, web }: Env): void {
       return null;
     }
   };
+
+  // A run of the site's own text on the server. 422 is a program that
+  // doesn't compile, and its text is rawr's report.
+  const answer = async (response: Response): Promise<any> => {
+    const type = response.headers.get("content-type") || "";
+    if (response.ok && type.startsWith("application/json")) return response.json();
+    if (response.status === 422) return { kind: "error", text: await response.text() };
+    return { failed: (await response.text()).trim().slice(0, 2000) };
+  };
+  const siteRun = (code: string) =>
+    fetch("/play/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code }),
+    }).then(answer);
+
+  // What warming does, once the page has loaded: one task per snippet.
+  const warmups: (() => Promise<unknown>)[] = [];
 
   // Plain-text editing where the browser has it. Elsewhere a paste is
   // reduced to its text.
@@ -259,21 +302,8 @@ export function setup({ document, window, fetch, web }: Env): void {
       button.closest(".compare")?.querySelector<HTMLButtonElement>('.tabs button[data-to="0"]')?.click();
       const code = text();
       try {
-        let result = onServer ? null : await browser(code);
-        if (!result) {
-          const response = edited()
-            ? await render(code, strip)
-            : await fetch("/play/run", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ code }),
-              });
-          const type = response.headers.get("content-type") || "";
-          if (response.ok && type.startsWith("application/json")) result = await response.json();
-          // 422 is a program that doesn't compile, and its text is rawr's report.
-          else if (response.status === 422) result = { kind: "error", text: await response.text() };
-          else result = { failed: (await response.text()).trim().slice(0, 2000) };
-        }
+        let result = edited() ? (onServer ? null : await browser(code)) : await early.take();
+        if (!result) result = edited() ? await answer(await render(code, strip)) : await siteRun(code);
         if (result.failed !== undefined) {
           fail("The code could not run. " + result.failed);
         } else {
@@ -288,6 +318,10 @@ export function setup({ document, window, fetch, web }: Env): void {
       setState("done");
     };
 
+    // The unedited snippet's run, which warming starts ahead of its Run.
+    const early = ahead(() => (onServer ? siteRun(original) : browser(original)));
+    warmups.push(async () => void (edited() || (await early.warm())));
+
     button.addEventListener("click", () => {
       if (state === "running") return;
       if (state === "done") {
@@ -298,5 +332,16 @@ export function setup({ document, window, fetch, web }: Env): void {
       highlight();
       run();
     });
+  }
+
+  // One snippet at a time, after the page's own loading, so warming never
+  // competes with it. A task that fails leaves its Run to do the work.
+  const start = async () => {
+    for (const task of warmups) await task().catch(() => {});
+  };
+  if (warm && warmups.length > 0) {
+    const later = () => setTimeout(start, 0);
+    if (document.readyState === "complete") later();
+    else window.addEventListener("load", later, { once: true });
   }
 }

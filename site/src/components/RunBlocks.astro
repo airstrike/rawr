@@ -2,11 +2,14 @@
 // The Run buttons' stylesheet and script, on a page with runnable snippets.
 // The inline script swaps each snippet's highlighted copy in before the first
 // paint; the HTML itself keeps the plain text /play/run's allow-list reads.
+// `warm` warms the page's snippets once it has loaded (scripts/run.ts).
 import "../styles/run.css";
+const { warm = false } = Astro.props;
 ---
 <script is:inline>
 for (const t of document.querySelectorAll("code[data-run] + template[data-hl]")) t.previousElementSibling.innerHTML = t.innerHTML;
 </script>
+{warm && <template data-run-warm></template>}
 <script>
   import { setup } from "../scripts/run.ts";
   import { WEB_MODULE } from "../play/session.ts";
@@ -14,6 +17,7 @@ for (const t of document.querySelectorAll("code[data-run] + template[data-hl]"))
     document,
     window,
     fetch: fetch.bind(window),
+    warm: document.querySelector("template[data-run-warm]") !== null,
     // rawr-web, as the playground loads it.
     web: async () => {
       const m = await import(/* @vite-ignore */ WEB_MODULE);
