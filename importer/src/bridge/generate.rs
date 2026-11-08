@@ -3395,6 +3395,18 @@ fn static_pins() -> &'static __rawr_internal::scope::Pins {
     PINS.get_or_init(__rawr_internal::scope::Pins::lasting)
 }
 
+/// Whether each argument at `positions` is text the program lends at
+/// `'static`, as a string literal is (`scope::lent_static`).
+#[allow(dead_code)]
+fn lent_static(arguments: &Arguments<'_, '_, '_>, positions: &[usize]) -> bool {
+    positions.iter().all(|position| {
+        arguments
+            .values
+            .get(*position)
+            .is_some_and(|value| __rawr_internal::scope::lent_static(value))
+    })
+}
+
 /// Bytes a call takes as `&'static [u8]`, as a font's are, kept for as long
 /// as the runner lives: once for each content, however often it is given.
 #[allow(dead_code)]
@@ -11538,6 +11550,15 @@ fn render_anchored_opening(
         }
     }
     let taken = String::from_utf8(taken).map_err(request::unwritable)?;
+    render_static_opening(
+        signature,
+        substitutions,
+        &returned,
+        &call,
+        &taken,
+        &pinned,
+        output,
+    )?;
     // An input that carries a lifetime, as a widget `view` made, is in a
     // region. In the slot's own region, which pins strings, the output
     // goes there too, at the lifetime the input has.
@@ -11589,6 +11610,57 @@ fn render_anchored_opening(
     }}"
     )
     .map_err(encoding)
+}
+
+/// A call whose own signature borrows its `&str` inputs for its output's
+/// life, as `impl<'a> From<&'a str> for Slot<'a, M>` does, given only
+/// text the program lends at `'static` (`lent_static`): a string literal,
+/// as rustc types `Slot::from("Verified")` a `Slot<'static, M>`. Each
+/// string is pinned for the runner's life in the site's pins, which hold
+/// one string per text however often the call runs (D694), and the output
+/// is a plain arena value, so no scope frame opens for it. A call that
+/// copies arrays in, makes a value for a `&T`, or takes a value carrying
+/// a lifetime keeps its frame.
+fn render_static_opening(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    returned: &convert::Type,
+    call: &str,
+    taken: &str,
+    pinned: &str,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    if REGION_ARGUMENTS.get()
+        || signature.scope().is_none()
+        || !copied_inputs(signature).is_empty()
+        || lifetime_inputs(signature, substitutions)?
+    {
+        return Ok(());
+    }
+    let mut texts = Vec::new();
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if lends_made(input, signature, substitutions) {
+            return Ok(());
+        }
+        if lends_str(input, signature, substitutions) {
+            texts.push(position.to_string());
+        }
+    }
+    if texts.is_empty() {
+        return Ok(());
+    }
+    let mut owned = String::new();
+    render_to_dynamic(returned, "made", 0, &mut owned)?;
+    writeln!(
+        output,
+        "    if lent_static(arguments, &[{texts}]) {{
+{taken}        let pins: &'static __rawr_internal::scope::Pins = {{ static PINS: __rawr_internal::scope::Pins = __rawr_internal::scope::Pins::constant(); &PINS }};{pinned}
+        let made = lend(arguments.arena, || {call});
+        return {owned};
+    }}",
+        texts = texts.join(", ")
+    )
+    .map_err(request::unwritable)
 }
 
 /// `register_defaults`, which gives the core each imported type's own
@@ -16385,6 +16457,16 @@ fn render_take(
         return writeln!(
             output,
             "    let argument_{local}_owned = take_primitive::<ImmutableString>(arguments, {index})?;\n    let argument_{local} = argument_{local}_owned.as_str();"
+        )
+        .map_err(request::unwritable);
+    }
+    // A `Cow<'a, str>` input, as `impl From<Cow<'a, str>> for Slot<'a, M>`
+    // takes: Rawr's string, owned, at the type the call names, so the impl
+    // rustc selects is that one beside the item's other `From` impls.
+    if matches!(ty, convert::Type::Builtin(convert::Builtin::Text)) {
+        return writeln!(
+            output,
+            "    let argument_{local} = std::borrow::Cow::<'static, str>::Owned(take_string(arguments, {index})?);"
         )
         .map_err(request::unwritable);
     }

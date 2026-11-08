@@ -1226,6 +1226,25 @@ pub fn anchor() -> Option<Nonce> {
     ANCHORS.with(|anchors| anchors.borrow().last().copied())
 }
 
+/// The tag of text the program lends at `'static`: a string literal, or a
+/// `const` of `&str`, passed where a crate's call borrows it for as long as
+/// its output lives. The call takes it pinned for the runner's life and
+/// gives a plain value, so no scope frame opens for it.
+const STATIC_TEXT: crate::types::dynamic::Tag = 0x5374;
+
+/// `text`, marked as lent at `'static` ([`lent_static`]): the resolver
+/// marks an argument so only where rustc's `'static` holds for it.
+pub fn lend_static(mut text: crate::Dynamic) -> crate::Dynamic {
+    text.set_tag(STATIC_TEXT);
+    text
+}
+
+/// Whether `value` is text [`lend_static`] marked.
+#[must_use]
+pub fn lent_static(value: &crate::Dynamic) -> bool {
+    value.tag() == STATIC_TEXT
+}
+
 /// Script strings native code borrows for as long as the script value
 /// they belong to is lent (D594): the strings a script `view(&state)`
 /// gives native widgets that borrow them for `'a` of `&'a State`. Each is

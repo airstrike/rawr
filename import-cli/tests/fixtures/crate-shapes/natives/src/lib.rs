@@ -1286,6 +1286,34 @@ pub mod badge {
         style: StyleFn,
     }
 
+    /// A badge of slots, as a component crate's `badge!` makes one: a
+    /// row of its children, styled, and itself a slot of a row.
+    pub struct Slotted<'a, M> {
+        row: parts::Row<'a, M>,
+        style: StyleFn,
+    }
+
+    impl<'a, M: 'a> Slotted<'a, M> {
+        pub fn new(row: parts::Row<'a, M>) -> Self {
+            Slotted {
+                row,
+                style: StyleFn(|size| format!("default {size}")),
+            }
+        }
+
+        pub fn style(mut self, style: impl Into<StyleFn>) -> Self {
+            self.style = style.into();
+            self
+        }
+    }
+
+    impl<'a, M: 'a> From<Slotted<'a, M>> for parts::Slot<'a, M> {
+        fn from(badge: Slotted<'a, M>) -> Self {
+            let style = (badge.style.0)(badge.row.gap());
+            parts::Slot::from(format!("badge {style} [{}]", badge.row.draw()))
+        }
+    }
+
     pub fn badge(label: &str) -> Badge {
         Badge {
             label: label.to_string(),
@@ -1327,6 +1355,20 @@ macro_rules! slots {
         $crate::compose::Row::with_children([
             $(Into::<$crate::compose::Slot<'_, _>>::into($child)),*
         ])
+    };
+}
+
+/// A badge of `compose::Slot`s, as a component crate's `badge!` wraps
+/// its children's row.
+#[macro_export]
+macro_rules! badge {
+    ($($child:expr),* $(,)?) => {
+        $crate::badge::Slotted::new(
+            $crate::compose::Row::with_children([
+                $(Into::<$crate::compose::Slot<'_, _>>::into($child)),*
+            ])
+            .spacing(4),
+        )
     };
 }
 

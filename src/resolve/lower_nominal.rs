@@ -6304,6 +6304,10 @@ enum PreludeOp {
     /// What a scope frame's call changed of the `&mut` array it took at
     /// `index`, once the frame has ended (D558 slice 2): `copy(made, i)`.
     FrameCopy,
+    /// Text lent at `'static` where a crate's call borrows it for its
+    /// output's life, as a literal is: `lend(text)`, marked so the call
+    /// pins it for the runner's life and opens no scope frame.
+    StaticText,
     /// A set's `union`, `intersection`, `difference`,
     /// `symmetric_difference` (the keys, in order), `is_subset`,
     /// `is_superset` or `is_disjoint` with another, by code
@@ -6469,6 +6473,7 @@ impl PreludeOp {
             Self::VecMethod => "vec.method",
             Self::VecCapacity => "vec.capacity",
             Self::FrameCopy => "scope.frame-copy",
+            Self::StaticText => "scope.static-text",
             Self::SetAlgebra => "set.algebra",
             Self::KeyedRange => "keyed.range",
             Self::IntMethod => "int.method",
@@ -6627,7 +6632,7 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
             ],
-            Self::PrettyDebug | Self::StrLines | Self::StrSplitWhitespace => {
+            Self::PrettyDebug | Self::StrLines | Self::StrSplitWhitespace | Self::StaticText => {
                 vec![TypeId::of::<ImmutableString>()]
             }
             Self::StrSplit => vec![TypeId::of::<ImmutableString>(), TypeId::of::<Dynamic>()],
@@ -7080,6 +7085,7 @@ impl PreludeOp {
                 let capacity = args[0].as_array_ref().map_or(0, |array| array.capacity());
                 return Ok(Dynamic::from(capacity as crate::INT));
             }
+            Self::StaticText => return Ok(crate::scope::lend_static(args[0].take())),
             Self::FrameCopy => {
                 let index = usize::try_from(args[1].as_int().unwrap_or(0)).unwrap_or(0);
                 return Ok(args[0]
@@ -19452,8 +19458,45 @@ impl<'a> Parser<'a> {
                 self.write_over(&placeholder, &format!("{helper}("));
             }
         }
-        let pending = std::mem::take(&mut self.pending_conversions);
-        for conversion in pending {
+        // A crate value's `.into()` whose target holds a type only another
+        // conversion settles waits for it, as rustc's obligations do: in
+        // `row![badge![icon(), "x"].style(..)].into()`, the badge's own
+        // `From` impl gives the icon's slot its message type. What no
+        // conversion settles is selected last, and its error is rustc's.
+        let mut pending = std::mem::take(&mut self.pending_conversions);
+        let mut ready = Vec::with_capacity(pending.len());
+        loop {
+            let (waiting, settled): (Vec<_>, Vec<_>) =
+                pending.into_iter().partition(|conversion| {
+                    let target = self.inference.resolve(&conversion.target);
+                    conversion.try_from.is_none()
+                        && conversion.host.is_some()
+                        && !matches!(target, Ty::Infer(_))
+                        && contains_unsettled(&target)
+                        && !self.unifies(&target, &conversion.source)
+                });
+            if settled.is_empty() {
+                ready.extend(waiting);
+                break;
+            }
+            pending = waiting;
+            for conversion in settled {
+                self.finish_conversion(conversion)?;
+            }
+            if pending.is_empty() {
+                break;
+            }
+        }
+        for conversion in ready {
+            self.finish_conversion(conversion)?;
+        }
+        Ok(())
+    }
+
+    /// The pending `.into()` `conversion`'s `From` impl, chosen and written
+    /// over its placeholder (`finish_conversions`).
+    fn finish_conversion(&mut self, conversion: PendingConversion) -> Result<(), Error> {
+        {
             let target = self.inference.resolve(&conversion.target);
             let helper = if let Some(error) = &conversion.try_from {
                 self.try_from_helper(&target, &conversion.source, error, conversion.span)?
@@ -23178,6 +23221,7 @@ impl<'a> Parser<'a> {
             .collect::<Vec<_>>();
         let summary = self.host_summary(&item, None, &self.inference.resolve(&ty), &types);
         let opens = item.opens();
+        let frame = item.frame();
         let helper = self.push_intrinsic(
             item,
             owner,
@@ -23189,6 +23233,7 @@ impl<'a> Parser<'a> {
         )?;
         let places = copied_places(&self.inference, &signature.inputs, &arguments);
         move_into_call(&self.inference, &signature.inputs, &mut arguments);
+        let opens = opens && !self.lend_static_texts(frame, &mut arguments);
         let runtime_arguments = arguments
             .into_iter()
             .filter(|argument| !argument.ty.is_imported_static_operand());
@@ -25346,6 +25391,57 @@ impl<'a> Parser<'a> {
             .cloned()
     }
 
+    /// Whether a call whose output borrows what it takes besides a
+    /// receiver (`frame`) takes only text lent at `'static` and scalars: a
+    /// string literal is `&'static str`, so rustc types
+    /// `Slot::from("Verified")` a `Slot<'static, _>` that borrows nothing of
+    /// the program's. Each such
+    /// text is then marked (`PreludeOp::StaticText`), so the call pins it
+    /// for the runner's life and gives a plain value, and no scope frame
+    /// opens for it. A borrow of a local (`name.as_str()`) keeps its frame.
+    fn lend_static_texts(
+        &mut self,
+        frame: Option<crate::host::item::Frame>,
+        arguments: &mut [ParsedExpr],
+    ) -> bool {
+        if frame != Some(crate::host::item::Frame::Inputs) {
+            return false;
+        }
+        let texts = arguments
+            .iter()
+            .map(|argument| self.static_text(argument))
+            .collect::<Vec<_>>();
+        let scalar = |parser: &Self, argument: &ParsedExpr| {
+            matches!(
+                parser.inference.resolve(&argument.ty),
+                Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char
+            )
+        };
+        if !texts.contains(&true)
+            || arguments
+                .iter()
+                .zip(&texts)
+                .any(|(argument, text)| !text && !scalar(self, argument))
+        {
+            return false;
+        }
+        for (argument, _) in arguments.iter_mut().zip(texts).filter(|(_, text)| *text) {
+            argument.source = self.prelude_op(PreludeOp::StaticText, [argument.rendered_source()]);
+            argument.prelude = origin::Fragment::default();
+        }
+        true
+    }
+
+    /// Whether `argument` is text that borrows nothing of the body, as a
+    /// string literal or a `const` of `&str` is: `&'static str`.
+    fn static_text(&self, argument: &ParsedExpr) -> bool {
+        matches!(self.inference.resolve(&argument.ty), Ty::Str)
+            && self
+                .flow()
+                .origins(argument.span)
+                .is_some_and(<[_]>::is_empty)
+    }
+
     /// A host call whose value borrows what it takes (`opens`, D558 tier
     /// 1), or that copies `&mut` arrays in and back out (`places`). A call
     /// that doesn't open a scope frame gives its value and then each copy.
@@ -25401,9 +25497,9 @@ impl<'a> Parser<'a> {
                 let line = statement.line().unwrap_or_default();
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
-                        "a call or assignment before a call whose value borrows what it \
-                         takes, in the statement at line {line}, is not supported in Rawr yet; \
-                         give the earlier call its own statement"
+                        "a call or assignment run before a call whose value borrows a local \
+                         it takes, in the statement at line {line}, is not supported in Rawr \
+                         yet"
                     )
                     .into(),
                     source: point_span(earlier),
@@ -49546,6 +49642,11 @@ impl<'a> Parser<'a> {
             .output
             .as_ref()
             .map_or(Ty::Unit, Ty::from_resolved);
+        // A `const` or `static` of `&str` is `&'static str`, as a literal
+        // is: it borrows nothing of the body.
+        if ty == Ty::Str {
+            self.flow().set_origins(span, Vec::new());
+        }
         let source = origin::Fragment::call(function.generated.as_str(), []);
         self.operator_expr(source, ty, span)
     }

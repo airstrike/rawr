@@ -1,6 +1,6 @@
 // rawr
 use natives::compose::{self, Row, Slot, Theme};
-use natives::slots;
+use natives::{badge, slots};
 
 struct Mine(u32);
 
@@ -8,6 +8,17 @@ impl<'a, M> From<Mine> for Slot<'a, M> {
     fn from(mine: Mine) -> Self {
         Slot::from(format!("mine {}", mine.0))
     }
+}
+
+/// A component crate's plainest view: badges of an icon and a literal in a
+/// row, each literal `'static` text the program holds once.
+fn badges<'a>() -> Slot<'a, ()> {
+    slots![
+        badge![compose::icon().size(12), "Verified"].style(badge::Secondary),
+        badge!["Bookmark", compose::icon().size(12)].style(badge::Ghost)
+    ]
+    .spacing(8)
+    .into()
 }
 
 fn main() {
@@ -49,4 +60,18 @@ fn main() {
     let label: Slot<()> = Slot::from(compose::label("from"));
     let row: Row<()> = Row::with_children([into, mine, label]);
     println!("{}", row.draw());
+    let row: Row<()> = Row::with_children([badges()]);
+    println!("{}", row.draw());
+    let mut many = Vec::new();
+    for _ in 0..1000 {
+        let view: Slot<()> = slots![
+            badge![compose::icon().size(12), "Verified"].style(badge::Secondary),
+            badge!["Bookmark", compose::icon().size(12)].style(badge::Ghost)
+        ]
+        .spacing(8)
+        .into();
+        many.push(view);
+    }
+    let row: Row<()> = Row::with_children(many);
+    println!("{}", row.draw().len());
 }
