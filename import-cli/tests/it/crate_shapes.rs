@@ -424,3 +424,17 @@ fn a_forwarding_impls_parameters_are_its_own() {
     assert!(check.status.success(), "{stderr}");
     assert!(!stderr.contains("left out"), "{stderr}");
 }
+
+/// A crate function whose signature has an array type, as a component
+/// crate's `Row::with_children<const N: usize>(children: [Slot<'a, M>; N])`
+/// and `fill(&mut [u8; 4], u8)`: an array literal or value crosses by
+/// value with `N` taken from its length, `&[T; N]` is lent, `&mut [T; N]`
+/// is lent and its writes reach the program's array or the crate struct's
+/// field, and `-> [u8; 4]` is Rawr's array (#1330, #1324).
+#[test]
+fn array_types_cross_as_rustc_has_them() {
+    runs_as_cargo_does(
+        "arrays",
+        "3 children: slot=1 slot=2 slot=3\n2 children: slot=\"a\" slot=\"b\"\n[1, 7, 3, 8]\n[0, 9, 0, 10]\n6 60\n[1, 2, 4, 8] 8\n",
+    );
+}

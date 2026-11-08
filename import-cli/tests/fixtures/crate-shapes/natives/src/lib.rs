@@ -1308,3 +1308,60 @@ pub mod badge {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Wrap(pub i64);
 }
+
+/// Functions whose signatures have array types, as a component crate's
+/// `Row::with_children<const N: usize>([Element; N])` takes its children
+/// and a pixel's channels are filled through `&mut [u8; 4]`.
+pub mod arrays {
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Slot<'a, M> {
+        message: M,
+        label: &'a str,
+    }
+
+    impl<'a, M> Slot<'a, M> {
+        pub fn new(message: M) -> Self {
+            Slot {
+                message,
+                label: "slot",
+            }
+        }
+    }
+
+    pub struct Row<'a, M> {
+        children: Vec<Slot<'a, M>>,
+    }
+
+    impl<'a, M: std::fmt::Debug> Row<'a, M> {
+        pub fn with_children<const N: usize>(children: [Slot<'a, M>; N]) -> Self {
+            Row {
+                children: children.into(),
+            }
+        }
+
+        pub fn describe(&self) -> String {
+            let messages: Vec<String> = self
+                .children
+                .iter()
+                .map(|child| format!("{}={:?}", child.label, child.message))
+                .collect();
+            format!("{} children: {}", self.children.len(), messages.join(" "))
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Pixel(pub [u8; 4]);
+
+    pub fn fill(channels: &mut [u8; 4], value: u8) {
+        channels[1] = value;
+        channels[3] = value + 1;
+    }
+
+    pub fn sum(values: &[i64; 3]) -> i64 {
+        values.iter().sum()
+    }
+
+    pub fn corners() -> [u8; 4] {
+        [1, 2, 4, 8]
+    }
+}

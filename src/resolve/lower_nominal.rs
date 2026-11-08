@@ -1995,6 +1995,9 @@ pub(crate) struct ImportedUse {
     pub(crate) path: ImmutableString,
     pub(crate) selector: rawr_import::surface::identity::Selector,
     pub(crate) types: Box<[rawr_import::classify::representability::convert::Type]>,
+    /// Its const parameters' values, in declared order, as an array's
+    /// length gives `N` (#1330).
+    pub(crate) constants: Box<[rawr_import::classify::representability::convert::Constant]>,
     pub(crate) functions: Box<[ImportedFunctionUse]>,
     pub(crate) mappers: Box<[ImportedMapperUse]>,
     /// The item takes a script closure for its `F: FnOnce` parameter.
@@ -2530,6 +2533,32 @@ fn fix_array_length(
     }
 }
 
+/// The const parameter whose length an input `[T; N]` or `&[T; N]` takes.
+#[cfg(feature = "rust-import")]
+fn length_parameter(ty: &crate::host::type_ref::Type) -> Option<&ImmutableString> {
+    match ty.shape() {
+        crate::host::type_ref::Shape::Array {
+            sequence: crate::host::type_ref::Sequence::Length(name),
+            ..
+        } => Some(name),
+        crate::host::type_ref::Shape::Reference { target, .. } => length_parameter(target),
+        _ => None,
+    }
+}
+
+/// The length of an argument's array, or of the array it borrows.
+#[cfg(feature = "rust-import")]
+fn array_length(ty: &Ty) -> Option<usize> {
+    match ty {
+        Ty::Array {
+            kind: sequence::Kind::Array(length),
+            ..
+        } => Some(*length),
+        Ty::Reference { target, .. } => array_length(target),
+        _ => None,
+    }
+}
+
 /// `T` of a crate's `RangeInclusive<T>` of a type parameter.
 fn range_inclusive_element(
     ty: &crate::host::type_ref::Type,
@@ -2767,7 +2796,8 @@ fn holds_value(ty: &rawr_import::classify::representability::convert::Type) -> b
         Type::Option(element)
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
-        | Type::Sequence { element, .. } => holds_value(element),
+        | Type::Sequence { element, .. }
+        | Type::ConstArray { element, .. } => holds_value(element),
         Type::Result(ok, err) => holds_value(ok) || holds_value(err),
         Type::ProfileMessage { payload, .. } => holds_value(payload),
         Type::Inferred
@@ -2789,7 +2819,9 @@ fn holds_crate_value(ty: &rawr_import::classify::representability::convert::Type
             *definition != rawr_import::surface::identity::Definition::value()
         }
         Type::Tuple(members) => members.iter().any(holds_crate_value),
-        Type::Option(element) | Type::Sequence { element, .. } => holds_crate_value(element),
+        Type::Option(element)
+        | Type::Sequence { element, .. }
+        | Type::ConstArray { element, .. } => holds_crate_value(element),
         Type::Result(ok, err) => holds_crate_value(ok) || holds_crate_value(err),
         Type::Script { .. }
         | Type::Borrowed { .. }
@@ -2822,7 +2854,8 @@ fn is_erased(ty: &rawr_import::classify::representability::convert::Type) -> boo
         Type::Option(element)
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
-        | Type::Sequence { element, .. } => is_erased(element),
+        | Type::Sequence { element, .. }
+        | Type::ConstArray { element, .. } => is_erased(element),
         Type::Result(ok, err) => is_erased(ok) || is_erased(err),
         Type::ProfileMessage { payload, .. } => is_erased(payload),
         Type::Inferred => false,
@@ -12695,6 +12728,10 @@ struct Parser<'a> {
     /// field read there, as all of the operand, is lent, not taken
     /// (`read_imported_field`).
     lent_field: Option<Position>,
+    /// Where the operand of the `&mut` being read starts: a crate struct's
+    /// field read there, as `&mut pixel.0`, is a place the call writes
+    /// through (`read_imported_field`).
+    lent_mut_field: Option<Position>,
     /// The chains bound to immutable locals, by name: each use of the
     /// local runs its chain.
     bound_iterators: BTreeMap<ImmutableString, BoundIterator>,
@@ -13109,6 +13146,7 @@ impl<'a> Parser<'a> {
             lend_self: false,
             mutable_borrow: None,
             lent_field: None,
+            lent_mut_field: None,
             bound_iterators: BTreeMap::new(),
             held_iter_mut: BTreeMap::new(),
             pending_iter_mut: None,
@@ -21073,6 +21111,24 @@ impl<'a> Parser<'a> {
                         }
                         return Ok(Ty::sequence(sequence::Kind::Vec, item));
                     }
+                    // `[T; N]` or `&[T; N]` of a const parameter `N`, as
+                    // `with_children<const N: usize>([Slot; N])` takes: the
+                    // argument's array gives `N` its length, as rustc infers
+                    // it (#1330). `N` holds an array of that length.
+                    #[cfg(feature = "rust-import")]
+                    if let Some(name) = length_parameter(ty)
+                        && !parameters.contains_key(name)
+                        && let Some(length) = arguments
+                            .and_then(|arguments| arguments.get(index))
+                            .and_then(|argument| {
+                                array_length(&self.inference.resolve(&argument.ty))
+                            })
+                    {
+                        parameters.insert(
+                            name.clone(),
+                            Ty::sequence(sequence::Kind::Array(length), Ty::Unit),
+                        );
+                    }
                     self.instantiate_host_type(
                         ty,
                         &mut parameters,
@@ -22211,6 +22267,19 @@ impl<'a> Parser<'a> {
                     }
                     crate::host::type_ref::Sequence::Vec => sequence::Kind::Vec,
                     crate::host::type_ref::Sequence::Slice => sequence::Kind::Slice,
+                    // `[T; N]` of the length the call's argument gave `N`
+                    // (`instantiate_host_signature`).
+                    #[cfg(feature = "rust-import")]
+                    crate::host::type_ref::Sequence::Length(name) => match parameters
+                        .get(name)
+                        .map(|length| self.inference.resolve(length))
+                    {
+                        Some(Ty::Array {
+                            kind: sequence::Kind::Array(length),
+                            ..
+                        }) => sequence::Kind::Array(length),
+                        _ => sequence::Kind::Slice,
+                    },
                 },
             },
             // A tuple is an array at runtime, as `event::listen_with`'s
@@ -22263,9 +22332,41 @@ impl<'a> Parser<'a> {
                 Some(surface)
             })
             .collect::<Option<Vec<_>>>()?;
-        Some(rawr_import::surface::instance::key_with_slots(
-            &types, slots,
+        let constants = self.imported_constants(item, requirements)?;
+        Some(rawr_import::surface::instance::key_with_constants(
+            &types, &constants, slots,
         ))
+    }
+
+    /// The values of an imported item's const parameters, in declared
+    /// order: each the length of the array its argument gave it (#1330).
+    /// `None` when one is unknown.
+    #[cfg(feature = "rust-import")]
+    fn imported_constants(
+        &self,
+        item: &crate::host::item::Definition,
+        requirements: &[(ImmutableString, Ty, capability::Set)],
+    ) -> Option<Box<[rawr_import::classify::representability::convert::Constant]>> {
+        item.signature()
+            .declared_length_parameters()
+            .map(|name| {
+                let (_, ty, _) = requirements
+                    .iter()
+                    .find(|(candidate, _, _)| *candidate == name)?;
+                let Ty::Array {
+                    kind: sequence::Kind::Array(length),
+                    ..
+                } = self.inference.resolve(ty)
+                else {
+                    return None;
+                };
+                rawr_import::classify::representability::convert::Constant::checked(
+                    "usize",
+                    &length.to_string(),
+                )
+                .ok()
+            })
+            .collect()
     }
 
     fn push_intrinsic(
@@ -26151,13 +26252,15 @@ impl<'a> Parser<'a> {
         // `item.name.push('!')`: a field Rawr holds as its own value, of a
         // place, is a place a method changes, read out and stored back as
         // `item.name = name` (#1139). So is an element of one, as
-        // `pixel.0[3] += 1` through a `&mut Pixel` (#1318).
+        // `pixel.0[3] += 1` through a `&mut Pixel` (#1318), and the field
+        // a `&mut` lends, as `fill(&mut pixel.0, 7)` writes (#1330).
         let lvalue = match &receiver.lvalue {
             Some(lvalue)
                 if shared
                     && (!self.type_provides(&ty, capability::Kind::Copy)
                         && self.method_follows()
-                        || matches!(self.peek(), Token::LeftBracket)) =>
+                        || matches!(self.peek(), Token::LeftBracket)
+                        || self.lent_mut_field == Some(receiver.span.start())) =>
             {
                 let place = self.temporary("place");
                 let stored = self.temporary("stored");
@@ -38955,7 +39058,11 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 self.next();
-                let mut operand = self.parse_operand()?;
+                let operand_start = self.position();
+                let lent = self.lent_mut_field.replace(operand_start);
+                let operand = self.parse_operand();
+                self.lent_mut_field = lent;
+                let mut operand = operand?;
                 let whole = span(start, operand.span.end());
                 if operand.lvalue.is_none() {
                     // `twice(&mut |x| v.push(x))`: the closure is the
@@ -56422,6 +56529,7 @@ impl<'a> Parser<'a> {
             path: path.into(),
             selector,
             types: Box::default(),
+            constants: Box::default(),
             functions: Box::default(),
             mappers: Box::default(),
             callable: false,
@@ -56611,8 +56719,24 @@ impl<'a> Parser<'a> {
                 operation: span,
             });
         }
-        // The instance's types in the item's declared parameter order.
-        let mut types = self.imported_entries(requirements.len())?;
+        // The instance's types in the item's declared parameter order, and
+        // its const lengths (#1330).
+        let constants = self.imported_constants(item, requirements).ok_or_else(|| {
+            Error::InvalidHostOperation {
+                item: item.path().into(),
+                reason: "type annotations needed: a const argument of it is unknown (E0282)".into(),
+                operation: span,
+            }
+        })?;
+        let lengths = item
+            .signature()
+            .declared_length_parameters()
+            .collect::<Vec<_>>();
+        let typed = requirements
+            .iter()
+            .filter(|(name, _, _)| !lengths.contains(name))
+            .collect::<Vec<_>>();
+        let mut types = self.imported_entries(typed.len())?;
         let declared = item
             .signature()
             .declared_type_parameters()
@@ -56625,10 +56749,10 @@ impl<'a> Parser<'a> {
                     .find(|(candidate, _, _)| candidate == name)
             })
             .collect::<Vec<_>>();
-        let ordered = if ordered.len() == requirements.len() {
+        let ordered = if ordered.len() == typed.len() {
             ordered
         } else {
-            requirements.iter().collect()
+            typed
         };
         for (name, ty, _) in ordered {
             if reaches_param(&self.inference.resolve(ty)) {
@@ -56781,6 +56905,7 @@ impl<'a> Parser<'a> {
             path: item.path().into(),
             selector,
             types,
+            constants,
             functions: functions.into_boxed_slice(),
             mappers: mappers.into_boxed_slice(),
             callable: item.signature().takes_callable(),

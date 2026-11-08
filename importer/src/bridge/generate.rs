@@ -7358,15 +7358,17 @@ fn instance_key(plan: &Plan) -> [u8; 32] {
     match plan.operation() {
         Operation::Function {
             substitutions,
+            constants,
             slots,
             ..
         }
         | Operation::Method {
             substitutions,
+            constants,
             slots,
             ..
-        } if !substitutions.is_empty() || !slots.is_empty() => {
-            crate::surface::instance::key_with_slots(substitutions, slots)
+        } if !substitutions.is_empty() || !constants.is_empty() || !slots.is_empty() => {
+            crate::surface::instance::key_with_constants(substitutions, constants, slots)
         }
         _ => [0; 32],
     }
@@ -14209,6 +14211,7 @@ fn render_rust_type(
             render_rust_type(err, facade, output)?;
             output.write_all(b">").map_err(request::unwritable)
         }
+        convert::Type::ConstArray { .. } => Err(unlengthed()),
         convert::Type::Sequence {
             element,
             length: Some(length),
@@ -16426,6 +16429,7 @@ fn render_take(
         .map_err(request::unwritable);
     }
     let helper = match ty {
+        convert::Type::ConstArray { .. } => return Err(unlengthed()),
         convert::Type::Builtin(convert::Builtin::String) => "take_string",
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_range",
         // Named, so an item rustc chooses by its input's type, as
@@ -16628,6 +16632,9 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
+    convert::Type::ConstArray { .. } => {
+            return Err(unlengthed())
+        }
         // A value of a generic impl function's own parameter's opaque type
         // stays in its frame (`render_frame`).
         convert::Type::Nominal { definition, .. } if let Some((frame, slot)) = frame_slot(definition) => {
@@ -16802,6 +16809,9 @@ fn render_from_dynamic(
             "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| {frame}.out_{slot}(arguments.arena, handle))"
         ),
         convert::Type::Inferred => return Err(request::drift("an inferred type parameter reached a runtime value")),
+        convert::Type::ConstArray { .. } => {
+            return Err(unlengthed())
+        }
         convert::Type::Unit | convert::Type::Never => cast(output, "()"),
         convert::Type::Builtin(convert::Builtin::Bool) => cast(output, "bool"),
         convert::Type::Builtin(convert::Builtin::Char) => cast(output, "char"),
@@ -17098,6 +17108,9 @@ fn render_to_dynamic(
 ) -> Result<(), request::Error> {
     use std::fmt::Write as _;
     match ty {
+    convert::Type::ConstArray { .. } => {
+            return Err(unlengthed())
+        }
         convert::Type::Nominal { definition, .. } if let Some((frame, slot)) = frame_slot(definition) => {
             write!(output, "{frame}.give_{slot}(arguments.arena, {value})")
         }
@@ -17851,6 +17864,10 @@ fn instantiated(
             owned: *owned,
             length: *length,
         },
+        convert::Type::ConstArray { element, parameter } => convert::Type::ConstArray {
+            element: one(element)?,
+            parameter: *parameter,
+        },
         convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
         convert::Type::Script { path, arguments } => convert::Type::Script {
             path: path.clone(),
@@ -17867,6 +17884,12 @@ fn instantiated(
         convert::Type::Inferred => ty.clone(),
         convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => ty.clone(),
     })
+}
+
+/// A `[T; N]` of a const parameter where the bridge needs a value: an
+/// instance's adapter has each at its argument's length (`adapter::at_lengths`).
+fn unlengthed() -> request::Error {
+    request::drift("an array of a const length reached the bridge without its length")
 }
 
 fn substitute<'a>(
@@ -19734,6 +19757,7 @@ fn names_parameter(ty: &convert::Type) -> bool {
         | convert::Type::Range(inner)
         | convert::Type::Borrowed { ty: inner, .. }
         | convert::Type::Sequence { element: inner, .. }
+        | convert::Type::ConstArray { element: inner, .. }
         | convert::Type::ProfileMessage { payload: inner, .. } => names_parameter(inner),
         convert::Type::Result(ok, err) => names_parameter(ok) || names_parameter(err),
         convert::Type::FunctionItem { input, output } => {
@@ -20676,6 +20700,7 @@ fn output_names(ty: &convert::Type, index: u32) -> bool {
         | convert::Type::Borrowed { ty: element, .. }
         | convert::Type::Range(element)
         | convert::Type::Sequence { element, .. } => output_names(element, index),
+        convert::Type::ConstArray { element, .. } => output_names(element, index),
         convert::Type::Result(ok, err) => output_names(ok, index) || output_names(err, index),
         convert::Type::FunctionItem { input, output } => {
             output_names(input, index) || output_names(output, index)
@@ -20954,6 +20979,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 format!("crate::{path}<{}>", arguments.join(", "))
             }
         }
+        convert::Type::ConstArray { .. } => return None,
         convert::Type::Sequence {
             element,
             length: Some(length),
@@ -21223,6 +21249,7 @@ fn render_generic_arguments(
                         | convert::Type::Range(_)
                         | convert::Type::Result(..)
                         | convert::Type::Sequence { .. }
+                        | convert::Type::ConstArray { .. }
                         | convert::Type::Tuple(_) => concrete.as_deref().unwrap_or("_").as_bytes(),
                         // `&[u8]` or `&str`, as `Reader<&'a [u8]>` takes
                         // (D558 tier 1).
@@ -21626,6 +21653,7 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         | convert::Type::Nominal { .. }
         | convert::Type::Script { .. }
         | convert::Type::Sequence { .. }
+        | convert::Type::ConstArray { .. }
         | convert::Type::Tuple(_)
         | convert::Type::FunctionItem { .. }
         | convert::Type::Borrowed { .. }

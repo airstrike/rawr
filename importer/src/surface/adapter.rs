@@ -833,7 +833,7 @@ fn clone_operation(
             selector @ (identity::Selector::Function { .. }
             | identity::Selector::AssociatedFunction { .. }),
         ) => Ok(Operation::Function {
-            signature: clone_signature(plan.signature())?,
+            signature: clone_signature_at(plan.signature(), selected.constants())?,
             substitutions: clone_types(selected.types())?,
             constants: clone_constants(selected.constants())?,
             functions: clone_function_items(contract, selected)?,
@@ -848,7 +848,7 @@ fn clone_operation(
             representability::Representability::Invocation(plan),
             identity::Selector::AssociatedFunction { .. },
         ) => Ok(Operation::Function {
-            signature: clone_signature(plan.signature())?,
+            signature: clone_signature_at(plan.signature(), selected.constants())?,
             substitutions: clone_types(selected.types())?,
             constants: clone_constants(selected.constants())?,
             functions: clone_function_items(contract, selected)?,
@@ -866,7 +866,7 @@ fn clone_operation(
             receiver: plan.receiver().ok_or(Error::AdapterPlan {
                 reason: "generic method has no receiver proof",
             })?,
-            signature: clone_signature(plan.signature())?,
+            signature: clone_signature_at(plan.signature(), selected.constants())?,
             substitutions: clone_types(selected.types())?,
             constants: clone_constants(selected.constants())?,
             functions: clone_function_items(contract, selected)?,
@@ -882,7 +882,7 @@ fn clone_operation(
             receiver: plan.receiver().ok_or(Error::AdapterPlan {
                 reason: "generic invocation method has no receiver proof",
             })?,
-            signature: clone_signature(plan.signature())?,
+            signature: clone_signature_at(plan.signature(), selected.constants())?,
             substitutions: clone_types(selected.types())?,
             constants: clone_constants(selected.constants())?,
             functions: clone_function_items(contract, selected)?,
@@ -1133,6 +1133,10 @@ fn defaulted(ty: &convert::Type, parameters: &[signature::Parameter]) -> Option<
             owned: *owned,
             length: *length,
         },
+        convert::Type::ConstArray { element, parameter } => convert::Type::ConstArray {
+            element: one(element)?,
+            parameter: *parameter,
+        },
         convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
         convert::Type::Script { path, arguments } => convert::Type::Script {
             path: path.clone(),
@@ -1152,9 +1156,35 @@ fn defaulted(ty: &convert::Type, parameters: &[signature::Parameter]) -> Option<
 }
 
 fn clone_signature(source: &signature::Signature) -> Result<signature::Signature, Error> {
+    clone_signature_at(source, &[])
+}
+
+/// `source` at an instance's `constants`: each input `[T; N]` of a const
+/// parameter `N` is the array of the length the constant gives `N`, as the
+/// call's argument has it (#1330).
+fn clone_signature_at(
+    source: &signature::Signature,
+    constants: &[convert::Constant],
+) -> Result<signature::Signature, Error> {
+    let lengths = source
+        .parameters()
+        .iter()
+        .filter(|parameter| parameter.kind() == signature::Kind::Constant)
+        .map(signature::Parameter::index)
+        .zip(constants)
+        .collect::<Vec<_>>();
+    let inputs = if lengths.is_empty() {
+        clone_types(source.inputs())?
+    } else {
+        source
+            .inputs()
+            .iter()
+            .map(|input| at_lengths(input, &lengths))
+            .collect::<Result<_, _>>()?
+    };
     Ok(signature::Signature::new(
         clone_parameters(source.parameters())?,
-        clone_types(source.inputs())?,
+        inputs,
         clone_type(source.output())?,
     )
     .with_guard(source.guard())
@@ -1242,6 +1272,10 @@ fn clone_type(source: &convert::Type) -> Result<convert::Type, Error> {
             owned: *owned,
             length: *length,
         },
+        convert::Type::ConstArray { element, parameter } => convert::Type::ConstArray {
+            element: Box::new(clone_type(element)?),
+            parameter: *parameter,
+        },
         convert::Type::Tuple(members) => convert::Type::Tuple(clone_types(members)?),
         convert::Type::Script { path, arguments } => convert::Type::Script {
             path: clone_str(path)?,
@@ -1256,6 +1290,43 @@ fn clone_constant(source: &convert::Constant) -> Result<convert::Constant, Error
         clone_str(source.ty())?,
         clone_str(source.value())?,
     ))
+}
+
+/// `ty` with each `[T; N]` of a const parameter at the length `lengths`
+/// gives the parameter, by its index.
+fn at_lengths(
+    ty: &convert::Type,
+    lengths: &[(u32, &convert::Constant)],
+) -> Result<convert::Type, Error> {
+    let unlengthed = Error::AdapterPlan {
+        reason: "an array's const parameter has no length in its instance",
+    };
+    Ok(match ty {
+        convert::Type::ConstArray { element, parameter } => {
+            let (_, constant) = lengths
+                .iter()
+                .find(|(index, _)| index == parameter)
+                .ok_or(unlengthed)?;
+            let length = constant
+                .value()
+                .trim_end_matches("usize")
+                .trim_end_matches('_')
+                .parse()
+                .map_err(|_| Error::AdapterPlan {
+                    reason: "an array's length is not a number",
+                })?;
+            convert::Type::Sequence {
+                element: Box::new(clone_type(element)?),
+                owned: true,
+                length: Some(length),
+            }
+        }
+        convert::Type::Borrowed { mutable, ty } => convert::Type::Borrowed {
+            mutable: *mutable,
+            ty: Box::new(at_lengths(ty, lengths)?),
+        },
+        ty => clone_type(ty)?,
+    })
 }
 
 fn clone_constants(source: &[convert::Constant]) -> Result<Box<[convert::Constant]>, Error> {
@@ -1344,7 +1415,8 @@ fn type_dynamic_bytes(ty: &convert::Type) -> Option<usize> {
         convert::Type::Option(element)
         | convert::Type::Borrowed { ty: element, .. }
         | convert::Type::Range(element)
-        | convert::Type::Sequence { element, .. } => {
+        | convert::Type::Sequence { element, .. }
+        | convert::Type::ConstArray { element, .. } => {
             type_dynamic_bytes(element)?.checked_add(mem::size_of::<convert::Type>())
         }
         convert::Type::Result(ok, err) => type_dynamic_bytes(ok)?

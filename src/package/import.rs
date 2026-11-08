@@ -385,7 +385,11 @@ impl crate::Engine {
                 }
             };
             let (start, end) = range(used.span);
-            if used.types.is_empty() && used.functions.is_empty() && used.slots.is_empty() {
+            if used.types.is_empty()
+                && used.constants.is_empty()
+                && used.functions.is_empty()
+                && used.slots.is_empty()
+            {
                 compiler
                     .require_selected(accepted, source.identity(), start, end)
                     .map_err(|error| {
@@ -493,7 +497,7 @@ impl crate::Engine {
             let instance = if slotted {
                 rawr_import::surface::instance::Arguments::new(
                     used.types,
-                    Box::default(),
+                    used.constants,
                     Box::default(),
                     None,
                     limits,
@@ -502,14 +506,14 @@ impl crate::Engine {
             } else if let Some(rawr_import::surface::callable::Class::Borrowed(_)) = class {
                 rawr_import::surface::instance::Arguments::borrowed(
                     used.types,
-                    Box::default(),
+                    used.constants,
                     binders,
                     limits,
                 )
             } else if let Some(rawr_import::surface::callable::Class::Shared(proof)) = class {
                 rawr_import::surface::instance::Arguments::shared(
                     used.types,
-                    Box::default(),
+                    used.constants,
                     binders,
                     proof.scope(),
                     limits,
@@ -517,21 +521,21 @@ impl crate::Engine {
             } else if let Some(rawr_import::surface::callable::Class::Mutable(_)) = class {
                 rawr_import::surface::instance::Arguments::mutable(
                     used.types,
-                    Box::default(),
+                    used.constants,
                     binders,
                     limits,
                 )
             } else if used.callable && !slotted {
                 rawr_import::surface::instance::Arguments::once(
                     used.types,
-                    Box::default(),
+                    used.constants,
                     binders,
                     limits,
                 )
             } else {
                 rawr_import::surface::instance::Arguments::new(
                     used.types,
-                    Box::default(),
+                    used.constants,
                     Box::default(),
                     None,
                     limits,
@@ -659,6 +663,7 @@ fn crossing_impls(
             | Type::Range(inner)
             | Type::Borrowed { ty: inner, .. }
             | Type::Sequence { element: inner, .. }
+            | Type::ConstArray { element: inner, .. }
             | Type::ProfileMessage { payload: inner, .. } => paths(inner, found),
             Type::Result(ok, err) => {
                 paths(ok, found);
@@ -1990,6 +1995,7 @@ fn facade_named(facade: &Facade<'_>) -> std::collections::BTreeSet<[u8; 32]> {
             | Type::Borrowed { ty: element, .. }
             | Type::Range(element)
             | Type::Sequence { element, .. }
+            | Type::ConstArray { element, .. }
             | Type::ProfileMessage {
                 payload: element, ..
             } => walk(element, named),
@@ -3118,6 +3124,16 @@ fn undeclared_parameter(
         | Type::ProfileMessage {
             payload: element, ..
         } => undeclared(element),
+        Type::ConstArray { element, parameter } => {
+            if parameters
+                .iter()
+                .any(|declared| declared.index() == *parameter)
+            {
+                undeclared(element)
+            } else {
+                Some(*parameter)
+            }
+        }
         Type::Result(first, second)
         | Type::FunctionItem {
             input: first,
@@ -3303,6 +3319,16 @@ fn written(
             ..
         } => format!("Vec<{}>", write(element)),
         Type::Sequence { element, .. } => format!("&[{}]", write(element)),
+        Type::ConstArray { element, parameter } => {
+            let length = parameters
+                .iter()
+                .find(|declared| declared.index() == *parameter)
+                .map_or_else(
+                    || format!("?{parameter}"),
+                    |declared| declared.name().into(),
+                );
+            format!("[{}; {length}]", write(element))
+        }
         Type::FunctionItem { input, output } => {
             format!("fn({}) -> {}", write(input), write(output))
         }
@@ -3508,7 +3534,8 @@ fn ty_ok(
         Type::Option(element)
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
-        | Type::Sequence { element, .. } => ty_ok(element, declared),
+        | Type::Sequence { element, .. }
+        | Type::ConstArray { element, .. } => ty_ok(element, declared),
         Type::Tuple(members)
         | Type::Script {
             arguments: members, ..
@@ -3532,14 +3559,19 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
                     representability::signature::Kind::Type
                         | representability::signature::Kind::Future
                         | representability::signature::Kind::Callable
+                        | representability::signature::Kind::Constant
                 )
             })
         }
         // `F: Future` takes a script future (D527).
+        // A const parameter a call's argument gives, as an array's length
+        // gives `N` (#1330).
         None => plan.signature().parameters().iter().all(|parameter| {
             matches!(
                 parameter.kind(),
-                representability::signature::Kind::Type | representability::signature::Kind::Future
+                representability::signature::Kind::Type
+                    | representability::signature::Kind::Future
+                    | representability::signature::Kind::Constant
             )
         }),
         // `F: FnOnce(..) -> R`, as `spawn_blocking` takes: a script closure
@@ -3594,6 +3626,12 @@ fn writes_declared(
             | Type::ProfileMessage {
                 payload: element, ..
             } => declared(element, parameters),
+            // A const length a call's argument gives (#1330).
+            Type::ConstArray { element, parameter } => {
+                parameters.iter().any(|declared| {
+                    declared.index() == *parameter && declared.kind() == Kind::Constant
+                }) && declared(element, parameters)
+            }
             Type::Result(first, second)
             | Type::FunctionItem {
                 input: first,
@@ -3890,6 +3928,16 @@ impl Types {
             Type::Sequence { element, .. } => {
                 host::type_ref::Type::vec(Self::convert_charged(element, parameters)?)
             }
+            Type::ConstArray { element, parameter } => {
+                let length = parameters
+                    .iter()
+                    .find(|declared| declared.index() == *parameter)
+                    .expect("an array's length names a declared parameter");
+                host::type_ref::Type::array_of_length(
+                    Self::convert_charged(element, parameters)?,
+                    length.name().into(),
+                )
+            }
             Type::Tuple(members) => host::type_ref::Type::tuple(
                 members
                     .iter()
@@ -3957,11 +4005,7 @@ fn signature_with(
         .and_then(|items| items.checked_add(1));
     allocation.retain_checked(items, bytes)?;
     let mut builder = host::signature::Builder::new();
-    for parameter in signature.parameters() {
-        if parameter.kind() == representability::signature::Kind::Type {
-            builder.type_parameter(parameter.name(), &requirements(parameter.bounds()))?;
-        }
-    }
+    declare_parameters(&mut builder, signature)?;
     if let Some(receiver) = receiver {
         builder.try_parameter(receiver)?;
     }
@@ -3974,6 +4018,28 @@ fn signature_with(
     }
     relations(&mut builder, signature)?;
     Ok(builder.finish())
+}
+
+/// The signature's type parameters, and its const parameters as the
+/// lengths a call's arguments give (#1330).
+fn declare_parameters(
+    builder: &mut host::signature::Builder,
+    signature: &representability::signature::Signature,
+) -> Result<(), Error> {
+    for parameter in signature.parameters() {
+        match parameter.kind() {
+            representability::signature::Kind::Type => {
+                builder.type_parameter(parameter.name(), &requirements(parameter.bounds()))?;
+            }
+            representability::signature::Kind::Constant => {
+                builder.type_parameter(parameter.name(), &[])?;
+                builder.length(parameter.name().into())?;
+            }
+            representability::signature::Kind::Callable
+            | representability::signature::Kind::Future => {}
+        }
+    }
+    Ok(())
 }
 
 /// The signature's relations, each a relation of `builder`'s.
@@ -4182,7 +4248,8 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
         Type::Option(element)
         | Type::Borrowed { ty: element, .. }
         | Type::Range(element)
-        | Type::Sequence { element, .. } => names_impl_parameter(element),
+        | Type::Sequence { element, .. }
+        | Type::ConstArray { element, .. } => names_impl_parameter(element),
         Type::Result(ok, err) => names_impl_parameter(ok) || names_impl_parameter(err),
         Type::FunctionItem { input, output } => {
             names_impl_parameter(input) || names_impl_parameter(output)
@@ -4205,11 +4272,7 @@ fn callable_signature(
         return self::signature(types, signature, allocation);
     }
     let mut builder = host::signature::Builder::new();
-    for parameter in signature.parameters() {
-        if parameter.kind() == representability::signature::Kind::Type {
-            builder.type_parameter(parameter.name(), &requirements(parameter.bounds()))?;
-        }
-    }
+    declare_parameters(&mut builder, signature)?;
     // A script function fills each callable parameter as a slot (D594).
     if !crossings.is_empty() {
         builder.crossing();
@@ -4360,6 +4423,9 @@ fn type_usage(
         | Type::Borrowed { ty: payload, .. }
         | Type::Range(payload)
         | Type::Sequence {
+            element: payload, ..
+        }
+        | Type::ConstArray {
             element: payload, ..
         } => type_usage(payload, parameters)?,
         Type::Tuple(members)

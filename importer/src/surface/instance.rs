@@ -1015,6 +1015,8 @@ fn concrete_type(ty: &convert::Type, depth: usize, limit: usize) -> Result<(), s
         | convert::Type::ProfileMessage {
             payload: element, ..
         } => concrete_type(element, actual, limit),
+        // Its length is the instance's constant, never one of its types.
+        convert::Type::ConstArray { .. } => Err(super::Error::InstanceMismatch),
         convert::Type::Result(ok, err) => {
             concrete_type(ok, actual, limit)?;
             concrete_type(err, actual, limit)
@@ -1053,6 +1055,27 @@ pub fn key_with_slots(types: &[convert::Type], slots: &[Slot]) -> [u8; 32] {
         digest.update(slot.position.to_le_bytes());
         digest.update(slot.key);
     }
+    digest.finalize().into()
+}
+
+/// [`key_with_slots`] of an instance whose const parameters are
+/// `constants`, as an array's length gives `N` (#1330): each length is an
+/// instance of its own, as each Rust array length is a type of its own.
+#[must_use]
+pub fn key_with_constants(
+    types: &[convert::Type],
+    constants: &[convert::Constant],
+    slots: &[Slot],
+) -> [u8; 32] {
+    let key = key_with_slots(types, slots);
+    if constants.is_empty() {
+        return key;
+    }
+    use sha2::{Digest as _, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(key);
+    digest.update(b"rawr.instance.constants/v1");
+    digest.update(serde_json::to_vec(constants).unwrap_or_default());
     digest.finalize().into()
 }
 
