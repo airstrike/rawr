@@ -3013,7 +3013,8 @@
     {"issue":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"open","category":"Divergences from rustc"},
     {"issue":1306,"title":"Coverage witnesses split integer literals below the top level","state":"open","category":"Divergences from rustc"},
     {"issue":1307,"title":"Struct patterns in fn parameters","state":"open","category":"Divergences from rustc"},
-    {"issue":1308,"title":"rustc's witnesses for native patterns with several refutable fields or a native enum variant","state":"open","category":"Divergences from rustc"}
+    {"issue":1308,"title":"rustc's witnesses for native patterns with several refutable fields or a native enum variant","state":"open","category":"Divergences from rustc"},
+    {"issue":1309,"title":"rawr check spins in Fingerprint::retained_bytes / Type::dynamic_bytes for an hour on a recursive native type","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3888,7 +3889,8 @@
             {"number":1302,"title":"A native trait object's &self method may be re-entered while a call on it runs","state":"open"},
             {"number":1303,"title":"Dropping a native trait object of a marked type runs the type's impl Drop","state":"open"},
             {"number":1304,"title":"`&dyn Trait` and `Rc`/`Arc<dyn Trait>` of a native trait from a marked type","state":"open"},
-            {"number":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"open"}
+            {"number":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"open"},
+            {"number":1309,"title":"rawr check spins in Fingerprint::retained_bytes / Type::dynamic_bytes for an hour on a recursive native type","state":"open"}
           ]
         }
       ]
