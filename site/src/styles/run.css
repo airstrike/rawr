@@ -21,6 +21,8 @@
 .run .live span, .run span span { display: inline; }
 .run span.err { color: var(--red); }
 .run span.exit { color: var(--quiet); }
+/* A snippet that waits for the server's next image (docs.ts's NEXT_IMAGE). */
+.run span.next { color: var(--quiet); }
 
 /* The code of a runnable snippet is editable (run.ts). */
 code[data-run][contenteditable] { display: block; outline: none; cursor: text; caret-color: var(--red); }
