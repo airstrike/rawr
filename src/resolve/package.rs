@@ -117,6 +117,9 @@ struct Resolver<'a> {
     evidence: Box<[crate::diagnostic::Source]>,
     units: Vec<Unit>,
     entry_source: source::Id,
+    /// A host's one in-memory file, which has no extern prelude to bound
+    /// its paths ([`Graph::hosted`]).
+    hosted: bool,
     declarations: BTreeMap<Address, Declaration>,
     exports: BTreeMap<Address, Export>,
     /// Private `use` bindings, so a path may start with an imported module.
@@ -158,6 +161,7 @@ pub(crate) fn resolve_captured(
 impl<'a> Resolver<'a> {
     fn new(graph: Graph, host: &'a host::Registry) -> Result<Self, Failure> {
         let expanded = graph.expanded();
+        let hosted = graph.hosted();
         #[cfg(feature = "rust-import")]
         let statics = graph.native_statics();
         let (packages, sources, parsed, entry_package, entry_source) = graph.into_parts();
@@ -236,6 +240,7 @@ impl<'a> Resolver<'a> {
             evidence,
             units,
             entry_source,
+            hosted,
             declarations: BTreeMap::new(),
             exports: BTreeMap::new(),
             aliases: BTreeMap::new(),
@@ -410,7 +415,8 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    /// Bind each private glob import's names until none binds more: a glob
+    /// Bind each private glob import's names, and the variants a public
+    /// glob of an enum re-exports, until none binds more: a glob
     /// may reach names another glob bound, as `use Progress::*;` after
     /// `use super::*;` does, or a module's glob the names its parent's
     /// glob bound. A glob that names nothing binds nothing here; its
@@ -427,10 +433,12 @@ impl<'a> Resolver<'a> {
                     let crate::item::UseTree::Glob { prefix, span } = &used.tree else {
                         continue;
                     };
-                    if used.header.visibility.is_some() {
+                    let segments = path_segments(prefix);
+                    // `pub use Shade::*;` re-exports the enum's variants.
+                    let public = used.header.visibility.is_some();
+                    if public && !self.enum_glob(context, &segments) {
                         continue;
                     }
-                    let segments = path_segments(prefix);
                     for name in self.glob_names(context, &segments).unwrap_or_default() {
                         let address = context.address(&name);
                         if self.binds(&address) || found.contains_key(&address) {
@@ -438,22 +446,27 @@ impl<'a> Resolver<'a> {
                         }
                         let mut path = segments.to_vec();
                         path.push(name);
-                        found.insert(
-                            address,
-                            Export {
-                                source: context.source,
-                                context: context.clone(),
-                                path: path.into_boxed_slice(),
-                                span: *span,
-                            },
-                        );
+                        let export = Export {
+                            source: context.source,
+                            context: context.clone(),
+                            path: path.into_boxed_slice(),
+                            span: *span,
+                        };
+                        found.insert(address, (export, public));
                     }
                 }
             }
             if found.is_empty() {
                 return;
             }
-            self.globs.extend(found);
+            for (address, (export, public)) in found {
+                let bound = if public {
+                    &mut self.exports
+                } else {
+                    &mut self.globs
+                };
+                bound.insert(address, export);
+            }
         }
     }
 
@@ -503,6 +516,28 @@ impl<'a> Resolver<'a> {
                             .rust
                             .insert((source, call.path_span), spelled.into_boxed_slice());
                         continue;
+                    }
+                    // `kinds::Secondary` after `pub use self::Kind::Secondary;`
+                    // in `kinds`: the variant of the enum the import names.
+                    let (origin_context, origin_path) = self.origin(&unit.context, &call.path);
+                    if *origin_path != *call.path {
+                        match self.variant(&origin_context, &origin_path) {
+                            Some(item::Import::Variant { identity, .. }) => {
+                                resolved.owners.insert((source, call.owner_span), identity);
+                                continue;
+                            }
+                            // A crate's, spelled through its enum's path.
+                            Some(item::Import::HostVariant { owner }) => {
+                                let spelled = owner
+                                    .split("::")
+                                    .map(ImmutableString::from)
+                                    .chain(call.path.last().cloned())
+                                    .collect();
+                                resolved.rust.insert((source, call.path_span), spelled);
+                                continue;
+                            }
+                            _ => {}
+                        }
                     }
 
                     if call.path.len() >= 3 {
@@ -625,6 +660,7 @@ impl<'a> Resolver<'a> {
         let prelude = self
             .packages
             .iter()
+            .filter(|_| !self.hosted)
             .find(|package| package.name() == self.package.as_str())
             .map(super::extern_prelude::Prelude::of);
         let mut aliases = BTreeMap::new();
@@ -870,6 +906,11 @@ impl<'a> Resolver<'a> {
 
     fn validate_exports(&self) -> Result<(), Failure> {
         for (address, export) in &self.exports {
+            // `pub use self::Kind::Secondary;` re-exports a variant.
+            let (context, path) = self.origin(&export.context, &export.path);
+            if self.variant(&context, &path).is_some() {
+                continue;
+            }
             let mut active = BTreeSet::new();
             active.insert(address.clone());
             let target =
@@ -906,7 +947,7 @@ impl<'a> Resolver<'a> {
         };
         let segments = path_segments(prefix);
         let module: ImmutableString = segments.join("::").into();
-        let local = self.script_enum(context, &segments).is_some()
+        let local = self.enum_glob(context, &segments)
             || super::std_ordering(&module)
             || self.local_glob_module(context, &segments).is_some();
         if parsed.header.visibility.is_some() && !local {
@@ -974,6 +1015,12 @@ impl<'a> Resolver<'a> {
                     .map(|name| ImmutableString::from(*name))
                     .collect(),
             );
+        }
+        if let Some(variants) = self
+            .host
+            .enum_variants(&super::std_reexport(&module, self.host))
+        {
+            return Some(variants);
         }
         if let Some(modules) = self.local_glob_module(context, segments) {
             return Some(self.module_names(context, &modules));
@@ -1063,6 +1110,41 @@ impl<'a> Resolver<'a> {
             .get(&address)
             .or_else(|| self.aliases.get(&address))
             .or_else(|| self.globs.get(&address))
+    }
+
+    /// Whether a glob import of `segments` names an enum's variants, the
+    /// program's (`Shade::*`) or a crate's (`iced::Alignment::*`).
+    fn enum_glob(&self, context: &Context, segments: &[ImmutableString]) -> bool {
+        self.script_enum(context, segments).is_some()
+            || self
+                .host
+                .enum_variants(&super::std_reexport(&segments.join("::"), self.host))
+                .is_some()
+    }
+
+    /// The variant `path` names from `context`, after [`Self::origin`]:
+    /// `Shape::Circle` of an enum of this crate, which `super::Circle`
+    /// reaches through the parent's import, std's `Ordering::Less`, or a
+    /// crate enum's, as `iced::Alignment::Center` or the re-exported
+    /// `iced::Center`.
+    fn variant(&self, context: &Context, path: &[ImmutableString]) -> Option<item::Import> {
+        let (last, prefix) = path.split_last()?;
+        let Some((definition, identity)) = self.script_enum(context, prefix) else {
+            if super::std_ordering(&prefix.join("::")) && ORDERING_VARIANTS.contains(&last.as_str())
+            {
+                return Some(item::Import::OrderingVariant);
+            }
+            return self
+                .host
+                .enum_variant(&super::std_reexport(&path.join("::"), self.host))
+                .map(|owner| item::Import::HostVariant { owner });
+        };
+        self.enum_variants[&definition]
+            .contains(last)
+            .then_some(item::Import::Variant {
+                definition,
+                identity,
+            })
     }
 
     /// The crate enum a `use` prefix names, as `Shape`, `shapes::Shape` or
@@ -1232,32 +1314,8 @@ impl<'a> Resolver<'a> {
                         }),
                     _ => path,
                 };
-                // `use Shape::Circle;`: a variant of a crate enum, which
-                // `use super::Circle;` reaches through the parent's import.
                 let (origin_context, origin_path) = self.origin(context, &path);
-                let variant = origin_path.split_last().and_then(|(last, prefix)| {
-                    let Some((definition, identity)) = self.script_enum(&origin_context, prefix)
-                    else {
-                        if super::std_ordering(&prefix.join("::"))
-                            && ORDERING_VARIANTS.contains(&last.as_str())
-                        {
-                            return Some(item::Import::OrderingVariant);
-                        }
-                        // A variant of a crate's enum, as `use
-                        // iced::Alignment::Center;` or the re-exported `use
-                        // iced::Center;`.
-                        return self
-                            .host
-                            .enum_variant(&super::std_reexport(&origin_path.join("::"), self.host))
-                            .map(|owner| item::Import::HostVariant { owner });
-                    };
-                    self.enum_variants[&definition].contains(last).then_some(
-                        item::Import::Variant {
-                            definition,
-                            identity,
-                        },
-                    )
-                });
+                let variant = self.variant(&origin_context, &origin_path);
                 // A std or crate path another module's import names, as
                 // `use super::*;` reaches the root's `use
                 // std::collections::HashMap;`, is spelled as that import
@@ -2011,13 +2069,30 @@ impl<'a> Resolver<'a> {
     }
 }
 
+/// The first segment of a body path at `index`: a name, or `self` that
+/// starts a path from this module (`self::Side::Left`).
+fn path_head(tokens: &[crate::item::BodyToken], index: usize) -> Option<ImmutableString> {
+    use crate::item::BodyTokenKind as Kind;
+    match tokens[index].kind() {
+        Kind::Identifier(first) => Some(first.clone()),
+        Kind::SelfValue
+            if tokens
+                .get(index + 1)
+                .is_some_and(|next| matches!(next.kind(), Kind::DoubleColon)) =>
+        {
+            Some("self".into())
+        }
+        _ => None,
+    }
+}
+
 fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
     fn collect(syntax: &crate::item::BodySyntax, output: &mut Vec<QualifiedCall>) {
         let tokens = syntax.tokens();
         let mut index = 0;
 
         while index < tokens.len() {
-            let crate::item::BodyTokenKind::Identifier(first) = tokens[index].kind() else {
+            let Some(first) = path_head(tokens, index) else {
                 index += 1;
                 continue;
             };
@@ -2031,7 +2106,7 @@ fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
                 continue;
             }
 
-            let mut segments = vec![(first.clone(), tokens[index].span())];
+            let mut segments = vec![(first, tokens[index].span())];
             let mut end = index;
             while end + 2 < tokens.len()
                 && matches!(
@@ -2089,7 +2164,7 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
     ) {
         let mut index = 0;
         while index < tokens.len() {
-            let crate::item::BodyTokenKind::Identifier(first) = tokens[index].kind() else {
+            let Some(first) = path_head(tokens, index) else {
                 index += 1;
                 continue;
             };
@@ -2103,7 +2178,7 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
                 continue;
             }
 
-            let mut segments = vec![(first.clone(), tokens[index].span())];
+            let mut segments = vec![(first, tokens[index].span())];
             let mut end = index;
             while end + 2 < tokens.len()
                 && matches!(

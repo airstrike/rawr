@@ -3001,7 +3001,13 @@ fn lower_with_context(
                 .key
                 .as_ref()
                 .expect("resolved functions retain stable item keys");
-            return vec![(function_name(shell.id).into(), private_function_name(key))];
+            let private = (function_name(shell.id).into(), private_function_name(key));
+            // A root function a single file's program also names by its own
+            // name (`Executable::into_one_file`) is never a std call's.
+            if key.modules().is_empty() && key.owner().is_none() {
+                return vec![private, (function.name.text.clone(), NATIVE_ONLY.into())];
+            }
+            return vec![private];
         }
         vec![
             (function_name(shell.id).into(), function.name.text.clone()),
@@ -29302,7 +29308,15 @@ impl<'a> Parser<'a> {
             self.next();
         }
 
-        let mut segments = vec![self.expect_name("payload binding or enum name in match pattern")?];
+        // `self::Side::Left`: a path from this module.
+        let head = match self.peek() {
+            Token::SelfValue if matches!(self.peek_second(), Token::DoubleColon) => {
+                let position = self.next().1;
+                ("self".into(), point_span(position))
+            }
+            _ => self.expect_name("payload binding or enum name in match pattern")?,
+        };
+        let mut segments = vec![head];
         while matches!(self.peek(), Token::DoubleColon) {
             self.next();
             segments.push(self.expect_qualified_name()?);
@@ -41808,6 +41822,10 @@ impl<'a> Parser<'a> {
             {
                 self.parse_qualified("super".into(), token_span)
             }
+            // `self::Side::Left`: a path from this module, never the receiver.
+            Token::SelfValue if matches!(self.peek(), Token::DoubleColon) => {
+                self.parse_qualified("self".into(), token_span)
+            }
             Token::SelfValue => {
                 // A free function's `&mut` parameter is `this` too.
                 let Some(binding) = self
@@ -53889,6 +53907,10 @@ impl<'a> Parser<'a> {
                 let position = self.next().1;
                 ("super".into(), point_span(position))
             }
+            Token::SelfValue if matches!(self.peek_second(), Token::DoubleColon) => {
+                let position = self.next().1;
+                ("self".into(), point_span(position))
+            }
             // `let a := 1;`, `let a:;`: no type starts there.
             token @ (Token::Equals | Token::SemiColon) => {
                 let at = self.position();
@@ -62476,6 +62498,50 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
             matches!(&error, resolve::Error::InvalidDerive { capability, .. } if capability.as_str() == "Debug"),
             "{error:?}"
         );
+    }
+
+    /// A module re-exports a crate enum's variant by `pub use`, by name and
+    /// by a glob, and the root names it through the module (#1345).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn a_module_re_exports_an_imported_enum_variant() {
+        let mut engine = Engine::new();
+        engine
+            .register_host_facade(imported_facade())
+            .expect("symbolic imported facade installs");
+        let text = r#"mod picks {
+    pub use imported::Choice::Count;
+    pub mod all {
+        pub use imported::Choice::*;
+    }
+}
+use picks::all::Empty;
+fn picked(empty: bool) -> imported::Choice {
+    if empty { Empty } else { picks::Count(2) }
+}
+fn counted() -> imported::Choice {
+    picks::all::Count(3)
+}
+"#;
+        let path = std::path::PathBuf::from("/main.rs");
+        let snapshot =
+            crate::package::snapshot::Snapshot::new(path.clone(), vec![(path, text.into())])
+                .unwrap();
+        let graph = crate::package::Graph::load_snapshot(&engine, &snapshot).unwrap();
+        let program = resolve::package::resolve(graph, &engine.host_registry)
+            .unwrap_or_else(|failure| panic!("re-exported variants: {:?}", failure.error));
+        let uses = symbolic_imported(&engine, &program)
+            .unwrap_or_else(|failure| panic!("symbolic imported source: {}", failure.into_error()));
+        assert!(
+            uses.iter()
+                .all(|used| used.path.as_str() == "imported::Choice"),
+            "{:?}",
+            uses.iter()
+                .map(|used| used.path.as_str())
+                .collect::<Vec<_>>()
+        );
+        // Two outputs and three variants.
+        assert_eq!(uses.len(), 5);
     }
 
     #[cfg(feature = "rust-import")]
