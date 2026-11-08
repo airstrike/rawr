@@ -386,6 +386,23 @@ fn a_parameter_an_impls_associated_type_fixes_runs() {
     );
 }
 
+/// iced's gallery (#1213): `tile(picture(handle))` given by a function
+/// written `-> impl Widget<Message> + 'a`, and by one written `->
+/// Option<impl Widget<Message>>`, where only the output's defaulted
+/// renderer fixes the picture's handle. The output is `cargo run`'s.
+#[test]
+fn a_handle_only_an_opaque_outputs_renderer_fixes_runs() {
+    let (rawr, cargo) = both_printed("floated.rs", "Increment");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 <picture Handle { name: \"sun\" }@0> none [Increment]")
+            && rawr.contains(
+                "2 view pad 0 <picture Handle { name: \"sun\" }@1> <picture Handle { name: \"sun\" }@0>"
+            ),
+        "{rawr}"
+    );
+}
+
 /// iced's checkbox: `application(State::default, ..)` gives an opaque
 /// `impl Program` that `fonts([..])` and `run()` take, `on_toggle_maybe`
 /// takes an `Option` of a variant's constructor, and `style` takes a crate
@@ -1946,7 +1963,7 @@ fn an_option_of_a_late_bound_reference_is_lent_for_the_call() {
 /// value of each item, while `update` changes the rest of the state. The
 /// output is `cargo run`'s.
 #[test]
-#[ignore = "blocked: the renderer of a borrowing opaque `impl Framed` stays unknown, so the lent cell's proxy bound names it `_` (E0121), and `&self.items` of a crate-value Vec field fails attestation as `&[T]`"]
+#[ignore = "blocked: `.map(..)` takes the borrowing value by value, and a lent cell's value moves only where it implements its one trait, without arguments, through its proxy (#856); `Framed<String, Theme, Renderer>` has arguments"]
 fn an_opaque_widget_borrows_a_slice_of_crate_values_for_the_views_lifetime() {
     let (rawr, cargo) = both_printed("notes.rs", "first,Reset");
     assert_eq!(rawr, cargo);

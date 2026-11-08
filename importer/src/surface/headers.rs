@@ -175,7 +175,12 @@ impl<'g, P: api::Phase> Headers<'g, P> {
         definition: &model::Definition,
         arguments: &[model::Argument],
     ) -> Option<Option<convert::Type>> {
-        use crate::classify::{option_element, result_elements, vec_element};
+        use crate::classify::{option_element, result_elements, std_binding, vec_element};
+        // alloc's `String` is Rawr's string, as iced's `markdown::view`
+        // gives an `impl Widget<Uri, ..>` whose `Uri` is a `String` (#917).
+        if matches!(std_binding::of(definition), Some(std_binding::Std::String)) {
+            return Some(Some(convert::Type::Builtin(convert::Builtin::String)));
+        }
         if let Some(element) = option_element(definition, arguments) {
             return Some(
                 self.ty(element)

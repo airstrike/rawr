@@ -13395,6 +13395,8 @@ impl<'a> Parser<'a> {
 
         let expected = self.tail_expected(Some(definition.output()));
         self.coerce_tail(&expected, definition.body())?;
+        #[cfg(feature = "rust-import")]
+        self.settle_opaque(definition.output());
         self.close_body_drops()?;
         self.wrap_formatter(definition.body());
 
@@ -13482,6 +13484,22 @@ impl<'a> Parser<'a> {
             _ => {}
         }
         Ok(())
+    }
+
+    /// While an opaque output is revealed, the written `impl Trait`'s
+    /// arguments and defaults fix what the tail left open before the body's
+    /// end falls back (`finish_structural_instances`), as rustc proves an
+    /// opaque type's bounds before its fallback. The renderer of iced's
+    /// gallery's viewer, `Some(opaque(mouse_area(container(image))))` in an
+    /// `Option<impl Widget<Message>>`, is then the default one, which fixes
+    /// the image's `Handle` (#1213) before `impl Into<Handle>` would take
+    /// the argument's type, so the revealed output names iced's handle. What
+    /// stays open is `reveal`'s `fix_opaque` to report.
+    #[cfg(feature = "rust-import")]
+    fn settle_opaque(&mut self, written: &type_ref::Type) {
+        if let Some(hidden) = self.revealing.clone() {
+            let _ = self.fix_opaque(written, &hidden);
+        }
     }
 
     /// `fix_opaque` with the generic parameters `written` names at the
@@ -14045,6 +14063,10 @@ impl<'a> Parser<'a> {
 
         let expected = self.tail_expected(definition.output.as_ref());
         self.coerce_tail(&expected, definition.body.span)?;
+        #[cfg(feature = "rust-import")]
+        if let Some(output) = &definition.output {
+            self.settle_opaque(output);
+        }
         if !definition.body.constant && !definition.body.asynchronous {
             self.close_body_drops()?;
             self.wrap_formatter(definition.body.span);
