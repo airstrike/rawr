@@ -125,7 +125,8 @@
         {"text":"`rawr run` watches the program's inputs, not the project tree: nothing under `target/` reaches the file watcher, so rawr's own builds no longer count as saves, and a project with a huge `target/` starts its watcher. If macOS refuses the watcher's stream, the error says so and lists the paths rawr asked for.","issues":[1346],"refs":[1222]},
         {"text":"`clock.strftime(\"%H:%M\")` fills `F: ?Sized` with the unsized `str`; instance_surface_type had no case for that type, so the call carried no instance key and fell back to the item's shared binding, the adapter of whichever instance registered first, in an order set by hashes. New crates in the crate-shapes fixture flipped that order and the literal reached the `[u8]` adapter: the 'a value reached an adapter as a type its signature doesn't take' panic, deterministic in one lane and absent in another, which is also the shape of the #1087 flake. Ty::UnsizedStr now keys as Builtin::Str, as the adapter generator names it. Merged in 1777280a7.","issues":[1352],"refs":[1087]},
         {"text":"A call of a crate's generic item always reaches the adapter of its own instance. A parameter an associated type reads no longer misses its adapter, and a type argument that keys no instance is a check error at the call, never a call into another instance's adapter at run time.","issues":[1353,1087]},
-        {"text":"A marked type behind a native trait object lends its strings in place: `fn label(&self) -> &str` reads the program's own text with no copy, and a `&self` method returning a native type that borrows the value, as `view(&self) -> Element<'_, Message>` does, works and keeps what it borrows only to the next `&mut self` call.","issues":[1322,1321]}
+        {"text":"A marked type behind a native trait object lends its strings in place: `fn label(&self) -> &str` reads the program's own text with no copy, and a `&self` method returning a native type that borrows the value, as `view(&self) -> Element<'_, Message>` does, works and keeps what it borrows only to the next `&mut self` call.","issues":[1322,1321]},
+        {"text":"Two `let`s of a crate value that borrows what it takes, such as an invariant `Text<'a>` or what `explain` gives, go to one call outside a view too, as Rust infers one lifetime for both.","issues":[1335]}
       ]
     },
     "releases": [
@@ -3068,7 +3069,7 @@
     {"issue":1332,"title":"Test the save path of #1323: a save during rawr run that breaks rawr's crate copy shows only cargo check's error","state":"open","category":"Health"},
     {"issue":1333,"title":"A `&mut` place of a receiver in a scope frame's region calls the method once","state":"closed","category":"Divergences from rustc"},
     {"issue":1334,"title":"An `Option<&mut T>` a crate method lends calls the method once","state":"closed","category":"Divergences from rustc"},
-    {"issue":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"open","category":"Divergences from rustc"},
+    {"issue":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"closed","category":"Divergences from rustc"},
     {"issue":1336,"title":"Selecting among many generic From impls by the argument's type: `Into::<Slot<'_, _>>::into(icon().size(12))`","state":"closed","category":"Divergences from rustc"},
     {"issue":1337,"title":"Native-module scanning reads target cfgs from rustc's cfg set","state":"closed","category":"Divergences from rustc"},
     {"issue":1338,"title":"cfg: RUSTFLAGS --cfg values and a disabled multi-parameter closure argument","state":"open","category":"Divergences from rustc"},
@@ -3098,7 +3099,12 @@
     {"issue":1362,"title":"The generic classification and the facade plan store each fact once","state":"open","category":"Importer"},
     {"issue":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"open","category":"Divergences from rustc"},
     {"issue":1364,"title":"A native trait object's `&[T]`/`&T` result that borrows the receiver comes back as a copy per call","state":"open","category":"Divergences from rustc"},
-    {"issue":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open","category":"Divergences from rustc"}
+    {"issue":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open","category":"Divergences from rustc"},
+    {"issue":1366,"title":"A free function taking `&T` of a value a scope frame's region holds","state":"open","category":"Divergences from rustc"},
+    {"issue":1367,"title":"A crate function taking an array of a region-held opaque value","state":"open","category":"Divergences from rustc"},
+    {"issue":1368,"title":"A crate function with two opaque-type parameters fails to compile in the runner","state":"open","category":"Divergences from rustc"},
+    {"issue":1369,"title":"A method taking `&mut Vec<String>` on a value a scope frame's region holds fails to compile in the runner","state":"open","category":"Divergences from rustc"},
+    {"issue":1370,"title":"A frame that joins an outer region keeps its values to the outer frame's end, so a loop piles them up","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3714,8 +3720,13 @@
             {"number":1313,"title":"A projection bound on a crate's own trait (`<F as Trait>::Output = T`) has no cases","state":"open"},
             {"number":1333,"title":"A `&mut` place of a receiver in a scope frame's region calls the method once","state":"closed"},
             {"number":1334,"title":"An `Option<&mut T>` a crate method lends calls the method once","state":"closed"},
-            {"number":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"open"},
-            {"number":1353,"title":"A call whose instance has no key takes whichever adapter of the item bound first","state":"closed"}
+            {"number":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"closed"},
+            {"number":1353,"title":"A call whose instance has no key takes whichever adapter of the item bound first","state":"closed"},
+            {"number":1366,"title":"A free function taking `&T` of a value a scope frame's region holds","state":"open"},
+            {"number":1367,"title":"A crate function taking an array of a region-held opaque value","state":"open"},
+            {"number":1368,"title":"A crate function with two opaque-type parameters fails to compile in the runner","state":"open"},
+            {"number":1369,"title":"A method taking `&mut Vec<String>` on a value a scope frame's region holds fails to compile in the runner","state":"open"},
+            {"number":1370,"title":"A frame that joins an outer region keeps its values to the outer frame's end, so a loop piles them up","state":"open"}
           ]
         }
       ]
