@@ -95,6 +95,7 @@
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A family of types indexed by one lifetime: `Parser<'x>` for every `'x`.
@@ -616,12 +617,61 @@ impl<'r, F: Regional> Erased<'r> for Slot<'r, F> {
 /// invariant (D558, check (b′)).
 pub struct Region<'r> {
     nonce: Nonce,
+    /// The guards crate methods gave of values here, each kept beside the
+    /// value it borrows ([`Region::yoke`]). Declared before `slots`, so
+    /// they drop first.
+    holds: RefCell<Vec<Hold>>,
     slots: Vec<Option<Box<dyn Erased<'r> + 'r>>>,
     /// Where script strings a call in the region borrows live for `'r`,
     /// in a region a slot opens at the lifetime of a script value it lent
     /// (D594).
     pins: Option<&'r Pins>,
     _r: PhantomData<fn(&'r ()) -> &'r ()>,
+}
+
+/// A guard a region keeps beside the value it borrows ([`Region::yoke`]):
+/// a [`Guard`], its target's type erased.
+struct Hold {
+    index: u32,
+    id: Nonce,
+    guard: Box<dyn Any>,
+}
+
+/// A guard whose target is `U`, at a lifetime only its region knows.
+struct Guard<U: ?Sized + 'static>(Box<dyn DerefMut<Target = U>>);
+
+/// What a place holds of a guard its region keeps ([`Region::yoke`]): the
+/// guard ends when this drops, as Rust drops it at the end of its
+/// statement or block, or when its value is next reached. A region that is
+/// busy when this drops ends the guard at that next reach, or when the
+/// region does.
+#[must_use]
+pub struct Held<U: ?Sized + 'static> {
+    nonce: Nonce,
+    index: u32,
+    id: Nonce,
+    target: PhantomData<fn() -> Box<U>>,
+}
+
+impl<U: ?Sized + 'static> Held<U> {
+    /// Whether the guard lasts: the method gave one, and nothing ended it.
+    #[must_use]
+    pub fn held(&self) -> bool {
+        with::<RegionF, _>(self.nonce, |region| region.target(self).is_ok()).unwrap_or(false)
+    }
+
+    /// `body` of the guard's target, while the guard lasts.
+    pub fn with<R>(&self, body: impl FnOnce(&mut U) -> R) -> Result<R, Error> {
+        with::<RegionF, _>(self.nonce, |region| region.target(self).map(body))?
+    }
+}
+
+impl<U: ?Sized + 'static> Drop for Held<U> {
+    fn drop(&mut self) {
+        let _ = with::<RegionF, _>(self.nonce, |region| {
+            region.unhold(self.index, Some(self.id))
+        });
+    }
 }
 
 impl Default for Region<'_> {
@@ -636,6 +686,7 @@ impl<'r> Region<'r> {
     pub fn new() -> Self {
         Self {
             nonce: fresh(),
+            holds: RefCell::new(Vec::new()),
             slots: Vec::new(),
             pins: None,
             _r: PhantomData,
@@ -716,6 +767,7 @@ impl<'r> Region<'r> {
     }
 
     fn slot(&self, index: u32) -> Result<&(dyn Erased<'r> + 'r), Error> {
+        self.unhold(index, None);
         self.slots
             .get(index as usize)
             .ok_or(Error::Mismatch)?
@@ -839,6 +891,97 @@ impl<'r> Region<'r> {
         handle: Scoped,
     ) -> Result<<G as Gives<'r, I>>::Out, Error> {
         self.take::<Given<G, I>>(handle)
+    }
+
+    /// Keep the guard `reach` makes of the value `handle` names beside it,
+    /// as a crate method's `&mut` of a frame's value borrows it, as
+    /// quick-xml's `reader.config_mut()` does (#1333): the method is called
+    /// once, and its place reaches the guard through the [`Held`] this
+    /// gives. Any other reach of the value ends the guard first, as rustc
+    /// ends the borrow at its last use, and so does a later guard of it. A
+    /// `reach` that gives none, as an `Option<&mut T>` method's `None`,
+    /// keeps nothing.
+    pub fn yoke<F: Regional, U: ?Sized + 'static>(
+        &mut self,
+        handle: Scoped,
+        reach: impl for<'a> FnOnce(&'a mut F::Of<'r>) -> Option<Box<dyn DerefMut<Target = U> + 'a>>,
+    ) -> Result<Held<U>, Error> {
+        let value = std::ptr::from_mut(self.get_mut::<F>(handle)?);
+        let id = fresh();
+        // SAFETY: the value is boxed in its slot, so it stays where it is
+        // while the slot holds it, and the guard ends before the slot is
+        // reached any other way (`slot`, which every reach of a value goes
+        // through) or dropped (the field order of `Region`). Only the
+        // lifetime changes, which has no layout, and the guard is reached
+        // only through `target`, while the region is borrowed `&mut`.
+        let guard =
+            reach(unsafe { &mut *value }).map(|guard| unsafe {
+                std::mem::transmute::<
+                    Box<dyn DerefMut<Target = U> + '_>,
+                    Box<dyn DerefMut<Target = U>>,
+                >(guard)
+            });
+        if let Some(guard) = guard {
+            self.holds.get_mut().push(Hold {
+                index: handle.index,
+                id,
+                guard: Box::new(Guard(guard)),
+            });
+        }
+        Ok(Held {
+            nonce: self.nonce,
+            index: handle.index,
+            id,
+            target: PhantomData,
+        })
+    }
+
+    /// [`Region::yoke`] of the value `handle` names, as what the function
+    /// `wrapper` gives.
+    pub fn yoke_given<I: Inputs, G: 'static + for<'x> Gives<'x, I>, U: ?Sized + 'static>(
+        &mut self,
+        _inputs: I,
+        _wrapper: G,
+        handle: Scoped,
+        reach: impl for<'a> FnOnce(
+            &'a mut <G as Gives<'r, I>>::Out,
+        ) -> Option<Box<dyn DerefMut<Target = U> + 'a>>,
+    ) -> Result<Held<U>, Error> {
+        self.yoke::<Given<G, I>, U>(handle, reach)
+    }
+
+    /// The target of the guard `held` names, while it lasts.
+    fn target<U: ?Sized + 'static>(&mut self, held: &Held<U>) -> Result<&mut U, Error> {
+        if held.nonce != self.nonce {
+            return Err(Error::Mismatch);
+        }
+        let hold = self
+            .holds
+            .get_mut()
+            .iter_mut()
+            .find(|hold| hold.id == held.id)
+            .ok_or(Error::Expired)?;
+        let guard = hold
+            .guard
+            .downcast_mut::<Guard<U>>()
+            .ok_or(Error::Mismatch)?;
+        Ok(&mut *guard.0)
+    }
+
+    /// End the guard kept beside the value at `index`, the one `id` names
+    /// when it is given. The guard drops once the list is let go, so its
+    /// drop may reach the region.
+    fn unhold(&self, index: u32, id: Option<Nonce>) {
+        let ended = {
+            let Ok(mut holds) = self.holds.try_borrow_mut() else {
+                return;
+            };
+            holds
+                .iter()
+                .position(|hold| hold.index == index && id.is_none_or(|id| hold.id == id))
+                .map(|at| holds.swap_remove(at))
+        };
+        drop(ended);
     }
 
     /// A copy of the value `handle` names, in a new slot, when its type is
@@ -1841,6 +1984,78 @@ mod tests {
         assert_eq!(expired(word), Some(Error::Expired));
         assert_eq!(expired(copy), Some(Error::Expired));
         assert_eq!(format!("{copy:?}"), format!("<&str: {}>", Error::Expired));
+    }
+
+    /// Counts under a name a region's value borrows, and how often one was
+    /// lent mutably.
+    struct Tally<'a> {
+        name: &'a str,
+        counts: Vec<u32>,
+        lent: usize,
+    }
+
+    struct TallyF;
+
+    impl Family for TallyF {
+        type Of<'x> = Tally<'x>;
+    }
+
+    impl super::Regional for TallyF {
+        fn name() -> &'static str {
+            "Tally"
+        }
+    }
+
+    /// The count at `index` of the tally `handle` names, kept beside it.
+    fn yoked(handle: super::Scoped, index: usize) -> super::Held<u32> {
+        super::with::<super::RegionF, _>(handle.nonce(), |region| {
+            region.yoke::<TallyF, _>(handle, |tally| {
+                tally.lent += 1;
+                tally
+                    .counts
+                    .get_mut(index)
+                    .map(|count| Box::new(count) as Box<dyn std::ops::DerefMut<Target = u32>>)
+            })
+        })
+        .unwrap()
+        .unwrap()
+    }
+
+    /// A region keeps a guard beside the value it borrows (#1333): each
+    /// access reaches the one guard, another reach of the value or the
+    /// handle's drop ends it, and a method that gives none keeps nothing.
+    #[test]
+    fn a_region_keeps_a_guard_beside_its_value() {
+        use super::{Region, RegionF};
+        let name = String::from("tally");
+        let mut region = Region::new();
+        let tally = region.insert::<TallyF>(Tally {
+            name: &name,
+            counts: vec![0, 0],
+            lent: 0,
+        });
+        let holds =
+            |nonce| super::with::<RegionF, _>(nonce, |region| region.holds.borrow().len()).unwrap();
+        super::open(&mut region, || {
+            let held = yoked(tally, 1);
+            assert!(held.held());
+            held.with(|count| *count += 2).unwrap();
+            held.with(|count| *count *= 5).unwrap();
+            let reached = super::with::<RegionF, _>(tally.nonce(), |region| {
+                let tally = region.get::<TallyF>(tally).unwrap();
+                (tally.name.to_owned(), tally.counts.clone(), tally.lent)
+            })
+            .unwrap();
+            assert_eq!(reached, ("tally".to_owned(), vec![0, 10], 1));
+            assert!(!held.held());
+            assert_eq!(held.with(|_| ()), Err(Error::Expired));
+            drop(yoked(tally, 0));
+            assert_eq!(holds(tally.nonce()), 0);
+            let missing = yoked(tally, 2);
+            assert!(!missing.held());
+            assert_eq!(holds(tally.nonce()), 0);
+        });
+        assert_eq!(region.get::<TallyF>(tally).unwrap().lent, 3);
     }
 
     /// A region kept past its call is reached by its handles for as long

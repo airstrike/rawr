@@ -2289,12 +2289,14 @@ impl Arena {
 
     /// The value of `handle` kept in its slot's home with the guard `reach`
     /// makes of it (#1325), as a crate method's `&mut` borrows it: a guard
-    /// kept before ends here, as its borrow did.
+    /// kept before ends here, as its borrow did. A `reach` that gives no
+    /// guard, as an `Option<&mut T>` method's `None` (#1334), leaves the
+    /// value in its slot, and the end it gives holds nothing.
     #[allow(dead_code)]
     fn yoke<T: 'static, U: ?Sized + 'static>(
         &mut self,
         handle: &NativeHandle,
-        reach: impl for<'a> FnOnce(&'a mut T) -> Box<dyn std::ops::DerefMut<Target = U> + 'a>,
+        reach: impl for<'a> FnOnce(&'a mut T) -> Option<Box<dyn std::ops::DerefMut<Target = U> + 'a>>,
     ) -> Result<YokeEnd<U>, Error> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         self.settle(handle);
@@ -2302,8 +2304,12 @@ impl Arena {
         let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
         let value = value.downcast::<T>().map_err(|_| Error::TypeMismatch)?;
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let yoke = __rawr_internal::island::place::Yoke::new(value, reach);
-        self.slots[index].homed = Some(Box::new(Yoked { id, yoke: RefCell::new(yoke) }));
+        let mut yoke = __rawr_internal::island::place::Yoke::new(value, reach);
+        if yoke.target().is_some() {
+            self.slots[index].homed = Some(Box::new(Yoked { id, yoke: RefCell::new(yoke) }));
+        } else {
+            self.slots[index].value = Some(yoke.into_owner());
+        }
         Ok(YokeEnd { handle: handle.clone(), id, target: std::marker::PhantomData })
     }
 }
@@ -2994,6 +3000,14 @@ struct YokeEnd<U: ?Sized + 'static> {
 
 #[allow(dead_code)]
 impl<U: ?Sized + 'static> YokeEnd<U> {
+    /// Whether the guard lasts: the method gave one, and nothing ended it.
+    fn held(&self, arena: &Arena) -> bool {
+        arena
+            .homed(&self.handle)
+            .and_then(|homed| homed.as_any().downcast_ref::<Yoked<U>>())
+            .is_some_and(|yoked| yoked.id == self.id)
+    }
+
     /// `body` of the guard's target, while the guard lasts.
     fn with<R>(&self, arena: &Arena, body: impl FnOnce(&mut U) -> R) -> Result<R, Error> {
         let ended = || Error::Lent(std::any::type_name::<U>(), __rawr_internal::scope::Error::Expired);
@@ -12786,9 +12800,12 @@ fn render_lent_slice(
 
 /// `render_guard` for a receiver in a scope frame's region (D558 tier 1),
 /// as quick-xml's `reader.config_mut()` is on a `Reader<&[u8]>` its
-/// `Reader::from_str` frame holds: the receiver is reached in its region at
-/// each access instead of in the arena. Nothing for a receiver type that
-/// carries no lifetime.
+/// `Reader::from_str` frame holds. A `Deref` guard is reached in the
+/// region for its one copy. A `DerefMut` guard's method is called once, and
+/// the region keeps the guard beside the receiver (`scope::Region::yoke`),
+/// where each access of its place reaches it (#1333), as the arena keeps a
+/// guard of its own values (`Arena::yoke`). Nothing for a receiver type
+/// that carries no lifetime.
 #[allow(clippy::too_many_arguments)]
 fn render_scoped_guard(
     plan: &Plan,
@@ -12817,7 +12834,6 @@ fn render_scoped_guard(
         return Ok(());
     };
     let target = substituted(signature.output(), signature, substitutions)?;
-    let copy = copy_macro(&target);
     let mut method = format!("receiver.{}", plan.name()).into_bytes();
     render_item_turbofish(
         signature,
@@ -12826,110 +12842,162 @@ fn render_scoped_guard(
         container_parameters,
         &mut method,
     )?;
-    // The inputs as they were taken, or, for a place, which reaches its
-    // target again with each access, copies of them (#1318).
     let inputs = signature.inputs().len();
-    if matches!(guard, Guard::Mutable) {
-        let copies = (0..inputs)
-            .map(|input| format!("Clone::clone(&argument_{input})"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        write!(method, "({copies})").map_err(encoding)?;
-    } else {
-        method.write_all(b"(").map_err(encoding)?;
-        argument_list(inputs, 1, &mut method)?;
-        method.write_all(b")").map_err(encoding)?;
-    }
+    method.write_all(b"(").map_err(encoding)?;
+    argument_list(inputs, 1, &mut method)?;
+    method.write_all(b")").map_err(encoding)?;
     let method = String::from_utf8(method).map_err(request::unwritable)?;
-    // The guard on the receiver in its region, inside `with`.
-    let reach = format!(
-        "__rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<_, Error> {{
-            let receiver = region.{}.map_err(|error| Error::Lent(scoped.name(), error))?;
-            let mut guard = {method};
-            let _ = &mut guard;",
-        family.call(family::Reach::GetMut, "scoped")
-    );
-    let close = "})
-        .map_err(|error| Error::Lent(scoped.name(), error))
-        .and_then(|output| output)";
-    let mut give = Vec::new();
-    render_give(&target, "output", &mut give)?;
-    let give = String::from_utf8(give).map_err(request::unwritable)?;
     match guard {
-        // A receiver in a region lends no optional borrow yet.
-        Guard::OptionShared | Guard::OptionMutable => Ok(()),
-        Guard::Shared => writeln!(
-            output,
-            "    if let Some(scoped) = scoped_value(arguments, 0) {{
-        return {reach}
+        // A receiver in a region lends no optional shared borrow yet.
+        Guard::OptionShared => Ok(()),
+        Guard::Shared => {
+            let copy = copy_macro(&target);
+            let mut give = Vec::new();
+            render_give(&target, "output", &mut give)?;
+            let give = String::from_utf8(give).map_err(request::unwritable)?;
+            writeln!(
+                output,
+                "    if let Some(scoped) = scoped_value(arguments, 0) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<_, Error> {{
+            let receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
+            let mut guard = {method};
+            let _ = &mut guard;
             let output = {copy}!(&*guard)?;
             {give}
-        {close};
-    }}"
-        )
-        .map_err(encoding),
-        Guard::Mutable => {
-            // The stored value is the local after the inputs.
-            let mut take = Vec::new();
-            render_take(inputs, 0, &target, &mut take)?;
-            let take = String::from_utf8(take).map_err(request::unwritable)?;
-            let give = format!(
-                "let read: Result<Dynamic, Error> = {{\n{give}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))"
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))
+        .and_then(|output| output);
+    }}",
+                reached = family.call(family::Reach::GetMut, "scoped"),
+            )
+            .map_err(encoding)
+        }
+        Guard::Mutable | Guard::OptionMutable => {
+            let optional = matches!(guard, Guard::OptionMutable);
+            let yoke = family.call(
+                family::Reach::Yoke,
+                &format!("scoped, |receiver| {}", yoked_guard(&method, optional)),
             );
             writeln!(
                 output,
                 "    if let Some(scoped) = scoped_value(arguments, 0) {{
-        let witness = output_witness();
-        let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {{
-            use __rawr_internal::island::place::Access;
-            let mut stored = match access {{
-                Access::Read => None,
-                Access::Store(value) => Some(value),
-                Access::Update(apply) => {{
-                    return with_arena(|arena| {{
-                        {reach}
-                            let output = {copy}!(&*guard)?;
-                            let value = {{
-                                #[allow(unused_variables)]
-                                let arguments = &mut Arguments {{ values: &mut [], arena: &mut *arena }};
-                                {give}
-                            }}?;
-                            let mut stored = match lend(arena, || apply(value)) {{
-                                Ok(stored) => stored,
-                                Err(error) => return Ok(Err(error)),
-                            }};
-                            let mut values = [&mut stored];
-                            let arguments = &mut Arguments {{ values: &mut values, arena }};
-                            {take}
-                            *guard = argument_{inputs};
-                            Ok(Ok(Dynamic::UNIT))
-                        {close}
-                    }})
-                    .map_err(runtime_error)?;
-                }}
-            }};
+        let end = __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| region.{yoke})
+            .and_then(|end| end)
+            .map_err(|error| Error::Lent(scoped.name(), error))?;"
+            )
+            .map_err(encoding)?;
+            render_yoked_place(
+                &target,
+                optional,
+                inputs,
+                "end.held()",
+                &|body| {
+                    format!(
+                        "end.with(|guard| {body}).map_err(|error| Error::Lent(scoped.name(), error))"
+                    )
+                },
+                output,
+            )?;
+            output.write_all(b"    }\n").map_err(encoding)
+        }
+    }
+}
+
+/// The closure body that makes the guard a yoke keeps of `call`'s output
+/// (`Arena::yoke`, `scope::Region::yoke`): the guard, or for an
+/// `Option<&mut T>` method (`optional`) the one its `Some` holds.
+fn yoked_guard(call: &str, optional: bool) -> String {
+    if optional {
+        format!("match {call} {{ Some(guard) => Some(Box::new(guard)), None => None }}")
+    } else {
+        format!("Some(Box::new({call}))")
+    }
+}
+
+/// The place of a guard a yoke keeps, as `render_guard` gives it, after
+/// `let end = ..;`: `held` is whether the yoke keeps one, and `with(body)`
+/// the expression that runs `body` on its target, `guard`, giving
+/// `Result<_, Error>`. A read copies the target, a store assigns it, and an
+/// update (`op=`, D554.7(f)) reads, has the script change the copy and
+/// stores the result. An `optional` guard gives `None` when the method
+/// gave none, and `Some` of the place otherwise. It returns from the
+/// adapter.
+fn render_yoked_place(
+    target: &convert::Type,
+    optional: bool,
+    inputs: usize,
+    held: &str,
+    with: &dyn Fn(&str) -> String,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = request::unwritable;
+    let element = if optional {
+        let convert::Type::Option(element) = target else {
+            return Err(request::drift("an optional borrow's output is no option"));
+        };
+        &**element
+    } else {
+        target
+    };
+    let copy = copy_macro(element);
+    let mut given = Vec::new();
+    render_give(element, "output", &mut given)?;
+    let given = String::from_utf8(given).map_err(request::unwritable)?;
+    // A read is attested as the guard's call's output is.
+    let give = format!(
+        "let read: Result<Dynamic, Error> = {{\n{given}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))"
+    );
+    // The stored value is the local after the inputs.
+    let mut take = Vec::new();
+    render_take(inputs, 0, element, &mut take)?;
+    let take = String::from_utf8(take).map_err(request::unwritable)?;
+    let (witness, placed) = if optional {
+        writeln!(
+            output,
+            "    if !{held} {{\n        return Ok(__rawr_internal::option::none());\n    }}"
+        )
+        .map_err(encoding)?;
+        (
+            "output_witness().and_then(|witness| witness.argument_witness(0))",
+            "__rawr_internal::option::some(Dynamic::from(place))",
+        )
+    } else {
+        ("output_witness()", "Dynamic::from(place)")
+    };
+    let read = with(&format!("{copy}!(&*guard)"));
+    let store = with(&format!("*guard = argument_{inputs}"));
+    writeln!(
+        output,
+        "    let witness = {witness};
+    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {{
+        use __rawr_internal::island::place::Access;
+        let reach = |mut stored: Option<Dynamic>| {{
             with_arena(|arena| {{
                 let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
                 let arguments = &mut Arguments {{ values: values.as_mut_slice(), arena }};
-                {reach}
-                    if arguments.values.is_empty() {{
-                        let output = {copy}!(&*guard)?;
-                        {give}
-                    }} else {{
-                        {take}
-                        *guard = argument_{inputs};
-                        Ok(Dynamic::UNIT)
-                    }}
-                {close}
+                if arguments.values.is_empty() {{
+                    let output = {read}??;
+                    {give}
+                }} else {{
+{take}
+                    {store}?;
+                    Ok(Dynamic::UNIT)
+                }}
             }})
             .map_err(runtime_error)
-        }});
-        return Ok(Dynamic::from(place));
-    }}"
-            )
-            .map_err(encoding)
-        }
-    }
+        }};
+        match access {{
+            Access::Read => reach(None),
+            Access::Store(value) => reach(Some(value)),
+            Access::Update(apply) => {{
+                let value = reach(None)?;
+                reach(Some(apply(value)?))
+            }}
+        }}
+    }});
+    return Ok({placed});"
+    )
+    .map_err(encoding)
 }
 
 /// The Rust path of `target` when it is one of std's types Rawr's std
@@ -13001,17 +13069,16 @@ fn render_borrowed_std(
 }
 
 /// A method whose Rust output is a borrow guard, as Freya's `State::read`
-/// and `State::write` give. The guard borrows the receiver, which lives in
-/// the arena, so it never leaves the one call that holds the receiver.
-/// A `Deref` guard gives a copy of its target. A `DerefMut` guard gives a
-/// place (`island::place::Place`): the method is called once, its guard is
-/// kept with the receiver's value in the slot's home (`Arena::yoke`), and
-/// each access reaches it there (#1325). A read copies the target, a store
-/// assigns it, and an update (`op=`, D554.7(f)) copies it, has the script
-/// change the copy and assigns the result. The guard ends when the place's
-/// last copy drops or the receiver is next reached, as rustc ends the
-/// borrow. The method's inputs are taken first, so they are owned values
-/// the call borrows.
+/// and `State::write` give. A `Deref` guard gives a copy of its target,
+/// inside the one call that holds the receiver. A `DerefMut` guard gives a
+/// place (`island::place::Place`), and an `Option<&mut T>` `Some` of one or
+/// `None`: the method is called once, its guard is kept with the
+/// receiver's value in the slot's home (`Arena::yoke`, #1325, #1334) or
+/// beside it in its region (`render_scoped_guard`), and each access
+/// reaches it there (`render_yoked_place`). The guard ends when the
+/// place's last copy drops or the receiver is next reached, as rustc ends
+/// the borrow. The method's inputs are taken first, so they are owned
+/// values the call borrows.
 #[allow(clippy::too_many_arguments)]
 fn render_guard(
     plan: &Plan,
@@ -13087,12 +13154,6 @@ fn render_guard(
         )?;
         write!(output, "({taken}); let _ = &mut guard; ").map_err(encoding)
     };
-    let indented = |lines: &[u8], indent: &str, output: &mut Vec<u8>| {
-        for line in String::from_utf8_lossy(lines).lines() {
-            writeln!(output, "{indent}{line}").map_err(encoding)?;
-        }
-        Ok::<_, request::Error>(())
-    };
     render_scoped_guard(
         plan,
         path,
@@ -13151,47 +13212,6 @@ fn render_guard(
         "    let receiver = native_handle(arguments, 0, false)?;"
     )
     .map_err(encoding)?;
-    // `call`, giving the method copies of its inputs, so a place reaches
-    // its target again with each access.
-    let call_again = |access: &str,
-                      handle: &str,
-                      taking: &str,
-                      output: &mut Vec<u8>|
-     -> Result<(), request::Error> {
-        write!(output, "{access}::<").map_err(encoding)?;
-        render_container_path(
-            path,
-            signature,
-            substitutions,
-            constants,
-            container_parameters,
-            true,
-            output,
-        )?;
-        write!(
-            output,
-            ", _>({handle}, |{taking}| {{ let guard = receiver.{}",
-            plan.name()
-        )
-        .map_err(encoding)?;
-        render_item_turbofish(
-            signature,
-            substitutions,
-            constants,
-            container_parameters,
-            output,
-        )?;
-        output.write_all(b"(").map_err(encoding)?;
-        for input in 0..signature.inputs().len() {
-            if input > 0 {
-                output.write_all(b", ").map_err(encoding)?;
-            }
-            write!(output, "Clone::clone(&argument_{input})").map_err(encoding)?;
-        }
-        output
-            .write_all(b"); let Some(mut guard) = guard else { return Err(Error::StaleHandle) }; let _ = &mut guard; ")
-            .map_err(encoding)
-    };
     match guard {
         Guard::Shared => {
             output.write_all(b"    let output = ").map_err(encoding)?;
@@ -13213,177 +13233,48 @@ fn render_guard(
                 .map_err(encoding)?;
             render_give(&target, "output", output)
         }
-        // `Some` of a place whose accesses call the method again, or `None`.
-        Guard::OptionMutable => {
-            let convert::Type::Option(element) = &target else {
-                return Err(request::drift("an optional borrow's output is no option"));
-            };
-            let mut given = Vec::new();
-            render_give(element, "output", &mut given)?;
-            let given = String::from_utf8(given).map_err(request::unwritable)?;
-            let give = format!(
-                "let read: Result<Dynamic, Error> = {{\n{given}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))\n"
-            )
-            .into_bytes();
-            let mut take = Vec::new();
-            let stored = signature.inputs().len();
-            render_take(stored, 0, element, &mut take)?;
-            output.write_all(b"    let present = ").map_err(encoding)?;
-            call_again(borrow, "receiver.clone()", "receiver", output)?;
+        // The method is called once: its guard is kept with the receiver's
+        // value (`Arena::yoke`), and each access of the place reaches it
+        // there (#1325). An `Option<&mut T>` gives `Some` of the place, or
+        // `None` (#1334).
+        Guard::Mutable | Guard::OptionMutable => {
+            let optional = matches!(guard, Guard::OptionMutable);
             output
-                .write_all(
-                    b"Ok::<(), Error>(()) }).map(|reached| reached.is_ok())?;
-    if !present {
-        return Ok(__rawr_internal::option::none());
-    }
-    let witness = output_witness().and_then(|witness| witness.argument_witness(0));
-    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {
-        use __rawr_internal::island::place::Access;
-        let mut stored = match access {
-            Access::Read => None,
-            Access::Store(value) => Some(value),
-            Access::Update(apply) => {
-                return with_arena(|arena| {
-                    ",
-                )
+                .write_all(b"    let end = arguments.arena.yoke::<")
                 .map_err(encoding)?;
-            call_again("arena.held", "receiver.clone()", "arena, receiver", output)?;
-            output
-                .write_all(
-                    format!(
-                        "
-                        let output = {copy}!(&*guard)?;
-                        let value = {{
-                            #[allow(unused_variables)]
-                            let arguments = &mut Arguments {{ values: &mut [], arena: &mut *arena }};
-"
-                    )
-                    .as_bytes(),
-                )
-                .map_err(encoding)?;
-            indented(&give, "                        ", output)?;
-            output
-                .write_all(
-                    b"                        }?;
-                        let mut stored = match lend(arena, || apply(value)) {
-                            Ok(stored) => stored,
-                            Err(error) => return Ok(Err(error)),
-                        };
-                        let mut values = [&mut stored];
-                        let arguments = &mut Arguments { values: &mut values, arena };
-",
-                )
-                .map_err(encoding)?;
-            indented(&take, "                    ", output)?;
-            output
-                .write_all(
-                    format!(
-                        "                        *guard = argument_{stored};
-                        Ok(Ok(Dynamic::UNIT))
-                    }})?
-                }})
-                .map_err(runtime_error)?;
-            }}
-        }};
-        with_arena(|arena| {{
-            let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
-            let arguments = &mut Arguments {{ values: values.as_mut_slice(), arena }};
-            if arguments.values.is_empty() {{
-                let output = "
-                    )
-                    .as_bytes(),
-                )
-                .map_err(encoding)?;
-            call_again(borrow, "receiver.clone()", "receiver", output)?;
-            output
-                .write_all(format!("{copy}!(&*guard) }})??;\n").as_bytes())
-                .map_err(encoding)?;
-            indented(&give, "            ", output)?;
-            output
-                .write_all(b"            } else {\n")
-                .map_err(encoding)?;
-            indented(&take, "            ", output)?;
-            output.write_all(b"                ").map_err(encoding)?;
-            call_again(borrow, "receiver.clone()", "receiver", output)?;
-            output
-                .write_all(
-                    format!(
-                        "*guard = argument_{stored}; Ok::<(), Error>(()) }})??;
-                Ok(Dynamic::UNIT)
-            }}
-        }})
-        .map_err(runtime_error)
-    }});
-    Ok(__rawr_internal::option::some(Dynamic::from(place)))
-"
-                    )
-                    .as_bytes(),
-                )
-                .map_err(encoding)
-        }
-        Guard::Mutable => {
-            let mut given = Vec::new();
-            render_give(&target, "output", &mut given)?;
-            let given = String::from_utf8(given).map_err(request::unwritable)?;
-            // A read is attested as the guard's call's output is.
-            let give = format!(
-                "let read: Result<Dynamic, Error> = {{\n{given}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))\n"
-            )
-            .into_bytes();
-            let mut take = Vec::new();
-            // The stored value is the local after the inputs.
-            render_take(inputs, 0, &target, &mut take)?;
-            // The method is called once: its guard is kept with the
-            // receiver's value (`Arena::yoke`), and each access of the
-            // place reaches it there (#1325).
-            output
-                .write_all(b"    let witness = output_witness();\n    let end = ")
-                .map_err(encoding)?;
-            call("arguments.arena.yoke", "&receiver", "receiver", output)?;
-            output
-                .write_all(
-                    b"Box::new(guard) })?;
-    let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {
-        use __rawr_internal::island::place::Access;
-        let reach = |mut stored: Option<Dynamic>| {
-            with_arena(|arena| {
-                let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
-                let arguments = &mut Arguments { values: values.as_mut_slice(), arena };
-                if arguments.values.is_empty() {
-",
-                )
-                .map_err(encoding)?;
+            render_container_path(
+                path,
+                signature,
+                substitutions,
+                constants,
+                container_parameters,
+                true,
+                output,
+            )?;
+            let mut method = format!("receiver.{}", plan.name()).into_bytes();
+            render_item_turbofish(
+                signature,
+                substitutions,
+                constants,
+                container_parameters,
+                &mut method,
+            )?;
+            write!(method, "({taken})").map_err(encoding)?;
+            let method = String::from_utf8(method).map_err(request::unwritable)?;
             writeln!(
                 output,
-                "                    let output = end.with(&*arguments.arena, |guard| {copy}!(&*guard))??;"
+                ", _>(&receiver, |receiver| {})?;",
+                yoked_guard(&method, optional)
             )
             .map_err(encoding)?;
-            indented(&give, "                    ", output)?;
-            output
-                .write_all(b"                } else {\n")
-                .map_err(encoding)?;
-            indented(&take, "                ", output)?;
-            write!(
+            render_yoked_place(
+                &target,
+                optional,
+                inputs,
+                "end.held(&*arguments.arena)",
+                &|body| format!("end.with(&*arguments.arena, |guard| {body})"),
                 output,
-                "                    end.with(&*arguments.arena, |guard| *guard = argument_{inputs})?;
-                    Ok(Dynamic::UNIT)
-                }}
-            }})
-            .map_err(runtime_error)
-        }};
-        match access {{
-            Access::Read => reach(None),
-            Access::Store(value) => reach(Some(value)),
-            Access::Update(apply) => {{
-                let value = reach(None)?;
-                reach(Some(apply(value)?))
-            }}
-        }}
-    }});
-    Ok(Dynamic::from(place))
-"
             )
-            .map_err(encoding)
         }
     }
 }

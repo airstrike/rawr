@@ -108,6 +108,9 @@ pub(super) enum Reach {
     Get,
     GetMut,
     Take,
+    /// A guard kept beside the value (`scope::Region::yoke`), whose
+    /// target's type rustc infers.
+    Yoke,
 }
 
 /// The function a call is made through, in a region, when its output is
@@ -131,8 +134,12 @@ impl Family {
             Reach::Get => "get",
             Reach::GetMut => "get_mut",
             Reach::Take => "take",
+            Reach::Yoke => "yoke",
         };
         match self {
+            Self::Named(name) if matches!(reach, Reach::Yoke) => {
+                format!("{method}::<{name}, _>({arguments})")
+            }
             Self::Named(name) => format!("{method}::<{name}>({arguments})"),
             Self::Given(index) => {
                 format!("{method}_given(RawrGiven{index}, rawr_given_{index}, {arguments})")
