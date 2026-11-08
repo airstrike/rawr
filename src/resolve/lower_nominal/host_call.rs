@@ -3022,3 +3022,164 @@ impl<'a> Parser<'a> {
         .retain_origin())
     }
 }
+
+/// Why a crate call can't take the program's function that builds its
+/// message, as `Message::Changed` given to iced's `on_input`, here.
+#[cfg(feature = "rust-import")]
+pub(super) const UNSUPPORTED_MESSAGE_FUNCTION: &str =
+    "passing the program's function that builds its message is not supported here in Rawr yet";
+
+/// A path naming a free value and free functions, as a Rust `fn` item: the
+/// value where it is not called, the functions where it is.
+/// A facade path may name a macro and a value independently, as in Rust:
+/// `column![..]` takes the macro and `column(..)` the function. A path in
+/// one namespace keeps its items, so a wrong call syntax still reaches the
+/// diagnostic that names the right one.
+pub(super) fn macro_or_value(
+    items: Vec<crate::host::item::Definition>,
+    bang: bool,
+) -> Vec<crate::host::item::Definition> {
+    let is_macro = |item: &crate::host::item::Definition| item.kind().is_macro();
+    if items.iter().all(is_macro) || !items.iter().any(is_macro) {
+        return items;
+    }
+    items
+        .into_iter()
+        .filter(|item| is_macro(item) == bang)
+        .collect()
+}
+
+pub(super) fn value_or_call(
+    items: Vec<crate::host::item::Definition>,
+    called: bool,
+) -> Vec<crate::host::item::Definition> {
+    let value = |item: &crate::host::item::Definition| {
+        matches!(item.kind(), crate::host::item::Kind::Value)
+    };
+    // A tuple variant's constructor, beside the reader a pattern uses.
+    let items = if items
+        .iter()
+        .any(|item| item.kind() == crate::host::item::Kind::AssociatedFunction)
+    {
+        items
+            .into_iter()
+            .filter(|item| item.kind() != crate::host::item::Kind::Method)
+            .collect()
+    } else {
+        items
+    };
+    if items.iter().all(value) || !items.iter().any(value) {
+        return items;
+    }
+    items
+        .into_iter()
+        .filter(|item| value(item) != called)
+        .collect()
+}
+
+/// A facade field may share its name with builder methods, as iced's
+/// `style.border` and `style.border(..)`: the field where it is read, the
+/// builders where it is called.
+pub(super) fn field_or_builder(
+    items: Vec<crate::host::item::Definition>,
+    field: bool,
+) -> Vec<crate::host::item::Definition> {
+    let reader = |item: &crate::host::item::Definition| {
+        item.receiver() == Some(receiver::Mode::Shared) && item.signature().parameters().is_empty()
+    };
+    if items.iter().all(reader) || !items.iter().any(reader) {
+        return items;
+    }
+    items
+        .into_iter()
+        .filter(|item| reader(item) == field)
+        .collect()
+}
+
+/// Whether a library function's numeric `parameter` takes a `source`
+/// number: an integer or a float, as Rust's literal settles.
+pub(super) fn host_number_accepts(parameter: &crate::host::type_ref::Type, source: &Ty) -> bool {
+    use crate::host::type_ref::{Builtin, Shape};
+    match parameter.shape() {
+        Shape::Builtin(Builtin::I64) => matches!(source, Ty::Int(_)),
+        Shape::Builtin(Builtin::F64 | Builtin::F32) => matches!(source, Ty::Float(_)),
+        _ => false,
+    }
+}
+
+/// Whether `member` of the imported enum `definition` is one of its
+/// variants. Any other member is an associated item, as torin's
+/// `Size::fill()` is beside its variant `Size::Fill`.
+#[cfg(feature = "rust-import")]
+pub(super) fn names_variant(definition: &crate::host::type_def::Definition, member: &str) -> bool {
+    matches!(
+        definition.shape(),
+        crate::host::type_def::Shape::Enum(variants)
+            if variants.iter().any(|variant| variant.name() == member)
+    )
+}
+
+#[cfg(feature = "rust-import")]
+pub(super) struct ImportedContext<'a> {
+    pub(super) native: Option<&'a crate::resolve::native::Capture>,
+    pub(super) allocation: &'a mut dyn crate::host::ImportAllocation,
+    pub(super) failure: &'a mut Option<rawr_import::surface::Error>,
+    pub(super) source: crate::program::source::Id,
+    pub(super) uses: &'a mut Vec<ImportedUse>,
+    pub(super) dependencies: &'a mut BTreeSet<crate::host::facade::Dependency>,
+}
+
+#[cfg(feature = "rust-import")]
+impl ImportedContext<'_> {
+    pub(super) fn allocation_failure(&mut self, error: rawr_import::surface::Error) -> Error {
+        self.failure.replace(error);
+        Error::LoweringUnavailable {
+            item: "<imported allocation>".into(),
+            body: Span::NONE,
+        }
+    }
+
+    pub(super) fn retain_checked(
+        &mut self,
+        items: Option<usize>,
+        bytes: Option<usize>,
+    ) -> Result<(), Error> {
+        self.allocation
+            .retain_checked(items, bytes)
+            .map_err(|error| self.allocation_failure(error))
+    }
+
+    pub(super) fn entries<T>(&mut self, count: usize) -> Result<Vec<T>, Error> {
+        self.retain_checked(Some(count), count.checked_mul(std::mem::size_of::<T>()))?;
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(count)
+            .map_err(|_| self.allocation_failure(rawr_import::surface::Error::Allocation))?;
+        Ok(entries)
+    }
+
+    pub(super) fn for_source(&mut self, source: crate::program::source::Id) -> ImportedContext<'_> {
+        ImportedContext {
+            native: self.native,
+            allocation: self.allocation,
+            failure: self.failure,
+            source,
+            uses: self.uses,
+            dependencies: self.dependencies,
+        }
+    }
+}
+
+/// A facade pattern met below a script pattern: the hidden name its value
+/// is bound to, the pattern, the value's type and the binding mode.
+pub(super) type HostCheck = (ImmutableString, pattern::Syntax, Ty, Option<bool>);
+
+/// Why a literal can't build an imported value whose public field rawr
+/// can't hold yet: the field and its type, as the crate writes them.
+#[cfg(feature = "rust-import")]
+pub(super) fn unsupported_field(unsupported: &crate::host::type_def::Unsupported) -> String {
+    format!(
+        "field `{}` has type `{}`, which rawr can't hold yet",
+        unsupported.field, unsupported.ty
+    )
+}
