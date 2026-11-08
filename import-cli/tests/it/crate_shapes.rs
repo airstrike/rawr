@@ -439,6 +439,6 @@ fn a_forwarding_impls_parameters_are_its_own() {
 fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     runs_as_cargo_does(
         "slots",
-        "icon 12 | str Verified | string Verified\nstr into\nstr from | string qualified\n",
+        "icon 12 | str Verified | string Verified\nstr into\nstr from | string qualified\nstr a | str b\nstr lent | str literal\nstr first | str second\n",
     );
 }
