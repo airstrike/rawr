@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 48;
+const SCHEMA: u32 = 49;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -1063,14 +1063,14 @@ impl Plan {
                 Representability::Rejected(reason)
                     if reason.kind() == representability::reject::Kind::Trait
             );
-            if !named_trait
+            let left_out = !named_trait
                 && matches!(
                     outcome.representability(),
                     Representability::Excluded(_) | Representability::Rejected(_)
-                )
-            {
-                continue;
-            }
+                );
+            // A crate whose every item is left out still has its facade,
+            // with nothing in it: the program's path into the crate finds
+            // its module and says why the item can't be used yet (#1267).
             let root = outcome.export().root_alias();
             let index = match facades.binary_search_by(|facade| facade.root.as_ref().cmp(root)) {
                 Ok(index) => index,
@@ -1098,6 +1098,9 @@ impl Plan {
                     index
                 }
             };
+            if left_out {
+                continue;
+            }
             let relative = path(outcome.export().path());
             let facade = &mut facades[index];
             if named_trait {

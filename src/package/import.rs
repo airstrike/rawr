@@ -1565,19 +1565,15 @@ fn install(
             )
         })
         .count();
+    // A facade for each root, whose items may all be left out (#1267).
     let facade_count = contract
         .outcomes()
         .enumerate()
         .filter(|(index, outcome)| {
-            !matches!(
-                outcome.representability(),
-                Representability::Excluded(_) | Representability::Rejected(_)
-            ) && !contract.outcomes().take(*index).any(|prior| {
-                !matches!(
-                    prior.representability(),
-                    Representability::Excluded(_) | Representability::Rejected(_)
-                ) && prior.export().root_alias() == outcome.export().root_alias()
-            })
+            !contract
+                .outcomes()
+                .take(*index)
+                .any(|prior| prior.export().root_alias() == outcome.export().root_alias())
         })
         .count();
     allocation.retain_checked(
@@ -1730,22 +1726,12 @@ fn install(
             }
             continue;
         }
-        if matches!(
-            outcome.representability(),
-            Representability::Excluded(_) | Representability::Rejected(_)
-        ) {
-            continue;
-        }
-        let definition = outcome
-            .identity()
-            .definition()
-            .expect("a type parameter's index names a declared parameter");
         let key = outcome.export();
         let root = key.root_alias();
-        let relative = relative_path(key, allocation)?;
-        if relative.is_empty() {
-            return Err(Error::InvalidPath { path: root.into() });
-        }
+        // A crate whose every item is left out still has its facade, with
+        // nothing in it, as the facade plan has: the program's path into the
+        // crate finds its module and says why the item can't be used yet
+        // (#1267).
         let facade_index = match facades.binary_search_by(|facade| facade.root.cmp(root)) {
             Ok(index) => index,
             Err(index) => {
@@ -1768,6 +1754,20 @@ fn install(
                 index
             }
         };
+        if matches!(
+            outcome.representability(),
+            Representability::Excluded(_) | Representability::Rejected(_)
+        ) {
+            continue;
+        }
+        let definition = outcome
+            .identity()
+            .definition()
+            .expect("a type parameter's index names a declared parameter");
+        let relative = relative_path(key, allocation)?;
+        if relative.is_empty() {
+            return Err(Error::InvalidPath { path: root.into() });
+        }
         let facade = &mut facades[facade_index];
         // A re-exported variant, as `pub use Alignment::Center;`, is its
         // enum's variant.
