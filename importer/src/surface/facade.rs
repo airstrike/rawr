@@ -1289,12 +1289,13 @@ impl Plan {
                 }
                 // A function's members are those of the opaque type it
                 // gives (`surface::opaque`).
-                let owner = if matches!(
+                let function = matches!(
                     outcome.representability(),
                     Representability::Function(_)
                         | Representability::FunctionItem(_)
                         | Representability::Invocation(_)
-                ) {
+                );
+                let owner = if function {
                     super::opaque::path(&relative, 0)
                 } else {
                     relative.to_string()
@@ -1306,7 +1307,7 @@ impl Plan {
                     let mut found = Vec::new();
                     item.signature.output.opaque(&opaque_identities, &mut found);
                     // Each path to the type gives them again.
-                    if let Some((identity, _)) = found.first() {
+                    if let Some((identity, _)) = found.first().filter(|_| !function) {
                         let members = inherent_members.entry(*identity).or_default();
                         for member in associated
                             .implementations()

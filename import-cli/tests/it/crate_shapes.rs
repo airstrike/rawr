@@ -194,6 +194,16 @@ fn an_opaque_iterator_of_a_re_exported_type_imports() {
     runs_as_cargo_does("iterated_again", "3\n");
 }
 
+/// swash's `Setting<u16>` and `Setting<f32>` impls each have a
+/// `parse_list` that gives an opaque iterator of its own: two types, each
+/// with its own `next`. They used to be declared at one path, whose two
+/// `next`s differed only in what they give, which failed every import of
+/// swash, as each iced program's is.
+#[test]
+fn two_impls_methods_of_one_name_give_two_opaque_iterators() {
+    runs_as_cargo_does("settings", "[2, 1] Some(1.5)\n");
+}
+
 /// A crate's trait impl on a type with a const parameter, as palette's
 /// `impl<T> Lookup<u8, T> for ArrayTable<256>` is, leaves the crate
 /// importable: no facade type writes a const argument, so the impl's header

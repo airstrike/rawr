@@ -343,6 +343,23 @@ pub mod form {
         }
     }
 
+    /// A setting of a value, as swash's `Setting<T>`: the impl at each
+    /// value type has a `parse_list` of its own, and their opaque iterators
+    /// are two types.
+    pub struct Setting<T>(pub T);
+
+    impl Setting<u16> {
+        pub fn parse_list(list: &str) -> impl Iterator<Item = Self> + '_ {
+            list.split(',').map(|part| Setting(part.len() as u16))
+        }
+    }
+
+    impl Setting<f32> {
+        pub fn parse_list(list: &str) -> impl Iterator<Item = Self> + '_ {
+            list.split(',').map(|part| Setting(part.len() as f32 / 2.0))
+        }
+    }
+
     /// A function's opaque iterator, as `(0..n).rev()` behind `impl
     /// Iterator<Item = u32>` gives.
     pub fn countdown(from: u32) -> impl Iterator<Item = u32> {
