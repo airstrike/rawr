@@ -111,6 +111,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate method's `&mut` of a value a scope frame's region holds, and an `Option<&mut T>` a crate method returns (as pane_grid's `state.get_mut(pane)`), are now called once and held for the statement or binding, as rustc holds them. Such methods are now places whatever their other inputs are. (#1333, #1334)
 - A program's unit struct named by a module path is its value in a `match` scrutinee and an `if let` value too, as `match badge::Secondary { badge::Secondary => .. }`. (#1327)
 - A program's generic `impl<'a, M> From<Mine> for Slot<'a, M>` of a crate type can pass its own `M` to the crate in its body: the impl is compiled for each type its conversions take, as rustc monomorphises it. (#1341)
+- A leading `self::` in a path names the current module, as rustc reads it: in values, calls, patterns, types, `use` lists and `self::super::`. `self` after a path's first segment is rustc's E0433. (#1342)
 
 ## 0.3.171 (2026-11-07)
 

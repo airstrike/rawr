@@ -110,7 +110,8 @@
       {"text":"A crate macro's children convert through the crate's From impl for their own full type, as rustc selects it: a widget crate's generic Text whose theme only the impl fixes, the crate's own builders, a program's own From impl, and a type reached through a re-export. A child no impl takes gets rustc's E0277 with the types the impls take, never \"unknown member\".","issues":[1336]},
       {"text":"A crate method's `&mut` of a value a scope frame's region holds, and an `Option<&mut T>` a crate method returns (as pane_grid's `state.get_mut(pane)`), are now called once and held for the statement or binding, as rustc holds them. Such methods are now places whatever their other inputs are.","issues":[1333,1334]},
       {"text":"A program's unit struct named by a module path is its value in a `match` scrutinee and an `if let` value too, as `match badge::Secondary { badge::Secondary => .. }`.","issues":[1327]},
-      {"text":"A program's generic `impl<'a, M> From<Mine> for Slot<'a, M>` of a crate type can pass its own `M` to the crate in its body: the impl is compiled for each type its conversions take, as rustc monomorphises it.","issues":[1341]}
+      {"text":"A program's generic `impl<'a, M> From<Mine> for Slot<'a, M>` of a crate type can pass its own `M` to the crate in its body: the impl is compiled for each type its conversions take, as rustc monomorphises it.","issues":[1341]},
+      {"text":"A leading `self::` in a path names the current module, as rustc reads it: in values, calls, patterns, types, `use` lists and `self::super::`. `self` after a path's first segment is rustc's E0433.","issues":[1342]}
     ]
   },
   "releases": [
