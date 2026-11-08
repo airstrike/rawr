@@ -379,4 +379,30 @@ fn a_provided_methods_opaque_output_whose_supertrait_binds_self() {
 #[test]
 fn a_crates_recursive_enum_of_a_static_slice_of_itself() {
     runs_as_cargo_does("pages", "5\nBuilt 2\nExamples\n");
+/// futures_util's forwarding impls: `impl<S, Item> Sink<Item> for Wrap<S>`
+/// and `impl<T, F> Stream for Immediate<F> where F: Future<Output = T>`,
+/// where `Forward<S, A>`'s `Future::Output` is a `Result<(), E>` whose `E`
+/// only its where clause fixes. Each impl is declared, none is left out,
+/// and the program calls each type's own method. `Forward`'s `E`, a
+/// parameter of its own impl, used to be read into the `Output = T` bound
+/// as a parameter of `Immediate`'s impl, which has no such parameter, and
+/// left that impl out (#1295).
+#[test]
+fn a_forwarding_impls_parameters_are_its_own() {
+    runs_as_cargo_does("forwarding", "1\n2\n");
+    let program = SHAPES.read("mains/forwarding.rs");
+    let root = SHAPES.lease(&[("src/main.rs", &program)]);
+    let directory = crate::support::scratch();
+    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_VERBOSE", "1")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let stderr = text(&check.stderr);
+    assert!(check.status.success(), "{stderr}");
+    assert!(!stderr.contains("left out"), "{stderr}");
 }

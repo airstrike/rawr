@@ -1134,6 +1134,116 @@ pub mod pages {
             Block::Md(text) => text,
             Block::Example { id, .. } => id,
             Block::Group { title, .. } => title,
+/// futures_util's forwarding impls: `Wrap<S>`'s `Sink<Item>` declares an
+/// `Item` its self type doesn't name, and `Immediate<F>`'s `Stream`, as
+/// futures_util's `PollImmediate`, binds `<F as Future>::Output` to a `T`
+/// only its where clause fixes. Each future the crate declares is a case
+/// of that bound, and `Forward<S, A>`'s `Output` names an `E` that only its
+/// own where clause fixes, as futures_util's `Forward` and `SendAll` do
+/// (#1295).
+pub mod forwarding {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    pub trait Sink<Item> {
+        type Error;
+
+        fn send(&mut self, item: Item) -> Result<(), Self::Error>;
+    }
+
+    pub trait Stream {
+        type Item;
+
+        fn next(&mut self) -> Option<Self::Item>;
+    }
+
+    pub struct Ready(pub u32);
+
+    impl Future for Ready {
+        type Output = u32;
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Ready(self.0)
+        }
+    }
+
+    pub struct Drain(pub u32);
+
+    impl Sink<u32> for Drain {
+        type Error = ();
+
+        fn send(&mut self, item: u32) -> Result<(), ()> {
+            self.0 += item;
+            Ok(())
+        }
+    }
+
+    pub struct Forward<S, A>(pub S, pub Option<A>);
+
+    impl<S, A, E> Future for Forward<S, A>
+    where
+        S: Sink<A, Error = E>,
+    {
+        type Output = Result<(), E>;
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+            // SAFETY: neither field is structurally pinned.
+            let this = unsafe { self.get_unchecked_mut() };
+            Poll::Ready(match this.1.take() {
+                Some(item) => this.0.send(item),
+                None => Ok(()),
+            })
+        }
+    }
+
+    pub struct Wrap<S>(pub S);
+
+    impl<S> Wrap<S> {
+        pub fn new(inner: S) -> Self {
+            Wrap(inner)
+        }
+
+        pub fn depth(&self) -> u32 {
+            1
+        }
+
+        pub fn forward<A>(self, item: A) -> Forward<Self, A> {
+            Forward(self, Some(item))
+        }
+    }
+
+    impl<S, Item> Sink<Item> for Wrap<S>
+    where
+        S: Sink<Item>,
+    {
+        type Error = S::Error;
+
+        fn send(&mut self, item: Item) -> Result<(), Self::Error> {
+            self.0.send(item)
+        }
+    }
+
+    pub struct Immediate<F>(pub F);
+
+    impl<F> Immediate<F> {
+        pub fn new(future: F) -> Self {
+            Immediate(future)
+        }
+
+        pub fn polls(&self) -> u32 {
+            2
+        }
+    }
+
+    impl<T, F> Stream for Immediate<F>
+    where
+        F: Future<Output = T>,
+    {
+        type Item = T;
+
+        fn next(&mut self) -> Option<T> {
+            None
         }
     }
 }
