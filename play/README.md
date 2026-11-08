@@ -330,7 +330,9 @@ run. Each IP
 minute; code is capped at 16 KiB; Cloudflare Turnstile (site key in
 `vars.TURNSTILE_SITEKEY`, secret `TURNSTILE_SECRET`) checks browsers. A
 request carrying `x-play-admin: <hex HMAC-SHA256 of "rawr-play admin">`
-skips Turnstile but not /play's limits. The HMAC key is the log key's 64 hex
+skips Turnstile but not /play's limits, and so does one carrying the
+`PLAY_SMOKE_TOKEN` secret, which the site's build sends when it runs the
+three server-run snippets. The HMAC key is the log key's 64 hex
 digits as text, not the 32 bytes they spell:
 `printf 'rawr-play admin' | openssl dgst -sha256 -hmac "$(cat ~/.config/rawr-play/log-key)" -r`. The dashboard counts
 playground runs apart from Discord's.
