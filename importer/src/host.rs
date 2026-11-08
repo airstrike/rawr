@@ -6,6 +6,11 @@
 //! sources (worktrees, private installs, the installed binary) each get their
 //! own, and a build of the same sources reuses it. Editing a development
 //! checkout therefore never changes what an installed `rawr` builds.
+//!
+//! A process leases the host it uses for as long as it runs, through a
+//! `.lock-<pid>` file in the host that it holds locked, and pruning skips a
+//! leased host without waiting for it (D608.7). Unleased hosts go by their
+//! last use, beyond the few most recently used.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -28,10 +33,10 @@ pub fn root() -> crate::Result<PathBuf> {
 /// The host is found or written once per process.
 #[cfg(feature = "embedded-host")]
 pub fn root() -> crate::Result<PathBuf> {
-    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    if let Some(root) = ROOT.get() {
-        touch(root);
-        return Ok(root.clone());
+    static ROOT: std::sync::OnceLock<Lease> = std::sync::OnceLock::new();
+    if let Some(lease) = ROOT.get() {
+        touch(&lease.root);
+        return Ok(lease.root.clone());
     }
     let home = match std::env::var_os("CARGO_HOME") {
         Some(home) => PathBuf::from(home),
@@ -45,13 +50,70 @@ pub fn root() -> crate::Result<PathBuf> {
         .join(".cargo"),
     };
     let hosts = crate::store::runtime_home(&home).join("hosts");
-    let root = materialize(&hosts, &DIGEST, FILES).map_err(|source| crate::Error::Io {
+    let lease = Lease::take(&hosts, &DIGEST, FILES).map_err(|source| crate::Error::Io {
         operation: "write",
         path: hosts.clone(),
         source,
     })?;
-    prune(&hosts, &[root.as_path()], HOST_IDLE, HOSTS_KEPT);
-    Ok(ROOT.get_or_init(|| root).clone())
+    prune(&hosts, &[lease.root.as_path()], HOST_IDLE, HOSTS_KEPT);
+    Ok(ROOT.get_or_init(|| lease).root.clone())
+}
+
+/// A host this process uses, held locked through its own `.lock-<pid>` file
+/// so that no prune removes it while the lease lives.
+#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
+struct Lease {
+    root: PathBuf,
+    _lock: std::fs::File,
+}
+
+#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
+impl Lease {
+    /// Lease the host for `digest` under `hosts`, writing it from `files`
+    /// first when it is not there. A prune that retires the host while the
+    /// lease is taken leaves the lease file locked by it or gone, and the
+    /// second attempt writes the host anew.
+    fn take(hosts: &Path, digest: &[u8; 32], files: &[(&str, &[u8])]) -> std::io::Result<Self> {
+        for _ in 0..2 {
+            let root = materialize(hosts, digest, files)?;
+            let path = root.join(format!("{LEASE}{}", std::process::id()));
+            let Ok(lock) = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+            else {
+                continue;
+            };
+            // Held now, the lease is seen by any prune that renames the host
+            // after this point; one that renamed it before took the file away.
+            if lock.try_lock().is_ok() && path.exists() {
+                return Ok(Self { root, _lock: lock });
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "another rawr retired this host while it was leased",
+        ))
+    }
+}
+
+/// The prefix of a host's lease files, one per process that uses it.
+const LEASE: &str = ".lock-";
+
+/// Every lease file of the host at `root`, locked, or `None` when a process
+/// holds one. Never waits for a lock.
+fn vacant(root: &Path) -> Option<Vec<std::fs::File>> {
+    let mut guards = Vec::new();
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with(LEASE) {
+            continue;
+        }
+        let guard = std::fs::File::open(entry.path()).ok()?;
+        guard.try_lock().ok()?;
+        guards.push(guard);
+    }
+    Some(guards)
 }
 
 /// The digest as lowercase hex.
@@ -145,10 +207,11 @@ pub fn clean(cargo_home: &Path) {
     crate::cargo::toolchain::clean(&crate::store::home(cargo_home));
 }
 
-/// Best effort: remove host directories other than `keep` that are both
-/// unused for `idle` and older than the `kept` most recently used ones. Each
-/// is first renamed aside, so a partial removal is never mistaken for a live
-/// host and is finished by a later launch. Staging directories left by an
+/// Best effort: remove host directories other than `keep` that no process
+/// leases and that are both unused for `idle` and older than the `kept` most
+/// recently used ones. Each is first renamed aside, so a partial removal is
+/// never mistaken for a live host and is finished by a later launch; a lease
+/// taken before the rename sends it back. Staging directories left by an
 /// interrupted write go once idle.
 fn prune(hosts: &Path, keep: &[&Path], idle: Duration, kept: usize) {
     let Ok(entries) = std::fs::read_dir(hosts) else {
@@ -159,7 +222,9 @@ fn prune(hosts: &Path, keep: &[&Path], idle: Duration, kept: usize) {
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
         if name.starts_with(".retired-") {
-            let _ = std::fs::remove_dir_all(&path);
+            if let Some(_guards) = vacant(&path) {
+                let _ = std::fs::remove_dir_all(&path);
+            }
             continue;
         }
         if !entry.file_type().is_ok_and(|kind| kind.is_dir()) || keep.contains(&path.as_path()) {
@@ -183,12 +248,22 @@ fn prune(hosts: &Path, keep: &[&Path], idle: Duration, kept: usize) {
     }
     candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
     for (_, idle, name, path) in candidates.into_iter().skip(kept) {
-        if !idle {
+        if !idle || vacant(&path).is_none() {
             continue;
         }
         let retired = hosts.join(format!(".retired-{name}"));
-        if std::fs::rename(&path, &retired).is_ok() {
-            let _ = std::fs::remove_dir_all(&retired);
+        if std::fs::rename(&path, &retired).is_err() {
+            continue;
+        }
+        match vacant(&retired) {
+            Some(_guards) => {
+                let _ = std::fs::remove_dir_all(&retired);
+            }
+            // Leased since the first look: put it back. Should a new copy
+            // have taken its place, the retired one goes once unleased.
+            None => {
+                let _ = std::fs::rename(&retired, &path);
+            }
         }
     }
 }
@@ -256,6 +331,7 @@ mod tests {
             ("old2", 3 * super::HOST_IDLE),
             ("old3", 4 * super::HOST_IDLE),
             ("running", super::HOST_IDLE / 2),
+            ("leased", 10 * super::HOST_IDLE),
             (".staging-a-1", 2 * super::HOST_IDLE),
             (".staging-b-2", super::HOST_IDLE / 2),
         ];
@@ -266,6 +342,26 @@ mod tests {
                 .unwrap();
         }
         fs::create_dir_all(hosts.join(".retired-partial/rawr")).unwrap();
+        fs::create_dir_all(hosts.join(".retired-held/rawr")).unwrap();
+        // A process that leased "leased" hours ago and one whose host was
+        // retired while it ran; a lease file whose process ended is free.
+        let lease = |root: PathBuf, pid: u32| {
+            let lock = fs::File::create(root.join(format!("{}{pid}", super::LEASE))).unwrap();
+            lock.try_lock().unwrap();
+            lock
+        };
+        let _leased = lease(hosts.join("leased"), 1);
+        let _held = lease(hosts.join(".retired-held"), 2);
+        drop(lease(hosts.join("old2"), 3));
+        // Recreating the lease files moved the times; set them back.
+        for (name, age) in [
+            ("leased", 10 * super::HOST_IDLE),
+            ("old2", 3 * super::HOST_IDLE),
+        ] {
+            fs::File::open(hosts.join(name))
+                .and_then(|dir| dir.set_modified(now - age))
+                .unwrap();
+        }
         let in_use = hosts.join("in-use");
         super::prune(&hosts, &[in_use.as_path()], super::HOST_IDLE, 2);
         let mut left = fs::read_dir(&hosts)
@@ -274,9 +370,44 @@ mod tests {
             .collect::<Vec<_>>();
         left.sort();
         // The two most recently used ("running", "old1") stay, as do the host in
-        // use and a staging directory still being written; the legacy
-        // `current` host goes once idle like any other.
-        assert_eq!(left, [".staging-b-2", "in-use", "old1", "running"]);
+        // use, a host a live process leases however old, a retired host still
+        // leased and a staging directory still being written; the legacy
+        // `current` host and an old host whose lessee ended go once idle.
+        assert_eq!(
+            left,
+            [
+                ".retired-held",
+                ".staging-b-2",
+                "in-use",
+                "leased",
+                "old1",
+                "running"
+            ]
+        );
         fs::remove_dir_all(hosts).unwrap();
+    }
+
+    #[test]
+    fn a_leased_host_survives_a_prune_that_keeps_nothing() {
+        let hosts = scratch("lease").join("hosts");
+        let files: &[(&str, &[u8])] = &[("rawr/src/lib.rs", b"one")];
+        let lease = super::Lease::take(&hosts, &[3; 32], files).unwrap();
+        let old = SystemTime::now() - 2 * super::HOST_IDLE;
+        fs::File::open(&lease.root)
+            .and_then(|dir| dir.set_modified(old))
+            .unwrap();
+        super::prune(&hosts, &[], super::HOST_IDLE, 0);
+        assert_eq!(
+            fs::read(lease.root.join("rawr/src/lib.rs")).unwrap(),
+            b"one"
+        );
+        let root = lease.root.clone();
+        drop(lease);
+        fs::File::open(&root)
+            .and_then(|dir| dir.set_modified(old))
+            .unwrap();
+        super::prune(&hosts, &[], super::HOST_IDLE, 0);
+        assert!(!root.exists(), "an unleased idle host goes");
+        fs::remove_dir_all(hosts.parent().unwrap()).unwrap();
     }
 }
