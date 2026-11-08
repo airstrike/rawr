@@ -165,7 +165,9 @@
         {"text":"A local array or slice borrowed where a crate takes `&'static [T]` is now rustc's E0597, as a borrowed string already was; statics, ranges of them and constant literals still pass.","issues":[1064]},
         {"text":"An unused `use crate::module;` in a marked file is no longer refused with E0432; as in rustc, it is at most a warning.","issues":[1436]},
         {"text":"?play's universe (iced, tokio and ratatui with their generated bindings) builds for wasm32, and the site can run an iced snippet in your browser on it: each Run gets a fresh instance in a frame of its own, drawn by iced's web shell, answering clicks with no round trip to the server. The landing page keeps its iced counter on the server for now, since the browser draws it at the wrong scale on high-density displays.","issues":[1448],"refs":[1395,1384]},
-        {"text":"The landing page's iced counter runs in your browser, in a frame of its own, at any display scale, answering clicks with no round trip to the server.","issues":[1449]}
+        {"text":"The landing page's iced counter runs in your browser, in a frame of its own, at any display scale, answering clicks with no round trip to the server.","issues":[1449]},
+        {"text":"A method a crate's trait gives another crate's type by a generic impl now resolves, as ratzilla's `WebRenderer` gives ratatui's `Terminal` its `on_key_event`; a block that ends in a closure passed to a crate keeps the closure's parameter types and captures.","issues":[1450]},
+        {"text":"`?` converts a crate's error through the crate's `impl From<Error> for io::Error`, and a crate error with a written or derived (thiserror) `std::error::Error` impl boxes as a `Box<dyn Error>`.","issues":[1451]}
       ]
     },
     "releases": [
@@ -3223,13 +3225,15 @@
     {"issue":1447,"title":"A crate struct's field read through a nested place (`self.state.id`) is read by value, not lent…","state":"open","category":"Imported lifetimes after slice 2"},
     {"issue":1448,"title":"?play's universe builds for wasm32 and runs in the browser","state":"open","category":"Platforms"},
     {"issue":1449,"title":"iced in the browser's universe draws at twice its hit-test scale at devicePixelRatio 2 (Retina)…","state":"closed","category":"Platforms"},
-    {"issue":1450,"title":"A method a crate trait's generic impl gives a generic crate type doesn't resolve (ratzilla's…","state":"open","category":"No glue (D593)"},
-    {"issue":1451,"title":"`?` misses a crate's `impl From<CrateError> for io::Error`, and a derived (thiserror) Error impl…","state":"open","category":"Divergences from rustc"},
+    {"issue":1450,"title":"A method a crate trait's generic impl gives a generic crate type doesn't resolve (ratzilla's…","state":"closed","category":"No glue (D593)"},
+    {"issue":1451,"title":"`?` misses a crate's `impl From<CrateError> for io::Error`, and a derived (thiserror) Error impl…","state":"closed","category":"Divergences from rustc"},
     {"issue":1452,"title":"rawr-import builds a runner for a non-host target and then tries to start it; it should build…","state":"open","category":"Importer"},
     {"issue":1453,"title":"rawr mcp input stops reaching a running iced app after ~150 calls while it keeps drawing; clicks…","state":"open","category":"Health"},
     {"issue":1454,"title":"A universe depending on a crate with a build-dependency panics: unit package absent from…","state":"open","category":"Importer"},
     {"issue":1455,"title":"The browser universe exports only prepare/run, so a good edit can't reload in place; every edit…","state":"open","category":"Importer"},
-    {"issue":1456,"title":"`[T]::binary_search` isn't supported in marked code","state":"open","category":"Divergences from rustc"}
+    {"issue":1456,"title":"`[T]::binary_search` isn't supported in marked code","state":"open","category":"Divergences from rustc"},
+    {"issue":1457,"title":"A crate method whose closure takes `&mut` of a type with a lifetime (ratzilla's `draw_web`…","state":"open","category":"No glue (D593)"},
+    {"issue":1458,"title":"A capturing closure inside an `if`/`match` value passed to native code reads its captures where…","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

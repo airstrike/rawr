@@ -159,6 +159,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - An unused `use crate::module;` in a marked file is no longer refused with E0432; as in rustc, it is at most a warning. (#1436)
 - ?play's universe (iced, tokio and ratatui with their generated bindings) builds for wasm32, and the site can run an iced snippet in your browser on it: each Run gets a fresh instance in a frame of its own, drawn by iced's web shell, answering clicks with no round trip to the server. The landing page keeps its iced counter on the server for now, since the browser draws it at the wrong scale on high-density displays. (#1448; part of #1395, #1384)
 - The landing page's iced counter runs in your browser, in a frame of its own, at any display scale, answering clicks with no round trip to the server. (#1449)
+- A method a crate's trait gives another crate's type by a generic impl now resolves, as ratzilla's `WebRenderer` gives ratatui's `Terminal` its `on_key_event`; a block that ends in a closure passed to a crate keeps the closure's parameter types and captures. (#1450)
+- `?` converts a crate's error through the crate's `impl From<Error> for io::Error`, and a crate error with a written or derived (thiserror) `std::error::Error` impl boxes as a `Box<dyn Error>`. (#1451)
 
 ## 0.3.171 (2026-11-07)
 
