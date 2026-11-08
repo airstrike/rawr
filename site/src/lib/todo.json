@@ -161,7 +161,9 @@
         {"text":"A function bounded by a trait with more than 64 impls, such as icedxdy's `badge(content: impl Into<Slot<'a, Message>>)`, now ties its argument's types to the callee's, so `badge![icon, \"Verified\"]` no longer reports E0282.","issues":[1435]},
         {"text":"A native function that keeps the blocks it is given, such as `State::new(page_index, blocks: &'static [Block])`, takes a marked module's `static BLOCKS`, a range of it, or a slice literal, as Rust does. Before, the generated runner failed to compile with E0713/E0521.","issues":[1437]},
         {"text":"A marked type that native code holds as a `Box<dyn Trait>` can return references: a `&'static Meta` or `&'static [Block]` that is a static gives native code the static itself, and `&self.state` is lent where the value holds it. A reference result rawr can't give yet is an error at `rawr check` instead of a panic at the call.","issues":[1442]},
-        {"text":"A marked type that native code holds as a `Box<dyn Trait>` can clone a field of a value it lent in place, as `fn scrollable_id(&self) -> Id { self.state.scrollable_id.clone() }` does while native code still holds `&State` from `state()` or a view from `preview()`. icedxdy's browser no longer exits when a page is selected.","issues":[1445]}
+        {"text":"A marked type that native code holds as a `Box<dyn Trait>` can clone a field of a value it lent in place, as `fn scrollable_id(&self) -> Id { self.state.scrollable_id.clone() }` does while native code still holds `&State` from `state()` or a view from `preview()`. icedxdy's browser no longer exits when a page is selected.","issues":[1445]},
+        {"text":"A local array or slice borrowed where a crate takes `&'static [T]` is now rustc's E0597, as a borrowed string already was; statics, ranges of them and constant literals still pass.","issues":[1064]},
+        {"text":"An unused `use crate::module;` in a marked file is no longer refused with E0432; as in rustc, it is at most a warning.","issues":[1436]}
       ]
     },
     "releases": [
@@ -2833,7 +2835,7 @@
     {"issue":1061,"title":"todos: std::env::current_dir isn't run","state":"open","category":"Divergences from rustc"},
     {"issue":1062,"title":"RangeInclusive<T> has none of Clone, Debug, PartialEq, Eq or Hash as a type's capabilities","state":"open","category":"Divergences from rustc"},
     {"issue":1063,"title":"An a..=b of i128 or u128 is an iterator chain, not a RangeInclusive<i128>","state":"open","category":"Divergences from rustc"},
-    {"issue":1064,"title":"A borrowed string fills a crate parameter bounded by 'static, where rustc gives E0597","state":"open","category":"Divergences from rustc"},
+    {"issue":1064,"title":"A borrowed string fills a crate parameter bounded by 'static, where rustc gives E0597","state":"closed","category":"Divergences from rustc"},
     {"issue":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"closed","category":"Health","release":"0.3.161"},
     {"issue":1066,"title":"The site deploy's snippet check fails on 'Durable Object reset because its code was updated'","state":"closed","category":"Health","release":"0.3.161"},
     {"issue":1067,"title":"An enum variant field &'a str of a crate type can't be built (serde's Unexpected::Str(&text))","state":"open","category":"Divergences from rustc"},
@@ -3205,7 +3207,7 @@
     {"issue":1433,"title":"A selected target that isn't installed fails with rawr's error, not rustc's E0463 with its…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1434,"title":"A native value keeping a script closure under a non-generic type doesn't lend the arena when its…","state":"open","category":"No glue (D593)"},
     {"issue":1435,"title":"A bound with more than 64 impls loses its relation, so badge(impl Into<Slot>) ties no message…","state":"closed","category":"Importer"},
-    {"issue":1436,"title":"An unused `use crate::module;` in a marked file is refused with E0432 where rustc only warns","state":"open","category":"Divergences from rustc"},
+    {"issue":1436,"title":"An unused `use crate::module;` in a marked file is refused with E0432 where rustc only warns","state":"closed","category":"Divergences from rustc"},
     {"issue":1437,"title":"A native fn's `&'static [T]` parameter gets a lent slice, so the runner fails E0713/E0521…","state":"closed","category":"No glue (D593)"},
     {"issue":1438,"title":"A slice literal passed to a `&'static [T]` parameter is pinned again at each call, where rustc…","state":"open","category":"No glue (D593)"},
     {"issue":1439,"title":"A static block's `&'static [T]` field (`children`) can't fill a `&'static [T]` parameter","state":"open","category":"No glue (D593)"},
