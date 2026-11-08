@@ -9,6 +9,8 @@
 
 use std::ops::Range;
 
+use crate::project::cargo::features::{Enabled, Operator};
+
 /// One file-module declaration (`mod name;`) found in Rust source.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct Declaration {
@@ -16,13 +18,15 @@ pub(crate) struct Declaration {
     pub(crate) path: Vec<String>,
     /// Byte range of the declaration's name.
     pub(crate) range: Range<usize>,
-    /// The declaration carries `#[path = ...]`, so Rust, not the module
-    /// tree, chooses its file.
+    /// The declaration carries `#[path = ...]`, written alone or applied by
+    /// a `#[cfg_attr(..)]` that holds, so Rust, not the module tree,
+    /// chooses its file.
     pub(crate) explicit_path: bool,
     /// The declaration, or an inline module enclosing it, carries a `#[cfg]`
-    /// that is false whatever the target: `test` (the app crate never builds
-    /// as a test), `any()`, and `not`/`all`/`any` of those. Rust never loads
-    /// it, so neither does Rawr. Other predicates count as enabled.
+    /// (alone or applied by a `#[cfg_attr(..)]` that holds) that does not
+    /// hold under the package's features and its target's options, as the
+    /// item parser reads it ([`Enabled::cfg`]). The app crate never builds
+    /// as a test. Rust never loads it, so neither does Rawr.
     pub(crate) disabled: bool,
 }
 
@@ -30,12 +34,25 @@ pub(crate) struct Declaration {
 enum Token<'a> {
     Ident(&'a str, usize),
     Punct(u8),
+    /// A string literal's contents, as written: what a `cfg` value or a
+    /// `#[path]` reads.
+    Str(&'a str),
+}
+
+/// What one outer or inner attribute says of the item it is on.
+#[derive(Clone, Copy, Debug, Default)]
+struct Attribute {
+    /// It is `#[path = ..]`.
+    path: bool,
+    /// It is a `#[cfg(..)]` that does not hold.
+    disabled: bool,
 }
 
 /// Every `mod name;` in Rust source, with enclosing inline modules
-/// (`mod a { mod b; }` gives `a::b`). Comments, strings, chars and raw
-/// strings are skipped; no parse is needed.
-pub(crate) fn declarations(text: &str) -> Vec<Declaration> {
+/// (`mod a { mod b; }` gives `a::b`), its `cfg`s read under `features`.
+/// Comments, strings, chars and raw strings are skipped; no parse is
+/// needed.
+pub(crate) fn declarations(text: &str, features: &Enabled) -> Vec<Declaration> {
     let tokens = tokens(text);
     let mut declarations = Vec::new();
     // Inline modules: (name, brace depth inside it, disabled).
@@ -47,25 +64,11 @@ pub(crate) fn declarations(text: &str) -> Vec<Declaration> {
     while index < tokens.len() {
         match tokens[index] {
             Token::Punct(b'#') => {
-                // `#[path = "..."]`, `#[cfg(...)]` or `#![...]`
-                let mut next = index + 1;
-                if tokens.get(next) == Some(&Token::Punct(b'!')) {
-                    next += 1;
-                }
-                if tokens.get(next) == Some(&Token::Punct(b'[')) {
-                    match tokens.get(next + 1) {
-                        Some(Token::Ident("path", _)) => explicit_path = true,
-                        Some(Token::Ident("cfg", _))
-                            if tokens.get(next + 2) == Some(&Token::Punct(b'(')) =>
-                        {
-                            let mut cursor = next + 3;
-                            if cfg(&tokens, &mut cursor) == Some(false) {
-                                disabled = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                let (attribute, end) = attribute(&tokens, index, features);
+                explicit_path |= attribute.path;
+                disabled |= attribute.disabled;
+                index = end;
+                continue;
             }
             Token::Punct(b'{') => {
                 depth += 1;
@@ -134,15 +137,16 @@ pub(crate) struct Reference {
     pub(crate) segments: Vec<String>,
     /// Byte range of the whole path.
     pub(crate) range: Range<usize>,
-    /// The path sits in an item or inline module whose `#[cfg]` is false
-    /// on every target (see [`Declaration::disabled`]).
+    /// The path sits in an item or inline module whose `#[cfg]` does not
+    /// hold (see [`Declaration::disabled`]).
     pub(crate) disabled: bool,
 }
 
-/// Every `crate::…` and `super::…` path in Rust source. A `use` group
-/// (`use crate::{a, b::c}`) gives one path per item. Visibility paths
-/// (`pub(in crate::a)`) are not references and are left out.
-pub(crate) fn references(text: &str) -> Vec<Reference> {
+/// Every `crate::…` and `super::…` path in Rust source, its `cfg`s read
+/// under `features`. A `use` group (`use crate::{a, b::c}`) gives one path
+/// per item. Visibility paths (`pub(in crate::a)`) are not references and
+/// are left out.
+pub(crate) fn references(text: &str, features: &Enabled) -> Vec<Reference> {
     let tokens = tokens(text);
     let colons = |at: usize| {
         tokens.get(at) == Some(&Token::Punct(b':'))
@@ -150,7 +154,7 @@ pub(crate) fn references(text: &str) -> Vec<Reference> {
     };
     let end_of = |at: usize| match tokens[at] {
         Token::Ident(name, start) => start + name.len(),
-        Token::Punct(_) => 0,
+        Token::Punct(_) | Token::Str(_) => 0,
     };
     // One `a::b::c` run of identifiers from `at`: the segments and the
     // index of the last identifier.
@@ -176,21 +180,9 @@ pub(crate) fn references(text: &str) -> Vec<Reference> {
     while index < tokens.len() {
         match tokens[index] {
             Token::Punct(b'#') => {
-                let mut next = index + 1;
-                if tokens.get(next) == Some(&Token::Punct(b'!')) {
-                    next += 1;
-                }
-                if tokens.get(next) == Some(&Token::Punct(b'['))
-                    && tokens
-                        .get(next + 1)
-                        .is_some_and(|token| matches!(token, Token::Ident("cfg", _)))
-                    && tokens.get(next + 2) == Some(&Token::Punct(b'('))
-                {
-                    let mut cursor = next + 3;
-                    if cfg(&tokens, &mut cursor) == Some(false) {
-                        disabled = true;
-                    }
-                }
+                // Read on past the `#`: an attribute's own paths
+                // (`#[derive(crate::Make)]`) are references too.
+                disabled |= attribute(&tokens, index, features).0.disabled;
             }
             Token::Punct(b'{') => {
                 depth += 1;
@@ -403,8 +395,10 @@ pub(crate) fn widened(
             }
             Token::Ident("path", start)
                 if index >= 2
-                    && tokens[index - 1] == Token::Punct(b'[')
-                    && tokens[index - 2] == Token::Punct(b'#') =>
+                    && (tokens[index - 1] == Token::Punct(b'[')
+                        && tokens[index - 2] == Token::Punct(b'#')
+                        || tokens[index - 1] == Token::Punct(b',')
+                            && in_cfg_attr(&tokens, index)) =>
             {
                 let equals = skip(start + 4);
                 if bytes.get(equals) != Some(&b'=') {
@@ -494,7 +488,12 @@ fn private_item(tokens: &[Token<'_>], index: usize) -> Option<usize> {
     let Token::Ident(word, at) = tokens[index] else {
         return None;
     };
-    let word_at = |offset: usize| match tokens.get(index + offset) {
+    // An ABI string (`extern "C" fn`) is not a word.
+    let word_at = |offset: usize| match tokens[index..]
+        .iter()
+        .filter(|token| !matches!(token, Token::Str(_)))
+        .nth(offset)
+    {
         Some(Token::Ident(word, _)) => Some(*word),
         _ => None,
     };
@@ -561,7 +560,7 @@ pub(crate) fn main_renamed(text: &str, name: &str) -> Option<String> {
         }
         previous = match token {
             Token::Ident(word, _) => Some(word),
-            Token::Punct(_) => None,
+            Token::Punct(_) | Token::Str(_) => None,
         };
     }
     None
@@ -586,42 +585,131 @@ fn std_path_start(text: &str, start: usize) -> Option<usize> {
     })
 }
 
-/// One `cfg` predicate starting at `cursor`, left just past it: `Some(false)`
-/// when false on every target, `Some(true)` when true on every target, `None`
-/// when it depends on the build (string values are not tokens, so
-/// `feature = "x"` is `feature =`).
-fn cfg(tokens: &[Token<'_>], cursor: &mut usize) -> Option<bool> {
-    let Some(Token::Ident(name, _)) = tokens.get(*cursor).copied() else {
-        return None;
+/// Whether the token at `index` sits in a `#[cfg_attr(..)]`'s list of
+/// attributes, where `path = ".."` is a `#[path]` as written alone.
+fn in_cfg_attr(tokens: &[Token<'_>], index: usize) -> bool {
+    let Some(hash) = tokens[..index]
+        .iter()
+        .rposition(|token| *token == Token::Punct(b'#'))
+    else {
+        return false;
     };
-    *cursor += 1;
-    if tokens.get(*cursor) == Some(&Token::Punct(b'=')) {
+    let mut cursor = hash + 1;
+    if tokens.get(cursor) == Some(&Token::Punct(b'!')) {
+        cursor += 1;
+    }
+    tokens.get(cursor) == Some(&Token::Punct(b'['))
+        && matches!(tokens.get(cursor + 1), Some(Token::Ident("cfg_attr", _)))
+        && attribute_end(tokens, hash) > index
+}
+
+/// What the attribute whose `#` is at `index` (`#[..]` or `#![..]`) says
+/// under `features`, and the index just past it.
+fn attribute(tokens: &[Token<'_>], index: usize, features: &Enabled) -> (Attribute, usize) {
+    let end = attribute_end(tokens, index);
+    let mut cursor = index + 1;
+    if tokens.get(cursor) == Some(&Token::Punct(b'!')) {
+        cursor += 1;
+    }
+    if tokens.get(cursor) != Some(&Token::Punct(b'[')) {
+        return (Attribute::default(), end);
+    }
+    cursor += 1;
+    (meta(tokens, &mut cursor, features), end)
+}
+
+/// What the attribute's contents at `cursor` say under `features`, left
+/// past them at the `,`, `)` or `]` after: `path = ..`, `cfg(..)`, and
+/// the attributes of a `cfg_attr(..)` whose predicate holds.
+fn meta(tokens: &[Token<'_>], cursor: &mut usize, features: &Enabled) -> Attribute {
+    let mut said = Attribute::default();
+    if let Some(Token::Ident(name, _)) = tokens.get(*cursor).copied() {
         *cursor += 1;
-        return None;
-    }
-    if tokens.get(*cursor) != Some(&Token::Punct(b'(')) {
-        return (name == "test").then_some(false);
-    }
-    *cursor += 1;
-    let mut values = Vec::new();
-    while *cursor < tokens.len() && tokens[*cursor] != Token::Punct(b')') {
-        let before = *cursor;
-        values.push(cfg(tokens, cursor));
-        if tokens.get(*cursor) == Some(&Token::Punct(b',')) || *cursor == before {
-            *cursor += 1;
+        let next = tokens.get(*cursor).copied();
+        match (name, next) {
+            ("path", Some(Token::Punct(b'='))) => said.path = true,
+            ("cfg", Some(Token::Punct(b'('))) => {
+                *cursor += 1;
+                said.disabled = !cfg(tokens, cursor, features);
+                close(tokens, cursor);
+            }
+            ("cfg_attr", Some(Token::Punct(b'('))) => {
+                *cursor += 1;
+                if cfg(tokens, cursor, features) {
+                    while tokens.get(*cursor) == Some(&Token::Punct(b',')) {
+                        *cursor += 1;
+                        let applied = meta(tokens, cursor, features);
+                        said.path |= applied.path;
+                        said.disabled |= applied.disabled;
+                    }
+                }
+                close(tokens, cursor);
+            }
+            _ => {}
         }
     }
+    // The rest of this attribute: up to the `,`, `)` or `]` that ends it.
+    let mut depth = 0_usize;
+    while let Some(token) = tokens.get(*cursor) {
+        match token {
+            Token::Punct(b'(' | b'[' | b'{') => depth += 1,
+            Token::Punct(b',' | b')' | b']') if depth == 0 => break,
+            Token::Punct(b')' | b']' | b'}') => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        *cursor += 1;
+    }
+    said
+}
+
+/// Past the rest of a parenthesized group whose `(` is behind `cursor`,
+/// through its `)`.
+fn close(tokens: &[Token<'_>], cursor: &mut usize) {
+    let mut depth = 0_usize;
+    while let Some(token) = tokens.get(*cursor) {
+        *cursor += 1;
+        match token {
+            Token::Punct(b'(' | b'[' | b'{') => depth += 1,
+            Token::Punct(b')') if depth == 0 => return,
+            Token::Punct(b')' | b']' | b'}') => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+}
+
+/// Whether the `cfg` predicate starting at `cursor` holds under
+/// `features`, as the item parser reads one ([`Enabled::cfg`],
+/// [`Operator`]); the app crate never builds as a test. Leaves `cursor`
+/// just past it.
+fn cfg(tokens: &[Token<'_>], cursor: &mut usize, features: &Enabled) -> bool {
+    let Some(Token::Ident(name, _)) = tokens.get(*cursor).copied() else {
+        return false;
+    };
     *cursor += 1;
-    match name {
-        "not" => match values.as_slice() {
-            [value] => value.map(|value| !value),
-            _ => None,
-        },
-        "all" if values.contains(&Some(false)) => Some(false),
-        "all" if values.iter().all(|value| *value == Some(true)) => Some(true),
-        "any" if values.contains(&Some(true)) => Some(true),
-        "any" if values.iter().all(|value| *value == Some(false)) => Some(false),
-        _ => None,
+    match tokens.get(*cursor) {
+        Some(Token::Punct(b'=')) => {
+            *cursor += 1;
+            let value = match tokens.get(*cursor) {
+                Some(Token::Str(value)) => Some(*value),
+                _ => None,
+            };
+            *cursor += 1;
+            value.is_some_and(|value| features.cfg(name, Some(value), false))
+        }
+        Some(Token::Punct(b'(')) => {
+            *cursor += 1;
+            let mut values = Vec::new();
+            while *cursor < tokens.len() && tokens[*cursor] != Token::Punct(b')') {
+                let before = *cursor;
+                values.push(cfg(tokens, cursor, features));
+                if tokens.get(*cursor) == Some(&Token::Punct(b',')) || *cursor == before {
+                    *cursor += 1;
+                }
+            }
+            *cursor += 1;
+            Operator::named(name).is_some_and(|operator| operator.holds(&values))
+        }
+        _ => features.cfg(name, None, false),
     }
 }
 
@@ -655,7 +743,14 @@ fn tokens(text: &str) -> Vec<Token<'_>> {
                     }
                 }
             }
-            b'"' => index = skip_string(bytes, index + 1),
+            b'"' => {
+                let end = skip_string(bytes, index + 1).min(bytes.len());
+                // Unterminated, it runs to the end of the text.
+                let closed = end > index + 1 && bytes[end - 1] == b'"';
+                let contents = index + 1..if closed { end - 1 } else { end };
+                tokens.push(Token::Str(&text[contents]));
+                index = end;
+            }
             b'\'' => {
                 // A char literal (`'a'`, `'\n'`) or a lifetime (`'a`).
                 if bytes.get(index + 1) == Some(&b'\\') {
@@ -756,9 +851,15 @@ fn raw_string(bytes: &[u8], index: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::declarations;
+    use crate::project::cargo::features::Enabled;
+
+    /// A Linux target with the feature `x`, as rustc and Cargo give them.
+    fn features() -> Enabled {
+        Enabled::of_lines(["feature=\"x\"", "target_os=\"linux\"", "unix"])
+    }
 
     fn paths(text: &str) -> Vec<(String, bool)> {
-        declarations(text)
+        declarations(text, &features())
             .into_iter()
             .map(|declaration| (declaration.path.join("::"), declaration.explicit_path))
             .collect()
@@ -805,6 +906,8 @@ const V: Option<&str> = option_env!("CARGO_MANIFEST_DIR");
 const W: &str = std::env!("CARGO_MANIFEST_DIR");
 #[path = "other.rs"]
 mod other;
+#[cfg_attr(unix, path = "unix.rs")]
+mod configured;
 mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
 "#;
         let file = Path::new("/app/src/model.rs");
@@ -832,6 +935,10 @@ mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
         );
         assert!(top.contains(r#"const W: &str = "/app";"#), "{top}");
         assert!(top.contains(r#"#[path = "/app/src/other.rs"]"#), "{top}");
+        assert!(
+            top.contains(r#"#[cfg_attr(unix, path = "/app/src/unix.rs")]"#),
+            "{top}"
+        );
         assert!(top.contains("pub(super) fn kept()"), "{top}");
         assert!(
             top.contains(r#"#[path = "/app/src/model/inline/deep.rs"]"#),
@@ -911,11 +1018,27 @@ mod featured;
 mod never;
 #[cfg(test)]
 mod inline { mod inner; }
+#[cfg(feature = "y")]
+mod unfeatured;
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(not(target_os = "macos"))]
+mod not_mac;
+#[cfg(all(unix, target_os = "linux"))]
+mod linux;
+#[cfg(windows)]
+mod windows;
+#[cfg_attr(windows, cfg(any()))]
+mod unless_windows;
+#[cfg_attr(unix, allow(dead_code), cfg(not(unix)))]
+mod unless_unix;
+#[cfg_attr(unix, path = "unix.rs")]
+mod moved;
+#[cfg_attr(windows, path = "windows.rs")]
+mod unmoved;
 mod plain;
 "#;
-        let disabled = declarations(text)
+        let disabled = declarations(text, &features())
             .into_iter()
             .map(|declaration| (declaration.path.join("::"), declaration.disabled))
             .collect::<Vec<_>>();
@@ -928,9 +1051,23 @@ mod plain;
                 ("featured".to_owned(), false),
                 ("never".to_owned(), true),
                 ("inline::inner".to_owned(), true),
-                ("mac".to_owned(), false),
+                ("unfeatured".to_owned(), true),
+                ("mac".to_owned(), true),
+                ("not_mac".to_owned(), false),
+                ("linux".to_owned(), false),
+                ("windows".to_owned(), true),
+                ("unless_windows".to_owned(), false),
+                ("unless_unix".to_owned(), true),
+                ("moved".to_owned(), false),
+                ("unmoved".to_owned(), false),
                 ("plain".to_owned(), false),
             ]
+        );
+        let moved = r#"#[cfg_attr(unix, path = "unix.rs")] mod moved;
+#[cfg_attr(windows, path = "windows.rs")] mod unmoved;"#;
+        assert_eq!(
+            paths(moved),
+            [("moved".to_owned(), true), ("unmoved".to_owned(), false)]
         );
     }
     #[test]
@@ -947,7 +1084,7 @@ mod tests { use super::*; }
 #[cfg(test)]
 use crate::only_tests;
 "#;
-        let found = super::references(text)
+        let found = super::references(text, &features())
             .into_iter()
             .map(|reference| {
                 (
