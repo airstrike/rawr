@@ -140,6 +140,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate value passed to `impl Into<T>` where it already is a `T`, as a component crate's `badge!` passes its `Slot::new(row)` to `badge(content: impl Into<Slot<'a, Message>>)`, takes the target's type arguments, so a later use fixes the row's message as rustc does. A crate value whose type nothing settles is rustc's E0282 at its `let` instead of a runner cargo refuses. (#1404)
 - A crate that calls your function with a `&` or `&mut` of its own value, as a simulation's `update(&mut self, message, building: &Building)` does, lends you that value for the call: its type needs no `Clone`, nothing is copied, and each call sees the value as the crate holds it then. Its methods, its fields, `{}`, `{:?}` and `==` reach it where it is, and you can pass it on to the crate's functions that take `&Building`, as a view's `draw(building)` does. (#1405, #1406)
 - The ?play universe runner builds again: a widget made from a borrowed `&str`, as iced's `button(label)` gives a `Button<'_, Message, &str>`, no longer fails E0597 in its generated adapter, and the generated runner compiles without warnings. (#1396)
+- Running one workspace member after another no longer fails with E0463 ("can't find crate for `rawr`"). Each member's runner is now its own Cargo unit in the workspace's build directory, so one member never reuses another member's build script and the shared runtime it names. (#1421)
 
 ## 0.3.171 (2026-11-07)
 
