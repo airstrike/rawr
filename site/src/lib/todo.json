@@ -2946,7 +2946,9 @@
     {"issue":1259,"title":"A marked crate's default features are off in its marked code","state":"open","category":"Divergences from rustc"},
     {"issue":1260,"title":"A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"open","category":"Divergences from rustc"},
     {"issue":1261,"title":"The rawr lib tests don't compile without the rust-import feature","state":"open","category":"Health"},
-    {"issue":1262,"title":"rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"open","category":"Health"}
+    {"issue":1262,"title":"rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"open","category":"Health"},
+    {"issue":1263,"title":"A marked module can't name a native non-root module's trait or type by path (`page::Page`): E0425","state":"open","category":"Divergences from rustc"},
+    {"issue":1264,"title":"A marked type implements a native trait and crosses to native code as `Box<dyn Trait>`, whose methods native code calls","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3789,7 +3791,9 @@
             {"number":1249,"title":"A native root can't name a marked module's types: `Program::new(..) -> (Program, Task<Message>)` from native main","state":"open"},
             {"number":1258,"title":"rawr test in a package with several binaries stops where cargo test tests each one","state":"open"},
             {"number":1259,"title":"A marked crate's default features are off in its marked code","state":"open"},
-            {"number":1262,"title":"rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"open"}
+            {"number":1262,"title":"rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"open"},
+            {"number":1263,"title":"A marked module can't name a native non-root module's trait or type by path (`page::Page`): E0425","state":"open"},
+            {"number":1264,"title":"A marked type implements a native trait and crosses to native code as `Box<dyn Trait>`, whose methods native code calls","state":"open"}
           ]
         }
       ]
