@@ -1017,3 +1017,34 @@ pub mod weighted {
 pub mod again {
     pub use crate::form;
 }
+
+/// A function's opaque `impl Number` whose trait's supertrait binds an
+/// associated type to `Self`, as num-traits' `Num: NumOps<Self, Self>`
+/// binds `Add::Output`: the opaque type's `Output` is the opaque type.
+pub mod numbers {
+    use std::ops::Add;
+
+    pub trait Number: Add<Output = Self> + Sized {
+        fn get(&self) -> u32;
+    }
+
+    struct Seven(u32);
+
+    impl Add for Seven {
+        type Output = Self;
+
+        fn add(self, other: Self) -> Self {
+            Seven(self.0 + other.0)
+        }
+    }
+
+    impl Number for Seven {
+        fn get(&self) -> u32 {
+            self.0
+        }
+    }
+
+    pub fn seven() -> impl Number {
+        Seven(7)
+    }
+}
