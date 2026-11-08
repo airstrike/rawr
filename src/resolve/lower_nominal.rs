@@ -57,6 +57,7 @@ mod places;
 mod postfix;
 mod proof;
 mod relocate;
+mod scope;
 mod sequence;
 use places::PlacePattern;
 mod reborrow;
@@ -251,69 +252,6 @@ use wide::{
 };
 pub(crate) use wide::{wide_operator, wide_range};
 
-/// A `for` loop's iterator when it holds borrows, its element, the
-/// positions where the element takes what the iterator holds (pairs of the
-/// element's position and the iterator's), and its pattern's bindings. The
-/// element and the bindings are given a value each iteration.
-type LoopElement = (
-    Option<super::borrowck::Local>,
-    super::borrowck::Local,
-    Vec<(borrowck::Path, borrowck::Path)>,
-    Vec<super::borrowck::Local>,
-);
-
-#[derive(Clone)]
-struct Binding {
-    ty: Ty,
-    mutable: bool,
-    available: bool,
-    declaration: Span,
-    kind: BindingKind,
-}
-
-#[derive(Clone)]
-enum BindingKind {
-    Local,
-    Invocation,
-    Receiver { owner: ImmutableString },
-}
-
-/// An array literal being parsed, for the frames its elements open: a
-/// call that opens one runs ahead of the statement, so each element before
-/// its own is bound ahead of that frame, as Rust evaluates elements in
-/// order (`[icon().size(12), Slot::from("Verified")]`).
-struct FrameArray {
-    /// Where the literal starts.
-    start: Position,
-    /// How many statements' frames were open when it started: a call
-    /// opening a frame of the same statement binds its elements.
-    depth: usize,
-    /// How many calls had been noted when it started (`calls_noted`),
-    /// counted rather than placed, as a macro's tokens all sit at its
-    /// call.
-    noted: usize,
-    /// How many calls had been noted when the element being parsed
-    /// started, its index, and how many frames its statement had then.
-    element: (usize, usize, usize),
-    /// Each element whose frame needs the elements before it bound first,
-    /// with how many frames its statement had when it started.
-    bound: Vec<(usize, usize)>,
-}
-
-/// An array literal's elements, its array's repeat count and a `vec!`'s
-/// count expression (`[x; 3]`, `vec![x; n]`).
-type ArrayElements = (Vec<ParsedExpr>, Option<usize>, Option<ParsedExpr>);
-
-/// A scope frame a statement's call opens (D558 tier 1): `outer` declares
-/// what keeps the frame, `inner` binds and opens it ahead of the statement,
-/// and `after` stores the copies it gives back once it has ended.
-#[derive(Default)]
-struct Frame {
-    outer: origin::Fragment,
-    inner: origin::Fragment,
-    after: origin::Fragment,
-}
-
 #[derive(Clone)]
 struct ParsedExpr {
     prelude: origin::Fragment,
@@ -323,11 +261,6 @@ struct ParsedExpr {
     lvalue: Option<Lvalue>,
     outcome: crate::host::usage::Outcome,
     evaluation: crate::host::usage::Evaluation,
-}
-
-struct Branch {
-    value: ParsedExpr,
-    syntax: Span,
 }
 
 impl ParsedExpr {
@@ -357,17 +290,6 @@ impl ParsedExpr {
     fn is_local(&self) -> bool {
         self.prelude.is_empty() && is_valid_identifier(self.source.as_str())
     }
-}
-
-/// An iterator chain bound to an immutable local: the local's declaration,
-/// the chain, its item type, and the names its setup bound where the local
-/// was bound, which a closure using the local captures.
-#[derive(Clone)]
-struct BoundIterator {
-    declaration: Span,
-    pipeline: iterator::Pipeline,
-    item: Ty,
-    names: Vec<String>,
 }
 
 /// A `text.into()` whose target the use site gives once inference has it:
@@ -1414,29 +1336,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// A loop being parsed. A `break` or `continue` to an enclosing loop sets
-/// that loop's jump flag and breaks out of every loop in between.
-struct LoopFrame {
-    label: Option<ImmutableString>,
-    jump: String,
-    /// `loop`, which may `break` with a value.
-    value: bool,
-    ty: Option<Ty>,
-    /// A nested loop jumps to this one.
-    targeted: bool,
-    /// Enclosing loops (by depth) that a jump inside this loop targets.
-    exits: BTreeSet<usize>,
-    /// The depth of `drop_scopes` outside the loop's body: a jump to the
-    /// loop drops the scopes above it.
-    drop_depth: usize,
-    /// The loop's depth in the recorded control flow, which also counts a
-    /// `while` whose condition holds this loop.
-    flow_depth: usize,
-    /// While a `while`'s condition is read: whether a labeled jump in it
-    /// goes to this `while`.
-    condition: Option<bool>,
-}
-
 fn default_value(
     model: &Nominal,
     models: &Models,
@@ -1449,54 +1348,6 @@ fn default_value(
         .materialize_default(&identity, definition.schema())
         .ok()
 }
-
-/// A `let`'s local and its type (`Lowering::local_types`).
-struct LocalType {
-    name: ImmutableString,
-    declaration: Span,
-    ty: Ty,
-    /// The `let`'s value, when it has one.
-    value: Option<Span>,
-}
-
-/// A use of a `let x;` before an assignment gives it a value
-/// (`Lowering::uninitialized`).
-struct UninitializedUse {
-    name: ImmutableString,
-    declaration: Span,
-    reference: Span,
-    ty: Ty,
-    /// Whether some path to the use gives the local a value.
-    possibly: bool,
-    /// The operator the use is the operand of while its type is unknown,
-    /// which needs the type there: rustc's code for it and its place.
-    operator: Option<(&'static str, Span)>,
-}
-
-/// Whether `pattern` binds some part of its value by value: a name, not a
-/// `ref`, a `_` or a `&` pattern.
-fn binds_by_value(pattern: &pattern::Syntax) -> bool {
-    match pattern {
-        pattern::Syntax::Binding { .. } => true,
-        pattern::Syntax::Rest { binding, .. } => binding.is_some(),
-        pattern::Syntax::TupleStruct { members, .. } | pattern::Syntax::Tuple { members, .. } => {
-            members.iter().any(binds_by_value)
-        }
-        pattern::Syntax::Or { alternatives, .. } => alternatives.iter().any(binds_by_value),
-        pattern::Syntax::Prelude { payload, .. } => payload.as_deref().is_some_and(binds_by_value),
-        pattern::Syntax::Cow { payload, .. } => binds_by_value(payload),
-        pattern::Syntax::Slice {
-            before,
-            rest,
-            after,
-            ..
-        } => {
-            before.iter().chain(after.iter()).any(binds_by_value)
-                || rest.as_deref().is_some_and(binds_by_value)
-        }
-        _ => false,
-    }
-}
 pub(crate) use cell::{cell_held, cell_lock, cell_new, is_cell};
 pub(super) use entry::runtime_entry;
 use host_call::{host_number_accepts, macro_or_value, value_or_call, HostCheck};
@@ -1506,6 +1357,10 @@ use op::invariant;
 #[cfg(test)]
 use op::matches_runtime_model;
 use operator::{cast_value, compound_operator, kind_code, unsigned_order};
+use scope::{
+    binds_by_value, ArrayElements, Binding, BindingKind, BoundIterator, Branch, Frame, FrameArray,
+    LocalType, LoopElement, LoopFrame, UninitializedUse,
+};
 pub(crate) use tokens::lex_rust;
 
 /// `=` or a compound assignment.
