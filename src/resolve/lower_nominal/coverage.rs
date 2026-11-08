@@ -1,12 +1,14 @@
 //! Match exhaustiveness: the patterns a match covers, specialised by
 //! constructor, and the witnesses of what it leaves out.
 
+use super::models::Nominal;
+use super::op::ordering_discriminant;
+use super::pattern::{PatternSyntax, Prelude};
 use super::ty::{Int, Ty};
-use super::{PatternSyntax, Prelude};
-use crate::ast;
-use crate::resolve::Error;
+use super::{cow, instantiate, origin, without_references, Parser};
+use crate::resolve::{BindingSite, Error};
 use crate::types::nominal;
-use crate::{type_def, ImmutableString, Span};
+use crate::{ast, type_def, ImmutableString, Span};
 
 /// One constructor of a matched type: an enum variant, or a prelude
 /// constructor (`Some`, `None`, `Ok`, `Err`).
@@ -600,4 +602,649 @@ pub(super) fn default_coverage_rows(rows: &[Vec<CoveragePattern>]) -> Vec<Vec<Co
         .filter(|row| row[0].is_wildcard())
         .map(|row| row[1..].to_vec())
         .collect()
+}
+
+impl<'a> Parser<'a> {
+    /// rustc's E0005 when `syntax`, whose coverage is `coverage`, on `ty`
+    /// misses some of its values, with the patterns of the values it
+    /// misses: an integer's or a `char`'s ranges, as a `match` names them,
+    /// or a facade struct's field's, which the pattern's facade checks
+    /// still to lower test.
+    pub(super) fn require_irrefutable(
+        &mut self,
+        syntax: &PatternSyntax,
+        coverage: &CoveragePattern,
+        ty: &Ty,
+        site: BindingSite,
+    ) -> Result<(), Error> {
+        let mut witnesses = self.uncovered(syntax, coverage, ty);
+        let checks = self.host_checks.borrow().clone();
+        for (_, check, check_ty, _) in checks {
+            if !witnesses.is_empty() {
+                break;
+            }
+            // A facade part's witness in its place in the pattern, the
+            // rest of it `_`: `(Style { width: 0_i64, .. }, _)`.
+            let at = check.span();
+            let prefix = match syntax {
+                PatternSyntax::Reference { .. } => String::new(),
+                _ => self.reference_prefix(ty),
+            };
+            witnesses = self
+                .host_uncovered(&check, &check_ty)?
+                .into_iter()
+                .map(|missed| match syntax.witness_at(at, &missed) {
+                    Some(placed) if syntax.span() != at => format!("{prefix}{placed}"),
+                    _ => missed,
+                })
+                .collect();
+        }
+        if witnesses.is_empty() {
+            return Ok(());
+        }
+        Err(Error::Refutable {
+            witnesses: witnesses.into_iter().map(Into::into).collect(),
+            ty: self.matched_type(ty),
+            site,
+            pattern: syntax.span(),
+        })
+    }
+
+    /// The values of `ty` that `syntax`, a pattern on a facade value, misses,
+    /// as rustc writes them: `Style { width: i64::MIN..=0_i64, .. }` for the
+    /// first field whose pattern misses some.
+    pub(super) fn host_uncovered(
+        &mut self,
+        syntax: &PatternSyntax,
+        ty: &Ty,
+    ) -> Result<Vec<String>, Error> {
+        if !syntax.may_refute() {
+            return Ok(Vec::new());
+        }
+        let referenced = self.referenced(ty);
+        match syntax {
+            PatternSyntax::At { pattern, .. } | PatternSyntax::Reference { pattern, .. } => {
+                self.host_uncovered(pattern, &referenced)
+            }
+            PatternSyntax::Enum(pattern)
+                if pattern.host_struct && matches!(referenced, Ty::Host { .. }) =>
+            {
+                let names = pattern
+                    .named
+                    .as_ref()
+                    .map(|(names, _)| names.as_ref())
+                    .unwrap_or_default();
+                let owner = pattern
+                    .owner
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                let prefix = self.reference_prefix(ty);
+                for ((field, at), member) in names.iter().zip(pattern.payload.iter()) {
+                    if !member.may_refute() {
+                        continue;
+                    }
+                    let value = origin::Fragment::plain("__rawr_field");
+                    let read = self.host_struct_field(value, &referenced, field, *at)?;
+                    let missed = self.host_uncovered(member, &read.ty)?;
+                    if !missed.is_empty() {
+                        return Ok(missed
+                            .into_iter()
+                            .map(|missed| format!("{prefix}{owner} {{ {field}: {missed}, .. }}"))
+                            .collect());
+                    }
+                }
+                Ok(Vec::new())
+            }
+            // A facade enum's variant, whose siblings the facade names.
+            _ if matches!(referenced, Ty::Host { .. }) => {
+                Ok(vec![format!("{}_", self.reference_prefix(ty))])
+            }
+            _ => {
+                let checks = self.host_checks.borrow().len();
+                let resolved = self.resolve_root_pattern(syntax, ty);
+                self.host_checks.borrow_mut().truncate(checks);
+                Ok(self.uncovered(syntax, &resolved?.coverage, ty))
+            }
+        }
+    }
+
+    /// The patterns of the values of `ty` that `syntax`, whose coverage is
+    /// `coverage`, misses, as rustc writes them.
+    pub(super) fn uncovered(
+        &self,
+        syntax: &PatternSyntax,
+        coverage: &CoveragePattern,
+        ty: &Ty,
+    ) -> Vec<String> {
+        // The value below the references, whose witnesses read through
+        // them, as `&None` (`reference_prefix`).
+        let referenced = self.referenced(ty);
+        let scalar = Scalar::of(&referenced).and_then(|scalar| {
+            let mut covered = Vec::new();
+            scalar.covered(syntax, &mut covered)?;
+            Some((scalar, covered))
+        });
+        let witnesses = match scalar {
+            Some((scalar, covered)) => scalar
+                .uncovered(&covered)
+                .into_iter()
+                .map(|(low, high)| scalar.witness(low, high))
+                .collect::<Vec<_>>(),
+            None => {
+                let rows = coverage
+                    .alternatives()
+                    .into_iter()
+                    .map(|alternative| vec![alternative])
+                    .collect::<Vec<_>>();
+                self.coverage_witnesses(std::slice::from_ref(&referenced), &rows, true)
+                    .iter()
+                    .map(|witness| {
+                        witness
+                            .first()
+                            .map_or_else(|| "_".to_string(), CoverageWitness::render)
+                    })
+                    .collect()
+            }
+        };
+        let prefix = self.reference_prefix(ty);
+        witnesses
+            .into_iter()
+            .map(|witness| format!("{prefix}{witness}"))
+            .collect()
+    }
+
+    /// rustc's E0005 for `syntax`, a `for` or parameter pattern at `site`
+    /// on `ty` that misses some of its values, before it is destructured.
+    pub(super) fn refuse_refutable(
+        &mut self,
+        syntax: &PatternSyntax,
+        ty: &Ty,
+        site: BindingSite,
+    ) -> Result<(), Error> {
+        if !syntax.may_refute() && !self.matches_unsized_slice(syntax, ty) {
+            return Ok(());
+        }
+        // The facade parts the check meets are destructured after it.
+        let checks = self.host_checks.borrow().len();
+        let resolved = self.resolve_root_pattern(syntax, ty);
+        let refused = resolved
+            .and_then(|resolved| self.require_irrefutable(syntax, &resolved.coverage, ty, site));
+        self.host_checks.borrow_mut().truncate(checks);
+        refused
+    }
+
+    pub(super) fn coverage_constructors(&self, ty: &Ty) -> Option<Vec<CoverageConstructor>> {
+        let resolved = self.inference.resolve(ty);
+        let prelude = |variant: Prelude, payload: &[Ty]| CoverageConstructor {
+            key: CoverageKey::Prelude(variant),
+            name: variant.name().into(),
+            payload: payload.into(),
+        };
+        match resolved {
+            Ty::Reference { target, .. } => return self.coverage_constructors(&target),
+            Ty::Bool => {
+                return Some(
+                    [false, true]
+                        .into_iter()
+                        .map(|value| CoverageConstructor {
+                            key: CoverageKey::Literal(ast::NominalLiteral::Bool(value)),
+                            name: value.to_string().into(),
+                            payload: Box::default(),
+                        })
+                        .collect(),
+                );
+            }
+            Ty::Ordering => {
+                return Some(
+                    ["Less", "Equal", "Greater"]
+                        .into_iter()
+                        .map(|name| CoverageConstructor {
+                            key: CoverageKey::Literal(ast::NominalLiteral::Int(
+                                ordering_discriminant(name).expect("an `Ordering` variant"),
+                            )),
+                            name: format!("Ordering::{name}").into(),
+                            payload: Box::default(),
+                        })
+                        .collect(),
+                );
+            }
+            Ty::Tuple(members) => {
+                return Some(vec![CoverageConstructor {
+                    key: CoverageKey::Tuple,
+                    name: ImmutableString::new(),
+                    payload: members,
+                }]);
+            }
+            // An array's one length; a slice's lengths up to the longest
+            // slice pattern seen, then every longer one at once.
+            Ty::Array { element, kind } => {
+                let constructor = |length, open| CoverageConstructor {
+                    key: CoverageKey::SliceLength { length, open },
+                    name: if open { "[..]" } else { "[]" }.into(),
+                    payload: vec![(*element).clone(); length].into(),
+                };
+                return Some(match kind.length() {
+                    Some(length) => vec![constructor(length, false)],
+                    None => {
+                        let longest = self.slice_arity.get();
+                        (0..=longest)
+                            .map(|length| constructor(length, false))
+                            .chain([constructor(longest + 1, true)])
+                            .collect()
+                    }
+                });
+            }
+            Ty::Option(element) => {
+                return Some(vec![
+                    prelude(Prelude::None, &[]),
+                    prelude(Prelude::Some, &[*element]),
+                ]);
+            }
+            Ty::Result(ok, err) => {
+                return Some(vec![
+                    prelude(Prelude::Ok, &[*ok]),
+                    prelude(Prelude::Err, &[*err]),
+                ]);
+            }
+            Ty::Cow(borrowed) => {
+                let owned = self.owned_of(&borrowed).unwrap_or(Ty::Unknown);
+                return Some(
+                    [(false, cow::reference_to(*borrowed)), (true, owned)]
+                        .into_iter()
+                        .map(|(owned, payload)| CoverageConstructor {
+                            key: CoverageKey::Cow(owned),
+                            name: if owned { "Cow::Owned" } else { "Cow::Borrowed" }.into(),
+                            payload: Box::new([payload]),
+                        })
+                        .collect(),
+                );
+            }
+            _ => {}
+        }
+        let definition = resolved.script()?;
+        let arguments = match &resolved {
+            Ty::Script(_, arguments) => arguments.clone(),
+            _ => Box::default(),
+        };
+        let substitution = self.nominal_substitution(definition, &arguments);
+        let item = match self.models.definition(definition) {
+            Nominal::Enum { definition, item } => (definition, item),
+            // A struct's one constructor, as a tuple's.
+            Nominal::Struct { item, .. } => {
+                return (item.form != crate::item::StructForm::Unit).then(|| {
+                    vec![CoverageConstructor {
+                        key: CoverageKey::Tuple,
+                        name: item.name.text.clone(),
+                        payload: item
+                            .fields
+                            .iter()
+                            .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
+                            .collect(),
+                    }]
+                });
+            }
+        };
+        let (definition, item) = item;
+        let identity = type_def::Identity::Script(definition.key().clone());
+
+        Some(
+            item.variants
+                .iter()
+                .map(|variant| CoverageConstructor {
+                    key: CoverageKey::Enum {
+                        identity: identity.clone(),
+                        variant: nominal::variant::Id::from_name(&variant.name),
+                    },
+                    name: format!("{}::{}", definition.name(), variant.name.text).into(),
+                    payload: variant
+                        .payload
+                        .iter()
+                        .map(|payload| instantiate(&Ty::from_resolved(payload), &substitution))
+                        .collect(),
+                })
+                .collect(),
+        )
+    }
+
+    pub(super) fn coverage_pattern_is_covered(
+        &self,
+        types: &[Ty],
+        rows: &[Vec<CoveragePattern>],
+        candidate: &[CoveragePattern],
+    ) -> bool {
+        debug_assert!(rows.iter().all(|row| row.len() == types.len()));
+        debug_assert_eq!(candidate.len(), types.len());
+
+        if candidate.is_empty() {
+            return rows.iter().any(Vec::is_empty);
+        }
+        if rows.is_empty() {
+            return false;
+        }
+        if rows
+            .iter()
+            .any(|row| row.iter().all(CoveragePattern::is_wildcard))
+        {
+            return true;
+        }
+
+        match &candidate[0] {
+            // A slice pattern covers each length it matches.
+            CoveragePattern::Constructor {
+                key: CoverageKey::Slice { .. },
+                ..
+            } => {
+                let Some(constructors) = self.coverage_constructors(&types[0]) else {
+                    return false;
+                };
+                constructors.iter().all(|constructor| {
+                    specialize_coverage_pattern(&candidate[0], constructor).is_none() || {
+                        let specialized_rows = specialize_coverage_rows(rows, constructor);
+                        let specialized_candidate =
+                            specialize_coverage_candidate(candidate, constructor);
+                        let specialized_types = specialize_coverage_types(types, constructor);
+                        self.coverage_pattern_is_covered(
+                            &specialized_types,
+                            &specialized_rows,
+                            &specialized_candidate,
+                        )
+                    }
+                })
+            }
+            CoveragePattern::Constructor { key, .. } => {
+                let Some(constructor) =
+                    self.coverage_constructors(&types[0])
+                        .and_then(|constructors| {
+                            constructors
+                                .into_iter()
+                                .find(|constructor| &constructor.key == key)
+                        })
+                else {
+                    return false;
+                };
+                let specialized_rows = specialize_coverage_rows(rows, &constructor);
+                let specialized_candidate = specialize_coverage_candidate(candidate, &constructor);
+                let specialized_types = specialize_coverage_types(types, &constructor);
+                self.coverage_pattern_is_covered(
+                    &specialized_types,
+                    &specialized_rows,
+                    &specialized_candidate,
+                )
+            }
+            CoveragePattern::Or(_) => unreachable!("or-patterns are expanded first"),
+            CoveragePattern::Wildcard if rows.iter().all(|row| row[0].is_wildcard()) => {
+                let default_rows = default_coverage_rows(rows);
+                self.coverage_pattern_is_covered(&types[1..], &default_rows, &candidate[1..])
+            }
+            CoveragePattern::Wildcard => {
+                let Some(constructors) = self.coverage_constructors(&types[0]) else {
+                    let default_rows = default_coverage_rows(rows);
+                    return self.coverage_pattern_is_covered(
+                        &types[1..],
+                        &default_rows,
+                        &candidate[1..],
+                    );
+                };
+
+                constructors.iter().all(|constructor| {
+                    let specialized_rows = specialize_coverage_rows(rows, constructor);
+                    let specialized_candidate =
+                        specialize_coverage_candidate(candidate, constructor);
+                    let specialized_types = specialize_coverage_types(types, constructor);
+                    self.coverage_pattern_is_covered(
+                        &specialized_types,
+                        &specialized_rows,
+                        &specialized_candidate,
+                    )
+                })
+            }
+        }
+    }
+
+    /// The values `rows` miss, as rustc's witnesses: at the `scrutinee`
+    /// each missing constructor, as `Message::B`; below it, `_` where the
+    /// rows name none of the type's constructors. Constructors no row names
+    /// are reported before the ones some row names, and alone, as rustc
+    /// reports `None` for `Some(1)`. Empty when the rows cover every value.
+    pub(super) fn coverage_witnesses(
+        &self,
+        types: &[Ty],
+        rows: &[Vec<CoveragePattern>],
+        scrutinee: bool,
+    ) -> Vec<Vec<CoverageWitness>> {
+        debug_assert!(rows.iter().all(|row| row.len() == types.len()));
+
+        if types.is_empty() {
+            return if rows.is_empty() {
+                vec![Vec::new()]
+            } else {
+                Vec::new()
+            };
+        }
+        if rows
+            .iter()
+            .any(|row| row.iter().all(CoveragePattern::is_wildcard))
+        {
+            return Vec::new();
+        }
+        let prefixed = |heads: &[CoverageWitness], tails: Vec<Vec<CoverageWitness>>| {
+            tails
+                .iter()
+                .flat_map(|tail| {
+                    heads.iter().map(move |head| {
+                        let mut witness = vec![head.clone()];
+                        witness.extend_from_slice(tail);
+                        witness
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let Some(constructors) = self.coverage_constructors(&types[0]) else {
+            let tails = self.coverage_witnesses(&types[1..], &default_coverage_rows(rows), false);
+            return prefixed(&[CoverageWitness::Wildcard], tails);
+        };
+        let (present, missing): (Vec<_>, Vec<_>) = constructors.iter().partition(|constructor| {
+            rows.iter().any(|row| {
+                !row[0].is_wildcard() && specialize_coverage_pattern(&row[0], constructor).is_some()
+            })
+        });
+        if !missing.is_empty() {
+            let tails = self.coverage_witnesses(&types[1..], &default_coverage_rows(rows), false);
+            if !tails.is_empty() {
+                let heads = if scrutinee || !present.is_empty() {
+                    missing
+                        .iter()
+                        .map(|constructor| CoverageWitness::Constructor {
+                            name: constructor.name.clone(),
+                            payload: (0..constructor.payload.len())
+                                .map(|_| CoverageWitness::Wildcard)
+                                .collect(),
+                        })
+                        .collect()
+                } else {
+                    vec![CoverageWitness::Wildcard]
+                };
+                return prefixed(&heads, tails);
+            }
+        }
+        present
+            .into_iter()
+            .flat_map(|constructor| {
+                let specialized_rows = specialize_coverage_rows(rows, constructor);
+                let specialized_types = specialize_coverage_types(types, constructor);
+                self.coverage_witnesses(&specialized_types, &specialized_rows, false)
+                    .into_iter()
+                    .map(|mut witness| {
+                        let tail = witness.split_off(constructor.payload.len());
+                        let mut combined = vec![CoverageWitness::Constructor {
+                            name: constructor.name.clone(),
+                            payload: witness.into_boxed_slice(),
+                        }];
+                        combined.extend(tail);
+                        combined
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// The variants an arm's pattern covers whole: a variant whose fields
+    /// it matches with bindings and `_` only.
+    pub(super) fn host_covers(syntax: &PatternSyntax, covered: &mut Vec<ImmutableString>) {
+        let irrefutable = |member: &PatternSyntax| {
+            let mut member = member;
+            loop {
+                match member {
+                    PatternSyntax::At { pattern, .. } => member = pattern,
+                    PatternSyntax::Reference { pattern, .. } => member = pattern,
+                    other => {
+                        return matches!(
+                            other,
+                            PatternSyntax::Binding { .. }
+                                | PatternSyntax::Ref { .. }
+                                | PatternSyntax::Discard { .. }
+                                | PatternSyntax::Rest { .. }
+                        )
+                    }
+                }
+            }
+        };
+        match syntax {
+            PatternSyntax::Or { alternatives, .. } => {
+                for alternative in alternatives.iter() {
+                    Self::host_covers(alternative, covered);
+                }
+            }
+            PatternSyntax::At { pattern, .. } | PatternSyntax::Reference { pattern, .. } => {
+                Self::host_covers(pattern, covered);
+            }
+            PatternSyntax::Enum(pattern) if pattern.payload.iter().all(irrefutable) => {
+                covered.push(pattern.variant.clone());
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether the unguarded arms `rows` of a match on facade values, one
+    /// pattern for each of `tys` in each row, cover every value, as rustc
+    /// checks it: the arms on one variant of a facade enum cover it when
+    /// their patterns below it cover its fields together, so `A(B(x))` and
+    /// `A(C)` cover `A` when `B` and `C` are its field's variants.
+    pub(super) fn host_rows_cover(
+        &mut self,
+        rows: Vec<Vec<&PatternSyntax>>,
+        tys: &[Ty],
+        at: Span,
+    ) -> Result<bool, Error> {
+        let Some((ty, rest)) = tys.split_first() else {
+            return Ok(!rows.is_empty());
+        };
+        // Each row by its first pattern, past `name @` and `&`, with each
+        // alternative of a `|` a row of its own.
+        let mut spread = Vec::new();
+        for row in rows {
+            let Some((&first, tail)) = row.split_first() else {
+                continue;
+            };
+            let mut firsts = vec![first];
+            while let Some(first) = firsts.pop() {
+                match first {
+                    PatternSyntax::At { pattern, .. }
+                    | PatternSyntax::Reference { pattern, .. } => {
+                        firsts.push(pattern);
+                    }
+                    PatternSyntax::Or { alternatives, .. } => firsts.extend(alternatives.iter()),
+                    _ => spread.push((first, tail.to_vec())),
+                }
+            }
+        }
+        let irrefutable = |pattern: &PatternSyntax| {
+            matches!(
+                pattern,
+                PatternSyntax::Binding { .. }
+                    | PatternSyntax::Ref { .. }
+                    | PatternSyntax::Discard { .. }
+                    | PatternSyntax::Rest { .. }
+            )
+        };
+        let resolved = self.inference.resolve(ty);
+        let enumerated = match without_references(&resolved) {
+            Ty::Host { proof, arguments } => match proof.definition.shape() {
+                crate::host::type_def::Shape::Enum(variants) => {
+                    Some((proof.clone(), arguments.clone(), variants.to_vec()))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((proof, arguments, variants)) =
+            enumerated.filter(|_| spread.iter().any(|(first, _)| !irrefutable(first)))
+        else {
+            // Only a pattern that matches every value covers a type whose
+            // values are not told apart here.
+            let wild = spread
+                .into_iter()
+                .filter(|(first, _)| irrefutable(first))
+                .map(|(_, tail)| tail)
+                .collect();
+            return self.host_rows_cover(wild, rest, at);
+        };
+        let definition = proof.definition.clone();
+        let path: ImmutableString = definition.path().as_str().into();
+        let discard = PatternSyntax::Discard { span: at };
+        for variant in &variants {
+            let mut parameters = definition
+                .parameters()
+                .iter()
+                .cloned()
+                .zip(arguments.iter().cloned())
+                .collect();
+            let mut fields = Vec::with_capacity(variant.fields().len());
+            for field in variant.fields() {
+                fields.push(self.instantiate_host_type(
+                    field.ty(),
+                    &mut parameters,
+                    &path,
+                    at,
+                    proof.owner.as_ref(),
+                    Some(&definition),
+                )?);
+            }
+            let mut specialized = Vec::new();
+            for (first, tail) in &spread {
+                let members = match first {
+                    pattern if irrefutable(pattern) => vec![&discard; fields.len()],
+                    PatternSyntax::Enum(pattern) if pattern.variant.as_str() == variant.name() => {
+                        match &pattern.named {
+                            Some((names, _)) => {
+                                let mut members = vec![&discard; fields.len()];
+                                for ((name, _), member) in names.iter().zip(pattern.payload.iter())
+                                {
+                                    if let Some(index) = variant
+                                        .fields()
+                                        .iter()
+                                        .position(|field| field.name() == name.as_str())
+                                    {
+                                        members[index] = member;
+                                    }
+                                }
+                                members
+                            }
+                            None if pattern.payload.is_empty() => vec![&discard; fields.len()],
+                            None => tuple_members(&pattern.payload, fields.len(), &discard)?,
+                        }
+                    }
+                    _ => continue,
+                };
+                specialized.push(members.into_iter().chain(tail.iter().copied()).collect());
+            }
+            let tys: Vec<Ty> = fields.into_iter().chain(rest.iter().cloned()).collect();
+            if !self.host_rows_cover(specialized, &tys, at)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 }
