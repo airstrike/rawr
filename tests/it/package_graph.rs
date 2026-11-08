@@ -562,7 +562,7 @@ fn canonical_module_targets_cannot_escape_or_alias() {
     assert!(report.labels()[0].source().identity().ends_with("src/main.rs"));
 
     let aliasing = workspace.path().join("aliasing");
-    write(&aliasing.join("Cargo.toml"), "[package]\nname = \"aliasing\"\n");
+    write(&aliasing.join("Cargo.toml"), "[package]\nname = \"aliasing\"\nedition = \"2024\"\n[workspace]\n");
     write(&aliasing.join("src/main.rs"), "mod first;\nmod second;\n");
     write(&aliasing.join("src/shared.rs"), "pub struct Shared;\n");
     symlink("shared.rs", aliasing.join("src/first.rs")).unwrap();

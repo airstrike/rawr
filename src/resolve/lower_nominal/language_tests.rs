@@ -1240,7 +1240,7 @@ fn language_option_patterns_and_exhaustiveness() {
         "fn f(x: Option<Option<i64>>) -> i64 { match x { Some(Some(v)) => v, None => 0 } } \
          pub fn run() -> i64 { 0 } run()",
     );
-    assert!(nested.contains("missing Some(None)"), "{nested}");
+    assert!(nested.contains("`Some(None)` not covered"), "{nested}");
     let unreachable = rejected(
         "fn f(x: Option<i64>) -> i64 { match x { Some(_) => 1, None => 0, Some(v) => v } } \
          pub fn run() -> i64 { 0 } run()",
@@ -1526,7 +1526,7 @@ fn language_result_patterns_and_exhaustiveness() {
         "fn f(x: Result<Option<i64>, i64>) -> i64 { match x { Ok(Some(v)) => v, Err(e) => e } } \
          pub fn run() -> i64 { 0 } run()",
     );
-    assert!(nested.contains("missing Ok(None)"), "{nested}");
+    assert!(nested.contains("`Ok(None)` not covered"), "{nested}");
     let unreachable = rejected(
         "fn f(x: Result<i64, i64>) -> i64 { match x { Ok(_) => 1, Err(_) => 0, Ok(v) => v } } \
          pub fn run() -> i64 { 0 } run()",
@@ -1877,7 +1877,7 @@ fn language_patterns_literals_ranges_tuples_and_bindings() {
     let tuple = rejected(
         "fn f(p: (bool, bool)) -> i64 { match p { (true, _) => 0, (false, true) => 1 } } pub fn run() -> i64 { 0 } run()",
     );
-    assert!(tuple.contains("missing (false, false)"), "{tuple}");
+    assert!(tuple.contains("`(false, false)` not covered"), "{tuple}");
     rejected("pub fn run() -> i64 { let Some(x) = Some(1); x } run()");
     rejected("fn f(x: Option<i64>) -> i64 { match x { Some('a') => 0, _ => 1 } } pub fn run() -> i64 { 0 } run()");
     rejected("fn f(x: Option<i64>) -> i64 { match x { Some(a) | None => 0 } } pub fn run() -> i64 { 0 } run()");
