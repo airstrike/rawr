@@ -150,6 +150,7 @@ use imported::{ImplArguments, ImplUse};
 #[cfg(test)]
 use inference::{inference_metrics, reset_inference_metrics};
 use inference::{Checkpoint, Inference, Patch};
+use iterator::{collect_try, COLLECT_OPTION, COLLECT_RESULT};
 use keyed::keyed_query;
 use location::retain_locations;
 pub(crate) use location::Location;
@@ -2519,55 +2520,6 @@ fn default_value(
         .runtime
         .materialize_default(&identity, definition.schema())
         .ok()
-}
-
-/// `CollectStop`'s and `CollectTry`'s code for a `Result` target.
-const COLLECT_RESULT: INT = 1;
-/// Their code for an `Option` target.
-const COLLECT_OPTION: INT = 2;
-
-/// `collect()` into a `Result` or an `Option` (`kinds[0]`) of `items`, which
-/// end at the first `Err` or `None` (`CollectStop`): that one, else `Ok` or
-/// `Some` of the payloads, concatenated when the payload's kind
-/// (`kinds[1]`) is a `String`'s.
-fn collect_try(kinds: [INT; 2], items: Dynamic) -> RawrResult {
-    let items = items
-        .into_array()
-        .map_err(|_| invariant("collected items are not an array"))?;
-    let mut payloads = crate::Array::with_capacity(items.len());
-    for item in items {
-        let payload = if kinds[0] == COLLECT_RESULT {
-            match crate::result::read(&item) {
-                Some(Ok(payload)) => payload,
-                Some(Err(_)) => return Ok(item),
-                None => return Err(invariant("a collected item is not a `Result`")),
-            }
-        } else {
-            match crate::option::read(&item) {
-                Some(Some(payload)) => payload,
-                Some(None) => return Ok(item),
-                None => return Err(invariant("a collected item is not an `Option`")),
-            }
-        };
-        payloads.push(payload);
-    }
-    let collected = if kinds[1] == kind_code(Ty::String) {
-        let mut text = String::new();
-        for payload in &payloads {
-            match payload.as_char() {
-                Ok(character) => text.push(character),
-                Err(_) => text.push_str(&payload.to_string()),
-            }
-        }
-        Dynamic::from(ImmutableString::from(text))
-    } else {
-        Dynamic::from_array(payloads)
-    };
-    Ok(if kinds[0] == COLLECT_RESULT {
-        crate::result::ok(collected)
-    } else {
-        crate::option::some(collected)
-    })
 }
 
 fn kind_code(ty: Ty) -> INT {
