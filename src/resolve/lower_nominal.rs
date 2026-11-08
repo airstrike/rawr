@@ -326,27 +326,6 @@ pub(super) fn runtime_entry(path: &crate::item::type_ref::Path) -> bool {
             .is_some_and(|segment| segment.name.text == "main")
 }
 
-/// A `RefCell` of `value` (`resolve::cell_new`).
-pub(crate) fn cell_new(value: Dynamic) -> Dynamic {
-    cell::new(value)
-}
-
-/// Whether the `RefCell` `value` is borrowed (`resolve::cell_held`).
-pub(crate) fn cell_held(value: &Dynamic) -> Option<bool> {
-    cell::held(value)
-}
-
-/// A mutable borrow of the `RefCell` `value` when nothing borrows it
-/// (`resolve::cell_lock`).
-pub(crate) fn cell_lock(value: &Dynamic) -> Option<Dynamic> {
-    cell::try_borrow_mut(value)
-}
-
-/// Whether `value` is a `RefCell` at runtime.
-pub(crate) fn is_cell(value: &Dynamic) -> bool {
-    value.is::<cell::Cell>()
-}
-
 /// A `for` loop's iterator when it holds borrows, its element, the
 /// positions where the element takes what the iterator holds (pairs of the
 /// element's position and the iterator's), and its pattern's bindings. The
@@ -1813,6 +1792,7 @@ fn binary_precedence(token: &Token) -> Option<u8> {
 fn unsigned_order(value: origin::Fragment) -> origin::Fragment {
     value.surrounded("((", ") ^ (-9223372036854775807 - 1))")
 }
+pub(crate) use cell::{cell_held, cell_lock, cell_new, is_cell};
 use host_call::{host_number_accepts, macro_or_value, value_or_call, HostCheck};
 #[cfg(feature = "rust-import")]
 use host_call::{names_variant, unsupported_field, ImportedContext, UNSUPPORTED_MESSAGE_FUNCTION};
