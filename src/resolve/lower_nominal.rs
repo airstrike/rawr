@@ -10505,9 +10505,13 @@ struct FrameArray {
     /// How many statements' frames were open when it started: a call
     /// opening a frame of the same statement binds its elements.
     depth: usize,
-    /// Where the element being parsed starts, its index, and how many
-    /// frames its statement had then.
-    element: (Position, usize, usize),
+    /// How many calls had been noted when it started (`calls_noted`),
+    /// counted rather than placed, as a macro's tokens all sit at its
+    /// call.
+    noted: usize,
+    /// How many calls had been noted when the element being parsed
+    /// started, its index, and how many frames its statement had then.
+    element: (usize, usize, usize),
     /// Each element whose frame needs the elements before it bound first,
     /// with how many frames its statement had when it started.
     bound: Vec<(usize, usize)>,
@@ -12777,8 +12781,13 @@ struct Parser<'a> {
     /// For each of `frames`, where its statement starts and where each
     /// call or assignment parsed in it so far starts: a frame is opened
     /// ahead of its statement, so one written before the call that opens
-    /// it would run after it.
-    frame_effects: Vec<(Position, Vec<Position>)>,
+    /// it would run after it. Each call is kept with its count among the
+    /// calls noted (`calls_noted`).
+    frame_effects: Vec<(Position, Vec<(Position, usize)>)>,
+    /// How many calls and assignments have been noted for
+    /// `frame_effects`, which orders them where their places can't, as
+    /// in a macro's expansion.
+    calls_noted: usize,
     /// The array literals being parsed, innermost last: a call that opens
     /// a frame in one element is preceded by the calls of the elements
     /// before it, which are bound ahead of the frame in their order.
@@ -13141,6 +13150,7 @@ impl<'a> Parser<'a> {
             pending_arguments: None,
             frames: Vec::new(),
             frame_effects: Vec::new(),
+            calls_noted: 0,
             frame_arrays: Vec::new(),
             call_parens: Vec::new(),
             callee: None,
@@ -14638,7 +14648,29 @@ impl<'a> Parser<'a> {
         source: &Ty,
         span: Span,
     ) -> Option<(method::Definition, Ty, Ty)> {
-        let candidates = self.models.conversions.get(&target)?.clone();
+        let mut candidates = self
+            .models
+            .conversions
+            .get(&target)
+            .cloned()
+            .unwrap_or_default();
+        // A crate's type that another of its paths names, as a macro's
+        // `$crate::compose::Slot` names the `natives::compose::Slot` the
+        // program's `impl From<Mine> for Slot<'a, ()>` names: the impls
+        // for the type at its other paths, which unify with it.
+        if let Some(expected) = expected
+            && matches!(self.inference.resolve(expected), Ty::Host { .. })
+        {
+            candidates.extend(
+                self.models
+                    .conversions
+                    .iter()
+                    .filter(|(owner, _)| **owner != target)
+                    .flat_map(|(_, methods)| methods)
+                    .filter(|method| method.builtin_owner().is_some())
+                    .cloned(),
+            );
+        }
         let mut chosen = None;
         // An `impl From` is as visible as `From`, from every module.
         for candidate in candidates {
@@ -16647,7 +16679,10 @@ impl<'a> Parser<'a> {
 
     /// The tokens of a call's parenthesised arguments, from its `(` to the
     /// matching `)` (consumed), without a trailing comma; with the
-    /// position of the `)`.
+    /// position of the `)`. The calls among them, and the call they close,
+    /// are noted for `frame_effects` as the tokens are parsed, not as they
+    /// are taken: the call runs after its arguments, so a scope frame one
+    /// of them opens is not preceded by it (`Into::<T>::into(label("x"))`).
     fn take_argument_tokens(&mut self) -> Result<(Vec<(Token, Position)>, Position), Error> {
         let (open, position) = self.next();
         if open == Token::Unit {
@@ -16659,6 +16694,21 @@ impl<'a> Parser<'a> {
                 source: point_span(position),
             });
         }
+        let noted = self
+            .frame_effects
+            .iter()
+            .map(|(_, effects)| effects.len())
+            .collect::<Vec<_>>();
+        let taken = self.take_until_close();
+        for ((_, effects), noted) in self.frame_effects.iter_mut().zip(noted) {
+            effects.truncate(noted);
+        }
+        taken
+    }
+
+    /// The tokens up to the `)` that closes an open `(` (consumed), for
+    /// `take_argument_tokens`.
+    fn take_until_close(&mut self) -> Result<(Vec<(Token, Position)>, Position), Error> {
         let mut depth = 0usize;
         let mut tokens = Vec::new();
         loop {
@@ -18900,6 +18950,52 @@ impl<'a> Parser<'a> {
         Some((items, self.models.item_owner(&path).cloned()))
     }
 
+    /// rustc's E0277 for `source` converted into the library type
+    /// `target`, none of whose `From` impls takes it: the bound, and the
+    /// type each impl takes, as rustc lists the trait's other impls. `None`
+    /// when `target` has no `from` to list.
+    fn unsatisfied_from(&mut self, target: &Ty, source: &Ty, at: Span) -> Option<Error> {
+        let (items, _) = self.target_from(target)?;
+        let mut takes = Vec::new();
+        for item in items
+            .iter()
+            .filter(|item| item.kind() == crate::host::item::Kind::AssociatedFunction)
+        {
+            let checkpoint = self.inference.checkpoint();
+            if let Ok(signature) = self.instantiate_host_signature(item, None, None, Span::NONE)
+                && let [input] = &signature.inputs[..]
+            {
+                // Rawr's text is the `&str` the impl takes.
+                let input = match self.inference.resolve(input) {
+                    Ty::Str => "&str".into(),
+                    input => input.name(&self.models),
+                };
+                takes.push(format!("          From<{input}>"));
+            }
+            self.inference.rollback(checkpoint);
+        }
+        if takes.is_empty() {
+            return None;
+        }
+        takes.sort();
+        takes.dedup();
+        let target = target.name(&self.models);
+        let bound = format!("From<{}>", source.name(&self.models));
+        Some(Error::StdPath {
+            code: "E0277",
+            message: format!("the trait bound `{target}: {bound}` is not satisfied").into(),
+            label: Some(format!("the trait `{bound}` is not implemented for `{target}`").into()),
+            note: Some(
+                format!(
+                    "the following other types implement trait `From<T>`:\n{}",
+                    takes.join("\n")
+                )
+                .into(),
+            ),
+            reference: at,
+        })
+    }
+
     /// The `from` functions of the library type `target` for a conversion
     /// of text of type `source` whose target the context gives as it is
     /// parsed (`Into::<T>::into(x)`, `<T as From<S>>::from(x)`, `let t: T
@@ -19215,6 +19311,11 @@ impl<'a> Parser<'a> {
                         #[cfg(feature = "rust-import")]
                         if host.forms.is_empty() {
                             self.demand_into(&source);
+                        }
+                        if let Some(error) =
+                            self.unsatisfied_from(&target, &source, conversion.span)
+                        {
+                            return Err(error);
                         }
                         let (source, target) =
                             (source.name(&self.models), target.name(&self.models));
@@ -25059,7 +25160,7 @@ impl<'a> Parser<'a> {
         // written before this call in it, outside it, would run after it.
         let start = value.span.start();
         if let Some((statement, effects)) = self.frame_effects.last_mut() {
-            effects.retain(|at| *at < start);
+            effects.retain(|(at, _)| *at < start);
             // The calls of an array's earlier elements, bound ahead of the
             // frame (`FrameArray`).
             let depth = self.frames.len();
@@ -25070,7 +25171,9 @@ impl<'a> Parser<'a> {
             {
                 let (element, index, mark) = array.element;
                 if !effects.is_empty()
-                    && effects.iter().all(|at| array.start <= *at && *at < element)
+                    && effects
+                        .iter()
+                        .all(|(_, noted)| (array.noted..element).contains(noted))
                 {
                     effects.clear();
                     if array.bound.last().is_none_or(|(last, _)| *last != index) {
@@ -25078,7 +25181,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            if let Some(&earlier) = effects.first() {
+            if let Some(&(earlier, _)) = effects.first() {
                 let line = statement.line().unwrap_or_default();
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
@@ -45192,7 +45295,8 @@ impl<'a> Parser<'a> {
         self.frame_arrays.push(FrameArray {
             start: open,
             depth: self.frames.len(),
-            element: (open, 0, 0),
+            noted: self.calls_noted,
+            element: (self.calls_noted, 0, 0),
             bound: Vec::new(),
         });
         let parsed = self.parse_array_elements(&close, array);
@@ -45315,7 +45419,7 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let frames = self.frames.last().map_or(0, Vec::len);
-            let element = (self.position(), elements.len(), frames);
+            let element = (self.calls_noted, elements.len(), frames);
             if let Some(array) = self.frame_arrays.last_mut() {
                 array.element = element;
             }
@@ -57611,8 +57715,9 @@ impl<'a> Parser<'a> {
     /// parsed.
     fn effect(&mut self, at: Position) {
         for (_, effects) in &mut self.frame_effects {
-            effects.push(at);
+            effects.push((at, self.calls_noted));
         }
+        self.calls_noted += 1;
     }
 
     /// Starts collecting the scope frames of a statement.
