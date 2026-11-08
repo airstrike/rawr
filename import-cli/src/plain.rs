@@ -495,11 +495,11 @@ fn prepare(
         remembered = false;
         let mut prepared = request
             .prepare_cached_in(&limits, scope)
-            .map_err(Error::cache)?;
+            .map_err(Error::import)?;
         settlement.absorb(prepared.settlement());
         // What a crate derive's expansion runs against: this run's own build.
         let basis = prepared.expansion_basis();
-        let api = prepared.retain_api(&limits).map_err(Error::cache)?;
+        let api = prepared.retain_api(&limits).map_err(Error::import)?;
         let input = api.input_identity();
         keyed = applied.is_file().then_some(input);
         let adapter = &*current_adapter.insert(adapter(keyed.as_ref()));

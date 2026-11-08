@@ -125,7 +125,8 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
         let checked = owner::check(&target, Some(graph), &Plain);
         let cargo = cargo.map(rawr_cli::cargo::Pending::finish);
         let checked = owner::settle_checked(checked, cargo.as_ref(), &target, &Plain);
-        return if rawr_cli::cargo::concluded(checked.as_deref(), cargo) {
+        let checked = checked.as_deref().map_err(Option::as_ref);
+        return if rawr_cli::cargo::concluded(checked, cargo) {
             ExitCode::SUCCESS
         } else {
             ExitCode::FAILURE

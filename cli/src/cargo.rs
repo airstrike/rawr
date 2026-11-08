@@ -390,18 +390,24 @@ fn selection(graph: &rawr::package::Graph) -> Vec<OsString> {
 /// End `rawr check`: Rawr's result first, then cargo's under its own
 /// heading. Returns whether both passed.
 pub fn conclude(checked: Result<&Path, &rawr::diagnostic::Report>, cargo: Option<Pending>) -> bool {
-    concluded(checked, cargo.map(Pending::finish))
+    concluded(checked.map_err(Some), cargo.map(Pending::finish))
 }
 
-/// [`conclude`] with cargo's status already read.
-pub fn concluded(checked: Result<&Path, &rawr::diagnostic::Report>, cargo: Option<Status>) -> bool {
+/// [`conclude`] with cargo's status already read. A failed check with no
+/// report is one cargo's report says all of.
+pub fn concluded(
+    checked: Result<&Path, Option<&rawr::diagnostic::Report>>,
+    cargo: Option<Status>,
+) -> bool {
     let checked = match checked {
         Ok(source) => {
             println!("Checked {}", source.display());
             true
         }
         Err(report) => {
-            crate::diagnostic::emit(report);
+            if let Some(report) = report {
+                crate::diagnostic::emit(report);
+            }
             false
         }
     };

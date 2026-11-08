@@ -534,6 +534,41 @@ fn a_marked_static_of_native_blocks_is_read_by_native_code() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A marked type that implements a native trait but not the trait's
+/// supertrait `Debug` (#1310): `rawr check` fails with `cargo check`'s
+/// E0277 at the program's own path, and with nothing of rawr's copy of the
+/// crate, which fails to build for the same reason.
+#[test]
+fn a_marked_type_missing_a_native_supertrait_fails_with_cargo_s_error_alone() {
+    const SUPERTRAIT: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-supertrait"
+    );
+    let root = crate::support::scratch().join("islands-supertrait");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(SUPERTRAIT), &root);
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(!check.status.success(), "{printed}");
+    assert!(printed.contains("error[E0277]"), "{printed}");
+    assert!(printed.contains("src/badge.rs"), "{printed}");
+    assert!(!printed.contains("RAWR-"), "{printed}");
+    assert!(!printed.contains("__Rawr"), "{printed}");
+    assert!(!printed.contains("target/rawr"), "{printed}");
+}
+
 #[test]
 fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin() {
     use std::io::Write as _;

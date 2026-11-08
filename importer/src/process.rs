@@ -627,22 +627,11 @@ fn non_send_future(stderr: &str) -> Option<(Box<str>, Box<str>)> {
         .lines()
         .filter_map(|line| line.trim_start().strip_prefix("::: "))
         .find(|path| !path.contains("/.cargo/") && !path.contains("rawr_adapters"))
-        // rawr's copy of the crate: `target/rawr/crate/`, or
-        // `target/rawr/members/<path>/crate/` for a workspace member.
-        .map(|path| {
-            let Some(at) = path.find("/target/rawr/") else {
-                return path;
-            };
-            let rest = &path[at + "/target/rawr/".len()..];
-            rest.strip_prefix("crate/")
-                .or_else(|| {
-                    rest.strip_prefix("members/")
-                        .and_then(|member| member.find("/crate/").map(|at| &member[at + 7..]))
-                })
-                .unwrap_or(path)
-        })
-        .unwrap_or("its Rust source");
-    Some((function.into(), location.trim().into()))
+        .map_or_else(
+            || "its Rust source".to_owned(),
+            |path| crate::location::copy::program(path.trim()),
+        );
+    Some((function.into(), location.into_boxed_str()))
 }
 
 /// The bound a script type, erased to `rawr::Value`, failed in a
@@ -1883,7 +1872,7 @@ mod non_send_tests {
             "/target/rawr/members/examples/app/crate/",
         );
         let (_, location) = super::non_send_future(&member).unwrap();
-        assert_eq!(&*location, "src/download.rs:42:25");
+        assert_eq!(&*location, "examples/app/src/download.rs:42:25");
         assert!(super::non_send_future("error[E0308]: mismatched types").is_none());
     }
 }
