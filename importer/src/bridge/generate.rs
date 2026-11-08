@@ -3995,20 +3995,10 @@ fn native_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
     arena_access(|arena| arena.compare(lhs, rhs)).flatten()
 }
 
-thread_local! {
-    /// The runtime a universe runner bound before it served (#515): the
-    /// program a fork of it compiles binds this one instead of its own.
-    static PREPARED_RUNTIME: std::cell::RefCell<Option<__rawr_internal::host::runtime::Registry>> =
-        const { std::cell::RefCell::new(None) };
-}
-
 fn imported_runtime(
     engine: &__rawr_internal::Engine,
     definitions: &[__rawr_internal::host::facade::Definition],
 ) -> Result<__rawr_internal::host::runtime::Registry, __rawr_internal::host::runtime::Error> {
-    if let Some(runtime) = PREPARED_RUNTIME.take() {
-        return Ok(runtime);
-    }
     __rawr_internal::host::value::register_relations::<NativeHandle>(native_equal, native_compare);
     __rawr_internal::host::value::register_relations::<__rawr_internal::scope::Scoped>(native_equal, native_compare);
     __rawr_internal::host::value::register_relations::<__rawr_internal::scope::Lent>(native_equal, native_compare);
@@ -5246,16 +5236,44 @@ fn finish(result: std::io::Result<()>) -> ! {
     }
 }
 
+/// This runner's generated bindings, as `rawr::universe` installs them in
+/// an engine and binds their runtime (#1387). Its name is one no script
+/// type takes.
+struct __RawrBindings;
+
+impl __rawr_internal::universe::Bindings for __RawrBindings {
+    fn engine(
+        &self,
+        access: __rawr_internal::Access,
+    ) -> std::io::Result<(
+        __rawr_internal::Shared<__rawr_internal::Engine>,
+        Box<[__rawr_internal::host::facade::Definition]>,
+    )> {
+        install_arena([0; 32]);
+        let native = __rawr_internal::package::import::runner::account::Native::decode(GENERATED_MANIFEST)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let (engine, bindings, _) = prepare_engine(native, access, &mut |_| Ok(()))?;
+        Ok((engine, bindings))
+    }
+
+    fn runtime(
+        &self,
+        engine: &__rawr_internal::Engine,
+        definitions: &[__rawr_internal::host::facade::Definition],
+    ) -> Result<__rawr_internal::host::runtime::Registry, __rawr_internal::host::runtime::Error> {
+        imported_runtime(engine, definitions)
+    }
+}
+
 /// `?play`'s entry in a universe runner (#434, #436, #515): a server on the
 /// socket `RAWR_PLAY_SOCKET` names. What every snippet needs is made once,
-/// here: the runner's bindings decoded and installed in an engine, and the
-/// runtime bound. Each snippet then runs in a fork of this process (see
-/// `__rawr_internal::play`), which compiles the crate root's source beside
-/// the manifest in `root` against that engine, with no parent and no
-/// Cargo, and runs it once as Rust runs it. The snapshot is the one the
-/// runner's build compiled: the same manifest at the same path, so a
-/// program whose native calls the build covered finds every one of them,
-/// and one that makes another fails to compile there.
+/// here: a universe of the runner's bindings (`rawr::universe`). Each
+/// snippet then runs in a fork of this process (see `__rawr_internal::play`),
+/// which loads the crate root's source beside the manifest in `root` in
+/// that universe, with no parent and no Cargo, and runs it once as Rust
+/// runs it. The manifest is the one the runner's build compiled, at the
+/// same path, so a program whose native calls the build covered finds every
+/// one of them, and one that makes another fails to compile there.
 fn run_play(root: std::path::PathBuf) -> ! {
     let Some(socket) = std::env::var_os(__rawr_internal::play::SOCKET) else {
         eprintln!("error: `{}` names no socket to serve on", __rawr_internal::play::SOCKET);
@@ -5267,25 +5285,16 @@ fn run_play(root: std::path::PathBuf) -> ! {
     }
     let manifest_path = root.join("Cargo.toml");
     let entry = root.join("src").join("main.rs");
-    let prepared = (|| -> std::io::Result<_> {
-        let manifest = std::fs::read_to_string(&manifest_path)?;
-        install_arena([0; 32]);
-        let native = __rawr_internal::package::import::runner::account::Native::decode(GENERATED_MANIFEST)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let (engine, bindings, application_contract) = prepare_engine(
-            native,
+    let prepared = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| error.to_string())
+        .and_then(|manifest| {
             // A snippet runs on a server whose files, environment and
             // process are not its own: it reaches none of them.
-            __rawr_internal::Access::none(),
-            &mut |_| Ok(()),
-        )?;
-        let bindings: std::sync::Arc<[__rawr_internal::host::facade::Definition]> = bindings.into();
-        let runtime = imported_runtime(&engine, &bindings)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        PREPARED_RUNTIME.set(Some(runtime));
-        Ok((manifest, engine, bindings, application_contract))
-    })();
-    let (manifest, engine, bindings, application_contract) = match prepared {
+            __rawr_internal::universe::Universe::new(&__RawrBindings, __rawr_internal::Access::none())
+                .map(|universe| (manifest, universe))
+                .map_err(|error| error.to_string())
+        });
+    let (manifest, universe) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             eprintln!("{error}");
@@ -5293,31 +5302,10 @@ fn run_play(root: std::path::PathBuf) -> ! {
         }
     };
     let served = __rawr_internal::play::serve(std::path::Path::new(&socket), |source| {
-        // A fork of this process, with its own copy of all of the above.
-        let files = vec![
-            (manifest_path.clone(), Box::from(manifest.as_str())),
-            (entry.clone(), source.into_boxed_str()),
-        ];
-        let compiled = __rawr_internal::package::snapshot::Snapshot::new(entry.clone(), files)
-            .map_err(|error| std::io::Error::other(error.to_string()))
-            .and_then(|snapshot| {
-                // The runner prepares nothing, so a native use its build
-                // didn't cover is the snippet's compile error.
-                let compiled = engine.compile_package_snapshot_covered(&snapshot)
-                    .map_err(|error| std::io::Error::other(rendered(&error)))?;
-                let (compiled, ast) = compiled.with_top_level();
-                let (candidate, _, _) = compiled.into_parts();
-                Ok(Program {
-                    engine: engine.clone(),
-                    ast: Some(ast),
-                    candidate: Some(candidate),
-                    application_contract: application_contract.clone(),
-                    _bindings: bindings.clone(),
-                    marked_main: snapshot.marked_root(),
-                })
-            });
-        match compiled {
-            Ok(program) => run_snippet(program),
+        // A fork of this process, with its own copy of the universe.
+        let files = vec![(manifest_path.clone(), Box::from(manifest.as_str()))];
+        match universe.program(entry.clone(), source, files) {
+            Ok(program) => exit(program.run()),
             Err(error) => {
                 eprintln!("{error}");
                 exit(1);
@@ -5330,35 +5318,6 @@ fn run_play(root: std::path::PathBuf) -> ! {
             eprintln!("error: ?play's runner stopped: {error}");
             exit(1);
         }
-    }
-}
-
-/// A snippet's compile error as `rawr check` prints it: the report with
-/// the source it points at.
-fn rendered(error: &__rawr_internal::package::import::resident::Error) -> String {
-    use __rawr_internal::package::import::resident::Error;
-    match error {
-        Error::Source(source) => match source.report() {
-            Ok(report) => __rawr_internal::diagnostic::render(&report),
-            Err(_) => source.to_string(),
-        },
-        error => error.to_string(),
-    }
-}
-
-/// Run a snippet's program once, as Rust runs it, and end the process.
-fn run_snippet(mut program: Program) -> ! {
-    if let Err(error) = evaluate_program(&mut program) {
-        eprintln!("error: {error}");
-        exit(101);
-    }
-    let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        __rawr_profile::run(&mut program)
-    }));
-    match started {
-        Ok(Started::Exit(status)) => exit(status),
-        Ok(Started::Entry(entry)) => exit(std::panic::catch_unwind(entry).unwrap_or(101)),
-        Err(_) => exit(101),
     }
 }
 
