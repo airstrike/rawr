@@ -2775,18 +2775,25 @@ fn scoped_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__raw
         .and_then(|value| value.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped))
 }
 
-/// The first value of a scope frame's region in the array at `index`, as
-/// `column![..]`'s elements are, or in the option there, as `column![..,
-/// maybe.map(|x| text(x))]`'s `Option<Text>` is.
+/// The value among the arguments at `indices`, and in the arrays there,
+/// as `column![..]`'s elements are, and the options, as `column![..,
+/// maybe.map(|x| text(x))]`'s `Option<Text>` is, whose scope frame's
+/// region ends first: a call that takes values of several frames runs in
+/// it, as `with_children([a, b])` of two `let`s does (#1329).
 #[allow(dead_code)]
-fn scoped_item(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Scoped> {
-    let value = arguments.values.get(index)?;
+fn scoped_innermost(arguments: &Arguments<'_, '_, '_>, indices: &[usize]) -> Option<__rawr_internal::scope::Scoped> {
     let scoped = |item: &Dynamic| item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped);
-    if let Some(option) = value.read_lock::<__rawr_internal::option::Value>() {
-        return option.as_ref().and_then(scoped);
+    let mut handles = Vec::new();
+    for value in indices.iter().filter_map(|index| arguments.values.get(*index)) {
+        if let Some(handle) = scoped(value) {
+            handles.push(handle);
+        } else if let Some(option) = value.read_lock::<__rawr_internal::option::Value>() {
+            handles.extend(option.as_ref().and_then(scoped));
+        } else if let Some(items) = value.read_lock::<__rawr_internal::Array>() {
+            handles.extend(items.iter().filter_map(scoped));
+        }
     }
-    let items = value.read_lock::<__rawr_internal::Array>()?;
-    items.iter().find_map(scoped)
+    __rawr_internal::scope::innermost(handles)
 }
 
 /// A value native code lent the call (D558.3) that an argument reaches,
@@ -9464,7 +9471,7 @@ fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'
             .join(", ");
         writeln!(
             output,
-            "    if let Some((nonce, name)) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))).map(|scoped| (scoped.nonce(), scoped.name())).or_else(|| __rawr_internal::scope::anchor().map(|anchor| (anchor, \"a slot's region\"))) {{
+            "    if let Some((nonce, name)) = scoped_innermost(arguments, &[{indices}]).map(|scoped| (scoped.nonce(), scoped.name())).or_else(|| __rawr_internal::scope::anchor().map(|anchor| (anchor, \"a slot's region\"))) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(nonce, |region| -> Result<Dynamic, Error> {{"
         )
         .map_err(encoding)?;
@@ -9986,7 +9993,7 @@ fn opaque_table_source(
                     .join(", ");
                 writeln!(
                     body,
-                    "    if let Some(scoped) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))) {{
+                    "    if let Some(scoped) = scoped_innermost(arguments, &[{indices}]) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{"
                 )
                 .map_err(request::unwritable)?;
@@ -20424,12 +20431,23 @@ use super::*;
         } else {
             String::new()
         };
+        // A value of an enclosing frame's region joins a call in an inner
+        // one where the type is covariant in its own lifetimes and nothing
+        // else among its arguments borrows (#1329).
+        let shorten = if lifetimes.covariant
+            && text.matches('\'').count() <= lifetimes.count as usize
+            && !text.contains('&')
+        {
+            "\n    fn shorten<'s, 'l: 's>(value: &'s Self::Of<'l>) -> Option<&'s Self::Of<'s>> {\n        Some(value)\n    }"
+        } else {
+            ""
+        };
         let shown = family::Ops::shown(&text)
             .unwrap_or_else(|| text.clone())
             .replace("'x", "'_");
         writeln!(
             output,
-            "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{display}{clone}{equal}\n}}\n"
+            "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{display}{clone}{shorten}{equal}\n}}\n"
         )
         .map_err(request::unwritable)?;
     }
