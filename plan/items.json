@@ -1452,6 +1452,7 @@
     {"t":"T1449","issue":1449,"title":"T1449: iced in the browser's universe draws at twice its hit-test scale at devicePixelRatio 2 (Retina)…","state":"closed","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":"7deda1eaa","release":null},
     {"t":"T1450","issue":1450,"title":"T1450: A method a crate trait's generic impl gives a generic crate type doesn't resolve (ratzilla's…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1451","issue":1451,"title":"T1451: `?` misses a crate's `impl From<CrateError> for io::Error`, and a derived (thiserror) Error impl…","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1452","issue":1452,"title":"T1452: rawr-import builds a runner for a non-host target and then tries to start it; it should build…","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1452","issue":1452,"title":"T1452: rawr-import builds a runner for a non-host target and then tries to start it; it should build…","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1453","issue":1453,"title":"T1453: rawr mcp input stops reaching a running iced app after ~150 calls while it keeps drawing; clicks…","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

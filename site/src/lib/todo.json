@@ -3225,7 +3225,8 @@
     {"issue":1449,"title":"iced in the browser's universe draws at twice its hit-test scale at devicePixelRatio 2 (Retina)…","state":"closed","category":"Platforms"},
     {"issue":1450,"title":"A method a crate trait's generic impl gives a generic crate type doesn't resolve (ratzilla's…","state":"open","category":"No glue (D593)"},
     {"issue":1451,"title":"`?` misses a crate's `impl From<CrateError> for io::Error`, and a derived (thiserror) Error impl…","state":"open","category":"Divergences from rustc"},
-    {"issue":1452,"title":"rawr-import builds a runner for a non-host target and then tries to start it; it should build…","state":"open","category":"Importer"}
+    {"issue":1452,"title":"rawr-import builds a runner for a non-host target and then tries to start it; it should build…","state":"open","category":"Importer"},
+    {"issue":1453,"title":"rawr mcp input stops reaching a running iced app after ~150 calls while it keeps drawing; clicks…","state":"open","category":"Health"}
   ],
   "groups": [
     {
