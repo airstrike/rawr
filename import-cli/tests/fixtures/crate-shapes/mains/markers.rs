@@ -1,5 +1,5 @@
 // rawr
-use natives::badge::{self, Badge, Wrap};
+use natives::badge::{self, badge, Badge, Wrap};
 
 fn ghost() -> badge::Ghost {
     badge::Ghost
@@ -14,12 +14,9 @@ fn main() {
         marker == copy,
         marker.clone() == badge::Secondary
     );
-    println!(
-        "{}",
-        badge::badge("Secondary").style(badge::Secondary).draw()
-    );
+    println!("{}", badge("Secondary").style(badge::Secondary).draw());
     let style: badge::StyleFn = ghost().into();
-    let drawn: Badge = badge::badge("Ghost").style(style);
+    let drawn: Badge = badge("Ghost").style(style);
     println!("{}", drawn.draw());
     match marker {
         badge::Secondary => println!("matched"),

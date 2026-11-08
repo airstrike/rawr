@@ -4979,7 +4979,7 @@ impl Models {
         }
         let mut functions = BTreeMap::new();
         let mut functions_by_key = BTreeMap::new();
-        let mut imports = BTreeMap::new();
+        let mut imports = BTreeMap::<_, item::Binding>::new();
 
         for shell in program.items.iter() {
             let nominal = match &shell.kind {
@@ -5027,7 +5027,16 @@ impl Models {
                 continue;
             };
             for binding in &item.bindings {
-                imports.insert((shell.source, binding.name.text.clone()), binding.clone());
+                // A module and a function of its name, bound in their own
+                // namespaces, read as one name.
+                let key = (shell.source, binding.name.text.clone());
+                let joined = match imports.remove(&key) {
+                    Some(previous) if previous.target.namespace() != binding.target.namespace() => {
+                        item::Binding::join(previous, binding.clone())
+                    }
+                    _ => binding.clone(),
+                };
+                imports.insert(key, joined);
                 match &binding.target {
                     item::Import::ScriptType { identity, .. } => {
                         let nominal = by_identity

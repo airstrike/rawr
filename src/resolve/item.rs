@@ -92,6 +92,70 @@ pub(crate) enum Import {
     Derive,
 }
 
+/// The Rust namespace a name is bound in. A module, a type or a trait is
+/// in the type namespace and a function in the value namespace, so a
+/// module `badge` and a function `badge` are two names, as rustc binds
+/// `use badge::{self, badge};`. A variant, a module with a function of its
+/// name, or a declaration whose kind the import table doesn't keep, is in
+/// both.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum Namespace {
+    Type,
+    Value,
+    Both,
+}
+
+impl Namespace {
+    /// The namespaces this one covers, each `Type` or `Value`.
+    pub(crate) const fn sides(self) -> &'static [Self] {
+        match self {
+            Self::Type => &[Self::Type],
+            Self::Value => &[Self::Value],
+            Self::Both => &[Self::Type, Self::Value],
+        }
+    }
+}
+
+impl Import {
+    /// The namespace the import binds its name in.
+    pub(crate) const fn namespace(&self) -> Namespace {
+        match self {
+            Self::Module
+            | Self::ScriptType { .. }
+            | Self::Type { .. }
+            | Self::Alias
+            | Self::Derive => Namespace::Type,
+            Self::ScriptItem { .. } | Self::Item { .. } => Namespace::Value,
+            Self::ModuleItem { .. }
+            | Self::Variant { .. }
+            | Self::OrderingVariant
+            | Self::HostVariant { .. } => Namespace::Both,
+        }
+    }
+}
+
+impl Binding {
+    /// One binding for a module and the function of its name, which two
+    /// imports bound in their own namespaces: a crate's module and item
+    /// read as the module item `use widget::text` binds, whose paths go
+    /// through the module. A script function is known by its key, so the
+    /// module's binding stands for the name.
+    pub(crate) fn join(self, other: Self) -> Self {
+        let (module, value) = match (&self.target, &other.target) {
+            (Import::Module, _) => (self, other),
+            (_, Import::Module) => (other, self),
+            _ => return other,
+        };
+        match value.target {
+            Import::Item { definitions, owner } => Self {
+                target: Import::ModuleItem { definitions, owner },
+                ..module
+            },
+            _ => module,
+        }
+    }
+}
+
 /// A generic type parameter and its bounds: built-in derivable traits as
 /// capabilities, user traits by name.
 #[derive(Clone, Debug, Eq, PartialEq)]

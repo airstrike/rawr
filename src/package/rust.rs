@@ -1025,14 +1025,23 @@ mod seed {
             .iter()
             .map(|(_, full)| full.iter().map(|segment| (*segment).to_owned()).collect())
             .collect::<Vec<Vec<String>>>();
+        // A name two `use`s bind, in Rust's two namespaces, as `badge` of
+        // `use m::badge::{self, badge};`: a path through it goes through
+        // the module, which a syntactic pass can't tell from the function,
+        // so it demands the path through each.
         for segments in qualified {
-            let mut full = bindings
+            let mut starts = bindings
                 .iter()
-                .rev()
-                .find(|(local, _)| *local == segments[0] && !modules.contains(local))
-                .map_or_else(|| vec![segments[0]], |(_, full)| full.clone());
-            full.extend_from_slice(&segments[1..]);
-            paths.push(full.into_iter().map(str::to_owned).collect());
+                .filter(|(local, _)| *local == segments[0] && !modules.contains(local))
+                .map(|(_, full)| full.clone())
+                .collect::<Vec<_>>();
+            if starts.is_empty() {
+                starts.push(vec![segments[0]]);
+            }
+            for mut full in starts {
+                full.extend_from_slice(&segments[1..]);
+                paths.push(full.into_iter().map(str::to_owned).collect());
+            }
         }
         paths
     }

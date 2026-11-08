@@ -495,6 +495,9 @@ fn resolution_report_with_sources(
             "binding declared here but left uninitialized".into()
         }
         resolve::Error::LocalTypeNeeded { .. } => "type must be known at this point".into(),
+        resolve::Error::DuplicateImport { name, .. } => {
+            format!("previous import of `{name}` here").into()
+        }
         resolve::Error::UnknownMacro { .. } => {
             "a macro with the same name exists, but it appears later".into()
         }
@@ -573,6 +576,9 @@ fn primary_label(
             Some(format!("unlabeled `{keyword}` in the condition of a `while` loop").into())
         }
         resolve::Error::AsyncMain { .. } => Some(resolve::ASYNC_MAIN.into()),
+        resolve::Error::DuplicateImport { name, .. } => {
+            Some(format!("`{name}` reimported here").into())
+        }
         resolve::Error::StdPath { label, .. } => label.clone(),
         resolve::Error::NonExhaustive { witnesses, .. } => {
             Some(resolve::NonExhaustive(witnesses).label().into())
@@ -690,6 +696,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
     }
     let stable_code = match error.category() {
         resolve::Category::DuplicateItem => code::RESOLVE_DUPLICATE_ITEM,
+        resolve::Category::DuplicateImport => code::RESOLVE_DUPLICATE_IMPORT,
         resolve::Category::UnknownType => match error {
             resolve::Error::UnknownType { path: true, .. } => code::RESOLVE_FAILED_PATH,
             _ => code::RESOLVE_UNKNOWN_TYPE,
@@ -779,6 +786,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         | resolve::Error::DuplicateMember { .. }
         | resolve::Error::DuplicateMethod { .. } => {
             builder.help("rename or remove one of the duplicate declarations")
+        }
+        resolve::Error::DuplicateImport { .. } => {
+            builder.help("you can use `as` to change the binding name of the import")
         }
         resolve::Error::UnknownType { name, .. } if name.contains("::") => builder.help(format!(
             "`{name}` isn't available in Rawr yet, or the path is misspelled"
@@ -1002,6 +1012,9 @@ fn evaluation_message(error: &EvalAltResult) -> String {
 fn resolution_message(error: &resolve::Error) -> String {
     match error {
         resolve::Error::DuplicateItem { name, .. } => format!("duplicate item `{name}`"),
+        resolve::Error::DuplicateImport { name, .. } => {
+            format!("the name `{name}` is defined multiple times")
+        }
         resolve::Error::UnknownType { name, path, .. } => {
             resolve::NotFound::type_named(name, *path).to_string()
         }
