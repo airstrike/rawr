@@ -72,6 +72,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Calling a macro without `!`, as in `print("hi")`, `vec(1)` or `std::print("hi")`, now gives rustc's E0423 "expected function, found macro" with the help "use `!` to invoke the macro". It used to say rawr doesn't run it yet. (#1252)
 - docs/reference/iced said what rawr doesn't do for iced (nothing hand-written, nothing prebuilt) and listed gaps such as 'a #[widget] written in a marked file', an attribute that exists nowhere. The page is deleted; /docs/reference/iced redirects to /docs/iced, its bindings and gaps anchors go to Imports, its examples anchor to the iced guide, and the values-cross-both-ways and one-iced-per-project facts stay in Imports and Run. (#1265)
 - A marked crate's `cfg!(feature = "..")`, `#[cfg(feature = "..")]` and `#[cfg_attr(..)]` follow the features Cargo enables for it, and `rawr run`, `rawr check` and `rawr test` take `--features`, `--no-default-features` and `--all-features` as `cargo run` does. (#1259)
+- A message that a closure gives on iced's executor thread, such as `keyboard::listen().filter_map(..)`'s `Some(Message::SplitFocused(Axis::Vertical))`, keeps the crate values it holds. pane_grid's hotkeys no longer panic. (#1234)
 
 ## 0.3.171 (2026-11-07)
 
