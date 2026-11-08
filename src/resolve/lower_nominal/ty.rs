@@ -1,12 +1,12 @@
 //! The lowering's types: `Ty` and the integer, float, pointer and counter
 //! kinds it is made of.
 
+#[cfg(feature = "rust-import")]
+use super::ImportedFunctionProof;
 use super::{
     cell, counted, cow, dyn_arguments, error_object, range_type_id, sequence, thread, Models,
     Nominal, ParseError, PreludeOp,
 };
-#[cfg(feature = "rust-import")]
-use super::{contains_inference, ImportedFunctionProof};
 use crate::resolve::type_ref;
 use crate::types::nominal;
 use crate::{type_def, Dynamic, ImmutableString, INT};
@@ -1578,4 +1578,140 @@ pub(super) fn same_inferred(left: &Ty, right: &Ty) -> bool {
     }
 
     compare(left, right, &mut BTreeMap::new(), &mut BTreeMap::new())
+}
+
+pub(super) fn exact_symbolic_type(ty: &type_ref::Type) -> Option<Ty> {
+    match ty {
+        type_ref::Type::Unit(_) | type_ref::Type::Path(_) => Some(Ty::from_resolved(ty)),
+        type_ref::Type::Tuple { .. } | type_ref::Type::Reference { .. } => None,
+    }
+}
+
+/// A symbolic callable's output where an imported item takes it: an owned
+/// value, or a tuple of owned values, as iced's `new` gives its state and
+/// first task, `(Self, Task<Message>)`, which the generated runner carries
+/// as the tuple it is.
+pub(super) fn owned_symbolic_type(ty: &type_ref::Type) -> Option<Ty> {
+    match ty {
+        type_ref::Type::Tuple { members, .. }
+            if members
+                .iter()
+                .all(|member| owned_symbolic_type(member).is_some()) =>
+        {
+            Some(Ty::from_resolved(ty))
+        }
+        ty => exact_symbolic_type(ty),
+    }
+}
+
+/// A symbolic callable's input: an owned value, or a shared borrow of one as
+/// in an iced style function's `&Theme`. Its type keeps the borrow, which
+/// the runtime passes by value.
+pub(super) fn symbolic_input_type(ty: &type_ref::Type) -> Option<Ty> {
+    match ty {
+        type_ref::Type::Reference {
+            mutable: false,
+            target,
+            ..
+        } => exact_symbolic_type(target).map(|target| Ty::Reference {
+            mutable: false,
+            target: Box::new(target),
+        }),
+        _ => exact_symbolic_type(ty),
+    }
+}
+
+/// Whether a type still has an inference variable in it.
+/// Whether `ty` holds a generic parameter of the body being checked where
+/// a crate's item would take it as a type of its own, not as a script
+/// value: the parameter itself, or inside a crate type, a borrow, an
+/// `Option`, a `Result`, a tuple or a collection.
+#[cfg(feature = "rust-import")]
+pub(super) fn reaches_param(ty: &Ty) -> bool {
+    match ty {
+        Ty::Param(_) => true,
+        Ty::Reference { target, .. }
+        | Ty::Boxed(target)
+        | Ty::Range(target)
+        | Ty::InclusiveOf(target) => reaches_param(target),
+        Ty::Array { element, .. } | Ty::Option(element) => reaches_param(element),
+        Ty::Result(ok, err) => reaches_param(ok) || reaches_param(err),
+        Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(reaches_param),
+        Ty::Host { arguments, .. } => arguments.iter().any(reaches_param),
+        _ => false,
+    }
+}
+
+/// Whether `ty` is a script type, or holds one as a crate type's argument
+/// or behind a borrow.
+#[cfg(feature = "rust-import")]
+pub(super) fn mentions_script(ty: &Ty) -> bool {
+    match ty {
+        Ty::Script(..) => true,
+        Ty::Reference { target, .. } | Ty::Boxed(target) => mentions_script(target),
+        Ty::Host { arguments, .. } => arguments.iter().any(mentions_script),
+        _ => false,
+    }
+}
+
+pub(super) fn contains_inference(ty: &Ty) -> bool {
+    contains(ty, &|ty| matches!(ty, Ty::Infer(_)))
+}
+
+/// The first unknown type inside `ty`, outermost first.
+#[cfg(feature = "rust-import")]
+pub(super) fn first_inference(ty: &Ty) -> Option<Ty> {
+    let found = std::cell::RefCell::new(None);
+    contains(ty, &|inner| {
+        matches!(inner, Ty::Infer(_)) && found.replace(Some(inner.clone())).is_none()
+    });
+    found.into_inner()
+}
+
+/// Whether `ty` holds a literal whose kind is still open: `{integer}` or
+/// `{float}`, which only the end of its body settles.
+pub(super) fn contains_open_literal(ty: &Ty) -> bool {
+    contains(ty, &|ty| {
+        matches!(ty, Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_)))
+    })
+}
+
+/// Whether `ty` is itself a variable inference has not settled: an
+/// unknown type, or a literal whose kind is still open.
+pub(super) fn is_unsettled(ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::Infer(_) | Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_))
+    )
+}
+
+/// Whether `ty` holds a variable inference has not settled: an unknown
+/// type, or a literal whose kind is still open.
+pub(super) fn contains_unsettled(ty: &Ty) -> bool {
+    contains_inference(ty) || contains_open_literal(ty)
+}
+
+/// Whether `ty` or a type inside it is one `leaf` picks.
+pub(super) fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
+    let inside = |ty: &Ty| contains(ty, leaf);
+    leaf(ty)
+        || match ty {
+            Ty::Reference { target, .. }
+            | Ty::Boxed(target)
+            | Ty::Iter(target, _)
+            | Ty::Reverse(target)
+            | Ty::Cow(target)
+            | Ty::Range(target)
+            | Ty::InclusiveOf(target)
+            | Ty::Cell(_, target) => inside(target),
+            Ty::Array { element, .. } | Ty::Option(element) => inside(element),
+            Ty::Result(ok, err) => inside(ok) || inside(err),
+            Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(inside),
+            Ty::Host { arguments, .. } => arguments.iter().any(inside),
+            Ty::Callable { inputs, output, .. }
+            | Ty::Fn { inputs, output }
+            | Ty::FnItem { inputs, output, .. }
+            | Ty::FnChoice { inputs, output, .. } => inputs.iter().any(inside) || inside(output),
+            _ => false,
+        }
 }
