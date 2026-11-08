@@ -177,7 +177,9 @@ interface Env {
   PLAY_LOG_KEY?: string;
   /**
    * Secret: the release's smoke test sends it as `x-play-admin`, so the
-   * site's snippets run without the landing page's per-IP limit.
+   * site's snippets run without the landing page's per-IP limit. The site's
+   * build sends it to /play/render, which then skips Turnstile, for the
+   * output of each snippet that runs on the server.
    */
   PLAY_SMOKE_TOKEN?: string;
   /** Turnstile: the public site key (a var) and the secret. */
@@ -630,18 +632,19 @@ async function ipHash(request: Request, env: Env): Promise<string> {
   return (await hmac(key, ip)).slice(0, 32);
 }
 
-/**
- * A caller holding the log key (header `x-play-admin`) skips Turnstile and
- * the landing page's limit, not /play's limits.
- */
+/** A caller holding the log key (header `x-play-admin`). */
 async function admin(request: Request, env: Env): Promise<boolean> {
   const header = request.headers.get("x-play-admin");
   if (!header || !env.PLAY_LOG_KEY) return false;
   return same(header, await hmac(env.PLAY_LOG_KEY, "rawr-play admin"));
 }
 
-/** The release's smoke test (`x-play-admin` is PLAY_SMOKE_TOKEN) or an admin: /play/run is not limited. */
-async function unlimited(request: Request, env: Env): Promise<boolean> {
+/**
+ * The release's smoke test or the site's build (`x-play-admin` is
+ * PLAY_SMOKE_TOKEN), or an admin. /play/render skips Turnstile for them, and
+ * /play/run skips the landing page's limit. /play's limits still count.
+ */
+async function trusted(request: Request, env: Env): Promise<boolean> {
   const header = request.headers.get("x-play-admin");
   if (header && env.PLAY_SMOKE_TOKEN && same(header, env.PLAY_SMOKE_TOKEN)) return true;
   return admin(request, env);
@@ -715,7 +718,7 @@ async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Pr
     return response;
   }
   const bot = getContainer(env.PLAY_BOT);
-  const wait = (await unlimited(request, env)) ? 0 : await bot.allow("landing", await ipHash(request, env));
+  const wait = (await trusted(request, env)) ? 0 : await bot.allow("landing", await ipHash(request, env));
   if (wait > 0) return plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) });
   let response: Response;
   try {
@@ -745,7 +748,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     // missing, forged or expired one falls back to Turnstile, and a
     // successful Siteverify sets a new one.
     let pass: string | null = null;
-    if (!(await hasPass(request, env)) && !(await admin(request, env))) {
+    if (!(await hasPass(request, env)) && !(await trusted(request, env))) {
       if (!(await human(body?.turnstile, request, env))) {
         return plain("the browser check did not pass; reload the page and try again", 403);
       }
