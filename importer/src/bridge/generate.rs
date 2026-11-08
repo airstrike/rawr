@@ -844,6 +844,19 @@ macro_rules! std_copy {
     }};
 }
 
+/// A copy of a field by its type's `Clone`, `None` when it has none.
+#[allow(unused_macros)]
+macro_rules! field_copy {
+    ($field:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::__rawr_runner::{ViaClone as _, WithoutClone as _};
+        let field = $field;
+        (&$crate::__rawr_runner::debug_probe(field))
+            .native_clone()
+            .and_then(|clone| $crate::__rawr_runner::copied(field, Some(clone)).ok())
+    }};
+}
+
 /// A copy of what a borrow guard dereferences to, made inside the call that
 /// holds the guard: its `Clone`, or an error naming the type when it has
 /// none, so a target without `Clone` fails where it is read and not where
@@ -2056,6 +2069,24 @@ impl Arena {
             return Err(Error::TypeMismatch);
         }
         Ok(index)
+    }
+
+    /// `read` of the value `handle` names, where it is, when taking it
+    /// would leave it whole (#1445): another copy of the handle still
+    /// names it, or a home holds it, as `self.state` does while native code
+    /// borrows it. `None` when this is its last copy, which moves it.
+    #[allow(dead_code)]
+    fn read_kept<T: 'static, R>(&mut self, handle: &NativeHandle, read: impl FnOnce(&T) -> R) -> Result<Option<R>, Error> {
+        self.settle(handle);
+        let kept = self.homed(handle).is_some()
+            || handle
+                .release
+                .as_ref()
+                .is_none_or(|release| std::sync::Arc::strong_count(release) > 1);
+        if !kept {
+            return Ok(None);
+        }
+        self.shared::<T, _>(handle.clone(), read).map(Some)
     }
 
     fn take<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
@@ -10645,13 +10676,26 @@ fn render_adapter_body(
                 )
                 .map_err(request::unwritable)?;
             } else {
+                // The field by value: moved out with the struct by its last
+                // handle, as Rust moves `value.field` out of a local. A
+                // struct still named elsewhere, or held in a home native
+                // code borrows, as `self.state` is while `fn state(&self)
+                // -> &State` lends it, stays whole: a `Clone` field is
+                // copied where the struct is, as `self.state.id.clone()`
+                // reads it (#1445).
                 writeln!(
                     output,
-                    "    let input: {path} = take_native(arguments, 0)?;"
+                    "    let handle = native_handle(arguments, 0, true)?;
+    let output = match arguments.arena.read_kept::<{path}, _>(&handle, |input| field_copy!(&input.{name}))? {{
+        Some(Some(output)) => output,
+        _ => {{
+            let input: {path} = arguments.arena.take(handle)?;
+            input.{name}
+        }}
+    }};",
+                    name = field.name()
                 )
                 .map_err(request::unwritable)?;
-                writeln!(output, "    let output = input.{};", field.name())
-                    .map_err(request::unwritable)?;
             }
             render_give(field.ty(), "output", output)?;
         }

@@ -44,16 +44,25 @@ pub fn heading(block: Block) -> String {
     }
 }
 
+/// A widget's name, which a view gives the widget it scrolls.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Id(String);
+
 /// A page's state: the blocks it shows, kept for as long as the app runs.
 pub struct State {
     pub page_index: usize,
+    pub scrollable_id: Id,
     blocks: &'static [Block],
 }
 
 impl State {
     /// The state of page `page_index`, which shows `blocks`.
     pub fn new(page_index: usize, blocks: &'static [Block]) -> Self {
-        Self { page_index, blocks }
+        Self {
+            page_index,
+            scrollable_id: Id(format!("page-{page_index}")),
+            blocks,
+        }
     }
 
     /// Lays the page out under its number.
@@ -75,6 +84,25 @@ pub trait Page {
     fn blocks(&self) -> &'static [Block];
     fn state(&self) -> &State;
     fn page_index(&self) -> usize;
+    fn scrollable_id(&self) -> Id;
+    fn preview(&self) -> Preview<'_>;
+}
+
+/// What a page previews: text it borrows, as iced's `Element<'_, Message>`
+/// borrows its page.
+pub struct Preview<'a> {
+    text: &'a str,
+}
+
+impl<'a> Preview<'a> {
+    pub fn text(&self) -> &'a str {
+        self.text
+    }
+}
+
+/// `text`, previewed.
+pub fn preview(text: &str) -> Preview<'_> {
+    Preview { text }
 }
 
 /// Shows `page` through each of its methods.
