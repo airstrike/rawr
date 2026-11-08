@@ -1786,6 +1786,20 @@ fn a_closure_gives_a_value_at_its_calls_lifetime_from_a_region_of_its_own() {
     );
 }
 
+/// As `board.rs`, but each pane's body is a crate's opaque widget, so the
+/// closure gives `Pane<'a, T, impl Widget>` and `Panes::new` gives a type
+/// that holds the opaque type it never takes. The output is `cargo run`'s.
+#[test]
+#[ignore = "blocked: `Panes::new` counts as the producer of the opaque type its closure gives, so its table compiles `title_bar` and `pane` at its own output's type (E0308 in `take_like`); new gap from #1191"]
+fn a_closure_gives_a_value_holding_an_opaque_type_at_its_calls_lifetime() {
+    let (rawr, cargo) = both_printed("board_opaque.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("pane container 4 3@16 opaque pad 0 [Increment] 30@16"),
+        "{rawr}"
+    );
+}
+
 /// iced's lazy (#328, #1081): `lazy(self.version, |_| ..)` is a widget only
 /// where what its closure gives is `'static`, as its impl's `W: Widget +
 /// 'static` says, and a container and `column!` take it. The widgets the
