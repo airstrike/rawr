@@ -20,6 +20,9 @@ impl Page for About {
     }
 }
 
+/// An alias of a native type: it crosses as the native type.
+pub type Landing = Home;
+
 pub const SCALE: usize = 10;
 
 pub fn scale(by: usize) -> usize {

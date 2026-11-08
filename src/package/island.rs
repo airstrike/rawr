@@ -1109,12 +1109,21 @@ fn lend(name: &str, mutable: bool, referent: &str, island: &str, text: &mut Stri
          {island}::Lend::new({key}, {}, &SHARED)\n    }};",
         if mutable { "Some(&MUTABLE)" } else { "None" }
     );
-    let method = if mutable { "lend" } else { "lend_ref" };
+    // A shared borrow of a type that crosses by the wire format, as an
+    // alias of `usize`, is copied instead (`Hand`).
+    let call = if mutable {
+        format!("__call.lend({name}")
+    } else {
+        format!(
+            "{{ use {island}::{{ByCopy as _, ByLoan as _}}; (&{island}::hand({name})).lend_ref(&mut __call, {name}"
+        )
+    };
+    let close = if mutable { "" } else { " }" };
     let _ = writeln!(
         text,
         "    // SAFETY: the lend's accessors read its key's place as `{referent}`.\n    \
          #[allow(unsafe_code)]\n    \
-         let () = unsafe {{ __call.{method}({name}, {name}_lend, ::std::any::type_name::<{referent}>()) }};"
+         let () = unsafe {{ {call}, {name}_lend, ::std::any::type_name::<{referent}>()){close} }};"
     );
 }
 
@@ -1288,7 +1297,9 @@ pub mod __rawr_island {
                 probe.hash_of(),
                 probe.order_of(),
             );
-            $call.give(value, traits);
+            #[allow(unused_imports)]
+            use crate::__rawr_island::{ByCopy as _, ByGift as _};
+            (&crate::__rawr_island::hand(&value)).hand(&mut $call, value, traits);
         }};
     }
     pub(crate) use give;
@@ -1542,6 +1553,52 @@ pub mod __rawr_island {
     impl<T: 'static> ByMove<T> for &Back<T> {
         fn take(&self, input: &mut In<'_>) -> T {
             input.native()
+        }
+    }
+
+    /// How an argument of `T` whose type the marked crate doesn't declare
+    /// goes to the interpreter: by the wire format when `T` crosses by it,
+    /// as an alias of `usize` does ([`ByCopy`], found first), and else as
+    /// the native value the interpreter keeps ([`ByGift`]), or lends for a
+    /// borrow ([`ByLoan`]). Rustc reads the alias through to its target, as
+    /// it does for the checker.
+    pub struct Hand<T>(::std::marker::PhantomData<T>);
+    pub fn hand<T>(_: &T) -> Hand<T> {
+        Hand(::std::marker::PhantomData)
+    }
+    pub trait ByCopy<T> {
+        fn hand(&self, call: &mut Call<'_>, value: T, traits: Traits);
+        /// # Safety
+        ///
+        /// None needed: the value is copied.
+        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
+    }
+    impl<T: Put> ByCopy<T> for Hand<T> {
+        fn hand(&self, call: &mut Call<'_>, value: T, _: Traits) {
+            call.argument(&value);
+        }
+        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, _: Lend, _: &'static str) {
+            call.argument(value);
+        }
+    }
+    pub trait ByGift<T> {
+        fn hand(&self, call: &mut Call<'_>, value: T, traits: Traits);
+    }
+    impl<T: 'static> ByGift<T> for &Hand<T> {
+        fn hand(&self, call: &mut Call<'_>, value: T, traits: Traits) {
+            call.give(value, traits);
+        }
+    }
+    pub trait ByLoan<T> {
+        /// # Safety
+        ///
+        /// As for [`Call::lend_ref`].
+        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
+    }
+    impl<T: Sync> ByLoan<T> for &Hand<T> {
+        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str) {
+            // SAFETY: as the caller's.
+            unsafe { call.lend_ref(value, lend, name) }
         }
     }
 
@@ -2094,7 +2151,9 @@ mod tests {
             "let () = unsafe { __call.lend(__a0, __a0_lend, ::std::any::type_name::<Frame<'_>>()) };",
             "    __call.mutable(&*__a1);\n",
             "crate::__rawr_island::Lend::new(::std::any::TypeId::of::<Key>(), None, &SHARED)",
-            "let () = unsafe { __call.lend_ref(__a0, __a0_lend, ::std::any::type_name::<Frame>()) };",
+            "let () = unsafe { { use crate::__rawr_island::{ByCopy as _, ByLoan as _}; \
+             (&crate::__rawr_island::hand(__a0)).lend_ref(&mut __call, __a0, __a0_lend, \
+             ::std::any::type_name::<Frame>()) } };",
         ] {
             assert!(text.contains(expected), "{expected}\n{text}");
         }
