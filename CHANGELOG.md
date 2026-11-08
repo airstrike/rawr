@@ -95,6 +95,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A native trait with supertraits works as a marked type's trait object: `Debug`, `Display`, `Clone`, `PartialEq`, `Eq`, `Hash`, `Default`, `PartialOrd` and `Ord`, derived or written, run the marked type's own impl, and a supertrait the type lacks is rustc's E0277. (#1301)
 - A `&self` method of a marked type's native trait object can call back into the same object through native code: `&self` calls share the value, as shared borrows do. (#1302)
 - A crate's impl with a `Future<Output = T>` bound is no longer left out when another future's `Output` names a parameter only its where clause fixes. futures_util's forwarding impls for `TakeWhile`, `Fold`, `PollImmediate` and the `&mut`/`Pin`/`Box` blankets are declared now. (#1295)
+- Marked code reads a marked `pub static` of native values, such as a page's `BLOCKS: &[page::Block]`, where native code holds it. It reads the length, indexes, iterates, matches, and reads a block's `children`, with no copy. `&BLOCKS[1..2]` lends a range of it to a native function. (#1291)
 
 ## 0.3.171 (2026-11-07)
 
