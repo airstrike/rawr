@@ -11454,6 +11454,14 @@ fn render_scoped_receiver(
             let _region = InRegion::enter();
             let mut converted = String::new();
             render_to_dynamic(&returned, "output", 0, &mut converted)?;
+            // What the call changed of a `&mut` array it took goes back
+            // after its value, as the arena's call gives it (#913).
+            let copied = copied_back(signature, substitutions)?;
+            if !copied.is_empty() {
+                converted = format!(
+                    "{{ let given = ({converted})?; Ok::<Dynamic, Error>(Dynamic::from_array(vec![given{copied}])) }}"
+                );
+            }
             (call, converted)
         }
     };
@@ -16920,21 +16928,8 @@ fn render_give_with(
     value: &str,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let mut copies = copied_inputs(signature);
-    // A program value lent `&mut` where a generic call takes `&mut T` moves
-    // into the call through its proxy and goes back after the call's value,
-    // with what native code changed in it (#1008).
-    for (position, input) in signature.inputs().iter().enumerate() {
-        if let convert::Type::Borrowed { mutable: true, ty } =
-            substituted(input, signature, substitutions)?
-            && matches!(*ty, convert::Type::Script { .. })
-            && !copies.iter().any(|(copied, _)| *copied == position)
-        {
-            copies.push((position, *ty));
-        }
-    }
-    copies.sort_by_key(|(position, _)| *position);
-    if copies.is_empty() {
+    let copied = copied_back(signature, substitutions)?;
+    if copied.is_empty() {
         return render_give(
             &substituted(signature.output(), signature, substitutions)?,
             value,
@@ -16949,6 +16944,35 @@ fn render_give_with(
         &mut given,
     )?;
     let given = String::from_utf8(given).map_err(request::unwritable)?;
+    writeln!(
+        output,
+        "    let given = (|| -> Result<Dynamic, Error> {{\n{given}    }})()?;\n    Ok(Dynamic::from_array(vec![given{copied}]))"
+    )
+    .map_err(request::unwritable)
+}
+
+/// What goes back to the program after a call's value, `, ..` of each
+/// `&mut` array the call took and changed (D558 slice 2) and each program
+/// value it took `&mut` through its proxy (#1008), in order: empty when
+/// the call gives its value alone.
+fn copied_back(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<String, request::Error> {
+    let mut copies = copied_inputs(signature);
+    // A program value lent `&mut` where a generic call takes `&mut T` moves
+    // into the call through its proxy and goes back after the call's value,
+    // with what native code changed in it (#1008).
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if let convert::Type::Borrowed { mutable: true, ty } =
+            substituted(input, signature, substitutions)?
+            && matches!(*ty, convert::Type::Script { .. })
+            && !copies.iter().any(|(copied, _)| *copied == position)
+        {
+            copies.push((position, *ty));
+        }
+    }
+    copies.sort_by_key(|(position, _)| *position);
     let mut copied = String::new();
     for (position, element) in &copies {
         if matches!(element, convert::Type::Script { .. }) {
@@ -16962,11 +16986,7 @@ fn render_give_with(
             copied.push_str(&format!(", ({converted})?"));
         }
     }
-    writeln!(
-        output,
-        "    let given = (|| -> Result<Dynamic, Error> {{\n{given}    }})()?;\n    Ok(Dynamic::from_array(vec![given{copied}]))"
-    )
-    .map_err(request::unwritable)
+    Ok(copied)
 }
 
 /// What goes back to the program of the `&mut String` or `&mut Vec<T>` at
