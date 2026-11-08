@@ -706,9 +706,7 @@ mod tests {
             .recv_timeout(std::time::Duration::from_millis(300))
             .is_err());
         drop(held);
-        receiver
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .unwrap();
+        receiver.recv().unwrap();
         waiter.join().unwrap();
         fs::remove_dir_all(home).unwrap();
     }

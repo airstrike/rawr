@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::support::{copy, start};
 
@@ -43,17 +43,13 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
 
     // The first run builds the runner.
-    let first = run.until(Duration::from_secs(900), |line| {
-        parse(line).is_some_and(|(tick, _)| tick >= 3)
-    });
+    let first = run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
     assert_eq!(parse(&first), Some((3, 3)));
 
     // A body edit: the running native loop keeps its count, and its next
     // calls run the new code.
     edit(&physics, "const SCALE: i64 = 1;", "const SCALE: i64 = 100;");
-    let swapped = run.until(Duration::from_secs(120), |line| {
-        parse(line).is_some_and(|(tick, value)| value == tick * 100)
-    });
+    let swapped = run.until(|line| parse(line).is_some_and(|(tick, value)| value == tick * 100));
     let (tick, _) = parse(&swapped).unwrap();
     assert!(tick > 3, "{}", run.seen.join("\n"));
     assert!(
@@ -74,9 +70,7 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
         "Counter { ticks: 0 }",
         "Counter { ticks: 0, label: String::new() }",
     );
-    let restarted = run.until(Duration::from_secs(600), |line| {
-        parse(line) == Some((1, 100))
-    });
+    let restarted = run.until(|line| parse(line) == Some((1, 100)));
     assert_eq!(restarted, "1 value 100");
     assert!(
         run.seen.iter().any(|line| line
@@ -93,17 +87,17 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
 /// An idle program is a healthy one (#1165): a native `main` waiting on its
 /// events makes no call into marked code, and its runner may not run at
 /// all for a while (an occluded window that macOS naps on a busy machine;
-/// here a SIGSTOP longer than every protocol deadline). The owner's
-/// periodic exchanges and a save's wait for the runner's reply instead of
-/// stopping it, and the program's next call into marked code runs the save.
+/// here a SIGSTOP). The owner's periodic exchanges and a save wait for the
+/// runner's reply instead of stopping it, and the program's next call into
+/// marked code runs the save.
 #[cfg(unix)]
 #[test]
-fn an_idle_native_main_outlives_every_deadline_and_takes_a_save_at_its_next_call() {
+fn an_idle_native_main_outlives_a_stop_and_takes_a_save_at_its_next_call() {
     use nix::sys::signal::{kill, Signal};
     use nix::unistd::Pid;
 
     const IDLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-idle");
-    // Longer than the runner protocol's 10 s transport deadline.
+    // How long the runner can't answer.
     const STOPPED: Duration = Duration::from_secs(12);
     let root = crate::support::scratch().join("islands-idle");
     let go = root.join("go");
@@ -117,16 +111,18 @@ fn an_idle_native_main_outlives_every_deadline_and_takes_a_save_at_its_next_call
         &root,
         &[("IDLE_GO", go.clone()), ("RAWR_MCP_EVENTS", events.clone())],
     );
-    let pid = run.until(Duration::from_secs(900), |line| line.starts_with("pid "));
+    let pid = run.until(|line| line.starts_with("pid "));
     let pid = Pid::from_raw(pid["pid ".len()..].parse().unwrap());
-    run.until(Duration::from_secs(30), |line| line == "value 1");
+    run.until(|line| line == "value 1");
     // A runner the owner stopped is gone, and its output says why.
     let pause = |run: &mut crate::support::Run| {
         kill(pid, Signal::SIGSTOP).unwrap();
         std::thread::sleep(STOPPED);
-        if kill(pid, Signal::SIGCONT).is_err() {
-            run.until(Duration::from_secs(5), |_| false);
-        }
+        assert!(
+            kill(pid, Signal::SIGCONT).is_ok(),
+            "the owner stopped the runner:\n{}",
+            run.seen.join("\n")
+        );
     };
 
     // The owner polls an idle program while it can't answer.
@@ -134,16 +130,7 @@ fn an_idle_native_main_outlives_every_deadline_and_takes_a_save_at_its_next_call
     // A save reaches it while it can't answer either.
     edit(&physics, "const SCALE: i64 = 1;", "const SCALE: i64 = 100;");
     pause(&mut run);
-    let queued = Instant::now() + Duration::from_secs(120);
-    while !fs::read_to_string(&events).is_ok_and(|text| text.contains("\"queued\"")) {
-        assert!(
-            Instant::now() < queued && run.child.try_wait().unwrap().is_none(),
-            "{}\n{}",
-            fs::read_to_string(&events).unwrap_or_default(),
-            run.seen.join("\n")
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    run.told(&events, |text| text.contains("\"queued\""));
     assert!(
         run.child.try_wait().unwrap().is_none(),
         "{}",
@@ -151,10 +138,9 @@ fn an_idle_native_main_outlives_every_deadline_and_takes_a_save_at_its_next_call
     );
 
     fs::write(&go, "").unwrap();
-    run.until(Duration::from_secs(30), |line| line == "value 100");
+    run.until(|line| line == "value 100");
     let seen = run.seen.join("\n");
     assert!(!seen.contains("restarting"), "{seen}");
-    assert!(!seen.contains("deadline"), "{seen}");
 }
 
 /// winit's event loop must run on the process's main thread, so a native
@@ -171,26 +157,20 @@ fn a_native_main_runs_on_the_process_main_thread() {
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(MAIN_THREAD), &root);
     let mut run = start(&root, &[]);
-    let line = run.until(Duration::from_secs(900), |line| {
-        line.starts_with("main thread ")
-    });
+    let line = run.until(|line| line.starts_with("main thread "));
     assert_eq!(line, "main thread true", "{}", run.seen.join("\n"));
-    let line = run.until(Duration::from_secs(30), |line| {
-        line.starts_with("marked main thread ")
-    });
+    let line = run.until(|line| line.starts_with("marked main thread "));
     assert_eq!(line, "marked main thread true", "{}", run.seen.join("\n"));
-    run.until(Duration::from_secs(30), |line| line == "answer 42");
+    run.until(|line| line == "answer 42");
     // The interpreter keeps a `u64` in an `i64`'s bits.
-    run.until(Duration::from_secs(30), |line| {
-        line == "wide 13907096814508502785"
-    });
+    run.until(|line| line == "wide 13907096814508502785");
     for expected in [
         "checked Ok(3)",
         "checked Err(\"0 is not positive\")",
         "run Ok(())",
         "run Err(Failure(\"no window\"))",
     ] {
-        run.until(Duration::from_secs(30), |line| line == expected);
+        run.until(|line| line == expected);
     }
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
@@ -220,7 +200,7 @@ fn a_native_main_calls_marked_modules_named_as_old_engine_keywords() {
     );
     assert_eq!(String::from_utf8_lossy(&native.stdout), "1 2 20 true\n");
     let mut run = start(&root, &[]);
-    run.until(Duration::from_secs(900), |line| line == "1 2 20 true");
+    run.until(|line| line == "1 2 20 true");
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
@@ -259,7 +239,7 @@ fn a_native_main_takes_and_gives_its_own_values_to_a_marked_leaf() {
     );
     let mut run = start(&root, &[]);
     for expected in printed.lines() {
-        let line = run.until(Duration::from_secs(900), |_| true);
+        let line = run.until(|_| true);
         assert_eq!(line, expected, "{}", run.seen.join("\n"));
     }
     let status = run.child.wait().unwrap();
@@ -305,7 +285,7 @@ fn a_marked_module_names_the_items_of_its_native_crate_root() {
     );
     let mut run = start(&root, &[]);
     for line in PRINTED {
-        let seen = run.until(Duration::from_secs(900), |_| true);
+        let seen = run.until(|_| true);
         assert_eq!(seen, line, "{}", run.seen.join("\n"));
     }
     let status = run.child.wait().unwrap();
@@ -330,40 +310,44 @@ fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin(
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(ARGUMENTS), &root);
     let words = root.join("src/words.rs");
+    let events = root.join("events.jsonl");
+    let _ = fs::remove_file(&events);
     let mut run = crate::support::start_with(
         &root,
-        &[],
+        &[("RAWR_MCP_EVENTS", events.clone())],
         &["one", "two words"],
         std::process::Stdio::piped(),
     );
     let mut stdin = run.child.stdin.take().unwrap();
 
     // `cargo run` names the program by its binary.
-    let name = run.until(Duration::from_secs(900), |line| line.starts_with("name "));
+    let name = run.until(|line| line.starts_with("name "));
     assert!(
         name.ends_with("/target/debug/islands-arguments"),
         "{}",
         run.seen.join("\n")
     );
-    run.until(Duration::from_secs(30), |line| line == "arg ONE");
-    run.until(Duration::from_secs(30), |line| line == "arg TWO WORDS");
+    run.until(|line| line == "arg ONE");
+    run.until(|line| line == "arg TWO WORDS");
     stdin.write_all(b"alpha\n").unwrap();
-    run.until(Duration::from_secs(30), |line| line == "line ALPHA");
+    run.until(|line| line == "line ALPHA");
 
     // While the program waits on stdin, a body edit swaps in for its next
     // call.
     std::thread::sleep(Duration::from_secs(2));
     edit(&words, "text.to_uppercase()", "format!(\"{text}!\")");
-    std::thread::sleep(Duration::from_secs(5));
+    run.told(&events, |text| {
+        text.contains("\"queued\"") || text.contains("\"swapped\"")
+    });
     if let Err(error) = stdin.write_all(b"beta\n") {
-        let _ = run.until(Duration::from_secs(2), |_| false);
         panic!("{error}: {}", run.seen.join("\n"));
     }
-    run.until(Duration::from_secs(60), |line| line == "line beta!");
+    run.until(|line| line == "line beta!");
     drop(stdin);
-    run.until(Duration::from_secs(30), |line| line == "done");
-    let status = run.child.wait().unwrap();
-    assert!(status.success(), "{}", run.seen.join("\n"));
+    run.until(|line| line == "done");
+    // Supervised, the run outlives its program, which a save would run again.
+    let told = run.told(&events, |text| text.contains("\"ended\""));
+    assert!(told.contains(r#""status":0"#), "{told}");
     assert!(
         !run.seen.iter().any(|line| line.contains("restarting")),
         "{}",
@@ -414,12 +398,10 @@ fn a_native_crate_reads_its_package_files_where_cargo_does() {
     fs::remove_file(root.join("stop")).unwrap();
     let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
     for expected in printed.lines() {
-        let line = run.until(Duration::from_secs(900), |_| true);
+        let line = run.until(|_| true);
         assert_eq!(line, expected, "{}", run.seen.join("\n"));
     }
-    run.until(Duration::from_secs(30), |line| {
-        parse(line).is_some_and(|(tick, _)| tick >= 3)
-    });
+    run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
     let built = run.seen.len();
     let native = native_builds(&root.join("target"));
     assert!(!native.is_empty(), "{}", run.seen.join("\n"));
@@ -429,9 +411,7 @@ fn a_native_crate_reads_its_package_files_where_cargo_does() {
         "const SCALE: i64 = 1;",
         "const SCALE: i64 = 100;",
     );
-    run.until(Duration::from_secs(120), |line| {
-        parse(line).is_some_and(|(tick, value)| tick > 3 && value == tick * 100)
-    });
+    run.until(|line| parse(line).is_some_and(|(tick, value)| tick > 3 && value == tick * 100));
     assert_eq!(native_builds(&root.join("target")), native);
     fs::write(root.join("stop"), "").unwrap();
     let status = run.child.wait().unwrap();

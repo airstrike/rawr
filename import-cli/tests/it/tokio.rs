@@ -6,7 +6,6 @@
 
 use std::fs;
 use std::process::Command;
-use std::time::Duration;
 
 use crate::support::{start, Fixture};
 
@@ -173,7 +172,7 @@ fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
     let mut run = start(&root, &[]);
 
     // The first run builds the runner, on a current-thread runtime.
-    let first = run.until(Duration::from_secs(900), |line| line == "version 1 tick 3");
+    let first = run.until(|line| line == "version 1 tick 3");
     assert_eq!(first, "version 1 tick 3");
     let entry = fs::read_to_string(root.join("target/rawr/crate/lib.rs")).unwrap();
     assert!(
@@ -187,9 +186,7 @@ fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
         text.replace("const VERSION: i64 = 1;", "const VERSION: i64 = 2;"),
     )
     .unwrap();
-    let restarted = run.until(Duration::from_secs(600), |line| {
-        line.starts_with("version 2")
-    });
+    let restarted = run.until(|line| line.starts_with("version 2"));
     assert_eq!(restarted, "version 2 tick 1");
     assert!(
         run.seen

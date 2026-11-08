@@ -4,7 +4,7 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -98,13 +98,12 @@ impl Client {
 
     /// The messages until the reply to `id`, which comes last.
     fn until(&mut self, id: u64) -> Vec<Value> {
-        let deadline = Instant::now() + Duration::from_secs(60);
         let mut seen = Vec::new();
         loop {
             let message = self
                 .messages
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .expect("a reply in time");
+                .recv()
+                .expect("the server replies before it exits");
             let done = message["id"] == id && message.get("method").is_none();
             seen.push(message);
             if done {
@@ -218,9 +217,7 @@ fn the_server_lists_extension_tools_relays_progress_and_stays_responsive_while_a
     // A hanging call doesn't hold up `ping`, and a cancel ends its process.
     let hanging = client.ask("tools/call", json!({ "name": "hang", "arguments": {} }));
     let pid_file = sandbox.work().join("hang.pid");
-    let deadline = Instant::now() + Duration::from_secs(20);
     while !pid_file.exists() {
-        assert!(Instant::now() < deadline, "the hanging call never started");
         std::thread::sleep(Duration::from_millis(20));
     }
     let ping = client.request("ping", json!({}));
@@ -234,7 +231,6 @@ fn the_server_lists_extension_tools_relays_progress_and_stays_responsive_while_a
         .unwrap()
         .trim()
         .to_owned();
-    let deadline = Instant::now() + Duration::from_secs(5);
     while Command::new("/bin/kill")
         .args(["-0", &pid])
         .stderr(Stdio::null())
@@ -242,10 +238,6 @@ fn the_server_lists_extension_tools_relays_progress_and_stays_responsive_while_a
         .unwrap()
         .success()
     {
-        assert!(
-            Instant::now() < deadline,
-            "the cancelled call's process lives on"
-        );
         std::thread::sleep(Duration::from_millis(50));
     }
     // The cancelled request got no answer: the next reply is the next one's.
@@ -326,7 +318,7 @@ fn a_started_program_reports_its_end_and_runs_again_on_a_save() {
     let main = sandbox.work().join("app/src/main.rs");
     std::fs::write(&main, "// rawr\nfn main() {\n    println!(\"one\");\n}\n").unwrap();
 
-    let started = client.call("start", json!({ "path": "app", "wait_ms": 20000 }));
+    let started = client.call("start", json!({ "path": "app" }));
     assert_eq!(started["isError"], false, "{started}");
     let state = started["structuredContent"]["state"]
         .as_str()
@@ -344,10 +336,8 @@ fn a_started_program_reports_its_end_and_runs_again_on_a_save() {
         .as_str()
         .unwrap_or_default()
         .to_owned();
-    let deadline = Instant::now() + Duration::from_secs(30);
     while !seen.iter().any(|event| event == "ended") {
-        assert!(Instant::now() < deadline, "no `ended`: {seen:?}");
-        let waited = client.call("wait", json!({ "path": "app", "timeout_ms": 5000 }));
+        let waited = client.call("wait", json!({ "path": "app" }));
         output.push_str(
             waited["structuredContent"]["stdout"]
                 .as_str()
@@ -362,13 +352,8 @@ fn a_started_program_reports_its_end_and_runs_again_on_a_save() {
     // Supervised, an ended program runs again on the next save.
     std::fs::write(&main, "// rawr\nfn main() {\n    println!(\"two\");\n}\n").unwrap();
     let mut output = String::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
     while !output.contains("two") {
-        assert!(
-            Instant::now() < deadline,
-            "the save did not run it again: {output}"
-        );
-        let waited = client.call("wait", json!({ "path": "app", "timeout_ms": 5000 }));
+        let waited = client.call("wait", json!({ "path": "app" }));
         output.push_str(
             waited["structuredContent"]["stdout"]
                 .as_str()
@@ -415,17 +400,14 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
          fn main() {\n    let mut counter = Counter { count: 0, label: String::from(\"ticks\") };\n    let names = vec![\"a\", \"b\"];\n    loop {\n        tick(&mut counter, 1);\n        std::thread::sleep(std::time::Duration::from_millis(2));\n    }\n}\n",
     )
     .unwrap();
-    let started = client.call("start", json!({ "path": "counter", "wait_ms": 20000 }));
+    let started = client.call("start", json!({ "path": "counter" }));
     assert_eq!(
         started["structuredContent"]["state"], "running",
         "{started}"
     );
 
     // One binding by name, at a step where it is in scope: `main`'s.
-    let read = client.call(
-        "inspect",
-        json!({ "path": "counter", "name": "names", "timeout_ms": 5000 }),
-    );
+    let read = client.call("inspect", json!({ "path": "counter", "name": "names" }));
     assert_eq!(read["isError"], false, "{read}");
     let structured = &read["structuredContent"];
     assert_eq!(structured["file"], json!(main), "{read}");
@@ -439,10 +421,7 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
     );
 
     // A parameter is read in its function.
-    let read = client.call(
-        "inspect",
-        json!({ "path": "counter", "name": "step", "timeout_ms": 5000 }),
-    );
+    let read = client.call("inspect", json!({ "path": "counter", "name": "step" }));
     assert_eq!(
         read["structuredContent"]["function"], "counter::tick",
         "{read}"
@@ -455,7 +434,7 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
     // The program's own type prints through its derived `Debug`.
     let read = client.call(
         "inspect",
-        json!({ "path": "counter", "name": "counter", "file": "counter/src/main.rs", "timeout_ms": 5000 }),
+        json!({ "path": "counter", "name": "counter", "file": "counter/src/main.rs" }),
     );
     let value = read["structuredContent"]["bindings"][0]["value"]
         .as_str()
@@ -469,21 +448,8 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
     assert!(text.starts_with(&format!("{}:", main.display())), "{text}");
     assert!(text.contains("counter = Counter { count: "), "{text}");
 
-    // A binding the program never reaches says so.
-    let missing = client.call(
-        "inspect",
-        json!({ "path": "counter", "name": "nowhere", "timeout_ms": 300 }),
-    );
-    assert_eq!(missing["isError"], true, "{missing}");
-    assert!(
-        missing["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("where `nowhere` is in scope"),
-        "{missing}"
-    );
     // Every binding in scope where the program is, and it still runs.
-    let read = client.call("inspect", json!({ "path": "counter", "timeout_ms": 5000 }));
+    let read = client.call("inspect", json!({ "path": "counter" }));
     assert_eq!(read["isError"], false, "{read}");
     let names: Vec<&str> = read["structuredContent"]["bindings"]
         .as_array()
@@ -499,9 +465,11 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
     // Paused in `tick`, `wait` and `status` say where (#535).
     let set = client.call(
         "break",
-        json!({ "path": "counter", "file": "counter/src/main.rs", "line": 9, "timeout_ms": 5000 }),
+        json!({ "path": "counter", "file": "counter/src/main.rs", "line": 9 }),
     );
-    assert_eq!(paused(&set), (9, "counter::tick".to_owned()), "{set}");
+    assert_eq!(set["isError"], false, "{set}");
+    let pause = next_pause(&mut client, "counter");
+    assert_eq!(at(&pause), (9, "counter::tick".to_owned()), "{pause}");
     let status = client.call("status", json!({ "path": "counter" }));
     let session = &status["structuredContent"]["sessions"][0];
     assert_eq!(session["state"], "paused", "{status}");
@@ -516,22 +484,20 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
             )),
         "{status}"
     );
-    let waited = client.call("wait", json!({ "path": "counter", "timeout_ms": 5000 }));
-    let waited = &waited["structuredContent"];
-    assert_eq!(waited["state"], "paused", "{waited}");
-    assert_eq!(waited["paused"]["line"], 9, "{waited}");
+    // A binding that isn't where the program is paused says so.
+    let missing = client.call("inspect", json!({ "path": "counter", "name": "nowhere" }));
+    assert_eq!(missing["isError"], true, "{missing}");
     assert!(
-        waited["events"]
-            .as_array()
+        missing["content"][0]["text"]
+            .as_str()
             .unwrap()
-            .iter()
-            .any(|event| event["event"] == "paused" && event["line"] == 9),
-        "{waited}"
+            .contains("`nowhere` isn't in scope"),
+        "{missing}"
     );
 
     // The `&mut` parameter reads under its own name (#534), first as the
     // program wrote it.
-    let read = client.call("inspect", json!({ "path": "counter", "timeout_ms": 5000 }));
+    let read = client.call("inspect", json!({ "path": "counter" }));
     let structured = &read["structuredContent"];
     let names: Vec<&str> = structured["bindings"]
         .as_array()
@@ -561,10 +527,7 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
         text.contains(&format!("#1 counter::main at {}:16", main.display())),
         "{text}"
     );
-    let caller = client.call(
-        "inspect",
-        json!({ "path": "counter", "frame": 1, "timeout_ms": 5000 }),
-    );
+    let caller = client.call("inspect", json!({ "path": "counter", "frame": 1 }));
     let structured = &caller["structuredContent"];
     assert_eq!(structured["function"], "counter::main", "{caller}");
     assert_eq!(structured["line"], 16, "{caller}");
@@ -582,10 +545,7 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
         structured["bindings"][0]["error"], "`counter` is borrowed by the call to `counter::tick`",
         "{caller}"
     );
-    let deeper = client.call(
-        "inspect",
-        json!({ "path": "counter", "frame": 2, "timeout_ms": 300 }),
-    );
+    let deeper = client.call("inspect", json!({ "path": "counter", "frame": 2 }));
     assert_eq!(deeper["isError"], true, "{deeper}");
     assert!(
         deeper["content"][0]["text"]
@@ -597,7 +557,7 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
 
     // Going on, it runs again.
     client.call("clear", json!({ "path": "counter" }));
-    let continued = client.call("continue", json!({ "path": "counter", "timeout_ms": 300 }));
+    let continued = client.call("continue", json!({ "path": "counter" }));
     assert!(
         continued["structuredContent"]["paused"].is_null(),
         "{continued}"
@@ -617,20 +577,33 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
 /// Where a debugger tool's answer says the program paused: its line and
 /// function.
 fn paused(answer: &Value) -> (u64, String) {
-    let paused = &answer["structuredContent"]["paused"];
+    at(&answer["structuredContent"]["paused"])
+}
+
+/// A pause's line and function.
+fn at(paused: &Value) -> (u64, String) {
     (
         paused["line"]
             .as_u64()
-            .unwrap_or_else(|| panic!("not paused: {answer}")),
+            .unwrap_or_else(|| panic!("not a pause: {paused}")),
         paused["function"].as_str().unwrap_or_default().to_owned(),
     )
 }
 
+/// Where the program at `path` pauses next, as `wait` says once its
+/// events up to that pause are in.
+fn next_pause(client: &mut Client, path: &str) -> Value {
+    loop {
+        let waited = client.call("wait", json!({ "path": path }));
+        let paused = &waited["structuredContent"]["paused"];
+        if waited["structuredContent"]["state"] == "paused" && paused.is_object() {
+            return paused.clone();
+        }
+    }
+}
+
 fn count(client: &mut Client) -> u64 {
-    let read = client.call(
-        "inspect",
-        json!({ "path": "looper", "name": "count", "timeout_ms": 5000 }),
-    );
+    let read = client.call("inspect", json!({ "path": "looper", "name": "count" }));
     assert_eq!(read["isError"], false, "{read}");
     read["structuredContent"]["bindings"][0]["value"]
         .as_str()
@@ -651,7 +624,7 @@ fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_acro
          \n\
          fn main() {\n    let mut count = 0;\n    loop {\n        count = tick(count);\n        std::thread::sleep(std::time::Duration::from_millis(2));\n    }\n}\n";
     std::fs::write(&main, program).unwrap();
-    let started = client.call("start", json!({ "path": "looper", "wait_ms": 20000 }));
+    let started = client.call("start", json!({ "path": "looper" }));
     assert_eq!(
         started["structuredContent"]["state"], "running",
         "{started}"
@@ -660,14 +633,11 @@ fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_acro
     // A line with no statement is refused, as code. The program answers
     // once its process compiled, so wait for `main` to run first: an
     // inspect answers as soon as `count` is in scope.
-    let read = client.call(
-        "inspect",
-        json!({ "path": "looper", "name": "count", "timeout_ms": 120000 }),
-    );
+    let read = client.call("inspect", json!({ "path": "looper", "name": "count" }));
     assert_eq!(read["isError"], false, "{read}");
     let refused = client.call(
         "break",
-        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 5, "timeout_ms": 5000 }),
+        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 5 }),
     );
     assert_eq!(refused["isError"], true, "{refused}");
     assert!(
@@ -681,15 +651,24 @@ fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_acro
     // Break on `count = tick(count);`: the program pauses there.
     let set = client.call(
         "break",
-        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 9, "timeout_ms": 5000 }),
+        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 9 }),
     );
     assert_eq!(set["isError"], false, "{set}");
-    assert_eq!(paused(&set), (9, "looper::main".to_owned()), "{set}");
-    assert_eq!(set["structuredContent"]["paused"]["file"], json!(main));
     let text = set["content"][0]["text"].as_str().unwrap();
     assert!(
-        text.contains(&format!("paused at {}:9", main.display())),
+        text.contains(&format!("breakpoint at {}:9", main.display())),
         "{text}"
+    );
+    let pause = next_pause(&mut client, "looper");
+    assert_eq!(at(&pause), (9, "looper::main".to_owned()), "{pause}");
+    assert_eq!(pause["file"], json!(main));
+    let status = client.call("status", json!({ "path": "looper" }));
+    assert!(
+        status["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("paused at {}:9", main.display())),
+        "{status}"
     );
     let first = count(&mut client);
     // Paused, it reads the same value again.
@@ -703,16 +682,11 @@ fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_acro
         "{stepped}"
     );
     assert_eq!(count(&mut client), first + 1);
-    let continued = client.call("continue", json!({ "path": "looper", "timeout_ms": 5000 }));
-    assert_eq!(
-        paused(&continued),
-        (9, "looper::main".to_owned()),
-        "{continued}"
-    );
-    assert_eq!(
-        continued["structuredContent"]["paused"]["reason"],
-        "breakpoint"
-    );
+    let continued = client.call("continue", json!({ "path": "looper" }));
+    assert_eq!(continued["isError"], false, "{continued}");
+    let pause = next_pause(&mut client, "looper");
+    assert_eq!(at(&pause), (9, "looper::main".to_owned()), "{pause}");
+    assert_eq!(pause["reason"], "breakpoint");
 
     // Into `tick`, where `count` is its parameter, and out again.
     let into = client.call("step", json!({ "path": "looper", "kind": "into" }));
@@ -721,7 +695,7 @@ fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_acro
     // Its caller's `count`, at the call (#511).
     let caller = client.call(
         "inspect",
-        json!({ "path": "looper", "name": "count", "frame": 1, "timeout_ms": 5000 }),
+        json!({ "path": "looper", "name": "count", "frame": 1 }),
     );
     assert_eq!(
         (
@@ -743,7 +717,7 @@ fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_acro
     // Cleared, the program runs on and doesn't pause.
     let cleared = client.call("clear", json!({ "path": "looper" }));
     assert_eq!(cleared["structuredContent"]["cleared"], 1, "{cleared}");
-    let continued = client.call("continue", json!({ "path": "looper", "timeout_ms": 300 }));
+    let continued = client.call("continue", json!({ "path": "looper" }));
     assert_eq!(continued["isError"], false, "{continued}");
     assert!(
         continued["structuredContent"]["paused"].is_null(),
@@ -760,39 +734,31 @@ fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_acro
     );
 
     // A function's breakpoint pauses at its first statement.
-    let set = client.call(
-        "break",
-        json!({ "path": "looper", "function": "tick", "timeout_ms": 5000 }),
-    );
-    assert_eq!(paused(&set), (3, "looper::tick".to_owned()), "{set}");
+    let set = client.call("break", json!({ "path": "looper", "function": "tick" }));
+    assert_eq!(set["isError"], false, "{set}");
+    let pause = next_pause(&mut client, "looper");
+    assert_eq!(at(&pause), (3, "looper::tick".to_owned()), "{pause}");
     let cleared = client.call("clear", json!({ "path": "looper", "function": "tick" }));
     assert_eq!(cleared["structuredContent"]["cleared"], 1, "{cleared}");
-    client.call("continue", json!({ "path": "looper", "timeout_ms": 100 }));
+    client.call("continue", json!({ "path": "looper" }));
 
     // A save that adds a line above restarts the program, and the
     // breakpoint follows its line's text to line 10.
     let set = client.call(
         "break",
-        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 9, "timeout_ms": 5000 }),
+        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 9 }),
     );
-    assert_eq!(paused(&set).0, 9, "{set}");
+    assert_eq!(set["isError"], false, "{set}");
+    assert_eq!(at(&next_pause(&mut client, "looper")).0, 9);
     std::fs::write(&main, program.replace("// rawr\n", "// rawr\n// counts\n")).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        let read = client.call("inspect", json!({ "path": "looper", "timeout_ms": 2000 }));
-        if read["structuredContent"]["line"] == 10 {
-            break;
-        }
-        assert!(Instant::now() < deadline, "no pause at line 10: {read}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    while at(&next_pause(&mut client, "looper")).0 != 10 {}
     let cleared = client.call("clear", json!({ "path": "looper" }));
     assert_eq!(cleared["structuredContent"]["cleared"], 1, "{cleared}");
     assert_eq!(
         cleared["structuredContent"]["paused"]["line"], 10,
         "{cleared}"
     );
-    client.call("continue", json!({ "path": "looper", "timeout_ms": 100 }));
+    client.call("continue", json!({ "path": "looper" }));
 
     let stopped = client.call("stop", json!({ "path": "looper" }));
     assert_eq!(stopped["structuredContent"]["stopped"], true, "{stopped}");
@@ -824,7 +790,11 @@ fn input_tools_are_listed_and_reach_the_started_program_which_says_what_it_takes
     ] {
         let schema = schema(name);
         assert_eq!(schema["required"], required, "{name}: {schema}");
-        for common in ["path", "title", "timeout_ms"] {
+        assert!(
+            schema["properties"].get("timeout_ms").is_none(),
+            "{name}: {schema}"
+        );
+        for common in ["path", "title"] {
             assert!(
                 schema["properties"].get(common).is_some(),
                 "{name}: {schema}"
@@ -847,15 +817,12 @@ fn input_tools_are_listed_and_reach_the_started_program_which_says_what_it_takes
          fn main() {\n    let mut count = 0;\n    loop {\n        count = tick(count);\n        std::thread::sleep(std::time::Duration::from_millis(2));\n    }\n}\n",
     )
     .unwrap();
-    let started = client.call("start", json!({ "path": "looper", "wait_ms": 20000 }));
+    let started = client.call("start", json!({ "path": "looper" }));
     assert_eq!(
         started["structuredContent"]["state"], "running",
         "{started}"
     );
-    let read = client.call(
-        "inspect",
-        json!({ "path": "looper", "name": "count", "timeout_ms": 120000 }),
-    );
+    let read = client.call("inspect", json!({ "path": "looper", "name": "count" }));
     assert_eq!(read["isError"], false, "{read}");
 
     let text = |answer: &Value| {
@@ -879,10 +846,7 @@ fn input_tools_are_listed_and_reach_the_started_program_which_says_what_it_takes
     );
 
     // A program with no window takes no input, and says so at once.
-    let windowless = client.call(
-        "click",
-        json!({ "path": "looper", "x": 10, "y": 10, "timeout_ms": 2000 }),
-    );
+    let windowless = client.call("click", json!({ "path": "looper", "x": 10, "y": 10 }));
     assert_eq!(windowless["isError"], true, "{windowless}");
     let expected = if cfg!(target_os = "macos") {
         "the program shows no window"
@@ -894,15 +858,16 @@ fn input_tools_are_listed_and_reach_the_started_program_which_says_what_it_takes
     // A paused program holds its event loop: input waits for `continue`.
     let set = client.call(
         "break",
-        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 9, "timeout_ms": 5000 }),
+        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 9 }),
     );
-    assert_eq!(paused(&set).0, 9, "{set}");
+    assert_eq!(set["isError"], false, "{set}");
+    assert_eq!(at(&next_pause(&mut client, "looper")).0, 9);
     let held = client.call("type", json!({ "path": "looper", "text": "hi" }));
     assert_eq!(held["isError"], true, "{held}");
     assert!(text(&held).contains("is paused at "), "{held}");
     assert!(text(&held).contains("main.rs:9"), "{held}");
     client.call("clear", json!({ "path": "looper" }));
-    client.call("continue", json!({ "path": "looper", "timeout_ms": 100 }));
+    client.call("continue", json!({ "path": "looper" }));
 
     let stopped = client.call("stop", json!({ "path": "looper" }));
     assert_eq!(stopped["structuredContent"]["stopped"], true, "{stopped}");

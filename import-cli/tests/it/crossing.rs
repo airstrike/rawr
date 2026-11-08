@@ -10,7 +10,6 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
 
 use crate::support::fixture::Lease;
 use crate::support::{start, Fixture};
@@ -2437,10 +2436,8 @@ fn an_edit_to_a_script_impl_takes_effect_at_its_next_call() {
             ("EVENTS_STOP", root.join("stop")),
         ],
     );
-    let pid = run.until(Duration::from_secs(900), |line| line.starts_with("pid "));
-    run.until(Duration::from_secs(60), |line| {
-        line.starts_with("3 view canvas[primary plain 18#1")
-    });
+    let pid = run.until(|line| line.starts_with("pid "));
+    run.until(|line| line.starts_with("3 view canvas[primary plain 18#1"));
 
     let text = fs::read_to_string(&main).unwrap();
     let written = "pen.stroke(&format!(\"{} {}\", theme.name(), self.presses)),";
@@ -2454,7 +2451,7 @@ fn an_edit_to_a_script_impl_takes_effect_at_its_next_call() {
     )
     .unwrap();
     // The presses go on from where they were: the state was kept.
-    let edited = run.until(Duration::from_secs(120), |line| line.contains(" edited#1"));
+    let edited = run.until(|line| line.contains(" edited#1"));
     let presses = edited
         .split("plain ")
         .nth(1)
@@ -2496,10 +2493,8 @@ fn a_body_edit_takes_effect_at_the_next_event_with_the_state_kept() {
             ("EVENTS_STOP", root.join("stop")),
         ],
     );
-    let pid = run.until(Duration::from_secs(900), |line| line.starts_with("pid "));
-    let before = run.until(Duration::from_secs(60), |line| {
-        parse(line).is_some_and(|(_, count)| count >= 3)
-    });
+    let pid = run.until(|line| line.starts_with("pid "));
+    let before = run.until(|line| parse(line).is_some_and(|(_, count)| count >= 3));
     let (_, kept) = parse(&before).unwrap();
 
     let text = fs::read_to_string(&main).unwrap();
@@ -2511,7 +2506,7 @@ fn a_body_edit_takes_effect_at_the_next_event_with_the_state_kept() {
     .unwrap();
     // The next events count by ten from where the state was.
     let previous = std::cell::Cell::new(None::<i64>);
-    run.until(Duration::from_secs(120), |line| {
+    run.until(|line| {
         let Some((_, count)) = parse(line) else {
             return false;
         };

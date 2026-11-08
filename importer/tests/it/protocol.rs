@@ -28,7 +28,7 @@ fn oversized_and_partial_frames_fail_before_partial_authority() {
     partial.extend_from_slice(&1_u32.to_be_bytes());
     assert!(matches!(
         protocol::receive(&mut Cursor::new(partial)),
-        Err(protocol::Error::Truncated)
+        Err(protocol::Error::Closed)
     ));
 
     let mut wrong_version = Vec::from(5_u32.to_be_bytes());

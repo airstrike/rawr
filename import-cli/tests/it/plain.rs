@@ -127,54 +127,6 @@ fn units_of(nightly: &Path, krate: &str) -> Vec<String> {
         .collect()
 }
 
-/// `rawr_import`, killed and failed after `limit`: a run that waits on
-/// itself fails the test instead of hanging it.
-fn rawr_import_within(
-    root: &Path,
-    arguments: &[&str],
-    home: &Path,
-    limit: std::time::Duration,
-) -> Output {
-    use std::process::Stdio;
-    // Beside the project: several tests name theirs `app`, and they run at
-    // once.
-    let stdout = root.with_extension("stdout");
-    let stderr = root.with_extension("stderr");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
-        .args(arguments)
-        .arg(root)
-        .env("RAWR_HOME", home)
-        .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
-        .env_remove("CARGO_TARGET_DIR")
-        .env_remove("RUSTFLAGS")
-        .env_remove("RAWR_VERBOSE")
-        .stdin(Stdio::null())
-        .stdout(fs::File::create(&stdout).unwrap())
-        .stderr(fs::File::create(&stderr).unwrap())
-        .spawn()
-        .unwrap();
-    let start = std::time::Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if start.elapsed() > limit {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!(
-                "rawr-import {arguments:?} ran past {limit:?}:\n{}",
-                fs::read_to_string(&stderr).unwrap_or_default()
-            );
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    };
-    Output {
-        status,
-        stdout: fs::read(&stdout).unwrap(),
-        stderr: fs::read(&stderr).unwrap(),
-    }
-}
-
 #[test]
 fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
     let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
@@ -317,7 +269,7 @@ fn main() {
     // valid -> ambiguous -> valid transitions, including a repeated test run.
     for _ in 0..2 {
         fs::write(root.join("src/main.rs"), &valid).unwrap();
-        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(120));
+        let run = rawr_import_with_home(&root, &["run"], &home);
         assert!(
             run.status.success(),
             "stdout:\n{}\nstderr:\n{}",
@@ -331,18 +283,13 @@ fn main() {
             "// rawr\nuse facts_a::Both;\nuse facts_c::{Left, Right};\nfn main() { let output: i64 = facts_a::both().choose(); println!(\"{output}\"); }\n",
         )
         .unwrap();
-        let ambiguous = rawr_import_within(
-            &root,
-            &["check"],
-            &home,
-            std::time::Duration::from_secs(120),
-        );
+        let ambiguous = rawr_import_with_home(&root, &["check"], &home);
         assert!(!ambiguous.status.success());
         assert!(text(&ambiguous.stderr).contains("error[E0034]"));
         assert!(!text(&ambiguous.stderr).contains("symbolic surface identity"));
     }
     fs::write(root.join("src/main.rs"), &valid).unwrap();
-    let restored = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(120));
+    let restored = rawr_import_with_home(&root, &["run"], &home);
     assert!(
         restored.status.success(),
         "stdout:\n{}\nstderr:\n{}",
@@ -392,7 +339,7 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
         root
     };
     let run = |root: &Path, expected: &str| {
-        let run = rawr_import_within(root, &["run"], &home, std::time::Duration::from_secs(600));
+        let run = rawr_import_with_home(root, &["run"], &home);
         assert!(
             run.status.success(),
             "stdout:\n{}\nstderr:\n{}",
@@ -525,7 +472,7 @@ fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
     )
     .unwrap();
     let run = |expected: &str| {
-        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        let run = rawr_import_with_home(&root, &["run"], &home);
         assert!(
             run.status.success(),
             "stdout:\n{}\nstderr:\n{}",
@@ -651,7 +598,7 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
             "// rawr\nfn left() -> i64 {\n    use facts_c::Left;\n    facts_a::both().choose()\n}\nfn main() {\n    println!(\"{} {}\", left(), semver::Version::new(1, 2, 3));\n}\n",
         )
         .unwrap();
-        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        let run = rawr_import_with_home(&root, &["run"], &home);
         assert!(
             run.status.success(),
             "stdout:\n{}\nstderr:\n{}",
@@ -785,7 +732,7 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
     let harness = second.join("target/rawr/shared/Cargo.toml");
     let copied = fs::metadata(&harness).unwrap().modified().unwrap();
     fs::remove_dir_all(second.join("target/rawr/store")).unwrap();
-    let rebuilt = rawr_import_within(second, &["run"], &home, std::time::Duration::from_secs(300));
+    let rebuilt = rawr_import_with_home(second, &["run"], &home);
     assert!(
         rebuilt.status.success(),
         "stdout:\n{}\nstderr:\n{}",
@@ -1243,21 +1190,15 @@ fn main() {
         );
     };
     let mut shared = start();
-    shared.until(std::time::Duration::from_secs(300), |line| {
-        line == "width 10"
-    });
+    shared.until(|line| line == "width 10");
     assert!(!nightly_built(&live));
     finish(&mut shared);
     assert!(live.join("target/rawr/shared/remembered.json").is_file());
     let mut remembered = start();
-    remembered.until(std::time::Duration::from_secs(120), |line| {
-        line == "width 10"
-    });
+    remembered.until(|line| line == "width 10");
     assert!(!nightly_built(&live));
     fs::write(&input, "longer").unwrap();
-    remembered.until(std::time::Duration::from_secs(180), |line| {
-        line == "width 11"
-    });
+    remembered.until(|line| line == "width 11");
     assert!(
         remembered
             .seen
@@ -1724,23 +1665,23 @@ fn a_marked_main_gets_its_arguments_and_stdin_and_restarts_on_a_save() {
     );
     let mut stdin = run.child.stdin.take().unwrap();
 
-    let name = run.until(Duration::from_secs(900), |line| line.starts_with("name "));
+    let name = run.until(|line| line.starts_with("name "));
     assert!(
         name.ends_with("/target/debug/plain-arguments"),
         "{}",
         run.seen.join("\n")
     );
-    run.until(Duration::from_secs(30), |line| line == "arg one");
-    run.until(Duration::from_secs(30), |line| line == "arg two words");
+    run.until(|line| line == "arg one");
+    run.until(|line| line == "arg two words");
     stdin.write_all(b"1.2.3\n").unwrap();
-    run.until(Duration::from_secs(30), |line| line == "major 1");
+    run.until(|line| line == "major 1");
 
     // The program waits on stdin; a save restarts it with the same
     // arguments, and the next line goes to the new one.
     std::thread::sleep(Duration::from_secs(2));
     let text = fs::read_to_string(&main).unwrap();
     fs::write(&main, text.replace("\"major\"", "\"Major\"")).unwrap();
-    run.until(Duration::from_secs(120), |line| line.starts_with("name "));
+    run.until(|line| line.starts_with("name "));
     assert!(
         run.seen
             .iter()
@@ -1748,11 +1689,11 @@ fn a_marked_main_gets_its_arguments_and_stdin_and_restarts_on_a_save() {
         "{}",
         run.seen.join("\n")
     );
-    run.until(Duration::from_secs(30), |line| line == "arg two words");
+    run.until(|line| line == "arg two words");
     stdin.write_all(b"4.5.6\n").unwrap();
-    run.until(Duration::from_secs(30), |line| line == "Major 4");
+    run.until(|line| line == "Major 4");
     drop(stdin);
-    run.until(Duration::from_secs(30), |line| line == "done");
+    run.until(|line| line == "done");
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
@@ -1955,8 +1896,6 @@ fn a_direct_proc_macro_dependency_expands_in_native_code() {
 /// loop that serializes keeps counting.
 #[test]
 fn a_rename_in_a_derived_type_swaps_into_the_running_program() {
-    use std::time::Duration;
-
     const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
     let root = crate::support::scratch().join("plain-derives-swap");
     let _ = fs::remove_dir_all(&root);
@@ -1977,15 +1916,11 @@ fn a_rename_in_a_derived_type_swaps_into_the_running_program() {
     };
     fs::write(&main, program("")).unwrap();
     let mut run = crate::support::start(&root, &[]);
-    let before = run.until(Duration::from_secs(900), |line| {
-        line.ends_with("{\"description\":\"write\"} write")
-    });
+    let before = run.until(|line| line.ends_with("{\"description\":\"write\"} write"));
     let counted = |line: &str| line.split(' ').next().unwrap().parse::<u64>().unwrap();
     let before = counted(&before);
     fs::write(&main, program("#[serde(rename = \"text\")]")).unwrap();
-    let after = run.until(Duration::from_secs(120), |line| {
-        line.ends_with("{\"text\":\"write\"} write")
-    });
+    let after = run.until(|line| line.ends_with("{\"text\":\"write\"} write"));
     // The loop went on: the edit swapped in, and the program never ran again.
     assert!(counted(&after) > before, "{}", run.seen.join("\n"));
     assert!(
@@ -2072,7 +2007,7 @@ fn a_whole_table_answers_a_later_macros_crate_root() {
     let home = crate::support::scratch().join("rawr-home");
     let run = |source: &str, expected: &str| {
         fs::write(root.join("src/main.rs"), source).unwrap();
-        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        let run = rawr_import_with_home(&root, &["run"], &home);
         assert!(
             run.status.success(),
             "stdout:\n{}\nstderr:\n{}",
@@ -2123,7 +2058,7 @@ fn a_whole_table_answers_the_selected_crates_own_macro() {
     let home = crate::support::scratch().join("rawr-home");
     let run = |source: &str, expected: &str| {
         fs::write(root.join("src/main.rs"), source).unwrap();
-        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        let run = rawr_import_with_home(&root, &["run"], &home);
         assert!(
             run.status.success(),
             "stdout:\n{}\nstderr:\n{}",
@@ -2197,7 +2132,7 @@ fn a_project_dependency_the_runner_also_needs_coexists() {
     )
     .unwrap();
     let home = crate::support::scratch().join("rawr-home");
-    let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+    let run = rawr_import_with_home(&root, &["run"], &home);
     assert!(
         run.status.success(),
         "stdout:\n{}\nstderr:\n{}",
@@ -2248,7 +2183,7 @@ fn a_new_path_of_a_path_dependency_replays_the_projects_tables() {
     let home = crate::support::scratch().join("rawr-home");
     let run = |source: &str, expected: &str| {
         fs::write(root.join("src/main.rs"), source).unwrap();
-        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        let run = rawr_import_with_home(&root, &["run"], &home);
         assert!(
             run.status.success(),
             "stdout:\n{}\nstderr:\n{}",
@@ -2446,8 +2381,7 @@ const PATCHED_MAIN: &str =
 
 /// Run and check `program`, and compare its check with `cargo check`'s.
 fn assert_runs_and_checks(program: &Path, home: &Path) {
-    let limit = std::time::Duration::from_secs(600);
-    let run = rawr_import_within(program, &["run"], home, limit);
+    let run = rawr_import_with_home(program, &["run"], home);
     assert!(
         run.status.success(),
         "stdout:\n{}\nstderr:\n{}",
@@ -2455,7 +2389,7 @@ fn assert_runs_and_checks(program: &Path, home: &Path) {
         text(&run.stderr)
     );
     assert_eq!(text(&run.stdout), "sides: 6\n");
-    let checked = rawr_import_within(program, &["check"], home, limit);
+    let checked = rawr_import_with_home(program, &["check"], home);
     assert!(checked.status.success(), "{}", text(&checked.stderr));
     assert_eq!(
         text(&checked.stdout),

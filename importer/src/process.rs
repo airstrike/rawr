@@ -1212,9 +1212,6 @@ fn recorded_result<T>(result: Result<T>, recorded: Result<()>) -> Result<T> {
     }
 }
 
-/// Bounded wait for a runner that already acknowledged its shutdown.
-const DRAIN_DEADLINE: Duration = Duration::from_secs(2);
-
 /// A spawned process-group leader that is always reaped together with its group.
 struct ChildLease(process::Child);
 

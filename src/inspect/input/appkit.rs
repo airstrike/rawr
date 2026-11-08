@@ -11,7 +11,7 @@
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::{mpsc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::{Button, Error, Gesture, Key, Modifiers, Point, Sent, Unit};
 
@@ -23,6 +23,9 @@ const CURSOR: &CStr = c"rawr-agent-cursor";
 
 /// About one frame at 60 Hz: the compositor shows a drawn frame by then.
 const FRAME: Duration = Duration::from_millis(17);
+
+/// How often a wait for the main thread looks whether it is given up.
+const POLL: Duration = Duration::from_millis(50);
 
 /// How far a drag moves between two of its events, in points.
 const STRIDE: f64 = 8.0;
@@ -259,23 +262,22 @@ impl Runtime {
 }
 
 /// Send `gesture` to the window titled `title`, or the program's front
-/// window, waiting up to `timeout` for each event and the frame drawn after
-/// them.
+/// window, waiting for each event and the frame drawn after them, until
+/// `interrupted` says to give up.
 pub(super) fn send(
     gesture: &Gesture,
     title: Option<&str>,
-    timeout: Duration,
+    interrupted: &dyn Fn() -> bool,
 ) -> Result<Sent, Error> {
     let missing = || Error::Window {
         title: title.map(str::to_owned),
     };
     let runtime = Runtime::get().ok_or_else(missing)?;
-    let deadline = Instant::now() + timeout;
     let mut sent = None;
     for event in events(gesture) {
         let title = title.map(str::to_owned);
         sent = Some(
-            main(deadline, timeout, move || {
+            main(interrupted, move || {
                 deliver(runtime, &event, title.as_deref())
             })?
             .ok_or_else(missing)?,
@@ -284,8 +286,8 @@ pub(super) fn send(
     // A redraw the events asked for runs before the loop waits again: two
     // more turns of it see one drawn, and the compositor shows it a frame
     // later.
-    main(deadline, timeout, || ())?;
-    main(deadline, timeout, || ())?;
+    main(interrupted, || ())?;
+    main(interrupted, || ())?;
     std::thread::sleep(FRAME);
     sent.ok_or_else(missing)
 }
@@ -397,10 +399,9 @@ impl Modifiers {
 }
 
 /// Run `work` on the main thread, where AppKit's views take events, and
-/// wait for it until `deadline`.
+/// wait for it, looking at each [`POLL`] whether `interrupted` gives it up.
 fn main<T: Send + 'static>(
-    deadline: Instant,
-    timeout: Duration,
+    interrupted: &dyn Fn() -> bool,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, Error> {
     unsafe extern "C" fn run(context: *mut c_void) {
@@ -414,11 +415,19 @@ fn main<T: Send + 'static>(
     });
     let context = Box::into_raw(Box::new(work)).cast::<c_void>();
     // SAFETY: the main queue runs `run` once with `context`, which owns
-    // the work; a reply after the deadline goes to a dropped receiver.
+    // the work; a reply after the wait was given up goes to a dropped
+    // receiver.
     unsafe { dispatch_async_f((&raw const _dispatch_main_q).cast(), context, run) };
-    finished
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .map_err(|_| Error::Unreached(timeout))
+    loop {
+        match finished.recv_timeout(POLL) {
+            Ok(value) => return Ok(value),
+            Err(mpsc::RecvTimeoutError::Timeout) if interrupted() => {
+                return Err(Error::Interrupted);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Error::Ended),
+        }
+    }
 }
 
 /// Hand `event` to the window titled `title`, or the front one: what it

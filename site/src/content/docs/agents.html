@@ -40,8 +40,8 @@
   <tr><th>Tool</th><th>What it does</th></tr>
   <tr><td><code>new</code></td><td>Makes a crate at <code>path</code>. <code>template</code> picks a template an installed extension offers. No extension offers one today. A path inside a Cargo workspace that doesn&rsquo;t list it is refused, with the fix.</td></tr>
   <tr><td><code>check</code></td><td>Runs rawr&rsquo;s check and <code>cargo check</code>. Each diagnostic has an absolute <code>file</code>, <code>line</code>, <code>column</code>, <code>end_line</code>, <code>end_column</code>, <code>code</code>, <code>severity</code>, <code>message</code> and <code>help</code>. One from rustc may carry a <code>suggestion</code>. The text form has one <code>file:line:col: error[CODE]: message</code> line per diagnostic. A diagnostic rustc gives without a code, as a syntax error, has an empty <code>code</code> and reads <code>error: message</code>.</td></tr>
-  <tr><td><code>run</code></td><td>Runs the program with <code>args</code> and <code>stdin</code> until it ends or <code>timeout_ms</code> passes. It returns the exit status, stdout and stderr.</td></tr>
-  <tr><td><code>start</code></td><td>Starts the program and keeps it running. It answers <code>running</code>, <code>failed</code> with diagnostics, or <code>building</code> while a first start builds. Starting the same project again replaces the program.</td></tr>
+  <tr><td><code>run</code></td><td>Runs the program with <code>args</code> and <code>stdin</code> to its end. It returns the exit status, stdout and stderr.</td></tr>
+  <tr><td><code>start</code></td><td>Starts the program and keeps it running. It answers once the program runs, with <code>running</code>, or with <code>failed</code> and diagnostics. A first start builds the program&rsquo;s dependencies first and tells its progress meanwhile. Starting the same project again replaces the program.</td></tr>
   <tr><td><code>wait</code></td><td>Waits for the next events of the started program and returns them with the output since the last call.</td></tr>
   <tr><td><code>status</code></td><td>Says what each started program is doing, without waiting. A paused program says where it is paused.</td></tr>
   <tr><td><code>stop</code></td><td>Stops the started program.</td></tr>
@@ -53,9 +53,9 @@
   <tr><td><code>key</code></td><td>Presses a <code>key</code> with <code>modifiers</code> held: <code>shift</code>, <code>control</code>, <code>alt</code> or <code>command</code>. A key is one character or a name such as <code>Enter</code>, <code>Tab</code>, <code>Backspace</code>, <code>ArrowLeft</code> or <code>F5</code>.</td></tr>
   <tr><td><code>type</code></td><td>Types <code>text</code>, one key press per character. A newline is <code>Enter</code>.</td></tr>
   <tr><td><code>inspect</code></td><td>Reads the started program&rsquo;s values while it runs. It returns the file, line and function the program is in, and each binding in scope there as Rust&rsquo;s <code>{:?}</code> prints it. <code>name</code> asks for one binding and <code>file</code> for one source file. <code>frame</code> reads a caller&rsquo;s bindings.</td></tr>
-  <tr><td><code>break</code></td><td>Sets a breakpoint on a <code>line</code> of a <code>file</code>, or on a <code>function</code>. It returns where the program paused, if it pauses within <code>timeout_ms</code>.</td></tr>
-  <tr><td><code>step</code></td><td>Runs the paused program to its next statement. <code>kind</code> is <code>over</code>, <code>into</code> or <code>out</code>.</td></tr>
-  <tr><td><code>continue</code></td><td>Lets the paused program run on. It returns where it pauses next, if it pauses within <code>timeout_ms</code>.</td></tr>
+  <tr><td><code>break</code></td><td>Sets a breakpoint on a <code>line</code> of a <code>file</code>, or on a <code>function</code>. It answers once the breakpoint is set. When the program reaches it, <code>wait</code> returns the <code>paused</code> event.</td></tr>
+  <tr><td><code>step</code></td><td>Runs the paused program to its next statement, and returns where it paused. <code>kind</code> is <code>over</code>, <code>into</code> or <code>out</code>.</td></tr>
+  <tr><td><code>continue</code></td><td>Lets the paused program run on. It answers once the program runs. When it pauses again, <code>wait</code> returns the <code>paused</code> event.</td></tr>
   <tr><td><code>clear</code></td><td>Removes every breakpoint, or those on a <code>file</code>, a <code>line</code> or a <code>function</code>.</td></tr>
 </table>
 <p>The events <code>wait</code> returns are these:</p>
@@ -80,7 +80,7 @@ counter = Counter { count: 41, label: "ticks" }</code></pre></div>
   <li>A value of the program&rsquo;s own type prints through its <code>Debug</code> impl or derive.</li>
   <li>A value of a crate&rsquo;s type prints through the crate&rsquo;s <code>Debug</code> impl. A type without one says so, as rustc does: <code>`Window` doesn&rsquo;t implement `Debug`</code>.</li>
   <li>A program with Rust dependencies answers too. In an iced app, <code>{"name": "state"}</code> reads the state in <code>update</code> or <code>view</code> the next time iced calls one.</li>
-  <li>A program waiting for input or for an event runs none of its own code. <code>inspect</code> then says nothing was read within <code>timeout_ms</code>. Call it again once the program runs.</li>
+  <li>A program waiting for input or for an event runs none of its own code, so <code>inspect</code> answers once it runs again. A paused program answers at once.</li>
   <li>A <code>&amp;mut</code> parameter and <code>self</code> read under those names.</li>
   <li>The answer lists the calls the program is in. <code>frame</code> reads one of them: 0 is the function the program is in, 1 is its caller, and so on. A caller&rsquo;s line is the line of its call.</li>
 </ul>
@@ -88,6 +88,7 @@ counter = Counter { count: 41, label: "ticks" }</code></pre></div>
 <h2 id="break">Pausing and stepping</h2>
 <p><code>break</code> pauses the running program when it reaches a line, or a function&rsquo;s first statement. While it is paused, <code>inspect</code> reads the values where it stopped.</p>
 <div class="block"><pre><code>break    {"path": "counter", "file": "counter/src/main.rs", "line": 9}
+wait     {"path": "counter"}
 inspect  {"path": "counter", "name": "count"}
 inspect  {"path": "counter", "frame": 1}
 step     {"path": "counter", "kind": "into"}
@@ -109,7 +110,7 @@ screenshot  {"path": "todos"}</code></pre></div>
 <ul>
   <li>The input goes to the program alone, in its own process. Your pointer, your keyboard and the app you are using are left alone, and the program&rsquo;s window isn&rsquo;t brought forward. You can keep working while an agent uses the window.</li>
   <li>The window shows an orange agent cursor where the pointer last went, so you can see where the agent is pointing. Screenshots show it too. It is drawn above the program&rsquo;s own drawing, and the program&rsquo;s layout and events don&rsquo;t change for it.</li>
-  <li>Each tool answers once the program has taken the input and drawn again. A <code>screenshot</code> right after it shows what the input did.</li>
+  <li>Each tool answers once the program has taken the input and drawn again. A <code>screenshot</code> right after it shows what the input did. An input that makes the program pause at a breakpoint answers with where it paused.</li>
   <li><code>key</code> and <code>type</code> go to whatever the program has focused. Click a text input first.</li>
   <li><code>title</code> picks a window by its title when the program has several. Otherwise the input goes to its front window.</li>
   <li>A paused program takes no input until <code>continue</code> or <code>step</code>, since the pause holds its event loop.</li>
@@ -128,7 +129,7 @@ screenshot  {"path": "counter"}
 click       {"path": "counter", "x": 60, "y": 90}
 screenshot  {"path": "counter"}
 stop        {"path": "counter"}</code></pre></div>
-<p>The first <code>start</code> of an app with dependencies builds them, which can take minutes. It answers <code>building</code> within the call&rsquo;s time limit, and <code>wait</code> follows the build until the app runs.</p>
+<p>The first <code>start</code> of an app with dependencies builds them, which can take minutes. It answers once the app runs, and tells the build&rsquo;s progress meanwhile.</p>
 
 <h2 id="programs">The programs the server starts</h2>
 <p>The server owns the programs it starts. It runs one program per project, as <code>rawr run</code> would at a terminal. The program&rsquo;s stdin is what <code>stdin</code> gave, then the end of input. Its output is kept for <code>wait</code>.</p>
@@ -141,7 +142,7 @@ stop        {"path": "counter"}</code></pre></div>
 
 <h2 id="limits">Limits</h2>
 <ul>
-  <li>No call takes longer than about 45 s. A longer build answers <code>building</code>, or <code>check</code> says it is still checking. Call it again to keep waiting.</li>
+  <li>rawr puts no time limit on a call. Each one waits for what it needs: a build, an event, a pause or the program&rsquo;s end. A client that bounds its calls cancels one that runs past its bound. A cancelled <code>start</code> or <code>check</code> leaves its build going, and the next call waits for it again.</li>
   <li><code>start</code> refuses a program that draws a terminal UI, such as a <a href="/docs/ratatui">ratatui</a> app. Run it with <code>rawr run</code> in a terminal of your own.</li>
   <li>A screenshot uses macOS&rsquo;s window capture. macOS asks for Screen Recording permission for the app the agent runs in. Other systems have no such capture yet.</li>
   <li>The input tools need macOS too. They need no permission, since nothing goes through the system&rsquo;s input.</li>

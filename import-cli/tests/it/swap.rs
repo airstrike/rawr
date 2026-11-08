@@ -5,7 +5,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
 
 use crate::support::{copy, start};
 
@@ -33,18 +32,14 @@ fn a_marked_main_in_a_native_loop_takes_a_body_edit_at_its_next_call() {
     let mut run = start(&root, &[("TICKER_STOP", root.join("stop"))]);
 
     // The first run builds the runner.
-    let pid = run.until(Duration::from_secs(900), |line| line.starts_with("pid "));
-    let first = run.until(Duration::from_secs(60), |line| {
-        parse(line).is_some_and(|(tick, _)| tick >= 3)
-    });
+    let pid = run.until(|line| line.starts_with("pid "));
+    let first = run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
     assert_eq!(parse(&first), Some((3, 3)));
 
     // A body edit: the native loop keeps its count and its process, and
     // its next calls run the new code.
     edit(&main, "Scale { factor: 1 }", "Scale { factor: 100 }");
-    let swapped = run.until(Duration::from_secs(60), |line| {
-        parse(line).is_some_and(|(tick, value)| value == tick * 100)
-    });
+    let swapped = run.until(|line| parse(line).is_some_and(|(tick, value)| value == tick * 100));
     let (tick, _) = parse(&swapped).unwrap();
     assert!(tick > 3, "{}", run.seen.join("\n"));
     let seen = run.seen.join("\n");
@@ -71,9 +66,7 @@ fn a_marked_main_in_a_native_loop_takes_a_body_edit_at_its_next_call() {
         "Scale { factor: 100 }",
         "Scale { factor: 100, name: String::new() }",
     );
-    let restarted = run.until(Duration::from_secs(600), |line| {
-        parse(line) == Some((1, 100))
-    });
+    let restarted = run.until(|line| parse(line) == Some((1, 100)));
     assert_eq!(restarted, "1 value 100");
     assert!(
         run.seen
@@ -89,9 +82,7 @@ fn a_marked_main_in_a_native_loop_takes_a_body_edit_at_its_next_call() {
         "ticker::run(step, 3000);",
         "ticker::run(step, 2999);",
     );
-    run.until(Duration::from_secs(600), |line| {
-        parse(line) == Some((1, 100))
-    });
+    run.until(|line| parse(line) == Some((1, 100)));
     assert!(
         run.seen
             .iter()
@@ -136,10 +127,8 @@ fn a_program_hears_what_each_save_did_and_why_it_restarted() {
     let root = reload_ticker("reload-ticker");
     let main = root.join("src/main.rs");
     let mut run = start(&root, &[("TICKER_STOP", root.join("stop"))]);
-    let first_pid = run.until(Duration::from_secs(900), |line| line.starts_with("pid "));
-    run.until(Duration::from_secs(60), |line| {
-        parse(line).is_some_and(|(tick, _)| tick >= 2)
-    });
+    let first_pid = run.until(|line| line.starts_with("pid "));
+    run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 2));
     let seen = run.seen.join("\n");
     assert!(
         !seen.contains("outcome "),
@@ -148,7 +137,7 @@ fn a_program_hears_what_each_save_did_and_why_it_restarted() {
     assert!(!seen.contains("no reload outcomes"), "{seen}");
 
     edit(&main, "Scale { factor: 1 }", "Scale { factor: 100 }");
-    run.until(Duration::from_secs(60), |line| line == "outcome swapped");
+    run.until(|line| line == "outcome swapped");
     let position = |wanted: &str| run.seen.iter().position(|line| line == wanted);
     if let Some(queued) = position("outcome queued") {
         assert!(
@@ -160,9 +149,7 @@ fn a_program_hears_what_each_save_did_and_why_it_restarted() {
 
     // The program keeps running the last good code.
     edit(&main, "tick * scale.factor", "tick * scale.missing");
-    let failed = run.until(Duration::from_secs(60), |line| {
-        line.starts_with("outcome failed at ")
-    });
+    let failed = run.until(|line| line.starts_with("outcome failed at "));
     let at = failed.strip_prefix("outcome failed at ").unwrap();
     let canonical = main.canonicalize().unwrap();
     assert!(
@@ -174,7 +161,7 @@ fn a_program_hears_what_each_save_did_and_why_it_restarted() {
     );
     assert!(failed.contains("missing"), "{failed}");
     edit(&main, "tick * scale.missing", "tick * scale.factor");
-    run.until(Duration::from_secs(60), |line| line == "outcome swapped");
+    run.until(|line| line == "outcome swapped");
 
     edit(
         &main,
@@ -186,10 +173,8 @@ fn a_program_hears_what_each_save_did_and_why_it_restarted() {
         "Scale { factor: 100 }",
         "Scale { factor: 100, name: String::new() }",
     );
-    run.until(Duration::from_secs(600), |line| {
-        line.starts_with("pid ") && *line != first_pid
-    });
-    let restarted = run.until(Duration::from_secs(60), |line| line.starts_with("outcome "));
+    run.until(|line| line.starts_with("pid ") && *line != first_pid);
+    let restarted = run.until(|line| line.starts_with("outcome "));
     assert_eq!(
         restarted,
         "outcome restarted: `Scale` changed its fields",

@@ -4,8 +4,9 @@
 //! JSON-RPC 2.0, one message per line, with the standard library only
 //! (D430.4). The main thread reads; each `tools/call` runs on a worker, so
 //! `ping`, `notifications/cancelled` and the end of input are handled while
-//! a long build runs; one writer thread writes every message. A cancel
-//! ends that call's process groups. No call blocks past [`BOUND`].
+//! a long build runs; one writer thread writes every message. A call waits
+//! for what it needs as long as that takes, telling its progress where it
+//! has any; the client's cancel ends it, with its process groups.
 //!
 //! Core's tools make, check and run programs; installed extensions add
 //! tools their manifests declare ([`extension`]). The programs `start`
@@ -32,8 +33,8 @@ use serde_json::{json, Value};
 pub const PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-/// No call blocks longer: Codex's default tool timeout is short.
-pub const BOUND: Duration = Duration::from_secs(44);
+/// How often a waiting call looks for its cancel.
+pub const POLL: Duration = Duration::from_millis(50);
 
 /// The server: where relative paths start, the writer, the calls in
 /// flight and the programs it started.
@@ -134,16 +135,13 @@ pub fn serve_on(
     }
     // The client went away: what the server started goes too.
     server.shut_down();
-    // Calls end once their processes are gone; then the writer ends with
-    // the server's last sender. One still busy is left to the exit.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while Arc::strong_count(&server) > 1 && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
+    // Each call ends once it sees its cancel; then the writer ends with the
+    // server's last sender.
+    while Arc::strong_count(&server) > 1 {
+        std::thread::sleep(POLL);
     }
-    if Arc::strong_count(&server) == 1 {
-        drop(server);
-        let _ = writer.join();
-    }
+    drop(server);
+    let _ = writer.join();
     Ok(())
 }
 

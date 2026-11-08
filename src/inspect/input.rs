@@ -22,7 +22,6 @@
 mod appkit;
 
 use std::fmt;
-use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -121,8 +120,11 @@ pub(super) enum Error {
     /// This system can't hand a window input.
     #[cfg(not(target_os = "macos"))]
     Unsupported,
-    /// The program's event loop didn't take the input in time.
-    Unreached(Duration),
+    /// The wait for the window was given up: the program paused, or the
+    /// tool that asked went away.
+    Interrupted,
+    /// The window's event loop ended before it took the input.
+    Ended,
 }
 
 /// What a sent input reached: the window and where the agent cursor is.
@@ -164,11 +166,12 @@ impl fmt::Display for Error {
             Self::Window { title: None } => formatter.write_str("the program shows no window"),
             #[cfg(not(target_os = "macos"))]
             Self::Unsupported => formatter.write_str("sending a window input needs macOS here"),
-            Self::Unreached(timeout) => write!(
-                formatter,
-                "the program's window didn't take the input within {} ms: its event loop is busy or held",
-                timeout.as_millis()
-            ),
+            Self::Interrupted => {
+                formatter.write_str("the program paused before its window took the input")
+            }
+            Self::Ended => {
+                formatter.write_str("the program's window ended before it took the input")
+            }
         }
     }
 }
@@ -388,15 +391,20 @@ impl Gesture {
     }
 
     /// Send the input to the program's window titled `title`, or its front
-    /// window, waiting up to `timeout` for it to take each event and draw.
-    pub(super) fn send(&self, title: Option<&str>, timeout: Duration) -> Result<Sent, Error> {
+    /// window, waiting for it to take each event and draw, until
+    /// `interrupted` says to give up.
+    pub(super) fn send(
+        &self,
+        title: Option<&str>,
+        interrupted: &dyn Fn() -> bool,
+    ) -> Result<Sent, Error> {
         #[cfg(target_os = "macos")]
         {
-            appkit::send(self, title, timeout)
+            appkit::send(self, title, interrupted)
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (title, timeout);
+            let _ = (title, interrupted);
             Err(Error::Unsupported)
         }
     }
@@ -411,12 +419,13 @@ impl Sent {
     }
 }
 
-/// Answer one input request.
-pub(super) fn answer(request: &Value, timeout: Duration) -> Value {
+/// Answer one input request, or `None` once `interrupted` gave it up.
+pub(super) fn answer(request: &Value, interrupted: &dyn Fn() -> bool) -> Option<Value> {
     let title = request.get("title").and_then(Value::as_str);
-    match Gesture::from_request(request).and_then(|gesture| gesture.send(title, timeout)) {
-        Ok(sent) => sent.to_json(),
-        Err(error) => json!({ "error": error.to_string() }),
+    match Gesture::from_request(request).and_then(|gesture| gesture.send(title, interrupted)) {
+        Ok(sent) => Some(sent.to_json()),
+        Err(Error::Interrupted) => None,
+        Err(error) => Some(json!({ "error": error.to_string() })),
     }
 }
 
@@ -520,7 +529,7 @@ mod tests {
 
     #[test]
     fn an_unknown_action_says_which_there_are() {
-        let answer = answer(&json!({ "action": "wave" }), Duration::from_millis(10));
+        let answer = answer(&json!({ "action": "wave" }), &|| false).unwrap();
         assert_eq!(
             answer["error"],
             "unknown input `wave`: use move, click, drag, scroll, key or type"
