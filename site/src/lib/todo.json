@@ -3093,7 +3093,8 @@
     {"issue":1359,"title":"Rawr's home keeps bindings and inventories per format and retires formats no installed rawr uses","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1360,"title":"The runner embeds a compact facade plan instead of a gigabyte of JSON","state":"open","category":"Importer"},
     {"issue":1361,"title":"Stored parts and tables are compressed with zstd when written","state":"open","category":"Health"},
-    {"issue":1362,"title":"The generic classification and the facade plan store each fact once","state":"open","category":"Importer"}
+    {"issue":1362,"title":"The generic classification and the facade plan store each fact once","state":"open","category":"Importer"},
+    {"issue":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3661,7 +3662,8 @@
             {"number":1336,"title":"Selecting among many generic From impls by the argument's type: `Into::<Slot<'_, _>>::into(icon().size(12))`","state":"closed"},
             {"number":1339,"title":"A crate function whose output is `[T; N]` of a const parameter only the output fixes is refused","state":"open"},
             {"number":1340,"title":"`&mut [T; N]` of crate values crosses as a lent place, not a copy","state":"open"},
-            {"number":1341,"title":"A program's generic impl of a std trait for a crate type can't pass its own parameter to the crate","state":"closed"}
+            {"number":1341,"title":"A program's generic impl of a std trait for a crate type can't pass its own parameter to the crate","state":"closed"},
+            {"number":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"open"}
           ],
           "milestone": "0.4"
         },
