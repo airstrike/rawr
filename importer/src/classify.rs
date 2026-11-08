@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 135;
+const CLASSIFIER_VERSION: u32 = 136;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7798,21 +7798,23 @@ impl<P: api::Phase> Context<'_, P> {
             && let model::Type::Slice(element) = &**target
             && !names_early_lifetime(element)
             && !names_late_lifetime(element)
+            // Wire values, as a pair of numbers, are copied as an array
+            // (`convert_value`).
+            && let Ok(element) = self.convert(element)
+            && matches!(element, Type::Nominal { .. })
+            && !self.clones(&element)
         {
-            let element = self.convert(element)?;
-            if matches!(element, Type::Nominal { .. }) && !self.clones(&element) {
-                return Ok(representability::constant::Plan::new(
-                    Type::Borrowed {
-                        mutable: false,
-                        ty: Box::new(Type::Sequence {
-                            element: Box::new(element),
-                            owned: false,
-                            length: None,
-                        }),
-                    },
-                    None,
-                ));
-            }
+            return Ok(representability::constant::Plan::new(
+                Type::Borrowed {
+                    mutable: false,
+                    ty: Box::new(Type::Sequence {
+                        element: Box::new(element),
+                        owned: false,
+                        length: None,
+                    }),
+                },
+                None,
+            ));
         }
         let ty = self.convert_value(ty)?;
         if !matches!(
