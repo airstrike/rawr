@@ -54,7 +54,8 @@
       {"text":"Native code can pass a marked function a native value by value, and the function keeps it as Rust would. A `&mut` native value the function changes, or replaces with `*value = new`, comes back changed. `item.count += 1` on another crate's struct field works, and `item.name.push('!')` on its `String` field changes the struct instead of a copy.","issues":[1139]},
       {"text":"A plain http request to the site, the playground or the bot pages moves to the same URL on https (301 for a GET, 308 for a POST so a playground request stays a POST). Before, http served the page as is.","issues":[1228]},
       {"text":"rawr puts no time limit of its own on anything. The runner protocol waits for the runner as long as it lives. The `rawr mcp` tools take no `timeout_ms` or `wait_ms`: `start` answers once the program runs, `check` once it has checked, `wait` at the next event, `step` where it paused; `break` and `continue` answer at once and `wait` tells the pause. A client that bounds its calls cancels them.","issues":[1205]},
-      {"text":"rawr no longer forgets an installed rawr-import: a manifest probe that fails, as one could under heavy load, is asked again on the next run instead of being remembered as 'not installed'.","issues":[1230]}
+      {"text":"rawr no longer forgets an installed rawr-import: a manifest probe that fails, as one could under heavy load, is asked again on the next run instead of being remembered as 'not installed'.","issues":[1230]},
+      {"text":"A crate type whose impls at different arguments each have a method of one name giving an `impl Trait`, as swash's `Setting<u16>` and `Setting<f32>` do with `parse_list`, imports again, so iced's examples that draw text check.","issues":[1232]}
     ]
   },
   "releases": [
