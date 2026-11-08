@@ -281,7 +281,11 @@ fn a_mut_input_with_a_lifetime_is_lent_not_cloned() {
 /// through its method, its `Display`, its `Debug` and its `PartialEq`, and
 /// passes the same borrow to the crate's `summary(&Building) -> String`
 /// and `picture(&Building) -> Picture<'a, M>`, as elevato's
-/// `view(building)` (#1406).
+/// `view(building)` (#1406). Its `advance` answers a `Command` made
+/// during the call, which borrows nothing of the building, run by a
+/// method given it and by one that keeps it, as elevato's `frame` runs
+/// the `update` its `Simulation::new` kept: the kept function's native
+/// calls reach the arena, and native code takes what it gives (#1432).
 #[test]
 fn a_native_borrow_lent_to_a_script_function_is_a_borrow_for_each_call() {
     runs_as_cargo_does(
@@ -290,7 +294,16 @@ fn a_native_borrow_lent_to_a_script_function_is_a_borrow_for_each_call() {
          2 summary of 4 floors Building { floors: 4 } true\n\
          picture of 5 floors\n\
          3 5 floors in the 5-storey building Building { floors: 5 } false\n\
-         picture of 6 floors\n",
+         picture of 6 floors\n\
+         4 at 6 floors, 3 to go\n\
+         5 at 7 floors, 2 to go\n\
+         6 at 8 floors, 1 to go\n\
+         delivered 4\n\
+         8 at 10 floors, 2 to go\n\
+         9 at 11 floors, 1 to go\n\
+         delivered 3\n\
+         12 at 14 floors, 1 to go\n\
+         delivered 3\n",
     );
 }
 

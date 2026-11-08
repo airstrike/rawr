@@ -1535,6 +1535,48 @@ pub mod simulation {
         }
     }
 
+    /// A simulation that keeps its program's `update`.
+    pub struct Running<P, M> {
+        simulation: Simulation<P>,
+        update: Box<dyn FnMut(&mut P, M, &Building) -> Command<M>>,
+    }
+
+    impl<P, M> Running<P, M> {
+        /// Delivers `message` to the kept `update`, then each message the
+        /// commands it answers deliver, as elevato's `frame` dispatches.
+        /// How many messages it delivered.
+        pub fn deliver(&mut self, message: M) -> usize {
+            let Self { simulation, update } = self;
+            simulation.run(message, update)
+        }
+    }
+
+    /// What an `update` answers, as iced's `Task<Message>`: the messages
+    /// it delivers next. It borrows nothing of the building.
+    pub struct Command<M> {
+        messages: Vec<M>,
+    }
+
+    impl<M> Command<M> {
+        pub fn none() -> Self {
+            Self {
+                messages: Vec::new(),
+            }
+        }
+
+        pub fn done(message: M) -> Self {
+            Self {
+                messages: vec![message],
+            }
+        }
+
+        pub fn map<N>(self, f: impl Fn(M) -> N) -> Command<N> {
+            Command {
+                messages: self.messages.into_iter().map(f).collect(),
+            }
+        }
+    }
+
     pub struct Simulation<P> {
         program: P,
         building: Building,
@@ -1553,6 +1595,39 @@ pub mod simulation {
         pub fn step<M>(&mut self, message: M, mut update: impl FnMut(&mut P, M, &Building)) {
             update(&mut self.program, message, &self.building);
             self.building.floors += 1;
+        }
+
+        /// Runs the program from `first`: each message goes to `update`
+        /// with the building, and the command it answers is run, its
+        /// messages delivered in turn, as elevato's simulation runs the
+        /// `Task` its `update` gives. How many messages it delivered.
+        pub fn run<M>(
+            &mut self,
+            first: M,
+            mut update: impl FnMut(&mut P, M, &Building) -> Command<M>,
+        ) -> usize {
+            let mut queue = vec![first];
+            let mut delivered = 0;
+            while let Some(message) = queue.pop() {
+                delivered += 1;
+                let command = update(&mut self.program, message, &self.building);
+                queue.extend(command.messages);
+                self.building.floors += 1;
+            }
+            delivered
+        }
+
+        /// The simulation with `update` kept to run its program from then
+        /// on, as elevato's `Simulation::new` keeps the program's `update`
+        /// for its `frame`.
+        pub fn keep<M>(
+            self,
+            update: impl FnMut(&mut P, M, &Building) -> Command<M> + 'static,
+        ) -> Running<P, M> {
+            Running {
+                simulation: self,
+                update: Box::new(update),
+            }
         }
 
         /// What the program's `view` of the building draws.
