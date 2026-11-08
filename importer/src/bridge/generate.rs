@@ -11348,7 +11348,8 @@ fn render_opening(
         output,
         "    {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
         let made = {call};
-        let mut region = __rawr_internal::scope::Region::new();
+        let pins = __rawr_internal::scope::Pins::new();
+        let mut region = __rawr_internal::scope::Region::anchored(&pins);
         let value = with_arena(|arena| {{
             let mut values: [&mut Dynamic; 0] = [];
             #[allow(unused_variables)]
@@ -11356,7 +11357,7 @@ fn render_opening(
             {converted}
         }})
         .map_err(runtime_error)?;
-        let result = __rawr_internal::scope::open(&mut region, || rest(value));{back}
+        let result = __rawr_internal::scope::open_joined(&mut region, || rest(value));{back}
         result
     }}){with};
     Ok(Dynamic::from(output))"
@@ -11557,9 +11558,18 @@ fn render_anchored_opening(
     if lifetime_inputs(signature, substitutions)? {
         return Ok(());
     }
+    // A call that would open a frame is made in the region of the frame
+    // whose scope it is in, when no slot's region is open: a second `let`
+    // joins the first's, so a call takes both at one lifetime, as rustc
+    // infers one (#1335).
+    let anchor = if instance_opens(signature, substitutions) {
+        "joined"
+    } else {
+        "anchor"
+    };
     writeln!(
         output,
-        "    if let Some(anchor) = __rawr_internal::scope::anchor() {{
+        "    if let Some(anchor) = __rawr_internal::scope::{anchor}() {{
 {taken}        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
             let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;{pinned}
             let made = {call};

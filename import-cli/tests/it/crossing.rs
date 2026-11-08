@@ -1554,6 +1554,30 @@ fn an_opaque_output_of_an_opaque_output_that_borrows_is_held_boxed() {
     );
 }
 
+/// Two `let`s of an invariant text that borrows a string, passed to one
+/// call, and two of what `explain` gives on it, passed to another (#1335):
+/// Rust infers one lifetime for both borrows. In a view both are made in
+/// the view's region; out of one, the first `let` opens a scope frame and
+/// the second joins its region, so the call takes both at one lifetime.
+/// The output is `cargo run`'s.
+#[test]
+fn two_lets_of_an_invariant_or_opaque_type_go_to_one_call() {
+    let (rawr, cargo) = both_printed("joined.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.starts_with(
+            "main pad 0 'left' 'right'\nmain pad 0 explain #0000ff 'left' explain #00ff00 'right'\n"
+        ),
+        "{rawr}"
+    );
+    assert!(
+        rawr.ends_with(
+            "last view pad 0 [Increment] pad 0 'count' 'presses' 2@50 pad 0 explain #0000ff 'first' explain #00ff00 rule 2 [Decrement]"
+        ),
+        "{rawr}"
+    );
+}
+
 /// What `explain` gives on an element that borrows a local, kept past the
 /// block the local lives in, is rustc's E0597 at the borrow (#936).
 #[test]

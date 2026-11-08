@@ -1149,14 +1149,17 @@ impl<G: 'static + for<'x> Gives<'x, I>, I: Inputs> Regional for Given<G, I> {
 thread_local! {
     /// The regions [`open_anchored`] opened on this thread, innermost last.
     static ANCHORS: RefCell<Vec<Nonce>> = const { RefCell::new(Vec::new()) };
+    /// The regions [`open_joined`] opened on this thread, innermost last.
+    static JOINS: RefCell<Vec<Nonce>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Pops an anchor when its region closes, however it closes.
-struct Unanchor;
+/// Pops a region off the stack of [`ANCHORS`] or [`JOINS`] when the region
+/// closes, however it closes.
+struct Unanchor(&'static std::thread::LocalKey<RefCell<Vec<Nonce>>>);
 
 impl Drop for Unanchor {
     fn drop(&mut self) {
-        ANCHORS.with(|anchors| anchors.borrow_mut().pop());
+        self.0.with(|anchors| anchors.borrow_mut().pop());
     }
 }
 
@@ -1256,7 +1259,7 @@ impl Drop for KeptRegion {
 /// lifetime, instead of opening a frame of its own (D594).
 pub fn open_anchored<R>(region: &mut Region<'_>, body: impl FnOnce() -> R) -> R {
     ANCHORS.with(|anchors| anchors.borrow_mut().push(region.nonce));
-    let _unanchor = Unanchor;
+    let _unanchor = Unanchor(&ANCHORS);
     open(region, body)
 }
 
@@ -1265,6 +1268,27 @@ pub fn open_anchored<R>(region: &mut Region<'_>, body: impl FnOnce() -> R) -> R 
 #[must_use]
 pub fn anchor() -> Option<Nonce> {
     ANCHORS.with(|anchors| anchors.borrow().last().copied())
+}
+
+/// [`open`] of a scope frame's region [`Region::anchored`] on pins of the
+/// frame's own (#1335): while `body`, the rest of the frame's scope, runs,
+/// a later `let` of a call whose output borrows a script string it takes
+/// makes the output in this region, with the string pinned there, instead
+/// of opening a frame of its own ([`joined`]). Both values are then at one
+/// lifetime, as rustc infers one for two `let`s a call takes together,
+/// which a type invariant in it, as iced's `Text<'a>` is, needs.
+pub fn open_joined<R>(region: &mut Region<'_>, body: impl FnOnce() -> R) -> R {
+    JOINS.with(|joins| joins.borrow_mut().push(region.nonce));
+    let _unjoin = Unanchor(&JOINS);
+    open(region, body)
+}
+
+/// The nonce of the region a call whose output borrows a script string it
+/// takes makes its output in: the innermost slot's region ([`anchor`]),
+/// else the innermost scope frame's [`open_joined`] opened on this thread.
+#[must_use]
+pub fn joined() -> Option<Nonce> {
+    anchor().or_else(|| JOINS.with(|joins| joins.borrow().last().copied()))
 }
 
 /// Script strings native code borrows for as long as the script value
