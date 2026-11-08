@@ -3233,7 +3233,9 @@
     {"issue":1455,"title":"The browser universe exports only prepare/run, so a good edit can't reload in place; every edit…","state":"open","category":"Importer"},
     {"issue":1456,"title":"`[T]::binary_search` isn't supported in marked code","state":"open","category":"Divergences from rustc"},
     {"issue":1457,"title":"A crate method whose closure takes `&mut` of a type with a lifetime (ratzilla's `draw_web`…","state":"open","category":"No glue (D593)"},
-    {"issue":1458,"title":"A capturing closure inside an `if`/`match` value passed to native code reads its captures where…","state":"open","category":"No glue (D593)"}
+    {"issue":1458,"title":"A capturing closure inside an `if`/`match` value passed to native code reads its captures where…","state":"open","category":"No glue (D593)"},
+    {"issue":1459,"title":"The playground deploy fails: universe_bg.wasm (52.6 MB) exceeds Cloudflare's asset size limit…","state":"open","category":"Platforms"},
+    {"issue":1460,"title":"The ?play image with #1395's runner fails a docs snippet: missing runtime binding for…","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
