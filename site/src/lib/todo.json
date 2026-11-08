@@ -124,7 +124,8 @@
         {"text":"`pub use` of an enum variant, by name or by glob, re-exports it from its module, for the program's enums and a crate's.","issues":[1345]},
         {"text":"`rawr run` watches the program's inputs, not the project tree: nothing under `target/` reaches the file watcher, so rawr's own builds no longer count as saves, and a project with a huge `target/` starts its watcher. If macOS refuses the watcher's stream, the error says so and lists the paths rawr asked for.","issues":[1346],"refs":[1222]},
         {"text":"`clock.strftime(\"%H:%M\")` fills `F: ?Sized` with the unsized `str`; instance_surface_type had no case for that type, so the call carried no instance key and fell back to the item's shared binding, the adapter of whichever instance registered first, in an order set by hashes. New crates in the crate-shapes fixture flipped that order and the literal reached the `[u8]` adapter: the 'a value reached an adapter as a type its signature doesn't take' panic, deterministic in one lane and absent in another, which is also the shape of the #1087 flake. Ty::UnsizedStr now keys as Builtin::Str, as the adapter generator names it. Merged in 1777280a7.","issues":[1352],"refs":[1087]},
-        {"text":"A call of a crate's generic item always reaches the adapter of its own instance. A parameter an associated type reads no longer misses its adapter, and a type argument that keys no instance is a check error at the call, never a call into another instance's adapter at run time.","issues":[1353,1087]}
+        {"text":"A call of a crate's generic item always reaches the adapter of its own instance. A parameter an associated type reads no longer misses its adapter, and a type argument that keys no instance is a check error at the call, never a call into another instance's adapter at run time.","issues":[1353,1087]},
+        {"text":"A marked type behind a native trait object lends its strings in place: `fn label(&self) -> &str` reads the program's own text with no copy, and a `&self` method returning a native type that borrows the value, as `view(&self) -> Element<'_, Message>` does, works and keeps what it borrows only to the next `&mut self` call.","issues":[1322,1321]}
       ]
     },
     "releases": [
@@ -3053,8 +3054,8 @@
     {"issue":1318,"title":"Assigning through a crate method's returned `&mut` into a public field: `rgba.get_pixel_mut(x, y).0 = [0; 4]`","state":"closed","category":"Divergences from rustc"},
     {"issue":1319,"title":"`use m::{self, f}` binds both a module and its same-named function","state":"closed","category":"Divergences from rustc"},
     {"issue":1320,"title":"A struct's constructor is no separate rejected export","state":"open","category":"Divergences from rustc"},
-    {"issue":1321,"title":"A stand-in's `&self` result of a native type with `'_` lets its borrowed strings go at the next `&mut` reach","state":"open","category":"Divergences from rustc"},
-    {"issue":1322,"title":"A stand-in's borrowed result (`&str`, `&[T]`, `&T`) is a copy the stand-in keeps, not a borrow of the kept value","state":"open","category":"Divergences from rustc"},
+    {"issue":1321,"title":"A stand-in's `&self` result of a native type with `'_` lets its borrowed strings go at the next `&mut` reach","state":"closed","category":"Divergences from rustc"},
+    {"issue":1322,"title":"A stand-in's borrowed result (`&str`, `&[T]`, `&T`) is a copy the stand-in keeps, not a borrow of the kept value","state":"closed","category":"Divergences from rustc"},
     {"issue":1323,"title":"rawr run shows only cargo's error when rawr's copy of the crate fails to build for the same reason","state":"closed","category":"Divergences from rustc"},
     {"issue":1324,"title":"A crate signature with `&mut [T; N]` (or another array type) can be used","state":"closed","category":"Divergences from rustc"},
     {"issue":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"closed","category":"Divergences from rustc"},
@@ -3095,7 +3096,9 @@
     {"issue":1360,"title":"The runner embeds a compact facade plan instead of a gigabyte of JSON","state":"open","category":"Importer"},
     {"issue":1361,"title":"Stored parts and tables are compressed with zstd when written","state":"open","category":"Health"},
     {"issue":1362,"title":"The generic classification and the facade plan store each fact once","state":"open","category":"Importer"},
-    {"issue":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"open","category":"Divergences from rustc"}
+    {"issue":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"open","category":"Divergences from rustc"},
+    {"issue":1364,"title":"A native trait object's `&[T]`/`&T` result that borrows the receiver comes back as a copy per call","state":"open","category":"Divergences from rustc"},
+    {"issue":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3996,8 +3999,8 @@
             {"number":1315,"title":"Moving a &'static [T] field out of an owned native value keeps the reference instead of copying elements","state":"open"},
             {"number":1316,"title":"&v[a..b] of an owned native Vec place cuts it in place","state":"open"},
             {"number":1318,"title":"Assigning through a crate method's returned `&mut` into a public field: `rgba.get_pixel_mut(x, y).0 = [0; 4]`","state":"closed"},
-            {"number":1321,"title":"A stand-in's `&self` result of a native type with `'_` lets its borrowed strings go at the next `&mut` reach","state":"open"},
-            {"number":1322,"title":"A stand-in's borrowed result (`&str`, `&[T]`, `&T`) is a copy the stand-in keeps, not a borrow of the kept value","state":"open"},
+            {"number":1321,"title":"A stand-in's `&self` result of a native type with `'_` lets its borrowed strings go at the next `&mut` reach","state":"closed"},
+            {"number":1322,"title":"A stand-in's borrowed result (`&str`, `&[T]`, `&T`) is a copy the stand-in keeps, not a borrow of the kept value","state":"closed"},
             {"number":1323,"title":"rawr run shows only cargo's error when rawr's copy of the crate fails to build for the same reason","state":"closed"},
             {"number":1324,"title":"A crate signature with `&mut [T; N]` (or another array type) can be used","state":"closed"},
             {"number":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"closed"},
@@ -4006,7 +4009,9 @@
             {"number":1338,"title":"cfg: RUSTFLAGS --cfg values and a disabled multi-parameter closure argument","state":"open"},
             {"number":1346,"title":"The file watcher fails to start on a large project: `unable to start FSEvent stream`; watch the inputs, not the tree","state":"closed"},
             {"number":1350,"title":"A new top-level file in a package tree beside its target/ is not seen before the next native read","state":"open"},
-            {"number":1351,"title":"A watched package tree covers its .git and nested packages","state":"open"}
+            {"number":1351,"title":"A watched package tree covers its .git and nested packages","state":"open"},
+            {"number":1364,"title":"A native trait object's `&[T]`/`&T` result that borrows the receiver comes back as a copy per call","state":"open"},
+            {"number":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open"}
           ]
         }
       ]
