@@ -252,46 +252,6 @@ use wide::{
 };
 pub(crate) use wide::{wide_operator, wide_range};
 
-#[derive(Clone)]
-struct ParsedExpr {
-    prelude: origin::Fragment,
-    source: origin::Fragment,
-    ty: Ty,
-    span: Span,
-    lvalue: Option<Lvalue>,
-    outcome: crate::host::usage::Outcome,
-    evaluation: crate::host::usage::Evaluation,
-}
-
-impl ParsedExpr {
-    fn rendered_source(&self) -> origin::Fragment {
-        if self.prelude.is_empty() {
-            self.source.clone()
-        } else {
-            self.rendered_block()
-        }
-    }
-
-    fn rendered_block(&self) -> origin::Fragment {
-        let mut rendered = origin::Fragment::plain("{\n");
-        rendered.push(self.prelude.clone());
-        rendered.push(self.source.clone());
-        rendered.push_text("\n}");
-        rendered
-    }
-
-    fn retain_origin(mut self) -> Self {
-        self.source.cover(self.span);
-        self
-    }
-
-    /// Whether this value is a local read by its name, which a call or a
-    /// `format!` can borrow where it is instead of a copy (D568).
-    fn is_local(&self) -> bool {
-        self.prelude.is_empty() && is_valid_identifier(self.source.as_str())
-    }
-}
-
 /// A `text.into()` whose target the use site gives once inference has it:
 /// a `String`, or a std type of std's `From` of text (`Cow<str>`), written
 /// over the placeholder before the text's `(text)`.
@@ -1350,6 +1310,7 @@ fn default_value(
 }
 pub(crate) use cell::{cell_held, cell_lock, cell_new, is_cell};
 pub(super) use entry::runtime_entry;
+use expr::ParsedExpr;
 use host_call::{host_number_accepts, macro_or_value, value_or_call, HostCheck};
 #[cfg(feature = "rust-import")]
 use host_call::{names_variant, unsupported_field, ImportedContext, UNSUPPORTED_MESSAGE_FUNCTION};

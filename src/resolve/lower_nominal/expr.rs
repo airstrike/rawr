@@ -1997,3 +1997,43 @@ impl<'a> Parser<'a> {
         }
     }
 }
+
+#[derive(Clone)]
+pub(super) struct ParsedExpr {
+    pub(super) prelude: origin::Fragment,
+    pub(super) source: origin::Fragment,
+    pub(super) ty: Ty,
+    pub(super) span: Span,
+    pub(super) lvalue: Option<Lvalue>,
+    pub(super) outcome: crate::host::usage::Outcome,
+    pub(super) evaluation: crate::host::usage::Evaluation,
+}
+
+impl ParsedExpr {
+    pub(super) fn rendered_source(&self) -> origin::Fragment {
+        if self.prelude.is_empty() {
+            self.source.clone()
+        } else {
+            self.rendered_block()
+        }
+    }
+
+    pub(super) fn rendered_block(&self) -> origin::Fragment {
+        let mut rendered = origin::Fragment::plain("{\n");
+        rendered.push(self.prelude.clone());
+        rendered.push(self.source.clone());
+        rendered.push_text("\n}");
+        rendered
+    }
+
+    pub(super) fn retain_origin(mut self) -> Self {
+        self.source.cover(self.span);
+        self
+    }
+
+    /// Whether this value is a local read by its name, which a call or a
+    /// `format!` can borrow where it is instead of a copy (D568).
+    pub(super) fn is_local(&self) -> bool {
+        self.prelude.is_empty() && is_valid_identifier(self.source.as_str())
+    }
+}
