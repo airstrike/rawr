@@ -14035,56 +14035,6 @@ impl<'a> Parser<'a> {
             .find(|path| self.models.host_items(path).is_some())
     }
 
-    /// The item of the crate iterator `ty`: its `next`'s `Option<T>`'s `T`,
-    /// as `Product<I, J>`'s `next` gives `(I::Item, J::Item)`. `None` when
-    /// `ty` has no `next` Rawr has.
-    #[cfg(feature = "rust-import")]
-    fn host_iterator_item(&mut self, ty: &Ty, span: Span) -> Option<Ty> {
-        if !self.type_implements(ty, "Iterator") {
-            return None;
-        }
-        let definition = ty
-            .host_alias()
-            .cloned()
-            .or_else(|| self.imported_member_owner(ty, "next"))?;
-        let next = self
-            .models
-            .host_items(&format!("{}::next", definition.path()))?
-            .first()?
-            .clone();
-        let checkpoint = self.inference.checkpoint();
-        let Ok(signature) = self.instantiate_host_signature(&next, Some(ty), None, span) else {
-            self.inference.rollback(checkpoint);
-            return None;
-        };
-        self.inference.commit(checkpoint);
-        match self.inference.resolve(&signature.output) {
-            Ty::Option(item) => Some(*item),
-            _ => None,
-        }
-    }
-
-    /// Whether `ty` is an iterator: the program's own (`program_iterator`)
-    /// or a crate type that implements `Iterator`.
-    #[cfg(feature = "rust-import")]
-    fn iterator_value(&self, ty: &Ty) -> bool {
-        let ty = self.inference.resolve(ty);
-        self.program_iterator(&ty)
-            || matches!(ty, Ty::Host { .. }) && self.type_implements(&ty, "Iterator")
-    }
-
-    /// Whether `ty` is an iterator of the program's own, which crosses into
-    /// a crate as a step function (`step_iterator`): an adaptor chain, an
-    /// integer range, or a script type that implements `Iterator`.
-    #[cfg(feature = "rust-import")]
-    fn program_iterator(&self, ty: &Ty) -> bool {
-        match self.inference.resolve(ty) {
-            Ty::Iter(..) | Ty::InclusiveRange(_) => true,
-            ty @ Ty::Script(..) => self.type_implements(&ty, "Iterator"),
-            _ => false,
-        }
-    }
-
     /// Whether the crate gives the host type `ty` (or the type it refers
     /// to) a member `member` of its own.
     #[cfg(feature = "rust-import")]
