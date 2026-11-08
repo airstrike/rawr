@@ -1261,6 +1261,7 @@
     {"t":"T1258","issue":1258,"title":"T1258: rawr test in a package with several binaries stops where cargo test tests each one","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
     {"t":"T1259","issue":1259,"title":"T1259: A marked crate's default features are off in its marked code","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
     {"t":"T1260","issue":1260,"title":"T1260: A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1261","issue":1261,"title":"T1261: The rawr lib tests don't compile without the rust-import feature","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1261","issue":1261,"title":"T1261: The rawr lib tests don't compile without the rust-import feature","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1262","issue":1262,"title":"T1262: rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"open","category":"Health","labels":["health"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null}
   ]
 }

@@ -2945,7 +2945,8 @@
     {"issue":1258,"title":"rawr test in a package with several binaries stops where cargo test tests each one","state":"open","category":"Divergences from rustc"},
     {"issue":1259,"title":"A marked crate's default features are off in its marked code","state":"open","category":"Divergences from rustc"},
     {"issue":1260,"title":"A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"open","category":"Divergences from rustc"},
-    {"issue":1261,"title":"The rawr lib tests don't compile without the rust-import feature","state":"open","category":"Health"}
+    {"issue":1261,"title":"The rawr lib tests don't compile without the rust-import feature","state":"open","category":"Health"},
+    {"issue":1262,"title":"rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3787,7 +3788,8 @@
             {"number":1245,"title":"Process capture and Cargo environment caps can still fire on a large project","state":"open"},
             {"number":1249,"title":"A native root can't name a marked module's types: `Program::new(..) -> (Program, Task<Message>)` from native main","state":"open"},
             {"number":1258,"title":"rawr test in a package with several binaries stops where cargo test tests each one","state":"open"},
-            {"number":1259,"title":"A marked crate's default features are off in its marked code","state":"open"}
+            {"number":1259,"title":"A marked crate's default features are off in its marked code","state":"open"},
+            {"number":1262,"title":"rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"open"}
           ]
         }
       ]
