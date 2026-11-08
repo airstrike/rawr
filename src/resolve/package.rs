@@ -635,6 +635,7 @@ impl<'a> Resolver<'a> {
                     let mut parsed = parsed;
                     qualify_opaque_bounds(&mut parsed, &modules);
                     write_renamed_modules(&mut parsed, &modules);
+                    self.write_native_trait_objects(&context, &mut parsed, &modules);
                     parsed
                 };
                 let shell = super::resolve_item(
@@ -1538,6 +1539,70 @@ impl<'a> Resolver<'a> {
         )
     }
 
+    /// Each trait object of `item`'s signatures whose trait is native, as
+    /// `dyn crate::page::Page`, `dyn page::Page` after `use crate::page;`
+    /// or `dyn Page` after `use crate::page::Page;`, written from the app
+    /// crate's root (`dyn polyglot::page::Page`), so the resolver finds the
+    /// trait by its path (`type_ref::native_trait`). The trait's own
+    /// arguments stay on its segment.
+    fn write_native_trait_objects(
+        &self,
+        context: &Context,
+        item: &mut crate::item::Parsed,
+        modules: &BTreeMap<ImmutableString, ImmutableString>,
+    ) {
+        use crate::item::type_ref::{Path, Segment};
+        let path = |path: &mut Path| {
+            let [dyn_, first, ..] = &path.segments[..] else {
+                return;
+            };
+            if dyn_.name.text.as_str() != crate::item::type_ref::DYN_SEGMENT {
+                return;
+            }
+            let written = path.segments[1..]
+                .iter()
+                .map(|segment| segment.name.text.clone())
+                .collect::<Vec<_>>();
+            let spelled = match modules.get(&first.name.text) {
+                Some(module) => module
+                    .split("::")
+                    .map(ImmutableString::from)
+                    .chain(written[1..].iter().cloned())
+                    .collect(),
+                None => match self.rust_spelling(context, &written) {
+                    Some(spelled) => spelled,
+                    None => return,
+                },
+            };
+            if spelled.len() < 2 {
+                return;
+            }
+            let last = path.segments[path.segments.len() - 1].clone();
+            let (at, span) = (first.name.span, first.span);
+            let count = spelled.len();
+            path.segments = std::iter::once(dyn_.clone())
+                .chain(spelled.into_iter().enumerate().map(|(index, text)| {
+                    if index + 1 == count {
+                        Segment {
+                            name: crate::item::Name {
+                                text,
+                                span: last.name.span,
+                            },
+                            ..last.clone()
+                        }
+                    } else {
+                        Segment {
+                            name: crate::item::Name { text, span: at },
+                            arguments: Box::default(),
+                            span,
+                        }
+                    }
+                }))
+                .collect();
+        };
+        each_signature_path(item, &path);
+    }
+
     /// `crate::…`, `super::…` or child-module paths that land in a `.rs`
     /// module of the current package, or name one, spelled through the
     /// app's crate name. A `use` that binds a `.rs` module (`use
@@ -2264,7 +2329,7 @@ pub(super) fn write_renamed_modules(
     item: &mut crate::item::Parsed,
     modules: &BTreeMap<ImmutableString, ImmutableString>,
 ) {
-    use crate::item::type_ref::{Argument, Path, Segment, Type};
+    use crate::item::type_ref::{Path, Segment};
     let renamed = modules
         .iter()
         .filter(|(name, qualified)| qualified.rsplit("::").next() != Some(name.as_str()))
@@ -2298,6 +2363,16 @@ pub(super) fn write_renamed_modules(
             .chain(path.segments.iter().skip(1).cloned())
             .collect();
     };
+    each_signature_path(item, &path);
+}
+
+/// Call `path` on each path of `item`'s signatures: its types, at any depth
+/// of their arguments, its generic bounds and an impl's trait.
+fn each_signature_path(
+    item: &mut crate::item::Parsed,
+    path: &impl Fn(&mut crate::item::type_ref::Path),
+) {
+    use crate::item::type_ref::{Argument, Path, Type};
     fn ty(written: &mut Type, path: &impl Fn(&mut Path)) {
         match written {
             Type::Unit(_) => {}
@@ -2331,30 +2406,30 @@ pub(super) fn write_renamed_modules(
     let function = |function: &mut crate::item::Function| {
         generics(&mut function.generics);
         for parameter in function.parameters.iter_mut() {
-            ty(&mut parameter.ty, &path);
+            ty(&mut parameter.ty, path);
         }
         if let Some(output) = &mut function.output {
-            ty(output, &path);
+            ty(output, path);
         }
     };
     match item {
         crate::item::Parsed::Struct(item) => {
             generics(&mut item.generics);
             for field in item.fields.iter_mut() {
-                ty(&mut field.ty, &path);
+                ty(&mut field.ty, path);
             }
         }
         crate::item::Parsed::Enum(item) => {
             generics(&mut item.generics);
             for variant in item.variants.iter_mut() {
                 for payload in variant.payload.iter_mut() {
-                    ty(payload, &path);
+                    ty(payload, path);
                 }
             }
         }
         crate::item::Parsed::Impl(item) => {
             generics(&mut item.generics);
-            ty(&mut item.owner, &path);
+            ty(&mut item.owner, path);
             if let Some(trait_) = &mut item.trait_ {
                 path(trait_);
             }
@@ -2368,7 +2443,7 @@ pub(super) fn write_renamed_modules(
             }
         }
         crate::item::Parsed::Function(item) => function(item),
-        crate::item::Parsed::TypeAlias(item) => ty(&mut item.target, &path),
+        crate::item::Parsed::TypeAlias(item) => ty(&mut item.target, path),
         crate::item::Parsed::Module(_) | crate::item::Parsed::Use(_) => {}
     }
 }

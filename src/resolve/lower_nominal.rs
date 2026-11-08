@@ -38792,6 +38792,18 @@ impl<'a> Parser<'a> {
                 let Ty::Dyn(trait_name, _) = &object else {
                     unreachable!("matched a trait object");
                 };
+                // A native trait's methods are the crate's, which rawr
+                // doesn't call through a trait object yet.
+                if type_ref::is_native_trait(trait_name) {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!(
+                            "calling `{member}` of the native trait object `{}` is not supported yet",
+                            object.name(&self.models)
+                        )
+                        .into(),
+                        source: member_span,
+                    });
+                }
                 // The trait's own methods, then its supertraits'.
                 let found = std::iter::once(trait_name.clone())
                     .chain(supertraits(&self.models, trait_name))
@@ -52206,12 +52218,23 @@ impl<'a> Parser<'a> {
                 return self.parse_local_fn_type(false);
             }
             // `dyn std::error::Error`: traits are crate-wide by name, as in
-            // item headers.
-            let (mut trait_name, mut trait_span) = self.expect_name("trait object type")?;
+            // item headers. A native trait is its full path.
+            let (first, first_span) = self.expect_name("trait object type")?;
+            let (mut trait_name, mut trait_span) = (first.clone(), first_span);
+            let mut written = first.to_string();
             while matches!(self.peek(), Token::DoubleColon) {
                 self.next();
                 (trait_name, trait_span) = self.expect_name("trait object type")?;
+                written.push_str("::");
+                written.push_str(&trait_name);
             }
+            let path_span = Span::new(
+                first_span.start(),
+                text_end(trait_span.start(), &trait_name),
+            );
+            let trait_name = self
+                .native_trait(&first, &written, path_span)
+                .unwrap_or(trait_name);
             let ty = self.dyn_type(&trait_name, trait_span)?;
             // `dyn Shape + Send + 'a`: Rust admits only auto traits and
             // lifetimes after the first trait (E0225).
@@ -52924,8 +52947,42 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The full path of the native trait a trait object names as `written`
+    /// (from `first`, at `span`), when it is one: `dyn crate::page::Page`,
+    /// `dyn page::Page` after `use crate::page;` or `dyn Page` after `use
+    /// crate::page::Page;`, as the item headers write it
+    /// (`type_ref::native_trait`).
+    #[cfg_attr(
+        not(feature = "rust-import"),
+        allow(clippy::unused_self, unused_variables)
+    )]
+    fn native_trait(&self, first: &str, written: &str, span: Span) -> Option<ImmutableString> {
+        #[cfg(feature = "rust-import")]
+        {
+            let path = match (self.models.qualified_rust(span), self.models.import(first)) {
+                (Some(spelled), _) => spelled.join("::"),
+                (None, Some(binding))
+                    if matches!(
+                        binding.target,
+                        item::Import::Module | item::Import::ModuleItem { .. }
+                    ) =>
+                {
+                    format!("{}{}", binding.qualified, &written[first.len()..])
+                }
+                (None, _) => written.to_owned(),
+            };
+            let parsed = crate::host::path::Path::parse(&path).ok()?;
+            (type_ref::is_native_trait(&path) && self.models.host.trait_header(&parsed).is_some())
+                .then(|| path.into())
+        }
+        #[cfg(not(feature = "rust-import"))]
+        None
+    }
+
     /// `dyn Trait` of a crate trait that can be made into an object.
-    /// `dyn Shape<Output = i64>` gives each associated type (E0191).
+    /// `dyn Shape<Output = i64>` gives each associated type (E0191). A
+    /// native trait's object (`type_ref::is_native_trait`) is the crate's,
+    /// which checked the trait.
     fn dyn_type(&mut self, trait_name: &str, span: Span) -> Result<Ty, Error> {
         let mut bindings = Vec::new();
         let mut positional = Vec::new();
@@ -52971,6 +53028,17 @@ impl<'a> Parser<'a> {
                     source: span,
                 }),
             };
+        }
+        // A native trait's object: the crate checked the trait.
+        if !self.models.traits.contains_key(trait_name) && type_ref::is_native_trait(trait_name) {
+            bindings.extend(
+                positional
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, ty)| (ImmutableString::from(index.to_string()), ty)),
+            );
+            bindings.sort_by(|(a, _), (b, _)| a.cmp(b));
+            return Ok(Ty::Dyn(trait_name.into(), bindings.into_boxed_slice()));
         }
         let Some((_, declared)) = self.models.traits.get(trait_name) else {
             return Err(Error::UnknownType {
@@ -53506,6 +53574,19 @@ impl<'a> Parser<'a> {
             }
         });
         if let Some((trait_name, bindings, concrete)) = unsizing {
+            // Making a native trait's object takes the crate's impl of the
+            // trait for the type, which rawr doesn't make one of yet.
+            if type_ref::is_native_trait(&trait_name) {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "coercing `{}` to the native trait object `{}` is not supported yet",
+                        concrete.name(&self.models),
+                        Ty::Dyn(trait_name.clone(), bindings.clone()).name(&self.models)
+                    )
+                    .into(),
+                    source: value.span,
+                });
+            }
             let positional = dyn_arguments(&bindings);
             if !self.type_implements_with(&concrete, &trait_name, &positional) {
                 return Err(Error::MissingCapability {

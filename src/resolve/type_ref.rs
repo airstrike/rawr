@@ -494,9 +494,10 @@ fn resolve_path(
         && first.name.text.as_str() == item::type_ref::DYN_SEGMENT
         && !rest.is_empty()
     {
-        // Traits are crate-wide by name.
+        // Traits are crate-wide by name; a native trait is its full path,
+        // as the resolver writes it (`package::write_native_trait_objects`).
         let last = &rest[rest.len() - 1];
-        let name = &last.name.text;
+        let name = native_trait(rest, host).unwrap_or_else(|| last.name.text.clone());
         // `Output = i64` bindings, kept as the arguments `=Output<i64>`.
         let mut arguments = Vec::new();
         for argument in &last.arguments {
@@ -1143,6 +1144,36 @@ fn declared<'t>(types: &'t BTreeMap<ImmutableString, Target>, name: &str) -> Opt
     types
         .get(name)
         .filter(|target| !matches!(target, Target::Std(_)))
+}
+
+/// The full path of the native trait `dyn` names by `segments`, written
+/// from a crate's root (`polyglot::page::Page`), when it is one: a trait
+/// object's trait is then native, not one of the crate's own.
+fn native_trait(
+    segments: &[item::type_ref::Segment],
+    #[cfg_attr(not(feature = "rust-import"), allow(unused_variables))] host: &host::Registry,
+) -> Option<ImmutableString> {
+    if segments.len() < 2 {
+        return None;
+    }
+    #[cfg(feature = "rust-import")]
+    {
+        let written = segments
+            .iter()
+            .map(|segment| segment.name.text.as_str())
+            .collect::<Vec<_>>()
+            .join("::");
+        let path = host::path::Path::parse(&written).ok()?;
+        host.trait_header(&path).map(|_| written.into())
+    }
+    #[cfg(not(feature = "rust-import"))]
+    None
+}
+
+/// Whether the trait of the trait object `dyn {name}` is native: its name
+/// is a path (`native_trait`), where a crate trait's is its own name.
+pub(crate) fn is_native_trait(name: &str) -> bool {
+    name.contains("::")
 }
 
 /// The facade trait a bound names (iced's `Widget<Message>`), if any.
