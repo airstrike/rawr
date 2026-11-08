@@ -123,7 +123,8 @@
         {"text":"A single-file program names its own items through `crate::`, `self::` and `super::` as rustc does, in types, values, calls, patterns and `use`, with rustc's error for `super::` at the root.","issues":[1344]},
         {"text":"`pub use` of an enum variant, by name or by glob, re-exports it from its module, for the program's enums and a crate's.","issues":[1345]},
         {"text":"`rawr run` watches the program's inputs, not the project tree: nothing under `target/` reaches the file watcher, so rawr's own builds no longer count as saves, and a project with a huge `target/` starts its watcher. If macOS refuses the watcher's stream, the error says so and lists the paths rawr asked for.","issues":[1346],"refs":[1222]},
-        {"text":"`clock.strftime(\"%H:%M\")` fills `F: ?Sized` with the unsized `str`; instance_surface_type had no case for that type, so the call carried no instance key and fell back to the item's shared binding, the adapter of whichever instance registered first, in an order set by hashes. New crates in the crate-shapes fixture flipped that order and the literal reached the `[u8]` adapter: the 'a value reached an adapter as a type its signature doesn't take' panic, deterministic in one lane and absent in another, which is also the shape of the #1087 flake. Ty::UnsizedStr now keys as Builtin::Str, as the adapter generator names it. Merged in 1777280a7.","issues":[1352],"refs":[1087]}
+        {"text":"`clock.strftime(\"%H:%M\")` fills `F: ?Sized` with the unsized `str`; instance_surface_type had no case for that type, so the call carried no instance key and fell back to the item's shared binding, the adapter of whichever instance registered first, in an order set by hashes. New crates in the crate-shapes fixture flipped that order and the literal reached the `[u8]` adapter: the 'a value reached an adapter as a type its signature doesn't take' panic, deterministic in one lane and absent in another, which is also the shape of the #1087 flake. Ty::UnsizedStr now keys as Builtin::Str, as the adapter generator names it. Merged in 1777280a7.","issues":[1352],"refs":[1087]},
+        {"text":"A call of a crate's generic item always reaches the adapter of its own instance. A parameter an associated type reads no longer misses its adapter, and a type argument that keys no instance is a check error at the call, never a call into another instance's adapter at run time.","issues":[1353,1087]}
       ]
     },
     "releases": [
@@ -2818,7 +2819,7 @@
     {"issue":1084,"title":"the_matrix's runner: WeightedIndex<_> where X is fixed only through I::Item: SampleBorrow<X>","state":"closed","category":"Divergences from rustc","release":"0.3.169"},
     {"issue":1085,"title":"A generic program impl of a crate trait isn't generated for a crate function's bound at a concrete argument","state":"open","category":"Divergences from rustc"},
     {"issue":1086,"title":"Relation cases for a std type are written as the value rawr holds, not the Rust type (f32 is f64)","state":"open","category":"Divergences from rustc"},
-    {"issue":1087,"title":"A crate_shapes strftime test panicked once in a parallel run: a value reached an adapter as a type it doesn't take","state":"open","category":"Health"},
+    {"issue":1087,"title":"A crate_shapes strftime test panicked once in a parallel run: a value reached an adapter as a type it doesn't take","state":"closed","category":"Health"},
     {"issue":1088,"title":"cargo test -p rawr --lib without the rust-import feature doesn't compile","state":"open","category":"Health"},
     {"issue":1089,"title":"The site serves /llms.txt, a short summary of rawr's docs for coding agents: every command and…","state":"closed","category":"Health","release":"0.3.162"},
     {"issue":1090,"title":"Previews render nowhere since rawr-iced was removed: bring them back on generated bindings","state":"open","category":"Health"},
@@ -3084,7 +3085,7 @@
     {"issue":1350,"title":"A new top-level file in a package tree beside its target/ is not seen before the next native read","state":"open","category":"Health"},
     {"issue":1351,"title":"A watched package tree covers its .git and nested packages","state":"open","category":"Health"},
     {"issue":1352,"title":"A crate generic called with a literal for an unsized str parameter reaches its own adapter in any registration order","state":"open","category":"Health"},
-    {"issue":1353,"title":"A call whose instance has no key takes whichever adapter of the item bound first","state":"open","category":"Health"},
+    {"issue":1353,"title":"A call whose instance has no key takes whichever adapter of the item bound first","state":"closed","category":"Health"},
     {"issue":1354,"title":"staged/ keeps only the keys a kept resolution names","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1355,"title":"One extraction table per key: staged/ keeps metadata, and an unchanged table is not written again","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1356,"title":"Generic, facade and overlay contents and runner sources are stored as content-defined parts","state":"open","category":"Health"},
@@ -3711,7 +3712,7 @@
             {"number":1333,"title":"A `&mut` place of a receiver in a scope frame's region calls the method once","state":"closed"},
             {"number":1334,"title":"An `Option<&mut T>` a crate method lends calls the method once","state":"closed"},
             {"number":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"open"},
-            {"number":1353,"title":"A call whose instance has no key takes whichever adapter of the item bound first","state":"open"}
+            {"number":1353,"title":"A call whose instance has no key takes whichever adapter of the item bound first","state":"closed"}
           ]
         }
       ]
