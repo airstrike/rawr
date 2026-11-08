@@ -149,7 +149,8 @@
       {"text":"An index past a slice's end panics at the expression's start, as rustc places it.","issues":[35]},
       {"text":"Integer division and remainder by zero or overflow, out-of-range slice ranges, `pow` overflow and a reversed `clamp` panic in rustc's words and at rustc's position.","issues":[37]},
       {"text":"A project whose `.cargo/config.toml` sets `build.target` (or that runs with `CARGO_BUILD_TARGET`) is read, extracted and generated for that target, as Cargo builds it, such as wasm32-unknown-unknown.","issues":[1394]},
-      {"text":"A crate value generic over a program's types can call a script function it kept, such as elevato's `Simulation::frame` calling the program's `update`, and that function can make crate values like a `Task` and give them back. Before, the program panicked with `Stale`.","issues":[1432]}
+      {"text":"A crate value generic over a program's types can call a script function it kept, such as elevato's `Simulation::frame` calling the program's `update`, and that function can make crate values like a `Task` and give them back. Before, the program panicked with `Stale`.","issues":[1432]},
+      {"text":"A view whose message type only its declared return type fixes, as `fn view(..) -> Slot<'static, Message> { match id { .. => row![badge![..].style(..)].into() } }`, runs instead of failing with E0282 at the badge when the crate's Slot is also an Element. A crate type with `From` impls for several generic targets, as a badge that is both a Slot and an Element, converts with `.into()` instead of failing at start with \"the bindings have no item\".","issues":[1422]}
     ]
   },
   "releases": [

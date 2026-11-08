@@ -150,6 +150,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Integer division and remainder by zero or overflow, out-of-range slice ranges, `pow` overflow and a reversed `clamp` panic in rustc's words and at rustc's position. (#37)
 - A project whose `.cargo/config.toml` sets `build.target` (or that runs with `CARGO_BUILD_TARGET`) is read, extracted and generated for that target, as Cargo builds it, such as wasm32-unknown-unknown. (#1394)
 - A crate value generic over a program's types can call a script function it kept, such as elevato's `Simulation::frame` calling the program's `update`, and that function can make crate values like a `Task` and give them back. Before, the program panicked with `Stale`. (#1432)
+- A view whose message type only its declared return type fixes, as `fn view(..) -> Slot<'static, Message> { match id { .. => row![badge![..].style(..)].into() } }`, runs instead of failing with E0282 at the badge when the crate's Slot is also an Element. A crate type with `From` impls for several generic targets, as a badge that is both a Slot and an Element, converts with `.into()` instead of failing at start with "the bindings have no item". (#1422)
 
 ## 0.3.171 (2026-11-07)
 
