@@ -216,6 +216,16 @@ debug = false
 [profile.release]
 lto = "fat"
 codegen-units = 1
+
+# Local installs of rawr's own tools (scripts/install-local.sh): release
+# optimisation without the whole-program link, which takes minutes per binary
+# and buys a few percent that development doesn't need. Published builds keep
+# `release`.
+[profile.local]
+inherits = "release"
+lto = false
+codegen-units = 256
+incremental = true
 #opt-level = "z"     # optimize for size
 #panic = 'abort'     # remove stack backtrace
 
