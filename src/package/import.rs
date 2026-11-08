@@ -695,7 +695,10 @@ fn imported_resolution_report(
     sources: &[diagnostic::Source],
     paths: &ImportedPaths<'_>,
 ) -> Result<Option<diagnostic::Report>, diagnostic::Error> {
-    let crate::resolve::Error::UnknownImport { path, reference } = &failure.error else {
+    let crate::resolve::Error::UnknownImport {
+        path, reference, ..
+    } = &failure.error
+    else {
         let Some((path, namespace)) = diagnostic_path(&failure.error) else {
             return Ok(None);
         };

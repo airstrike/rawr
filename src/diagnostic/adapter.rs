@@ -608,9 +608,16 @@ fn primary_label(
         resolve::Error::NotInModule { module, .. } => {
             Some(format!("not found in `{}`", written_module(source, primary, module)).into())
         }
+        // rustc names the module a qualified type isn't in.
+        resolve::Error::UnknownType {
+            name, path: false, ..
+        } if let Some((module, _)) = name.rsplit_once("::") => {
+            Some(format!("not found in `{module}`").into())
+        }
         resolve::Error::UnknownVariable { .. }
         | resolve::Error::UnknownFunction { .. }
         | resolve::Error::UnknownType { path: false, .. } => Some("not found in this scope".into()),
+        resolve::Error::UnknownImport { path, missing, .. } => missing.label(path).map(Into::into),
         resolve::Error::UnknownType {
             name, path: true, ..
         } => Some(
@@ -790,16 +797,21 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::DuplicateImport { .. } => {
             builder.help("you can use `as` to change the binding name of the import")
         }
-        resolve::Error::UnknownType { name, .. } if name.contains("::") => builder.help(format!(
-            "`{name}` isn't available in Rawr yet, or the path is misspelled"
-        )),
-        resolve::Error::UnknownMember { owner, member, .. } if owner.contains("::") => builder
-            .help(format!(
-                "`{owner}::{member}` isn't available in Rawr yet, or the name is misspelled"
-            )),
-        resolve::Error::UnknownImport { path, .. } => builder.help(format!(
-            "`{path}` isn't available in Rawr yet, or the path is misspelled"
-        )),
+        // rustc's help where a path starts at no crate or module in scope.
+        resolve::Error::UnknownType {
+            name, path: true, ..
+        } if matches!(
+            resolve::NotFound::type_named(name, true),
+            resolve::NotFound::Module(_)
+        ) =>
+        {
+            builder.help(unlinked_crate_help(name))
+        }
+        resolve::Error::UnknownImport {
+            path,
+            missing: resolve::Unresolved::Unlinked,
+            ..
+        } => builder.help(unlinked_crate_help(path)),
         resolve::Error::StdPath {
             note: Some(note), ..
         } => builder.note(note.clone()),
@@ -1007,6 +1019,15 @@ fn evaluation_message(error: &EvalAltResult) -> String {
         }
         _ => error.to_string(),
     }
+}
+
+/// rustc's help for a path whose first segment, `name`, names no crate or
+/// module in scope.
+fn unlinked_crate_help(name: &str) -> String {
+    format!(
+        "if you wanted to use a crate named `{name}`, use `cargo add {name}` to add it to your \
+         `Cargo.toml`"
+    )
 }
 
 fn resolution_message(error: &resolve::Error) -> String {

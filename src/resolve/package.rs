@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{item, type_ref, Error, LocatedError, Namespace, Private, Program, Script};
+use super::{item, type_ref, Error, LocatedError, Namespace, Private, Program, Script, Unresolved};
 use crate::package::{graph, source, Graph};
 use crate::{host, parse, program, type_def, ImmutableString, Span};
 
@@ -657,12 +657,7 @@ impl<'a> Resolver<'a> {
         );
 
         self.resolve_aliases()?;
-        let prelude = self
-            .packages
-            .iter()
-            .filter(|_| !self.hosted)
-            .find(|package| package.name() == self.package.as_str())
-            .map(super::extern_prelude::Prelude::of);
+        let prelude = self.prelude();
         let mut aliases = BTreeMap::new();
         #[cfg(feature = "rust-import")]
         let mut lexical = BTreeMap::new();
@@ -749,7 +744,7 @@ impl<'a> Resolver<'a> {
                 .map_err(|error| Failure {
                     primary: context.source,
                     secondary: None,
-                    error,
+                    error: self.unresolved_type(&context, error),
                 })?;
                 shells.push(shell);
             }
@@ -963,13 +958,25 @@ impl<'a> Resolver<'a> {
             });
         }
         let Some(names) = self.glob_names(context, &segments) else {
+            // rustc stops at a first segment that names no crate or module.
+            let error = match prefix.segments.first() {
+                Some(root) if self.unresolved_root(context, &root.name.text) => {
+                    Error::UnknownImport {
+                        path: root.name.text.clone(),
+                        reference: root.name.span,
+                        missing: Unresolved::Unlinked,
+                    }
+                }
+                _ => Error::UnknownImport {
+                    path: module,
+                    reference: *span,
+                    missing: Unresolved::Path,
+                },
+            };
             return Err(Failure {
                 primary: context.source,
                 secondary: None,
-                error: Error::UnknownImport {
-                    path: module,
-                    reference: *span,
-                },
+                error,
             });
         };
         Ok(names
@@ -1337,7 +1344,16 @@ impl<'a> Resolver<'a> {
                     Some(_) => Target::Module,
                     None => {
                         let mut active = BTreeSet::new();
-                        self.resolve_any_path(context, &path, name.span, &mut active)?
+                        self.resolve_any_path(context, &path, name.span, &mut active)
+                            .map_err(|failure| {
+                                self.unresolved_use(
+                                    context,
+                                    &parsed.tree,
+                                    &path,
+                                    name.span,
+                                    failure,
+                                )
+                            })?
                     }
                 };
                 // A glob's name is shadowed by the one a declaration or an
@@ -1516,7 +1532,10 @@ impl<'a> Resolver<'a> {
                 continue;
             }
             let mut active = BTreeSet::new();
-            match self.resolve_path(context, &segments, path.span, &mut active)? {
+            let target = self
+                .resolve_path(context, &segments, path.span, &mut active)
+                .map_err(|failure| self.unresolved_type_path(context, path, failure))?;
+            match target {
                 Target::Type(target) => {
                     types.insert(segments.join("::").into(), target);
                 }
@@ -2070,9 +2089,242 @@ impl<'a> Resolver<'a> {
             error: Error::UnknownImport {
                 path: path.join("::").into(),
                 reference,
+                missing: Unresolved::Path,
             },
         }
     }
+
+    /// The crates this package's paths may start with, as rustc's extern
+    /// prelude has them. `None` for a host's one in-memory file, whose host
+    /// decides what it reaches.
+    fn prelude(&self) -> Option<super::extern_prelude::Prelude> {
+        self.packages
+            .iter()
+            .filter(|_| !self.hosted)
+            .find(|package| package.name() == self.package.as_str())
+            .map(super::extern_prelude::Prelude::of)
+    }
+
+    /// Whether `root`, a path's first segment in `context`, names no crate,
+    /// module or item in scope, where rustc stops resolving the path.
+    fn unresolved_root(&self, context: &Context, root: &str) -> bool {
+        let address = context.address(root);
+        // A `use` binds the name, unless it is `use root;` itself.
+        let bound = |uses: &BTreeMap<Address, Export>| {
+            uses.get(&address).is_some_and(|export| {
+                export.path.first().map(ImmutableString::as_str) != Some(root)
+            })
+        };
+        !matches!(
+            root,
+            "std" | "core" | "alloc" | "crate" | "self" | "super" | "Self"
+        ) && !self.declarations.contains_key(&address)
+            && !bound(&self.exports)
+            && !bound(&self.aliases)
+            && !bound(&self.globs)
+            && self.host.entry(root).is_none()
+            && self
+                .prelude()
+                .is_none_or(|crates| crates.reach(root, Span::NONE).is_err())
+    }
+
+    /// Whether `path` in `context` names a module of this crate or of
+    /// another. A probe: a crate's miss it finds isn't recorded.
+    fn names_module(&self, context: &Context, path: &[ImmutableString]) -> bool {
+        let target = if self.is_script_path(context, path) {
+            self.resolve_path(context, path, Span::NONE, &mut BTreeSet::new())
+                .ok()
+        } else {
+            host_target(
+                self.host,
+                path,
+                Span::NONE,
+                #[cfg(feature = "rust-import")]
+                None,
+            )
+            .ok()
+        };
+        matches!(target, Some(Target::Module | Target::HostModuleItem { .. }))
+    }
+
+    /// The longest proper prefix of `path` in `context` that names a module,
+    /// by its length.
+    fn found_module(&self, context: &Context, path: &[ImmutableString]) -> Option<usize> {
+        (1..path.len())
+            .rev()
+            .find(|&end| self.names_module(context, &path[..end]))
+    }
+
+    /// The module `module` names in `context`, as rustc's E0432 names it:
+    /// its path from its crate's root, or the crate's name for a crate's
+    /// root.
+    fn rustc_module(&self, context: &Context, module: &[ImmutableString]) -> ImmutableString {
+        let here = context.namespace.modules.as_ref();
+        let supers = module
+            .iter()
+            .take_while(|segment| *segment == "super")
+            .count();
+        let absolute = match module {
+            [first, rest @ ..] if first == "crate" => rest.to_vec(),
+            [first, rest @ ..] if first == "self" => [here, rest].concat(),
+            _ if supers > 0 => {
+                let parent = &here[..here.len().saturating_sub(supers)];
+                [parent, &module[supers..]].concat()
+            }
+            [first, ..] if self.is_child_module(context, first) => [here, module].concat(),
+            // Another crate's module, named from its root.
+            [_, rest @ ..] if !rest.is_empty() && !self.is_script_path(context, module) => {
+                rest.to_vec()
+            }
+            _ => module.to_vec(),
+        };
+        absolute.join("::").into()
+    }
+
+    /// rustc's E0432, or its E0433 where the path's first segment names no
+    /// crate, for the `use` of `path` (written as `tree`, its name at
+    /// `reference`) that `failure` refuses with no more than its path.
+    fn unresolved_use(
+        &self,
+        context: &Context,
+        tree: &crate::item::UseTree,
+        path: &[ImmutableString],
+        reference: Span,
+        failure: Failure,
+    ) -> Failure {
+        let Error::UnknownImport {
+            reference: at,
+            missing: Unresolved::Path,
+            ..
+        } = &failure.error
+        else {
+            return failure;
+        };
+        if *at != reference {
+            return failure;
+        }
+        let written = match tree {
+            crate::item::UseTree::Path(prefix, _)
+            | crate::item::UseTree::Group { prefix, .. }
+            | crate::item::UseTree::Glob { prefix, .. } => &prefix.segments,
+        };
+        // The span of the segment at `index`, as the `use` writes it.
+        let segment = |index: usize| {
+            written
+                .get(index)
+                .filter(|segment| path.get(index) == Some(&segment.name.text))
+                .map(|segment| segment.name.span)
+        };
+        let error = match path {
+            [root] if self.unresolved_root(context, root) => Error::UnknownImport {
+                path: root.clone(),
+                reference,
+                missing: Unresolved::Crate,
+            },
+            [root, _, ..] if self.unresolved_root(context, root) => match segment(0) {
+                Some(span) => Error::UnknownType {
+                    name: root.clone(),
+                    reference: span,
+                    path: true,
+                },
+                None => return failure,
+            },
+            _ => match self.found_module(context, path) {
+                Some(end) if end + 1 == path.len() => Error::UnknownImport {
+                    path: path.join("::").into(),
+                    reference,
+                    missing: Unresolved::Item(self.rustc_module(context, &path[..end])),
+                },
+                Some(end) if let Some(span) = segment(end) => Error::UnknownImport {
+                    path: path[..=end].join("::").into(),
+                    reference: span,
+                    missing: Unresolved::Module(self.rustc_module(context, &path[..end])),
+                },
+                _ => return failure,
+            },
+        };
+        Failure { error, ..failure }
+    }
+
+    /// rustc's E0425 for the type path `path` into a module of this crate
+    /// that `failure` refuses as an unresolved import: the module has no
+    /// type of its last segment's name.
+    fn unresolved_type_path(
+        &self,
+        context: &Context,
+        path: &crate::item::type_ref::Path,
+        failure: Failure,
+    ) -> Failure {
+        let segments = path_segments(path);
+        match (&failure.error, path.segments.last()) {
+            (
+                Error::UnknownImport {
+                    reference,
+                    missing: Unresolved::Path,
+                    ..
+                },
+                Some(last),
+            ) if *reference == path.span
+                && self.found_module(context, &segments) == Some(segments.len() - 1) =>
+            {
+                Failure {
+                    error: Error::UnknownType {
+                        name: segments.join("::").into(),
+                        reference: last.name.span,
+                        path: false,
+                    },
+                    ..failure
+                }
+            }
+            _ => failure,
+        }
+    }
+
+    /// rustc's error for a type path another crate's module doesn't
+    /// resolve, which `error` reports at the whole path: E0433 at its first
+    /// segment where that names no crate or module in scope, else E0425 at
+    /// its last.
+    fn unresolved_type(&self, context: &Context, error: Error) -> Error {
+        let Error::UnknownType {
+            name,
+            reference,
+            path: false,
+        } = &error
+        else {
+            return error;
+        };
+        let (Some((root, _)), Some((_, last))) = (name.split_once("::"), name.rsplit_once("::"))
+        else {
+            return error;
+        };
+        let start = reference.start();
+        // The spans below are the path's own only where it is written as
+        // `name` is, on one line.
+        if text_end(start, name) != reference.end() {
+            return error;
+        }
+        if self.unresolved_root(context, root) {
+            return Error::UnknownType {
+                name: root.into(),
+                reference: Span::new(start, text_end(start, root)),
+                path: true,
+            };
+        }
+        let last_start = text_end(start, &name[..name.len() - last.len()]);
+        Error::UnknownType {
+            name: name.clone(),
+            reference: Span::new(last_start, reference.end()),
+            path: false,
+        }
+    }
+}
+
+/// The position `text` ends at when it starts at `position` on one line.
+fn text_end(mut position: crate::Position, text: &str) -> crate::Position {
+    for _ in text.chars() {
+        position.advance();
+    }
+    position
 }
 
 /// `self::super::m` is `super::m`: a leading `self` stays in the module
@@ -2432,6 +2684,7 @@ fn host_target(
             let error = Error::UnknownImport {
                 path: qualified,
                 reference,
+                missing: Unresolved::Path,
             };
             #[cfg(feature = "rust-import")]
             if let Some(native) = missing {
