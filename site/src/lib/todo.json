@@ -3,9 +3,9 @@
   "updated": "2026-11-07",
   "version": "0.3.171",
   "examples": {
-    "running": 32,
+    "running": 33,
     "total": 56,
-    "note": "0.3.160 sweep plus the_matrix, lazy and progress_bar: 32 run; modal and pane_grid wait on a region holding an opaque-typed value"
+    "note": "0.3.160 sweep plus the_matrix, lazy, progress_bar and pane_grid: 33 run; gallery passes check, loupe and modal run their crossing shapes"
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
@@ -63,7 +63,18 @@
         {"text":"rawr puts no time limit of its own on anything. The runner protocol waits for the runner as long as it lives. The `rawr mcp` tools take no `timeout_ms` or `wait_ms`: `start` answers once the program runs, `check` once it has checked, `wait` at the next event, `step` where it paused; `break` and `continue` answer at once and `wait` tells the pause. A client that bounds its calls cancels them.","issues":[1205]},
         {"text":"rawr no longer forgets an installed rawr-import: a manifest probe that fails, as one could under heavy load, is asked again on the next run instead of being remembered as 'not installed'.","issues":[1230]},
         {"text":"A crate type whose impls at different arguments each have a method of one name giving an `impl Trait`, as swash's `Setting<u16>` and `Setting<f32>` do with `parse_list`, imports again, so iced's examples that draw text check.","issues":[1232]},
-        {"text":"The landing page is shorter: each example shows its code, its command and its output, and the bouncing ball is drawn across the page.","issues":[1233]}
+        {"text":"The landing page is shorter: each example shows its code, its command and its output, and the bouncing ball is drawn across the page.","issues":[1233]},
+        {"text":"A value of yours that holds one of a view's values, as iced's loupe holds what `explain` gives of its `column![..]`, is reached after the view returns: the view's values live as long as the state the view borrows stays unchanged.","issues":[1217]},
+        {"text":"Your impl of a crate's trait at a type that holds a crate's opaque value can delegate to it, as `self.content.labels(labels)` or `Widget::press(&self.content, label)`: a `&mut Vec<String>` the crate lent your method reaches the crate's own vector.","issues":[913]},
+        {"text":"iced's pane_grid runs: a closure that gives a value at its call's own lifetime, as `PaneGrid::new(&state, |id, pane, max| Content<'a, ..>)` does, makes it in a region of its own at that lifetime, and `content.title_bar(title_bar)` joins values of that region.","issues":[1191,1082]},
+        {"text":"A crate whose generic type's impls each give an opaque iterator by one name, as swash's `Setting<u16>::parse_list` and `Setting<f32>::parse_list`, imports: every iced program that draws text checks again.","issues":[1232]},
+        {"text":"A function written `-> impl Widget<Message>` or `-> Option<impl Widget<Message>>` fixes its renderer before an `impl Into<Handle>` argument's own type would fix the handle, as rustc does, so gallery's images take iced's `image::Handle` and gallery passes `rawr check`. A crate's opaque widget whose trait names a `String`, as `markdown::view`'s `impl Widget<Uri, ..>`, takes the renderer a later use gives it.","issues":[1213,1099],"refs":[917]},
+        {"text":"rawr runs a package's binaries as Cargo lists them: one under src/bin/ or named by [[bin]], and a library runs from whichever binary cargo run would run. With several binaries and no default-run, rawr asks for --bin, as cargo run does.","issues":[1116]},
+        {"text":"`rawr run path/to/file.rs` runs a file its package lists as a binary as that package's binary, with its dependencies and profile, and `rawr run --bin NAME` (and check and test) picks one as cargo run --bin does. A file no package lists still runs alone.","issues":[1175]},
+        {"text":"A package's `panic = \"abort\"` profile aborts a panic, as the binary Cargo builds does: status 134.","issues":[1176]},
+        {"text":"A [target.'cfg(..)'.dependencies] table joins a program's dependencies when Cargo's own build links it on the host. rawr asks Cargo's unit graph and evaluates no cfg itself.","issues":[1214]},
+        {"text":"A large project is never refused for its size: the semantic API, the node store, the extraction driver and the attempt record no longer have byte or count caps.","issues":[1231]},
+        {"text":"Each runnable snippet on the site had a hand-written output that nothing checked. One error showed only its first line, six compile errors were not marked as errors, and the drop-order output showed what Rust prints rather than what rawr prints. The site's build now runs every snippet in rawr-web, or on the server through /play/render for the three blocks marked data-where=\"server\", and draws each output with the same function the Run button uses (site/src/lib/output.ts). A hand-written output fails the build. /play/render skips Turnstile for the smoke token, and the deploy's smoke test checks each server block's output against the deployed server.","issues":[1246]}
       ]
     },
     "releases": [
@@ -2584,7 +2595,7 @@
     {"issue":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"closed","category":"Divergences from rustc","release":"0.3.134"},
     {"issue":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"closed","category":"Divergences from rustc","release":"0.3.136"},
     {"issue":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"closed","category":"Divergences from rustc","release":"0.3.135"},
-    {"issue":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"open","category":"Divergences from rustc"},
+    {"issue":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"closed","category":"Divergences from rustc"},
     {"issue":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open","category":"Health"},
     {"issue":915,"title":"A macro's own-crate segment in the remembered demand walks the whole crate a second time","state":"open","category":"Health"},
     {"issue":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"open","category":"Divergences from rustc"},
@@ -2753,7 +2764,7 @@
     {"issue":1079,"title":"for over an Option iterates it, as Option is IntoIterator (rustlings clippy2)","state":"closed","category":"Divergences from rustc"},
     {"issue":1080,"title":"std::thread::spawn in a lone-file program (rustlings smart_pointers3)","state":"closed","category":"Divergences from rustc"},
     {"issue":1081,"title":"A region family writes a closure-filled type argument at the region's lifetime, not 'static (lazy, pane_grid)","state":"closed","category":"Divergences from rustc"},
-    {"issue":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"open","category":"Divergences from rustc"},
+    {"issue":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"closed","category":"Divergences from rustc"},
     {"issue":1083,"title":"progress_bar's runner: transition(..) in a region closure gives 'lifetime may not live long enough'","state":"closed","category":"Divergences from rustc","release":"0.3.169"},
     {"issue":1084,"title":"the_matrix's runner: WeightedIndex<_> where X is fixed only through I::Item: SampleBorrow<X>","state":"closed","category":"Divergences from rustc","release":"0.3.169"},
     {"issue":1085,"title":"A generic program impl of a crate trait isn't generated for a crate function's bound at a concrete argument","state":"open","category":"Divergences from rustc"},
@@ -2770,7 +2781,7 @@
     {"issue":1096,"title":"Docs index cards leave out Agents and ratatui","state":"open","category":"Health"},
     {"issue":1097,"title":"A shared extraction table holds definitions from crates outside its key; another project replays crates it never loaded","state":"closed","category":"Health","release":"0.3.169"},
     {"issue":1098,"title":"markdown: code_block's opaque type gets 4 arguments where 5 are declared (panic in host/type_ref.rs:790)","state":"closed","category":"Divergences from rustc"},
-    {"issue":1099,"title":"gallery: image(handle) fixes Handle from its argument, not from the renderer (54 x E0271)","state":"open","category":"Divergences from rustc"},
+    {"issue":1099,"title":"gallery: image(handle) fixes Handle from its argument, not from the renderer (54 x E0271)","state":"closed","category":"Divergences from rustc"},
     {"issue":1100,"title":"screenshot: &screenshot.rgba (a &Bytes) isn't deref-coerced to &[u8]","state":"open","category":"Divergences from rustc"},
     {"issue":1101,"title":"In a program's impl of a crate trait method, a parameter's projection bound to the impl's Self isn't the impl's type","state":"open","category":"Divergences from rustc"},
     {"issue":1102,"title":"A program impl's generic method that takes &O writes type Of<'x> = _ (E0121)","state":"open","category":"Divergences from rustc"},
@@ -2787,7 +2798,7 @@
     {"issue":1113,"title":"Flaky rawr-cli test a_template_is_written_by_the_binary_offering_it","state":"open","category":"Health"},
     {"issue":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open","category":"Divergences from rustc"},
     {"issue":1115,"title":"A marked src/lib.rs beside a native src/main.rs","state":"open","category":"Divergences from rustc"},
-    {"issue":1116,"title":"Binaries under src/bin/ and [[bin]] targets are not found","state":"open","category":"Divergences from rustc"},
+    {"issue":1116,"title":"Binaries under src/bin/ and [[bin]] targets are not found","state":"closed","category":"Divergences from rustc"},
     {"issue":1117,"title":"`use crate::native_mod;` then `native_mod::ITEM` fails in marked code","state":"closed","category":"Divergences from rustc","release":"0.3.169"},
     {"issue":1118,"title":"Native code can't get a Result, such as iced::Result, back from a marked function","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
     {"issue":1119,"title":"A marked function that native main calls runs off the main thread, so winit panics on macOS","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
@@ -2846,8 +2857,8 @@
     {"issue":1172,"title":"A live rawr run doesn't see a repointed symlink until the next run","state":"open","category":"Health"},
     {"issue":1173,"title":"A rerun-if-changed path with `..` after a symlinked directory is read lexically","state":"open","category":"Health"},
     {"issue":1174,"title":"A build target whose source file is a symlink is refused","state":"open","category":"Health"},
-    {"issue":1175,"title":"rawr runs a Cargo package's [[bin]] file only as a lone file, without the package's dependencies","state":"open","category":"Divergences from rustc"},
-    {"issue":1176,"title":"A package's `panic = \"abort\"` profile: a panic aborts, as cargo's build does","state":"open","category":"Divergences from rustc"},
+    {"issue":1175,"title":"rawr runs a Cargo package's [[bin]] file only as a lone file, without the package's dependencies","state":"closed","category":"Divergences from rustc"},
+    {"issue":1176,"title":"A package's `panic = \"abort\"` profile: a panic aborts, as cargo's build does","state":"closed","category":"Divergences from rustc"},
     {"issue":1177,"title":"A generic body's trait call picks among f32/f64 or &str/String impls by runtime type","state":"open","category":"Divergences from rustc"},
     {"issue":1178,"title":"impls of one trait for Vec<i64> and Vec<String> (or Foo<i32> and Foo<i64>) are a duplicate method","state":"open","category":"Divergences from rustc"},
     {"issue":1179,"title":"The site's Run buttons run snippets in the browser","state":"open","category":"Health"},
@@ -2862,7 +2873,7 @@
     {"issue":1188,"title":"An iterator whose items are references, as Vec::iter_mut's are","state":"open","category":"Divergences from rustc"},
     {"issue":1189,"title":"An opaque output that borrows its receiver, as `fn items(&self) -> impl Iterator + '_`","state":"open","category":"Divergences from rustc"},
     {"issue":1190,"title":"Hold a region value whose type contains an opaque type behind a boxed proxy (D745.4b; modal, pane_grid, loupe)","state":"closed","category":"Divergences from rustc"},
-    {"issue":1191,"title":"A capturing closure whose output carries the region lifetime gives it in a region of its own (pane_grid)","state":"open","category":"Divergences from rustc"},
+    {"issue":1191,"title":"A capturing closure whose output carries the region lifetime gives it in a region of its own (pane_grid)","state":"closed","category":"Divergences from rustc"},
     {"issue":1192,"title":"An update that calls retain on a field gives the slot a non-unit value","state":"open","category":"Divergences from rustc"},
     {"issue":1193,"title":"The runner writes each protocol frame in one write, so a stalled runner never leaves the owner holding half a frame","state":"open","category":"Health"},
     {"issue":1194,"title":"A path dependency whose manifest names a file outside its package panics the importer","state":"open","category":"Health"},
@@ -2884,11 +2895,11 @@
     {"issue":1210,"title":"Decide the fate of input/membership, the unwired contained cargo-package listing","state":"open","category":"Health"},
     {"issue":1211,"title":"bindings::tests::a_difference_cleans_the_nightly_run_once_and_then_is_drift fails under the full lib suite","state":"open","category":"Health"},
     {"issue":1212,"title":"An opaque iterator's next declared without its owner through a re-export; core's Iterator at an unstable path","state":"open","category":"Health"},
-    {"issue":1213,"title":"After the projection work for #1099, gallery has 50 x E0271 <Renderer as…","state":"open","category":"Divergences from rustc"},
-    {"issue":1214,"title":"With #1074 fixed, rawr check on iced's tour stops at open::that_in_background(..): E0433 cannot…","state":"open","category":"Divergences from rustc"},
+    {"issue":1213,"title":"After the projection work for #1099, gallery has 50 x E0271 <Renderer as…","state":"closed","category":"Divergences from rustc"},
+    {"issue":1214,"title":"With #1074 fixed, rawr check on iced's tour stops at open::that_in_background(..): E0433 cannot…","state":"closed","category":"Divergences from rustc"},
     {"issue":1215,"title":"ratatui's Line::styled_graphemes and Span::styled_graphemes are left out of the facade","state":"open","category":"Divergences from rustc"},
     {"issue":1216,"title":"A crate function that takes a boxed region value in another position than the first doesn't take it","state":"open","category":"Divergences from rustc"},
-    {"issue":1217,"title":"A script value that holds a value of a view's region is reached after the region ends (loupe)","state":"open","category":"Divergences from rustc"},
+    {"issue":1217,"title":"A script value that holds a value of a view's region is reached after the region ends (loupe)","state":"closed","category":"Divergences from rustc"},
     {"issue":1218,"title":"A generic program function's type parameter isn't inferred through an impl Trait argument's bound, nor taken from a t...","state":"open","category":"Divergences from rustc"},
     {"issue":1219,"title":"Syntax highlighting on the site and in the playground","state":"open","category":"Health"},
     {"issue":1220,"title":"Run-error text on the light terminal strip is below 4.5:1","state":"open","category":"Health"},
@@ -2902,9 +2913,25 @@
     {"issue":1228,"title":"The site redirects plain http to https","state":"open","category":"Health"},
     {"issue":1229,"title":"runtime cleanup test flakes under the parallel lib suite","state":"open","category":"Health"},
     {"issue":1230,"title":"A failed manifest probe was cached as a permanent negative, so rawr called an installed rawr-import 'not installed'","state":"closed","category":"Health"},
-    {"issue":1231,"title":"A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"open","category":"Health"},
+    {"issue":1231,"title":"A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"closed","category":"Health"},
     {"issue":1232,"title":"One method's opaque types in two impls share a facade name (swash parse_list); text examples fail check","state":"closed","category":"Health"},
-    {"issue":1233,"title":"A shorter landing page","state":"open","category":"Health"}
+    {"issue":1233,"title":"A shorter landing page","state":"open","category":"Health"},
+    {"issue":1234,"title":"A closure on another thread can't give Option of a program value holding a crate value (pane_grid hotkeys)","state":"open","category":"Divergences from rustc"},
+    {"issue":1235,"title":"A crate call whose closure gives a value holding an opaque type counts as that type's producer","state":"open","category":"Divergences from rustc"},
+    {"issue":1236,"title":"A program can't call an inherent method that several impls of a generic type give, as `Setting::<u16>::parse_list`","state":"open","category":"Divergences from rustc"},
+    {"issue":1237,"title":"A lent cell's value can't move into a by-value method of a trait with arguments (changelog's markdown::view(..).map(..))","state":"open","category":"Divergences from rustc"},
+    {"issue":1238,"title":"In iced's changelog the view's renderer doesn't reach an element boxed through row![..]","state":"open","category":"Divergences from rustc"},
+    {"issue":1239,"title":"tour: rawr check stops at a host item of cosmic_text's opaque FontRef::fonts whose owner type isn't declared","state":"open","category":"Divergences from rustc"},
+    {"issue":1240,"title":"Keep Cargo's unit-graph answer across processes","state":"open","category":"Health"},
+    {"issue":1241,"title":"A target-table dependency whose library name differs from its key isn't linked by name","state":"open","category":"Divergences from rustc"},
+    {"issue":1242,"title":"Profile settings beyond panic: overflow-checks and debug-assertions","state":"open","category":"Divergences from rustc"},
+    {"issue":1243,"title":"A cargo script's profile and target tables","state":"open","category":"Divergences from rustc"},
+    {"issue":1244,"title":"The semantic API encodes each direct dependency's whole surface when the program names nothing in it","state":"open","category":"Health"},
+    {"issue":1245,"title":"Process capture and Cargo environment caps can still fire on a large project","state":"open","category":"Health"},
+    {"issue":1246,"title":"Generate the site's snippet outputs by running them at build, not by hand","state":"closed","category":"Health"},
+    {"issue":1247,"title":"A snippet of statements doesn't drop its locals at its end","state":"open","category":"Divergences from rustc"},
+    {"issue":1248,"title":"rawr-web prints u128 and i128 values as their type names","state":"open","category":"Divergences from rustc"},
+    {"issue":1249,"title":"A native root can't name a marked module's types: `Program::new(..) -> (Program, Task<Message>)` from native main","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3355,7 +3382,7 @@
           "start": 45,
           "size": 3,
           "state": "now",
-          "note": "17 examples pass check but their runner doesn't build (#951 #955 #957)",
+          "note": "pane_grid runs (#1191, #1082); 17 examples pass check but their runner doesn't build (#951 #955 #957)",
           "issues": [
             {"number":335,"title":"events: `rawr check` passes, but the runner build fails on…","state":"closed"},
             {"number":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
@@ -3367,8 +3394,8 @@
             {"number":955,"title":"Generated adapters for borrowing widgets miss lifetimes: modal's E0106 and pane_grid's region lifetime","state":"open"},
             {"number":957,"title":"Generated adapter bounds the program doesn't need: geometry's Shell: Clone, progress_bar's f64, the_matrix's ThreadRng","state":"closed"},
             {"number":1081,"title":"A region family writes a closure-filled type argument at the region's lifetime, not 'static (lazy, pane_grid)","state":"closed"},
-            {"number":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"open"},
-            {"number":1191,"title":"A capturing closure whose output carries the region lifetime gives it in a region of its own (pane_grid)","state":"open"}
+            {"number":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"closed"},
+            {"number":1191,"title":"A capturing closure whose output carries the region lifetime gives it in a region of its own (pane_grid)","state":"closed"}
           ],
           "milestone": "0.4"
         },
@@ -3451,10 +3478,11 @@
             {"number":1084,"title":"the_matrix's runner: WeightedIndex<_> where X is fixed only through I::Item: SampleBorrow<X>","state":"closed"},
             {"number":1085,"title":"A generic program impl of a crate trait isn't generated for a crate function's bound at a concrete argument","state":"open"},
             {"number":1098,"title":"markdown: code_block's opaque type gets 4 arguments where 5 are declared (panic in host/type_ref.rs:790)","state":"closed"},
-            {"number":1099,"title":"gallery: image(handle) fixes Handle from its argument, not from the renderer (54 x E0271)","state":"open"},
+            {"number":1099,"title":"gallery: image(handle) fixes Handle from its argument, not from the renderer (54 x E0271)","state":"closed"},
             {"number":1100,"title":"screenshot: &screenshot.rgba (a &Bytes) isn't deref-coerced to &[u8]","state":"open"},
             {"number":1129,"title":"progress_bar: a transition moved into a row! in one branch and a column! in the other fails with a lent-value mismatch","state":"closed"},
             {"number":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"closed"},
+            {"number":1213,"title":"After the projection work for #1099, gallery has 50 x E0271 <Renderer as…","state":"closed"},
             {"number":1218,"title":"A generic program function's type parameter isn't inferred through an impl Trait argument's bound, nor taken from a t...","state":"open"}
           ],
           "milestone": "0.4"
@@ -3465,14 +3493,14 @@
           "start": 47,
           "size": 3,
           "state": "now",
-          "note": "Borrowing opaque outputs live in regions through wrapper fns (#936); layout starts its runner. Slots and members next (#965)",
+          "note": "A view's values live past the call in a kept region (#1217); a trait impl delegates to a crate's opaque value (#913); swash's two parse_lists import (#1232). Left: #1235 #1236 #1237 and the owner gap #1239",
           "issues": [
             {"number":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"closed"},
             {"number":885,"title":"Run the impl Trait a trait method gives from its default body (iced's Widget::explain)","state":"closed"},
             {"number":886,"title":"A crate opaque value whose type arguments only a later use fixes","state":"closed"},
             {"number":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"closed"},
             {"number":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"closed"},
-            {"number":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"open"},
+            {"number":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"closed"},
             {"number":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"open"},
             {"number":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open"},
             {"number":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"closed"},
@@ -3486,8 +3514,12 @@
             {"number":1190,"title":"Hold a region value whose type contains an opaque type behind a boxed proxy (D745.4b; modal, pane_grid, loupe)","state":"closed"},
             {"number":1215,"title":"ratatui's Line::styled_graphemes and Span::styled_graphemes are left out of the facade","state":"open"},
             {"number":1216,"title":"A crate function that takes a boxed region value in another position than the first doesn't take it","state":"open"},
-            {"number":1217,"title":"A script value that holds a value of a view's region is reached after the region ends (loupe)","state":"open"},
-            {"number":1232,"title":"One method's opaque types in two impls share a facade name (swash parse_list); text examples fail check","state":"closed"}
+            {"number":1217,"title":"A script value that holds a value of a view's region is reached after the region ends (loupe)","state":"closed"},
+            {"number":1232,"title":"One method's opaque types in two impls share a facade name (swash parse_list); text examples fail check","state":"closed"},
+            {"number":1235,"title":"A crate call whose closure gives a value holding an opaque type counts as that type's producer","state":"open"},
+            {"number":1236,"title":"A program can't call an inherent method that several impls of a generic type give, as `Setting::<u16>::parse_list`","state":"open"},
+            {"number":1237,"title":"A lent cell's value can't move into a by-value method of a trait with arguments (changelog's markdown::view(..).map(..))","state":"open"},
+            {"number":1239,"title":"tour: rawr check stops at a host item of cosmic_text's opaque FontRef::fonts whose owner type isn't declared","state":"open"}
           ]
         }
       ]
@@ -3676,8 +3708,8 @@
             {"number":1078,"title":"Assigning through an Arc is E0594, as rustc reports (rustlings threads2)","state":"closed"},
             {"number":1079,"title":"for over an Option iterates it, as Option is IntoIterator (rustlings clippy2)","state":"closed"},
             {"number":1080,"title":"std::thread::spawn in a lone-file program (rustlings smart_pointers3)","state":"closed"},
-            {"number":1175,"title":"rawr runs a Cargo package's [[bin]] file only as a lone file, without the package's dependencies","state":"open"},
-            {"number":1176,"title":"A package's `panic = \"abort\"` profile: a panic aborts, as cargo's build does","state":"open"}
+            {"number":1175,"title":"rawr runs a Cargo package's [[bin]] file only as a lone file, without the package's dependencies","state":"closed"},
+            {"number":1176,"title":"A package's `panic = \"abort\"` profile: a panic aborts, as cargo's build does","state":"closed"}
           ]
         },
         {
@@ -3691,7 +3723,7 @@
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
             {"number":1115,"title":"A marked src/lib.rs beside a native src/main.rs","state":"open"},
-            {"number":1116,"title":"Binaries under src/bin/ and [[bin]] targets are not found","state":"open"},
+            {"number":1116,"title":"Binaries under src/bin/ and [[bin]] targets are not found","state":"closed"},
             {"number":1117,"title":"`use crate::native_mod;` then `native_mod::ITEM` fails in marked code","state":"closed"},
             {"number":1118,"title":"Native code can't get a Result, such as iced::Result, back from a marked function","state":"closed"},
             {"number":1119,"title":"A marked function that native main calls runs off the main thread, so winit panics on macOS","state":"closed"},
@@ -3732,7 +3764,14 @@
             {"number":1222,"title":"A native rebuild's own copy of a marked module starts another save","state":"open"},
             {"number":1224,"title":"A marked function can't take a native value nested by value in an argument (Option<Kind>, Vec<Item>)","state":"open"},
             {"number":1225,"title":"A marked function can't take a native value whose type names a non-'static lifetime by value","state":"open"},
-            {"number":1231,"title":"A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"open"}
+            {"number":1231,"title":"A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"closed"},
+            {"number":1240,"title":"Keep Cargo's unit-graph answer across processes","state":"open"},
+            {"number":1241,"title":"A target-table dependency whose library name differs from its key isn't linked by name","state":"open"},
+            {"number":1242,"title":"Profile settings beyond panic: overflow-checks and debug-assertions","state":"open"},
+            {"number":1243,"title":"A cargo script's profile and target tables","state":"open"},
+            {"number":1244,"title":"The semantic API encodes each direct dependency's whole surface when the program names nothing in it","state":"open"},
+            {"number":1245,"title":"Process capture and Cargo environment caps can still fire on a large project","state":"open"},
+            {"number":1249,"title":"A native root can't name a marked module's types: `Program::new(..) -> (Program, Task<Message>)` from native main","state":"open"}
           ]
         }
       ]
@@ -3803,7 +3842,8 @@
             {"number":1015,"title":"The legacy extraction plan hashes every selected artifact in full on each check","state":"open"},
             {"number":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"closed"},
             {"number":1121,"title":"An iced canvas::Program's State written through &mut in update isn't kept between events","state":"open"},
-            {"number":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open"}
+            {"number":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open"},
+            {"number":1246,"title":"Generate the site's snippet outputs by running them at build, not by hand","state":"closed"}
           ]
         },
         {
@@ -3876,7 +3916,8 @@
           "note": "rawr-web",
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"},
-            {"number":1184,"title":"ratatui snippets run in the browser","state":"open"}
+            {"number":1184,"title":"ratatui snippets run in the browser","state":"open"},
+            {"number":1248,"title":"rawr-web prints u128 and i128 values as their type names","state":"open"}
           ]
         },
         {
@@ -3914,7 +3955,8 @@
             {"number":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open"},
             {"number":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"closed"},
             {"number":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open"},
-            {"number":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"closed"}
+            {"number":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"closed"},
+            {"number":1247,"title":"A snippet of statements doesn't drop its locals at its end","state":"open"}
           ]
         }
       ]
