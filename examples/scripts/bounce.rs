@@ -22,9 +22,16 @@ fn main() {
         height: 8.0,
         up: 0.0,
     };
-    for tick in 1..=12 {
+    let mut heights = Vec::new();
+    for _ in 0..13 {
+        heights.push(ball.height.round() as i64);
         ball.advance(0.25);
-        let column = (ball.height * 2.0).round() as usize;
-        println!("{tick:>2} |{}o", " ".repeat(column));
+    }
+    for row in (0..=8).rev() {
+        let cells: Vec<&str> = heights
+            .iter()
+            .map(|&height| if height == row { "()" } else { "  " })
+            .collect();
+        println!("{}", cells.join(" ").trim_end());
     }
 }

@@ -4,8 +4,7 @@
     <div>
       <h1><span class="word">rawr</span><span class="sub">is rust augmented with rust</span></h1>
       <p class="tag">A Rust interpreter for your dev builds.</p>
-      <p class="lede">Put <code>// rawr</code> on the first line of a file in your Cargo crate. <code>rawr run</code> checks the marked files and then interprets them. Cargo compiles the same crate for release.</p>
-      <p class="lede">rawr can also <a href="#embed">run Rust scripts inside your app</a>.</p>
+      <p class="lede">Mark a file with <code>// rawr</code>. <code>rawr run</code> interprets it, and Cargo compiles it for release.</p>
       <div class="actions">
         <a class="btn go" href="/docs/start">Get started</a>
         <a class="btn" href="/play">Try it in the browser</a>
@@ -96,10 +95,6 @@ fn main() {
         </div>
       </div>
       </div>
-      <figcaption>
-        Both sides show the same <code>src/main.rs</code>. Cargo compiles it and rawr interprets it. Both print <code>total: 27</code>.
-        <small>Edit the file and press run. It runs in your browser.</small>
-      </figcaption>
     </figure>
   </div>
 </div>
@@ -108,12 +103,9 @@ fn main() {
   <div class="wrap sec">
     <div class="side">
       <h2>Interpret your crate while you develop</h2>
-      <p><code>rawr run</code> takes a Cargo crate whose root file starts with <code>// rawr</code>, or a single <code>.rs</code> file. It checks names, types and traits first. A program that fails the check doesn&rsquo;t start.</p>
-      <p><code>rawr check</code> runs the same check without running the program. Then it runs <code>cargo check</code>, so rustc has the final word on whether the code is valid Rust.</p>
-      <p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust, and so is every crate in <code>[dependencies]</code>. With <a href="/docs/imports">rawr-import</a> installed, <code>rawr run</code> compiles them with Cargo and the marked code calls them.</p>
-      <p>The marker is a comment, so <code>cargo build --release</code> compiles every file and ships no interpreter.</p>
-      <p>The crate root may stay native and call marked modules. A save reaches the running program at its next call. <a href="/docs/run#native-main">Run</a> says how.</p>
-      <p>A <a href="/docs/ratatui">ratatui</a> app works this way with no extra crate. A save repaints the terminal with the app&rsquo;s state kept, and rawr leaves the terminal as it found it.</p>
+      <p><code>rawr run</code> checks names, types and traits, then interprets. Code that fails the check doesn&rsquo;t start.</p>
+      <p>Unmarked modules and <a href="/docs/imports">dependencies</a> are native, built by Cargo.</p>
+      <p><code>cargo build --release</code> ships no interpreter.</p>
     </div>
     <div class="stack" id="install">
       <div class="cmds">
@@ -156,7 +148,6 @@ fn main() {
  <span class="c">--&gt;</span> /home/you/cart/src/main.rs:23:21-23:25
  <span class="c">23 |</span>         sum += item.cost();
     <span class="c">|</span>                     <span class="e">^^^^</span></code></pre>
-        <p class="fig-note">Change <code>item.price()</code> to <code>item.cost()</code> in the cart above. The error points to the line, and nothing runs. Then <code>cargo check</code> reports rustc&rsquo;s version of the same error.</p>
       </div>
     </div>
   </div>
@@ -166,10 +157,8 @@ fn main() {
   <div class="wrap sec">
     <div class="side">
       <h2>Hot reload in the app you already have</h2>
-      <p>rawr has no framework of its own. Your app keeps its libraries, and Cargo compiles them as <code>cargo run</code> does.</p>
-      <p>Mark the files you are working on with <code>// rawr</code>. <code>rawr run</code> interprets them, and they call each library through its own API.</p>
-      <p>A save reaches the running app at its next call into marked code. The app keeps its state when the new code fits it. Otherwise rawr restarts the app and prints why.</p>
-      <p>A save that fails the check prints its error. The last good version keeps running.</p>
+      <p>rawr has no framework of its own. Your app keeps its libraries.</p>
+      <p>A save reaches the running app, which keeps its state when it can. A save that fails the check prints its error, and the last good version keeps running.</p>
       <div class="actions"><a class="btn" href="/docs/apps">Apps and libraries</a></div>
     </div>
     <figure class="libs">
@@ -178,7 +167,7 @@ fn main() {
       <input type="radio" name="lib" id="lib-std"><label for="lib-std">A plain loop</label>
       <div class="lib" id="lib-iced-panel">
         <div class="block">
-          <div class="file"><b>src/main.rs</b><span>a window, from iced&rsquo;s counter example</span></div>
+          <div class="file"><b>src/main.rs</b><span>iced&rsquo;s counter</span></div>
           <pre><code data-lang="rust">// rawr
 use iced::Center;
 use iced::widget::{Widget, button, column, text};
@@ -203,12 +192,11 @@ impl Counter {
     }
 }</code></pre>
           <div class="run"><b>rawr run</b><span class="quiet">(opens a window)</span></div>
-          <p class="fig-note">iced runs the window and calls <code>update</code> and <code>view</code> back. Change the text size and save. The next click draws the new view, and the count stays.</p>
         </div>
       </div>
       <div class="lib" id="lib-ratatui-panel">
         <div class="block">
-          <div class="file"><b>src/ui.rs</b><span>a terminal app, from examples/tui</span></div>
+          <div class="file"><b>src/ui.rs</b><span>examples/tui</span></div>
           <pre><code data-lang="rust">// rawr
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
@@ -229,13 +217,12 @@ pub fn draw(frame: &amp;mut Frame, app: &amp;mut App) {
     );
     // ...
 }</code></pre>
-          <div class="run"><b>rawr run -p tui</b><span class="quiet">(draws in the terminal)</span></div>
-          <p class="fig-note">The native <code>main.rs</code> owns the terminal and calls <code>ui::draw</code> to draw each screen. Change a title and save. The screen repaints with no key pressed, and the to-dos stay.</p>
+          <div class="run"><b>rawr run</b><span class="quiet">(draws in the terminal)</span></div>
         </div>
       </div>
       <div class="lib" id="lib-std-panel">
         <div class="block">
-          <div class="file"><b>bounce.rs</b><span>std only, the ball from examples/islands</span></div>
+          <div class="file"><b>bounce.rs</b><span>std only</span></div>
           <pre><code data-lang="rust" data-run="bounce.rs" id="src-bounce">// rawr
 const GRAVITY: f64 = 9.8;
 const BOUNCE: f64 = 0.8;
@@ -261,28 +248,30 @@ fn main() {
         height: 8.0,
         up: 0.0,
     };
-    for tick in 1..=12 {
+    let mut heights = Vec::new();
+    for _ in 0..13 {
+        heights.push(ball.height.round() as i64);
         ball.advance(0.25);
-        let column = (ball.height * 2.0).round() as usize;
-        println!("{tick:&gt;2} |{}o", " ".repeat(column));
+    }
+    for row in (0..=8).rev() {
+        let cells: Vec&lt;&amp;str&gt; = heights
+            .iter()
+            .map(|&amp;height| if height == row { "()" } else { "  " })
+            .collect();
+        println!("{}", cells.join(" ").trim_end());
     }
 }</code></pre>
-          <div class="run"><button type="button" class="runbtn" data-source="src-bounce" data-out="out-bounce" aria-label="Run bounce.rs" hidden></button><b>rawr run bounce.rs</b><span id="out-bounce" aria-live="polite"> 1 |               o
- 2 |            o
- 3 |         o
- 4 |    o
- 5 |o
- 6 |    o
- 7 |      o
- 8 |       o
- 9 |       o
-10 |      o
-11 |    o
-12 |o</span></div>
-          <p class="fig-note">Change <code>BOUNCE</code> and run it again. In <code>examples/islands</code> a native <code>main.rs</code> calls <code>advance</code> each tick, so a save reaches the next tick and the ball carries on from where it was.</p>
+          <div class="run"><button type="button" class="runbtn" data-source="src-bounce" data-out="out-bounce" aria-label="Run bounce.rs" hidden></button><b>rawr run bounce.rs</b><span id="out-bounce" aria-live="polite">()
+   ()
+      ()
+
+         ()             () ()
+                     ()       ()
+            ()    ()             ()
+
+               ()                   ()</span></div>
         </div>
       </div>
-      <p class="later">The iced and ratatui code runs natively under <code>rawr run</code>. iced will run on this page when the browser gets iced bindings (<a href="https://github.com/airstrike/rawr/issues/435">#435</a>).</p>
     </figure>
   </div>
 </section>
@@ -291,9 +280,7 @@ fn main() {
   <div class="wrap sec">
     <div class="side">
       <h2>Let your users change your app in Rust</h2>
-      <p>Your app adds the <code>rawr</code> crate and loads rules its users write in Rust, without rebuilding it.</p>
-      <p>Put <code>#[rawr::export]</code> on your own types, and the rules can use them. <code>Engine::load</code> checks the rules against the exports. <code>script.func</code> gives a typed handle to a function the rules define, and <code>script.reload()</code> picks up an edit.</p>
-      <p>Here the interpreter ships in your release build.</p>
+      <p>Your app adds the <code>rawr</code> crate and loads rules its users write in Rust, with no rebuild. Here the interpreter ships in your release build.</p>
       <div class="actions"><a class="btn" href="/docs/embedding">Embed rawr</a></div>
     </div>
     <div class="stack" id="hosts">
@@ -338,8 +325,7 @@ fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
   <div class="wrap sec">
     <div class="side">
       <h2>Run Rust in your browser</h2>
-      <p>The playground runs Rust code and shows its output. It doesn&rsquo;t run iced programs yet.</p>
-      <p>The <code class="nw">?play</code> bot does the same in Discord. Post <code class="nw">?play</code> above a Rust code block in a channel where the bot is turned on.</p>
+      <p>The playground and the <code class="nw">?play</code> bot in Discord run plain Rust programs.</p>
       <div class="actions">
         <a class="btn go" href="/play">Open the playground</a>
         <a class="btn" href="/docs/play/discord">Use rawr in Discord</a>
@@ -352,7 +338,7 @@ fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
 <span class="c">```rust</span>
 <span class="c">// the cart from above</span>
 <span class="c">```</span></code></pre>
-        <p class="fig-note">The bot replies with the program&rsquo;s output, <code>total: 27</code>.</p>
+        <div class="run"><small>the bot replies</small><span>total: 27</span></div>
       </div>
     </div>
   </div>
@@ -364,10 +350,9 @@ fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
       <h2>Pre-alpha</h2>
     </div>
     <div>
-      <p class="status">rawr supports part of Rust. The <a href="/docs/reference/overview">API Reference</a> lists what works, what is missing and where rawr still differs from Rust.</p>
-      <p class="status">The <code>rawr</code> crate and the <code>rawr</code> command need Rust 1.95 or newer. rawr-import needs a Unix system and a Rust nightly from <code>nightly-2026-07-11</code> through <code>nightly-2026-11-02</code>: the one the project names, or <code>nightly-2026-07-11</code>. It has been tested on Apple Silicon Macs. <a href="/docs/reference/requirements">Requirements</a> has the details.</p>
-      <p class="status"><strong>Planned:</strong> native modules other than the crate root that call into marked modules, and marked ratatui code that draws on the <code>Frame</code> itself.</p>
-      <p class="status">rawr&rsquo;s API and commands may change. Report incorrect results or unexpected rejections <a href="https://github.com/airstrike/rawr/issues">on GitHub</a> with a small reproduction.</p>
+      <p class="status">rawr supports part of Rust. The <a href="/docs/reference/overview">API Reference</a> lists what works.</p>
+      <p class="status">rawr needs Rust 1.95 or newer. rawr-import needs a Unix system and a Rust nightly, as <a href="/docs/reference/requirements">Requirements</a> explains.</p>
+      <p class="status">The API and commands may change. Report bugs <a href="https://github.com/airstrike/rawr/issues">on GitHub</a>.</p>
     </div>
   </div>
 </section>
