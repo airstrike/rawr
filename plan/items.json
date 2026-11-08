@@ -1420,6 +1420,8 @@
     {"t":"T1417","issue":1417,"title":"T1417: `rawr check` passes where the runner build fails: a check that also compiles the generated…","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1418","issue":1418,"title":"T1418: A save whose text is unchanged sends no event, so a host showing \"applying\" can't resolve it…","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1419","issue":1419,"title":"T1419: A generic filled through a `let`'s annotation takes the annotated type…","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1420","issue":1420,"title":"T1420: A test checks that a generated runner compiles without warnings; rawr shows cargo's warnings…","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1420","issue":1420,"title":"T1420: A test checks that a generated runner compiles without warnings; rawr shows cargo's warnings…","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1421","issue":1421,"title":"T1421: Regression: a runner whose runtime is compiled in-project can't find crate `rawr` (E0463); every…","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1422","issue":1422,"title":"T1422: A fn's declared return type fixes a conversion's open argument through `.into()` and macros down…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

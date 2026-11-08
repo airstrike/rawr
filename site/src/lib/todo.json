@@ -3174,7 +3174,9 @@
     {"issue":1417,"title":"`rawr check` passes where the runner build fails: a check that also compiles the generated…","state":"open","category":"Health"},
     {"issue":1418,"title":"A save whose text is unchanged sends no event, so a host showing \"applying\" can't resolve it…","state":"open","category":"Hot reload of a marked `main` (D555)"},
     {"issue":1419,"title":"A generic filled through a `let`'s annotation takes the annotated type…","state":"open","category":"Divergences from rustc"},
-    {"issue":1420,"title":"A test checks that a generated runner compiles without warnings; rawr shows cargo's warnings…","state":"open","category":"Health"}
+    {"issue":1420,"title":"A test checks that a generated runner compiles without warnings; rawr shows cargo's warnings…","state":"open","category":"Health"},
+    {"issue":1421,"title":"Regression: a runner whose runtime is compiled in-project can't find crate `rawr` (E0463); every…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1422,"title":"A fn's declared return type fixes a conversion's open argument through `.into()` and macros down…","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
