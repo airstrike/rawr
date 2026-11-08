@@ -46,3 +46,9 @@ pub fn measure(by: &Width) -> page::size::Width {
 pub fn titled(page: page::Landing) -> String {
     page.title()
 }
+
+pub fn grow(by: &mut page::size::Width, tally: &mut page::Tally, again: &mut Width) {
+    *by += 3;
+    tally.add(*by);
+    *again *= *by;
+}

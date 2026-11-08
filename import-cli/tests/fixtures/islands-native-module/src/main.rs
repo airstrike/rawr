@@ -16,4 +16,10 @@ fn main() {
     println!("{width}");
     println!("{}", badge::measure(&5));
     println!("{}", badge::titled(page::Home));
+    let mut by: page::size::Width = 4;
+    let mut tally = page::Tally::new();
+    let mut again: page::size::Width = 2;
+    badge::grow(&mut by, &mut tally, &mut again);
+    badge::grow(&mut by, &mut tally, &mut again);
+    println!("{by} {} {again}", tally.count());
 }

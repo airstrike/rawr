@@ -34,3 +34,22 @@ pub mod size {
 
     pub const BASE: usize = 1;
 }
+
+/// A native struct a marked function changes through a `&mut` it is lent.
+pub struct Tally {
+    count: usize,
+}
+
+impl Tally {
+    pub fn new() -> Self {
+        Tally { count: 0 }
+    }
+
+    pub fn add(&mut self, by: usize) {
+        self.count += by;
+    }
+
+    pub fn count(&self) -> usize {
+        self.count
+    }
+}

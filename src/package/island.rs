@@ -1000,8 +1000,9 @@ impl<'a> Generator<'a> {
             text,
             "    let mut __call = {island}::Call::new({path:?}, {owned});"
         );
-        let mut mutable = Vec::new();
-        let mut lent = Vec::new();
+        // Each `&mut` argument in argument order, as its change comes back:
+        // a copy, or what a lent place was given.
+        let mut changed = Vec::new();
         let mut argument = |name: &str, pass: Pass, text: &mut String| match pass {
             Pass::Value => {
                 let _ = writeln!(text, "    __call.argument(&{name});");
@@ -1011,12 +1012,12 @@ impl<'a> Generator<'a> {
             }
             Pass::Mutable => {
                 let _ = writeln!(text, "    __call.mutable(&*{name});");
-                mutable.push(name.to_owned());
+                changed.push((name.to_owned(), None));
             }
             Pass::Lend { mutable, referent } => {
                 lend(name, mutable, &referent, &island, text);
                 if mutable {
-                    lent.push((name.to_owned(), referent));
+                    changed.push((name.to_owned(), Some(referent)));
                 }
             }
             Pass::Give => {
@@ -1049,23 +1050,28 @@ impl<'a> Generator<'a> {
         } else {
             let _ = writeln!(text, "    let __value: {output} = __reply.take();");
         }
-        for name in mutable {
-            let _ = writeln!(text, "    *{name} = __reply.take();");
-        }
         // A lent `&mut` the function gave a whole new value, `*place =
-        // value`, takes it (#1139); one whose type names a lifetime can't.
-        for (name, referent) in lent {
-            if static_lifetimes(&referent) == referent {
-                let _ = writeln!(
-                    text,
-                    "    if let Some(__new) = __reply.read(|input| input.replaced::<{referent}>()) {{\n        \
-                     *{name} = __new;\n    }}"
-                );
-            } else {
-                let _ = writeln!(
-                    text,
-                    "    __reply.read(|input| input.unreplaced(\"{referent}\"));"
-                );
+        // value`, takes it (#1139), and one of a type that crosses by the
+        // wire format, as an alias of `usize`, takes its copy (`Hand`,
+        // #1297). One whose type names a lifetime can't take a new value.
+        for (name, referent) in changed {
+            match referent {
+                None => {
+                    let _ = writeln!(text, "    *{name} = __reply.take();");
+                }
+                Some(referent) if static_lifetimes(&referent) == referent => {
+                    let _ = writeln!(
+                        text,
+                        "    {{ use {island}::{{ByCopy as _, ByLoan as _}}; \
+                         (&{island}::hand(&*{name})).back(&mut __reply, {name}) }}"
+                    );
+                }
+                Some(referent) => {
+                    let _ = writeln!(
+                        text,
+                        "    __reply.read(|input| input.unreplaced(\"{referent}\"));"
+                    );
+                }
             }
         }
         text.push_str("    __value\n}\n");
@@ -1271,16 +1277,21 @@ fn lend(name: &str, mutable: bool, referent: &str, island: &str, text: &mut Stri
          {island}::Lend::new({key}, {}, &SHARED)\n    }};",
         if mutable { "Some(&MUTABLE)" } else { "None" }
     );
-    // A shared borrow of a type that crosses by the wire format, as an
-    // alias of `usize`, is copied instead (`Hand`).
-    let call = if mutable {
-        format!("__call.lend({name}")
-    } else {
+    // A borrow of a type that crosses by the wire format, as an alias of
+    // `usize`, is copied instead (`Hand`), and a `&mut` one's copy comes
+    // back (#1297). A type that names a lifetime is lent.
+    let hand = |method: &str, value: &str| {
         format!(
-            "{{ use {island}::{{ByCopy as _, ByLoan as _}}; (&{island}::hand({name})).lend_ref(&mut __call, {name}"
+            "{{ use {island}::{{ByCopy as _, ByLoan as _}}; (&{island}::hand({value})).{method}(&mut __call, {name}"
         )
     };
-    let close = if mutable { "" } else { " }" };
+    let (call, close) = if !mutable {
+        (hand("lend_ref", name), " }")
+    } else if static_lifetimes(referent) == referent {
+        (hand("lend", &format!("&*{name}")), " }")
+    } else {
+        (format!("__call.lend({name}"), "")
+    };
     let _ = writeln!(
         text,
         "    // SAFETY: the lend's accessors read its key's place as `{referent}`.\n    \
@@ -1810,8 +1821,9 @@ pub mod __rawr_island {
     /// goes to the interpreter: by the wire format when `T` crosses by it,
     /// as an alias of `usize` does ([`ByCopy`], found first), and else as
     /// the native value the interpreter keeps ([`ByGift`]), or lends for a
-    /// borrow ([`ByLoan`]). Rustc reads the alias through to its target, as
-    /// it does for the checker.
+    /// borrow ([`ByLoan`]). A `&mut` comes back the same way: its copy, or
+    /// the new value the lent place was given. Rustc reads the alias
+    /// through to its target, as it does for the checker.
     pub struct Hand<T>(::std::marker::PhantomData<T>);
     pub fn hand<T>(_: &T) -> Hand<T> {
         Hand(::std::marker::PhantomData)
@@ -1822,6 +1834,14 @@ pub mod __rawr_island {
         ///
         /// None needed: the value is copied.
         unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
+        /// # Safety
+        ///
+        /// None needed: the value is copied, and its copy comes back.
+        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
+        /// The copy of a `&mut` argument [`ByCopy::lend`] copied, back.
+        fn back(&self, reply: &mut Reply, place: &mut T)
+        where
+            T: Take;
     }
     impl<T: Put> ByCopy<T> for Hand<T> {
         fn hand(&self, call: &mut Call<'_>, value: T, _: Traits) {
@@ -1829,6 +1849,15 @@ pub mod __rawr_island {
         }
         unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, _: Lend, _: &'static str) {
             call.argument(value);
+        }
+        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, _: Lend, _: &'static str) {
+            call.mutable(&*value);
+        }
+        fn back(&self, reply: &mut Reply, place: &mut T)
+        where
+            T: Take,
+        {
+            *place = reply.take();
         }
     }
     pub trait ByGift<T> {
@@ -1843,12 +1872,43 @@ pub mod __rawr_island {
         /// # Safety
         ///
         /// As for [`Call::lend_ref`].
-        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
+        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str)
+        where
+            T: Sync;
+        /// # Safety
+        ///
+        /// As for [`Call::lend`].
+        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str)
+        where
+            T: Send;
+        /// The whole new value the call gave the place [`ByLoan::lend`]
+        /// lent, `*place = value`, if it gave one (#1139).
+        fn back(&self, reply: &mut Reply, place: &mut T)
+        where
+            T: 'static;
     }
-    impl<T: Sync> ByLoan<T> for &Hand<T> {
-        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str) {
+    impl<T> ByLoan<T> for &Hand<T> {
+        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str)
+        where
+            T: Sync,
+        {
             // SAFETY: as the caller's.
             unsafe { call.lend_ref(value, lend, name) }
+        }
+        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str)
+        where
+            T: Send,
+        {
+            // SAFETY: as the caller's.
+            unsafe { call.lend(value, lend, name) }
+        }
+        fn back(&self, reply: &mut Reply, place: &mut T)
+        where
+            T: 'static,
+        {
+            if let Some(new) = reply.read(|input| input.replaced::<T>()) {
+                *place = new;
+            }
         }
     }
 
@@ -2597,8 +2657,8 @@ mod tests {
         );
         assert!(
             text.contains(
-                "    if let Some(__new) = __reply.read(|input| input.replaced::<Message>()) {\n        \
-                 *__a0 = __new;\n    }\n"
+                "    { use crate::__rawr_island::{ByCopy as _, ByLoan as _}; \
+                 (&crate::__rawr_island::hand(&*__a0)).back(&mut __reply, __a0) }\n"
             ),
             "{text}"
         );

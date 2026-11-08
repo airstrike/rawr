@@ -307,7 +307,9 @@ fn a_marked_module_names_the_items_of_its_native_crate_root() {
 /// native code calls the trait's methods on what it gets back (#1263).
 /// Marked functions take and give the nested alias of `usize`, by value
 /// and by a shared borrow, as `usize` crosses, and take an alias of a
-/// native struct as the struct crosses (#1272).
+/// native struct as the struct crosses (#1272). A `&mut` of the alias
+/// crosses as `&mut usize` does, copied in and back, beside a `&mut` of a
+/// native struct, which is lent (#1297).
 /// `rawr check` passes as `cargo check` does, and `rawr run` prints what
 /// `cargo run` prints.
 #[test]
@@ -316,7 +318,16 @@ fn a_marked_module_names_the_items_of_a_native_module() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-native-module"
     );
-    const PRINTED: [&str; 7] = ["home", "home", "about", "31", "41", "10", "home"];
+    const PRINTED: [&str; 8] = [
+        "home",
+        "home",
+        "about",
+        "31",
+        "41",
+        "10",
+        "home",
+        "10 17 140",
+    ];
     let root = crate::support::scratch().join("islands-native-module");
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(MODULE), &root);
