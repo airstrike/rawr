@@ -17,4 +17,12 @@ fn main() {
     badge::state().show();
     badge::part().show();
     badge::promoted().show();
+    let page = badge::BadgePage::new(7);
+    page::describe(&*page);
+    println!(
+        "{} {} {}",
+        std::ptr::eq(page.meta(), &badge::META),
+        std::ptr::eq(page.blocks(), badge::BLOCKS),
+        std::ptr::eq(page.state(), page.state())
+    );
 }

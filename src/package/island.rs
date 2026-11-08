@@ -732,6 +732,10 @@ impl<'a> Generator<'a> {
                 }
                 format!("::std::vec::Vec<{}>", slice(file.text, element.span()))
             }
+            // A native value the receiver holds is lent where it is.
+            target if self.crosses(target, None).is_err() && self.lendable(target) => {
+                return Some(Ok(Borrowed::InPlace));
+            }
             target => {
                 if let Err(reason) = self.crosses(target, None) {
                     return Some(Err(reason));
@@ -740,6 +744,37 @@ impl<'a> Generator<'a> {
             }
         };
         Some(Ok(Borrowed::Kept(owned)))
+    }
+
+    /// How a `&'static` result of a native value comes back (#1442): `None`
+    /// when `function`'s result is no such reference.
+    fn lasting_result(&self, function: &item::Function) -> Option<Lasting> {
+        let Some(type_ref::Type::Reference {
+            mutable: false,
+            lifetime: Some(lifetime),
+            target,
+            ..
+        }) = &function.output
+        else {
+            return None;
+        };
+        if lifetime.name.text != "static" {
+            return None;
+        }
+        let type_ref::Type::Path(path) = target.as_ref() else {
+            return None;
+        };
+        let last = path.segments.last()?;
+        if path.segments.len() == 1 && last.name.text == "str" {
+            return Some(Lasting::Text);
+        }
+        if last.name.text == crate::item::type_ref::SLICE_TYPE {
+            let [type_ref::Argument::Type(element)] = &last.arguments[..] else {
+                return None;
+            };
+            return self.lendable(element).then_some(Lasting::Slice);
+        }
+        (self.crosses(target, None).is_err() && self.lendable(target)).then_some(Lasting::Value)
     }
 
     /// The generated text of `file` with its inline modules `group`, and
@@ -1175,6 +1210,7 @@ impl<'a> Generator<'a> {
         // A result that doesn't cross by the wire format may still come
         // back part by part, its native parts moved.
         let mut back = None;
+        let lasting = self.lasting_result(function);
         let kept = match self.kept_result(file, function).filter(|_| object) {
             Some(Ok(owned)) => Some(owned),
             Some(Err(reason)) => {
@@ -1185,6 +1221,7 @@ impl<'a> Generator<'a> {
         };
         if let Some(output) = &function.output
             && kept.is_none()
+            && lasting.is_none()
             && self.crosses(output, owner).is_err()
         {
             match self.back(file, output, owner) {
@@ -1208,6 +1245,29 @@ impl<'a> Generator<'a> {
             && owner.is_none_or(|owner| !self.crossing.contains(owner))
         {
             reasons.push("its receiver can't cross yet".to_owned());
+        }
+        // Native code calls each method of a trait object it holds, so a
+        // reference one gives that can't come back is an error before
+        // anything runs, not a panic at the call.
+        if object
+            && matches!(function.output, Some(type_ref::Type::Reference { .. }))
+            && let Some(reason) = reasons
+                .iter()
+                .find(|reason| reason.starts_with("its result"))
+        {
+            let at = function
+                .output
+                .as_ref()
+                .map_or(function.span, type_ref::Type::span)
+                .start();
+            return Err(format!(
+                "error: native code can't borrow the result of `{path}` through rawr yet: {}\n  \
+                 --> {}:{}:{}",
+                reason.trim_start_matches("its result: "),
+                file.path.display(),
+                at.line().unwrap_or(1),
+                at.position().unwrap_or(1)
+            ));
         }
         let island = format!("crate::{MODULE}");
         let mut text = format!("{signature} {{\n");
@@ -1235,6 +1295,11 @@ impl<'a> Generator<'a> {
         );
         if matches!(kept, Some(Borrowed::Pinned)) {
             text.push_str("    __call.pinned();\n");
+        }
+        // A reference to a native value comes back where the value is
+        // (#1442): a `&'static` only from a static.
+        if lasting.is_some() || matches!(kept, Some(Borrowed::InPlace)) {
+            let _ = writeln!(text, "    __call.in_place({});", lasting.is_some());
         }
         // Each `&mut` argument in argument order, as its change comes back:
         // a copy, or what a lent place was given.
@@ -1275,7 +1340,25 @@ impl<'a> Generator<'a> {
             .output
             .as_ref()
             .map_or("()", |ty| slice(file.text, ty.span()));
-        if let Some(Borrowed::Pinned) = kept {
+        if let Some(lasting) = lasting {
+            // A static's own place, which lives as long as the program.
+            let read = match lasting {
+                Lasting::Value => "lasting",
+                Lasting::Slice => "lasting_slice",
+                Lasting::Text => "lasting_text",
+            };
+            let _ = writeln!(
+                text,
+                "    let __value: {output} = __reply.read(|input| input.{read}());"
+            );
+        } else if let Some(Borrowed::InPlace) = kept {
+            // The receiver's own native value, kept where it is for as
+            // long as `&self` is borrowed.
+            let _ = writeln!(
+                text,
+                "    let __value: {output} = self.0.lent(&mut __reply);"
+            );
+        } else if let Some(Borrowed::Pinned) = kept {
             // The result is the program's own text, pinned with the value.
             let _ = writeln!(
                 text,
@@ -1491,6 +1574,23 @@ enum Borrowed {
     /// the owned type it comes back as, `Vec<T>` for `&[T]` and `T` for
     /// `&T`, which the stand-in keeps for as long as `&self` is borrowed.
     Kept(String),
+    /// A `&T` of a native value the receiver holds: the value where it is,
+    /// kept there for as long as `&self` is borrowed (#1442).
+    InPlace,
+}
+
+/// How a `&'static` result of a native value comes back
+/// (`Generator::lasting_result`): a static's own place, as `fn meta(&self)
+/// -> &'static Meta { &META }` gives (#1442).
+#[derive(Clone, Copy)]
+enum Lasting {
+    /// A `&'static T`.
+    Value,
+    /// A `&'static [T]`, as a static slice of native values is.
+    Slice,
+    /// A `&'static str`: the program's own text, pinned for as long as the
+    /// runner lives.
+    Text,
 }
 
 /// Where a module's stand-ins go (`Generator::stand_in`): the names it
@@ -1783,6 +1883,20 @@ pub mod __rawr_island {
                     length,
                 ))
             }
+        }
+
+        /// The native value a `&self` call gave where the program value
+        /// holds it ([`Call::in_place`]), as `fn state(&self) -> &State {
+        /// &self.state }` gives it (#1442), borrowed for as long as the
+        /// object is.
+        pub fn lent<T: 'static>(&self, reply: &mut Reply) -> &T {
+            let place = reply.read(|input| input.place::<T>());
+            // SAFETY: the runner keeps the value where it is with the
+            // program value's pins, which it lets go only when the value is
+            // next taken `&mut` or released, which a `&mut self` call or
+            // the object's drop does, and neither can happen while `&self`
+            // is borrowed. Nothing writes the value while the pins hold it.
+            unsafe { &*place }
         }
 
         /// Let go of the kept results, as a `&mut self` call may once
@@ -2207,6 +2321,36 @@ pub mod __rawr_island {
                      which can't come back yet",
                     self.path
                 );
+            }
+        }
+        /// A static's own value, which the interpreter gave where it is for
+        /// a call that asked for a `&'static` ([`Call::in_place`]).
+        pub fn lasting<T: 'static>(&mut self) -> &'static T {
+            let place = self.place::<T>();
+            // SAFETY: for a call that asks for a `&'static`, the runner
+            // gives only the place of a value that lives as long as the
+            // program, and nothing writes it.
+            unsafe { &*place }
+        }
+        /// A static slice of native values itself, for a call that asked
+        /// for a `&'static [T]` ([`Call::in_place`]).
+        pub fn lasting_slice<T: 'static>(&mut self) -> &'static [T] {
+            self.native()
+        }
+        /// The program's own text, pinned for as long as the runner lives,
+        /// for a call that asked for a `&'static str` ([`Call::in_place`]).
+        pub fn lasting_text(&mut self) -> &'static str {
+            self.native()
+        }
+        /// Where the native value the interpreter lent in place is, as a
+        /// `T`.
+        fn place<T: 'static>(&mut self) -> *const T {
+            let place: *const dyn ::std::any::Any = self.native();
+            // SAFETY: the runner gave the place of a value that lives at
+            // least as long as the call's result borrows it.
+            match unsafe { &*place }.downcast_ref::<T>() {
+                Some(value) => value,
+                None => self.fail(&::std::format!("expected a `{}`", ::std::any::type_name::<T>())),
             }
         }
         /// A native value the interpreter moved, as the `iced::Error` of an
@@ -2644,6 +2788,7 @@ pub mod __rawr_island {
         path: &'static str,
         owned: bool,
         pinned: bool,
+        in_place: u8,
         count: u32,
         mutable: u64,
         values: Out,
@@ -2666,6 +2811,7 @@ pub mod __rawr_island {
                 path,
                 owned,
                 pinned: false,
+                in_place: 0,
                 count: 0,
                 mutable: 0,
                 values: Out(::std::vec::Vec::new()),
@@ -2731,6 +2877,13 @@ pub mod __rawr_island {
         pub fn pinned(&mut self) {
             self.pinned = true;
         }
+        /// The call's result is a reference to a native value, which
+        /// comes back where the value is: with `lasting`, a `&'static`
+        /// ([`In::lasting`]), and else one its stand-in's receiver holds
+        /// ([`Object::lent`]).
+        pub fn in_place(&mut self, lasting: bool) {
+            self.in_place = 4 | u8::from(lasting) << 3;
+        }
         /// An argument the call may change, which comes back after it.
         pub fn mutable<T: Put + ?Sized>(&mut self, value: &T) {
             self.mutable |= 1 << self.count;
@@ -2739,7 +2892,7 @@ pub mod __rawr_island {
         pub fn send(mut self) -> Reply {
             register();
             let mut bytes = ::std::vec::Vec::with_capacity(13 + self.values.0.len());
-            bytes.push(u8::from(self.owned) | u8::from(self.pinned) << 1);
+            bytes.push(u8::from(self.owned) | u8::from(self.pinned) << 1 | self.in_place);
             bytes.extend_from_slice(&self.count.to_le_bytes());
             bytes.extend_from_slice(&self.mutable.to_le_bytes());
             bytes.extend_from_slice(&self.values.0);
@@ -3195,8 +3348,14 @@ mod tests {
             ),
             "{text}"
         );
+        // A `&'static str` is the program's own text, pinned for as long as
+        // the runner lives (#1442).
         assert!(
-            text.contains("can't call `physics::Badge::Page::named` yet"),
+            text.contains(
+                "        __call.in_place(true);\n        __call.object(&self.0);\n        \
+                 let mut __reply = __call.send();\n        \
+                 let __value: &'static str = __reply.read(|input| input.lasting_text());\n"
+            ),
             "{text}"
         );
         assert!(
@@ -3238,6 +3397,71 @@ mod tests {
                 "physics::Badge".to_owned(),
                 "crate::physics::__rawr_object_0".to_owned()
             )]
+        );
+    }
+
+    /// A stand-in's reference to a native value comes back where the value
+    /// is (#1442): a `&'static T` or `&'static [T]` as a static's own place
+    /// and a `&T` the receiver holds lent in place for as long as `&self`
+    /// is. One that can't come back is an error before anything runs.
+    #[test]
+    fn a_stand_in_gives_native_references_in_place() {
+        let shadow = generate(
+            "// rawr\nuse crate::page;\npub struct Badge {\n    state: page::State,\n}\n\
+             impl page::Page for Badge {\n    \
+             fn meta(&self) -> &'static page::Meta { &META }\n    \
+             fn blocks(&self) -> &'static [page::Block] { BLOCKS }\n    \
+             fn state(&self) -> &page::State { &self.state }\n    \
+             fn preview(&self, id: &str) -> ui::Element<'_, Message, Theme> { view(id) }\n}\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        for (output, read) in [
+            (
+                "&'static page::Meta",
+                "__reply.read(|input| input.lasting())",
+            ),
+            (
+                "&'static [page::Block]",
+                "__reply.read(|input| input.lasting_slice())",
+            ),
+        ] {
+            let expected = format!(
+                "        __call.in_place(true);\n        __call.object(&self.0);\n        \
+                 let mut __reply = __call.send();\n        let __value: {output} = {read};\n"
+            );
+            assert!(text.contains(&expected), "{expected}\n{text}");
+        }
+        assert!(
+            text.contains(
+                "        __call.in_place(false);\n        __call.object(&self.0);\n        \
+                 let mut __reply = __call.send();\n        \
+                 let __value: &page::State = self.0.lent(&mut __reply);\n"
+            ),
+            "{text}"
+        );
+        // An output that borrows `&self` is made in the region its call
+        // runs in, kept with the value (#1321).
+        assert!(
+            text.contains(
+                "__reply.read(|input| (&crate::__rawr_island::Back::<\
+                 ui::Element<'static, Message, Theme>>::new()).take(input))"
+            ),
+            "{text}"
+        );
+        let shadow = generate(
+            "// rawr\nuse crate::page;\npub struct Badge {\n    rows: Vec<page::Row>,\n}\n\
+             impl page::Page for Badge {\n    \
+             fn rows(&self) -> &[page::Row] { &self.rows }\n}\n",
+        );
+        assert_eq!(
+            shadow.refused,
+            [
+                "error: native code can't borrow the result of `physics::Badge::Page::rows` \
+              through rawr yet: a `Row` can't cross yet\n  --> /crate/src/physics.rs:7:23"
+            ]
         );
     }
 

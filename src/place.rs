@@ -21,7 +21,7 @@ use crate::{Dynamic, RawrResult, RawrResultOf, Shared};
 use std::any::Any;
 use std::fmt;
 
-pub use native::{borrow, borrow_ref, lend, lend_ref, owned, reach, restore, take};
+pub use native::{borrow, borrow_ref, lasting, lend, lend_ref, owned, reach, restore, take};
 
 /// The ownership action selected by a checked extension expression.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -372,6 +372,13 @@ trait Storage: Any + crate::func::SendSync {
         None
     }
 
+    /// What this storage is, when it lives as long as the program: a slice
+    /// boxed as its `&'static [T]`, or a static's value boxed as its place,
+    /// a `*const dyn Any`; `None` for any other storage.
+    fn lasting(&self) -> Option<Box<dyn Any>> {
+        None
+    }
+
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -518,6 +525,15 @@ pub fn reach_as<T: 'static, R>(
 #[must_use]
 pub fn get(value: &Dynamic) -> Option<Place> {
     value.read_lock::<Place>().map(|place| place.clone())
+}
+
+/// What `place` is when it lives as long as the program (#1442): a static
+/// slice boxed as its `&'static [T]`, or a static's value boxed as its
+/// place, a `*const dyn Any`, which a marked function's `&'static` result
+/// gives native code.
+#[must_use]
+pub fn lasting_reference(place: &Place) -> Option<Box<dyn Any>> {
+    place.storage.lasting()
 }
 
 pub(crate) fn failure(message: impl Into<String>) -> Box<crate::EvalAltResult> {
