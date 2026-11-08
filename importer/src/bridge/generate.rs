@@ -3861,11 +3861,21 @@ fn snapshot_bytes<'a>(input: &mut &'a [u8], limit: usize) -> std::io::Result<&'a
 }
 
 fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package::snapshot::Snapshot> {
-    let domain = b"rawr.snapshot.entry/v1";
+    let domain = b"rawr.snapshot.entry/v2";
     if !input.starts_with(domain) { return Err(std::io::Error::other("snapshot entry")); }
     input = &input[domain.len()..];
     let entry = std::str::from_utf8(snapshot_bytes(&mut input, 1024 * 1024)?)
         .map_err(|_| std::io::Error::other("snapshot entry UTF-8"))?;
+    // The features the parent's Cargo enabled for the entry package.
+    if input.len() < 8 { return Err(std::io::Error::other("snapshot features")); }
+    let count = u64::from_le_bytes(input[..8].try_into().map_err(|_| std::io::Error::other("snapshot features"))?);
+    input = &input[8..];
+    if count > (input.len() / 8) as u64 { return Err(std::io::Error::other("snapshot features")); }
+    let mut features = Vec::new();
+    for _ in 0..count {
+        features.push(std::str::from_utf8(snapshot_bytes(&mut input, 1024 * 1024)?)
+            .map_err(|_| std::io::Error::other("snapshot feature UTF-8"))?);
+    }
     let mut files = Vec::new();
     let mut previous: Option<&[u8]> = None;
     while !input.is_empty() {
@@ -3880,6 +3890,7 @@ fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package
     }
     if files.is_empty() { return Err(std::io::Error::other("snapshot files")); }
     __rawr_internal::package::snapshot::Snapshot::new(std::path::PathBuf::from(entry), files)
+        .map(|snapshot| snapshot.with_features(__rawr_internal::project::cargo::features::Enabled::of_names(features)))
         .map_err(|error| std::io::Error::other(error.to_string()))
 }
 

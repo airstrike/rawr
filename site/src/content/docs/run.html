@@ -62,7 +62,7 @@ fn main() {}</code></pre></div>
 <h2 id="features">Features</h2>
 <p>A marked crate&rsquo;s <code>cfg(feature = "&hellip;")</code> holds for the features Cargo enables for it. rawr asks Cargo which ones those are, from Cargo&rsquo;s unit graph. That covers <code>cfg!</code>, <code>#[cfg]</code> on items and statements, and <code>#[cfg_attr]</code>. With no flags, those are your default features and what they enable, as under <code>cargo run</code>.</p>
 <p><code>rawr run</code>, <code>rawr check</code> and <code>rawr test</code> take Cargo&rsquo;s feature flags: <code>--features &lt;list&gt;</code> (or <code>-F</code>), <code>--no-default-features</code> and <code>--all-features</code>. rawr hands them to Cargo as they are written, and the background <code>cargo check</code> gets them too.</p>
-<p>A crate with Rust dependencies runs its marked code in rawr-import&rsquo;s runner, which doesn&rsquo;t get the features yet. There every <code>feature</code> is off.</p>
+<p>A crate with Rust dependencies runs its marked code in rawr-import&rsquo;s runner. The runner gets the same features, and its native modules build with them, so the crate prints what <code>cargo run</code> prints under each flag.</p>
 <div class="block"><pre><code>rawr run --no-default-features --features fast</code></pre></div>
 
 <h2 id="scripts">Scripts</h2>

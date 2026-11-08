@@ -14,11 +14,16 @@ use std::process::Command;
 use crate::support::fixture::Lease;
 use crate::support::{start, Fixture};
 
-/// The fixture, whose lanes hold the program's own native module, which
-/// only some variants declare, beside them, so that rustfmt finds it from
-/// each.
-static CROSSING: Fixture =
-    Fixture::with("crossing", &[("src/download.rs", "variants/download.rs")]);
+/// The fixture, whose lanes hold the program's own native modules, which
+/// only some variants declare, beside them, so that rustfmt finds them
+/// from each.
+static CROSSING: Fixture = Fixture::with(
+    "crossing",
+    &[
+        ("src/download.rs", "variants/download.rs"),
+        ("src/flagged.rs", "variants/flagged.rs"),
+    ],
+);
 
 /// A lane of the fixture, with `variant` from `variants/` as its `main.rs`
 /// when given.
@@ -326,11 +331,16 @@ fn a_view_passing_a_later_methods_opaque_output_to_the_crate_runs() {
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
 /// both programs' stdout without the process id.
 fn both_printed(variant: &str, presses: &str) -> (String, String) {
-    let root = lane(Some(variant));
+    both_printed_in(&lane(Some(variant)), presses, &[])
+}
+
+/// `rawr-import run` and `cargo run` of the project at `root` with
+/// `flags`, as `both_printed` gives them.
+fn both_printed_in(root: &std::path::Path, presses: &str, flags: &[&str]) -> (String, String) {
     let directory = crate::support::scratch();
     let output = |mut command: Command| {
         let run = command
-            .current_dir(&root)
+            .current_dir(root)
             .env("EVENTS_PRESS", presses)
             .env_remove("CARGO_TARGET_DIR")
             .env_remove("RUSTFLAGS")
@@ -350,11 +360,37 @@ fn both_printed(variant: &str, presses: &str) -> (String, String) {
     };
     let mut rawr = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
     rawr.arg("run")
-        .arg(&*root)
+        .arg(root)
+        .args(flags)
         .env("RAWR_HOME", directory.join("rawr-home"));
     let mut cargo = Command::new("cargo");
-    cargo.args(["run", "-q"]);
+    cargo.args(["run", "-q"]).args(flags);
     (output(rawr), output(cargo))
+}
+
+/// A package whose `default` feature enables `x` (#1268): marked code's
+/// `cfg!(feature = "x")` and `#[cfg(feature = "x")]` statement, and a
+/// native module's `cfg!`, hold as Cargo enables the features, with the
+/// default ones and with `--no-default-features`. The output is `cargo
+/// run`'s.
+#[test]
+fn a_crate_s_features_follow_cargo_s_feature_flags() {
+    let manifest = CROSSING.read("Cargo.toml").replace(
+        "[dependencies]",
+        "[features]\ndefault = [\"x\"]\nx = []\n\n[dependencies]",
+    );
+    let main = CROSSING.read("variants/featured.rs");
+    let root = CROSSING.lease(&[("Cargo.toml", &manifest), ("src/main.rs", &main)]);
+    for (flags, x) in [(&[][..], true), (&["--no-default-features"][..], false)] {
+        let (rawr, cargo) = both_printed_in(&root, "", flags);
+        assert_eq!(rawr, cargo, "{flags:?}");
+        let only = if x { "only with x" } else { "only without x" };
+        assert_eq!(
+            rawr,
+            format!("x {x}\n{only}\nnative x {x}\nsame 3"),
+            "{flags:?}"
+        );
+    }
 }
 
 /// iced's tour (#1074): `padded_button("Back")`, a generic function of the

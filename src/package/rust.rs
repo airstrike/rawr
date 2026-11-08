@@ -333,9 +333,14 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
         files.extend(build_script(cargo, &directory)?);
     }
     write_changed(files)?;
-    let mut crates = vec![Dependency::path(alias, &directory)?.package(&cargo.package)?];
+    // The features Cargo enabled for the package under the command's
+    // feature flags, and no others: `default` among them when it is on.
+    let features = || entry.features().names();
+    let mut crates = vec![Dependency::path(alias, &directory)?
+        .package(&cargo.package)?
+        .features(features(), false)?];
     if let Some(bin) = entry.bin() {
-        crates.push(bin_crate(bin, cargo, &directory, &module_root)?);
+        crates.push(bin_crate(bin, cargo, &directory, &module_root)?.features(features(), false)?);
     }
     Ok(crates)
 }
@@ -573,8 +578,9 @@ fn bin_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path) -> String
         super::island::BIN,
         Path::new("src/main.rs"),
     );
+    // The library's features are the ones the runner gives it.
     text.push_str(&format!(
-        "{} = {{ package = {:?}, path = {:?} }}\n",
+        "{} = {{ package = {:?}, path = {:?}, default-features = false }}\n",
         cargo.crate_name,
         cargo.package,
         library.display().to_string()
@@ -629,8 +635,9 @@ fn manifest_head(
 /// `cargo`'s dependencies as `[dependencies]` lines, its
 /// `[build-dependencies]`, its `[features]` (#1144), then the empty
 /// `[workspace]` that keeps a generated package out of any other. A
-/// generated package is a path dependency with its default features on,
-/// so it builds with the features `cargo build` gives the package.
+/// generated package is a path dependency with the features Cargo enabled
+/// for the package and no default ones, so it builds with the features
+/// `cargo build` gives the package under the command's feature flags.
 fn dependency_table(cargo: &super::manifest::cargo::Cargo) -> String {
     let mut text = dependency_lines(&cargo.dependencies);
     if !cargo.build_dependencies.is_empty() {

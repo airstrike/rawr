@@ -115,6 +115,9 @@ impl Serialize for Snapshot {
 pub struct SnapshotBuilder {
     digest: Sha256,
     entry: bool,
+    /// Whether the entry package's features are framed, which they are
+    /// before the first file.
+    features: bool,
     files: usize,
     previous: Option<Box<str>>,
     items: usize,
@@ -348,6 +351,7 @@ impl Snapshot {
         SnapshotBuilder {
             digest: Sha256::new(),
             entry: false,
+            features: false,
             files: 0,
             previous: None,
             items: 0,
@@ -390,7 +394,7 @@ impl SnapshotBuilder {
             actual: usize::MAX,
         })?;
         let mut digest = self.digest.clone();
-        digest.update(b"rawr.snapshot.entry/v1");
+        digest.update(b"rawr.snapshot.entry/v2");
         digest.update(path_length.to_le_bytes());
         digest.update(path.as_bytes());
         self.digest = digest;
@@ -400,11 +404,47 @@ impl SnapshotBuilder {
         Ok(())
     }
 
+    /// Bind the features Cargo enabled for the entry package, after the
+    /// entry and before any file. A snapshot that binds none has none.
+    #[doc(hidden)]
+    pub fn features<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) -> Result<(), Error> {
+        if !self.entry {
+            return Err(Error::MissingEntry);
+        }
+        if self.features || self.files != 0 {
+            return Err(Error::SnapshotOrder);
+        }
+        let names = names.into_iter().collect::<Vec<_>>();
+        let bytes = names
+            .iter()
+            .try_fold(self.bytes, |bytes, name| bytes.checked_add(name.len()))
+            .ok_or(Error::Limit {
+                resource: "snapshot retained bytes",
+                limit: self.byte_limit,
+                actual: usize::MAX,
+            })?;
+        let count = u64::try_from(names.len()).map_err(|_| Error::SnapshotOrder)?;
+        let mut digest = self.digest.clone();
+        digest.update(count.to_le_bytes());
+        for name in names {
+            let length = u64::try_from(name.len()).map_err(|_| Error::SnapshotOrder)?;
+            digest.update(length.to_le_bytes());
+            digest.update(name.as_bytes());
+        }
+        self.digest = digest;
+        self.features = true;
+        self.bytes = bytes;
+        Ok(())
+    }
+
     /// Retain one exact canonical path and its already-captured bytes.
     #[doc(hidden)]
     pub fn file(&mut self, path: &str, contents: &[u8]) -> Result<(), Error> {
         if !self.entry {
             return Err(Error::MissingEntry);
+        }
+        if !self.features {
+            self.features([])?;
         }
         if self
             .previous
