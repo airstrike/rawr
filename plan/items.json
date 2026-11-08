@@ -1441,6 +1441,7 @@
     {"t":"T1438","issue":1438,"title":"T1438: A slice literal passed to a `&'static [T]` parameter is pinned again at each call, where rustc…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1439","issue":1439,"title":"T1439: A static block's `&'static [T]` field (`children`) can't fill a `&'static [T]` parameter","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1440","issue":1440,"title":"T1440: A crate's `&'static T` parameter of a single native value gets a lent reborrow, not the marked…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1441","issue":1441,"title":"T1441: A marked function returning `[NativeType; N]` to native code fails: the interpreter's answer is…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1441","issue":1441,"title":"T1441: A marked function returning `[NativeType; N]` to native code fails: the interpreter's answer is…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1442","issue":1442,"title":"T1442: A native trait method a marked type implements can't return a reference (`&'static Meta`…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

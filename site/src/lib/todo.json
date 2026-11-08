@@ -3208,7 +3208,8 @@
     {"issue":1438,"title":"A slice literal passed to a `&'static [T]` parameter is pinned again at each call, where rustc…","state":"open","category":"No glue (D593)"},
     {"issue":1439,"title":"A static block's `&'static [T]` field (`children`) can't fill a `&'static [T]` parameter","state":"open","category":"No glue (D593)"},
     {"issue":1440,"title":"A crate's `&'static T` parameter of a single native value gets a lent reborrow, not the marked…","state":"open","category":"No glue (D593)"},
-    {"issue":1441,"title":"A marked function returning `[NativeType; N]` to native code fails: the interpreter's answer is…","state":"open","category":"No glue (D593)"}
+    {"issue":1441,"title":"A marked function returning `[NativeType; N]` to native code fails: the interpreter's answer is…","state":"open","category":"No glue (D593)"},
+    {"issue":1442,"title":"A native trait method a marked type implements can't return a reference (`&'static Meta`…","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
