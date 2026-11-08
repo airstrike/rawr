@@ -1434,6 +1434,8 @@
     {"t":"T1431","issue":1431,"title":"T1431: Panics inside std (pow, sum, step_by, drain) name the call site where rustc names core's source file","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1432","issue":1432,"title":"T1432: A script fn lent a native `&T` returns a crate value the slot takes after the lend ends: Stale…","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"e4bbfa4ee","release":null},
     {"t":"T1433","issue":1433,"title":"T1433: A selected target that isn't installed fails with rawr's error, not rustc's E0463 with its…","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1434","issue":1434,"title":"T1434: A native value keeping a script closure under a non-generic type doesn't lend the arena when its…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1434","issue":1434,"title":"T1434: A native value keeping a script closure under a non-generic type doesn't lend the arena when its…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1435","issue":1435,"title":"T1435: A bound with more than 64 impls loses its relation, so badge(impl Into<Slot>) ties no message…","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1436","issue":1436,"title":"T1436: An unused `use crate::module;` in a marked file is refused with E0432 where rustc only warns","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

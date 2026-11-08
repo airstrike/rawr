@@ -3199,7 +3199,9 @@
     {"issue":1431,"title":"Panics inside std (pow, sum, step_by, drain) name the call site where rustc names core's source file","state":"open","category":"Divergences from rustc"},
     {"issue":1432,"title":"A script fn lent a native `&T` returns a crate value the slot takes after the lend ends: Stale…","state":"closed","category":"No glue (D593)"},
     {"issue":1433,"title":"A selected target that isn't installed fails with rawr's error, not rustc's E0463 with its…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1434,"title":"A native value keeping a script closure under a non-generic type doesn't lend the arena when its…","state":"open","category":"No glue (D593)"}
+    {"issue":1434,"title":"A native value keeping a script closure under a non-generic type doesn't lend the arena when its…","state":"open","category":"No glue (D593)"},
+    {"issue":1435,"title":"A bound with more than 64 impls loses its relation, so badge(impl Into<Slot>) ties no message…","state":"open","category":"Importer"},
+    {"issue":1436,"title":"An unused `use crate::module;` in a marked file is refused with E0432 where rustc only warns","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
