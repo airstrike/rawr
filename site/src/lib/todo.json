@@ -3026,7 +3026,8 @@
     {"issue":1313,"title":"A projection bound on a crate's own trait (`<F as Trait>::Output = T`) has no cases","state":"open","category":"Divergences from rustc"},
     {"issue":1314,"title":"A native &[T] parameter takes a native slice place when the call also takes a lent &T or &mut T, or its output borrows","state":"open","category":"Divergences from rustc"},
     {"issue":1315,"title":"Moving a &'static [T] field out of an owned native value keeps the reference instead of copying elements","state":"open","category":"Divergences from rustc"},
-    {"issue":1316,"title":"&v[a..b] of an owned native Vec place cuts it in place","state":"open","category":"Divergences from rustc"}
+    {"issue":1316,"title":"&v[a..b] of an owned native Vec place cuts it in place","state":"open","category":"Divergences from rustc"},
+    {"issue":1317,"title":"A crate's unit struct used as a value (`badge::Secondary`), through a re-export, with its From conversion at a call","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3583,7 +3584,8 @@
             {"number":1267,"title":"A dependency whose every item is left out reads as an unknown crate (E0433) instead of naming the unsupported item","state":"closed"},
             {"number":1274,"title":"A crate's JoinHandle nested in an output (Option, Result, a tuple) or taken as an input crosses","state":"open"},
             {"number":1275,"title":"A crate's JoinHandle<T> of a T that holds crate values crosses","state":"open"},
-            {"number":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"open"}
+            {"number":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"open"},
+            {"number":1317,"title":"A crate's unit struct used as a value (`badge::Secondary`), through a re-export, with its From conversion at a call","state":"open"}
           ],
           "milestone": "0.4"
         },
