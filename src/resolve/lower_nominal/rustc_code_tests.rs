@@ -1129,6 +1129,68 @@ fn rendered(source: &str) -> String {
     render(&Report::from_parse(evidence, &error).expect("the error is in the source"))
 }
 
+/// A `use` in a block is in scope in that block alone: outside it the
+/// names it binds are rustc's E0425 (#7). `cargo run` of the programs
+/// rawr runs prints `true 1 2`.
+#[test]
+fn a_blocks_use_is_out_of_scope_outside_the_block() {
+    let color = "#[derive(PartialEq)]\nenum Color {\n    Red,\n    Green,\n}\n";
+    let outside = format!(
+        "{color}fn inside() -> bool {{\n    use Color::*;\n    Red == Red && Green == Green\n}}\n\
+         fn outside() -> bool {{\n    Red == Color::Red\n}}\nfn main() {{\n    \
+         println!(\"{{}} {{}}\", inside(), outside());\n}}\n"
+    );
+    assert_eq!(
+        refused(&outside),
+        (
+            "E0425".into(),
+            "cannot find value `Red` in this scope".into(),
+            label("not found in this scope")
+        )
+    );
+    assert!(rendered(&outside).contains(" --> main.rs:11:5"));
+    assert_eq!(
+        refused(
+            "mod m {\n    pub fn helper() -> i32 {\n        1\n    }\n}\nfn a() -> i32 {\n    use \
+             m::helper;\n    helper()\n}\nfn b() -> i32 {\n    helper()\n}\nfn main() {}\n"
+        ),
+        (
+            "E0425".into(),
+            "cannot find function `helper` in this scope".into(),
+            label("not found in this scope")
+        )
+    );
+    assert_eq!(
+        refused(
+            "fn a() {\n    use std::collections::HashMap;\n    let _m: HashMap<i32, i32> = \
+             HashMap::new();\n}\nfn b() {\n    let _m: HashMap<i32, i32> = HashMap::new();\n}\nfn \
+             main() {}\n"
+        ),
+        (
+            "E0425".into(),
+            "cannot find type `HashMap` in this scope".into(),
+            label("not found in this scope")
+        )
+    );
+    // In scope in its block, the blocks and items inside it, and in each
+    // block that writes the same `use`.
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    engine
+        .run(&format!(
+            "{color}mod m {{\n    pub fn one() -> i32 {{\n        1\n    }}\n}}\nfn first() -> bool \
+             {{\n    use Color::*;\n    let check = || {{ Red != Green }};\n    fn inner() -> Color \
+             {{\n        Green\n    }}\n    check() && inner() == Green\n}}\nfn second() -> i32 {{\n    \
+             use Color::*;\n    use m::one;\n    {{\n        if Red == Red {{ one() }} else {{ 0 }}\n    \
+             }}\n}}\nfn third() -> i32 {{\n    use m::one;\n    one() + 1\n}}\nfn main() {{\n    \
+             println!(\"{{}} {{}} {{}}\", first(), second(), third());\n}}\nmain();\n"
+        ))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(lines.lock().unwrap().as_str(), "true 1 2\n");
+}
+
 /// `write!` calls the `write_fmt` of a `Write` trait, which is callable
 /// only where the trait is in scope: rustc's E0599 "cannot write into
 /// `String`" at the value written into, with no `use std::fmt::Write;`

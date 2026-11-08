@@ -583,6 +583,27 @@ impl Use {
             UseTree::Glob { .. } => Vec::new(),
         }
     }
+
+    /// What the import binds, apart from where it is written: each name
+    /// with its path, and a glob's module under `*`. One import written in
+    /// several bodies has one key, and is hoisted once.
+    #[must_use]
+    pub fn hoist_key(&self) -> Vec<(ImmutableString, Box<[ImmutableString]>)> {
+        let mut key = self
+            .bindings()
+            .into_iter()
+            .map(|(name, path)| (name.text, path))
+            .collect::<Vec<_>>();
+        if let UseTree::Glob { prefix, .. } = &self.tree {
+            let path = prefix
+                .segments
+                .iter()
+                .map(|segment| segment.name.text.clone())
+                .collect();
+            key.push(("*".into(), path));
+        }
+        key
+    }
 }
 
 /// An associated type equality of a bound, as `(trait, name, type)`:

@@ -4798,6 +4798,9 @@ struct Models {
     /// The first segment of a path being read that starts with `::`
     /// (`::image::ImageReader`): an outside crate, which no `use` shadows.
     global_head: Option<ImmutableString>,
+    /// Where the lowering is in the source, which says whether a name a
+    /// block's `use` binds is in scope; `NONE` before any token is read.
+    at: Position,
     /// Native closure copies retain the original whole-candidate contribution.
     #[cfg(feature = "rust-import")]
     _imported_owner: Option<crate::package::import::runner::account::support::Owner>,
@@ -4825,6 +4828,9 @@ struct Tables {
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
     lexical: BTreeMap<crate::program::source::Id, Box<[crate::item::Use]>>,
+    /// The blocks a name is in scope in when only blocks' `use`s bind it
+    /// in its source: rustc scopes a block's `use` to the block (#7).
+    block_scopes: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[Span]>>,
     by_name: BTreeMap<(crate::program::source::Id, ImmutableString), Nominal>,
     /// The source that declares each script type.
     declared_in: BTreeMap<type_def::Id, crate::program::source::Id>,
@@ -5187,10 +5193,34 @@ impl Models {
         let mut imported_variants = Vec::new();
         let mut ordering_variants = Vec::new();
         let mut host_variants = Vec::new();
+        // A name only blocks' `use`s bind is in scope in those blocks; one a
+        // module's `use` or an item of the source binds is in scope there.
+        let declared = by_name
+            .keys()
+            .chain(functions.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut block_scopes = BTreeMap::<_, Vec<Span>>::new();
+        let mut module_names = BTreeSet::new();
         for shell in program.items.iter() {
             let item::Kind::Use(item) = &shell.kind else {
                 continue;
             };
+            let blocks = program
+                .lexical
+                .get(&shell.source)
+                .and_then(|imports| use_blocks(imports, item.span));
+            for binding in &item.bindings {
+                let key = (shell.source, binding.name.text.clone());
+                match &blocks {
+                    Some(blocks) if !declared.contains(&key) => {
+                        block_scopes.entry(key).or_default().extend(blocks);
+                    }
+                    _ => {
+                        module_names.insert(key);
+                    }
+                }
+            }
             for binding in &item.bindings {
                 // A module and a function of its name, bound in their own
                 // namespaces, read as one name.
@@ -5244,6 +5274,11 @@ impl Models {
                 }
             }
         }
+        let block_scopes = block_scopes
+            .into_iter()
+            .filter(|(key, _)| !module_names.contains(key))
+            .map(|(key, blocks)| (key, blocks.into_boxed_slice()))
+            .collect();
         // An imported variant reads as its enum's path, `Shape::Circle`. The
         // enum is named by its own name in that source, which a different
         // type of that name there leaves to a name no source can write.
@@ -5519,6 +5554,7 @@ impl Models {
             features: program.features().clone(),
             imports,
             lexical: program.lexical.clone(),
+            block_scopes,
             by_name,
             declared_in,
             variants,
@@ -5645,6 +5681,7 @@ impl Models {
             context: program.source.entry(),
             tables: Shared::new(tables),
             global_head: None,
+            at: Position::NONE,
             #[cfg(feature = "rust-import")]
             _imported_owner: None,
             #[cfg(test)]
@@ -5653,13 +5690,32 @@ impl Models {
     }
 
     fn get(&self, name: &str) -> Option<&Nominal> {
-        self.by_name.get(&(self.context, name.into()))
+        self.by_name
+            .get(&(self.context, name.into()))
+            .filter(|_| self.in_scope(name, self.at))
     }
 
-    /// The enum an imported variant's name stands for in this source.
-    fn imported_variant(&self, name: &str) -> Option<&[ImmutableString]> {
+    /// Whether `name` is in scope at `at` in this source as far as `use`s
+    /// say: everywhere, unless only blocks' `use`s bind it, and then inside
+    /// those blocks.
+    fn in_scope(&self, name: &str, at: Position) -> bool {
+        at.is_none()
+            || self
+                .block_scopes
+                .get(&(self.context, name.into()))
+                .is_none_or(|blocks| {
+                    blocks
+                        .iter()
+                        .any(|block| block.start() <= at && at <= block.end())
+                })
+    }
+
+    /// The enum an imported variant's name at `at` stands for in this
+    /// source.
+    fn imported_variant(&self, name: &str, at: Position) -> Option<&[ImmutableString]> {
         self.variants
             .get(&(self.context, name.into()))
+            .filter(|_| self.in_scope(name, at))
             .map(AsRef::as_ref)
     }
 
@@ -5674,11 +5730,12 @@ impl Models {
             })
     }
 
-    /// The whole path of the crate enum variant a name stands for in this
-    /// source (`use iced::Center;`).
-    fn imported_host_variant(&self, name: &str) -> Option<&[ImmutableString]> {
+    /// The whole path of the crate enum variant a name at `at` stands for
+    /// in this source (`use iced::Center;`).
+    fn imported_host_variant(&self, name: &str, at: Position) -> Option<&[ImmutableString]> {
         self.host_variants
             .get(&(self.context, name.into()))
+            .filter(|_| self.in_scope(name, at))
             .map(AsRef::as_ref)
     }
 
@@ -5891,7 +5948,9 @@ impl Models {
     }
 
     fn function(&self, name: &str) -> Option<&ScriptFunction> {
-        self.functions.get(&(self.context, name.into()))
+        self.functions
+            .get(&(self.context, name.into()))
+            .filter(|_| self.in_scope(name, self.at))
     }
 
     fn qualified_function(&self, span: Span) -> Option<&ScriptFunction> {
@@ -5907,7 +5966,9 @@ impl Models {
         {
             return None;
         }
-        self.imports.get(&(self.context, name.into()))
+        self.imports
+            .get(&(self.context, name.into()))
+            .filter(|_| self.in_scope(name, self.at))
     }
 
     fn for_source(&self, source: crate::program::source::Id) -> Self {
@@ -58098,6 +58159,7 @@ impl<'a> Parser<'a> {
                 .expect("token streams always end with EOF"),
         };
         self.track_calls(&token, position);
+        self.models.at = position;
         (token, position)
     }
 
@@ -58155,6 +58217,18 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// The blocks of the import at `span` among a source's `imports`, and of
+/// each import there that binds what it binds, which hoisting merged into
+/// it: `None` when one of them is the module's.
+fn use_blocks(imports: &[crate::item::Use], span: Span) -> Option<Vec<Span>> {
+    let key = imports.iter().find(|used| used.span == span)?.hoist_key();
+    imports
+        .iter()
+        .filter(|used| used.hoist_key() == key)
+        .map(|used| used.scope)
+        .collect()
+}
+
 /// Each name of an imported enum variant (`use Shape::*;`) as its path,
 /// `Shape::Circle`, where a path may start: not after `.` or `::`, and not
 /// before a `:` that names a field or a `::` that goes on to a name. A
@@ -58185,7 +58259,7 @@ fn expand_imported_variants(
             _ => None,
         };
         // A crate enum's variant is its enum's, `Alignment::Center`.
-        if let Some(path) = name.and_then(|name| models.imported_host_variant(name)) {
+        if let Some(path) = name.and_then(|name| models.imported_host_variant(name, *position)) {
             for (segment, name) in path.iter().enumerate() {
                 if segment > 0 {
                     expanded.push((Token::DoubleColon, *position));
@@ -58194,7 +58268,7 @@ fn expand_imported_variants(
             }
             continue;
         }
-        let owner = name.and_then(|name| models.imported_variant(name));
+        let owner = name.and_then(|name| models.imported_variant(name, *position));
         for segment in owner.into_iter().flatten() {
             expanded.push((
                 Token::Identifier(Box::new(segment.as_str().into())),
