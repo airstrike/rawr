@@ -1433,7 +1433,8 @@ fn import_path(
 struct Facade<'contract> {
     root: &'contract str,
     entries: Vec<Entry<'contract>>,
-    /// The traits the program names: modules, as in the facade plan.
+    /// The traits and the modules the program names: modules, as in the
+    /// facade plan.
     traits: Vec<Box<str>>,
     /// Each trait the program names with its identity, whose header fixes
     /// a type its defaults leave open (D604).
@@ -1776,6 +1777,20 @@ fn install(
                 index
             }
         };
+        // A module the program names (`use crate::icon;`) is a module, as
+        // the facade plan has it, so an import that nothing below it uses
+        // resolves, as rustc's does (#1436).
+        if let Representability::Rejected(reason) = outcome.representability()
+            && reason.kind() == representability::reject::Kind::Module
+        {
+            let relative = relative_path(key, allocation)?;
+            let traits = &mut facades[facade_index].traits;
+            if let Err(position) = traits.binary_search_by(|path| path.as_ref().cmp(&relative)) {
+                traits.try_reserve(1).map_err(|_| Error::Allocation)?;
+                traits.insert(position, relative.into_boxed_str());
+            }
+            continue;
+        }
         if matches!(
             outcome.representability(),
             Representability::Excluded(_) | Representability::Rejected(_)
@@ -2990,18 +3005,22 @@ fn lends(signature: &representability::signature::Signature) -> u32 {
         .fold(0, |bits, index| bits | 1 << index)
 }
 
-/// The inputs of `signature`, by bit, that only a `&'static str` fills:
-/// one written `&'static str`, as iced's `Font::with_name` takes, or a type
-/// parameter a `&str` fills only at `'static`, as iced's `title(impl
-/// Title<State>)` is, which iced implements for `&'static str`.
+/// The inputs of `signature`, by bit, that only a borrow at `'static`
+/// fills: one written `&'static str`, as iced's `Font::with_name` takes, or
+/// another shared reference at `'static`, as `State::new(blocks: &'static
+/// [Block])` takes, or a type parameter a `&str` fills only at `'static`,
+/// as iced's `title(impl Title<State>)` is, which iced implements for
+/// `&'static str`.
 fn lent_static(signature: &representability::signature::Signature) -> u32 {
     use representability::convert::{Builtin, Type};
+    let statics = signature.statics();
     signature
         .inputs()
         .iter()
         .enumerate()
         .take(32)
-        .filter(|(_, input)| match input {
+        .filter(|(index, input)| match input {
+            _ if u32::try_from(*index).is_ok_and(|index| statics.contains(&index)) => true,
             Type::Builtin(Builtin::StaticStr) => true,
             Type::Parameter(index) => signature
                 .parameters()

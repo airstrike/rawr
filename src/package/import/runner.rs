@@ -900,9 +900,9 @@ fn build(
             .variant_alias(path, variant)
             .map_err(|source| entry_error(facade.root(), path, source.into()))?;
     }
-    // A trait the program names is a module (`use rand::Rng;`), unless the
-    // bindings already declare something at its path (iced's `Widget`, whose
-    // type the bindings carry).
+    // A trait or a module the program names is a module (`use rand::Rng;`,
+    // `use crate::icon;`), unless the bindings already declare something at
+    // its path (iced's `Widget`, whose type the bindings carry).
     for path in facade.traits() {
         let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
         for module in prefixes.chain(std::iter::once(path)) {
