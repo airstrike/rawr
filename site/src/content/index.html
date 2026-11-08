@@ -249,27 +249,27 @@ fn main() {
         up: 0.0,
     };
     let mut heights = Vec::new();
-    for _ in 0..13 {
+    for _ in 0..20 {
         heights.push(ball.height.round() as i64);
-        ball.advance(0.25);
+        ball.advance(0.2);
     }
     for row in (0..=8).rev() {
         let cells: Vec&lt;&amp;str&gt; = heights
             .iter()
-            .map(|&amp;height| if height == row { "()" } else { "  " })
+            .map(|&amp;height| if height == row { "•" } else { " " })
             .collect();
         println!("{}", cells.join(" ").trim_end());
     }
 }</code></pre>
-          <div class="run"><button type="button" class="runbtn" data-source="src-bounce" data-out="out-bounce" aria-label="Run bounce.rs" hidden></button><b>rawr run bounce.rs</b><span id="out-bounce" aria-live="polite">()
-   ()
-      ()
+          <div class="run"><button type="button" class="runbtn" data-source="src-bounce" data-out="out-bounce" aria-label="Run bounce.rs" hidden></button><b>rawr run bounce.rs</b><span id="out-bounce" aria-live="polite">• •
+    •
+      •
 
-         ()             () ()
-                     ()       ()
-            ()    ()             ()
-
-               ()                   ()</span></div>
+        •           • •
+                • •     •
+          •               •         •
+              •             •   • •   •
+            •                 •</span></div>
         </div>
       </div>
     </figure>
