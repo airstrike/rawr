@@ -12,4 +12,8 @@ fn main() {
         println!("{}", shown.title());
     }
     println!("{}", badge::scaled(2));
+    let width: page::size::Width = badge::widen(4);
+    println!("{width}");
+    println!("{}", badge::measure(&5));
+    println!("{}", badge::titled(page::Home));
 }
