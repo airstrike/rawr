@@ -133,6 +133,10 @@ node --input-type=module -e '
   const text = (h) => h.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "\x27").replace(/&amp;/g, "&");
   const sources = new Set();
   const failing = new Set();
+  // The build ran each data-where="server" block on the server that was live
+  // then. Its output must also be what the server just deployed answers.
+  const { outputHtml } = await import(process.argv[3] + "/site/src/lib/output.ts");
+  const shown = new Map();
   for (const path of pages) {
     const page = await (await fetch(process.argv[1] + path)).text();
     const found = [...page.matchAll(/<code([^>]*data-run[^>]*)>([\s\S]*?)<\/code>/g)];
@@ -140,11 +144,12 @@ node --input-type=module -e '
     // A block whose shown output is an error (class="err") is expected to
     // fail to compile, so its 422 is its right answer.
     for (const match of found) {
-      const [whole, , html] = match;
+      const [whole, attributes, html] = match;
       const after = page.slice(match.index + whole.length);
       const strip = after.slice(0, after.indexOf("</div>", after.indexOf("<div class=\"run\"")));
       const body = JSON.stringify({ code: text(html) });
       if (strip.includes("class=\"err\"")) failing.add(body);
+      if (attributes.includes("data-where=\"server\"")) shown.set(body, strip.slice(strip.indexOf("aria-live=\"polite\">") + 19, strip.lastIndexOf("</span>")));
       sources.add(body);
     }
   }
@@ -171,7 +176,13 @@ node --input-type=module -e '
         await new Promise((resolve) => setTimeout(resolve, (wait + 1) * 1000));
         continue;
       }
+      const same = (result) => {
+        if (!shown.has(body) || outputHtml(result) === shown.get(body)) return;
+        const first = JSON.parse(body).code.split("\n").find((line) => line.trim()) ?? "";
+        throw new Error("the page shows another output than the server gives for the server snippet starting " + JSON.stringify(first) + "; the site was built against the server before this deploy, so deploy the site again");
+      };
       if (response.status === 422 && failing.has(body)) {
+        same({ kind: "error", text: await response.text() });
         console.log("ran a site snippet: its compile error, as the page shows");
         break;
       }
@@ -191,12 +202,13 @@ node --input-type=module -e '
         const first = JSON.parse(body).code.split("\n").find((line) => line.trim()) ?? "";
         throw new Error("run failed: a limit stopped it after " + seconds() + " s on the snippet starting " + JSON.stringify(first));
       }
+      if (shown.has(body)) same(JSON.parse(ran));
       console.log("ran a site snippet in " + seconds() + " s (" + (response.headers.get("x-run") ?? "?") + "):", response.headers.get("content-type"));
       break;
     }
   }
   console.log("ran " + sources.size + " distinct site snippets from " + pages.length + " pages");
-' "$site" "$repo/site/dist"
+' "$site" "$repo/site/dist" "$repo"
 
 # Port readiness must not erase the boot report accepted before the snippets.
 curl -fsS "$site/bot/health" | node -e '

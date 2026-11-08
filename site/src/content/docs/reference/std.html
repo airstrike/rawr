@@ -15,7 +15,7 @@
 let fields: Vec&lt;&amp;str&gt; = line.trim().split(", ").collect();
 let id: i64 = fields[0].replace("id=", "").parse().unwrap();
 println!("{fields:?} {id}");</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-strings" data-out="out-strings" aria-label="Run strings.rs" hidden></button><b>rawr run strings.rs</b><span id="out-strings" aria-live="polite">["id=7", "name=rawr"] 7</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-strings" data-out="out-strings" aria-label="Run strings.rs" hidden></button><b>rawr run strings.rs</b><span id="out-strings" aria-live="polite"></span></div>
 </div>
 <p><code>*</code> of a <code>&amp;str</code> or a <code>String</code> is rustc&rsquo;s <code>str</code>. It works where rustc allows it: <code>&amp;*s</code> is a <code>&amp;str</code>, <code>*a == *b</code> compares, and <code>(*s).len()</code> calls a method. A <code>str</code> has no size, so <code>let x = *s;</code> and <code>println!("{}", *s)</code> are rustc&rsquo;s E0277.</p>
 <h2 id="cow"><code>Cow</code></h2>
@@ -38,8 +38,7 @@ for word in &amp;words {
         Cow::Owned(s) =&gt; println!("owned {s}"),
     }
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-cow" data-out="out-cow" aria-label="Run cow.rs" hidden></button><b>rawr run cow.rs</b><span id="out-cow" aria-live="polite">owned a!
-borrowed b!</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-cow" data-out="out-cow" aria-label="Run cow.rs" hidden></button><b>rawr run cow.rs</b><span id="out-cow" aria-live="polite"></span></div>
 </div>
 <h2 id="vec"><code>Vec</code> and slices</h2>
 <p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>swap_remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>chunks_exact</code>, <code>rchunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code>, <code>capacity</code> and more. <code>get_mut</code>, <code>first_mut</code>, <code>last_mut</code> and <code>iter_mut().find(..)</code> lend an element to change. An iterator kept in <code>let mut it = v.iter_mut();</code> lends the next element at each <code>it.next()</code>.</p>
@@ -56,7 +55,7 @@ if let Some(item) = items.iter_mut().find(|i| i.id == 2) {
 }
 items.retain(|i| i.n &gt; 0);
 println!("{} item, id {}", items.len(), items[0].id);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-find-retain" data-out="out-find-retain" aria-label="Run find-retain.rs" hidden></button><b>rawr run find-retain.rs</b><span id="out-find-retain" aria-live="polite">1 item, id 2</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-find-retain" data-out="out-find-retain" aria-label="Run find-retain.rs" hidden></button><b>rawr run find-retain.rs</b><span id="out-find-retain" aria-live="polite"></span></div>
 </div>
 <h2 id="iterators">Iterators</h2>
 <p><code>map</code>, <code>filter</code>, <code>enumerate</code>, <code>zip</code>, <code>skip</code>, <code>take</code>, <code>step_by</code>, <code>rev</code>, <code>any</code>, <code>all</code>, <code>position</code>, <code>fold</code>, <code>sum</code>, <code>max</code>, <code>min</code>, <code>count</code>, <code>collect</code> and more. <code>std::iter::once</code> and <code>std::iter::empty</code> start one. An <code>Option</code> or a <code>Result</code> is an iterator of the one value it holds. <code>for x in opt</code>, <code>for x in &amp;opt</code>, <code>opt.iter()</code> and <code>opt.into_iter()</code> walk it, as std&rsquo;s <code>IntoIterator</code> impls do. An iterator can be cloned and walked again. Its methods are the ones std declares on <code>Iterator</code>, <code>DoubleEndedIterator</code> and <code>Peekable</code>; one rawr doesn&rsquo;t run yet, such as <code>rposition</code>, fails with &ldquo;rawr doesn&rsquo;t run `Iterator::rposition` yet&rdquo;.</p>
@@ -66,14 +65,14 @@ println!("{} item, id {}", items.len(), items[0].id);</code></pre>
 let long: Vec&lt;(usize, &amp;str)&gt; = words.iter().copied().enumerate().filter(|(_, w)| w.len() &gt; 3).collect();
 let total = (1..=10).step_by(3).fold(0, |acc, x| acc + x); // 22
 println!("{long:?} {total}");</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-iterators" data-out="out-iterators" aria-label="Run iterators.rs" hidden></button><b>rawr run iterators.rs</b><span id="out-iterators" aria-live="polite">[(2, "three")] 22</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-iterators" data-out="out-iterators" aria-label="Run iterators.rs" hidden></button><b>rawr run iterators.rs</b><span id="out-iterators" aria-live="polite"></span></div>
 </div>
 <h2 id="arrays">Arrays</h2>
 <p><code>[T; N]::map</code> gives a <code>[U; N]</code>.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="array-map.rs" id="src-array-map">let squares = [1, 2, 3].map(|x| x * x);
 println!("{squares:?}");</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-array-map" data-out="out-array-map" aria-label="Run array-map.rs" hidden></button><b>rawr run array-map.rs</b><span id="out-array-map" aria-live="polite">[1, 4, 9]</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-array-map" data-out="out-array-map" aria-label="Run array-map.rs" hidden></button><b>rawr run array-map.rs</b><span id="out-array-map" aria-live="polite"></span></div>
 </div>
 <h2 id="numbers">Numbers</h2>
 <p><code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>powi</code>, <code>powf</code>, <code>floor</code>, <code>round</code> and kin. Floats also have <code>sin</code>, <code>cos</code>, <code>tan</code>, their inverses and hyperbolic forms, <code>atan2</code>, <code>hypot</code>, <code>exp</code>, <code>ln</code>, <code>log</code>, <code>log10</code>, <code>to_degrees</code> and <code>to_radians</code>. <code>rem_euclid</code> and <code>div_euclid</code> work on floats and integers. A number&rsquo;s method can be called by its path.</p>
@@ -81,7 +80,7 @@ println!("{squares:?}");</code></pre>
   <pre><code data-lang="rust" data-run="floats.rs" id="src-floats">let angle = 1.0_f64.atan2(1.0).to_degrees(); // 45.0
 let wrapped = f32::rem_euclid(-0.25, 1.0); // 0.75
 println!("{angle:?} {wrapped:?}");</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-floats" data-out="out-floats" aria-label="Run floats.rs" hidden></button><b>rawr run floats.rs</b><span id="out-floats" aria-live="polite">45.0 0.75</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-floats" data-out="out-floats" aria-label="Run floats.rs" hidden></button><b>rawr run floats.rs</b><span id="out-floats" aria-live="polite"></span></div>
 </div>
 <h2 id="threads">Threads, <code>Mutex</code> and channels</h2>
 <p><code>std::thread::spawn</code> runs its closure on a thread of its own, in parallel with the others, as Rust does. <code>join</code> waits for it and gives what the closure returned, or <code>Err</code> when it panicked. The program exits when <code>main</code> returns, ending the threads still running. The closure must be <code>Send</code> and <code>'static</code>: one that captures an <code>Rc</code> is rustc&rsquo;s E0277, and one that borrows a local without <code>move</code> is E0373.</p>
@@ -104,7 +103,7 @@ drop(tx);
 let mut ids: Vec&lt;i32&gt; = rx.iter().collect();
 ids.sort();
 println!("{ids:?} {}", *counter.lock().unwrap()); // [0, 10, 20, 30] 4</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-threads" data-out="out-threads" aria-label="Run threads.rs on rawr's server" hidden></button><small>on rawr&rsquo;s server</small><b>rawr run threads.rs</b><span id="out-threads" aria-live="polite">[0, 10, 20, 30] 4</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-threads" data-out="out-threads" aria-label="Run threads.rs on rawr's server" hidden></button><small>on rawr&rsquo;s server</small><b>rawr run threads.rs</b><span id="out-threads" aria-live="polite"></span></div>
 </div>
 <h2 id="time"><code>Duration</code>, <code>Instant</code> and <code>SystemTime</code></h2>
 <p><code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code> and <code>duration_since</code> work. So do <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>std::thread::sleep(duration)</code> pauses the program. In an iced app, these are <code>iced::time</code>&rsquo;s, which are std&rsquo;s own.</p>
@@ -117,8 +116,7 @@ let step = Duration::from_millis(500) * 3;
 println!("{step:?}"); // 1.5s
 let spent = start.elapsed();
 println!("{}", spent &lt; step);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-time" data-out="out-time" aria-label="Run time.rs on rawr's server" hidden></button><small>on rawr&rsquo;s server</small><b>rawr run time.rs</b><span id="out-time" aria-live="polite">1.5s
-true</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-time" data-out="out-time" aria-label="Run time.rs on rawr's server" hidden></button><small>on rawr&rsquo;s server</small><b>rawr run time.rs</b><span id="out-time" aria-live="polite"></span></div>
 </div>
 <h2 id="futures">Futures</h2>
 <p><code>std::future::Future</code> is the type of an <code>async</code> block and of an <code>async fn</code>&rsquo;s result, written <code>impl Future&lt;Output = T&gt;</code>. Outside iced, it is a Rust future that the crate&rsquo;s own runtime polls, as <a href="/docs/run#async">Run</a> describes. tokio&rsquo;s <code>join!</code> and the futures crate&rsquo;s <code>join!</code> run two to five futures together and give their outputs as a tuple.</p>
@@ -145,7 +143,7 @@ for word in "a b a".split(' ') {
     *n += 1;
 }
 println!("a: {}, b: {}", counts["a"], counts["b"]);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-hashmap" data-out="out-hashmap" aria-label="Run hashmap.rs" hidden></button><b>rawr run hashmap.rs</b><span id="out-hashmap" aria-live="polite">a: 2, b: 1</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-hashmap" data-out="out-hashmap" aria-label="Run hashmap.rs" hidden></button><b>rawr run hashmap.rs</b><span id="out-hashmap" aria-live="polite"></span></div>
 </div>
 <h2 id="refcell"><code>RefCell</code> and <code>Cell</code></h2>
 <p><code>RefCell</code> has <code>new</code>, <code>default</code>, <code>borrow</code>, <code>borrow_mut</code>, <code>into_inner</code>, <code>replace</code>, <code>take</code> and <code>clone</code>. A borrow ends with its block. A borrow that conflicts with one still held panics with Rust&rsquo;s message.</p>
@@ -158,7 +156,7 @@ let cell = RefCell::new(vec![1]);
 cell.borrow_mut().push(2);
 let len = cell.borrow().len(); // 2
 println!("{len}");</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-refcell" data-out="out-refcell" aria-label="Run refcell.rs" hidden></button><b>rawr run refcell.rs</b><span id="out-refcell" aria-live="polite">2</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-refcell" data-out="out-refcell" aria-label="Run refcell.rs" hidden></button><b>rawr run refcell.rs</b><span id="out-refcell" aria-live="polite"></span></div>
 </div>
 <div class="block">
   <pre><code data-lang="rust" data-run="cell.rs" id="src-cell">use std::cell::Cell;
@@ -174,7 +172,7 @@ fn main() {
     c.hit();
     println!("{} {:?}", c.hits.get(), c.hits); // 2 Cell { value: 2 }
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-cell" data-out="out-cell" aria-label="Run cell.rs" hidden></button><b>rawr run cell.rs</b><span id="out-cell" aria-live="polite">2 Cell { value: 2 }</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-cell" data-out="out-cell" aria-label="Run cell.rs" hidden></button><b>rawr run cell.rs</b><span id="out-cell" aria-live="polite"></span></div>
 </div>
 <h2 id="mem"><code>std::mem</code> and <code>PhantomData</code></h2>
 <p><code>std::mem::swap</code>, <code>replace</code> and <code>take</code> work. So does <code>std::marker::PhantomData</code>. Two fields or two tuple members of one value can be borrowed <code>&amp;mut</code> at once, as in <code>swap(&amp;mut pair.0, &amp;mut pair.1)</code>. <code>size_of::&lt;T&gt;()</code> and <code>size_of_val(&amp;x)</code> give rustc&rsquo;s size of a number, <code>bool</code>, <code>char</code>, <code>()</code> or an array of them. Other types are refused, because rustc chooses their layout.</p>
@@ -185,8 +183,7 @@ std::mem::swap(&amp;mut a, &amp;mut b);
 let old = std::mem::take(&amp;mut a); // [2, 3], and a is empty
 println!("{old:?} {a:?} {b:?}");
 println!("{} {}", size_of::&lt;u64&gt;(), std::mem::size_of_val(&amp;[1u16; 3])); // 8 6</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-mem" data-out="out-mem" aria-label="Run mem.rs" hidden></button><b>rawr run mem.rs</b><span id="out-mem" aria-live="polite">[2, 3] [] [1]
-8 6</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-mem" data-out="out-mem" aria-label="Run mem.rs" hidden></button><b>rawr run mem.rs</b><span id="out-mem" aria-live="polite"></span></div>
 </div>
 <h2 id="traits"><code>fmt</code>, <code>ops</code> and <code>cmp</code></h2>
 <p><code>std::fmt</code> for <code>Display</code> and <code>Debug</code> impls, <code>std::ops</code> for operator traits, and <code>std::cmp::Ordering</code>.</p>
@@ -196,7 +193,7 @@ println!("{} {}", size_of::&lt;u64&gt;(), std::mem::size_of_val(&amp;[1u16; 3]))
 let order = 3.cmp(&amp;5);
 assert_eq!(order, Ordering::Less);
 println!("{order:?}");</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-ordering" data-out="out-ordering" aria-label="Run ordering.rs" hidden></button><b>rawr run ordering.rs</b><span id="out-ordering" aria-live="polite">Less</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-ordering" data-out="out-ordering" aria-label="Run ordering.rs" hidden></button><b>rawr run ordering.rs</b><span id="out-ordering" aria-live="polite"></span></div>
 </div>
 <h2 id="std-traits">Implementing std&rsquo;s traits</h2>
 <p>Your type implements any stable std trait Rust lets it implement: <code>FromStr</code>, <code>AsRef</code>, <code>AsMut</code>, <code>Borrow</code>, <code>Deref</code>, <code>TryFrom</code>, <code>IntoIterator</code>, <code>Extend</code>, <code>Sum</code>, <code>fmt::Write</code>, <code>io::Write</code> and the rest. Each one is declared as std declares it, so a missing item is rustc&rsquo;s E0046 and a trait nothing brings into scope is E0405. <code>s.parse()</code> finds your <code>FromStr</code> by the turbofish or by the type the result is used as. A <code>for</code> loop takes your <code>IntoIterator</code>, and <code>write!</code> writes through your <code>fmt::Write</code>. Trait functions called by path, such as <code>Iterator::next(&amp;mut it)</code>, <code>Clone::clone_from(&amp;mut a, &amp;b)</code> and <code>std::cmp::max_by_key(a, b, f)</code>, are the method calls they name. A method or field your type lacks is found through your <code>Deref</code>, as in Rust. A method that takes <code>&amp;mut self</code> is reached through your <code>DerefMut</code>, and without one it is rustc&rsquo;s E0596. <code>*w</code> reads through your <code>deref</code>, and <code>*w = x</code> writes through your <code>deref_mut</code>. Without a <code>DerefMut</code> the write is rustc&rsquo;s E0594. <code>as_deref</code> borrows through your <code>Deref</code>. Where rawr can&rsquo;t run a trait&rsquo;s machinery yet, such as <code>as_deref_mut</code> through your <code>DerefMut</code>, the impl still declares, and the use fails with &ldquo;rawr doesn&rsquo;t run&rdquo;.</p>
@@ -224,7 +221,7 @@ impl FromStr for Rgb {
 
 let c: Rgb = "1, 2, 3".parse().unwrap();
 println!("{c:?} {:?}", "x".parse::&lt;Rgb&gt;());</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-from-str" data-out="out-from-str" aria-label="Run from_str.rs" hidden></button><b>rawr run from_str.rs</b><span id="out-from-str" aria-live="polite">Rgb(1, 2, 3) Err("bad x")</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-from-str" data-out="out-from-str" aria-label="Run from_str.rs" hidden></button><b>rawr run from_str.rs</b><span id="out-from-str" aria-live="polite"></span></div>
 </div>
 <h2 id="conversions">Conversions</h2>
 <p><code>From</code> and <code>Into</code> between your own types, and from your own type into a number type. <code>TryFrom</code> between integer types. <code>From::from</code>, <code>Into::into</code>, <code>Clone::clone</code>, <code>ToString::to_string</code>, the methods of <code>Option</code> and <code>Result</code>, and your own associated functions all work as values.</p>
@@ -243,7 +240,7 @@ let parsed: Vec&lt;i64&gt; = vec!["1", "x"].into_iter().map(|s| s.parse::&lt;i64
 let byte = u8::try_from(300_i64); // Err
 let degrees: f64 = Celsius(21.5).into();
 println!("{names:?} {parsed:?} {} {degrees}", byte.is_err());</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-conversions" data-out="out-conversions" aria-label="Run conversions.rs" hidden></button><b>rawr run conversions.rs</b><span id="out-conversions" aria-live="polite">["a", "b"] [1] true 21.5</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-conversions" data-out="out-conversions" aria-label="Run conversions.rs" hidden></button><b>rawr run conversions.rs</b><span id="out-conversions" aria-live="polite"></span></div>
 </div>
 <p>A <code>Debug</code> impl can use the formatter&rsquo;s builders: <code>f.debug_struct("Life").field("cells", &amp;n).finish()</code>, <code>debug_tuple</code> with <code>field</code>, <code>debug_list</code> with <code>entry</code>, and <code>finish_non_exhaustive</code>. They write what std&rsquo;s builders write, and <code>{:#?}</code> lays the text out as it does a derived <code>Debug</code>.</p>
 <h2 id="errors"><code>std::error::Error</code></h2>
@@ -281,9 +278,7 @@ fn main() {
         }
     }
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-errors" data-out="out-errors" aria-label="Run errors.rs" hidden></button><b>rawr run errors.rs</b><span id="out-errors" aria-live="polite">4
-invalid digit found in string | ParseIntError { kind: InvalidDigit }
--2 is negative | Negative(-2)</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-errors" data-out="out-errors" aria-label="Run errors.rs" hidden></button><b>rawr run errors.rs</b><span id="out-errors" aria-live="polite"></span></div>
 </div>
 <h2 id="path-io"><code>path</code>, <code>ffi</code>, <code>io</code>, <code>env</code>, <code>fs</code> and <code>process</code></h2>
 <p><code>std::path</code> and <code>std::ffi</code> work in every program. <code>PathBuf</code>, <code>Path</code>, <code>OsString</code> and <code>OsStr</code> are Rust&rsquo;s own types. <code>Path</code> is another name for <code>PathBuf</code>, and <code>OsStr</code> is another name for <code>OsString</code>. They have <code>new</code>, <code>from</code>, <code>push</code>, <code>join</code>, <code>parent</code>, <code>file_name</code>, <code>file_stem</code>, <code>extension</code>, <code>display</code>, <code>to_str</code> and <code>to_string_lossy</code>, and <code>Path::new</code> borrows a string as a path. Each item has std&rsquo;s own signature. A parameter std declares as <code>P: AsRef&lt;Path&gt;</code> takes a <code>&amp;str</code>, a <code>String</code>, an <code>OsString</code> or a <code>PathBuf</code>, by value or borrowed, and <code>std::fs</code>&rsquo;s functions take the same.</p>
@@ -300,6 +295,6 @@ let path = PathBuf::from("src").join("main.rs");
 let ext = path.extension().unwrap().to_str().unwrap(); // "rs"
 let err = std::io::Error::other("disk full");
 println!("{} {ext} {:?} {err} {:?}", path.display(), path.parent(), err.kind());</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-path" data-out="out-path" aria-label="Run path.rs" hidden></button><b>rawr run path.rs</b><span id="out-path" aria-live="polite">src/main.rs rs Some("src") disk full Other</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-path" data-out="out-path" aria-label="Run path.rs" hidden></button><b>rawr run path.rs</b><span id="out-path" aria-live="polite"></span></div>
 </div>
 </article>

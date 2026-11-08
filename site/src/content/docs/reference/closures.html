@@ -22,9 +22,7 @@ fn main() {
     let odd_squares: Vec&lt;i64&gt; = (1..=10).filter(|x| x % 2 == 1).map(|x| x * x).collect();
     println!("{:?}", odd_squares);
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-closures" data-out="out-closures" aria-label="Run closures.rs" hidden></button><b>rawr run closures.rs</b><span id="out-closures" aria-live="polite">["first", "second"]
-2 6
-[1, 9, 25, 49, 81]</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-closures" data-out="out-closures" aria-label="Run closures.rs" hidden></button><b>rawr run closures.rs</b><span id="out-closures" aria-live="polite"></span></div>
 </div>
 <h2 id="capture">Captures</h2>
 <p>A closure that changes what it captures is <code>FnMut</code>. A <code>move</code> closure takes what it captures. It captures only the fields it uses, so <code>move || s.a.len()</code> moves <code>s.a</code> and leaves <code>s.b</code> usable. A closure that moves a captured value out, as <code>|| drop(s)</code> does, can be called once.</p>
@@ -40,7 +38,7 @@ tick();
 let name = String::from("rawr");
 let greet = move || format!("hi, {name}");
 println!("{count} {}", greet());</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-capture" data-out="out-capture" aria-label="Run capture.rs" hidden></button><b>rawr run capture.rs</b><span id="out-capture" aria-live="polite">2 hi, rawr</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-capture" data-out="out-capture" aria-label="Run capture.rs" hidden></button><b>rawr run capture.rs</b><span id="out-capture" aria-live="polite"></span></div>
 </div>
 <h2 id="passing">Passing and returning closures</h2>
 <p>A function takes a closure as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. It returns one as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>. A function can also take <code>&amp;mut impl FnMut(..)</code>. The closure passed can be a variable, as in <code>twice(&amp;mut add)</code>, or written in place, as in <code>twice(&amp;mut |x| v.push(x))</code>. Each call changes what the closure captured where the caller has it.</p>
@@ -56,7 +54,7 @@ fn twice&lt;F: Fn(i64) -&gt; i64&gt;(f: F, x: i64) -&gt; i64 {
 let b = Button { on_click: Box::new(|| String::from("clicked")) };
 let four = twice(|x| x * 2, 1);
 println!("{} {four}", (b.on_click)());</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-boxed-fn" data-out="out-boxed-fn" aria-label="Run boxed-fn.rs" hidden></button><b>rawr run boxed-fn.rs</b><span id="out-boxed-fn" aria-live="polite">clicked 4</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-boxed-fn" data-out="out-boxed-fn" aria-label="Run boxed-fn.rs" hidden></button><b>rawr run boxed-fn.rs</b><span id="out-boxed-fn" aria-live="polite"></span></div>
 </div>
 <h2 id="values">Closures as values</h2>
 <p>A closure in a variable can be passed to a function, copied to another variable, or called from another closure. A closure that holds a value that is not <code>Copy</code>, or captures something by <code>&amp;mut</code>, is not <code>Copy</code>, so <code>let g = f;</code> moves it. A use of <code>f</code> after that is rustc&rsquo;s E0382. A copy of a <code>Copy</code> closure has its own copy of what it captured by value, as in Rust. After <code>let mut d = c;</code>, calling <code>d</code> doesn&rsquo;t change what <code>c</code> sees. A parameter can be <code>_</code> or another pattern.</p>
@@ -65,7 +63,7 @@ println!("{} {four}", (b.on_click)());</code></pre>
 let also_add = add;
 let sums: Vec&lt;i64&gt; = vec![(1, 2), (3, 4)].into_iter().map(also_add).collect();
 println!("{sums:?} {}", add((5, 6)));</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-copy-closure" data-out="out-copy-closure" aria-label="Run copy-closure.rs" hidden></button><b>rawr run copy-closure.rs</b><span id="out-copy-closure" aria-live="polite">[3, 7] 11</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-copy-closure" data-out="out-copy-closure" aria-label="Run copy-closure.rs" hidden></button><b>rawr run copy-closure.rs</b><span id="out-copy-closure" aria-live="polite"></span></div>
 </div>
 <p>A path to a function is a value wherever Rust takes one, as an argument, a variable or a <code>fn</code> pointer. That includes a method, as in <code>Counter::update</code>, a <code>&amp;mut self</code> method and a function with a <code>&amp;mut</code> parameter among them. It also includes a trait&rsquo;s method, as in <code>Shape::area</code> or <code>&lt;Square as Shape&gt;::grow</code>, and a generic method with its turbofish. A call through the path, as in <code>Counter::update(&amp;mut counter, message)</code>, changes <code>counter</code> as <code>counter.update(message)</code> does.</p>
 <div class="block">
@@ -83,7 +81,7 @@ fn run(update: impl Fn(&amp;mut Counter, i64), view: impl Fn(&amp;Counter) -&gt;
 fn main() {
     run(Counter::update, Counter::view);
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-method-path" data-out="out-method-path" aria-label="Run method-path.rs" hidden></button><b>rawr run method-path.rs</b><span id="out-method-path" aria-live="polite">value 2</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-method-path" data-out="out-method-path" aria-label="Run method-path.rs" hidden></button><b>rawr run method-path.rs</b><span id="out-method-path" aria-live="polite"></span></div>
 </div>
 <p>The same holds for std&rsquo;s types and traits, as in <code>HashMap::values</code>, <code>Vec::len</code>, <code>str::trim</code>, <code>char::to_ascii_uppercase</code>, <code>Iterator::count</code>, <code>std::cmp::max</code> and <code>String::new</code>, and for a crate type&rsquo;s methods, as in <code>Look::name</code>. The method takes its receiver as std declares it, so <code>Vec::len</code> takes a <code>&amp;Vec&lt;T&gt;</code>. Passing <code>char::to_ascii_uppercase</code> to the <code>map</code> of a <code>chars()</code> iterator is rustc&rsquo;s E0631, because the method takes <code>&amp;char</code>. A path doesn&rsquo;t reach through <code>Deref</code>, so <code>String::trim</code> is rustc&rsquo;s E0599. Called, as in <code>Vec::len(&amp;v)</code> or <code>String::push_str(&amp;mut s, "!")</code>, the path calls the method on its first argument.</p>
 <div class="block">
@@ -94,7 +92,7 @@ fn main() {
     let sizes: Vec&lt;usize&gt; = maps.iter().map(HashMap::len).collect();
     println!("{} {sizes:?} {}", values.len(), Vec::len(&amp;values));
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-std-method-path" data-out="out-std-method-path" aria-label="Run std-method-path.rs" hidden></button><b>rawr run std-method-path.rs</b><span id="out-std-method-path" aria-live="polite">3 [2, 1] 3</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-std-method-path" data-out="out-std-method-path" aria-label="Run std-method-path.rs" hidden></button><b>rawr run std-method-path.rs</b><span id="out-std-method-path" aria-live="polite"></span></div>
 </div>
 <h2 id="inference">Parameter types</h2>
 <p>A closure&rsquo;s parameters take their types from where it is passed.</p>
@@ -112,7 +110,7 @@ fn shade(f: impl Fn(f32) -&gt; Color) -&gt; Color {
 let base = Color { r: 0.0, g: 1.0 };
 let c = shade(|r| Color { r, ..base });
 println!("{} {}", c.r, c.g);</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-struct-update" data-out="out-struct-update" aria-label="Run struct-update.rs" hidden></button><b>rawr run struct-update.rs</b><span id="out-struct-update" aria-live="polite">0.5 1</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-struct-update" data-out="out-struct-update" aria-label="Run struct-update.rs" hidden></button><b>rawr run struct-update.rs</b><span id="out-struct-update" aria-live="polite"></span></div>
 </div>
 <h2 id="async">Async code</h2>
 <p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. An <code>async</code> block gives a Rust future that iced can run as a task. <a href="/docs/run#async">Run</a> describes how such a future runs.</p>

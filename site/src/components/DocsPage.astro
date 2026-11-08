@@ -3,7 +3,8 @@
 // lib/docs.ts. pages/docs/[...slug].astro builds every page but the three
 // that are a directory's index.html, which have their own index.astro.
 import Base from "../layouts/Base.astro";
-import { anchors, fullTitle, highlightBlocks, pager, parse, sidebar, source, toc, type Page } from "../lib/docs.ts";
+import { anchors, fullTitle, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Page } from "../lib/docs.ts";
+import { runs } from "../lib/runs.ts";
 import { movedScript } from "../lib/moved.ts";
 import "../styles/docs.css";
 import Footer from "./Footer.astro";
@@ -16,8 +17,9 @@ const file = `../content/docs/${source(page.path)}`;
 const text = files[file];
 if (text === undefined) throw new Error(`no ${file} for ${page.path}`);
 const { description, article } = parse(text, file);
-const body = toc(anchors(highlightBlocks(article)));
-const runs = /<code[^>]*\bdata-run\b/.test(article);
+// Each snippet's output comes from running it (runOutputs).
+const body = toc(anchors(await runOutputs(highlightBlocks(article), runs)));
+const runnable = /<code[^>]*\bdata-run\b/.test(article);
 const moved = movedScript(page.path);
 ---
 <Base title={fullTitle(page)} description={description} path={page.path} current="docs">
@@ -31,6 +33,6 @@ const moved = movedScript(page.path);
 </main>
 </div>
 <Footer />
-{runs && <RunBlocks />}
+{runnable && <RunBlocks />}
 {moved && <script is:inline set:html={moved} />}
 </Base>

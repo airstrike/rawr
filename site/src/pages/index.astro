@@ -3,10 +3,13 @@
 import Footer from "../components/Footer.astro";
 import RunBlocks from "../components/RunBlocks.astro";
 import Base from "../layouts/Base.astro";
-import { highlightBlocks } from "../lib/docs.ts";
+import { highlightBlocks, runOutputs } from "../lib/docs.ts";
+import { runs } from "../lib/runs.ts";
 import main from "../content/index.html?raw";
 import "../styles/landing.css";
 
+// Each snippet's output comes from running it (runOutputs).
+const body = await runOutputs(highlightBlocks(main), runs);
 const og = {
   description: "Mark a file in your Cargo crate with // rawr. rawr run interprets it while you develop. Cargo compiles the same crate for release. Pre-alpha.",
   twitter: true,
@@ -18,7 +21,7 @@ const og = {
   path="/"
   og={og}
 >
-<Fragment set:html={highlightBlocks(main)} />
+<Fragment set:html={body} />
 <Footer />
 <RunBlocks />
 <script>
