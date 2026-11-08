@@ -159,11 +159,17 @@ fn limit() -> usize {
         .max(1)
 }
 
-/// Every file under `directory`, by its path under `base`, with its bytes.
+/// Every file under `directory`, by its path under `base`, with its bytes,
+/// but what Cargo makes at the fixture's root, `target/` and `Cargo.lock`:
+/// a build of the fixture where it sits is no part of it, and its stale
+/// units would pass for fresh ones in a lane.
 fn gather(directory: &Path, base: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
     for entry in fs::read_dir(directory).unwrap() {
         let entry = entry.unwrap();
         let path = base.join(entry.file_name());
+        if path == Path::new("target") || path == Path::new("Cargo.lock") {
+            continue;
+        }
         if entry.file_type().unwrap().is_dir() {
             gather(&entry.path(), &path, files);
         } else {
