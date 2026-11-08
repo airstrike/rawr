@@ -36,10 +36,10 @@ impl Value for Owned {
     // The current API schema: an action with another is one an older rawr
     // wrote, which the store evicts (#630).
     const SCHEMA: u32 = crate::api::SCHEMA;
-    fn encode(&self, _: usize) -> Result<Box<[u8]>, Error> {
+    fn encode(&self) -> Result<Box<[u8]>, Error> {
         Ok(Box::from(&b"owned"[..]))
     }
-    fn decode(bytes: &[u8], _: usize) -> Result<Self, Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
         if bytes == b"owned" {
             Ok(Self)
         } else {
@@ -56,7 +56,7 @@ impl Current for NeverCurrent {
 }
 
 fn current(store: &Store, inputs: &[u8]) -> Validated<Owned> {
-    let recipe = Direct::capture([1; 32], inputs, 64, &[]).unwrap();
+    let recipe = Direct::capture([1; 32], inputs, &[]).unwrap();
     let current = Evaluator::new(store, &crate::metrics::Current)
         .direct(&recipe, || Ok(Owned))
         .unwrap();
@@ -216,7 +216,7 @@ fn find_payload(root: &std::path::Path) -> PathBuf {
 // Real discoverable provenance: the current recipe depends on bounded file
 // observations, while the owned semantic output remains unchanged.
 fn observed_parent(store: &Store, source: PathBuf, checks: Arc<AtomicU64>) -> Validated<Owned> {
-    let recipe = Discoverable::capture([1; 32], b"observed-parent", 64, &[]).unwrap();
+    let recipe = Discoverable::capture([1; 32], b"observed-parent", &[]).unwrap();
     Evaluator::new(store, &crate::metrics::Current)
         .discover_budgeted(
             &recipe,
@@ -240,8 +240,7 @@ fn staged_direct_mutation_during_pure_miss_rejects_current_promotion() {
     let checks = Arc::new(AtomicU64::new(0));
     let parent = observed_parent(&store, source.clone(), Arc::clone(&checks));
     let retention = Retention::from_validated(&parent, None).unwrap();
-    let recipe =
-        Direct::capture([1; 32], b"staged-miss", 64, &[Parent::validated(&parent)]).unwrap();
+    let recipe = Direct::capture([1; 32], b"staged-miss", &[Parent::validated(&parent)]).unwrap();
     let before = checks.load(Ordering::Relaxed);
     let executed = AtomicU64::new(0);
     let result =
@@ -278,19 +277,13 @@ fn staged_direct_warm_hit_skips_execute_and_transitive_drift_rejects() {
     fs::write(&source, b"before").unwrap();
     let checks = Arc::new(AtomicU64::new(0));
     let ancestor = observed_parent(&store, source.clone(), Arc::clone(&checks));
-    let middle_recipe = Direct::capture(
-        [1; 32],
-        b"owned-middle",
-        64,
-        &[Parent::validated(&ancestor)],
-    )
-    .unwrap();
+    let middle_recipe =
+        Direct::capture([1; 32], b"owned-middle", &[Parent::validated(&ancestor)]).unwrap();
     let evaluator = Evaluator::new(&store, &crate::metrics::Current);
     let middle = evaluator.direct(&middle_recipe, || Ok(Owned)).unwrap();
     let retention = Retention::from_validated(&middle, None).unwrap();
     assert_eq!(retention.entries().len(), 2);
-    let recipe =
-        Direct::capture([1; 32], b"staged-child", 64, &[Parent::validated(&middle)]).unwrap();
+    let recipe = Direct::capture([1; 32], b"staged-child", &[Parent::validated(&middle)]).unwrap();
     let executed = AtomicU64::new(0);
     let first = evaluator
         .staged_direct(&recipe, &retention, || {
@@ -324,7 +317,7 @@ fn staged_direct_warm_hit_skips_execute_and_transitive_drift_rejects() {
 }
 
 fn owned_current(store: &Store, inputs: &[u8], parents: &[Parent]) -> Validated<Owned> {
-    let recipe = Direct::capture([1; 32], inputs, 64, parents).unwrap();
+    let recipe = Direct::capture([1; 32], inputs, parents).unwrap();
     Evaluator::new(store, &crate::metrics::Current)
         .direct(&recipe, || Ok(Owned))
         .unwrap()
@@ -425,13 +418,13 @@ fn retention_keeps_siblings_without_adding_recipe_edges() {
     let root = Root::prepare();
     let store = root.open();
     let evaluator = Evaluator::new(&store, &crate::metrics::Current);
-    let seed_recipe = Direct::<Owned>::capture([1; 32], b"branch-root", 64, &[]).unwrap();
+    let seed_recipe = Direct::<Owned>::capture([1; 32], b"branch-root", &[]).unwrap();
     let seed = evaluator.direct(&seed_recipe, || Ok(Owned)).unwrap();
     let parent = Parent::validated(&seed);
     let left_recipe =
-        Direct::<Owned>::capture([1; 32], b"left", 64, std::slice::from_ref(&parent)).unwrap();
+        Direct::<Owned>::capture([1; 32], b"left", std::slice::from_ref(&parent)).unwrap();
     let right_recipe =
-        Direct::<Owned>::capture([1; 32], b"right", 64, std::slice::from_ref(&parent)).unwrap();
+        Direct::<Owned>::capture([1; 32], b"right", std::slice::from_ref(&parent)).unwrap();
     let left = evaluator.direct(&left_recipe, || Ok(Owned)).unwrap();
     let right = evaluator.direct(&right_recipe, || Ok(Owned)).unwrap();
     let retained = Retention::from_validated(&seed, None).unwrap();
@@ -957,7 +950,7 @@ fn ordinary_discovered_callbacks_run_unchanged_for_both_scopes() {
     let store = root.open();
     let calls = Arc::new(AtomicU64::new(0));
     let observed = calls.clone();
-    let recipe = Discoverable::capture([7; 32], b"ordinary-scope", 64, &[]).unwrap();
+    let recipe = Discoverable::capture([7; 32], b"ordinary-scope", &[]).unwrap();
     let value = Evaluator::new(&store, &crate::metrics::Current)
         .discover_budgeted(
             &recipe,

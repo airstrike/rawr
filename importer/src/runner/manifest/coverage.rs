@@ -897,7 +897,6 @@ mod tests {
             graph.scalar_predicate_proofs().cloned().collect(),
             graph.support().cloned().collect(),
             graph.anonymous_imports().cloned().collect(),
-            usize::MAX,
             &mut allocation,
         )
         .unwrap()

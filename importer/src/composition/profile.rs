@@ -17,10 +17,8 @@ pub fn evaluate<T: crate::profile::trusted::Operations>(
     adapter: &crate::profile::trusted::Adapter<T>,
     contract: &crate::profile::Contract,
     checked: &crate::checked::Cached,
-    limits: &crate::cargo::Limits,
 ) -> Result<(Demand, Proof), Error> {
     let parent = checked.node_chain();
-    same_limits(parent.output_limit(), limits);
     evaluate_parts(
         adapter,
         contract,
@@ -31,7 +29,6 @@ pub fn evaluate<T: crate::profile::trusted::Operations>(
         node::staging::Input::current(parent.current_parent()),
         checked.checked_fingerprint(),
         checked.checked_payload(),
-        limits,
     )
 }
 
@@ -40,9 +37,7 @@ pub fn evaluate_retained<T: crate::profile::trusted::Operations>(
     adapter: &crate::profile::trusted::Adapter<T>,
     contract: &crate::profile::Contract,
     checked: &crate::checked::Retained,
-    limits: &crate::cargo::Limits,
 ) -> Result<(Demand, Proof), Error> {
-    same_limits(checked.context.limits().node_output_bytes(), limits);
     evaluate_parts(
         adapter,
         contract,
@@ -51,7 +46,6 @@ pub fn evaluate_retained<T: crate::profile::trusted::Operations>(
         checked.product.input(),
         checked.checked_fingerprint(),
         checked.checked_payload(),
-        limits,
     )
 }
 
@@ -60,9 +54,7 @@ pub fn prepare_retained<T: crate::profile::trusted::Operations>(
     adapter: &crate::profile::trusted::Adapter<T>,
     contract: &crate::profile::Contract,
     checked: &crate::checked::Retained,
-    limits: &crate::cargo::Limits,
 ) -> Result<Pair, Error> {
-    same_limits(checked.context.limits().node_output_bytes(), limits);
     evaluate_parts(
         adapter,
         contract,
@@ -71,7 +63,6 @@ pub fn prepare_retained<T: crate::profile::trusted::Operations>(
         checked.product.input(),
         checked.checked_fingerprint(),
         checked.checked_payload(),
-        limits,
     )
 }
 
@@ -87,7 +78,6 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
     input: node::staging::Input<'_>,
     fingerprint: [u8; 32],
     payload: &[u8],
-    limits: &crate::cargo::Limits,
 ) -> Result<O, Error> {
     assert!(
         adapter.identity() == contract.identity() && adapter.version() == contract.version(),
@@ -114,7 +104,6 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
             payload,
             (!adapter.uses_semantic_api()).then_some(&contract.graph_fingerprint()),
         )?,
-        limits.node_output_bytes(),
     )
     .map_err(node_error)?;
     let demand = recipe.lookup_owned(&evaluator).map_err(node_error)?;
@@ -124,7 +113,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                 .value()
                 .owned(contract, fingerprint, payload)
                 .map_err(Error::fresh)?;
-            let recipe = generated_recipe(context, adapter, demand, parts.value(), limits)?;
+            let recipe = generated_recipe(context, adapter, demand, parts.value())?;
             let generated = recipe.lookup_owned(&evaluator).map_err(node_error)?;
             Some((recipe, generated, parts))
         }
@@ -164,7 +153,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                         let value = adapter
                             .demand_owned(contract, fingerprint, payload)
                             .map_err(failure)?;
-                        Product::capture(&value, limits.node_output_bytes()).map_err(failure)
+                        Product::capture(&value).map_err(failure)
                     })?),
                 };
                 let retained_demand = batch.retention().try_clone()?;
@@ -175,9 +164,8 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                             .value()
                             .owned(contract, fingerprint, payload)
                             .map_err(|error| failure(error.fresh()))?;
-                        let recipe =
-                            generated_recipe(context, adapter, &demand, parts.value(), limits)
-                                .map_err(failure)?;
+                        let recipe = generated_recipe(context, adapter, &demand, parts.value())
+                            .map_err(failure)?;
                         let outcome = recipe.lookup_owned(&evaluator)?;
                         (recipe, outcome, parts)
                     }
@@ -187,8 +175,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                     Outcome::Miss(miss) => {
                         Owned::Staged(generated_recipe.resume(batch, miss, || {
                             let proof = adapter.generate_owned(parts.value()).map_err(failure)?;
-                            GeneratedProduct::capture(&proof, limits.node_output_bytes())
-                                .map_err(failure)
+                            GeneratedProduct::capture(&proof).map_err(failure)
                         })?)
                     }
                 };
@@ -220,7 +207,6 @@ fn generated_recipe<T: crate::profile::trusted::Operations>(
     adapter: &crate::profile::trusted::Adapter<T>,
     parent: &Owned<Product>,
     demand: &Demand,
-    limits: &crate::cargo::Limits,
 ) -> Result<Recipe<GeneratedProduct>, Error> {
     Recipe::from_inputs(
         context,
@@ -233,7 +219,6 @@ fn generated_recipe<T: crate::profile::trusted::Operations>(
             demand.digest(),
             adapter.owns_product_lifecycle(),
         )?,
-        limits.node_output_bytes(),
     )
     .map_err(node_error)
 }
@@ -256,16 +241,6 @@ fn finish(
         parts.into_current(demand_chain),
         proof.into_current(generated_chain),
     ))
-}
-
-/// The checked program and its profile were built under the same limits:
-/// their nodes share one context.
-fn same_limits(output: usize, limits: &crate::cargo::Limits) {
-    assert_eq!(
-        output,
-        limits.node_output_bytes(),
-        "the profile's output limit differs from the checked program's"
-    );
 }
 
 fn failure(error: impl std::fmt::Display) -> node::Error {

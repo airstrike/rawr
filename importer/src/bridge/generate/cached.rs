@@ -65,7 +65,6 @@ pub(crate) fn materialize<B: crate::surface::Runner>(
 /// Carry owned profile generation to the fresh harness-render consumer.
 pub(crate) fn materialize_historical<B: crate::surface::Runner>(
     key: super::super::GenerationRequestKey<B>,
-    limits: &crate::cargo::Limits,
 ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, super::request::Error> {
     use node::staging::{Outcome, Owned, Recipe};
     let super::super::profile::Profile::Historical(pair) = &key.profile else {
@@ -73,13 +72,9 @@ pub(crate) fn materialize_historical<B: crate::surface::Runner>(
     };
     let context = pair.context.clone();
     let initial = pair.retention.try_clone().map_err(node_error)?;
-    let recipe = Recipe::<Product>::from_inputs(
-        &context,
-        &[pair.generated.input()],
-        &authority(&key)?,
-        limits.node_output_bytes(),
-    )
-    .map_err(node_error)?;
+    let recipe =
+        Recipe::<Product>::from_inputs(&context, &[pair.generated.input()], &authority(&key)?)
+            .map_err(node_error)?;
     let store = context.open_store().map_err(node_error)?;
     let evaluator = node::Evaluator::new(&store, &crate::metrics::Current);
     let outcome = recipe.lookup_owned(&evaluator).map_err(node_error)?;
@@ -163,8 +158,7 @@ fn evaluate_retained(
     let initial = chain.retention().ok_or(node::Error::State(
         "retained overlay requires exact parent ownership",
     ))?;
-    let recipe =
-        node::staging::Recipe::<Product>::from_chain(chain, authority, chain.output_limit())?;
+    let recipe = node::staging::Recipe::<Product>::from_chain(chain, authority)?;
     let store = chain.context().open_store()?;
     let evaluator = node::Evaluator::new(&store, &crate::metrics::Current);
     match recipe.lookup(&evaluator)? {
@@ -257,15 +251,8 @@ impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Overlay;
     const SCHEMA: u32 = SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         let length = self.encoded_len();
-        if length > limit {
-            return Err(node::Error::Limit {
-                resource: "cached generated overlay bytes",
-                limit,
-                actual: length,
-            });
-        }
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(length)
@@ -292,13 +279,9 @@ impl node::Value for Product {
         Ok(bytes.into_boxed_slice())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit || bytes.len() < HEADER_BYTES {
-            return Err(node::Error::Limit {
-                resource: "cached generated overlay bytes",
-                limit,
-                actual: bytes.len(),
-            });
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
+        if bytes.len() < HEADER_BYTES {
+            return Err(node::Error::Codec("cached overlay is truncated"));
         }
         if bytes.get(..8) != Some(MAGIC) || bytes[104..112] != [0; 8] {
             return Err(node::Error::Codec("cached overlay header changed"));
@@ -500,16 +483,15 @@ mod tests {
 
     #[test]
     fn overlay_product_roundtrips_and_rejects_framing_drift() {
-        let limit = crate::cargo::Limits::standard().node_output_bytes();
         let product = product();
-        let bytes = product.encode(limit).expect("the overlay product encodes");
-        let decoded = Product::decode(&bytes, limit).expect("the overlay product decodes");
+        let bytes = product.encode().expect("the overlay product encodes");
+        let decoded = Product::decode(&bytes).expect("the overlay product decodes");
         assert_eq!(decoded.aggregate, [1; 32]);
         assert_eq!(decoded.source.as_ref(), b"source");
-        assert!(Product::decode(&bytes[..bytes.len() - 1], limit).is_err());
+        assert!(Product::decode(&bytes[..bytes.len() - 1]).is_err());
         let mut reserved = bytes.into_vec();
         reserved[104] = 1;
-        assert!(Product::decode(&reserved, limit).is_err());
+        assert!(Product::decode(&reserved).is_err());
     }
 
     #[test]

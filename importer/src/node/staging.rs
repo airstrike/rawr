@@ -113,10 +113,10 @@ impl<K: Value> Recipe<K> {
         }
     }
 
-    pub(crate) fn from_chain(chain: &Chain, inputs: &[u8], limit: usize) -> Result<Self, Error> {
+    pub(crate) fn from_chain(chain: &Chain, inputs: &[u8]) -> Result<Self, Error> {
         chain
             .context()
-            .direct_with_parents(inputs, limit, std::slice::from_ref(chain.current_parent()))
+            .direct_with_parents(inputs, std::slice::from_ref(chain.current_parent()))
             .map(|direct| Self {
                 direct,
                 current: true,
@@ -127,27 +127,21 @@ impl<K: Value> Recipe<K> {
         context: &crate::context::Context,
         parent: &Staged<P>,
         inputs: &[u8],
-        limit: usize,
     ) -> Result<Self, Error> {
-        Direct::capture_edges(
-            context.identity(),
-            inputs,
-            limit,
-            std::slice::from_ref(parent),
+        Direct::capture_edges(context.identity(), inputs, std::slice::from_ref(parent)).map(
+            |direct| Self {
+                direct,
+                current: false,
+            },
         )
-        .map(|direct| Self {
-            direct,
-            current: false,
-        })
     }
 
     pub(crate) fn from_inputs(
         context: &crate::context::Context,
         parents: &[Input<'_>],
         inputs: &[u8],
-        limit: usize,
     ) -> Result<Self, Error> {
-        let direct = Direct::capture_edges(context.identity(), inputs, limit, parents)?;
+        let direct = Direct::capture_edges(context.identity(), inputs, parents)?;
         Ok(Self {
             direct,
             current: parents.iter().all(|parent| parent.current),
@@ -301,10 +295,10 @@ mod tests {
     impl Value for Bytes {
         const KIND: super::super::Kind = super::super::Kind::Generic;
         const SCHEMA: u32 = 1;
-        fn encode(&self, _: usize) -> Result<Box<[u8]>, Error> {
+        fn encode(&self) -> Result<Box<[u8]>, Error> {
             Ok(Box::from(&b"bytes"[..]))
         }
-        fn decode(bytes: &[u8], _: usize) -> Result<Self, Error> {
+        fn decode(bytes: &[u8]) -> Result<Self, Error> {
             if bytes == b"bytes" {
                 Ok(Self)
             } else {
@@ -331,20 +325,17 @@ mod tests {
         let store = context.open_store().unwrap();
         let evaluator = Evaluator::new(&store, &crate::metrics::Current);
         let owner = evaluator
-            .direct(&context.direct::<Bytes>(b"owner", 64).unwrap(), || {
-                Ok(Bytes)
-            })
+            .direct(&context.direct::<Bytes>(b"owner").unwrap(), || Ok(Bytes))
             .unwrap();
         let retained = super::super::read_set::Retention::from_validated(&owner, None).unwrap();
         let parent = Parent::validated(&owner);
         let first =
-            Recipe::<Bytes>::from_inputs(&context, &[Input::current(&parent)], b"first", 64)
-                .unwrap();
+            Recipe::<Bytes>::from_inputs(&context, &[Input::current(&parent)], b"first").unwrap();
         assert!(matches!(first.lookup(&evaluator).unwrap(), Lookup::Miss(_)));
         store
             .with_staged_batch(&retained, &crate::metrics::Current, |batch| {
                 let first = Owned::Staged(first.evaluate(batch, || Ok(Bytes))?);
-                let child = Recipe::<Bytes>::from_inputs(&context, &[first.input()], b"child", 64)?;
+                let child = Recipe::<Bytes>::from_inputs(&context, &[first.input()], b"child")?;
                 assert!(matches!(
                     child.lookup(&evaluator),
                     Err(Error::State("staged recipe cannot mint a current hit"))

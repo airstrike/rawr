@@ -64,17 +64,12 @@ use engine::model::{
 use engine::{Emission, Hash, Level};
 use units::raw;
 
-const MAX_BYTES: usize = 256 * 1024 * 1024;
-const MAX_PACKAGES: usize = 4_096;
-const MAX_DEFINITIONS: usize = 500_000;
-const MAX_EDGES: usize = 1_000_000;
-const MAX_STRING: usize = 1024 * 1024;
 const MAX_DEPTH: usize = 256;
 const DIAGNOSTIC_FILE: &str = "rawr-probe-recursion.journal";
 const DIAGNOSTIC_SLOT_BYTES: usize = 512;
 const DIAGNOSTIC_SLOTS: u64 = 512;
 const MAX_DIAGNOSTIC_EVENTS: u64 = 4_000_000;
-const MAX_DIAGNOSTIC_IDENTITIES: usize = MAX_DEFINITIONS;
+const MAX_DIAGNOSTIC_IDENTITIES: usize = 500_000;
 const MAX_DIAGNOSTIC_INSTANTIATIONS: usize = 2_500_000;
 const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Field-form and public-completeness proof entered at schema 8; exact sealed
@@ -312,11 +307,12 @@ fn effective_associated_item<I: Copy>(
 }
 
 #[derive(Clone, Copy)]
+/// What one extraction owned, counted for the diagnostic probe's report.
+/// No count refuses an extraction: limits never decide whether Rawr runs.
 pub(super) struct Budget {
     bytes: usize,
     items: usize,
     edges: usize,
-    byte_limit: usize,
 }
 
 struct Diagnostic {
@@ -847,7 +843,7 @@ pub(super) fn run(
 ) -> Result<ExitCode, String> {
     let arguments_digest = arguments_digest(&arguments, &mut budget)?;
     let completion = completion::Prepared::bind(&invocations, &arguments_digest, &mut budget)?;
-    let collector = attempt::Collector::install(&mut budget)?;
+    let collector = attempt::Collector::install()?;
     let mut diagnostic = diagnose_recursion
         .then(|| Diagnostic::create(Path::new(DIAGNOSTIC_FILE)))
         .transpose()?;
@@ -1604,27 +1600,6 @@ impl Budget {
             bytes: 0,
             items: 0,
             edges: 0,
-            byte_limit: MAX_BYTES,
-        }
-    }
-
-    /// No byte limit, for the sysroot's whole walk (`std_catalog`).
-    pub(super) fn unlimited() -> Self {
-        Self {
-            bytes: 0,
-            items: 0,
-            edges: 0,
-            byte_limit: usize::MAX,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn with_limits(bytes: usize) -> Self {
-        Self {
-            bytes: 0,
-            items: 0,
-            edges: 0,
-            byte_limit: bytes,
         }
     }
 
@@ -1656,17 +1631,10 @@ impl Budget {
 
     pub(super) fn bytes(&mut self, amount: usize) -> Result<(), String> {
         self.bytes = self.bytes.saturating_add(amount);
-        if self.bytes > self.byte_limit {
-            Err("compiler aggregate owned byte limit exceeded".to_owned())
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     pub(super) fn path_capacity(&mut self, maximum: usize) -> Result<(), String> {
-        if maximum > MAX_STRING {
-            return Err("compiler path exceeds the protocol limit".to_owned());
-        }
         self.items(1)?;
         self.bytes(maximum)
     }
@@ -1714,8 +1682,8 @@ impl Budget {
     }
 
     fn string_length(&mut self, length: usize) -> Result<(), String> {
-        if length == 0 || length > MAX_STRING {
-            return Err("compiler string is empty or exceeds the protocol limit".to_owned());
+        if length == 0 {
+            return Err("compiler string is empty".to_owned());
         }
         self.items(1)?;
         self.bytes(length)
@@ -1742,19 +1710,11 @@ fn loaded_external_crates(
 ) -> Result<Vec<ExternalCrate>, String> {
     let mut loaded = Vec::new();
     for crate_num in tcx.crates(()) {
-        if loaded.len() >= MAX_PACKAGES {
-            return Err("loaded compiler crate limit exceeded".to_owned());
-        }
         let source = tcx.used_crate_source(*crate_num);
         let sysroot = tcx.sess.opts.sysroot.path();
         let mut artifacts = Vec::new();
-        let mut path_count = 0_usize;
         let mut all_sysroot = true;
         for path in source.paths() {
-            path_count = path_count.saturating_add(1);
-            if path_count > MAX_EDGES {
-                return Err("loaded compiler artifact edge limit exceeded".to_owned());
-            }
             budget.edge(1)?;
             all_sysroot &= path.starts_with(sysroot);
             let path = canonical_path(path, "loaded artifact", budget)?;
@@ -1767,7 +1727,7 @@ fn loaded_external_crates(
                 .map_err(|error| format!("loaded artifact allocation failed: {error}"))?;
             artifacts.push(budget.owned(text)?);
         }
-        if path_count == 0 {
+        if artifacts.is_empty() {
             return Err("loaded compiler crate has no artifact evidence".to_owned());
         }
         if all_sysroot {
@@ -2146,9 +2106,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             };
         if cache_was_absent {
             candidates = self.relevant_implementations(obligation.trait_id, obligation.self_ty)?;
-            if candidates.len() > MAX_DEFINITIONS {
-                return Err("relevant implementation candidate limit exceeded".to_owned());
-            }
             self.budget.edge(candidates.len())?;
             self.budget.items(candidates.len())?;
             candidates.sort_unstable_by_key(|implementation| {
@@ -4883,9 +4840,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             self.emissions.push(emission);
             return Ok(());
         }
-        if self.sysroot.len() >= MAX_PACKAGES {
-            return Err("compiler sysroot package limit exceeded".to_owned());
-        }
         if !self.is_sysroot_crate(crate_num)? {
             return Err("non-sysroot crate cannot enter compiler authority registry".to_owned());
         }
@@ -5638,12 +5592,8 @@ fn const_kind_text(kind: ty::ConstKind<'_>) -> &'static str {
 fn arguments_digest(arguments: &[String], budget: &mut Budget) -> Result<String, String> {
     let mut digest = Sha256::new();
     for argument in arguments {
-        let length = argument.len();
-        if length > MAX_STRING {
-            return Err("rustc argument exceeds the string limit".to_owned());
-        }
-        let length =
-            u64::try_from(length).map_err(|_| "rustc argument length exceeds u64".to_owned())?;
+        let length = u64::try_from(argument.len())
+            .map_err(|_| "rustc argument length exceeds u64".to_owned())?;
         digest.update(length.to_le_bytes());
         digest.update(argument.as_bytes());
     }
@@ -5734,10 +5684,6 @@ struct Bounded<'a> {
 
 impl Write for Bounded<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let actual = self.written.saturating_add(bytes.len());
-        if actual > MAX_BYTES {
-            return Err(io::Error::other("compiler sidecar byte limit exceeded"));
-        }
         let count = self.file.write(bytes)?;
         self.written = self.written.saturating_add(count);
         Ok(count)
@@ -5749,8 +5695,8 @@ impl Write for Bounded<'_> {
 }
 
 fn checked_string(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.len() > MAX_STRING {
-        Err("compiler string is empty or exceeds the protocol limit".to_owned())
+    if value.is_empty() {
+        Err("compiler string is empty".to_owned())
     } else {
         Ok(())
     }
@@ -5781,7 +5727,7 @@ mod tests {
         validate_parameter_class, Artifact, Budget, Diagnostic, DiagnosticIdentity,
         ImplementationCrateAuthority, ImplementationWork, Invocation, Namespace,
         OpaqueArgumentAction, Package, ParameterClass, Root, SelectedSurfaceWork, DIAGNOSTIC_SLOTS,
-        DIAGNOSTIC_SLOT_BYTES, MAX_DEPTH, MAX_EDGES,
+        DIAGNOSTIC_SLOT_BYTES, MAX_DEPTH,
     };
     use rustc_hir::def::DefKind;
 
@@ -5815,18 +5761,6 @@ mod tests {
         let mut measured = Budget::standard();
         super::completion::Prepared::bind(std::slice::from_ref(&row), digest, &mut measured)
             .unwrap();
-        let (bytes, _, _) = measured.usage();
-        let mut exact = Budget::with_limits(bytes + 7);
-        exact.bytes(7).unwrap();
-        exact.items(2).unwrap();
-        super::completion::Prepared::bind(std::slice::from_ref(&row), digest, &mut exact).unwrap();
-        let mut short = Budget::with_limits(bytes + 6);
-        short.bytes(7).unwrap();
-        short.items(2).unwrap();
-        assert!(
-            super::completion::Prepared::bind(std::slice::from_ref(&row), digest, &mut short)
-                .is_err()
-        );
         let mut other = invocation(&["other"]);
         other.invocation_nonce = digest.to_owned();
         other.unit_correlation = digest.to_owned();
@@ -6151,23 +6085,16 @@ mod tests {
     }
 
     #[test]
-    fn allocation_budget_rejects_before_owned_string_growth() {
-        let mut budget = Budget::with_limits(3);
-        assert_eq!(budget.owned("abc").expect("the exact byte boundary"), "abc");
-        assert!(budget.owned("d").is_err());
-    }
-
-    #[test]
     fn edges_past_a_million_are_counted_and_never_refused() {
         let mut budget = Budget::standard();
-        budget.edge(MAX_EDGES).expect("a million edges");
+        budget.edge(1_000_000).expect("a million edges");
         budget.edge(1).expect("the next edge");
         assert_eq!(budget.usage().2, 1_000_001);
     }
 
     #[test]
     fn anonymous_associated_support_segments_are_structured_stable_and_bounded() {
-        let mut budget = Budget::with_limits(usize::MAX);
+        let mut budget = Budget::standard();
         let first = anonymous_associated_segment("new", 0, &mut budget)
             .expect("the first RPITIT support segment is exact");
         let repeated = anonymous_associated_segment("new", 0, &mut budget)

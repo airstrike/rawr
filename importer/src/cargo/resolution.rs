@@ -76,8 +76,7 @@ pub fn cached(
     let target = context.project().join("target");
     let parent = Parent::validated(toolchain);
     let fixed = fixed_recipe(context, &manifest, &target)?;
-    let recipe =
-        context.discover_with_parents::<Metadata>(&fixed, limits.node_output_bytes(), &[parent])?;
+    let recipe = context.discover_with_parents::<Metadata>(&fixed, &[parent])?;
     let validation_context = context.clone();
     node::Evaluator::new(&context.open_store()?, sink).discover_budgeted(
         &recipe,
@@ -173,15 +172,8 @@ impl node::Value for Metadata {
     const KIND: node::Kind = node::Kind::Resolution;
     const SCHEMA: u32 = OUTPUT_SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         let length = HEADER_BYTES.saturating_add(self.canonical.len());
-        if length > limit {
-            return Err(node::Error::Limit {
-                resource: "cached leaf Cargo metadata bytes",
-                limit,
-                actual: length,
-            });
-        }
         let canonical_length = u64::try_from(self.canonical.len())
             .map_err(|_| node::Error::Codec("Cargo metadata length is not encodable"))?;
         let mut bytes = Vec::new();
@@ -195,14 +187,7 @@ impl node::Value for Metadata {
         Ok(bytes.into_boxed_slice())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached leaf Cargo metadata bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         let manifest = bytes
             .get(..32)
             .and_then(|bytes| bytes.try_into().ok())
@@ -244,29 +229,14 @@ fn input_digests_budgeted(
     lock: &Path,
     budget: Option<&node::GraphBudget>,
 ) -> Result<([u8; 32], [u8; 32]), node::Error> {
-    // Manifest and lock reads are I/O retention bounded by physical
-    // constants (manifest class: `TAIL_BYTES`; lock class: `CAPTURE_BYTES`).
-    let manifest = read_hashed_input(
-        "cached leaf Cargo manifest",
-        manifest,
-        process::TAIL_BYTES,
-        budget,
-    )?;
-    // Lock reads are I/O retention, bounded by the physical capture
-    // constant.
-    let lock = read_hashed_input(
-        "cached leaf Cargo lock",
-        lock,
-        process::CAPTURE_BYTES,
-        budget,
-    )?;
+    let manifest = read_hashed_input("cached leaf Cargo manifest", manifest, budget)?;
+    let lock = read_hashed_input("cached leaf Cargo lock", lock, budget)?;
     Ok((Sha256::digest(manifest).into(), Sha256::digest(lock).into()))
 }
 
 fn read_hashed_input(
     resource: &'static str,
     path: &Path,
-    limit: usize,
     budget: Option<&node::GraphBudget>,
 ) -> Result<Vec<u8>, node::Error> {
     if budget.is_some() {
@@ -278,16 +248,8 @@ fn read_hashed_input(
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(node::Error::Shape(path.to_path_buf()));
         }
-        let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-        if length > limit {
-            return Err(node::Error::Limit {
-                resource,
-                limit,
-                actual: length,
-            });
-        }
     }
-    Ok(super::read_bounded(resource, path, limit)?)
+    Ok(super::read_whole(resource, path)?)
 }
 
 fn require_configuration_free(
@@ -468,8 +430,7 @@ fn cached_locked_with_parents(
 ) -> Result<node::Validated<Locked>, node::Error> {
     let limits = context.limits();
     let fixed = locked_recipe(authority, manifest, lock, target)?;
-    let recipe =
-        context.discover_with_parents::<Locked>(&fixed, limits.node_input_bytes(), parents)?;
+    let recipe = context.discover_with_parents::<Locked>(&fixed, parents)?;
     let validation_lock = lock.to_path_buf();
     node::Evaluator::new(&context.open_store()?, sink).discover_budgeted(
         &recipe,
@@ -492,11 +453,7 @@ pub(crate) fn cached_unit_graph(
 ) -> Result<node::Validated<UnitGraph>, node::Error> {
     let limits = context.limits();
     let parent = Parent::validated(parent);
-    let recipe = context.direct_with_parents::<UnitGraph>(
-        authority,
-        limits.node_output_bytes(),
-        &[parent],
-    )?;
+    let recipe = context.direct_with_parents::<UnitGraph>(authority, &[parent])?;
     node::Evaluator::new(&context.open_store()?, sink)
         .native(&recipe, || UnitGraph::capture(execute()?, &limits))
 }
@@ -518,29 +475,10 @@ impl Locked {
         manifests
             .try_reserve_exact(paths.len())
             .map_err(|_| node::Error::Allocation)?;
-        let mut retained = 0_usize;
         for path in paths.iter() {
-            let evidence = Evidence::capture(path, process::TAIL_BYTES)?;
-            retained =
-                retained.saturating_add(usize::try_from(evidence.length).unwrap_or(usize::MAX));
-            if retained > limits.node_input_bytes() {
-                return Err(node::Error::Limit {
-                    resource: "cached Cargo metadata input bytes",
-                    limit: limits.node_input_bytes(),
-                    actual: retained,
-                });
-            }
-            manifests.push(evidence);
+            manifests.push(Evidence::capture(path)?);
         }
-        let lock = Evidence::capture(lock, process::CAPTURE_BYTES)?;
-        retained = retained.saturating_add(usize::try_from(lock.length).unwrap_or(usize::MAX));
-        if retained > limits.node_input_bytes() {
-            return Err(node::Error::Limit {
-                resource: "cached Cargo metadata input bytes",
-                limit: limits.node_input_bytes(),
-                actual: retained,
-            });
-        }
+        let lock = Evidence::capture(lock)?;
         let locked = Self {
             lock,
             manifests: manifests.into_boxed_slice(),
@@ -557,21 +495,17 @@ impl Locked {
         budget: &node::GraphBudget,
     ) -> Result<Box<[u8]>, node::Error> {
         self.validate_shape(limits)?;
-        if self.lock.path != lock
-            || self.lock != Evidence::capture_budgeted(lock, process::CAPTURE_BYTES, Some(budget))?
-        {
+        if self.lock.path != lock || self.lock != Evidence::capture_budgeted(lock, Some(budget))? {
             return Err(node::Error::Codec("cached Cargo lock evidence changed"));
         }
         for expected in self.manifests.iter() {
-            if *expected
-                != Evidence::capture_budgeted(&expected.path, process::TAIL_BYTES, Some(budget))?
-            {
+            if *expected != Evidence::capture_budgeted(&expected.path, Some(budget))? {
                 return Err(node::Error::Codec(
                     "cached Cargo package-manifest evidence changed",
                 ));
             }
         }
-        self.discovered_inputs(limits)
+        self.discovered_inputs()
     }
 
     fn validate_shape(&self, limits: &super::Limits) -> Result<(), node::Error> {
@@ -599,8 +533,8 @@ impl Locked {
         Ok(())
     }
 
-    fn discovered_inputs(&self, limits: &super::Limits) -> Result<Box<[u8]>, node::Error> {
-        let mut writer = LockedWriter::new(limits.node_input_bytes());
+    fn discovered_inputs(&self) -> Result<Box<[u8]>, node::Error> {
+        let mut writer = LockedWriter::new();
         writer.append(b"rawr.cargo.locked-metadata-inputs/v1")?;
         writer.evidence(&self.lock)?;
         writer.count(self.manifests.len())?;
@@ -630,25 +564,11 @@ impl node::Value for UnitGraph {
     const KIND: node::Kind = node::Kind::Resolution;
     const SCHEMA: u32 = UNIT_GRAPH_OUTPUT_SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        if self.raw.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached Cargo unit-graph bytes",
-                limit,
-                actual: self.raw.len(),
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.raw.clone())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached Cargo unit-graph bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         Ok(Self {
             raw: bytes.to_vec().into_boxed_slice(),
         })
@@ -659,8 +579,8 @@ impl node::Value for Locked {
     const KIND: node::Kind = node::Kind::Resolution;
     const SCHEMA: u32 = LOCKED_OUTPUT_SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        let mut writer = LockedWriter::new(limit);
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
+        let mut writer = LockedWriter::new();
         writer.evidence(&self.lock)?;
         writer.count(self.manifests.len())?;
         for manifest in self.manifests.iter() {
@@ -670,8 +590,8 @@ impl node::Value for Locked {
         Ok(writer.finish())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        let mut reader = LockedReader::new(bytes, limit)?;
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
+        let mut reader = LockedReader::new(bytes);
         let lock = reader.evidence()?;
         let count = reader.count()?;
         if count > bytes.len().saturating_sub(reader.offset) / 44 {
@@ -697,16 +617,15 @@ impl node::Value for Locked {
 }
 
 impl Evidence {
-    fn capture(path: &Path, limit: usize) -> Result<Self, node::Error> {
-        Self::capture_budgeted(path, limit, None)
+    fn capture(path: &Path) -> Result<Self, node::Error> {
+        Self::capture_budgeted(path, None)
     }
 
     fn capture_budgeted(
         path: &Path,
-        limit: usize,
         budget: Option<&node::GraphBudget>,
     ) -> Result<Self, node::Error> {
-        let bytes = read_hashed_input("cached Cargo metadata input", path, limit, budget)?;
+        let bytes = read_hashed_input("cached Cargo metadata input", path, budget)?;
         Ok(Self {
             path: path.to_path_buf(),
             length: u64::try_from(bytes.len())
@@ -722,7 +641,7 @@ fn locked_recipe(
     lock: &Path,
     target: &Path,
 ) -> Result<Box<[u8]>, node::Error> {
-    let mut writer = LockedWriter::new(node::MAX_CONTENT_BYTES.min(16 * 1024 * 1024));
+    let mut writer = LockedWriter::new();
     writer.append(b"rawr.cargo.locked-metadata-resolution/v1")?;
     writer.append(&LOCKED_RECIPE_SCHEMA.to_le_bytes())?;
     writer.bytes(authority)?;
@@ -734,26 +653,14 @@ fn locked_recipe(
 
 struct LockedWriter {
     bytes: Vec<u8>,
-    limit: usize,
 }
 
 impl LockedWriter {
-    fn new(limit: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            limit,
-        }
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
     }
 
     fn append(&mut self, bytes: &[u8]) -> Result<(), node::Error> {
-        let next = self.bytes.len().saturating_add(bytes.len());
-        if next > self.limit {
-            return Err(node::Error::Limit {
-                resource: "cached locked Cargo metadata bytes",
-                limit: self.limit,
-                actual: next,
-            });
-        }
         self.bytes
             .try_reserve_exact(bytes.len())
             .map_err(|_| node::Error::Allocation)?;
@@ -799,15 +706,8 @@ struct LockedReader<'bytes> {
 }
 
 impl<'bytes> LockedReader<'bytes> {
-    fn new(bytes: &'bytes [u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached locked Cargo metadata bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
-        Ok(Self { bytes, offset: 0 })
+    fn new(bytes: &'bytes [u8]) -> Self {
+        Self { bytes, offset: 0 }
     }
 
     fn take(&mut self, length: usize) -> Result<&'bytes [u8], node::Error> {
@@ -1155,17 +1055,13 @@ mod tests {
             lock: [2; 32],
             canonical: br#"{"packages":[]}"#.to_vec().into_boxed_slice(),
         };
-        let limit = super::super::Limits::standard().node_output_bytes();
-        let bytes = metadata.encode(limit).expect("the metadata encodes");
-        let decoded = Metadata::decode(&bytes, limit).expect("the metadata decodes");
-        assert_eq!(
-            decoded.encode(limit).expect("the metadata reencodes"),
-            bytes
-        );
+        let bytes = metadata.encode().expect("the metadata encodes");
+        let decoded = Metadata::decode(&bytes).expect("the metadata decodes");
+        assert_eq!(decoded.encode().expect("the metadata reencodes"), bytes);
         let mut trailing = bytes.into_vec();
         trailing.push(0);
         assert!(matches!(
-            Metadata::decode(&trailing, limit),
+            Metadata::decode(&trailing),
             Err(node::Error::Codec("Cargo metadata payload is truncated"))
         ));
     }
@@ -1226,21 +1122,17 @@ mod tests {
         let raw = locked_metadata(&[&fixture.manifest, &fixture.dependency_manifest]);
         let locked = Locked::capture(raw, &fixture.manifest, &fixture.lock, &limits)
             .expect("the locked metadata captures every manifest");
-        let limit = limits.node_input_bytes();
-        let bytes = locked.encode(limit).expect("the locked metadata encodes");
-        let decoded = Locked::decode(&bytes, limit).expect("the locked metadata decodes");
+        let bytes = locked.encode().expect("the locked metadata encodes");
+        let decoded = Locked::decode(&bytes).expect("the locked metadata decodes");
         decoded
             .validate_shape(&limits)
             .expect("the decoded manifest closure is exact");
         decoded
             .revalidate(&fixture.lock, &limits, &node::GraphBudget::new())
             .expect("the decoded input closure revalidates");
-        assert_eq!(
-            decoded.encode(limit).expect("the metadata reencodes"),
-            bytes
-        );
+        assert_eq!(decoded.encode().expect("the metadata reencodes"), bytes);
 
-        let mut reordered = Locked::decode(&bytes, limit).expect("the fixture decodes again");
+        let mut reordered = Locked::decode(&bytes).expect("the fixture decodes again");
         reordered.manifests.swap(0, 1);
         assert!(matches!(
             reordered.validate_shape(&limits),
@@ -1265,7 +1157,7 @@ mod tests {
         let mut trailing = bytes.into_vec();
         trailing.push(0);
         assert!(matches!(
-            Locked::decode(&trailing, limit),
+            Locked::decode(&trailing),
             Err(node::Error::Codec(
                 "cached Cargo metadata has trailing bytes"
             ))
@@ -1299,7 +1191,6 @@ mod tests {
                 .discover::<Locked>(
                     &locked_recipe(authority, &fixture.manifest, &fixture.lock, &fixture.target)
                         .expect("the recipe authority seals"),
-                    context.limits().node_input_bytes(),
                 )
                 .expect("the locked recipe seals");
             let exact = store
@@ -1703,7 +1594,6 @@ mod tests {
                                 Vec::new(),
                                 Vec::new(),
                                 Vec::new(),
-                                limits.node_canonical_bytes(),
                                 &mut allocation,
                             )
                         },
@@ -1721,40 +1611,26 @@ mod tests {
                                 &super::super::Limits::standard(),
                             )
                             .expect("the fixture API graph classifies");
-                        let facade = crate::surface::facade::Plan::encode_cached(
-                            &contract,
-                            &super::super::Limits::standard(),
-                        )
-                        .expect("the facade node validates");
+                        let facade = crate::surface::facade::Plan::encode_cached(&contract)
+                            .expect("the facade node validates");
                         assert!(!facade.bytes().is_empty());
                     } else if mode == "profile-chain" {
                         let chain = crate::node::Chain::validated(context.clone(), &api);
                         let graph = graph
                             .publish_with_chain(crate::input::proof::Proof::fixture(), Some(chain))
                             .expect("the fixture API graph publishes with its current chain");
-                        let profile = crate::profile::classify(
-                            &CachedProfileDefinition,
-                            &graph,
-                            &super::super::Limits::standard(),
-                        )
-                        .expect("the profile classification node validates");
+                        let profile = crate::profile::classify(&CachedProfileDefinition, &graph)
+                            .expect("the profile classification node validates");
                         assert_eq!(profile.graph_fingerprint(), graph.fingerprint());
                         assert!(profile.node_chain().is_some());
                         let checked = CachedProfileChecked::direct();
-                        let demand = crate::profile::demand(
-                            &CachedProfileDefinition,
-                            &profile,
-                            &checked,
-                            &super::super::Limits::standard(),
-                        )
-                        .expect("the profile demand node validates");
+                        let demand =
+                            crate::profile::demand(&CachedProfileDefinition, &profile, &checked)
+                                .expect("the profile demand node validates");
                         assert!(demand.node_chain().is_some());
-                        let proof = crate::profile::Proof::generate(
-                            &CachedProfileDefinition,
-                            &demand,
-                            &super::super::Limits::standard(),
-                        )
-                        .expect("the generated profile proof node validates");
+                        let proof =
+                            crate::profile::Proof::generate(&CachedProfileDefinition, &demand)
+                                .expect("the generated profile proof node validates");
                         assert!(proof.node_chain().is_some());
                     } else if mode == "runner-chain" {
                         let limits = super::super::Limits::standard();
@@ -1762,15 +1638,13 @@ mod tests {
                         let graph = graph
                             .publish_with_chain(crate::input::proof::Proof::fixture(), Some(chain))
                             .expect("the full-DAG API graph publishes with its current chain");
-                        let profile =
-                            crate::profile::classify(&CachedProfileDefinition, &graph, &limits)
-                                .expect("the full-DAG profile classification validates");
+                        let profile = crate::profile::classify(&CachedProfileDefinition, &graph)
+                            .expect("the full-DAG profile classification validates");
                         let contract = graph
                             .classify(&crate::classify::Policy::standard(), &limits)
                             .expect("the full-DAG generic classification validates");
-                        let facade =
-                            crate::surface::facade::Plan::encode_cached(&contract, &limits)
-                                .expect("the full-DAG facade validates");
+                        let facade = crate::surface::facade::Plan::encode_cached(&contract)
+                            .expect("the full-DAG facade validates");
                         let (snapshot, transport) = runner_snapshot(&limits);
                         let checked = crate::checked::evaluate(
                             &contract,
@@ -1793,13 +1667,11 @@ mod tests {
                             &CachedProfileDefinition,
                             &profile,
                             &checked_evidence,
-                            &limits,
                         )
                         .expect("the full-DAG profile demand validates");
                         let profile = crate::profile::Proof::generate(
                             &CachedProfileDefinition,
                             &profile_demand,
-                            &limits,
                         )
                         .expect("the full-DAG generated profile validates");
                         let mut supervisor = crate::supervisor::Owner::new();
@@ -1812,9 +1684,7 @@ mod tests {
                                 .expect("the full-DAG runner revision seals"),
                         )
                         .expect("the full-DAG generation request seals");
-                        let generated = request
-                            .generate(&limits)
-                            .expect("the full-DAG overlay validates");
+                        let generated = request.generate().expect("the full-DAG overlay validates");
                         let cache = crate::cache::Writer::new(context.project())
                             .expect("the full-DAG local runner cache binds");
                         let cargo = super::super::Owner::acquire()

@@ -80,7 +80,7 @@ pub(crate) fn write(directory: &Path, bytes: &[u8]) -> Result<Box<[u8]>, node::E
 }
 
 /// The total length a well-formed manifest names.
-pub(crate) fn check(manifest: &[u8], limit: usize) -> Result<usize, node::Error> {
+pub(crate) fn check(manifest: &[u8]) -> Result<usize, node::Error> {
     let scalar = |start: usize| {
         manifest
             .get(start..start + 8)
@@ -101,13 +101,6 @@ pub(crate) fn check(manifest: &[u8], limit: usize) -> Result<usize, node::Error>
     {
         return Err(node::Error::Codec("API parts manifest length is invalid"));
     }
-    if total > limit {
-        return Err(node::Error::Limit {
-            resource: "cached API graph bytes",
-            limit,
-            actual: total,
-        });
-    }
     let mut sum = 0_usize;
     for entry in manifest[HEADER_BYTES..].as_chunks::<ENTRY_BYTES>().0 {
         let length = usize::try_from(u64::from_le_bytes(entry[..8].try_into().unwrap_or([0; 8])))
@@ -125,12 +118,8 @@ pub(crate) fn check(manifest: &[u8], limit: usize) -> Result<usize, node::Error>
 }
 
 /// Read back the bytes a checked manifest names, each part verified.
-pub(crate) fn read(
-    directory: &Path,
-    manifest: &[u8],
-    limit: usize,
-) -> Result<Box<[u8]>, node::Error> {
-    let total = check(manifest, limit)?;
+pub(crate) fn read(directory: &Path, manifest: &[u8]) -> Result<Box<[u8]>, node::Error> {
+    let total = check(manifest)?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(total)
@@ -229,13 +218,9 @@ mod tests {
     fn an_edit_writes_only_the_parts_it_changed_and_every_part_is_verified() {
         let directory = std::env::temp_dir().join(format!("rawr-api-parts-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
-        let limit = usize::MAX;
         let original = bytes(7, 4 * 1024 * 1024);
         let manifest = super::write(&directory, &original).unwrap();
-        assert_eq!(
-            &*super::read(&directory, &manifest, limit).unwrap(),
-            &original[..]
-        );
+        assert_eq!(&*super::read(&directory, &manifest).unwrap(), &original[..]);
         let before = parts(&directory);
         assert!(before.len() > 8, "the bytes are cut into parts");
 
@@ -244,7 +229,7 @@ mod tests {
         edited.splice(2_000_000..2_000_010, *b"an edit that grows the API");
         let edited_manifest = super::write(&directory, &edited).unwrap();
         assert_eq!(
-            &*super::read(&directory, &edited_manifest, limit).unwrap(),
+            &*super::read(&directory, &edited_manifest).unwrap(),
             &edited[..]
         );
         let after = parts(&directory);
@@ -272,10 +257,9 @@ mod tests {
         fs::set_permissions(victim, permissions).unwrap();
         fs::write(victim, b"altered").unwrap();
         assert!(
-            super::read(&directory, &manifest, limit).is_err()
-                || super::read(&directory, &edited_manifest, limit).is_err()
+            super::read(&directory, &manifest).is_err()
+                || super::read(&directory, &edited_manifest).is_err()
         );
-        assert!(super::read(&directory, &manifest, original.len() - 1).is_err());
         fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -4696,7 +4696,7 @@ fn raw_pair(
         code: "raw-canonical-encoding",
         reason: error.to_string().into_boxed_str(),
     };
-    let body = api::semantic::encode_once(body, crate::node::MAX_CONTENT_BYTES, allocation)?;
+    let body = api::semantic::encode_once(body, allocation)?;
     let header = |context: Vec<u8>, invocations: Vec<u8>| {
         const SCHEMA: &[u8] = br#"{"schema":3,"context":"#;
         const INVOCATIONS: &[u8] = br#","invocations":"#;
@@ -4736,7 +4736,7 @@ fn raw_pair(
         serde_json::to_vec(&api::semantic::Context(context)).map_err(encoding)?,
         serde_json::to_vec(&api::semantic::Invocations(invocations)).map_err(encoding)?,
     )?;
-    api::semantic::admit(semantic.len(), crate::node::MAX_CONTENT_BYTES, allocation)?;
+    api::semantic::admit(semantic.len(), allocation)?;
     Ok((canonical, semantic))
 }
 

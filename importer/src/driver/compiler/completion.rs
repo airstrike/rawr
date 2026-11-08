@@ -22,10 +22,9 @@ impl Prepared {
         let first = invocations
             .first()
             .ok_or("missing completion invocations")?;
-        if invocations.len() > attempt_protocol::MAX_INVOCATIONS
-            || invocations
-                .iter()
-                .any(|row| row.protocol_directory != first.protocol_directory)
+        if invocations
+            .iter()
+            .any(|row| row.protocol_directory != first.protocol_directory)
         {
             return Err("inconsistent completion invocation population".to_owned());
         }

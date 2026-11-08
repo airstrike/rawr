@@ -52,11 +52,10 @@ fn exact_operation_forms_emit_rooted_normalized_thunks() {
 #[test]
 fn one_adapter_change_rewrites_only_its_module_file() {
     let project = rawr_import::store::TestProject::new("rawr-p3-modules");
-    let limits = rawr_import::cargo::Limits::standard();
     let sources = |surface: p3::Surface| {
         p3::request_at(project.path(), b"exact p3 surface", surface)
             .0
-            .generate(&limits)
+            .generate()
             .expect("the generated manifest seals")
             .files()
             .map(|file| (file.path().to_owned(), file.bytes().to_vec()))

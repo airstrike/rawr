@@ -9,9 +9,7 @@ fn same_surface_hot_admits_and_changed_surface_returns_one_cold_continuation() {
     let chain = p3::dag_chain(&root);
     let (initial, initial_snapshot) =
         p3::dag_request_at(&root, &chain, b"initial body", p3::Surface::Complete);
-    let generated = initial
-        .generate(&rawr_import::cargo::Limits::standard())
-        .expect("the initial surface generates");
+    let generated = initial.generate().expect("the initial surface generates");
     let lane = crate::shared::lane();
     let cargo = rawr_import::cargo::Owner::acquire().expect("the Cargo lane is free");
     let built = generated
@@ -57,7 +55,7 @@ fn same_surface_hot_admits_and_changed_surface_returns_one_cold_continuation() {
     assert_eq!(current.key(), hot_key);
     let (changed, changed_snapshot) = miss.into_parts();
     let generated = changed
-        .generate(&rawr_import::cargo::Limits::standard())
+        .generate()
         .expect("the sole cold continuation generates");
     let lane = crate::shared::lane();
     let cargo = rawr_import::cargo::Owner::acquire().expect("the Cargo lane is serialized");

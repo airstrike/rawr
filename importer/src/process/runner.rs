@@ -1017,8 +1017,7 @@ impl<B> Candidate<Admitted, B> {
             }
             payload.extend_from_slice(&nonce);
             payload.extend_from_slice(request.application_semantic());
-            let limits = request.shared_limits()?;
-            let mut manifest = request.generate(&limits)?;
+            let mut manifest = request.generate()?;
             let mut read_set = manifest.replay_hot(&inner.manifest)?;
             read_set.bind_snapshot(&snapshot)?;
             read_set.pin_prepared()?;

@@ -155,38 +155,34 @@ impl Context {
     pub fn direct<K: crate::node::Value>(
         &self,
         semantic_inputs: &[u8],
-        output_limit: usize,
     ) -> Result<crate::node::Direct<K>, crate::node::Error> {
-        self.direct_with_parents(semantic_inputs, output_limit, &[])
+        self.direct_with_parents(semantic_inputs, &[])
     }
 
     /// Bind a direct recipe to current validated semantic parent receipts.
     pub fn direct_with_parents<K: crate::node::Value>(
         &self,
         semantic_inputs: &[u8],
-        output_limit: usize,
         parents: &[crate::node::Parent],
     ) -> Result<crate::node::Direct<K>, crate::node::Error> {
-        crate::node::Direct::capture(self.digest, semantic_inputs, output_limit, parents)
+        crate::node::Direct::capture(self.digest, semantic_inputs, parents)
     }
 
     /// Bind a discoverable recipe whose complete action is learned on a miss.
     pub fn discover<K: crate::node::Value>(
         &self,
         fixed_inputs: &[u8],
-        output_limit: usize,
     ) -> Result<crate::node::Discoverable<K>, crate::node::Error> {
-        self.discover_with_parents(fixed_inputs, output_limit, &[])
+        self.discover_with_parents(fixed_inputs, &[])
     }
 
     /// Bind a discoverable recipe to current validated semantic parents.
     pub fn discover_with_parents<K: crate::node::Value>(
         &self,
         fixed_inputs: &[u8],
-        output_limit: usize,
         parents: &[crate::node::Parent],
     ) -> Result<crate::node::Discoverable<K>, crate::node::Error> {
-        crate::node::Discoverable::capture(self.digest, fixed_inputs, output_limit, parents)
+        crate::node::Discoverable::capture(self.digest, fixed_inputs, parents)
     }
 
     /// Canonical project root included in every direct action identity.

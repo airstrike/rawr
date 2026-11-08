@@ -229,11 +229,6 @@ where
 {
     let owned_context = graph.context().clone();
     let context = &owned_context;
-    if context.limits().node_output_bytes() != limits.node_output_bytes() {
-        return Err(cache(node::Error::State(
-            "connected classification limits changed",
-        )));
-    }
     let initial = graph
         .retention()
         .map_err(cache)?
@@ -250,14 +245,12 @@ where
         &[graph.input()],
         &crate::profile::cached::authority(adapter.identity(), adapter.version(), profile_exact)
             .map_err(|error| cache(failure(error)))?,
-        limits.node_output_bytes(),
     )
     .map_err(cache)?;
     let generic_recipe = Recipe::<Generic>::from_inputs(
         context,
         &[graph.input()],
         &crate::classify::cached::authority(policy).map_err(|error| cache(failure(error)))?,
-        node::MAX_CONTENT_BYTES,
     )
     .map_err(cache)?;
     let profile = profile_recipe.lookup_owned(&evaluator).map_err(cache)?;
@@ -275,7 +268,6 @@ where
                 &[generic.input()],
                 &crate::surface::facade::cached::authority(parts.fingerprint.as_bytes())
                     .map_err(cache)?,
-                limits.node_output_bytes(),
             )
             .map_err(cache)?;
             let outcome = recipe.lookup_owned(&evaluator).map_err(cache)?;
@@ -287,7 +279,7 @@ where
         (Outcome::Hit(profile), Some((_, Outcome::Hit(facade), parts))) => {
             let profile_parts = profile
                 .value()
-                .owned(adapter.identity(), adapter.version(), graph.graph(), limits)
+                .owned(adapter.identity(), adapter.version(), graph.graph())
                 .map_err(|error| cache(failure(error.fresh())))?;
             let authority = checked::authority(
                 parts.fingerprint,
@@ -304,7 +296,6 @@ where
                 context,
                 &[facade.input(), profile.input()],
                 &authority,
-                limits.node_output_bytes(),
             )
             .map_err(cache)?;
             let outcome = recipe.lookup_owned(&evaluator).map_err(cache)?;
@@ -354,7 +345,7 @@ where
             let result = store.with_staged_batch(retention, &crate::metrics::Current, |batch| {
                 let profile = acquire(profile, &profile_recipe, batch, || {
                     let parts = adapter.classify_parts(graph.graph()).map_err(failure)?;
-                    Profile::capture_parts(&parts, limits.node_output_bytes()).map_err(failure)
+                    Profile::capture_parts(&parts).map_err(failure)
                 })?;
                 let generic = acquire(generic, &generic_recipe, batch, || {
                     Generic::capture(graph.graph(), policy, limits).map_err(failure)
@@ -372,7 +363,6 @@ where
                             &crate::surface::facade::cached::authority(
                                 parts.fingerprint.as_bytes(),
                             )?,
-                            limits.node_output_bytes(),
                         )?;
                         let outcome = recipe.lookup_owned(&evaluator)?;
                         (recipe, outcome, parts)
@@ -386,7 +376,7 @@ where
                     None => {
                         let profile_parts = profile
                             .value()
-                            .owned(adapter.identity(), adapter.version(), graph.graph(), limits)
+                            .owned(adapter.identity(), adapter.version(), graph.graph())
                             .map_err(|error| failure(error.fresh()))?;
                         let authority = checked::authority(
                             parts.fingerprint,
@@ -403,7 +393,6 @@ where
                             context,
                             &[facade.input(), profile.input()],
                             &authority,
-                            limits.node_output_bytes(),
                         )?;
                         let outcome = recipe.lookup_owned(&evaluator)?;
                         (recipe, outcome, profile_parts)

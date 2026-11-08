@@ -30,7 +30,7 @@ pub fn generated_at(
 ) -> rawr_import::runner::Manifest<rawr_import::runner::Generated, ()> {
     request_at(root, SNAPSHOT_SOURCE, Surface::Complete)
         .0
-        .generate(&rawr_import::cargo::Limits::standard())
+        .generate()
         .expect("the deterministic generated manifest seals")
 }
 

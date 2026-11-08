@@ -428,7 +428,6 @@ fn session(
                     }
                 };
                 let next_manifests = prepared.manifests.clone();
-                let limits = prepared.limits();
                 let (request, snapshot, _, inputs) = prepared.into_parts();
                 let observation = match inputs.encode_observation() {
                     Ok(observation) => observation,
@@ -547,7 +546,7 @@ fn session(
                             framework(error, source.clone())
                         };
                         request
-                            .generate(&limits)
+                            .generate()
                             .map_err(|error| report(&error, restarts.again(&error)))
                             .and_then(|generated| {
                                 lane.build(generated)
@@ -897,11 +896,10 @@ fn prepare_on_lane(
             Err(error) => return Err(import(error, source.clone())),
         };
         let manifests = prepared.manifests.clone();
-        let limits = prepared.limits();
         let mut prepared = prepared;
         let settlement = prepared.take_settlement();
         let (request, snapshot, _, inputs) = prepared.into_parts();
-        let generated = match request.generate(&limits) {
+        let generated = match request.generate() {
             Ok(generated) => generated,
             Err(error) if restarts.again(&error) => continue,
             Err(error) => return Err(framework(error, source.clone())),

@@ -166,7 +166,7 @@ impl Fixture {
             .expect("fixture toolchain is retained");
         let native = process::Native::from_attestation(&attestation);
         let recipe = context
-            .discover::<resolution::BuildProduct>(b"rawr.cold-command-test/v1", 4096)
+            .discover::<resolution::BuildProduct>(b"rawr.cold-command-test/v1")
             .expect("reservation recipe derives");
         store
             .with_ownership(|ownership| {

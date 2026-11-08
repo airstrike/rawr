@@ -174,28 +174,15 @@ impl<B> GenerationRequestKey<B> {
         self.profile.value().application_semantic()
     }
 
-    pub(crate) fn shared_limits(&self) -> Result<crate::cargo::Limits, crate::node::Error> {
-        if let profile::Profile::Historical(pair) = &self.profile {
-            return Ok(pair.context.limits());
-        }
-        self.profile
-            .node_chain()
-            .map(|chain| chain.context().limits())
-            .ok_or(crate::node::Error::State(
-                "hot request has no current shared context",
-            ))
-    }
-
     /// Materialize normalized runner files once and seal their manifest.
     pub fn generate(
         self,
-        limits: &crate::cargo::Limits,
     ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, request::Error>
     where
         B: crate::surface::Runner,
     {
         if matches!(&self.profile, profile::Profile::Historical(_)) {
-            return generate::cached::materialize_historical(self, limits);
+            return generate::cached::materialize_historical(self);
         }
         if self.profile.node_chain().is_some() {
             return generate::cached::materialize(self);

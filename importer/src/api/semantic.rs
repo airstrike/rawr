@@ -163,7 +163,6 @@ pub(super) fn current(
     bytes: &[u8],
     context: &super::Context,
     invocations: &[super::Invocation],
-    limit: usize,
     allocation: &mut crate::extract::Allocation,
 ) -> Result<Vec<u8>> {
     let sections: Sections<'_> =
@@ -182,7 +181,6 @@ pub(super) fn current(
             context,
             invocations,
         },
-        limit,
         allocation,
     )
 }
@@ -206,17 +204,14 @@ fn require(expected: &[u8], value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-/// Encode one semantic API document. `limit` is a physical bound: every
-/// caller passes `node::MAX_CONTENT_BYTES` (directly or as
-/// `Limits::node_canonical_bytes`), the node-store payload ceiling the encoded
-/// document must fit, so exceeding it refuses. `allocation.bytes` measures
+/// Encode one semantic API document, whatever its size: a large program's
+/// API is never refused (no resource gating). `allocation.bytes` records
 /// the encoded size.
 pub(crate) fn encode(
     value: &impl Serialize,
-    limit: usize,
     allocation: &mut crate::extract::Allocation,
 ) -> Result<Vec<u8>> {
-    let length = measure(value, limit, allocation)?;
+    let length = measure(value, allocation)?;
     let mut output = Vec::new();
     output.try_reserve_exact(length).map_err(|source| {
         allocation.failure(Error::Allocation {
@@ -228,28 +223,18 @@ pub(crate) fn encode(
     Ok(output)
 }
 
-/// Encode `value` in one pass under `encode`'s physical bound, without
-/// recording it: the caller records the documents it composes from it.
+/// Encode `value` in one pass, without recording it: the caller records
+/// the documents it composes from it.
 pub(crate) fn encode_once(
     value: &impl Serialize,
-    limit: usize,
     allocation: &mut crate::extract::Allocation,
 ) -> Result<Vec<u8>> {
-    let mut limited = Limited {
+    let mut output = Fallible {
         output: Vec::new(),
-        limit,
-        overflow: None,
         failed: None,
     };
-    let result = serde_json::to_writer(&mut limited, value);
-    if let Some(actual) = limited.overflow {
-        return Err(allocation.failure(Error::Limit {
-            resource: "semantic API bytes",
-            limit,
-            actual,
-        }));
-    }
-    if let Some(source) = limited.failed {
+    let result = serde_json::to_writer(&mut output, value);
+    if let Some(source) = output.failed {
         return Err(allocation.failure(Error::Allocation {
             operation: "semantic API encoding",
             source,
@@ -259,41 +244,24 @@ pub(crate) fn encode_once(
         code: "semantic-api-encoding",
         reason: error.to_string().into_boxed_str(),
     })?;
-    Ok(limited.output)
+    Ok(output.output)
 }
 
 /// Record one composed semantic document of `length` bytes as `measure` does.
-pub(crate) fn admit(
-    length: usize,
-    limit: usize,
-    allocation: &mut crate::extract::Allocation,
-) -> Result<()> {
-    if length > limit {
-        return Err(allocation.failure(Error::Limit {
-            resource: "semantic API bytes",
-            limit,
-            actual: length,
-        }));
-    }
+pub(crate) fn admit(length: usize, allocation: &mut crate::extract::Allocation) -> Result<()> {
     allocation.items(1)?;
-    allocation.bytes(length)?;
-    Ok(())
+    allocation.bytes(length)
 }
 
-struct Limited {
+/// A buffer whose growth is fallible, so an allocator failure is an
+/// `Error::Allocation` rather than an abort.
+struct Fallible {
     output: Vec<u8>,
-    limit: usize,
-    overflow: Option<usize>,
     failed: Option<std::collections::TryReserveError>,
 }
 
-impl std::io::Write for Limited {
+impl std::io::Write for Fallible {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        let actual = self.output.len().saturating_add(buffer.len());
-        if actual > self.limit {
-            self.overflow = Some(actual);
-            return Err(std::io::Error::other("semantic API byte limit exceeded"));
-        }
         if let Err(error) = self.output.try_reserve(buffer.len()) {
             self.failed = Some(error);
             return Err(std::io::Error::other("semantic API allocation failed"));
@@ -307,26 +275,13 @@ impl std::io::Write for Limited {
     }
 }
 
-/// Measure one semantic API document under `encode`'s physical bound and
-/// record it on the canonical account.
+/// Measure one semantic API document and record it on the canonical account.
 pub(crate) fn measure(
     value: &impl Serialize,
-    limit: usize,
     allocation: &mut crate::extract::Allocation,
 ) -> Result<usize> {
-    let mut measured = super::Measured {
-        bytes: 0,
-        limit,
-        overflow: None,
-    };
+    let mut measured = super::Measured { bytes: 0 };
     let result = serde_json::to_writer(&mut measured, value);
-    if let Some(actual) = measured.overflow {
-        return Err(allocation.failure(Error::Limit {
-            resource: "semantic API bytes",
-            limit,
-            actual,
-        }));
-    }
     result.map_err(|error| Error::Extraction {
         code: "semantic-api-encoding",
         reason: error.to_string().into_boxed_str(),

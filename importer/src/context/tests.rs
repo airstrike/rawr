@@ -17,11 +17,11 @@ impl Value for ValueFixture {
     // wrote, which the store evicts (#630).
     const SCHEMA: u32 = crate::api::SCHEMA;
 
-    fn encode(&self, _limit: usize) -> Result<Box<[u8]>, crate::node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, crate::node::Error> {
         Ok(Box::default())
     }
 
-    fn decode(_bytes: &[u8], _limit: usize) -> Result<Self, crate::node::Error> {
+    fn decode(_bytes: &[u8]) -> Result<Self, crate::node::Error> {
         Ok(Self)
     }
 }
@@ -157,19 +157,19 @@ fn environment_target_and_limit_drift_change_context_and_direct_action_identity(
     let limits_changed = context(environment("one"), "target-a", &bounded);
     let actions = [
         first
-            .direct::<ValueFixture>(b"same semantic input", 64)
+            .direct::<ValueFixture>(b"same semantic input")
             .expect("the action seals")
             .action(),
         environment_changed
-            .direct::<ValueFixture>(b"same semantic input", 64)
+            .direct::<ValueFixture>(b"same semantic input")
             .expect("the action seals")
             .action(),
         target_changed
-            .direct::<ValueFixture>(b"same semantic input", 64)
+            .direct::<ValueFixture>(b"same semantic input")
             .expect("the action seals")
             .action(),
         limits_changed
-            .direct::<ValueFixture>(b"same semantic input", 64)
+            .direct::<ValueFixture>(b"same semantic input")
             .expect("the action seals")
             .action(),
     ];

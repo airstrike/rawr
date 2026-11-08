@@ -13,31 +13,23 @@ pub(super) fn classify_facade(
     limits: &crate::cargo::Limits,
 ) -> Result<(Contract<Classified>, crate::surface::facade::Cached), Error> {
     let parent = graph.node_chain().cloned().ok_or(Error::Canonical)?;
-    if parent.output_limit() != limits.node_output_bytes() {
-        return Err(Error::Canonical);
-    }
     let Some(retention) = parent.retention() else {
         // Existing callers without carried historical bundle commitments keep
         // their current-validation path; no staged retention is inferred.
         let contract = classify(graph, policy, limits)?;
-        let facade =
-            crate::surface::facade::Plan::encode_cached(&contract, limits).map_err(|error| {
-                Error::Node(Box::new(node::Error::Transform(
-                    error.to_string().into_boxed_str(),
-                )))
-            })?;
+        let facade = crate::surface::facade::Plan::encode_cached(&contract).map_err(|error| {
+            Error::Node(Box::new(node::Error::Transform(
+                error.to_string().into_boxed_str(),
+            )))
+        })?;
         return Ok((contract, facade));
     };
     let context = parent.context();
     let store = context
         .open_store()
         .map_err(|error| Error::Node(Box::new(error)))?;
-    let recipe = node::staging::Recipe::<Product>::from_chain(
-        &parent,
-        &authority(policy)?,
-        node::MAX_CONTENT_BYTES,
-    )
-    .map_err(|error| Error::Node(Box::new(error)))?;
+    let recipe = node::staging::Recipe::<Product>::from_chain(&parent, &authority(policy)?)
+        .map_err(|error| Error::Node(Box::new(error)))?;
     store
         .with_staged_batch(retention, &crate::metrics::Current, |batch| {
             let generic = recipe.evaluate(batch, || {
@@ -52,10 +44,7 @@ pub(super) fn classify_facade(
                 crate::surface::facade::cached::authority(parts.fingerprint.as_bytes())?;
             let facade_recipe =
                 node::staging::Recipe::<crate::surface::facade::cached::Product>::child(
-                    context,
-                    &generic,
-                    &authority,
-                    limits.node_output_bytes(),
+                    context, &generic, &authority,
                 )?;
             let facade = facade_recipe.evaluate(batch, || {
                 crate::surface::facade::cached::Product::capture_parts(&graph, &parts)
@@ -75,9 +64,6 @@ pub(super) fn classify(
     limits: &crate::cargo::Limits,
 ) -> Result<Contract<Classified>, Error> {
     let parent = graph.node_chain().cloned().ok_or(Error::Canonical)?;
-    if parent.output_limit() != limits.node_output_bytes() {
-        return Err(Error::Canonical);
-    }
     let authority = authority(policy)?;
     let product = parent
         .direct_artifact::<Product>(&authority, || {
@@ -137,28 +123,14 @@ impl node::Value for Product {
         node::reader_schema(4, &[contract[0], contract[1], super::COMPILER_ABI])
     };
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        if self.canonical.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached generic contract bytes",
-                limit,
-                actual: self.canonical.len(),
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         if self.canonical.is_empty() {
             return Err(node::Error::Codec("cached generic contract is empty"));
         }
         Ok(self.canonical.clone())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached generic contract bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         if bytes.is_empty() {
             return Err(node::Error::Codec("cached generic contract is empty"));
         }
@@ -208,9 +180,7 @@ mod tests {
         )
         .unwrap();
         let store = context.open_store().unwrap();
-        let seed_recipe = context
-            .direct::<Product>(b"owned-api-fixture", crate::node::MAX_CONTENT_BYTES)
-            .unwrap();
+        let seed_recipe = context.direct::<Product>(b"owned-api-fixture").unwrap();
         let seed = crate::node::Evaluator::new(&store, &crate::metrics::Current)
             .direct(&seed_recipe, || {
                 Product::capture(&crate::test_fixture::support_outcomes(), &policy, &limits)
@@ -328,11 +298,8 @@ mod tests {
         let product = Product {
             canonical: expected.clone(),
         };
-        let bytes = product
-            .encode(crate::node::MAX_CONTENT_BYTES)
-            .expect("the generic product encodes");
-        let decoded = Product::decode(&bytes, crate::node::MAX_CONTENT_BYTES)
-            .expect("the generic product decodes");
+        let bytes = product.encode().expect("the generic product encodes");
+        let decoded = Product::decode(&bytes).expect("the generic product decodes");
         let replayed = ClassifiedParts::decode(&decoded.canonical, &graph, &policy)
             .expect("the generic product replays");
         let contract = replayed.into_contract(graph, None);

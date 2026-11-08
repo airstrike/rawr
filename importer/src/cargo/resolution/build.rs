@@ -59,8 +59,7 @@ pub(crate) fn cached(
 ) -> Result<node::Validated<Product>, node::Error> {
     let limits = context.limits();
     let parent = Parent::validated(parent);
-    let recipe =
-        context.discover_with_parents::<Product>(authority, product_byte_limit()?, &[parent])?;
+    let recipe = context.discover_with_parents::<Product>(authority, &[parent])?;
     let store = context.open_store()?;
     let validation_store = store.clone();
     let product = node::Evaluator::new(&store, sink).discover_bundled_budgeted(
@@ -83,14 +82,6 @@ impl Product {
         limits: &super::super::Limits,
         attempt: crate::store::bundle::Attempt,
     ) -> Result<node::Bundled<Self>, node::Error> {
-        // The node content bound is the physical store ceiling.
-        if raw.len() > node::MAX_CONTENT_BYTES {
-            return Err(node::Error::Limit {
-                resource: "cached authoritative build JSON bytes",
-                limit: node::MAX_CONTENT_BYTES,
-                actual: raw.len(),
-            });
-        }
         let reference = attempt.reference();
         // One build account per capture charges the bundle.
         let seal = capture_bundle(
@@ -114,7 +105,7 @@ impl Product {
         limits: &super::super::Limits,
     ) -> Result<Self, node::Error> {
         validate_manifest(seal, limits)?;
-        let mut writer = Writer::new(product_byte_limit()?);
+        let mut writer = Writer::new();
         writer.append(MAGIC)?;
         writer.append(&SCHEMA.to_le_bytes())?;
         writer.append(&reference.execution().as_bytes())?;
@@ -207,11 +198,7 @@ impl Product {
             ));
         }
         let root = store.join(self.reference.relative());
-        let seal = super::super::read_bounded(
-            "cached authoritative build bundle seal",
-            &root.join("seal"),
-            node::MAX_CONTENT_BYTES,
-        )?;
+        let seal = crate::store::read_whole(&root.join("seal"))?;
         if seal.len() != self.seal_bytes
             || <[u8; 32]>::from(Sha256::digest(&seal)) != self.seal_digest
         {
@@ -220,7 +207,7 @@ impl Product {
                 reason: "authoritative Cargo bundle seal changed before restoration",
             });
         }
-        let mut reader = ManifestReader::new(&seal, node::MAX_CONTENT_BYTES)?;
+        let mut reader = ManifestReader::new(&seal);
         reader.header()?;
         let count = reader.count;
         // One build account per restoration charges the restored tree; the
@@ -297,25 +284,11 @@ impl node::Value for Product {
     const KIND: node::Kind = node::Kind::NativeProduct;
     const SCHEMA: u32 = EXECUTION_SCHEMA;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        if self.canonical.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached authoritative build product bytes",
-                limit,
-                actual: self.canonical.len(),
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.canonical.clone())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached authoritative build product bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         Self::decode_canonical(bytes.to_vec().into_boxed_slice())
     }
 }
@@ -359,14 +332,6 @@ impl<'capture> CaptureState<'capture> {
 
     fn retain_member(&mut self) -> Result<(), node::Error> {
         self.members = self.members.checked_add(1).ok_or(node::Error::Allocation)?;
-        let limit = bundle_member_limit();
-        if self.members > limit {
-            return Err(node::Error::Limit {
-                resource: "cached authoritative build filesystem members",
-                limit,
-                actual: self.members,
-            });
-        }
         Ok(())
     }
 }
@@ -385,7 +350,7 @@ fn capture_bundle(
             "authoritative Cargo bundle partitions were not empty",
         ));
     }
-    let mut writer = Writer::new(node::MAX_CONTENT_BYTES);
+    let mut writer = Writer::new();
     writer.append(BUNDLE_MAGIC)?;
     writer.append(&BUNDLE_SCHEMA.to_le_bytes())?;
     let count_offset = writer.len();
@@ -513,13 +478,10 @@ fn capture_root(
 }
 
 fn validate_product(bytes: &[u8]) -> Result<DecodedProduct, node::Error> {
-    let limit = product_byte_limit()?;
-    if bytes.len() > limit || bytes.len() < PRODUCT_HEADER_BYTES {
-        return Err(node::Error::Limit {
-            resource: "cached authoritative build product bytes",
-            limit,
-            actual: bytes.len(),
-        });
+    if bytes.len() < PRODUCT_HEADER_BYTES {
+        return Err(node::Error::Codec(
+            "cached authoritative build product is truncated",
+        ));
     }
     if bytes.get(..8) != Some(MAGIC) || u32_at(bytes, 8)? != SCHEMA {
         return Err(node::Error::Codec(
@@ -532,21 +494,12 @@ fn validate_product(bytes: &[u8]) -> Result<DecodedProduct, node::Error> {
     );
     let raw_length = usize::try_from(u64_at(bytes, 76)?)
         .map_err(|_| node::Error::Codec("cached authoritative build JSON length is invalid"))?;
-    if raw_length > node::MAX_CONTENT_BYTES {
-        return Err(node::Error::Limit {
-            resource: "cached authoritative build JSON bytes",
-            limit: node::MAX_CONTENT_BYTES,
-            actual: raw_length,
-        });
-    }
     let seal_bytes = usize::try_from(u64_at(bytes, 84)?)
         .map_err(|_| node::Error::Codec("authoritative build bundle seal length is invalid"))?;
-    if !(BUNDLE_HEADER_BYTES..=node::MAX_CONTENT_BYTES).contains(&seal_bytes) {
-        return Err(node::Error::Limit {
-            resource: "authoritative build bundle seal bytes",
-            limit: node::MAX_CONTENT_BYTES,
-            actual: seal_bytes,
-        });
+    if seal_bytes < BUNDLE_HEADER_BYTES {
+        return Err(node::Error::Codec(
+            "authoritative build bundle seal is truncated",
+        ));
     }
     let seal_digest = array_at(bytes, 92)?;
     let raw_end = PRODUCT_HEADER_BYTES
@@ -566,18 +519,8 @@ fn validate_product(bytes: &[u8]) -> Result<DecodedProduct, node::Error> {
 }
 
 fn validate_manifest(bytes: &[u8], limits: &super::super::Limits) -> Result<(), node::Error> {
-    let mut reader = ManifestReader::new(bytes, node::MAX_CONTENT_BYTES)?;
+    let mut reader = ManifestReader::new(bytes);
     reader.header()?;
-    let count = usize::try_from(reader.count).unwrap_or(usize::MAX);
-    // The store's member ceiling is physical and refuses.
-    let members = bundle_member_limit();
-    if count > members {
-        return Err(node::Error::Limit {
-            resource: "cached authoritative build filesystem members",
-            limit: members,
-            actual: count,
-        });
-    }
     let mut previous: Option<(u8, PathBuf)> = None;
     let mut path_bytes = 0_usize;
     for _ in 0..reader.count {
@@ -630,11 +573,7 @@ fn validate_bundle_root_with_budget(
         &root.join("declared"),
         "authoritative Cargo bundle declared partition changed",
     )?;
-    let seal = super::super::read_bounded(
-        "cached authoritative build bundle seal",
-        &root.join("seal"),
-        node::MAX_CONTENT_BYTES,
-    )?;
+    let seal = crate::store::read_whole(&root.join("seal"))?;
     validate_manifest(&seal, limits)?;
     let target = root.join("target");
     let protocol = root.join("build");
@@ -642,7 +581,7 @@ fn validate_bundle_root_with_budget(
     let protocol_current = current_files_with_budget(&protocol, limits)?;
     let mut target_expected = BTreeSet::new();
     let mut protocol_expected = BTreeSet::new();
-    let mut reader = ManifestReader::new(&seal, node::MAX_CONTENT_BYTES)?;
+    let mut reader = ManifestReader::new(&seal);
     reader.header()?;
     for _ in 0..reader.count {
         let entry = reader.entry()?;
@@ -691,7 +630,6 @@ fn current_files_with_budget(
     let mut files = BTreeSet::new();
     let mut pending = vec![root.to_path_buf()];
     let mut path_bytes = 0_usize;
-    let mut members = 0usize;
     while let Some(directory) = pending.pop() {
         let depth = directory
             .strip_prefix(root)
@@ -712,15 +650,6 @@ fn current_files_with_budget(
         })?;
         let mut children = Vec::new();
         for entry in entries {
-            members = members.checked_add(1).ok_or(node::Error::Allocation)?;
-            let limit = bundle_member_limit();
-            if members > limit {
-                return Err(node::Error::Limit {
-                    resource: "restored authoritative build filesystem members",
-                    limit,
-                    actual: members,
-                });
-            }
             children
                 .try_reserve(1)
                 .map_err(|_| node::Error::Allocation)?;
@@ -885,15 +814,6 @@ struct Evidence {
     digest: [u8; 32],
 }
 
-/// The product's node content bound: the physical store ceiling.
-fn product_byte_limit() -> Result<usize, node::Error> {
-    Ok(node::MAX_CONTENT_BYTES)
-}
-
-fn bundle_member_limit() -> usize {
-    usize::try_from(crate::store::bundle::MAX_MEMBERS).unwrap_or(usize::MAX)
-}
-
 impl Evidence {
     fn capture(path: &Path) -> Result<Self, node::Error> {
         Self::capture_with_budget(path)
@@ -1048,15 +968,11 @@ fn set_mode(file: &fs::File, mode: u32, path: &Path) -> Result<(), node::Error> 
 
 struct Writer {
     bytes: Vec<u8>,
-    limit: usize,
 }
 
 impl Writer {
-    fn new(limit: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            limit,
-        }
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
     }
 
     fn len(&self) -> usize {
@@ -1064,14 +980,6 @@ impl Writer {
     }
 
     fn append(&mut self, bytes: &[u8]) -> Result<(), node::Error> {
-        let next = self.bytes.len().saturating_add(bytes.len());
-        if next > self.limit {
-            return Err(node::Error::Limit {
-                resource: "cached authoritative build product bytes",
-                limit: self.limit,
-                actual: next,
-            });
-        }
         self.bytes
             .try_reserve_exact(bytes.len())
             .map_err(|_| node::Error::Allocation)?;
@@ -1134,19 +1042,12 @@ struct Entry {
 }
 
 impl<'bytes> ManifestReader<'bytes> {
-    fn new(bytes: &'bytes [u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached authoritative build product bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
-        Ok(Self {
+    fn new(bytes: &'bytes [u8]) -> Self {
+        Self {
             bytes,
             offset: 0,
             count: 0,
-        })
+        }
     }
 
     fn take(&mut self, length: usize) -> Result<&'bytes [u8], node::Error> {
@@ -1314,15 +1215,12 @@ mod tests {
         fs::write(bundle_root.join("target/extra"), b"extra").expect("extra bundle file writes");
         assert!(super::validate_bundle_root(&bundle_root, &limits, false).is_err());
         fs::remove_file(bundle_root.join("target/extra")).expect("extra bundle file retires");
-        let encoded = product
-            .encode(crate::node::MAX_CONTENT_BYTES)
-            .expect("product encodes");
+        let encoded = product.encode().expect("product encodes");
         assert_eq!(
             encoded.len(),
             PRODUCT_HEADER_BYTES + b"{\"compiler-artifact\":true}\n".len()
         );
-        let replayed =
-            Product::decode(&encoded, crate::node::MAX_CONTENT_BYTES).expect("product decodes");
+        let replayed = Product::decode(&encoded).expect("product decodes");
         assert_eq!(replayed.raw(), b"{\"compiler-artifact\":true}\n");
 
         fs::remove_dir_all(&target).expect("target retires");
@@ -1383,18 +1281,12 @@ mod tests {
             .restore(&store, &target, &protocol, &limits)
             .is_err());
 
-        let mut trailing = product
-            .encode(crate::node::MAX_CONTENT_BYTES)
-            .expect("product encodes")
-            .into_vec();
+        let mut trailing = product.encode().expect("product encodes").into_vec();
         trailing.push(0);
-        assert!(Product::decode(&trailing, crate::node::MAX_CONTENT_BYTES).is_err());
-        let mut schema = product
-            .encode(crate::node::MAX_CONTENT_BYTES)
-            .expect("product encodes")
-            .into_vec();
+        assert!(Product::decode(&trailing).is_err());
+        let mut schema = product.encode().expect("product encodes").into_vec();
         schema[8..12].copy_from_slice(&SCHEMA.saturating_add(1).to_le_bytes());
-        assert!(Product::decode(&schema, crate::node::MAX_CONTENT_BYTES).is_err());
+        assert!(Product::decode(&schema).is_err());
         fs::remove_dir_all(root).expect("fixture retires");
     }
 

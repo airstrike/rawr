@@ -232,14 +232,12 @@ impl Parts {
         identity: Identity,
         version: Version,
         graph: &crate::api::Graph<impl crate::api::Phase>,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
         Self::decode_with(
             bytes,
             identity,
             version,
             (graph.fingerprint(), graph.semantic_fingerprint()),
-            limits,
             |evidence| evidence_matches_graph(evidence, graph),
         )
     }
@@ -252,9 +250,8 @@ impl Parts {
         identity: Identity,
         version: Version,
         graph: (crate::api::Fingerprint, crate::api::Fingerprint),
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        Self::decode_with(bytes, identity, version, graph, limits, |_| true)
+        Self::decode_with(bytes, identity, version, graph, |_| true)
     }
 
     fn decode_with(
@@ -262,16 +259,8 @@ impl Parts {
         identity: Identity,
         version: Version,
         (fingerprint, semantic): (crate::api::Fingerprint, crate::api::Fingerprint),
-        limits: &crate::cargo::Limits,
         matches_graph: impl Fn(&Evidence) -> bool,
     ) -> Result<Self, Error> {
-        if bytes.len() > limits.node_output_bytes() {
-            return Err(Error::Limit {
-                resource: "profile contract bytes",
-                limit: limits.node_output_bytes(),
-                actual: bytes.len(),
-            });
-        }
         let stored: StoredCanonical = serde_json::from_slice(bytes).map_err(|_| Error::Stale)?;
         let canonical = serde_json::to_vec(&stored).expect("a profile contract serializes");
         if canonical.as_slice() != bytes
@@ -316,15 +305,8 @@ impl Parts {
         })
     }
 
-    pub(crate) fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
+    pub(crate) fn encode(&self) -> Result<Box<[u8]>, Error> {
         let bytes = serde_json::to_vec(&self.stored).expect("a profile contract serializes");
-        if bytes.len() > limit {
-            return Err(Error::Limit {
-                resource: "profile contract bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
         assert_eq!(
             <[u8; 32]>::from(Sha256::digest(&bytes)),
             self.rules,
@@ -358,7 +340,7 @@ impl Parts {
 }
 
 impl Contract {
-    pub(super) fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
+    pub(super) fn encode(&self) -> Result<Box<[u8]>, Error> {
         let canonical = serde_json::to_vec(&Canonical {
             schema: 7,
             identity: self.identity.as_bytes(),
@@ -372,13 +354,6 @@ impl Contract {
             projections: &self.projections,
         })
         .expect("a profile contract serializes");
-        if canonical.len() > limit {
-            return Err(Error::Limit {
-                resource: "profile contract bytes",
-                limit,
-                actual: canonical.len(),
-            });
-        }
         assert_eq!(
             <[u8; 32]>::from(Sha256::digest(&canonical)),
             self.rules,
@@ -393,9 +368,8 @@ impl Contract {
         version: Version,
         graph: &crate::api::Graph<crate::api::Extracted>,
         chain: crate::node::Chain,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        Ok(Parts::decode(bytes, identity, version, graph, limits)?.into_current(chain))
+        Ok(Parts::decode(bytes, identity, version, graph)?.into_current(chain))
     }
 
     /// Borrow the current profile-classification node for demand joins.

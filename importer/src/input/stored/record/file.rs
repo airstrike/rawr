@@ -76,13 +76,12 @@ impl Commitment {
         bytes
     }
 
-    /// Decode the bundle's record commitment. The record extent is a store
-    /// payload bound by the physical content ceiling, like the bundle seal.
+    /// Decode the bundle's record commitment. The record is never empty.
     pub(crate) fn decode(bytes: &[u8; 40]) -> Result<Self> {
         let mut length = [0; 8];
         length.copy_from_slice(&bytes[..8]);
         let length = usize::try_from(u64::from_le_bytes(length)).map_err(|_| Error::Overflow)?;
-        if length == 0 || length > crate::node::MAX_CONTENT_BYTES {
+        if length == 0 {
             return Err(Error::Encoding(
                 "retained resolution record extent is invalid",
             ));

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::Digest as _;
 
-use crate::node::codec::{Envelope, MAX_ENVELOPE_BYTES};
+use crate::node::codec::Envelope;
 use crate::node::read_set::Entry;
 use crate::node::replay::Stored;
 use crate::node::{
@@ -27,7 +27,9 @@ mod pins;
 mod recovery;
 mod session;
 
-pub(crate) use entry::{existing_directory_budgeted, read_file_budgeted};
+#[cfg(any(test, feature = "rustc-driver"))]
+pub(crate) use entry::read_file_budgeted;
+pub(crate) use entry::{existing_directory_budgeted, read_whole};
 
 pub(crate) use pins::{transaction, Guard as PinGuard, Role as PinRole};
 
@@ -520,10 +522,8 @@ impl Store {
         recipe: &Direct<K>,
         bytes: &[u8],
     ) -> Result<(), Error> {
-        let estimate = accounting::Charge::node(
-            recipe.output_limit(),
-            Envelope::reservation_length(recipe.parent_count())?,
-        )?;
+        let estimate =
+            accounting::Charge::node(Envelope::reservation_length(recipe.parent_count())?)?;
         self.with_action_lease(recipe.action(), || {
             lease::with_project(&self.root, self.project, || {
                 let key = accounting::LeaseKey::Action(recipe.action());
@@ -566,7 +566,7 @@ impl Store {
         };
 
         let envelope_path = action.join("envelope");
-        let envelope_bytes = entry::read_file_budgeted(&envelope_path, MAX_ENVELOPE_BYTES)?;
+        let envelope_bytes = entry::read_whole(&envelope_path)?;
         self.validate_allocation(
             &action,
             accounting::Class::Action,
@@ -595,11 +595,7 @@ impl Store {
             })?;
         let content_path = content.join("payload");
         let before = fs::symlink_metadata(&content_path).ok();
-        let bytes = entry::read_payload_budgeted(
-            &content_path,
-            envelope.content_length,
-            envelope.output_limit,
-        )?;
+        let bytes = entry::read_payload_budgeted(&content_path, envelope.content_length)?;
         let (sha, current) = payload_digests::<K>(&content_path, before.as_ref(), &bytes);
         let record = self.validate_allocation_record(
             &content,
@@ -776,7 +772,6 @@ impl Store {
         self.with_node_reservation(
             ownership,
             accounting::LeaseKey::Action(recipe.action()),
-            recipe.output_limit(),
             recipe.parent_count(),
             in_flight.map(InFlight::Current),
             evaluate,
@@ -797,7 +792,6 @@ impl Store {
             self.with_node_reservation_locked(
                 ownership,
                 accounting::LeaseKey::Action(recipe.action()),
-                recipe.output_limit(),
                 recipe.parent_count(),
                 Some(InFlight::Retained(retention)),
                 evaluate,
@@ -886,7 +880,6 @@ impl Store {
         self.with_node_reservation(
             ownership,
             accounting::LeaseKey::Execution(recipe.execution()),
-            recipe.output_limit(),
             recipe.parent_count(),
             in_flight.map(InFlight::Current),
             evaluate,
@@ -968,7 +961,7 @@ impl Store {
             let in_flight_guard = self.acquire_in_flight(ownership, in_flight, &mut recovery)?;
             let result = (|| {
                 let envelope = Envelope::reservation_length(recipe.parent_count())?;
-                let node = accounting::Charge::node(recipe.output_limit(), envelope)?;
+                let node = accounting::Charge::node(envelope)?;
                 let (project, reservation, budget) =
                     self.reserve_bundle_node(key, node, K::KIND, K::SCHEMA, &mut recovery)?;
                 let attempt =
@@ -1038,22 +1031,13 @@ impl Store {
         &self,
         ownership: &Ownership<'_>,
         key: accounting::LeaseKey,
-        output_limit: usize,
         parent_count: usize,
         in_flight: Option<InFlight<'_>>,
         evaluate: impl FnOnce() -> Result<Reserved<K, T>, Error>,
     ) -> Result<T, Error> {
         ownership.require(&self.root, self.project)?;
         lease::with_project(&self.root, self.project, || {
-            self.with_node_reservation_locked(
-                ownership,
-                key,
-                output_limit,
-                parent_count,
-                in_flight,
-                evaluate,
-                Ok,
-            )
+            self.with_node_reservation_locked(ownership, key, parent_count, in_flight, evaluate, Ok)
         })
     }
 
@@ -1062,7 +1046,6 @@ impl Store {
         &self,
         ownership: &Ownership<'_>,
         key: accounting::LeaseKey,
-        output_limit: usize,
         parent_count: usize,
         in_flight: Option<InFlight<'_>>,
         evaluate: impl FnOnce() -> Result<Reserved<K, T>, Error>,
@@ -1072,7 +1055,7 @@ impl Store {
         let in_flight_guard = self.acquire_in_flight(ownership, in_flight, &mut recovery)?;
         let result = (|| {
             let envelope = Envelope::reservation_length(parent_count)?;
-            let estimate = accounting::Charge::node(output_limit, envelope)?;
+            let estimate = accounting::Charge::node(envelope)?;
             let (project, reservation) =
                 self.reserve_node(key, estimate, K::KIND, K::SCHEMA, &mut recovery)?;
             match evaluate() {
@@ -1623,7 +1606,6 @@ impl Store {
     pub(crate) fn inspect_candidate<K: Value>(
         &self,
         action: ActionKey,
-        output_limit: usize,
         budget: &crate::node::GraphBudget,
     ) -> Result<Option<crate::node::replay::Replayed<K>>, Error> {
         let action_relative = self.action_relative::<K>(action);
@@ -1632,8 +1614,7 @@ impl Store {
             return Ok(None);
         };
         let envelope_path = action_path.join("envelope");
-        let envelope_bytes =
-            entry::read_candidate_file_budgeted(&envelope_path, MAX_ENVELOPE_BYTES)?;
+        let envelope_bytes = entry::read_candidate_whole(&envelope_path)?;
         let action_record = self.validate_allocation_record(
             &action_path,
             accounting::Class::Action,
@@ -1655,7 +1636,6 @@ impl Store {
         if envelope.kind != K::KIND
             || envelope.output_schema != K::SCHEMA
             || envelope.action != action
-            || envelope.output_limit != output_limit
         {
             return Err(Error::Corrupt {
                 path: action_path,
@@ -1670,11 +1650,7 @@ impl Store {
             })?;
         let content_path = content.join("payload");
         let before = fs::symlink_metadata(&content_path).ok();
-        let bytes = entry::read_candidate_payload_budgeted(
-            &content_path,
-            envelope.content_length,
-            output_limit,
-        )?;
+        let bytes = entry::read_candidate_payload_budgeted(&content_path, envelope.content_length)?;
         let (sha, current) = payload_digests::<K>(&content_path, before.as_ref(), &bytes);
         let content_record = self.validate_allocation_record(
             &content,
@@ -1695,7 +1671,7 @@ impl Store {
         }
         let bundled = accounting::registered_action(&self.root, &action_record, &content_record)?;
         Stored::new(envelope, bytes, bundled)
-            .inspect(output_limit, budget)
+            .inspect(budget)
             .map(Some)
     }
 
@@ -1860,7 +1836,7 @@ impl Store {
                 }
             })?;
         let envelope_path = action.join("envelope");
-        let envelope_bytes = entry::read_file_budgeted(&envelope_path, MAX_ENVELOPE_BYTES)?;
+        let envelope_bytes = entry::read_whole(&envelope_path)?;
         let action_record = self.validate_allocation_record(
             &action,
             accounting::Class::Action,
@@ -1901,11 +1877,7 @@ impl Store {
         let payload = content.join("payload");
         // Both payload digests are pure functions of its bytes: computed once
         // per physical identity and reused by every later revalidation.
-        let metadata = entry::inspect_payload_budgeted(
-            &payload,
-            envelope.content_length,
-            envelope.output_limit,
-        )?;
+        let metadata = entry::inspect_payload_budgeted(&payload, envelope.content_length)?;
         let identity = crate::file_digest::Identity::of(&metadata);
         let content_domain = crate::file_digest::Domain::Content {
             kind: expected.kind as u8,
@@ -1916,11 +1888,7 @@ impl Store {
         let (sha, current) = match memoized {
             Some(digests) => digests,
             None => {
-                let bytes = entry::read_payload_budgeted(
-                    &payload,
-                    envelope.content_length,
-                    envelope.output_limit,
-                )?;
+                let bytes = entry::read_payload_budgeted(&payload, envelope.content_length)?;
                 let sha: [u8; 32] = sha2::Sha256::digest(&bytes).into();
                 let current =
                     content_digest_parts(expected.kind, expected.schema, &bytes).as_bytes();

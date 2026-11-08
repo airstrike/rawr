@@ -942,7 +942,7 @@ fn derived_suffix(
         "profile is rebound to the exact current API"
     );
     let generated =
-        crate::composition::profile::prepare_retained(adapter, &profile, &checked, limits).unwrap();
+        crate::composition::profile::prepare_retained(adapter, &profile, &checked).unwrap();
     let symbolic = checked
         .replay_demand((), &contract, source, limits)
         .unwrap()
@@ -998,7 +998,7 @@ fn derived_suffix(
         )
         .unwrap();
     semantic[6] = *request.build_request_key().as_bytes();
-    let manifest = request.generate(limits).unwrap();
+    let manifest = request.generate().unwrap();
     semantic[7] = manifest.generated_manifest().digest();
     let files = manifest
         .files

@@ -13,7 +13,6 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
     definition: &D,
     contract: &Contract,
     checked: &C,
-    limits: &crate::cargo::Limits,
 ) -> Result<Demand, Error> {
     let parent = checked
         .node_chain()
@@ -21,10 +20,8 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
         .cloned()
         .expect("the cached profile's contract has no node");
     assert!(
-        parent.output_limit() == limits.node_output_bytes()
-            && definition.identity() == contract.identity()
-            && definition.version() == contract.version(),
-        "the profile or limits demanding hooks differ from the ones that classified the contract"
+        definition.identity() == contract.identity() && definition.version() == contract.version(),
+        "the profile demanding hooks differs from the one that classified the contract"
     );
     let checked_fingerprint = checked.profile_fingerprint();
     let payload = checked.profile_payload();
@@ -40,7 +37,7 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
         .direct::<Product>(&authority, || {
             let demand = crate::profile::demand_direct(definition, contract, checked)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
-            Product::capture(&demand, limits.node_output_bytes())
+            Product::capture(&demand)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))
         })
         .map_err(|error| Error::Node(Box::new(error)))?;
@@ -54,17 +51,14 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
 pub(crate) fn generate<C: crate::profile::Checked, D: crate::profile::Definition<C>>(
     definition: &D,
     demand: &Demand,
-    limits: &crate::cargo::Limits,
 ) -> Result<crate::profile::Proof, Error> {
     let parent = demand
         .node_chain()
         .cloned()
         .expect("the cached profile's demand has no node");
     assert!(
-        parent.output_limit() == limits.node_output_bytes()
-            && definition.identity() == demand.identity()
-            && definition.version() == demand.version(),
-        "the profile or limits generating the source differ from the ones that demanded it"
+        definition.identity() == demand.identity() && definition.version() == demand.version(),
+        "the profile generating the source differs from the one that demanded it"
     );
     let product_lifecycle = definition.owns_product_lifecycle();
     let authority = generated_authority(
@@ -79,7 +73,7 @@ pub(crate) fn generate<C: crate::profile::Checked, D: crate::profile::Definition
         .direct::<GeneratedProduct>(&authority, || {
             let proof = crate::profile::Proof::generate_direct(definition, demand)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
-            GeneratedProduct::capture(&proof, limits.node_output_bytes())
+            GeneratedProduct::capture(&proof)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))
         })
         .map_err(|error| Error::Node(Box::new(error)))?;
@@ -155,9 +149,9 @@ pub(crate) struct Product {
 }
 
 impl Product {
-    pub(crate) fn capture(demand: &Demand, limit: usize) -> Result<Self, Error> {
+    pub(crate) fn capture(demand: &Demand) -> Result<Self, Error> {
         Ok(Self {
-            canonical: demand.encode(limit)?,
+            canonical: demand.encode()?,
         })
     }
 
@@ -189,25 +183,11 @@ impl node::Value for Product {
     const KIND: node::Kind = node::Kind::ProfileProof;
     const SCHEMA: u32 = 1;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        if self.canonical.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached profile demand bytes",
-                limit,
-                actual: self.canonical.len(),
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.canonical.clone())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached profile demand bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         if bytes.is_empty() {
             return Err(node::Error::Codec("cached profile demand is empty"));
         }
@@ -222,9 +202,9 @@ pub(crate) struct GeneratedProduct {
 }
 
 impl GeneratedProduct {
-    pub(crate) fn capture(proof: &crate::profile::Proof, limit: usize) -> Result<Self, Error> {
+    pub(crate) fn capture(proof: &crate::profile::Proof) -> Result<Self, Error> {
         Ok(Self {
-            canonical: proof.encode_owner(limit)?,
+            canonical: proof.encode_owner()?,
         })
     }
 
@@ -250,25 +230,11 @@ impl node::Value for GeneratedProduct {
     const KIND: node::Kind = node::Kind::ProfileProof;
     const SCHEMA: u32 = 2;
 
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
-        if self.canonical.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached generated profile proof bytes",
-                limit,
-                actual: self.canonical.len(),
-            });
-        }
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.canonical.clone())
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        if bytes.len() > limit {
-            return Err(node::Error::Limit {
-                resource: "cached generated profile proof bytes",
-                limit,
-                actual: bytes.len(),
-            });
-        }
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
         if bytes.is_empty() {
             return Err(node::Error::Codec(
                 "cached generated profile proof is empty",
@@ -337,10 +303,10 @@ mod tests {
         let product = Product {
             canonical: br#"{"schema":7}"#.to_vec().into_boxed_slice(),
         };
-        let bytes = product.encode(1024).expect("the demand product encodes");
-        assert!(Product::decode(&bytes, 1024).is_ok());
-        assert!(Product::decode(&[], 1024).is_err());
-        assert!(Product::decode(&bytes, 1).is_err());
+        let bytes = product.encode().expect("the demand product encodes");
+        assert!(Product::decode(&bytes).is_ok());
+        assert!(Product::decode(&[]).is_err());
+        assert!(Product::decode(&bytes).is_err());
     }
 
     #[test]
@@ -349,10 +315,10 @@ mod tests {
             canonical: br#"{"schema":9}"#.to_vec().into_boxed_slice(),
         };
         let bytes = product
-            .encode(1024)
+            .encode()
             .expect("the generated profile product encodes");
-        assert!(GeneratedProduct::decode(&bytes, 1024).is_ok());
-        assert!(GeneratedProduct::decode(&[], 1024).is_err());
-        assert!(GeneratedProduct::decode(&bytes, 1).is_err());
+        assert!(GeneratedProduct::decode(&bytes).is_ok());
+        assert!(GeneratedProduct::decode(&[]).is_err());
+        assert!(GeneratedProduct::decode(&bytes).is_err());
     }
 }

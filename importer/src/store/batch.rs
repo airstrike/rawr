@@ -98,19 +98,11 @@ impl<'a> Batch<'a> {
                 let value = store.with_node_reservation_locked(
                     self.ownership,
                     accounting::LeaseKey::Action(recipe.action()),
-                    recipe.output_limit(),
                     recipe.parent_count(),
                     None,
                     || {
                         sink.node(K::KIND.metric(), crate::metrics::NodeEvent::ExecutedMiss);
-                        let bytes = execute()?.into_encoded(recipe.output_limit())?;
-                        if bytes.len() > recipe.output_limit() {
-                            return Err(Error::Limit {
-                                resource: "node content bytes",
-                                limit: recipe.output_limit(),
-                                actual: bytes.len(),
-                            });
-                        }
+                        let bytes = execute()?.into_encoded()?;
                         Ok(Reserved::Publish {
                             result: (),
                             recipe: recipe.clone(),

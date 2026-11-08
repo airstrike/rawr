@@ -61,14 +61,7 @@ pub(crate) fn evaluate_owner(
     let product = node::Evaluator::new(&context.open_store()?, sink).staged_direct(
         &recipe,
         retention,
-        || {
-            capture(
-                context,
-                &mut materialize,
-                &mut current,
-                context.limits().node_canonical_bytes(),
-            )
-        },
+        || capture(context, &mut materialize, &mut current),
     )?;
     let graph = current_graph(context, &mut materialize, current, product.value())?;
     Ok((product, graph))
@@ -157,12 +150,7 @@ pub(crate) fn retain_under<O>(
                 }
                 (Outcome::Miss(miss), None) => {
                     let staged = recipe.resume(batch, miss, || {
-                        capture(
-                            context,
-                            &mut materialize,
-                            &mut current,
-                            context.limits().node_canonical_bytes(),
-                        )
+                        capture(context, &mut materialize, &mut current)
                     })?;
                     if let Some(key) = memo {
                         super::memo::remember(context, &key, staged.content().digest());
@@ -188,14 +176,8 @@ fn evaluate_with_parents(
     let recipe = recipe(context, request, policy, parents)?;
     let mut materialize = Some(materialize);
     let mut current = None;
-    let product = node::Evaluator::new(&context.open_store()?, sink).direct(&recipe, || {
-        capture(
-            context,
-            &mut materialize,
-            &mut current,
-            context.limits().node_canonical_bytes(),
-        )
-    })?;
+    let product = node::Evaluator::new(&context.open_store()?, sink)
+        .direct(&recipe, || capture(context, &mut materialize, &mut current))?;
     let graph = current_graph(context, &mut materialize, current, product.value())?;
     Ok((product, graph))
 }
@@ -206,7 +188,6 @@ fn capture<F>(
     context: &Context,
     materialize: &mut Option<F>,
     current: &mut Option<Graph<Captured>>,
-    limit: usize,
 ) -> Result<Product, node::Error>
 where
     F: FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>>,
@@ -216,11 +197,6 @@ where
         .ok_or(node::Error::Codec("API capture was already consumed"))?;
     let mut graph = materialize(None)?;
     let stored = graph.take_stored()?;
-    super::limited_graph_usage(
-        "stored API graph bytes",
-        limit,
-        stored.canonical.len().saturating_add(stored.selected.len()),
-    )?;
     *current = Some(graph);
     Ok(Product {
         form: Form::Captured {
@@ -265,23 +241,15 @@ fn recipe(
     authority.extend_from_slice(&crate::extract::protocol::SCHEMA.to_le_bytes());
     authority.extend_from_slice(request);
     authority.extend_from_slice(policy);
-    context.direct_with_parents::<Product>(
-        &authority,
-        context.limits().node_canonical_bytes(),
-        parents,
-    )
+    context.direct_with_parents::<Product>(&authority, parents)
 }
 
 impl Product {
     #[cfg(test)]
-    pub(crate) fn capture(
-        graph: Graph<Captured>,
-        limit: usize,
-        parts: PathBuf,
-    ) -> crate::Result<Self> {
+    pub(crate) fn capture(graph: Graph<Captured>, parts: PathBuf) -> crate::Result<Self> {
         Ok(Self {
             form: Form::Captured {
-                stored: graph.into_stored(limit)?,
+                stored: graph.into_stored()?,
                 parts,
             },
         })
@@ -290,24 +258,17 @@ impl Product {
     /// A product read from the store, with its graph bytes read back from its
     /// parts; `None` when this product already holds them.
     pub(crate) fn resolve(&self, context: &Context) -> Result<Option<Self>, node::Error> {
-        self.resolve_in(
-            &super::parts::directory(context),
-            context.limits().node_canonical_bytes(),
-        )
+        self.resolve_in(&super::parts::directory(context))
     }
 
-    fn resolve_in(
-        &self,
-        parts: &std::path::Path,
-        limit: usize,
-    ) -> Result<Option<Self>, node::Error> {
+    fn resolve_in(&self, parts: &std::path::Path) -> Result<Option<Self>, node::Error> {
         let Form::Manifest(manifest) = &self.form else {
             return Ok(None);
         };
-        let bytes = super::parts::read(parts, manifest, limit)?;
+        let bytes = super::parts::read(parts, manifest)?;
         Ok(Some(Self {
             form: Form::Resolved {
-                stored: graph_bytes(bytes, limit)?,
+                stored: graph_bytes(bytes)?,
                 manifest: manifest.clone(),
             },
         }))
@@ -349,22 +310,20 @@ impl node::Value for Product {
 
     /// The manifest of the graph's parts; a captured graph keeps any part not
     /// already kept.
-    fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
+    fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         match &self.form {
-            Form::Captured { stored, parts } => {
-                super::parts::write(parts, &graph_payload(stored, limit)?)
-            }
+            Form::Captured { stored, parts } => super::parts::write(parts, &graph_payload(stored)?),
             Form::Manifest(manifest) | Form::Resolved { manifest, .. } => Ok(manifest.clone()),
         }
     }
 
-    fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
-        Self::decode_owned(bytes.into(), limit)
+    fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
+        Self::decode_owned(bytes.into())
     }
 
     /// The manifest is checked here; its parts are read on replay.
-    fn decode_owned(bytes: Box<[u8]>, limit: usize) -> Result<Self, node::Error> {
-        super::parts::check(&bytes, limit)?;
+    fn decode_owned(bytes: Box<[u8]>) -> Result<Self, node::Error> {
+        super::parts::check(&bytes)?;
         Ok(Self {
             form: Form::Manifest(bytes),
         })
@@ -372,21 +331,11 @@ impl node::Value for Product {
 }
 
 /// The graph's bytes: the header, the semantic canonical, the selected ledger.
-fn graph_payload(
-    stored: &StoredGraph,
-    limit: usize,
-) -> Result<std::borrow::Cow<'_, [u8]>, node::Error> {
+fn graph_payload(stored: &StoredGraph) -> Result<std::borrow::Cow<'_, [u8]>, node::Error> {
     let length = HEADER_BYTES
         .checked_add(stored.canonical.len())
         .and_then(|length| length.checked_add(stored.selected.len()))
         .unwrap_or(usize::MAX);
-    if length > limit {
-        return Err(node::Error::Limit {
-            resource: "cached API graph bytes",
-            limit,
-            actual: length,
-        });
-    }
     let StoredGraph {
         canonical,
         selected,
@@ -416,14 +365,7 @@ fn graph_payload(
 }
 
 /// The canonical and selected bytes stay views of the read buffer.
-fn graph_bytes(bytes: Box<[u8]>, limit: usize) -> Result<StoredGraph, node::Error> {
-    if bytes.len() > limit {
-        return Err(node::Error::Limit {
-            resource: "cached API graph bytes",
-            limit,
-            actual: bytes.len(),
-        });
-    }
+fn graph_bytes(bytes: Box<[u8]>) -> Result<StoredGraph, node::Error> {
     if bytes.get(..MAGIC.len()) != Some(MAGIC) {
         return Err(node::Error::Codec("cached API graph magic changed"));
     }
@@ -490,7 +432,6 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            Limits::standard().node_canonical_bytes(),
             allocation,
         )
         .expect("the fixture graph seals")
@@ -500,21 +441,21 @@ mod tests {
         std::env::temp_dir().join(format!("rawr-api-cached-{}", std::process::id()))
     }
 
-    fn capture(graph: Graph<crate::api::Captured>, limit: usize) -> Product {
-        Product::capture(graph, limit, parts()).expect("the fixture product captures")
+    fn capture(graph: Graph<crate::api::Captured>) -> Product {
+        Product::capture(graph, parts()).expect("the fixture product captures")
     }
 
     fn product() -> Product {
         let limits = Limits::standard();
         let graph = graph(&Context::fixture(), &mut Allocation::new(&limits));
-        capture(graph, limits.node_canonical_bytes())
+        capture(graph)
     }
 
     /// Decode a stored manifest and read its parts back.
-    fn read(bytes: &[u8], limit: usize) -> Product {
-        Product::decode(bytes, limit)
+    fn read(bytes: &[u8]) -> Product {
+        Product::decode(bytes)
             .expect("the manifest decodes")
-            .resolve_in(&parts(), limit)
+            .resolve_in(&parts())
             .expect("the parts read back")
             .expect("a decoded product reads its parts")
     }
@@ -530,18 +471,14 @@ mod tests {
 
     #[test]
     fn captured_storage_is_published_as_the_manifest_of_its_parts() {
-        let limit = Limits::standard().node_canonical_bytes();
         let product = product();
-        let expected = product.encode(limit).expect("the product encodes");
-        assert!(super::super::parts::check(&expected, limit).is_ok());
-        let encoded = product.into_encoded(limit).expect("the product hands over");
+        let expected = product.encode().expect("the product encodes");
+        assert!(super::super::parts::check(&expected).is_ok());
+        let encoded = product.into_encoded().expect("the product hands over");
         assert_eq!(encoded, expected);
-        let decoded = Product::decode(&encoded, limit).expect("the manifest decodes");
+        let decoded = Product::decode(&encoded).expect("the manifest decodes");
         assert!(matches!(decoded.form, Form::Manifest(_)));
-        assert_eq!(
-            decoded.encode(limit).expect("a manifest re-encodes"),
-            expected
-        );
+        assert_eq!(decoded.encode().expect("a manifest re-encodes"), expected);
     }
 
     #[test]
@@ -549,10 +486,8 @@ mod tests {
         let limits = Limits::standard();
         let product = product();
         let expected = replay(&product, &limits).expect("the source product replays");
-        let bytes = product
-            .encode(limits.node_canonical_bytes())
-            .expect("the product encodes");
-        let decoded = read(&bytes, limits.node_canonical_bytes());
+        let bytes = product.encode().expect("the product encodes");
+        let decoded = read(&bytes);
         let actual = replay(&decoded, &limits).expect("the stored graph replays");
 
         assert_eq!(actual.fingerprint(), expected.fingerprint());
@@ -565,56 +500,51 @@ mod tests {
     /// to the same manifest.
     #[test]
     fn read_parts_are_viewed_without_copying() {
-        let limit = Limits::standard().node_canonical_bytes();
-        let bytes = product().encode(limit).expect("the product encodes");
-        let decoded = read(&bytes, limit);
+        let bytes = product().encode().expect("the product encodes");
+        let decoded = read(&bytes);
         let stored = decoded.stored().expect("the parts were read");
         assert!(std::sync::Arc::ptr_eq(
             &stored.canonical.buffer,
             &stored.selected.buffer
         ));
-        assert_eq!(
-            decoded.encode(limit).expect("the product re-encodes"),
-            bytes
-        );
+        assert_eq!(decoded.encode().expect("the product re-encodes"), bytes);
     }
 
     #[test]
     fn stored_graph_rejects_framing_and_canonical_tamper() {
         let limits = Limits::standard();
-        let limit = limits.node_canonical_bytes();
         let product = product();
-        let bytes = super::graph_payload(product.stored().unwrap(), limit)
+        let bytes = super::graph_payload(product.stored().unwrap())
             .expect("the graph lays out")
             .into_owned();
 
         let mut magic = bytes.clone();
         magic[0] ^= 1;
-        assert!(super::graph_bytes(magic.into(), limit).is_err());
+        assert!(super::graph_bytes(magic.into()).is_err());
 
         let mut trailing = bytes.clone();
         trailing.push(0);
-        assert!(super::graph_bytes(trailing.into(), limit).is_err());
+        assert!(super::graph_bytes(trailing.into()).is_err());
 
         let mut canonical = bytes;
         let last = canonical.last_mut().expect("canonical bytes are present");
         *last = b' ';
         let decoded = Product {
             form: Form::Captured {
-                stored: super::graph_bytes(canonical.into(), limit)
+                stored: super::graph_bytes(canonical.into())
                     .expect("the frame remains structurally complete"),
                 parts: parts(),
             },
         };
         assert!(replay(&decoded, &limits).is_err());
 
-        let manifest = product.encode(limit).expect("the product encodes");
+        let manifest = product.encode().expect("the product encodes");
         let mut tampered = manifest.to_vec();
         tampered[0] ^= 1;
-        assert!(Product::decode(&tampered, limit).is_err());
+        assert!(Product::decode(&tampered).is_err());
         let mut trailing = manifest.to_vec();
         trailing.push(0);
-        assert!(Product::decode(&trailing, limit).is_err());
+        assert!(Product::decode(&trailing).is_err());
     }
 
     #[test]
@@ -656,11 +586,9 @@ mod tests {
         )
         .expect("the pre-policy raw graph seals");
         let expected_fingerprint = graph.fingerprint();
-        let product = capture(graph, limits.node_canonical_bytes());
-        let bytes = product
-            .encode(limits.node_canonical_bytes())
-            .expect("the raw graph product encodes");
-        let decoded = read(&bytes, limits.node_canonical_bytes());
+        let product = capture(graph);
+        let bytes = product.encode().expect("the raw graph product encodes");
+        let decoded = read(&bytes);
         let replayed = decoded
             .replay(&context, Vec::new(), &limits, &mut Allocation::new(&limits))
             .expect("selected state replays");
@@ -684,7 +612,7 @@ mod tests {
         assert_ne!(first.fingerprint(), current.fingerprint());
         let expected_exact = current.canonical_bytes().to_vec();
         let expected_fingerprint = current.fingerprint();
-        let first = capture(first, limits.node_canonical_bytes());
+        let first = capture(first);
         let current = Product {
             form: Form::Captured {
                 stored: current.take_stored().expect("current captures"),
@@ -692,12 +620,8 @@ mod tests {
             },
         };
         assert_eq!(
-            first
-                .encode(limits.node_canonical_bytes())
-                .expect("first encodes"),
-            current
-                .encode(limits.node_canonical_bytes())
-                .expect("current encodes")
+            first.encode().expect("first encodes"),
+            current.encode().expect("current encodes")
         );
         let mut allocation = Allocation::new(&limits);
         allocation.items(17).expect("current history fits");
@@ -732,10 +656,7 @@ mod tests {
     #[test]
     fn replay_preflight_ignores_understated_ownership_and_honors_prior_spending() {
         let limits = Limits::standard();
-        let mut product = capture(
-            crate::test_fixture::captured_support_outcomes(),
-            limits.node_canonical_bytes(),
-        );
+        let mut product = capture(crate::test_fixture::captured_support_outcomes());
         let decode = crate::extract::protocol::selected_preflight(
             &product.stored().unwrap().selected,
             &limits,
@@ -840,11 +761,10 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            limits.node_canonical_bytes(),
             &mut Allocation::new(&limits),
         )
         .unwrap();
-        let product = capture(graph, limits.node_canonical_bytes());
+        let product = capture(graph);
         let decode = crate::extract::protocol::selected_preflight(
             &product.stored().unwrap().selected,
             &limits,

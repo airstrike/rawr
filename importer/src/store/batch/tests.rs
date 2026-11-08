@@ -32,10 +32,10 @@ impl Value for Owned {
     // The current bindings schema: an action with another is one an older
     // rawr wrote, which the store evicts (#630).
     const SCHEMA: u32 = <crate::surface::facade::cached::Product as crate::node::Value>::SCHEMA;
-    fn encode(&self, _: usize) -> Result<Box<[u8]>, Error> {
+    fn encode(&self) -> Result<Box<[u8]>, Error> {
         Ok(Box::from(&b"owned"[..]))
     }
-    fn decode(bytes: &[u8], _: usize) -> Result<Self, Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
         if bytes == b"owned" {
             Ok(Self)
         } else {
@@ -49,15 +49,14 @@ fn batch_and_two_legacy_contenders_serialize_while_another_project_progresses() 
     let root = Root::prepare();
     let store = Store::open(&root.0, [1; 32]).unwrap();
     let other = Store::open(&root.0, [2; 32]).unwrap();
-    let seed = Direct::<Owned>::capture([3; 32], b"seed", 64, &[]).unwrap();
+    let seed = Direct::<Owned>::capture([3; 32], b"seed", &[]).unwrap();
     let owner = Evaluator::new(&store, &crate::metrics::Current)
         .direct(&seed, || Ok(Owned))
         .unwrap();
     let retained = crate::node::read_set::Retention::from_validated(&owner, None).unwrap();
     let recipe =
-        Direct::<Owned>::capture([3; 32], b"shared-child", 64, &[Parent::validated(&owner)])
-            .unwrap();
-    let independent = Direct::<Owned>::capture([4; 32], b"independent", 64, &[]).unwrap();
+        Direct::<Owned>::capture([3; 32], b"shared-child", &[Parent::validated(&owner)]).unwrap();
+    let independent = Direct::<Owned>::capture([4; 32], b"independent", &[]).unwrap();
     let start = Barrier::new(4);
     let calls = AtomicUsize::new(0);
     let (done, completed) = mpsc::channel();
@@ -137,7 +136,7 @@ fn batch_and_two_legacy_contenders_serialize_while_another_project_progresses() 
         0,
         "the final InFlight logical role was released"
     );
-    let cleanup = Direct::<Owned>::capture([3; 32], b"cleanup-miss", 64, &[]).unwrap();
+    let cleanup = Direct::<Owned>::capture([3; 32], b"cleanup-miss", &[]).unwrap();
     Evaluator::new(&store, &crate::metrics::Current)
         .direct(&cleanup, || Ok(Owned))
         .unwrap();
@@ -183,16 +182,15 @@ fn existing_ownership_does_not_create_a_missing_control() {
 fn batch_retains_sibling_results_and_their_join_with_exact_edges() {
     let root = Root::prepare();
     let store = Store::open(&root.0, [1; 32]).unwrap();
-    let seed = Direct::<Owned>::capture([3; 32], b"branch-seed", 64, &[]).unwrap();
+    let seed = Direct::<Owned>::capture([3; 32], b"branch-seed", &[]).unwrap();
     let owner = Evaluator::new(&store, &crate::metrics::Current)
         .direct(&seed, || Ok(Owned))
         .unwrap();
     let retained = crate::node::read_set::Retention::from_validated(&owner, None).unwrap();
-    let left = Direct::<Owned>::capture([3; 32], b"branch-left", 64, &[Parent::validated(&owner)])
-        .unwrap();
+    let left =
+        Direct::<Owned>::capture([3; 32], b"branch-left", &[Parent::validated(&owner)]).unwrap();
     let right =
-        Direct::<Owned>::capture([3; 32], b"branch-right", 64, &[Parent::validated(&owner)])
-            .unwrap();
+        Direct::<Owned>::capture([3; 32], b"branch-right", &[Parent::validated(&owner)]).unwrap();
     store
         .with_staged_batch(&retained, &crate::metrics::Current, |batch| {
             let left = batch.evaluate(&left, || Ok(Owned))?;
@@ -205,7 +203,6 @@ fn batch_retains_sibling_results_and_their_join_with_exact_edges() {
             let join = Direct::<Owned>::capture(
                 [3; 32],
                 b"branch-join",
-                64,
                 &[Parent::validated(&left), Parent::validated(&right)],
             )?;
             let joined = batch.evaluate(&join, || Ok(Owned))?;

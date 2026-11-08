@@ -27,7 +27,6 @@ impl ActionKey {
         schema: u32,
         context: Digest,
         semantic_inputs: &[u8],
-        output_limit: usize,
         parents: &[impl Edge],
     ) -> Self {
         let mut digest = Sha256::new();
@@ -36,7 +35,6 @@ impl ActionKey {
         digest.update([kind as u8]);
         digest.update(schema.to_le_bytes());
         digest.update(context.0);
-        digest.update((output_limit as u64).to_le_bytes());
         digest.update((semantic_inputs.len() as u64).to_le_bytes());
         digest.update(semantic_inputs);
         retain_semantic_parents(&mut digest, parents);
@@ -62,7 +60,6 @@ impl LookupKey {
         schema: u32,
         context: Digest,
         fixed_inputs: &[u8],
-        output_limit: usize,
         parents: &[impl Edge],
     ) -> Self {
         let mut digest = Sha256::new();
@@ -71,7 +68,6 @@ impl LookupKey {
         digest.update([kind as u8]);
         digest.update(schema.to_le_bytes());
         digest.update(context.0);
-        digest.update((output_limit as u64).to_le_bytes());
         digest.update((fixed_inputs.len() as u64).to_le_bytes());
         digest.update(fixed_inputs);
         retain_semantic_parents(&mut digest, parents);
