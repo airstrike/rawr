@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 129;
+const CLASSIFIER_VERSION: u32 = 130;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -294,13 +294,16 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
     opaque_self: std::cell::RefCell<Option<model::Type>>,
-    /// The opaque types being converted, so one their own bounds reach
-    /// again is left as its projection, not converted without end: a
-    /// projection `opaque_projection` gives, as `A: From<Self::B>` and `B:
+    /// The opaque types being converted, each by its definition at its
+    /// captures, so one their own bounds reach again is left as its
+    /// projection, not converted without end: a projection
+    /// `opaque_projection` gives, as `A: From<Self::B>` and `B:
     /// From<Self::A>` of one trait reach, or the opaque type itself, as
     /// `impl Number` binds `Add::Output` to it through `Number: Add<Output
-    /// = Self>` (#1262).
-    opaque_converting: std::cell::RefCell<Vec<api::identity::Definition>>,
+    /// = Self>` (#1262). The same definition at other captures is another
+    /// type, as `explain`'s output is where its `Self` is `explain`'s
+    /// output (#1270).
+    opaque_converting: std::cell::RefCell<Vec<(api::identity::Definition, Box<[model::Argument]>)>>,
     /// While a function's output is converted: the associated types each
     /// opaque `impl Trait` type it gives binds, as arguments of that type.
     opaque_associated: std::cell::RefCell<Vec<representability::signature::Opaque>>,
@@ -9126,15 +9129,19 @@ impl<P: api::Phase> Context<'_, P> {
                 bounds,
                 captures,
             } => {
-                // An opaque type its own conversion reaches again, as `impl
-                // Number` does where `Number: Add<Output = Self>` binds
-                // `Output` to the opaque type itself, is left as the
-                // projection that names it, as rustc leaves one it cannot
-                // normalize (#1262).
-                if self.opaque_converting.borrow().contains(id) {
+                // An opaque type its own conversion reaches again at the
+                // same captures, as `impl Number` does where `Number:
+                // Add<Output = Self>` binds `Output` to the opaque type
+                // itself, is left as the projection that names it: its
+                // arguments would hold the type itself (#1262). The same
+                // definition at other captures is another type, converted
+                // as any is, as `explain`'s output is where its `Self` is
+                // `explain`'s output (#1270).
+                let converting = (id.clone(), captures.clone());
+                if self.opaque_converting.borrow().contains(&converting) {
                     return Err(representability::reject::Kind::Projection.into());
                 }
-                self.opaque_converting.borrow_mut().push(id.clone());
+                self.opaque_converting.borrow_mut().push(converting);
                 let converted = self.convert_opaque(id, bounds, captures);
                 self.opaque_converting.borrow_mut().pop();
                 converted?
