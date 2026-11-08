@@ -14458,7 +14458,20 @@ impl<'a> Parser<'a> {
                 _ if self.macro_definition_ahead() => self.parse_local_macro()?,
                 _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
-                _ => self.parse_statement()?,
+                _ => {
+                    // A tail literal is expected to be the return type:
+                    // `vec![Box::new(A), Box::new(B)]` as `Vec<Box<dyn
+                    // Named>>`.
+                    let expected = self.tail_expected(definition.output.as_ref());
+                    if let Some(element) = self.literal_element(&expected)
+                        && self.literal_ends_block()
+                    {
+                        self.array_hint = Some(element);
+                    }
+                    let statement = self.parse_statement();
+                    self.array_hint = None;
+                    statement?;
+                }
             }
         }
 
@@ -34148,14 +34161,8 @@ impl<'a> Parser<'a> {
     /// An expression expected to have type `expected`: an array literal's
     /// elements coerce to its element type.
     fn parse_expr_expecting(&mut self, expected: Option<&Ty>) -> Result<ParsedExpr, Error> {
-        let literal = matches!(self.peek(), Token::LeftBracket)
-            || matches!(self.peek(), Token::Identifier(ref name) if name.as_str() == "vec")
-                && matches!(self.peek_second(), Token::Bang);
-        if literal
-            && let Some(Ty::Array { element, .. }) =
-                expected.map(|expected| self.inference.resolve(expected))
-        {
-            self.array_hint = Some(*element);
+        if let Some(expected) = expected {
+            self.array_hint = self.literal_element(expected);
         }
         let hint = expected.map(|expected| (expected.clone(), self.expression_stack.len() + 1));
         let outer = std::mem::replace(&mut self.collect_hint, hint);
@@ -34163,6 +34170,69 @@ impl<'a> Parser<'a> {
         self.collect_hint = outer;
         self.array_hint = None;
         value
+    }
+
+    /// The element type the array or `vec!` literal ahead is expected to
+    /// have when the expression is expected to be `expected`, as rustc's
+    /// expectation reaches it: `[..]` and `vec![..]` of a sequence, and
+    /// `&[..]` of a reference to one (`&[&A, &B]` as a `&[&dyn Named]`).
+    /// A `&vec![..]` reaches only a `&Vec<T>`: a `&[T]` is its deref, which
+    /// carries no expectation.
+    fn literal_element(&mut self, expected: &Ty) -> Option<Ty> {
+        if self.split_angle.is_some() {
+            return None;
+        }
+        let mut ahead = self.input.clone().map(|(token, _)| token);
+        let mut expected = self.inference.resolve(expected);
+        let mut token = ahead.next()?;
+        let referenced = matches!(token, Token::Ampersand);
+        if referenced {
+            let Ty::Reference { target, .. } = expected else {
+                return None;
+            };
+            expected = self.inference.resolve(&target);
+            token = ahead.next()?;
+            if matches!(token, Token::Mut) {
+                token = ahead.next()?;
+            }
+        }
+        let vec = match token {
+            Token::LeftBracket => false,
+            Token::Identifier(name) if name.as_str() == "vec" => {
+                matches!(ahead.next(), Some(Token::Bang)).then_some(true)?
+            }
+            _ => return None,
+        };
+        let Ty::Array { element, kind } = expected else {
+            return None;
+        };
+        (!(referenced && vec) || kind == sequence::Kind::Vec).then_some(*element)
+    }
+
+    /// Whether the expression ahead ends at the enclosing block's `}`: its
+    /// first bracket's match is followed by it, as a body's tail literal
+    /// `vec![..]` is.
+    fn literal_ends_block(&mut self) -> bool {
+        let mut ahead = self.input.clone().map(|(token, _)| token);
+        let mut depth = 0_usize;
+        while let Some(token) = ahead.next() {
+            match token {
+                Token::LeftBracket | Token::LeftParen | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightBracket | Token::RightParen | Token::RightBrace if depth > 1 => {
+                    depth -= 1;
+                }
+                Token::RightBracket | Token::RightParen | Token::RightBrace if depth == 1 => {
+                    return matches!(ahead.next(), Some(Token::RightBrace));
+                }
+                Token::RightBracket | Token::RightParen | Token::RightBrace | Token::EOF => {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     fn parse_expr(&mut self) -> Result<ParsedExpr, Error> {
