@@ -1230,6 +1230,7 @@
     {"t":"T1227","issue":1227,"title":"T1227: `a.b.c += v` through more than one imported struct field","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1228","issue":1228,"title":"T1228: The site redirects plain http to https","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1229","issue":1229,"title":"T1229: runtime cleanup test flakes under the parallel lib suite","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1230","issue":1230,"title":"T1230: A failed manifest probe was cached as a permanent negative, so rawr called an installed rawr-import 'not installed'","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"718b0d43a","release":null}
+    {"t":"T1230","issue":1230,"title":"T1230: A failed manifest probe was cached as a permanent negative, so rawr called an installed rawr-import 'not installed'","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"718b0d43a","release":null},
+    {"t":"T1231","issue":1231,"title":"T1231: A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"open","category":"Health","labels":["health"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null}
   ]
 }

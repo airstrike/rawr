@@ -2899,7 +2899,8 @@
     {"issue":1227,"title":"`a.b.c += v` through more than one imported struct field","state":"open","category":"Divergences from rustc"},
     {"issue":1228,"title":"The site redirects plain http to https","state":"open","category":"Health"},
     {"issue":1229,"title":"runtime cleanup test flakes under the parallel lib suite","state":"open","category":"Health"},
-    {"issue":1230,"title":"A failed manifest probe was cached as a permanent negative, so rawr called an installed rawr-import 'not installed'","state":"closed","category":"Health"}
+    {"issue":1230,"title":"A failed manifest probe was cached as a permanent negative, so rawr called an installed rawr-import 'not installed'","state":"closed","category":"Health"},
+    {"issue":1231,"title":"A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -3725,7 +3726,8 @@
             {"number":1208,"title":"A root package's build script that declares no rerun-if input runs again only when the generated crate changes","state":"open"},
             {"number":1222,"title":"A native rebuild's own copy of a marked module starts another save","state":"open"},
             {"number":1224,"title":"A marked function can't take a native value nested by value in an argument (Option<Kind>, Vec<Item>)","state":"open"},
-            {"number":1225,"title":"A marked function can't take a native value whose type names a non-'static lifetime by value","state":"open"}
+            {"number":1225,"title":"A marked function can't take a native value whose type names a non-'static lifetime by value","state":"open"},
+            {"number":1231,"title":"A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"open"}
           ]
         }
       ]
