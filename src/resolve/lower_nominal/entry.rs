@@ -16,8 +16,8 @@ use super::op::{register, ExecutableOp, PreludeOp};
 #[cfg(feature = "rust-import")]
 use super::ImportedContext;
 use super::{
-    body_source, closure, lex_rust, location, rewrite_statements, source_full_span, source_span,
-    this_parameter, Parser,
+    closure, lex_rust, location, rewrite_statements, source_full_span, source_span, this_parameter,
+    Parser,
 };
 use crate::ast::NominalPattern;
 use crate::resolve::{item, LoweringFailure, Program};
@@ -635,4 +635,42 @@ pub(super) fn expand_imported_variants(
         expanded.push((token.clone(), *position));
     }
     expanded
+}
+
+/// A function's body as `source_span` selects it, with its elided source
+/// blank.
+pub(super) fn body_source(source: &str, body: &item::Body) -> String {
+    let selected = source_span(source, body.span);
+    let Some(elide) = body.elide else {
+        return selected;
+    };
+    let mut output = String::with_capacity(selected.len());
+    let mut line = 1_u16;
+    let mut column = 0_u16;
+    for character in selected.chars() {
+        if character == '\n' {
+            output.push(character);
+            line = line.saturating_add(1);
+            column = 0;
+            continue;
+        }
+        column = column.saturating_add(1);
+        let position = Position::new(line, column);
+        output.push(if position >= elide.start() && position < elide.end() {
+            ' '
+        } else {
+            character
+        });
+    }
+    output
+}
+
+/// Whether `path` names a runtime's entry macro: a crate's `main`, as
+/// `#[tokio::main]` and `#[async_std::main]` are.
+pub(in crate::resolve) fn runtime_entry(path: &crate::item::type_ref::Path) -> bool {
+    path.segments.len() > 1
+        && path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.name.text == "main")
 }

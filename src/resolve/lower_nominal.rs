@@ -138,6 +138,8 @@ use coverage::{
 pub(crate) use dispatch::this_parameter;
 use dispatch::{builtin_conversions_from, builtin_operator, BUILTIN_CONVERSIONS};
 use dispatch::{copied_parameters, inherit_names, method_copied};
+#[cfg(feature = "rust-import")]
+use entry::body_source;
 pub(super) use entry::lower;
 #[cfg(feature = "rust-import")]
 pub(crate) use entry::with_uses;
@@ -286,44 +288,6 @@ pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> 
         }
     }
     tokens
-}
-
-/// A function's body as `source_span` selects it, with its elided source
-/// blank.
-fn body_source(source: &str, body: &item::Body) -> String {
-    let selected = source_span(source, body.span);
-    let Some(elide) = body.elide else {
-        return selected;
-    };
-    let mut output = String::with_capacity(selected.len());
-    let mut line = 1_u16;
-    let mut column = 0_u16;
-    for character in selected.chars() {
-        if character == '\n' {
-            output.push(character);
-            line = line.saturating_add(1);
-            column = 0;
-            continue;
-        }
-        column = column.saturating_add(1);
-        let position = Position::new(line, column);
-        output.push(if position >= elide.start() && position < elide.end() {
-            ' '
-        } else {
-            character
-        });
-    }
-    output
-}
-
-/// Whether `path` names a runtime's entry macro: a crate's `main`, as
-/// `#[tokio::main]` and `#[async_std::main]` are.
-pub(super) fn runtime_entry(path: &crate::item::type_ref::Path) -> bool {
-    path.segments.len() > 1
-        && path
-            .segments
-            .last()
-            .is_some_and(|segment| segment.name.text == "main")
 }
 
 /// A `for` loop's iterator when it holds borrows, its element, the
@@ -1793,6 +1757,7 @@ fn unsigned_order(value: origin::Fragment) -> origin::Fragment {
     value.surrounded("((", ") ^ (-9223372036854775807 - 1))")
 }
 pub(crate) use cell::{cell_held, cell_lock, cell_new, is_cell};
+pub(super) use entry::runtime_entry;
 use host_call::{host_number_accepts, macro_or_value, value_or_call, HostCheck};
 #[cfg(feature = "rust-import")]
 use host_call::{names_variant, unsupported_field, ImportedContext, UNSUPPORTED_MESSAGE_FUNCTION};
