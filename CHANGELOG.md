@@ -54,6 +54,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Native code can pass a marked function a native value by value, and the function keeps it as Rust would. A `&mut` native value the function changes, or replaces with `*value = new`, comes back changed. `item.count += 1` on another crate's struct field works, and `item.name.push('!')` on its `String` field changes the struct instead of a copy. (#1139)
 - A plain http request to the site, the playground or the bot pages moves to the same URL on https (301 for a GET, 308 for a POST so a playground request stays a POST). Before, http served the page as is. (#1228)
 - rawr puts no time limit of its own on anything. The runner protocol waits for the runner as long as it lives. The `rawr mcp` tools take no `timeout_ms` or `wait_ms`: `start` answers once the program runs, `check` once it has checked, `wait` at the next event, `step` where it paused; `break` and `continue` answer at once and `wait` tells the pause. A client that bounds its calls cancels them. (#1205)
+- rawr no longer forgets an installed rawr-import: a manifest probe that fails, as one could under heavy load, is asked again on the next run instead of being remembered as 'not installed'. (#1230)
 
 ## 0.3.171 (2026-11-07)
 
