@@ -67,6 +67,7 @@ use super::borrowck::{
 };
 use super::{
     intrinsic, item, type_ref, BindingSite, Callee, Error, LoweringFailure, MoveCause, Program,
+    Unresolved,
 };
 use crate::ast::{
     self, BinaryExpr, FlowControl, FnCallExpr, FnCallHashes, NominalEnumPattern, NominalPattern,
@@ -13851,6 +13852,7 @@ impl<'a> Parser<'a> {
         .then(|| Error::UnknownImport {
             path: binding.qualified.clone(),
             reference,
+            missing: Unresolved::Path,
         })
     }
 
@@ -53368,6 +53370,7 @@ impl<'a> Parser<'a> {
                     Error::UnknownImport {
                         path: format!("{name}::{member}").into(),
                         reference: span(owner_span.start(), member_span.end()),
+                        missing: Unresolved::Path,
                     }
                 }
                 error => error,

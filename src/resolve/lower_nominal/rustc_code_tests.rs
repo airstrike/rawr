@@ -176,10 +176,22 @@ fn a_paths_unknown_first_segment_is_e0433() {
 
 #[test]
 fn a_use_of_a_path_that_does_not_exist_is_e0432() {
-    let (code, message, _) = refused("use foo::bar;\nfn main() {}\n");
+    // rustc stops at a first segment that names no crate: E0433.
     assert_eq!(
-        (code.as_str(), message.as_str()),
-        ("E0432", "unresolved import `foo::bar`")
+        refused("use foo::bar;\nfn main() {}\n"),
+        (
+            "E0433".into(),
+            "cannot find module or crate `foo` in this scope".into(),
+            label("use of unresolved module or unlinked crate `foo`")
+        )
+    );
+    assert_eq!(
+        refused("mod foo {}\nuse foo::bar;\nfn main() {}\n"),
+        (
+            "E0432".into(),
+            "unresolved import `foo::bar`".into(),
+            label("no `bar` in `foo`")
+        )
     );
 }
 

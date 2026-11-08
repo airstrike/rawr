@@ -405,6 +405,8 @@ pub enum Error {
         path: ImmutableString,
         /// Exact unresolved path or member span.
         reference: Span,
+        /// Where the path stops resolving, as rustc labels it.
+        missing: Unresolved,
     },
     /// A `use` group prefix is not a static namespace.
     InvalidImport {
@@ -1363,6 +1365,38 @@ impl fmt::Display for NonExhaustive<'_> {
     }
 }
 
+/// Where an unresolved `use` stops resolving, as rustc's E0432 labels it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Unresolved {
+    /// The resolver knows only that the path names nothing: no label.
+    Path,
+    /// `use name;` names no crate: "no external crate `name`".
+    Crate,
+    /// A glob's first segment names no crate or module in scope: "use of
+    /// unresolved module or unlinked crate `name`".
+    Unlinked,
+    /// The module before the last segment, as rustc names it, has no item
+    /// of that name: "no `Missing` in `widget`".
+    Item(ImmutableString),
+    /// The module before the last segment, as rustc names it, has no
+    /// module of that name: "could not find `nothing` in `lib`".
+    Module(ImmutableString),
+}
+
+impl Unresolved {
+    /// rustc's label at the unresolved `path`, when it has one.
+    pub(crate) fn label(&self, path: &str) -> Option<String> {
+        let last = path.rsplit("::").next().unwrap_or(path);
+        match self {
+            Self::Path => None,
+            Self::Crate => Some(format!("no external crate `{path}`")),
+            Self::Unlinked => Some(NotFound::Module(path).undeclared()),
+            Self::Item(module) => Some(format!("no `{last}` in `{module}`")),
+            Self::Module(module) => Some(format!("could not find `{last}` in `{module}`")),
+        }
+    }
+}
+
 /// Where a pattern that must match every value is written, as rustc names
 /// it in E0005.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1675,7 +1709,9 @@ impl fmt::Display for Written<'_> {
                 NotFound::type_named(name, *path),
                 if *path { "E0433" } else { "E0425" }
             ),
-            Error::UnknownImport { path, reference } => {
+            Error::UnknownImport {
+                path, reference, ..
+            } => {
                 write!(formatter, "unresolved import `{path}` at {reference} (E0432)")
             }
             Error::InvalidImport {

@@ -86,14 +86,60 @@ fn unknown_type_adapter_reads_as_rustcs_e0425() {
     assert_eq!(report.help(), None);
 }
 
+/// rustc's code, message, primary label (its text and its columns) and help
+/// for each unresolved path: a crate the program doesn't depend on, an item
+/// or a module a present module lacks.
 #[test]
-fn unknown_qualified_type_says_it_is_not_available_yet() {
-    let text = "struct Counter { value: lib::widget::Missing }\n";
-    let error = Engine::new().compile(text).unwrap_err();
-    let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
+fn unresolved_paths_read_as_rustcs() {
+    const CARGO_ADD: &str = "use `cargo add ratatui` to add it to your `Cargo.toml`";
+    for (text, code, message, label, columns, help) in [
+        (
+            "use ratatui::buffer::Buffer;\n",
+            "E0433",
+            "cannot find module or crate `ratatui` in this scope",
+            "use of unresolved module or unlinked crate `ratatui`",
+            (5, 12),
+            Some(format!("if you wanted to use a crate named `ratatui`, {CARGO_ADD}")),
+        ),
+        (
+            "struct Counter { value: ratatui::buffer::Buffer }\n",
+            "E0433",
+            "cannot find module or crate `ratatui` in this scope",
+            "use of unresolved module or unlinked crate `ratatui`",
+            (25, 32),
+            Some(format!("if you wanted to use a crate named `ratatui`, {CARGO_ADD}")),
+        ),
+        (
+            "use ratatui::*;\n",
+            "E0432",
+            "unresolved import `ratatui`",
+            "use of unresolved module or unlinked crate `ratatui`",
+            (5, 12),
+            Some(format!("if you wanted to use a crate named `ratatui`, {CARGO_ADD}")),
+        ),
+        ("use ratatui;\n", "E0432", "unresolved import `ratatui`", "no external crate `ratatui`", (5, 12), None),
+        ("mod lib { pub mod widget {} }\nuse lib::widget::Missing;\n", "E0432", "unresolved import `lib::widget::Missing`", "no `Missing` in `lib::widget`", (18, 25), None),
+        ("mod lib { pub mod widget {} }\nuse lib::nothing::Missing;\n", "E0432", "unresolved import `lib::nothing`", "could not find `nothing` in `lib`", (10, 17), None),
+        (
+            "mod lib { pub mod widget {} }\nstruct Counter { value: lib::widget::Missing }\n",
+            "E0425",
+            "cannot find type `Missing` in module `lib::widget`",
+            "not found in `lib::widget`",
+            (38, 45),
+            None,
+        ),
+    ] {
+        let error = Engine::new().compile(text).unwrap_err();
+        let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
+        let primary = &report.labels()[0];
+        let at = (primary.span().start().position(), primary.span().end().position());
 
-    assert_eq!(report.code(), code::RESOLVE_UNKNOWN_TYPE);
-    assert_eq!(report.help().unwrap(), "`lib::widget::Missing` isn't available in Rawr yet, or the path is misspelled");
+        assert_eq!(report.code().as_str(), code, "{text}");
+        assert_eq!(report.message(), message, "{text}");
+        assert_eq!(primary.message(), Some(label), "{text}");
+        assert_eq!(at, (Some(columns.0), Some(columns.1)), "{text}");
+        assert_eq!(report.help(), help.as_deref(), "{text}");
+    }
 }
 
 #[cfg(feature = "serde")]
