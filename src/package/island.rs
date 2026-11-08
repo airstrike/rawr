@@ -92,6 +92,11 @@ pub(crate) struct Shadow {
     /// why: an error before anything is built.
     #[cfg(any(test, feature = "rust-import"))]
     pub(crate) refused: Vec<String>,
+    /// Each stand-in's maker, by its type's path from the crate's root and
+    /// the maker's from the shadow crate's (#1264), for [`support`] to
+    /// register.
+    #[cfg(any(test, feature = "rust-import"))]
+    pub(crate) objects: Vec<(String, String)>,
 }
 
 /// What native code sees of a crate's marked modules: each item's path
@@ -175,6 +180,9 @@ enum Pass {
     /// A value of a type the marked crate doesn't declare, as an app's own
     /// `Message`: moved to the interpreter, which keeps it (#1139).
     Give,
+    /// The receiver of a native trait object's stand-in: the handle of the
+    /// program value it holds, which the call takes as its receiver (#1264).
+    Object,
 }
 
 /// The crate's own struct or enum that native code sees, by name.
@@ -204,6 +212,7 @@ pub(crate) fn shadow<'a>(
     let mut files = Vec::new();
     let mut shape = BTreeMap::new();
     let mut refused = Vec::new();
+    let mut objects = Vec::new();
     // An inline module is a source of its own with its file's path; the
     // file's own source has the shortest module path.
     let mut by_file: BTreeMap<&Path, Vec<&Source<'_>>> = BTreeMap::new();
@@ -222,7 +231,7 @@ pub(crate) fn shadow<'a>(
              #![allow(unused_imports, dead_code, unused_variables, clippy::all)]\n",
             path.display()
         );
-        text.push_str(&generator.body(file, &group, &mut shape, &mut refused));
+        text.push_str(&generator.body(file, &group, &mut shape, &mut refused, &mut objects));
         files.push((relative.to_path_buf(), text));
     }
     Shadow {
@@ -231,6 +240,8 @@ pub(crate) fn shadow<'a>(
         shape: Shape(shape),
         #[cfg(any(test, feature = "rust-import"))]
         refused,
+        #[cfg(any(test, feature = "rust-import"))]
+        objects,
     }
 }
 
@@ -518,16 +529,19 @@ impl<'a> Generator<'a> {
         })
     }
 
-    /// The generated text of `file` with its inline modules `group`.
+    /// The generated text of `file` with its inline modules `group`, and
+    /// each stand-in's maker it declares in `objects`.
     fn body(
         &self,
         file: &Source<'_>,
         group: &[&Source<'_>],
         shape: &mut BTreeMap<String, Entry>,
         refused: &mut Vec<String>,
+        objects: &mut Vec<(String, String)>,
     ) -> String {
         let mut items = String::new();
         let mut uses = Vec::new();
+        let mut stand_ins = BTreeSet::new();
         for item in file.items {
             match item {
                 item::Parsed::Use(declared) => uses.push(declared),
@@ -541,7 +555,7 @@ impl<'a> Generator<'a> {
                             else {
                                 continue;
                             };
-                            let text = self.body(inner, group, shape, refused);
+                            let text = self.body(inner, group, shape, refused, objects);
                             let _ = write!(items, "pub mod {name} {{\n{text}}}\n");
                         }
                         None => {
@@ -595,7 +609,7 @@ impl<'a> Generator<'a> {
                         continue;
                     }
                     let path = path_of(file.modules, &declared.name.text);
-                    match self.stub(file, declared, None, &path) {
+                    match self.stub(file, declared, None, false, &path) {
                         Ok(text) => {
                             items.push_str(&text);
                             shape.insert(
@@ -611,6 +625,14 @@ impl<'a> Generator<'a> {
                 }
                 item::Parsed::Impl(declared) => {
                     self.implementation(file, declared, &mut items, shape, refused);
+                    let stand_in = Place {
+                        declared: &mut stand_ins,
+                        items: &mut items,
+                        shape,
+                        refused,
+                        objects,
+                    };
+                    self.stand_in(file, declared, stand_in);
                 }
                 _ => {}
             }
@@ -742,7 +764,7 @@ impl<'a> Generator<'a> {
         };
         for function in functions {
             let path = format!("{}::{}", mirrored.path, function.name.text);
-            match self.stub(file, function, Some(owner), &path) {
+            match self.stub(file, function, Some(owner), false, &path) {
                 Ok(stub) => {
                     for line in stub.lines() {
                         let _ = writeln!(text, "    {line}");
@@ -762,13 +784,118 @@ impl<'a> Generator<'a> {
         items.push_str(&text);
     }
 
+    /// For the marked impl `declared` of one of the crate's own native
+    /// traits for a marked type, the type's stand-in and its impl of the
+    /// trait (#1264): a struct holding the handle of the program value
+    /// native code holds as the trait's object, whose functions each call
+    /// the impl's own with that value as the receiver, in the generation the
+    /// call runs in. Its maker, which the interpreter makes the object
+    /// with, goes in the place's `objects`.
+    fn stand_in(&self, file: &Source<'_>, declared: &item::Impl, place: Place<'_>) {
+        let (Some(trait_), type_ref::Type::Path(owner)) = (&declared.trait_, &declared.owner)
+        else {
+            return;
+        };
+        let (Some(last), Some(owner)) = (trait_.segments.last(), owner.segments.last()) else {
+            return;
+        };
+        // A trait of the crate's own native modules, as `page::Page` after
+        // `use crate::page;`: rawr's copy of the crate declares it, and the
+        // stand-in beside it. A dependency's trait crosses by the runner's
+        // proxy (D594), and a marked trait is the interpreter's.
+        let from_crate = |start: Option<&ImmutableString>| {
+            start.is_some_and(|start| matches!(start.as_str(), "crate" | "self" | "super"))
+        };
+        let first = &trait_.segments[0].name.text;
+        let crate_own = from_crate(Some(first))
+            || file.items.iter().any(|item| {
+                matches!(item, item::Parsed::Use(used) if !used.global()
+                && used.bindings().iter().any(|(name, path)| {
+                    name.text == *first && from_crate(path.first())
+                }))
+            });
+        if !crate_own
+            || trait_.global
+            || self.traits.contains(last.name.text.as_str())
+            || !declared.generics.is_empty()
+            || !declared.lifetimes.params.is_empty()
+            || !last.arguments.is_empty()
+            || !owner.arguments.is_empty()
+        {
+            return;
+        }
+        let name = owner.name.text.as_str();
+        let path = match self.types.get(name) {
+            Some(mirrored) if mirrored.generic => return,
+            Some(mirrored) => mirrored.path.clone(),
+            None => path_of(file.modules, name),
+        };
+        let stand_in = format!("__Rawr{name}");
+        let full = format!("crate::{}", path_of(file.modules, &stand_in));
+        let island = format!("crate::{MODULE}");
+        let mut text = String::new();
+        if place.declared.insert(stand_in.clone()) {
+            let _ = writeln!(
+                text,
+                "/// Generated by Rawr: a `{name}` native code holds as a trait object,\n\
+                 /// by the handle of the program value.\n\
+                 #[doc(hidden)]\n\
+                 pub struct {stand_in}(pub {island}::Object);"
+            );
+        }
+        let written = slice(file.text, trait_.span);
+        let _ = writeln!(text, "impl {written} for {full} {{");
+        for (associated, ty) in &declared.associated {
+            let _ = writeln!(
+                text,
+                "    type {} = {};",
+                associated.text,
+                slice(file.text, ty.span())
+            );
+        }
+        for function in &declared.functions {
+            // The impl's function is the owner's member `Page::title`.
+            let member = format!("{path}::{}::{}", last.name.text, function.name.text);
+            match self.stub(file, function, None, true, &member) {
+                Ok(stub) => {
+                    for line in stub.lines() {
+                        let _ = writeln!(text, "    {line}");
+                    }
+                }
+                Err(reason) => place.refused.push(reason),
+            }
+        }
+        text.push_str("}\n");
+        let maker = format!("__rawr_object_{}", place.objects.len());
+        let _ = writeln!(
+            text,
+            "#[doc(hidden)]\n\
+             pub fn {maker}(trait_name: &str, handle: u64) -> ::std::option::Option<{island}::Given> {{\n    \
+             {island}::object!(trait_name, handle, dyn {written}, {full})\n}}"
+        );
+        place.shape.insert(
+            format!("{path} as dyn {written}"),
+            Entry {
+                kind: Kind::Other,
+                text: text.clone(),
+            },
+        );
+        place.items.push_str(&text);
+        place
+            .objects
+            .push((path, format!("crate::{}", path_of(file.modules, &maker))));
+    }
+
     /// One function's trampoline. `owner` is the type of an associated
-    /// function; `path` is what the interpreter finds it by.
+    /// function; `path` is what the interpreter finds it by. A stand-in's
+    /// function (`object`) has no `owner`: its `Self` is the stand-in, which
+    /// doesn't cross, and its receiver is the program value's handle.
     fn stub(
         &self,
         file: &Source<'_>,
         function: &item::Function,
         owner: Option<&str>,
+        object: bool,
         path: &str,
     ) -> Result<String, String> {
         if let Some(type_ref::Type::Path(output)) = &function.output {
@@ -813,6 +940,19 @@ impl<'a> Generator<'a> {
             }
         }
         signature.push_str(slice(file.text, Span::new(cursor, end)));
+        // On a stand-in, `Self` is the stand-in, which doesn't cross.
+        let names_self =
+            |ty: &type_ref::Type| identifiers(slice(file.text, ty.span())).contains("Self");
+        if object
+            && function
+                .parameters
+                .iter()
+                .map(|parameter| &parameter.ty)
+                .chain(&function.output)
+                .any(names_self)
+        {
+            reasons.push("a trait object's function can't name `Self` yet".to_owned());
+        }
         let signature = without_rawr_attributes(signature.trim_end());
         // A result that doesn't cross by the wire format may still come
         // back part by part, its native parts moved.
@@ -827,11 +967,19 @@ impl<'a> Generator<'a> {
         }
         let receiver = match &function.receiver {
             None => None,
+            Some(item::Receiver::Shared(_) | item::Receiver::Mutable(_)) if object => {
+                Some(Pass::Object)
+            }
             Some(item::Receiver::Shared(_)) => Some(Pass::Borrow),
             Some(item::Receiver::Mutable(_)) => Some(Pass::Mutable),
             Some(item::Receiver::Owned(_) | item::Receiver::OwnedMutable(_)) => Some(Pass::Value),
         };
-        if receiver.is_some() && owner.is_none_or(|owner| !self.crossing.contains(owner)) {
+        if object && !matches!(receiver, Some(Pass::Object)) {
+            reasons.push("a trait object's function takes `&self` or `&mut self`".to_owned());
+        } else if !object
+            && receiver.is_some()
+            && owner.is_none_or(|owner| !self.crossing.contains(owner))
+        {
             reasons.push("its receiver can't cross yet".to_owned());
         }
         let island = format!("crate::{MODULE}");
@@ -847,7 +995,7 @@ impl<'a> Generator<'a> {
             );
             return Ok(text);
         }
-        let owned = owner.is_some();
+        let owned = owner.is_some() || object;
         let _ = writeln!(
             text,
             "    let mut __call = {island}::Call::new({path:?}, {owned});"
@@ -873,6 +1021,9 @@ impl<'a> Generator<'a> {
             }
             Pass::Give => {
                 let _ = writeln!(text, "    {island}::give!(__call, {name});");
+            }
+            Pass::Object => {
+                let _ = writeln!(text, "    __call.object(&{name}.0);");
             }
         };
         if let Some(pass) = receiver {
@@ -1024,6 +1175,17 @@ impl<'a> Generator<'a> {
     }
 }
 
+/// Where a module's stand-ins go (`Generator::stand_in`): the names it
+/// has declared already, its generated items, the shape, what can't cross
+/// and the makers.
+struct Place<'p> {
+    declared: &'p mut BTreeSet<String>,
+    items: &'p mut String,
+    shape: &'p mut BTreeMap<String, Entry>,
+    refused: &'p mut Vec<String>,
+    objects: &'p mut Vec<(String, String)>,
+}
+
 /// Append `text` to the shape entry of `path`.
 fn append(shape: &mut BTreeMap<String, Entry>, path: &str, text: &str) {
     if let Some(entry) = shape.get_mut(path) {
@@ -1160,15 +1322,23 @@ fn identifiers(text: &str) -> BTreeSet<&str> {
 
 /// The runtime support of a native root's shadow crate, appended to its
 /// root as the module [`MODULE`]. `main` is whether the crate root has a
-/// `fn main` to start.
+/// `fn main` to start; `objects` are the crate's stand-ins' makers, each by
+/// its type's path ([`Shadow::objects`]).
 #[cfg(feature = "rust-import")]
-pub(crate) fn support(main: bool) -> String {
+pub(crate) fn support(main: bool, objects: &[(String, String)]) -> String {
     let entry = if main {
         "Exit::code(super::main())"
     } else {
         "{ ::std::eprintln!(\"rawr: the crate root has no `main` to run\"); 0 }"
     };
-    SUPPORT.replace("ENTRY", entry)
+    let makers = objects
+        .iter()
+        .map(|(owner, maker)| format!("({owner:?}, {maker} as Maker)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    SUPPORT
+        .replace("ENTRY", entry)
+        .replace("__MAKER_LIST__", &format!("[{makers}]"))
 }
 
 /// The wire format matches [`crate::island`]'s.
@@ -1201,7 +1371,86 @@ pub mod __rawr_island {
         ) -> ::std::result::Result<*mut (), u8>;
         fn __rawr_scope_release_v1(nonce: u64, shared: bool);
         fn __rawr_island_start_v1(entry: fn() -> i32);
+        fn __rawr_island_objects_v1(makers: &[(&'static str, Maker)]);
+        fn __rawr_island_release_v1(handle: u64);
     }
+
+    /// What makes a native trait's object of a program value: the
+    /// trait's path below the crate's root and the value's handle give a
+    /// box of the stand-in, or `None` for another trait
+    /// (`rawr::island::Maker`).
+    pub type Maker = fn(&str, u64) -> ::std::option::Option<Given>;
+
+    /// Each stand-in's maker, by its type's path from the crate's root.
+    static MAKERS: &[(&str, Maker)] = &__MAKER_LIST__;
+
+    /// Register [`MAKERS`] once, before the first call into marked code,
+    /// which is where a program value becomes a trait object.
+    fn register() {
+        static ONCE: ::std::sync::Once = ::std::sync::Once::new();
+        // SAFETY: the runner links `rawr`, which defines the function with
+        // this exact signature.
+        ONCE.call_once(|| unsafe { __rawr_island_objects_v1(MAKERS) });
+    }
+
+    /// The handle of the program value a stand-in holds, let go of when
+    /// the stand-in is dropped.
+    pub struct Object(u64);
+
+    impl Object {
+        pub fn new(handle: u64) -> Self {
+            Self(handle)
+        }
+    }
+
+    impl Drop for Object {
+        fn drop(&mut self) {
+            // SAFETY: as for `register`.
+            unsafe { __rawr_island_release_v1(self.0) }
+        }
+    }
+
+    /// Whether `object`, a trait object type's name, is `dyn` of the trait
+    /// at `below`, its path below the crate's root.
+    pub fn names(object: &str, below: &str) -> bool {
+        let object = object.strip_prefix("dyn ").unwrap_or(object);
+        let object = object.split_once("::").map_or(object, |(_, below)| below);
+        object == below
+    }
+
+    /// The box of `dyn $object` a maker gives for the handle `$handle`, the
+    /// stand-in `$stand` holding it, when `$trait_name` names `$object`'s
+    /// trait, with what the box has of [`Traits`].
+    macro_rules! object {
+        ($trait_name:expr, $handle:expr, $object:ty, $stand:path) => {{
+            #[allow(unused_imports)]
+            use crate::__rawr_island::{
+                HasClone as _, HasDebug as _, HasDisplay as _, HasEqual as _, HasHash as _,
+                HasOrder as _, LacksClone as _, LacksDebug as _, LacksDisplay as _,
+                LacksEqual as _, LacksHash as _, LacksOrder as _,
+            };
+            if !crate::__rawr_island::names(::std::any::type_name::<$object>(), $trait_name) {
+                return ::std::option::Option::None;
+            }
+            let value: ::std::boxed::Box<$object> =
+                ::std::boxed::Box::new($stand(crate::__rawr_island::Object::new($handle)));
+            let probe = &crate::__rawr_island::probe(&value);
+            let traits = (
+                probe.debug_of(),
+                probe.display_of(),
+                probe.clone_of(),
+                probe.equal_of(),
+                probe.hash_of(),
+                probe.order_of(),
+            );
+            ::std::option::Option::Some((
+                ::std::boxed::Box::new(value) as ::std::boxed::Box<dyn ::std::any::Any>,
+                ::std::any::type_name::<::std::boxed::Box<$object>>(),
+                traits,
+            ))
+        }};
+    }
+    pub(crate) use object;
 
     type Any = dyn ::std::any::Any;
 
@@ -1341,6 +1590,7 @@ pub mod __rawr_island {
     const ENUM: u8 = 16;
     const LENT: u8 = 20;
     const NATIVE: u8 = 21;
+    const HANDLE: u8 = 22;
 
     /// A value on its way to the interpreter.
     pub struct Out(::std::vec::Vec<u8>);
@@ -1899,12 +2149,20 @@ pub mod __rawr_island {
             value.put(&mut self.values);
             self.count += 1;
         }
+        /// A stand-in's receiver: the handle of the program value it holds,
+        /// which the call takes as the impl's receiver.
+        pub fn object(&mut self, object: &Object) {
+            self.values.byte(HANDLE);
+            self.values.0.extend_from_slice(&object.0.to_le_bytes());
+            self.count += 1;
+        }
         /// An argument the call may change, which comes back after it.
         pub fn mutable<T: Put + ?Sized>(&mut self, value: &T) {
             self.mutable |= 1 << self.count;
             self.argument(value);
         }
         pub fn send(mut self) -> Reply {
+            register();
             let mut bytes = ::std::vec::Vec::with_capacity(13 + self.values.0.len());
             bytes.push(u8::from(self.owned));
             bytes.extend_from_slice(&self.count.to_le_bytes());
@@ -2284,6 +2542,72 @@ mod tests {
                  *__a0 = __new;\n    }\n"
             ),
             "{text}"
+        );
+    }
+
+    /// A marked type's impl of a crate trait gets a stand-in holding the
+    /// program value's handle, whose functions take it as their receiver,
+    /// and a maker the support registers by the type's path (#1264). A
+    /// function that names `Self` can't be called on the stand-in.
+    #[test]
+    fn a_crate_traits_impl_gets_a_stand_in_and_a_maker() {
+        let shadow = generate(
+            "// rawr\nuse crate::page::{self, Message};\nuse std::fmt;\n\
+             pub struct Badge {\n    count: usize,\n}\n\
+             impl page::Page for Badge {\n    fn title(&self) -> String { String::new() }\n    \
+             fn update(&mut self, message: Message) -> Option<Message> { None }\n    \
+             fn same(&self, other: &Self) -> bool { true }\n}\n\
+             impl fmt::Display for Badge {\n    \
+             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { Ok(()) }\n}\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        assert!(
+            text.contains("pub struct __RawrBadge(pub crate::__rawr_island::Object);\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "impl page::Page for crate::physics::__RawrBadge {\n    \
+                 fn title(&self) -> String {\n        \
+                 let mut __call = crate::__rawr_island::Call::new(\"physics::Badge::Page::title\", true);\n        \
+                 __call.object(&self.0);\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "        __call.object(&self.0);\n        \
+                 crate::__rawr_island::give!(__call, __a0);\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("can't call `physics::Badge::Page::same` yet"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "pub fn __rawr_object_0(trait_name: &str, handle: u64) -> \
+                 ::std::option::Option<crate::__rawr_island::Given> {\n    \
+                 crate::__rawr_island::object!(trait_name, handle, dyn page::Page, \
+                 crate::physics::__RawrBadge)\n}\n"
+            ),
+            "{text}"
+        );
+        // A std trait is not the crate's: no stand-in for it.
+        assert!(
+            !text.contains("for crate::physics::__RawrBadge {\n    fn fmt"),
+            "{text}"
+        );
+        assert_eq!(
+            shadow.objects,
+            [(
+                "physics::Badge".to_owned(),
+                "crate::physics::__rawr_object_0".to_owned()
+            )]
         );
     }
 

@@ -6172,6 +6172,11 @@ enum PreludeOp {
     /// `Drop` (`drops.rs`): its fields, payload or elements in Rust's drop
     /// order, each that holds a value of a type with `impl Drop`.
     DropParts,
+    /// `Box<dyn Trait>` of a native trait, made of a box of the program's
+    /// own type that implements it: `object(value, owner, trait)`, the
+    /// stand-in rawr's copy of the crate declares for the owner, holding
+    /// the value's handle (`island::object`, #1264).
+    NativeObject,
 }
 
 impl PreludeOp {
@@ -6298,6 +6303,7 @@ impl PreludeOp {
             Self::Swapped => "place.swapped",
             Self::Memory => "place.memory",
             Self::DropParts => "drop.parts",
+            Self::NativeObject => "island.object",
         }
     }
 
@@ -6568,6 +6574,11 @@ impl PreludeOp {
             Self::Expect | Self::ExpectOk | Self::ExpectErr => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<ImmutableString>()]
             }
+            Self::NativeObject => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<ImmutableString>(),
+            ],
         }
     }
 
@@ -6636,6 +6647,15 @@ impl PreludeOp {
                 );
             }
             Self::DropParts => return Ok(drops::parts(args[0], args[1], models)),
+            #[cfg(feature = "rust-import")]
+            Self::NativeObject => {
+                let owner = args[1].clone_cast::<ImmutableString>();
+                let trait_name = args[2].clone_cast::<ImmutableString>();
+                return crate::island::object(args[0].take(), &owner, &trait_name).or_else(&panic);
+            }
+            // Only a native trait's object makes one, which needs the crate.
+            #[cfg(not(feature = "rust-import"))]
+            Self::NativeObject => return Err(invariant("a native trait object without a crate")),
             Self::Compare => {
                 return Ok(match comparison.compare(args[0], args[1], shape)? {
                     Some(ordering) => crate::option::some((ordering as crate::INT).into()),
@@ -53604,6 +53624,35 @@ impl<'a> Parser<'a> {
         None
     }
 
+    /// The path from the crate's root of `concrete`, a type of the program's
+    /// own with no parameters, when the program implements the native trait
+    /// `trait_name` for it: what rawr's copy of the crate names the type's
+    /// stand-in by (`package::island`, #1264).
+    fn native_object_owner(&self, concrete: &Ty, trait_name: &str) -> Option<String> {
+        let Ty::Script(definition, arguments) = self.inference.resolve(concrete) else {
+            return None;
+        };
+        let implemented = arguments.is_empty()
+            && self.models.script_impls.iter().any(|candidate| {
+                candidate.path.as_str() == trait_name
+                    && candidate.generics.is_empty()
+                    && candidate.arguments.is_empty()
+                    && matches!(&candidate.owner, type_ref::Type::Path(type_ref::Path {
+                        target: type_ref::Target::Script { definition: owner, .. },
+                        ..
+                    }) if *owner == definition)
+            });
+        implemented.then(|| {
+            let key = self.models.definition(definition).definition().key();
+            key.modules()
+                .iter()
+                .map(ImmutableString::as_str)
+                .chain([key.name()])
+                .collect::<Vec<_>>()
+                .join("::")
+        })
+    }
+
     /// `dyn Trait` of a crate trait that can be made into an object.
     /// `dyn Shape<Output = i64>` gives each associated type (E0191). A
     /// native trait's object (`type_ref::is_native_trait`) is the crate's,
@@ -54199,8 +54248,30 @@ impl<'a> Parser<'a> {
             }
         });
         if let Some((trait_name, bindings, concrete)) = unsizing {
-            // Making a native trait's object takes the crate's impl of the
-            // trait for the type, which rawr doesn't make one of yet.
+            // A box of the program's own type that implements a native
+            // trait becomes that trait's object: the stand-in rawr's copy of
+            // the crate declares for the type, which holds the value's
+            // handle and calls the impl's functions through it (#1264).
+            if type_ref::is_native_trait(&trait_name)
+                && matches!(target, Ty::Boxed(_))
+                && let Some(owner) = self.native_object_owner(&concrete, &trait_name)
+            {
+                let source = std::mem::take(&mut value.source);
+                value.source = self.prelude_op(
+                    PreludeOp::NativeObject,
+                    [
+                        source,
+                        format!("{owner:?}").into(),
+                        format!("{trait_name:?}").into(),
+                    ],
+                );
+                value.source.cover(value.span);
+                value.ty = target;
+                value.lvalue = None;
+                return Ok(None);
+            }
+            // Making a native trait's object of anything else, a borrow or
+            // a counted pointer of the program's type, is not done yet.
             if type_ref::is_native_trait(&trait_name) {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(

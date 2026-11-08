@@ -40,6 +40,10 @@ pub(crate) const LENT: u8 = 20;
 /// reply's [`Natives`]; or one the call gives the interpreter, its index
 /// among the call's given values.
 pub(crate) const NATIVE: u8 = 21;
+/// The receiver of a call of a native trait object's stand-in (#1264):
+/// the handle of the program value it holds, which the call takes from the
+/// kept values and puts back after (`island::object`).
+pub(crate) const HANDLE: u8 = 22;
 
 /// Nesting deeper than this does not cross.
 const DEPTH: usize = 256;

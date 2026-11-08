@@ -111,6 +111,113 @@ pub(crate) fn lodged(
     lodge(given, witness)
 }
 
+/// What makes a native trait's object of a program value (#1264): given
+/// the trait's path from the crate's root and the value's handle, a box of
+/// the stand-in rawr's copy of the crate declares for the value's type,
+/// which then owns the handle; `None` when the stand-in's impl is of
+/// another trait.
+pub type Maker = fn(&str, u64) -> Option<Given>;
+
+/// The stand-ins' makers each crate registered, by their type's path.
+static MAKERS: Mutex<Vec<(&'static str, Maker)>> = Mutex::new(Vec::new());
+
+/// The program values native code holds as a native trait's object, by
+/// their handle (#1264).
+#[derive(Default)]
+struct Kept {
+    next: u64,
+    values: HashMap<u64, Dynamic>,
+}
+
+#[cfg(feature = "sync")]
+static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
+
+#[cfg(not(feature = "sync"))]
+thread_local! {
+    static KEPT: RefCell<Option<Kept>> = const { RefCell::new(None) };
+}
+
+/// `change` of the kept program values.
+fn kept<R>(change: impl FnOnce(&mut Kept) -> R) -> R {
+    #[cfg(feature = "sync")]
+    {
+        let mut kept = KEPT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        change(kept.get_or_insert_with(Kept::default))
+    }
+    #[cfg(not(feature = "sync"))]
+    KEPT.with_borrow_mut(|kept| change(kept.get_or_insert_with(Kept::default)))
+}
+
+/// Register the makers of a crate's stand-ins, each by its type's path
+/// from the crate's root: the shadow crate's island module calls this
+/// before its first call into marked code.
+#[unsafe(no_mangle)]
+pub fn __rawr_island_objects_v1(makers: &[(&'static str, Maker)]) {
+    MAKERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend_from_slice(makers);
+}
+
+/// Let go of the program value a stand-in held: its box was dropped.
+#[unsafe(no_mangle)]
+pub fn __rawr_island_release_v1(handle: u64) {
+    // Dropped once the table is free again.
+    let released = kept(|kept| kept.values.remove(&handle));
+    drop(released);
+}
+
+/// `value`, of the program's type at `owner`, as the native trait object
+/// `Box<dyn trait_name>`: the value is kept under a handle, and the
+/// stand-in rawr's copy of the crate declares for `owner` holds it and
+/// calls the impl's functions through it, in the generation of each call.
+/// `trait_name` is the trait's path from the crate's root.
+pub(crate) fn object(value: Dynamic, owner: &str, trait_name: &str) -> Result<Dynamic, String> {
+    let makers = MAKERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter(|(path, _)| *path == owner)
+        .map(|(_, maker)| *maker)
+        .collect::<Vec<_>>();
+    let handle = kept(|kept| {
+        kept.next += 1;
+        kept.values.insert(kept.next, value);
+        kept.next
+    });
+    // The crate's own path of the trait, without the crate's name, which
+    // the stand-in's impl compares with its own.
+    let below = trait_name
+        .split_once("::")
+        .map_or(trait_name, |(_, below)| below);
+    match makers.iter().find_map(|maker| maker(below, handle)) {
+        Some(given) => lodged(given, None),
+        None => {
+            __rawr_island_release_v1(handle);
+            Err(format!(
+                "rawr: native code has no stand-in for `{owner}` as a `dyn {trait_name}`; \
+                 restart `rawr run`"
+            ))
+        }
+    }
+}
+
+/// The program value of `handle` out of the table, for one call of the
+/// impl's function it is the receiver of.
+fn take_kept(handle: u64) -> Result<Dynamic, String> {
+    kept(|kept| kept.values.remove(&handle)).ok_or_else(|| {
+        "rawr: a native trait object's program value is in use by a call it made, or was dropped"
+            .to_owned()
+    })
+}
+
+/// Put the program value of `handle` back after the call it was taken for.
+fn put_kept(handle: u64, value: Dynamic) {
+    kept(|kept| kept.values.insert(handle, value));
+}
+
 /// Register the native `main` to start: the shadow crate's island module
 /// calls this from the program's Rawr `main`.
 #[unsafe(no_mangle)]
@@ -937,13 +1044,32 @@ impl Calls {
         let model = call.model;
         let inputs = self.inputs.get(&(owned, path.to_owned()));
         let mut values = Vec::with_capacity(count);
+        // A stand-in's receiver is its program value, taken for the call
+        // (#1264).
+        let mut held = Vec::new();
         for index in 0..count {
+            if reader.bytes.first() == Some(&program::model::island::HANDLE) {
+                reader.byte().map_err(malformed)?;
+                let handle = u64::from_le_bytes(reader.array().map_err(malformed)?);
+                let value = match take_kept(handle) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        restore(&held, &mut values);
+                        return Err(message);
+                    }
+                };
+                held.push((index, handle));
+                values.push(value);
+                continue;
+            }
             let witness = inputs.and_then(|inputs| inputs.get(index)?.as_ref());
-            values.push(
-                model
-                    .island_read(&self.types, lent, given, witness, &mut reader, 0)
-                    .map_err(malformed)?,
-            );
+            match model.island_read(&self.types, lent, given, witness, &mut reader, 0) {
+                Ok(value) => values.push(value),
+                Err(error) => {
+                    restore(&held, &mut values);
+                    return Err(malformed(error));
+                }
+            }
         }
         // A function changes its first `&mut` parameter in place and copies
         // the others back out after its value, as `[value, ..copied]`; a
@@ -964,8 +1090,10 @@ impl Calls {
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
-        let mut result = (call.invoke)(item, &mut values)
-            .map_err(|error| format!("rawr: `{path}` failed: {error}"))?;
+        let invoked = (call.invoke)(item, &mut values);
+        // The receiver changed in place, as a method's is, goes back.
+        restore(&held, &mut values);
+        let mut result = invoked.map_err(|error| format!("rawr: `{path}` failed: {error}"))?;
         let copied = match item.kind() {
             item::Kind::Function => references.get(1..).unwrap_or_default(),
             item::Kind::Method => references
@@ -1019,6 +1147,15 @@ impl Calls {
             }
         }
         Ok(reply)
+    }
+}
+
+/// Put each stand-in's receiver in `values` back under its handle.
+fn restore(held: &[(usize, u64)], values: &mut [Dynamic]) {
+    for &(index, handle) in held {
+        if let Some(value) = values.get_mut(index) {
+            put_kept(handle, value.take());
+        }
     }
 }
 
