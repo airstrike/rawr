@@ -76,7 +76,8 @@
         {"text":"A large project is never refused for its size: the semantic API, the node store, the extraction driver and the attempt record no longer have byte or count caps.","issues":[1231]},
         {"text":"Each runnable snippet on the site had a hand-written output that nothing checked. One error showed only its first line, six compile errors were not marked as errors, and the drop-order output showed what Rust prints rather than what rawr prints. The site's build now runs every snippet in rawr-web, or on the server through /play/render for the three blocks marked data-where=\"server\", and draws each output with the same function the Run button uses (site/src/lib/output.ts). A hand-written output fails the build. /play/render skips Turnstile for the smoke token, and the deploy's smoke test checks each server block's output against the deployed server.","issues":[1246]},
         {"text":"The reference pages were checked claim by claim against the current rawr: overview, requirements, iced, std, closures, generics, items, moves, play and commands. These were stale: gaps that now run (serde derives, crate functions taking your type, async without a runtime, try_join! and select!, consts captured in format strings, entry borrows, std::fs, char::from_u32), a removed difference (the index panic's column), lenient cases rustc's errors now catch (HashMap without use, a field returned by value), a Send bound said to go unchecked, the &dyn gap (it is std traits' trait objects), and quoted errors rawr no longer gives (unknown import, RwLock's not-yet message). Requirements lists rawr-reload, and commands gives exit status 134 under panic = \"abort\" and the default-run rule. Merged as e94629ca8.","issues":[1250]},
-        {"text":"Calling a macro without `!`, as in `print(\"hi\")`, `vec(1)` or `std::print(\"hi\")`, now gives rustc's E0423 \"expected function, found macro\" with the help \"use `!` to invoke the macro\". It used to say rawr doesn't run it yet.","issues":[1252]}
+        {"text":"Calling a macro without `!`, as in `print(\"hi\")`, `vec(1)` or `std::print(\"hi\")`, now gives rustc's E0423 \"expected function, found macro\" with the help \"use `!` to invoke the macro\". It used to say rawr doesn't run it yet.","issues":[1252]},
+        {"text":"docs/reference/iced said what rawr doesn't do for iced (nothing hand-written, nothing prebuilt) and listed gaps such as 'a #[widget] written in a marked file', an attribute that exists nowhere. The page is deleted; /docs/reference/iced redirects to /docs/iced, its bindings and gaps anchors go to Imports, its examples anchor to the iced guide, and the values-cross-both-ways and one-iced-per-project facts stay in Imports and Run.","issues":[1265]}
       ]
     },
     "releases": [
@@ -2948,7 +2949,8 @@
     {"issue":1261,"title":"The rawr lib tests don't compile without the rust-import feature","state":"open","category":"Health"},
     {"issue":1262,"title":"rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"open","category":"Health"},
     {"issue":1263,"title":"A marked module can't name a native non-root module's trait or type by path (`page::Page`): E0425","state":"open","category":"Divergences from rustc"},
-    {"issue":1264,"title":"A marked type implements a native trait and crosses to native code as `Box<dyn Trait>`, whose methods native code calls","state":"open","category":"Divergences from rustc"}
+    {"issue":1264,"title":"A marked type implements a native trait and crosses to native code as `Box<dyn Trait>`, whose methods native code calls","state":"open","category":"Divergences from rustc"},
+    {"issue":1265,"title":"The iced reference page is removed: it hedged about special cases rawr never had and named a nonexistent #[widget]","state":"open","category":"Health"}
   ],
   "groups": [
     {
