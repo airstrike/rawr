@@ -882,6 +882,11 @@ impl Provenance {
         &self.environment
     }
 
+    /// The target triple Cargo builds the project for.
+    pub(crate) fn target(&self) -> &str {
+        self.projection.target()
+    }
+
     /// Borrow the semantic values sealed by this exact configuration discovery.
     pub(crate) fn projection(&self) -> &projection::Projection {
         &self.projection
@@ -905,22 +910,18 @@ impl Provenance {
         })
     }
 
+    /// Discover the config Cargo reads for `project_root`. `target` is a
+    /// target the caller selects; without one, the target is Cargo's own:
+    /// `CARGO_BUILD_TARGET`, then the nearest `build.target`, then the host.
     pub(crate) fn discover(
         project_root: &Path,
         authority_manifest: Option<&Path>,
         environment: Environment,
-        target: &str,
+        target: Option<&str>,
         profile: &str,
         parallelism: crate::process::parallelism::Proof,
         limits: &Limits,
     ) -> Result<Self> {
-        let projection = projection::Projection::derive_governed(
-            &environment,
-            target,
-            profile,
-            parallelism,
-            limits,
-        )?;
         let mut candidates = Vec::new();
         let project_end = append_hierarchy_candidates(&mut candidates, project_root)?;
         let authority_end = if let Some(authority_root) = authority_manifest.and_then(Path::parent)
@@ -976,6 +977,7 @@ impl Provenance {
         candidates.dedup_by(|left, right| left.path == right.path);
 
         let mut compiler = None::<(usize, PathBuf)>;
+        let mut configured_target = None::<(usize, Box<str>)>;
         let cargo_home = environment.cargo_home()?;
         let mut env_sources = Vec::new();
         for candidate in &candidates {
@@ -999,11 +1001,26 @@ impl Provenance {
                         item,
                     });
                 }
-                if let Some(value) = document
-                    .get("build")
-                    .and_then(toml_edit::Item::as_table_like)
-                    .and_then(|build| build.get("rustc"))
+                let directory = candidate
+                    .path
+                    .parent()
+                    .expect("a Cargo config file has a directory");
+                let base = directory
+                    .parent()
+                    .expect("a Cargo config file's directory has a parent");
+                let priority = if directory.file_name() == Some(std::ffi::OsStr::new(".cargo"))
+                    && project_root.starts_with(base)
                 {
+                    Some(base.components().count() + 1)
+                } else if cargo_home.as_deref() == Some(directory) {
+                    Some(0)
+                } else {
+                    None
+                };
+                let build = document
+                    .get("build")
+                    .and_then(toml_edit::Item::as_table_like);
+                if let Some(value) = build.and_then(|build| build.get("rustc")) {
                     let value = value.as_str().ok_or_else(|| Error::Request {
                         reason: format!(
                             "invalid configuration for key `build.rustc`: expected a string \
@@ -1012,22 +1029,6 @@ impl Provenance {
                         )
                         .into_boxed_str(),
                     })?;
-                    let directory = candidate
-                        .path
-                        .parent()
-                        .expect("a Cargo config file has a directory");
-                    let base = directory
-                        .parent()
-                        .expect("a Cargo config file's directory has a parent");
-                    let priority = if directory.file_name() == Some(std::ffi::OsStr::new(".cargo"))
-                        && project_root.starts_with(base)
-                    {
-                        Some(base.components().count() + 1)
-                    } else if cargo_home.as_deref() == Some(directory) {
-                        Some(0)
-                    } else {
-                        None
-                    };
                     if let Some(priority) = priority
                         && compiler.as_ref().is_none_or(|(kept, _)| priority > *kept)
                     {
@@ -1035,11 +1036,37 @@ impl Provenance {
                         compiler = Some((priority, path));
                     }
                 }
+                if let Some(value) = build.and_then(|build| build.get("target"))
+                    && let Some(priority) = priority
+                    && configured_target
+                        .as_ref()
+                        .is_none_or(|(kept, _)| priority > *kept)
+                {
+                    configured_target = Some((priority, build_target(value, &candidate.path)?));
+                }
             }
         }
 
         let env = env::Table::merge(&mut env_sources)?;
         drop(env_sources);
+
+        // Cargo reads `host-tuple` as the host's own triple.
+        let target = match target
+            .or_else(|| environment.value("CARGO_BUILD_TARGET"))
+            .or(configured_target
+                .as_ref()
+                .map(|(_, target)| target.as_ref()))
+        {
+            None | Some("host-tuple") => crate::cargo::toolchain::HOST,
+            Some(target) => target,
+        };
+        let projection = projection::Projection::derive_governed(
+            &environment,
+            target,
+            profile,
+            parallelism,
+            limits,
+        )?;
 
         let digest_bytes = candidates.iter().fold(0_usize, |total, candidate| {
             total
@@ -1201,6 +1228,33 @@ fn env_rank(
         Some(env::Rank::Home)
     } else {
         None
+    }
+}
+
+/// A config file's `build.target`: one target triple. Cargo also takes a
+/// list of them and builds for each; rawr builds a program for one.
+fn build_target(value: &toml_edit::Item, path: &Path) -> Result<Box<str>> {
+    let invalid = || Error::Request {
+        reason: format!(
+            "invalid configuration for key `build.target`: expected a string in `{}`",
+            path.display()
+        )
+        .into_boxed_str(),
+    };
+    if let Some(target) = value.as_str() {
+        return Ok(target.into());
+    }
+    let list = value.as_array().ok_or_else(invalid)?;
+    match list.iter().collect::<Vec<_>>().as_slice() {
+        [target] => target.as_str().map(Box::from).ok_or_else(invalid),
+        _ => Err(Error::Request {
+            reason: format!(
+                "rawr builds a program for one target, and `{}` sets `build.target` to {} targets",
+                path.display(),
+                list.len()
+            )
+            .into_boxed_str(),
+        }),
     }
 }
 
@@ -1608,7 +1662,7 @@ mod tests {
             &project,
             None,
             environment,
-            "aarch64-apple-darwin",
+            Some("aarch64-apple-darwin"),
             "dev",
             parallelism,
             &Limits::standard(),
@@ -1662,7 +1716,7 @@ mod tests {
             project,
             None,
             environment,
-            "aarch64-apple-darwin",
+            Some("aarch64-apple-darwin"),
             "dev",
             crate::process::parallelism::Proof::discover().expect("parallelism discovers"),
             &Limits::standard(),
@@ -1888,7 +1942,7 @@ mod tests {
             &path,
             None,
             Environment::empty(),
-            "aarch64-apple-darwin",
+            Some("aarch64-apple-darwin"),
             "dev",
             parallelism,
             &limits,
@@ -1899,7 +1953,7 @@ mod tests {
             None,
             Environment::from_pairs([("RUSTFLAGS", "-Ctarget-cpu=native")])
                 .expect("semantic environment seals"),
-            "aarch64-apple-darwin",
+            Some("aarch64-apple-darwin"),
             "dev",
             parallelism,
             &limits,
@@ -1908,6 +1962,63 @@ mod tests {
         fs::remove_dir(path).expect("test config root is removed");
         assert_eq!(baseline.digest, semantic.digest);
         assert_ne!(baseline.projection, semantic.projection);
+    }
+
+    /// The target is Cargo's: a target the caller selects, then
+    /// `CARGO_BUILD_TARGET`, then the nearest `build.target`, whose
+    /// `host-tuple` is the host, then the host.
+    #[test]
+    fn the_target_is_the_one_cargo_builds_for() {
+        let root = std::env::temp_dir().join(format!(
+            "rawr-config-target-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let project = root.join("outer/project");
+        fs::create_dir_all(project.join(".cargo")).expect("project config directory");
+        fs::create_dir_all(root.join("outer/.cargo")).expect("outer config directory");
+        let project = fs::canonicalize(&project).expect("project is canonical");
+        let outer = project
+            .parent()
+            .expect("outer directory")
+            .join(".cargo/config.toml");
+        let own = project.join(".cargo/config.toml");
+        let limits = Limits::standard();
+        let parallelism =
+            crate::process::parallelism::Proof::discover().expect("test parallelism discovers");
+        let target = |environment: Environment, selected: Option<&str>| {
+            Provenance::discover(
+                &project,
+                None,
+                environment,
+                selected,
+                "dev",
+                parallelism,
+                &limits,
+            )
+            .map(|provenance| provenance.target().to_owned())
+        };
+        let host = crate::cargo::toolchain::HOST;
+        assert_eq!(target(Environment::empty(), None).unwrap(), host);
+        fs::write(&outer, "[build]\ntarget = \"x86_64-unknown-linux-gnu\"\n").unwrap();
+        fs::write(&own, "[build]\ntarget = \"wasm32-unknown-unknown\"\n").unwrap();
+        assert_eq!(
+            target(Environment::empty(), None).unwrap(),
+            "wasm32-unknown-unknown"
+        );
+        assert_eq!(
+            target(Environment::empty(), Some("aarch64-apple-darwin")).unwrap(),
+            "aarch64-apple-darwin"
+        );
+        let environment = Environment::from_pairs([("CARGO_BUILD_TARGET", "i686-linux-android")])
+            .expect("environment seals");
+        assert_eq!(target(environment, None).unwrap(), "i686-linux-android");
+        fs::write(&own, "[build]\ntarget = [\"host-tuple\"]\n").unwrap();
+        assert_eq!(target(Environment::empty(), None).unwrap(), host);
+        fs::write(&own, "[build]\ntarget = [\"a\", \"b\"]\n").unwrap();
+        let error = target(Environment::empty(), None).unwrap_err().to_string();
+        assert!(error.contains("for one target"), "{error}");
+        fs::remove_dir_all(root).expect("test config root is removed");
     }
 
     #[test]
@@ -1935,7 +2046,7 @@ mod tests {
                 &root,
                 None,
                 Environment::empty(),
-                "aarch64-apple-darwin",
+                Some("aarch64-apple-darwin"),
                 "dev",
                 parallelism,
                 limits,
@@ -2198,7 +2309,7 @@ mod tests {
                 &project,
                 None,
                 environment.clone(),
-                crate::cargo::toolchain::HOST,
+                Some(crate::cargo::toolchain::HOST),
                 "dev",
                 crate::process::parallelism::Proof::discover().unwrap(),
                 &limits,

@@ -673,7 +673,6 @@ fn validate_plan(plan: &Plan, budget: &mut compiler::Budget) -> Result<(), Strin
         || plan.canonical_bytes != CANONICAL_BYTES
         || plan.compiler_commit != COMPILER_COMMIT
         || plan.host != include_str!(concat!(env!("OUT_DIR"), "/toolchain-host"))
-        || plan.selected_target != plan.host
         || plan.entries.is_empty()
         || plan
             .demand

@@ -15,6 +15,7 @@ fn active_compiler() -> &'static str {
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct Search {
     pub(super) rustc: PathBuf,
+    target: Box<str>,
     pub(super) sysroot: PathBuf,
     pub(super) library: PathBuf,
     pub(super) lib64: bool,
@@ -26,7 +27,7 @@ impl Search {
             &self.rustc,
             active_compiler(),
             crate::cargo::toolchain::HOST,
-            crate::cargo::toolchain::HOST,
+            &self.target,
             allocation,
         )?;
         if &current != self {
@@ -42,8 +43,7 @@ impl Search {
         target: &str,
         allocation: &mut Allocation,
     ) -> Result<Self> {
-        if compiler != active_compiler() || host != crate::cargo::toolchain::HOST || target != host
-        {
+        if compiler != active_compiler() || host != crate::cargo::toolchain::HOST {
             return Err(invalid("compiler search pin differs"));
         }
         if !rustc.is_absolute()
@@ -88,10 +88,11 @@ impl Search {
             },
             allocation,
         )?;
-        let target = join(&base, target, allocation)?;
-        let library = join(&target, "lib", allocation)?;
+        let directory = join(&base, target, allocation)?;
+        let library = join(&directory, "lib", allocation)?;
         Ok(Self {
             rustc,
+            target: target.into(),
             sysroot,
             library,
             lib64,

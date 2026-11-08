@@ -1,0 +1,3 @@
+# The target Cargo builds the package for, and rawr with it.
+[build]
+target = "wasm32-unknown-unknown"

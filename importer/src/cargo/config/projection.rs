@@ -252,6 +252,11 @@ impl Projection {
         SCHEMA
     }
 
+    /// The target triple Cargo builds for.
+    pub(crate) fn target(&self) -> &str {
+        &self.target
+    }
+
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
         self.entries
             .iter()

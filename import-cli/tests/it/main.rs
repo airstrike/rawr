@@ -22,3 +22,4 @@ mod tokio;
 #[cfg(unix)]
 mod tui;
 mod unit_graph;
+mod wasm;
