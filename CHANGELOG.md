@@ -82,6 +82,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate whose generic trait has a provided method giving an opaque type, where that type's supertrait binds an associated type to Self (as `Add<Output = Self>` does), no longer panics rawr check while building its API. An item whose signature names another item's type parameter is left out with a can't-be-used-yet note. (#1278)
 - A std trait works as a trait object, as in Rust. `Box<dyn Error>` with `?` from `parse`, `&dyn Debug` of a derived or builtin value, `&dyn Display` of the program's own impl, and `Vec<Box<dyn Display>>` of mixed values all work, with no `impl Error` needed in the program. Formatting, `to_string()` and the trait's methods call the value's own impl. (#1251)
 - A `match` that misses values reports rustc's E0004 in rustc's words: the patterns not covered (`Message::Decrement`, `None`, `i32::MIN..=0_i32` and `2_i32..=i32::MAX`, `&_`), the label on the scrutinee, the matched type and the arm to add. Integer and `char` arms whose ranges cover the whole type no longer need a `_`. (#1256)
+- A marked module builds a native module's structs and enums whose fields are `&'static str`, `Option<&'static str>` and `&'static [T]` from literals, and a marked `pub static` of them is compiled natively, so native code reads it as a Rust item. (#1283)
 
 ## 0.3.171 (2026-11-07)
 
