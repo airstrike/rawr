@@ -2719,6 +2719,72 @@ main();
     );
 }
 
+/// An array or `vec!` literal coerces each element to the trait object its
+/// expected element type is (#1285): `&[&A, &B]` to a `&[&dyn Named]`
+/// parameter, `&[Box::new(1), Box::new("s")]` to a `&[Box<dyn Display>]`
+/// one, a `vec!` to a `Vec<Box<dyn Display>>` one, `vec![Box::new(A),
+/// Box::new(B)]` returned as a `Vec<Box<dyn Named>>`, and `Rc` and `&dyn`
+/// elements under a `let`. rustc prints `a b`, `1 s`, `2` and `a b a b`.
+#[test]
+fn language_literal_elements_coerce_to_trait_objects() {
+    let source = r#"
+use std::fmt::Display;
+use std::rc::Rc;
+
+trait Named { fn name(&self) -> String; }
+struct A;
+struct B;
+impl Named for A { fn name(&self) -> String { "a".to_string() } }
+impl Named for B { fn name(&self) -> String { "b".to_string() } }
+
+fn all(items: &[&dyn Named]) -> String {
+    items.iter().map(|item| item.name()).collect::<Vec<_>>().join(" ")
+}
+fn show(items: &[Box<dyn Display>]) -> String {
+    items.iter().map(|item| item.to_string()).collect::<Vec<_>>().join(" ")
+}
+fn owned(items: Vec<Box<dyn Display>>) -> usize { items.len() }
+fn boxed() -> Vec<Box<dyn Named>> { vec![Box::new(A), Box::new(B)] }
+
+fn main() {
+    println!("{}", all(&[&A, &B]));
+    println!("{}", show(&[Box::new(1), Box::new("s")]));
+    println!("{}", owned(vec![Box::new(1), Box::new("s")]));
+    let shared: Vec<Rc<dyn Named>> = vec![Rc::new(A), Rc::new(B)];
+    let refs: [&dyn Named; 2] = [&B, &A];
+    let mut names: Vec<String> = boxed().iter().map(|item| item.name()).collect();
+    names.push(shared[0].name());
+    names.push(refs[0].name());
+    println!("{}", names.join(" "));
+}
+main();
+"#;
+    assert_eq!(printed(source), "a b\n1 s\n2\na b a b\n");
+    let named = "trait Named { fn name(&self) -> String; } struct A; struct C; \
+                 impl Named for A { fn name(&self) -> String { \"a\".to_string() } } \
+                 fn all(items: &[&dyn Named]) -> usize { items.len() }";
+    // An element whose type doesn't implement the trait is rustc's E0277,
+    // `C: Named` is not satisfied.
+    let error = rejected_run(&format!(
+        "{named} fn main() {{ println!(\"{{}}\", all(&[&A, &C])); }} main();"
+    ));
+    assert!(
+        error.contains("the trait bound `C: Named` is not satisfied"),
+        "{error}"
+    );
+    // A `&Vec` carries no element expectation through its deref to the
+    // slice: rustc's E0308, the `Box<{integer}>` elements stay boxed
+    // integers.
+    let error = rejected_run(
+        "use std::fmt::Display; fn show(items: &[Box<dyn Display>]) -> usize { items.len() } \
+         fn main() { println!(\"{}\", show(&vec![Box::new(1), Box::new(\"s\")])); } main();",
+    );
+    assert!(
+        error.contains("mismatched types: expected `Box<{integer}>`, found `Box<&str>`"),
+        "{error}"
+    );
+}
+
 #[test]
 fn language_generic_trait_functions_without_self() {
     let value = run_string(
