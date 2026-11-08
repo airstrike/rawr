@@ -12742,11 +12742,14 @@ fn render_borrowed_receiver(
     // A method that calls a script closure back, as `Frame::with_save(&mut
     // self, f: impl FnOnce(&mut Frame) -> R)` does, holds its receiver out
     // of its slot and lends the arena while it runs, as a function does
-    // (D551.6), so the closure's own native calls reach the arena.
+    // (D551.6), so the closure's own native calls reach the arena. So does
+    // a method of a value generic over a script type, which may call a
+    // script function it keeps, as elevato's `Simulation<P, M>::frame`
+    // calls the program's `update` (#1432).
     let calls_back = signature.inputs().iter().any(|ty| {
         callable_parameter(ty, signature)
             || matches!(ty, convert::Type::Option(inner) if callable_parameter(inner, signature))
-    });
+    }) || substitutions.iter().any(names_script);
     let (arena_call, lent_call) = if calls_back {
         (
             format!(
@@ -17515,6 +17518,34 @@ fn holds_script(ty: &convert::Type) -> bool {
         }
         convert::Type::Result(ok, err) => holds_script(ok) || holds_script(err),
         _ => false,
+    }
+}
+
+/// Whether `ty` names a script type anywhere, as `Simulation<State,
+/// Message>` does: native code that holds a value of it may call script
+/// code back.
+fn names_script(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Script { .. } => true,
+        convert::Type::Nominal { arguments, .. } => arguments.iter().any(names_script),
+        convert::Type::Tuple(members) => members.iter().any(names_script),
+        convert::Type::Option(element)
+        | convert::Type::Sequence { element, .. }
+        | convert::Type::ConstArray { element, .. }
+        | convert::Type::Borrowed { ty: element, .. }
+        | convert::Type::Range(element)
+        | convert::Type::ProfileMessage {
+            payload: element, ..
+        } => names_script(element),
+        convert::Type::Result(ok, err) => names_script(ok) || names_script(err),
+        convert::Type::FunctionItem { input, output } => {
+            names_script(input) || names_script(output)
+        }
+        convert::Type::Unit
+        | convert::Type::Never
+        | convert::Type::Builtin(_)
+        | convert::Type::Parameter(_)
+        | convert::Type::Inferred => false,
     }
 }
 
