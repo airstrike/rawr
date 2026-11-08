@@ -4529,7 +4529,7 @@ fn language_ord_helpers() {
     rejected("pub fn run() -> i64 { let mut v = vec![1.0]; v.sort(); 0 } run()");
     rejected("pub fn run() -> i64 { let v = vec![2, 1]; v.sort(); v[0] } run()");
     let error = rejected("pub fn run() -> i64 { 5.clamp(4, 1) } run()");
-    assert!(error.contains("min <= max"), "{error}");
+    assert!(error.contains("min > max. min = 4, max = 1"), "{error}");
 }
 
 #[test]

@@ -96,8 +96,14 @@ fn in_place(value: &Dynamic, pins: Option<&crate::scope::Pins>) -> Result<Box<dy
     // A `&'static str` is the program's own text, pinned for as long as
     // the runner lives, once per text.
     if let Ok(text) = value.flatten_clone().into_immutable_string() {
-        static TEXTS: crate::scope::Pins = crate::scope::Pins::constant();
-        let text: &'static str = TEXTS.pin(text);
+        // Per thread, since without the `sync` feature the text is an `Rc`
+        // and pins of it can't be shared; the interpreter's thread is one.
+        thread_local! {
+            static TEXTS: &'static crate::scope::Pins =
+                Box::leak(Box::new(crate::scope::Pins::constant()));
+        }
+        let pins: &'static crate::scope::Pins = TEXTS.with(|pins| *pins);
+        let text: &'static str = pins.pin(text);
         return Ok(Box::new(text));
     }
     if let Some(slice) =
