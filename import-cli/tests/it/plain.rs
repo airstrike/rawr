@@ -2223,6 +2223,31 @@ fn a_new_path_of_a_path_dependency_replays_the_projects_tables() {
         root.join("target/rawr/bindings").is_dir(),
         "the path crates' tables are kept with the project"
     );
+    // One copy of each table (#1355): a settled table is its entry's own,
+    // with none left where the driver wrote it, and staged/ keeps none.
+    let rawr = root.join("target/rawr");
+    for entry in fs::read_dir(rawr.join("bindings")).unwrap().flatten() {
+        let key = entry.file_name();
+        if key.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        assert!(entry.path().join("table.json").is_file());
+        assert!(
+            !rawr.join("extraction").join(&key).exists(),
+            "a settled table is copied: {key:?}"
+        );
+    }
+    for entry in fs::read_dir(rawr.join("staged"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        assert!(
+            !entry.path().join("table.json").exists(),
+            "staged/ copies a table: {:?}",
+            entry.path()
+        );
+    }
     std::thread::sleep(std::time::Duration::from_millis(1100));
     let saved = std::time::SystemTime::now();
     std::thread::sleep(std::time::Duration::from_millis(1100));

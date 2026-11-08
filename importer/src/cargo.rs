@@ -2076,10 +2076,14 @@ impl Request {
             .as_mut()
             .map_or_else(Vec::new, |capture| capture.settlement(&build));
         #[cfg(feature = "rustc-driver")]
-        let staged = capture
-            .as_ref()
-            .and_then(|capture| capture.staged())
-            .map(Path::to_path_buf);
+        let staged = capture.as_ref().and_then(|capture| {
+            let keys = capture
+                .shared_keys()
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            Some((capture.staged()?.to_path_buf(), keys))
+        });
         #[cfg(feature = "rustc-driver")]
         let probe_artifacts = capture
             .as_mut()
@@ -2143,7 +2147,7 @@ impl Request {
             }
             // The next demand of this resolution replays these tables
             // instead of building and probing again.
-            if let Some(staged) = &staged {
+            if let Some((staged, keys)) = &staged {
                 let entries = settlement
                     .iter()
                     .filter_map(|settled| {
@@ -2166,7 +2170,8 @@ impl Request {
                         Some((settled, inputs))
                     })
                     .collect::<Vec<_>>();
-                crate::bindings::stage(staged, &entries);
+                let keys = keys.iter().map(String::as_str).collect::<Vec<_>>();
+                crate::bindings::stage(staged, &keys, &entries);
             }
         }
         let universe = universe
