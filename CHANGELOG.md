@@ -142,6 +142,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The ?play universe runner builds again: a widget made from a borrowed `&str`, as iced's `button(label)` gives a `Button<'_, Message, &str>`, no longer fails E0597 in its generated adapter, and the generated runner compiles without warnings. (#1396)
 - Running one workspace member after another no longer fails with E0463 ("can't find crate for `rawr`"). Each member's runner is now its own Cargo unit in the workspace's build directory, so one member never reuses another member's build script and the shared runtime it names. (#1421)
 - `rawr::universe` loads a marked file against a binary's linked generated bindings and runs it in that process. `call(name, args)` or `run()` executes it, and `reload()` or `replace(text)` on any thread reports unchanged, queued, swapped, failed or restarting. ?play's universe runner serves its snippets through it. (#1424; part of #1387)
+- `write!` with no `Write` trait in scope is rustc's E0599 "cannot write into `String`", with its help naming `use std::fmt::Write;`. (#5)
+- A `use` inside a block is in scope in that block alone; outside it its names are rustc's E0425. (#7)
+- A bare value where a `Box<dyn Error>` is expected is rustc's E0308, with rustc's `Box::new` or `Into::into` help. (#6)
+- An unsuffixed literal that several `From` impls fit takes rustc's fallback type, i32 or f64, and selects that impl. (#8)
+- An index past a slice's end panics at the expression's start, as rustc places it. (#35)
+- Integer division and remainder by zero or overflow, out-of-range slice ranges, `pow` overflow and a reversed `clamp` panic in rustc's words and at rustc's position. (#37)
 
 ## 0.3.171 (2026-11-07)
 

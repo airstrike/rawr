@@ -148,7 +148,13 @@
         {"text":"A crate that calls your function with a `&` or `&mut` of its own value, as a simulation's `update(&mut self, message, building: &Building)` does, lends you that value for the call: its type needs no `Clone`, nothing is copied, and each call sees the value as the crate holds it then. Its methods, its fields, `{}`, `{:?}` and `==` reach it where it is, and you can pass it on to the crate's functions that take `&Building`, as a view's `draw(building)` does.","issues":[1405,1406]},
         {"text":"The ?play universe runner builds again: a widget made from a borrowed `&str`, as iced's `button(label)` gives a `Button<'_, Message, &str>`, no longer fails E0597 in its generated adapter, and the generated runner compiles without warnings.","issues":[1396]},
         {"text":"Running one workspace member after another no longer fails with E0463 (\"can't find crate for `rawr`\"). Each member's runner is now its own Cargo unit in the workspace's build directory, so one member never reuses another member's build script and the shared runtime it names.","issues":[1421]},
-        {"text":"`rawr::universe` loads a marked file against a binary's linked generated bindings and runs it in that process. `call(name, args)` or `run()` executes it, and `reload()` or `replace(text)` on any thread reports unchanged, queued, swapped, failed or restarting. ?play's universe runner serves its snippets through it.","issues":[1424],"refs":[1387]}
+        {"text":"`rawr::universe` loads a marked file against a binary's linked generated bindings and runs it in that process. `call(name, args)` or `run()` executes it, and `reload()` or `replace(text)` on any thread reports unchanged, queued, swapped, failed or restarting. ?play's universe runner serves its snippets through it.","issues":[1424],"refs":[1387]},
+        {"text":"`write!` with no `Write` trait in scope is rustc's E0599 \"cannot write into `String`\", with its help naming `use std::fmt::Write;`.","issues":[5]},
+        {"text":"A `use` inside a block is in scope in that block alone; outside it its names are rustc's E0425.","issues":[7]},
+        {"text":"A bare value where a `Box<dyn Error>` is expected is rustc's E0308, with rustc's `Box::new` or `Into::into` help.","issues":[6]},
+        {"text":"An unsuffixed literal that several `From` impls fit takes rustc's fallback type, i32 or f64, and selects that impl.","issues":[8]},
+        {"text":"An index past a slice's end panics at the expression's start, as rustc places it.","issues":[35]},
+        {"text":"Integer division and remainder by zero or overflow, out-of-range slice ranges, `pow` overflow and a reversed `clamp` panic in rustc's words and at rustc's position.","issues":[37]}
       ]
     },
     "releases": [
@@ -1761,10 +1767,10 @@
     {"issue":2,"title":"A panic printed `error[RAWR-RUNTIME-THROW]` instead of rustc's panic text","state":"closed","category":"Divergences from rustc","release":"0.1.0"},
     {"issue":3,"title":"A non-primitive `op=` through a guard evaluates its right side before `write()`, which rustc…","state":"open","category":"Divergences from rustc"},
     {"issue":4,"title":"`VecDeque` is type-checked as a `Vec`","state":"retired","category":"Divergences from rustc"},
-    {"issue":5,"title":"`write!` works without `use std::fmt::Write`","state":"open","category":"Divergences from rustc"},
-    {"issue":6,"title":"A `Box<dyn Error>` coerces without `Box::new` or `.into()`","state":"open","category":"Divergences from rustc"},
-    {"issue":7,"title":"A `use Enum::*` inside a function applies to the whole file","state":"open","category":"Divergences from rustc"},
-    {"issue":8,"title":"When several `From` cases fit an argument, rustc decides","state":"open","category":"Divergences from rustc"},
+    {"issue":5,"title":"`write!` works without `use std::fmt::Write`","state":"closed","category":"Divergences from rustc"},
+    {"issue":6,"title":"A `Box<dyn Error>` coerces without `Box::new` or `.into()`","state":"closed","category":"Divergences from rustc"},
+    {"issue":7,"title":"A `use Enum::*` inside a function applies to the whole file","state":"closed","category":"Divergences from rustc"},
+    {"issue":8,"title":"When several `From` cases fit an argument, rustc decides","state":"closed","category":"Divergences from rustc"},
     {"issue":9,"title":"On the playground, `random_range` over an `f32` range draws an `f64`","state":"retired","category":"Divergences from rustc"},
     {"issue":10,"title":"A guard inside `Option` or `Result` (`try_write`, `Mutex::lock`)","state":"open","category":"Borrow guards (D554)"},
     {"issue":11,"title":"Mutating a guarded `Vec` or tuple","state":"open","category":"Borrow guards (D554)"},
@@ -1791,9 +1797,9 @@
     {"issue":32,"title":"After reinstalling, the first `rawr check` sometimes says \"toolchain installation state…","state":"retired","category":"Platforms"},
     {"issue":33,"title":"On iPhone the canvas may draw at 1x instead of 3x","state":"retired","category":"Platforms"},
     {"issue":34,"title":"rawr-iced's 47 failing tests were ported to `panic!` and current rules","state":"closed","category":"Health","release":"0.1.0"},
-    {"issue":35,"title":"An index panic on a slice is placed at the `[`, where rustc places it at the expression's start","state":"open","category":"Divergences from rustc"},
+    {"issue":35,"title":"An index panic on a slice is placed at the `[`, where rustc places it at the expression's start","state":"closed","category":"Divergences from rustc"},
     {"issue":36,"title":"Current nightly rustc prints a blank line and a thread id first …","state":"open","category":"Divergences from rustc"},
-    {"issue":37,"title":"A panic in compiler-written code has no position, so its first line names the file with no line…","state":"open","category":"Divergences from rustc"},
+    {"issue":37,"title":"A panic in compiler-written code has no position, so its first line names the file with no line…","state":"closed","category":"Divergences from rustc"},
     {"issue":38,"title":"A panic in an async body in the browser goes through the iced adapter's report","state":"retired","category":"Divergences from rustc"},
     {"issue":39,"title":"`Layout::areas` needs const generics inferred from `let [a, b, c] = …`, which the resolver…","state":"open","category":"Imported lifetimes after slice 1 (D561)"},
     {"issue":40,"title":"`Line::from(..)` and other direct `From` calls on imported types aren't supported","state":"open","category":"Imported lifetimes after slice 1 (D561)"},
@@ -3182,7 +3188,13 @@
     {"issue":1423,"title":"A failed runner build is explained as build-script drift even when the failure has nothing to do…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1424,"title":"rawr::universe loads a marked file against a binary's linked generated bindings and reloads it in process","state":"open","category":"Importer"},
     {"issue":1425,"title":"rawr-import generates a runner's sources without building it, for a build script to compile as…","state":"open","category":"Importer"},
-    {"issue":1426,"title":"The generator emits a runner as a module of a host crate, and a `rawr_build::bindings()` for…","state":"open","category":"Importer"}
+    {"issue":1426,"title":"The generator emits a runner as a module of a host crate, and a `rawr_build::bindings()` for…","state":"open","category":"Importer"},
+    {"issue":1427,"title":"A non-prelude std trait's method (io::Write, BufRead, Read, Hasher) is callable out of scope…","state":"open","category":"Divergences from rustc"},
+    {"issue":1428,"title":"write! into a String with only std::io::Write in scope is accepted; rustc's E0599 says its trait…","state":"open","category":"Divergences from rustc"},
+    {"issue":1429,"title":"Two blocks' uses binding one name to different items collide, and items declared in a block are…","state":"open","category":"Divergences from rustc"},
+    {"issue":1430,"title":"Err(value) with a bare error in an if/match arm where Result<_, Box<dyn Error>> is expected is…","state":"open","category":"Divergences from rustc"},
+    {"issue":1431,"title":"Panics inside std (pow, sum, step_by, drain) name the call site where rustc names core's source file","state":"open","category":"Divergences from rustc"},
+    {"issue":1432,"title":"A script fn lent a native `&T` returns a crate value the slot takes after the lend ends: Stale…","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

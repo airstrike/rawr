@@ -141,7 +141,13 @@
       {"text":"A crate that calls your function with a `&` or `&mut` of its own value, as a simulation's `update(&mut self, message, building: &Building)` does, lends you that value for the call: its type needs no `Clone`, nothing is copied, and each call sees the value as the crate holds it then. Its methods, its fields, `{}`, `{:?}` and `==` reach it where it is, and you can pass it on to the crate's functions that take `&Building`, as a view's `draw(building)` does.","issues":[1405,1406]},
       {"text":"The ?play universe runner builds again: a widget made from a borrowed `&str`, as iced's `button(label)` gives a `Button<'_, Message, &str>`, no longer fails E0597 in its generated adapter, and the generated runner compiles without warnings.","issues":[1396]},
       {"text":"Running one workspace member after another no longer fails with E0463 (\"can't find crate for `rawr`\"). Each member's runner is now its own Cargo unit in the workspace's build directory, so one member never reuses another member's build script and the shared runtime it names.","issues":[1421]},
-      {"text":"`rawr::universe` loads a marked file against a binary's linked generated bindings and runs it in that process. `call(name, args)` or `run()` executes it, and `reload()` or `replace(text)` on any thread reports unchanged, queued, swapped, failed or restarting. ?play's universe runner serves its snippets through it.","issues":[1424],"refs":[1387]}
+      {"text":"`rawr::universe` loads a marked file against a binary's linked generated bindings and runs it in that process. `call(name, args)` or `run()` executes it, and `reload()` or `replace(text)` on any thread reports unchanged, queued, swapped, failed or restarting. ?play's universe runner serves its snippets through it.","issues":[1424],"refs":[1387]},
+      {"text":"`write!` with no `Write` trait in scope is rustc's E0599 \"cannot write into `String`\", with its help naming `use std::fmt::Write;`.","issues":[5]},
+      {"text":"A `use` inside a block is in scope in that block alone; outside it its names are rustc's E0425.","issues":[7]},
+      {"text":"A bare value where a `Box<dyn Error>` is expected is rustc's E0308, with rustc's `Box::new` or `Into::into` help.","issues":[6]},
+      {"text":"An unsuffixed literal that several `From` impls fit takes rustc's fallback type, i32 or f64, and selects that impl.","issues":[8]},
+      {"text":"An index past a slice's end panics at the expression's start, as rustc places it.","issues":[35]},
+      {"text":"Integer division and remainder by zero or overflow, out-of-range slice ranges, `pow` overflow and a reversed `clamp` panic in rustc's words and at rustc's position.","issues":[37]}
     ]
   },
   "releases": [
