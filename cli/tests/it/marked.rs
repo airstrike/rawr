@@ -746,6 +746,65 @@ fn marked_modules_named_as_old_engine_keywords_run_as_cargo_runs_them() {
     assert_eq!(stdout(&run), stdout(&native));
 }
 
+/// A marked crate's `cfg(feature = "..")`s hold for the features Cargo
+/// enables: its defaults, and what `--features`, `--no-default-features`
+/// and `--all-features` give it, in `cfg!`, `#[cfg]` on items and
+/// statements, and `#[cfg_attr]`, as under `cargo run` (#1259).
+#[test]
+fn a_marked_crate_s_features_are_cargo_s() {
+    let Some(cargo) = std::env::var_os("CARGO") else {
+        panic!("run under cargo: $CARGO names the cargo to test with");
+    };
+    let sandbox = Sandbox::new("marked-features");
+    let root = copy("rs-marker-features", &sandbox.work());
+    let bin = Path::new(&cargo).parent().unwrap();
+    let target = sandbox.path.join("target");
+
+    for flags in [
+        &[][..],
+        &["--no-default-features"],
+        &["--features", "y"],
+        &["--no-default-features", "--features=y"],
+        &["--all-features"],
+    ] {
+        let native = Command::new(&cargo)
+            .args(["run", "--quiet", "--offline"])
+            .args(flags)
+            .current_dir(&root)
+            .env("CARGO_TARGET_DIR", &target)
+            .output()
+            .unwrap();
+        let run = Command::new(sandbox.path.join("bin/rawr"))
+            .arg("run")
+            .args(flags)
+            .current_dir(&root)
+            .env("PATH", bin)
+            .env("CARGO", &cargo)
+            .env("CARGO_TARGET_DIR", &target)
+            .env("RAWR_HOME", sandbox.path.join("home"))
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+
+        assert_success(&native);
+        assert_success(&run);
+        assert_eq!(stdout(&run), stdout(&native), "{flags:?}: {}", stderr(&run));
+    }
+    let defaults = Command::new(sandbox.path.join("bin/rawr"))
+        .args(["run", "--no-default-features"])
+        .current_dir(&root)
+        .env("PATH", bin)
+        .env("CARGO", &cargo)
+        .env("CARGO_TARGET_DIR", &target)
+        .env("RAWR_HOME", sandbox.path.join("home"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        stdout(&defaults),
+        "x: false\ny: false\nstatement without x\nitem without x\n"
+    );
+}
+
 /// A marked crate's Cargo.toml dependencies are its Rust imports.
 #[test]
 fn a_marked_crate_imports_its_cargo_dependencies() {

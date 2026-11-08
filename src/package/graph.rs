@@ -40,6 +40,8 @@ pub struct Package {
     pub(crate) rust: Option<manifest::rust::Config>,
     /// The profile's panic strategy, as Cargo builds the target.
     panic: project::cargo::Panic,
+    /// The features Cargo enables for the target: its `cfg(feature)`s.
+    features: project::cargo::features::Enabled,
     /// The crate is the package's library, not a binary.
     library: bool,
     /// The package's target the crate is, as Cargo lists it.
@@ -205,6 +207,14 @@ impl Package {
     #[must_use]
     pub const fn panic(&self) -> project::cargo::Panic {
         self.panic
+    }
+
+    /// The features Cargo enables for the package's target, under which
+    /// its `cfg(feature = "..")`s hold: none for a file outside a package,
+    /// and none for a runner's snapshot, which does not ask Cargo.
+    #[must_use]
+    pub const fn features(&self) -> &project::cargo::features::Enabled {
+        &self.features
     }
 
     /// The crate name the native modules are imported under, when the
@@ -680,14 +690,18 @@ impl<'a> Builder<'a> {
             },
             |target| target.kind() == project::cargo::Kind::Library,
         );
-        let (cargo, panic) = match cargo {
+        let (cargo, unit) = match cargo {
             Some((cargo, evidence)) => {
-                let (cargo, panic) =
+                let (cargo, unit) =
                     self.on_host(cargo, &evidence, described.as_ref(), target.as_ref())?;
-                (Some((cargo, evidence)), panic)
+                (Some((cargo, evidence)), unit)
             }
-            None => (None, project::cargo::Panic::default()),
+            None => (None, None),
         };
+        let panic = unit
+            .as_ref()
+            .map_or_else(project::cargo::Panic::default, project::cargo::Unit::panic);
+        let features = unit.map(|unit| unit.features().clone()).unwrap_or_default();
         // The crate name rustc gives this target, so item paths read as
         // Rust's do. A file outside a Cargo package is `main`.
         let name: ImmutableString = match (&target, &cargo) {
@@ -709,6 +723,7 @@ impl<'a> Builder<'a> {
             cargo: None,
             rust: None,
             panic,
+            features,
             library,
             target: target.clone(),
             script,
@@ -1062,21 +1077,22 @@ impl<'a> Builder<'a> {
         )
         .map_err(Error::diagnostic)?;
         let evidence = self.push_evidence(source.diagnostic().clone());
+        let features = &self.packages[package.0].features;
         let parsed = match self.cells {
-            Some(cells) => match cells.get(&canonical, source.text()) {
+            Some(cells) => match cells.get(&canonical, source.text(), features) {
                 Some(parsed) => parsed,
                 None => {
                     let parsed = self
                         .engine
-                        .parse_unit(source.text())
+                        .parse_unit_with(source.text(), features)
                         .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?;
-                    cells.parsed(&canonical, source.text(), &parsed);
+                    cells.parsed(&canonical, source.text(), features, &parsed);
                     parsed
                 }
             },
             None => self
                 .engine
-                .parse_unit(source.text())
+                .parse_unit_with(source.text(), features)
                 .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?,
         };
         let declarations = parsed
@@ -1557,17 +1573,18 @@ impl<'a> Builder<'a> {
 
     /// `cargo` as Cargo builds `target` of `package` on the host: its
     /// `[target.'<platform>']` dependencies Cargo links there joined, and
-    /// its profile's panic strategy, from Cargo's unit graph. A runner's
-    /// snapshot does not ask Cargo ([`manifest::cargo::Host::Unasked`]),
-    /// and a file that is no target of its package builds as the binary
-    /// `cargo run` runs, else the library.
+    /// Cargo's unit for it (its profile's panic strategy and its features),
+    /// from Cargo's unit graph. A runner's snapshot does not ask Cargo
+    /// ([`manifest::cargo::Host::Unasked`]), and a file that is no target
+    /// of its package builds as the binary `cargo run` runs, else the
+    /// library.
     fn on_host(
         &mut self,
         cargo: manifest::cargo::Cargo,
         evidence: &diagnostic::Source,
         package: Option<&project::cargo::Package>,
         target: Option<&project::cargo::Target>,
-    ) -> Result<(manifest::cargo::Cargo, project::cargo::Panic), Error> {
+    ) -> Result<(manifest::cargo::Cargo, Option<project::cargo::Unit>), Error> {
         let built = package
             .filter(|_| self.snapshot.is_none())
             .and_then(|package| {
@@ -1579,7 +1596,7 @@ impl<'a> Builder<'a> {
         match built {
             Some(Ok(unit)) => Ok((
                 cargo.on_host(manifest::cargo::Host::Built(&unit)),
-                unit.panic(),
+                Some(unit),
             )),
             Some(Err(error)) => {
                 let evidence = self.push_evidence(evidence.clone());
@@ -1590,10 +1607,7 @@ impl<'a> Builder<'a> {
                     Span::new(Position::START, Position::START),
                 ))
             }
-            None => Ok((
-                cargo.on_host(manifest::cargo::Host::Unasked),
-                project::cargo::Panic::default(),
-            )),
+            None => Ok((cargo.on_host(manifest::cargo::Host::Unasked), None)),
         }
     }
 

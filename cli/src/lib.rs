@@ -78,9 +78,22 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
 }
 
 /// The arguments with `-p <package>` and `--bin <name>` in the places of
-/// the paths they select, as `cargo run` selects them: what every binary
-/// that is handed the program reads.
+/// the paths they select, as `cargo run` selects them, and without the
+/// feature flags (`--features`, `--no-default-features` and
+/// `--all-features`), which become the selection every Cargo answer of the
+/// process is asked with: what every binary that is handed the program
+/// reads.
 pub fn target_arguments(arguments: Vec<OsString>) -> Result<Vec<OsString>, String> {
+    let arguments = if arguments
+        .first()
+        .is_some_and(|command| command == "run" || command == "check" || command == "test")
+    {
+        let (selection, arguments) = rawr::project::cargo::features::Selection::take(arguments);
+        selection.select();
+        arguments
+    } else {
+        arguments
+    };
     binary_arguments(package_arguments(arguments)?)
 }
 
@@ -400,6 +413,8 @@ fn help(installed: &[layer::Installed]) -> String {
          Run the program's `#[test]` functions, as `cargo test`\n  \
          rawr run -p <package>         Run a package of this workspace, as `cargo run -p`\n  \
          rawr run --bin <name>         Run a binary of the package, as `cargo run --bin`\n  \
+         rawr run --features <list>    Enable features, as `cargo run --features`; also\n                                \
+         `--no-default-features` and `--all-features`, for run, check and test\n  \
          rawr new <path>               Create a crate with a marked `src/main.rs`\n  \
          rawr doctor [path]            Report on the environment and the project\n  \
          rawr mcp [path]               Serve coding agents over MCP on stdio\n  \
@@ -733,10 +748,12 @@ fn forward(arguments: &[OsString]) -> ExitCode {
     ExitCode::from(2)
 }
 
-/// Run `binary` with the same arguments in place of this process.
+/// Run `binary` with the same arguments and feature flags in place of this
+/// process.
 fn hand_off(binary: &Path, arguments: &[OsString]) -> ExitCode {
     let mut command = Command::new(binary);
     command.args(arguments);
+    rawr::project::cargo::features::Selection::selected().hand(&mut command);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;

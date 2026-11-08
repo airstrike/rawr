@@ -26,7 +26,7 @@
 - Crate root may be marked or native. A native root runs if some module it declares is marked. No marked file: `RAWR-ENVIRONMENT-MISSING-SOURCE`.
 - A single `.rs` file passed to `rawr run` runs with or without the marker; it may hold top-level statements (run first, then `fn main`). Cargo won't build top-level statements.
 - Path dependencies are always native, even if marked. Only the crate you run is interpreted.
-- Inner attributes go after the marker. Lint attrs and build/doc attrs (`windows_subsystem`, `crate_name`, `recursion_limit`, `doc`...) are accepted and ignored. `#![cfg_attr(p, ..)]` applies when `p` holds: `debug_assertions` true, every `feature` false, `test` only under `rawr test`. `no_std`, `no_implicit_prelude`, `no_main`, `feature` are errors.
+- Inner attributes go after the marker. Lint attrs and build/doc attrs (`windows_subsystem`, `crate_name`, `recursion_limit`, `doc`...) are accepted and ignored. `#![cfg_attr(p, ..)]` applies when `p` holds: `debug_assertions` true, `feature = ".."` when Cargo's unit graph enables it for the package, `test` only under `rawr test`. The same holds for `cfg!`, `#[cfg]` on items and statements, and outer `#[cfg_attr]`. `no_std`, `no_implicit_prelude`, `no_main`, `feature` are errors.
 - Full: https://rawr.airstrike.fyi/docs/run#the-rawr-marker
 
 ## Commands
@@ -35,6 +35,7 @@ Paths: a crate dir, its `Cargo.toml`, or a `.rs` file. Without one, rawr searche
 
 - `rawr [run] [path] [-- args]`: check, then run. `run` is the default (`rawr` alone runs the crate here). Args after `--` go to the program; stdin is passed through. Watches and reloads on save. At a terminal, after the program ends, waits for the next save (Ctrl-C quits); with non-terminal stdin, exits with the program's status. `cargo check` errors print after the program ends.
 - `rawr run -p <pkg>` / `--package <pkg>`: a workspace package, as `cargo run -p`. Also for `check` and `test`.
+- `rawr run --features <list>` / `-F`, `--no-default-features`, `--all-features`: the package's features, handed to Cargo as written. Also for `check` and `test`. Without them, the default features are on, as under `cargo run`. Not yet in rawr-import: its runner sees every `feature` off, and rawr's copy of a crate with a native module builds with the defaults.
 - `rawr check [path]`: rawr's check (prints `Checked <entry>` or the first error), then `cargo check` (`cargo check passed` or rustc's errors). Exit 1 if either fails.
 - `rawr test [path] [filter] [-- libtest options]`: builds as `cargo test` (`#[cfg(test)]` in, `cfg!(test)` true), runs `#[test]` fns one at a time in name order, cargo-test output format. Supports `#[should_panic]`, `#[should_panic(expected = "..")]`, `#[ignore]`, `#[ignore = ".."]`, tests returning `Result`. Options: `--exact`, `--skip <f>` / `--skip=<f>`, `--ignored`, `--include-ignored`, `--nocapture`; `--test-threads` accepted and ignored.
 - `rawr new <path>`: a Cargo crate with no deps; marked `src/main.rs` that prints three lines. Refuses a non-empty path. `--template <name>`: an extension's template (none exist today). `rawr new --help` lists templates.

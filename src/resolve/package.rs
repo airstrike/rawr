@@ -689,12 +689,16 @@ impl<'a> Resolver<'a> {
             .collect::<Vec<_>>()
             .into_boxed_slice();
 
-        let entry_crate = self
+        let entry = self
             .packages
             .iter()
-            .find(|package| package.name() == self.package.as_str())
+            .find(|package| package.name() == self.package.as_str());
+        let entry_crate = entry
             .and_then(|package| package.entry().and(package.rust_crate()))
             .map(ImmutableString::from);
+        let features = entry
+            .map(|package| package.features().clone())
+            .unwrap_or_default();
         let program = Program {
             #[cfg(feature = "rust-import")]
             native: self.native,
@@ -715,6 +719,7 @@ impl<'a> Resolver<'a> {
             qualified_rust: qualified_calls.rust,
             entry_crate,
             crates: prelude,
+            features,
             aliases,
             scripts,
             instances: super::Instances::default(),

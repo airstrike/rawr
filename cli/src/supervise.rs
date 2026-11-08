@@ -238,6 +238,7 @@ fn start(location: &Path, name: &OsStr, arguments: &[OsString]) -> std::io::Resu
     }
     #[cfg(not(unix))]
     let _ = name;
+    rawr::project::cargo::features::Selection::selected().hand(&mut command);
     command
         .args(arguments)
         .env(PROGRAM, location)

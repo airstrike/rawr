@@ -1,0 +1,13 @@
+[package]
+name = "rs-marker-features"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = ["x"]
+x = []
+y = []
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

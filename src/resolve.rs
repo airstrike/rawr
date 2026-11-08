@@ -96,6 +96,9 @@ pub struct Program {
     /// `None` for a source compiled alone, whose host decides what it
     /// reaches.
     crates: Option<extern_prelude::Prelude>,
+    /// The features Cargo enables for the package: its bodies'
+    /// `cfg(feature = "..")`s hold. None for a source compiled alone.
+    features: crate::project::cargo::features::Enabled,
     /// The type aliases each source names, declared or imported, which a
     /// body reads as the item headers do.
     aliases: BTreeMap<(program::source::Id, ImmutableString), type_ref::Alias>,
@@ -295,6 +298,11 @@ impl LoweringFailure {
 impl Program {
     pub(crate) fn package(&self) -> &str {
         &self.package
+    }
+
+    /// The features Cargo enables for the package.
+    pub(crate) const fn features(&self) -> &crate::project::cargo::features::Enabled {
+        &self.features
     }
 
     /// Access the source promoted into this resolved program.
@@ -619,6 +627,7 @@ fn resolve_with_evidence_and_namespace(
         qualified_rust: BTreeMap::new(),
         entry_crate: None,
         crates: None,
+        features: crate::project::cargo::features::Enabled::default(),
         aliases,
         scripts: vec![Script {
             source: program::source::Id::ROOT,
