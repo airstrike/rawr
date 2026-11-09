@@ -135,4 +135,13 @@ fn main() {
         target: grid::Target::Pane(first),
     }));
     example.update(Message::Dragged(grid::DragEvent::Picked { pane: first }));
+    // A widget borrows the panes, as pane_grid's `view` has
+    // `PaneGrid::new(&self.panes, ..)`, and a `&self` method still reads
+    // them, as rustc lets a shared borrow live beside another.
+    let widget = grid::Grid::new(&example.panes);
+    println!(
+        "{} panes beside a grid of {}",
+        example.panes.len(),
+        widget.panes()
+    );
 }
