@@ -172,7 +172,8 @@
         {"text":"A crate whose `lazy_static!` declares a hidden struct beside a static of the same name, as `colored`'s `SHOULD_COLORIZE` does, imports instead of failing as declared twice.","issues":[1462]},
         {"text":"A crate that re-exports `core` under another name, as bytemuck's `pub use ::core as __core;`, registers its bindings instead of failing at a module with no parent.","issues":[1463]},
         {"text":"A marked function that native code calls on another thread, as an iced app's `Task::perform` output closure runs on a tokio worker, makes and uses crate values as it does on the main thread, instead of failing with `Stale`.","issues":[1464]},
-        {"text":"The playground deploys again: the browser's universe ships as a 5 MB brotli-compressed module that the browser decompresses as it downloads, since the 53 MB raw module was over Cloudflare's limit on one file.","issues":[1459]}
+        {"text":"The playground deploys again: the browser's universe ships as a 5 MB brotli-compressed module that the browser decompresses as it downloads, since the 53 MB raw module was over Cloudflare's limit on one file.","issues":[1459]},
+        {"text":"A marked file can define a type over a native one, as inboard's `theme.rs` does with `enum Theme { Selected(themedef::Theme) }`. Its values cross with their native parts, and every impl native code relies on stays: `From` in both directions with native and crate types, a crate trait's impl, and `impl From<&Theme> for markdown::Settings`.","issues":[1466]}
       ]
     },
     "releases": [
@@ -3246,8 +3247,11 @@
     {"issue":1463,"title":"A crate module is declared below a re-export prefix (bytemuck's `pub use ::core as __core;`)…","state":"closed","category":"Importer"},
     {"issue":1464,"title":"A marked fn native code calls on another thread has no arena, so its first crate call fails…","state":"closed","category":"Divergences from rustc"},
     {"issue":1465,"title":"A marked fn on another thread can't keep a native value past its call, and trait-object calls…","state":"open","category":"Divergences from rustc"},
-    {"issue":1466,"title":"Marking inboard's theme.rs fails: a marked type's From impls with native and crate types, and…","state":"open","category":"Divergences from rustc"},
-    {"issue":1467,"title":"A marked module can only be declared from the crate root or a marked module; any file should be…","state":"open","category":"Divergences from rustc"}
+    {"issue":1466,"title":"Marking inboard's theme.rs fails: a marked type's From impls with native and crate types, and…","state":"closed","category":"Divergences from rustc"},
+    {"issue":1467,"title":"A marked module can only be declared from the crate root or a marked module; any file should be…","state":"open","category":"Divergences from rustc"},
+    {"issue":1468,"title":"A marked type's `&self` method returning a reference into the value …","state":"open","category":"No glue (D593)"},
+    {"issue":1469,"title":"A marked type's native part goes to the interpreter as a clone at every call, even for `&self`…","state":"open","category":"No glue (D593)"},
+    {"issue":1470,"title":"A marked trait impl for a native type whose method takes a receiver …","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

@@ -166,6 +166,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate that re-exports `core` under another name, as bytemuck's `pub use ::core as __core;`, registers its bindings instead of failing at a module with no parent. (#1463)
 - A marked function that native code calls on another thread, as an iced app's `Task::perform` output closure runs on a tokio worker, makes and uses crate values as it does on the main thread, instead of failing with `Stale`. (#1464)
 - The playground deploys again: the browser's universe ships as a 5 MB brotli-compressed module that the browser decompresses as it downloads, since the 53 MB raw module was over Cloudflare's limit on one file. (#1459)
+- A marked file can define a type over a native one, as inboard's `theme.rs` does with `enum Theme { Selected(themedef::Theme) }`. Its values cross with their native parts, and every impl native code relies on stays: `From` in both directions with native and crate types, a crate trait's impl, and `impl From<&Theme> for markdown::Settings`. (#1466)
 
 ## 0.3.171 (2026-11-07)
 
