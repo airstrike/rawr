@@ -14,6 +14,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate's `&mut self` method now works on a temporary, as in inboard's `rand::rng().random_range(0..100)`. The call's value is borrowed where it is made and lives to the end of its statement, as rustc does. This replaces a RAWR-RESOLVE-HOST-OPERATION "not supported yet" error. (#1514; part of #143, #870)
 - A crate's `&self` or `&mut self` method now reaches an element of a slice that a native method lends where it is. Examples are `entry.is_shared()` in `for entry in registry.entries()`, and on a `Vec<&Entry>` collected from it. It used to panic at run time with "a value reached an adapter as a type its signature doesn't take". (#1515)
 - A browser universe prepares about four times faster: elevato's `prepare()` goes from 1.25 s to about 0.29 s, measured natively. A whole-crate or whole-module re-export is now one alias that the runner's registry follows, not a copy of its entries. The facade plan also writes identities as hex. elevato's plan drops from 25.8 MB to 14.8 MB, and its wasm from 51.9 MB to 41.0 MB. (#1516; part of #1360, #1384, #435)
+- A call inside a crate macro's arguments now runs in Rust's order around a call whose value borrows a local, as in inboard's `stack![page, opaque(wizard.view(catalog, theme).map(..))]`. It used to be refused as "a call or assignment run before a call whose value borrows a local". (#1521)
 
 ## 0.3.172 (2026-11-09)
 

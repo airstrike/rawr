@@ -20,7 +20,8 @@
         {"text":"A universe in a browser, such as elevato.rs's page, prepares its bindings about eight times faster: 10.8 s down to about 1.4 s, measured natively. Installing a crate's items now sorts once, instead of shifting the registry for each item. Each item and type that re-exports reach at many paths is stored and converted once. The embedded bindings plan shrinks from 97.6 MB to about 26 MB.","issues":[1512],"refs":[1360,1362,435,1384]},
         {"text":"A crate's `&mut self` method now works on a temporary, as in inboard's `rand::rng().random_range(0..100)`. The call's value is borrowed where it is made and lives to the end of its statement, as rustc does. This replaces a RAWR-RESOLVE-HOST-OPERATION \"not supported yet\" error.","issues":[1514],"refs":[143,870]},
         {"text":"A crate's `&self` or `&mut self` method now reaches an element of a slice that a native method lends where it is. Examples are `entry.is_shared()` in `for entry in registry.entries()`, and on a `Vec<&Entry>` collected from it. It used to panic at run time with \"a value reached an adapter as a type its signature doesn't take\".","issues":[1515]},
-        {"text":"A browser universe prepares about four times faster: elevato's `prepare()` goes from 1.25 s to about 0.29 s, measured natively. A whole-crate or whole-module re-export is now one alias that the runner's registry follows, not a copy of its entries. The facade plan also writes identities as hex. elevato's plan drops from 25.8 MB to 14.8 MB, and its wasm from 51.9 MB to 41.0 MB.","issues":[1516],"refs":[1360,1384,435]}
+        {"text":"A browser universe prepares about four times faster: elevato's `prepare()` goes from 1.25 s to about 0.29 s, measured natively. A whole-crate or whole-module re-export is now one alias that the runner's registry follows, not a copy of its entries. The facade plan also writes identities as hex. elevato's plan drops from 25.8 MB to 14.8 MB, and its wasm from 51.9 MB to 41.0 MB.","issues":[1516],"refs":[1360,1384,435]},
+        {"text":"A call inside a crate macro's arguments now runs in Rust's order around a call whose value borrows a local, as in inboard's `stack![page, opaque(wizard.view(catalog, theme).map(..))]`. It used to be refused as \"a call or assignment run before a call whose value borrows a local\".","issues":[1521]}
       ]
     },
     "releases": [
@@ -3337,7 +3338,11 @@
     {"issue":1515,"title":"A method on an element of a slice a native method returns panics as a rawr bug","state":"open","category":"No glue (D593)"},
     {"issue":1516,"title":"A runner installs each re-export path of a crate's subtree as its own entries","state":"open","category":"Platforms"},
     {"issue":1517,"title":"A facade whose crate depends on another holds that crate's surface again under its hidden segment","state":"open","category":"Platforms"},
-    {"issue":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"open","category":"Platforms"}
+    {"issue":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"open","category":"Platforms"},
+    {"issue":1519,"title":"A runner's registry builds each entry on first lookup from a binary plan, so prepare costs what a program touches","state":"open","category":"Platforms"},
+    {"issue":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open","category":"Platforms"},
+    {"issue":1521,"title":"A call in a crate macro's arguments ahead of a call that borrows a local was refused as run before it","state":"open","category":"No glue (D593)"},
+    {"issue":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4289,7 +4294,9 @@
             {"number":1510,"title":"A marked module can't name a native module's type alias by its path (`crate::widget::Element`)","state":"open"},
             {"number":1511,"title":"The mirror table that Ty::from_resolved reads is a thread-local installed by Models::new; pass it explicitly","state":"open"},
             {"number":1514,"title":"A crate's &mut self method on a temporary is refused as not a `let mut` binding","state":"open"},
-            {"number":1515,"title":"A method on an element of a slice a native method returns panics as a rawr bug","state":"open"}
+            {"number":1515,"title":"A method on an element of a slice a native method returns panics as a rawr bug","state":"open"},
+            {"number":1521,"title":"A call in a crate macro's arguments ahead of a call that borrows a local was refused as run before it","state":"open"},
+            {"number":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"open"}
           ]
         }
       ]
@@ -4444,7 +4451,7 @@
           "start": 58,
           "size": 6,
           "state": "now",
-          "note": "The universe's generated bindings, built for wasm32 and loaded by rawr-web, give the playground, the landing page and an embedding site iced, ratatui and any declared crate. elevato.rs's universe checks and runs in Chrome (0.3.172). Its prepare went from 11 s to about 0.3 s (#1512, #1516), and its wasm is 41 MB raw and 5.5 MB as brotli. Next: per-start prepare work (#1518), duplicated facades (#1517), then in-place reload (#1455)",
+          "note": "The universe's generated bindings, built for wasm32 and loaded by rawr-web, give the playground, the landing page and an embedding site iced, ratatui and any declared crate. elevato.rs's universe checks and runs in Chrome (0.3.172). Its prepare went from 11 s to about 0.3 s (#1512, #1516), and its wasm is 41 MB raw and 5.5 MB as brotli. Next: a registry built on first lookup (#1519), with prepare at about 0.63 s in Chrome (#1518), duplicated facades (#1517), then in-place reload (#1455)",
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"},
             {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open"},
@@ -4461,7 +4468,9 @@
             {"number":1513,"title":"A runner installs each re-export path of a crate's item as its own registry entry, so prepare stays above a second","state":"open"},
             {"number":1516,"title":"A runner installs each re-export path of a crate's subtree as its own entries","state":"open"},
             {"number":1517,"title":"A facade whose crate depends on another holds that crate's surface again under its hidden segment","state":"open"},
-            {"number":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"open"}
+            {"number":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"open"},
+            {"number":1519,"title":"A runner's registry builds each entry on first lookup from a binary plan, so prepare costs what a program touches","state":"open"},
+            {"number":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open"}
           ]
         },
         {
