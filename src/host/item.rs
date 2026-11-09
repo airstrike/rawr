@@ -667,9 +667,7 @@ impl Definition {
     pub(crate) fn resolve(
         &self,
         root: &host::path::Path,
-        modules: &[host::path::Path],
-        types: &[host::type_def::Definition],
-        imported: &host::type_ref::ImportedTypes,
+        declared: &dyn host::declared::Declared,
     ) -> Result<Self, host::Error> {
         let path = host::path::Path::qualify(root, &self.path);
         let parent = path.parent().unwrap_or_else(|| root.clone());
@@ -677,7 +675,7 @@ impl Definition {
 
         match self.kind {
             Kind::Value | Kind::Function | Kind::IntrinsicFunction => {
-                if !parent_is_root && modules.binary_search(&parent).is_err() {
+                if !parent_is_root && !declared.module(&parent) {
                     return Err(host::Error::MissingFacadeModule {
                         path: path.to_string().into(),
                         module: parent.to_string().into(),
@@ -685,12 +683,7 @@ impl Definition {
                 }
             }
             Kind::IntrinsicMacro | Kind::MacroRules => {
-                if !parent_is_root
-                    && modules.binary_search(&parent).is_err()
-                    && types
-                        .binary_search_by(|definition| definition.path_ref().cmp(&parent))
-                        .is_err()
-                {
+                if !parent_is_root && !declared.module(&parent) && declared.ty(&parent).is_none() {
                     return Err(host::Error::MissingFacadeModule {
                         path: path.to_string().into(),
                         module: parent.to_string().into(),
@@ -701,10 +694,7 @@ impl Definition {
             | Kind::AssociatedFunction
             | Kind::Method
             | Kind::IntrinsicMethod => {
-                if types
-                    .binary_search_by(|definition| definition.path_ref().cmp(&parent))
-                    .is_err()
-                {
+                if declared.ty(&parent).is_none() {
                     return Err(host::Error::InvalidAssociatedOwner {
                         item: path.to_string().into(),
                         owner: parent.to_string().into(),
@@ -731,7 +721,7 @@ impl Definition {
         }
 
         Ok(Self {
-            signature: self.signature.resolve(root, types, imported, &path)?,
+            signature: self.signature.resolve(root, declared, &path)?,
             path,
             kind: self.kind,
             receiver: self.receiver,
@@ -760,10 +750,7 @@ impl Definition {
     pub(crate) fn resolve_imported<A: host::ImportAllocation + ?Sized>(
         mut self,
         root: &host::path::Path,
-        modules: &[host::path::Path],
-        types: &[host::type_def::Definition],
-        aliases: &[host::path::Path],
-        imported: &host::type_ref::ImportedTypes,
+        declared: &dyn host::declared::Declared,
         allocation: &mut A,
     ) -> Result<Self, host::Error> {
         let relative = self.path;
@@ -773,11 +760,11 @@ impl Definition {
         // An alias that passes its parameters on to a type has that type's
         // associated functions, as iced's `widget::Text::new`.
         let alias_function = matches!(self.kind, Kind::AssociatedFunction | Kind::AssociatedValue)
-            && aliases.contains(&parent);
+            && declared.type_alias(&parent);
 
         match self.kind {
             Kind::Value | Kind::Function | Kind::IntrinsicFunction => {
-                if !parent_is_root && modules.binary_search(&parent).is_err() {
+                if !parent_is_root && !declared.module(&parent) {
                     return Err(host::Error::MissingFacadeModule {
                         path: path.to_string().into(),
                         module: parent.to_string().into(),
@@ -785,12 +772,7 @@ impl Definition {
                 }
             }
             Kind::IntrinsicMacro | Kind::MacroRules => {
-                if !parent_is_root
-                    && modules.binary_search(&parent).is_err()
-                    && types
-                        .binary_search_by(|definition| definition.path_ref().cmp(&parent))
-                        .is_err()
-                {
+                if !parent_is_root && !declared.module(&parent) && declared.ty(&parent).is_none() {
                     return Err(host::Error::MissingFacadeModule {
                         path: path.to_string().into(),
                         module: parent.to_string().into(),
@@ -801,11 +783,7 @@ impl Definition {
             | Kind::AssociatedFunction
             | Kind::Method
             | Kind::IntrinsicMethod => {
-                if !alias_function
-                    && types
-                        .binary_search_by(|definition| definition.path_ref().cmp(&parent))
-                        .is_err()
-                {
+                if !alias_function && declared.ty(&parent).is_none() {
                     return Err(host::Error::InvalidAssociatedOwner {
                         item: path.to_string().into(),
                         owner: parent.to_string().into(),
@@ -832,7 +810,7 @@ impl Definition {
 
         self.signature = self
             .signature
-            .resolve_imported(root, types, imported, &path, allocation)?;
+            .resolve_imported(root, declared, &path, allocation)?;
         self.path = path;
         Ok(self)
     }

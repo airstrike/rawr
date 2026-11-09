@@ -120,8 +120,7 @@ impl TypeAlias {
     fn resolve(
         &self,
         root: &host::path::Path,
-        types: &[host::type_def::Definition],
-        imported: &host::type_ref::ImportedTypes,
+        declared: &dyn host::declared::Declared,
     ) -> Result<Self, host::Error> {
         let mut parameters = self
             .parameters
@@ -135,7 +134,7 @@ impl TypeAlias {
             .collect::<Result<Vec<_>, host::Error>>()?;
         parameters.sort_by(|(left, _), (right, _)| left.cmp(right));
         let resolve =
-            |ty: &host::type_ref::Type| ty.resolve(root, types, &parameters, imported, &self.path);
+            |ty: &host::type_ref::Type| ty.resolve(root, declared, &parameters, &self.path);
         Ok(Self {
             path: self.path.clone(),
             parameters: self.parameters.clone(),
@@ -277,14 +276,13 @@ impl ImplHeader {
 fn resolve_header_types(
     types: &[host::type_ref::Type],
     root: &host::path::Path,
-    declared: &[host::type_def::Definition],
+    declared: &dyn host::declared::Declared,
     parameters: &[(host::path::Path, crate::capability::Set)],
-    imported: &host::type_ref::ImportedTypes,
     item: &host::path::Path,
 ) -> Option<Box<[host::type_ref::Type]>> {
     types
         .iter()
-        .map(|ty| ty.resolve(root, declared, parameters, imported, item).ok())
+        .map(|ty| ty.resolve(root, declared, parameters, item).ok())
         .collect()
 }
 
@@ -1161,6 +1159,7 @@ impl Builder {
         validate_type_identities(&self.types)?;
         resolve_projections(&mut self.types, self.projections)?;
         let imported = host::type_ref::ImportedTypes::from_facade(&self.types)?;
+        let declared = host::declared::Slices::new(&self.modules, &self.types, &[], &imported);
 
         let item_count = self
             .items
@@ -1179,7 +1178,7 @@ impl Builder {
                 .try_reserve_exact(declarations.len())
                 .map_err(|_| host::Error::Allocation)?;
             for item in declarations {
-                resolved.push(item.resolve(&self.root, &self.modules, &self.types, &imported)?);
+                resolved.push(item.resolve(&self.root, &declared)?);
             }
             resolved.sort_by_key(host::item::Definition::fingerprint);
             for (index, item) in resolved.iter().enumerate() {
@@ -1229,7 +1228,7 @@ impl Builder {
         let mut type_aliases = self
             .type_aliases
             .iter()
-            .map(|alias| alias.resolve(&self.root, &self.types, &imported))
+            .map(|alias| alias.resolve(&self.root, &declared))
             .collect::<Result<Vec<_>, _>>()?;
         type_aliases.sort_by(|left, right| left.path.cmp(&right.path));
         for alias in &type_aliases {
@@ -1302,6 +1301,8 @@ impl Builder {
             .iter()
             .map(|alias| alias.path.clone())
             .collect::<Vec<_>>();
+        let declared =
+            host::declared::Slices::new(&self.modules, &self.types, &alias_paths, &imported);
         let mut families = Vec::new();
         // Resolving one group temporarily owns its new storage while the
         // declaration and final ordinary-item buffers are still alive.
@@ -1323,14 +1324,7 @@ impl Builder {
                 .try_reserve_exact(declarations.len())
                 .map_err(|_| host::Error::Allocation)?;
             for item in declarations {
-                resolved.push(item.resolve_imported(
-                    &self.root,
-                    &self.modules,
-                    &self.types,
-                    &alias_paths,
-                    &imported,
-                    allocation,
-                )?);
+                resolved.push(item.resolve_imported(&self.root, &declared, allocation)?);
             }
             resolved.sort_by_key(host::item::Definition::fingerprint);
             match host::family::Pending::partition(resolved, allocation)? {
@@ -1379,7 +1373,7 @@ impl Builder {
             .try_reserve_exact(self.type_aliases.len())
             .map_err(|_| host::Error::Allocation)?;
         for alias in &self.type_aliases {
-            type_aliases.push(alias.resolve(&self.root, &self.types, &imported)?);
+            type_aliases.push(alias.resolve(&self.root, &declared)?);
         }
         type_aliases.sort_by(|left, right| left.path.cmp(&right.path));
         let mut modules = Vec::new();
@@ -1406,13 +1400,7 @@ impl Builder {
                 .iter()
                 .map(|default| match default {
                     Some(default) => default
-                        .resolve(
-                            &self.root,
-                            &self.types,
-                            &parameters,
-                            &imported,
-                            &header.path,
-                        )
+                        .resolve(&self.root, &declared, &parameters, &header.path)
                         .ok()
                         .map(Some),
                     None => Some(None),
@@ -1446,14 +1434,7 @@ impl Builder {
                 continue;
             };
             let resolve = |types: &[host::type_ref::Type]| {
-                resolve_header_types(
-                    types,
-                    &self.root,
-                    &self.types,
-                    &parameters,
-                    &imported,
-                    &self.root,
-                )
+                resolve_header_types(types, &self.root, &declared, &parameters, &self.root)
             };
             let (Some(arguments), Some(self_type)) = (
                 resolve(&header.arguments),

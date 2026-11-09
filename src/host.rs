@@ -1,6 +1,7 @@
 //! Host metadata consulted while resolving Rawr source.
 
 pub mod debug;
+pub(crate) mod declared;
 pub mod display;
 mod error;
 pub mod export;
