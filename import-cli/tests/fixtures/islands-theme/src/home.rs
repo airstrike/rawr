@@ -112,6 +112,13 @@ pub fn inbox<'a>(theme: &'a theme::Theme) -> Element<'a, Message> {
         .boxed()
 }
 
+/// The sidebar, as inboard's views: a marked fn gives the theme native
+/// code lends it on to the marked `inbox`, which gives it to the native
+/// `inbox::view`, so native code's own reference reaches the last call.
+pub fn sidebar(theme: &theme::Theme) -> Element<'_, Message> {
+    inbox(theme)
+}
+
 /// An element that keeps both its lent title and the lent theme borrowed
 /// (#1509).
 pub fn titled<'a>(title: &'a str, theme: &'a theme::Theme) -> Element<'a, Message> {

@@ -208,6 +208,28 @@ impl From<f32> for Pixels {
     }
 }
 
+impl From<u32> for Pixels {
+    fn from(amount: u32) -> Self {
+        Pixels(amount as f32)
+    }
+}
+
+/// Space around a widget, as `iced::Padding`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Padding {
+    pub vertical: f32,
+    pub horizontal: f32,
+}
+
+impl From<[u16; 2]> for Padding {
+    fn from([vertical, horizontal]: [u16; 2]) -> Self {
+        Padding {
+            vertical: f32::from(vertical),
+            horizontal: f32::from(horizontal),
+        }
+    }
+}
+
 /// Children laid out top to bottom, as the iced fork's `Column<W>`.
 pub struct Column<W> {
     children: Vec<W>,
@@ -224,8 +246,8 @@ impl<W> Column<W> {
         }
     }
 
-    pub fn spacing(mut self, spacing: u32) -> Self {
-        self.spacing = spacing;
+    pub fn spacing(mut self, spacing: impl Into<Pixels>) -> Self {
+        self.spacing = spacing.into().0 as u32;
         self
     }
 
@@ -341,16 +363,27 @@ where
 
 /// Empty space, as `iced::widget::Space`.
 pub struct Space {
+    width: Length,
     height: Length,
 }
 
 pub fn vertical_space() -> Space {
-    Space {
-        height: Length::Shrink,
-    }
+    Space::new()
 }
 
 impl Space {
+    pub fn new() -> Self {
+        Self {
+            width: Length::Shrink,
+            height: Length::Shrink,
+        }
+    }
+
+    pub fn width(mut self, width: impl Into<Length>) -> Self {
+        self.width = width.into();
+        self
+    }
+
     pub fn height(mut self, height: impl Into<Length>) -> Self {
         self.height = height.into();
         self
@@ -359,7 +392,10 @@ impl Space {
 
 impl<M, T, R> Widget<M, T, R> for Space {
     fn draw(&self, _theme: &T) -> String {
-        format!("space {:?}", self.height)
+        match self.width {
+            Length::Shrink => format!("space {:?}", self.height),
+            width => format!("space {width:?}x{:?}", self.height),
+        }
     }
 }
 
@@ -606,5 +642,254 @@ impl<'a, T: TextCatalog> Text<'a, T> {
             self.size,
             theme.color(&self.class)
         )
+    }
+}
+
+/// Children laid out left to right, as iced's `Row`, from any iterator
+/// of elements.
+pub struct Row<'a, M, T, R = Renderer> {
+    children: Vec<Element<'a, M, T, R>>,
+}
+
+pub fn row<'a, M, T, R>(
+    children: impl IntoIterator<Item = Element<'a, M, T, R>>,
+) -> Row<'a, M, T, R> {
+    Row {
+        children: children.into_iter().collect(),
+    }
+}
+
+impl<M, T, R> Widget<M, T, R> for Row<'_, M, T, R> {
+    fn draw(&self, theme: &T) -> String {
+        let children: Vec<String> = self
+            .children
+            .iter()
+            .map(|child| child.draw(theme))
+            .collect();
+        format!("row [{}]", children.join(", "))
+    }
+
+    fn press(&self) -> Option<M> {
+        self.children.iter().find_map(Widget::press)
+    }
+}
+
+/// A button and its look, as `iced::widget::button`: a module beside a
+/// function of one name.
+pub mod button {
+    use super::{Element, Widget};
+
+    /// How a button looks, as `iced::widget::button::Style`.
+    #[derive(Debug, Clone, Copy, PartialEq, Default)]
+    pub struct Style {
+        pub text_color: u32,
+        pub background: u32,
+    }
+
+    /// What the pointer does to a button, as iced's `button::Status`.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum Status {
+        Active,
+        Hovered,
+    }
+
+    /// A button, as `iced::widget::Button`.
+    pub struct Button<'a, M, T> {
+        content: Element<'a, M, T>,
+        message: Option<M>,
+        style: Box<dyn Fn(&T, Status) -> Style + 'a>,
+    }
+
+    pub fn button<'a, M, T>(content: impl Widget<M, T> + 'a) -> Button<'a, M, T> {
+        Button {
+            content: content.boxed(),
+            message: None,
+            style: Box::new(|_, _| Style::default()),
+        }
+    }
+
+    impl<'a, M, T> Button<'a, M, T> {
+        pub fn on_press(mut self, message: M) -> Self {
+            self.message = Some(message);
+            self
+        }
+
+        pub fn style(mut self, style: impl Fn(&T, Status) -> Style + 'a) -> Self {
+            self.style = Box::new(style);
+            self
+        }
+    }
+
+    impl<M: Clone, T, R> Widget<M, T, R> for Button<'_, M, T> {
+        fn draw(&self, theme: &T) -> String {
+            format!(
+                "button {:?} ({})",
+                (self.style)(theme, Status::Hovered),
+                self.content.draw(theme)
+            )
+        }
+
+        fn press(&self) -> Option<M> {
+            self.message.clone()
+        }
+    }
+}
+
+pub use button::button;
+
+/// A line between parts, as `iced::widget::rule`.
+pub mod rule {
+    use super::Widget;
+
+    /// A horizontal line, as iced's `Rule`.
+    pub struct Rule<'a, T> {
+        height: u32,
+        style: Box<dyn Fn(&T) -> u32 + 'a>,
+    }
+
+    pub fn horizontal<'a, T>(height: u32) -> Rule<'a, T> {
+        Rule {
+            height,
+            style: Box::new(|_| 0),
+        }
+    }
+
+    impl<'a, T> Rule<'a, T> {
+        pub fn style(mut self, style: impl Fn(&T) -> u32 + 'a) -> Self {
+            self.style = Box::new(style);
+            self
+        }
+    }
+
+    impl<M, T, R> Widget<M, T, R> for Rule<'_, T> {
+        fn draw(&self, theme: &T) -> String {
+            format!("rule {} styled {}", self.height, (self.style)(theme))
+        }
+    }
+}
+
+/// An area that takes presses, as `iced::widget::mouse_area`.
+pub mod mouse_area {
+    use super::{Element, Widget};
+
+    /// What the pointer does over a mouse area.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum Status {
+        Idle,
+        Hovered,
+    }
+
+    /// A widget that takes presses, as iced's `MouseArea`.
+    pub struct MouseArea<'a, M, T> {
+        content: Element<'a, M, T>,
+        message: Option<M>,
+        style: Box<dyn Fn(&T, Status) -> u32 + 'a>,
+    }
+
+    pub fn mouse_area<'a, M, T>(content: impl Widget<M, T> + 'a) -> MouseArea<'a, M, T> {
+        MouseArea {
+            content: content.boxed(),
+            message: None,
+            style: Box::new(|_, _| 0),
+        }
+    }
+
+    impl<'a, M, T> MouseArea<'a, M, T> {
+        pub fn on_press(mut self, message: M) -> Self {
+            self.message = Some(message);
+            self
+        }
+
+        pub fn style(mut self, style: impl Fn(&T, Status) -> u32 + 'a) -> Self {
+            self.style = Box::new(style);
+            self
+        }
+    }
+
+    impl<M: Clone, T, R> Widget<M, T, R> for MouseArea<'_, M, T> {
+        fn draw(&self, theme: &T) -> String {
+            format!(
+                "area styled {} ({})",
+                (self.style)(theme, Status::Hovered),
+                self.content.draw(theme)
+            )
+        }
+
+        fn press(&self) -> Option<M> {
+            self.message.clone()
+        }
+    }
+}
+
+pub use mouse_area::mouse_area;
+
+/// A field of text, as iced's `TextInput`.
+pub struct TextInput<'a, M, T> {
+    placeholder: String,
+    value: String,
+    on_input: Option<Box<dyn Fn(String) -> M + 'a>>,
+    on_submit: Option<M>,
+    theme: PhantomData<fn(&T)>,
+}
+
+pub fn text_input<'a, M, T>(placeholder: &str, value: &str) -> TextInput<'a, M, T> {
+    TextInput {
+        placeholder: placeholder.to_owned(),
+        value: value.to_owned(),
+        on_input: None,
+        on_submit: None,
+        theme: PhantomData,
+    }
+}
+
+impl<'a, M, T> TextInput<'a, M, T> {
+    pub fn on_input(mut self, on_input: impl Fn(String) -> M + 'a) -> Self {
+        self.on_input = Some(Box::new(on_input));
+        self
+    }
+
+    pub fn on_submit(mut self, message: M) -> Self {
+        self.on_submit = Some(message);
+        self
+    }
+}
+
+impl<M: Clone, T, R> Widget<M, T, R> for TextInput<'_, M, T> {
+    fn draw(&self, _theme: &T) -> String {
+        format!("input {} of {}", self.value, self.placeholder)
+    }
+
+    /// What typing the placeholder gives, else what submitting does.
+    fn press(&self) -> Option<M> {
+        match &self.on_input {
+            Some(on_input) => Some(on_input(self.placeholder.clone())),
+            None => self.on_submit.clone(),
+        }
+    }
+}
+
+/// Text a widget shows, as `iced::widget::text`: a module beside a
+/// function of one name.
+pub mod text {
+    use std::borrow::Cow;
+
+    /// Text borrowed or owned, as iced's `text::Fragment<'a>`.
+    pub type Fragment<'a> = Cow<'a, str>;
+
+    /// What can be a widget's text, as iced's `text::IntoFragment<'a>`.
+    pub trait IntoFragment<'a> {
+        fn into_fragment(self) -> Fragment<'a>;
+    }
+
+    impl<'a> IntoFragment<'a> for &'a str {
+        fn into_fragment(self) -> Fragment<'a> {
+            Cow::Borrowed(self)
+        }
+    }
+
+    impl<'a> IntoFragment<'a> for String {
+        fn into_fragment(self) -> Fragment<'a> {
+            Cow::Owned(self)
+        }
     }
 }

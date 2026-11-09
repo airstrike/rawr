@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+common = { path = "common" }
 ui = { path = "ui" }
 
 # Its own workspace: it is not a member of Rawr's.

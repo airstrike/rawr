@@ -6,6 +6,10 @@
 mod grid;
 mod home;
 mod inbox;
+// Marked builders `rawr check` checks; native code calls none of them,
+// as running generic marked code from native code waits on #1539.
+#[allow(dead_code)]
+mod sidebar;
 mod style;
 mod theme;
 mod widget;
@@ -86,6 +90,8 @@ fn main() {
     println!("{}", badge.draw());
     let inbox = home::inbox(&theme);
     println!("inbox {} {:?}", inbox.draw(&theme), inbox.message());
+    let sidebar = home::sidebar(&dark);
+    println!("sidebar {} {:?}", sidebar.draw(&dark), sidebar.message());
     println!("titled {}", home::titled("mail", &dark).draw(&theme));
     let page = home::page(grid::home(&theme), &theme);
     println!("page {} {:?}", page.draw(&theme), page.message());

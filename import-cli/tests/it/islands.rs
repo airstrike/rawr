@@ -891,7 +891,18 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// keeps. A marked `Panel<'a>` of native code's `&'a str` and `Element<'a,
 /// Message>`s, as inboard's `Sidebar<'a, Message>`, is built by native code
 /// through a chain of marked methods by value and by `&mut`, kept between
-/// calls and drawn, and its title is native code's own text (#1557).
+/// calls and drawn, and its title is native code's own text (#1557). A
+/// marked `sidebar(theme: &Theme) -> Element<'_, Message>` gives the theme
+/// native code lends it on to the marked `inbox`, whose native call gets
+/// native code's own reference. A marked `sidebar` module follows inboard's
+/// `widget/sidebar.rs`: structs of `Box<dyn Iterator<Item = Element>>`,
+/// `.chain(&mut self.actions)` and `column(&mut self.content)`, a native
+/// crate's `space!()`, a struct update through the crate's own `Default`
+/// of a generic struct with `[4, 0].into()` into a crate `Padding`, a
+/// blanket `IntoContent<'a, Message>` impl, a dependency's
+/// `IntoFragment<'a>`, closures annotated `&Theme` through the crate
+/// root's re-export and an `impl Fn(String) -> Message` handed on to
+/// `on_input`.
 /// `rawr check` passes as `cargo check` does, and `rawr run` prints what
 /// `cargo run` prints.
 #[test]
@@ -924,7 +935,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         "{printed}"
     );
     assert!(
-        printed.contains("void styled 0 idle\nhome badge on dark\ninbox inbox styled 120 Some(Inbox(Opened(120)))\ntitled mail styled 254 idle\npage grid styled 121 Some(Grid(Tile(120)))\n"),
+        printed.contains("void styled 0 idle\nhome badge on dark\ninbox inbox styled 120 Some(Inbox(Opened(120)))\nsidebar inbox styled 250 Some(Inbox(Opened(250)))\ntitled mail styled 254 idle\npage grid styled 121 Some(Grid(Tile(120)))\n"),
         "{printed}"
     );
     assert!(
@@ -965,7 +976,95 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     }
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
+
+    // inboard's sidebar.rs also hands a crate's `style` closures over the
+    // marked `&Theme`, one a struct update over a crate `Style`, the `impl
+    // Fn(&Theme, Status)` a native function gives, and a native style
+    // function's last argument given ahead by `common::function::Ternary::
+    // with`, which the glob import brings beside `Function::with`. `rawr
+    // check` passes as `cargo check` does; the runner can't build them yet.
+    let sidebar = root.join("src/sidebar.rs");
+    let mut text = fs::read_to_string(&sidebar).unwrap();
+    text.push_str(OPAQUE_STYLES);
+    fs::write(&sidebar, text).unwrap();
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
 }
+
+/// The sidebar builders of inboard's whose styles a crate calls with the
+/// marked `&Theme`, and a non-generic caller that instantiates them.
+const OPAQUE_STYLES: &str = "
+use common::function::*;
+use ui::{button as ui_button, rule};
+
+use crate::widget::{mouse_area, Button};
+
+pub fn tab<'a, Message>(label: Element<'a, Message>, message: Message, selected: bool) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    mouse_area(column![
+        container(label).center_x(Fill),
+        rule::horizontal(1).style(move |theme: &Theme| match selected {
+            true => theme::rule::accent(theme),
+            false => theme::rule::divider(theme),
+        })
+    ])
+    .on_press(message)
+    .boxed()
+}
+
+pub fn button<'a, Message: Clone + 'a>(
+    icon: Element<'a, Message>,
+    message: impl Fn() -> Message + 'a,
+) -> Button<'a, Message> {
+    ui::button(icon)
+        .on_press(message())
+        .style(|theme: &Theme, status| ui_button::Style {
+            text_color: theme.colors().text + 80,
+            ..theme::button::board_toolbar(theme, status)
+        })
+}
+
+pub fn muted_tab<'a, Message>(label: Element<'a, Message>, message: Message, selected: bool) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    mouse_area(container(label))
+        .style(theme::mouse_area::muted_tab.with(selected))
+        .on_press(message)
+        .boxed()
+}
+
+pub fn nav_item<'a, Message: Clone + 'a>(label: &'a str, on_press: Message, selected: bool) -> Element<'a, Message> {
+    ui::button(crate::widget::label(label))
+        .on_press(on_press)
+        .style(theme::button::sidebar_nav(selected))
+        .boxed()
+}
+
+pub fn navigation() -> Element<'static, Message> {
+    column![
+        tab(tab_label(\"one\"), Message::Tab(1), true),
+        muted_tab(tab_label(\"two\"), Message::Tab(2), false),
+        button(tab_label(\"+\"), || Message::Pressed),
+        nav_item(\"home\", Message::Tab(3), true),
+    ]
+    .boxed()
+}
+";
 
 /// A marked module names a native workspace crate's `&'static str`, byte
 /// string and slice constants and `&'static str` static through the crate's
