@@ -1054,6 +1054,97 @@ impl<'a> Generator<'a> {
         Some(Ok(Borrowed::Kept(owned)))
     }
 
+    /// The marked input whose borrow `function`'s result keeps, as rustc
+    /// ties their lifetimes, by its name in the trampoline (#1473): an
+    /// input whose type names a lifetime the result names, as `&'a self` of
+    /// `view<'a>(&'a self, ..) -> Element<'a, Message>`, and else, as rustc
+    /// elides it, `&self` or the one input that borrows. Only a marked
+    /// value native code holds is an anchor: one lent by its parts or
+    /// copied, `receiver` and `passes` say. `None` when there is none.
+    fn anchor(
+        &self,
+        file: &Source<'_>,
+        function: &item::Function,
+        receiver: Option<&Pass>,
+        passes: &[Pass],
+    ) -> Option<String> {
+        let output = function.output.as_ref()?;
+        if matches!(output, type_ref::Type::Reference { .. }) {
+            return None;
+        }
+        let named = lifetimes(slice(file.text, output.span()))
+            .into_iter()
+            .filter(|name| *name != "_")
+            .collect::<Vec<_>>();
+        let names = |text: &str| lifetimes(text).iter().any(|name| named.contains(name));
+        let borrows = |ty: &type_ref::Type| {
+            matches!(ty, type_ref::Type::Reference { .. })
+                || !lifetimes(slice(file.text, ty.span())).is_empty()
+        };
+        let receiver = match (&function.receiver, receiver) {
+            (Some(item::Receiver::Shared(span)), Some(pass)) => Some((*span, pass)),
+            _ => None,
+        };
+        let tied_receiver = receiver.filter(|(span, _)| {
+            if named.is_empty() {
+                true
+            } else {
+                names(slice(file.text, *span))
+            }
+        });
+        // An elided lifetime of a `&mut self` method is the receiver's,
+        // which native code can't hold as an anchor.
+        if named.is_empty() && matches!(function.receiver, Some(item::Receiver::Mutable(_))) {
+            return None;
+        }
+        let tied = if named.is_empty() && tied_receiver.is_none() {
+            let borrowing = function
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, parameter)| borrows(&parameter.ty))
+                .collect::<Vec<_>>();
+            match &borrowing[..] {
+                [(index, _)] => vec![*index],
+                _ => Vec::new(),
+            }
+        } else if named.is_empty() {
+            Vec::new()
+        } else {
+            function
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, parameter)| names(slice(file.text, parameter.ty.span())))
+                .map(|(index, _)| index)
+                .collect()
+        };
+        let marked = |pass: &Pass| matches!(pass, Pass::LendParts { mutable: false });
+        let held = |index: usize, ty: &type_ref::Type| {
+            let type_ref::Type::Reference {
+                mutable: false,
+                target,
+                ..
+            } = ty
+            else {
+                return false;
+            };
+            let type_ref::Type::Path(path) = target.as_ref() else {
+                return false;
+            };
+            marked(&passes[index])
+                || (matches!(passes[index], Pass::Borrow) && self.marked(file, path).is_some())
+        };
+        if let Some((_, pass)) = tied_receiver
+            && (marked(pass) || matches!(pass, Pass::Borrow))
+        {
+            return Some("self".to_owned());
+        }
+        tied.into_iter()
+            .find(|index| held(*index, &function.parameters[*index].ty))
+            .map(|index| format!("__a{index}"))
+    }
+
     /// How a `&'static` result of a native value comes back (#1442): `None`
     /// when `function`'s result is no such reference.
     fn lasting_result(
@@ -1695,8 +1786,17 @@ impl<'a> Generator<'a> {
                 let _ = writeln!(text, "    __call.object(&{name}.0);");
             }
         };
+        // A result read part by part that borrows a marked input, as
+        // `view<'a>(&'a self, ..) -> Element<'a, Message>` borrows `self`,
+        // is made in a region kept with that input (#1473).
+        let anchor = back
+            .as_ref()
+            .and_then(|_| self.anchor(file, function, receiver.as_ref(), &passes));
         if let Some(pass) = receiver {
             argument("self", pass, &mut text);
+        }
+        if let Some(anchor) = anchor {
+            let _ = writeln!(text, "    __call.anchor({anchor});");
         }
         for (index, pass) in passes.into_iter().enumerate() {
             argument(&format!("__a{index}"), pass, &mut text);
@@ -2649,6 +2749,20 @@ fn each_lifetime(text: &str, with: &str) -> String {
 }
 
 /// Every identifier in `text`.
+/// The name of each lifetime `text` names but `'static`, `_` for `'_`.
+fn lifetimes(text: &str) -> Vec<&str> {
+    text.split('\'')
+        .skip(1)
+        .map(|after| {
+            let end = after
+                .find(|c: char| !(c == '_' || c.is_alphanumeric()))
+                .unwrap_or(after.len());
+            &after[..end]
+        })
+        .filter(|name| *name != "static")
+        .collect()
+}
+
 fn identifiers(text: &str) -> BTreeSet<&str> {
     text.split(|c: char| !(c == '_' || c.is_alphanumeric()))
         .filter(|word| !word.is_empty())
@@ -4160,6 +4274,15 @@ pub mod __rawr_island {
         Ok(())
     }
 
+    /// The anchor of `value` (#1473): its address and a hash of its type's
+    /// name, which the runner keeps what native code borrows of it by.
+    fn anchor_of<T: ?Sized>(value: &T) -> [u64; 2] {
+        use ::std::hash::{Hash as _, Hasher as _};
+        let mut hasher = ::std::collections::hash_map::DefaultHasher::new();
+        ::std::any::type_name::<T>().hash(&mut hasher);
+        [::std::ptr::from_ref(value).cast::<()>().addr() as u64, hasher.finish()]
+    }
+
     /// One call of a marked function. `'c` is what its lent arguments
     /// borrow: they stay borrowed until the call is sent and answered.
     pub struct Call<'c> {
@@ -4170,6 +4293,8 @@ pub mod __rawr_island {
         unit: bool,
         count: u32,
         mutable: u64,
+        anchor: ::std::option::Option<[u64; 2]>,
+        releases: ::std::vec::Vec<[u64; 2]>,
         values: Out,
         lent: ::std::vec::Vec<(
             ::std::any::TypeId,
@@ -4193,6 +4318,8 @@ pub mod __rawr_island {
                 unit: false,
                 count: 0,
                 mutable: 0,
+                anchor: ::std::option::Option::None,
+                releases: ::std::vec::Vec::new(),
                 values: Out(::std::vec::Vec::new(), ::std::vec::Vec::new()),
                 lent: ::std::vec::Vec::new(),
                 borrows: ::std::marker::PhantomData,
@@ -4256,6 +4383,7 @@ pub mod __rawr_island {
         /// mutably for the call, which comes back after it
         /// ([`Parts::take_into`]).
         pub fn lent_mut<T: Parts>(&mut self, value: &'c mut T) {
+            self.releases.push(anchor_of(&*value));
             self.mutable |= 1 << self.count;
             value.lend_mut(self);
             self.count += 1;
@@ -4297,6 +4425,13 @@ pub mod __rawr_island {
         pub fn in_place(&mut self, lasting: bool) {
             self.in_place = 4 | u8::from(lasting) << 3;
         }
+        /// The call's result borrows `value`, a marked input it borrows
+        /// (#1473): it is made in a region kept with what native code
+        /// borrows of `value`, which the runner lets go of when native code
+        /// next takes `value` `&mut`.
+        pub fn anchor<T: ?Sized>(&mut self, value: &'c T) {
+            self.anchor = ::std::option::Option::Some(anchor_of(value));
+        }
         /// The function returns `()`, which comes back whatever value its
         /// body's last statement left.
         pub fn unit(&mut self) {
@@ -4304,20 +4439,36 @@ pub mod __rawr_island {
         }
         /// An argument the call may change, which comes back after it.
         pub fn mutable<T: Put + ?Sized>(&mut self, value: &T) {
+            self.releases.push(anchor_of(value));
             self.mutable |= 1 << self.count;
             self.argument(value);
         }
         pub fn send(mut self) -> Reply {
             register();
             let mut bytes = ::std::vec::Vec::with_capacity(13 + self.values.0.len());
+            let anchored = u8::from(self.anchor.is_some()) << 5;
+            let releases = u8::from(!self.releases.is_empty()) << 6;
             bytes.push(
                 u8::from(self.owned)
                     | u8::from(self.pinned) << 1
                     | self.in_place
-                    | u8::from(self.unit) << 4,
+                    | u8::from(self.unit) << 4
+                    | anchored
+                    | releases,
             );
             bytes.extend_from_slice(&self.count.to_le_bytes());
             bytes.extend_from_slice(&self.mutable.to_le_bytes());
+            for [address, ty] in self.anchor.iter() {
+                bytes.extend_from_slice(&address.to_le_bytes());
+                bytes.extend_from_slice(&ty.to_le_bytes());
+            }
+            if !self.releases.is_empty() {
+                bytes.extend_from_slice(&(self.releases.len() as u32).to_le_bytes());
+                for [address, ty] in &self.releases {
+                    bytes.extend_from_slice(&address.to_le_bytes());
+                    bytes.extend_from_slice(&ty.to_le_bytes());
+                }
+            }
             bytes.extend_from_slice(&self.values.0);
             // SAFETY: the runner links `rawr`, which defines the function
             // with this exact signature. Each lent place is borrowed for
@@ -4657,6 +4808,44 @@ mod tests {
             assert!(text.contains(expected), "{expected}\n{text}");
         }
         assert!(!text.contains("panic!"), "{text}");
+    }
+
+    /// A result read part by part that borrows a marked input is anchored
+    /// on that input, as rustc ties their lifetimes (#1473): `&'a self` of
+    /// `view<'a>(&'a self, ..)`, the elided one of a free `view(&State)`,
+    /// and not `&self` when the result names another input's lifetime. A
+    /// `&mut` of a marked value lets go of what was borrowed of it.
+    #[test]
+    fn a_result_that_borrows_a_marked_input_is_anchored_on_it() {
+        let shadow = generate(
+            "// rawr\nuse crate::{ui, Inbox};\n\
+             pub struct State {\n    content: ui::Content,\n    title: String,\n}\n\
+             impl State {\n    \
+             pub fn view<'a>(&'a self, inbox: &'a Inbox) -> ui::Element<'a, u32> { todo!() }\n    \
+             pub fn other<'a>(&self, inbox: &'a Inbox) -> ui::Element<'a, u32> { todo!() }\n    \
+             pub fn edit(&mut self) {}\n}\n\
+             pub fn show(state: &State) -> ui::Element<'_, u32> { todo!() }\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        let body = |name: &str| {
+            let at = text.find(&format!("fn {name}")).unwrap();
+            let end = text[at..].find("\n}\n").map_or(text.len(), |end| at + end);
+            &text[at..end]
+        };
+        assert!(
+            body("view").contains("    __call.anchor(self);\n"),
+            "{text}"
+        );
+        assert!(!body("other").contains("__call.anchor("), "{text}");
+        assert!(
+            body("show").contains("    __call.anchor(__a0);\n"),
+            "{text}"
+        );
+        assert!(!body("edit").contains("__call.anchor("), "{text}");
+        assert_eq!(lifetimes("Element<'a, &'static str, '_>"), ["a", "_"]);
     }
 
     /// A marked type's native parts inside an `Option`, a `Vec`, a `Box`

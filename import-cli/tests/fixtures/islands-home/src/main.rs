@@ -15,6 +15,13 @@ fn main() {
         workspace.update(home::Message::Edited(Action::Insert(character)));
     }
     println!("{}", workspace.home.summary());
+    // Two elements held at once, each borrowing the screen.
+    let inbox = workspace.show();
+    let wizard = home::view(&workspace.home);
+    println!(
+        "shown {} {:?} and {}",
+        inbox.label, inbox.on_press, wizard.label
+    );
     let taken = workspace.update(home::Message::Inbox(inbox::Message::Read(2)));
     println!("inbox {} after {taken}", workspace.inbox.unread);
     let opened = workspace.home.open();
@@ -28,6 +35,8 @@ fn main() {
         workspace.home.count(),
         workspace.home.text()
     );
+    let shown = workspace.show();
+    println!("shown {} {:?}", shown.label, shown.on_press);
     let taken = workspace.press();
     println!("pressed {taken}: {}", workspace.home.summary());
     let taken = workspace.press();
@@ -73,10 +82,12 @@ fn main() {
         let before = workspace.home.count();
         workspace.update(home::Message::Count);
         let after = workspace.home.count();
+        let shown = workspace.show();
         println!(
-            "tick {tick} from {before} by {} over [{}]",
+            "tick {tick} from {before} by {} over [{}] shows {}",
             after - before,
-            workspace.home.tabs()
+            workspace.home.tabs(),
+            shown.label
         );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }

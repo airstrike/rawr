@@ -65,6 +65,15 @@ pub(crate) const LASTING: u8 = 8;
 /// comes back whatever value its body's last statement left, as the part
 /// `self.tabs.remove(index);` removes (#1475).
 pub(crate) const UNIT_RESULT: u8 = 16;
+/// The first byte of a call's header: the result borrows a marked input,
+/// whose key follows the header (#1473). The call runs in a region kept
+/// in that input's pins, so the result lives as long as the input is
+/// borrowed.
+pub(crate) const ANCHORED: u8 = 32;
+/// The first byte of a call's header: the call takes marked inputs `&mut`,
+/// whose keys follow the header and the anchor's (#1473). What native code
+/// borrowed of each is let go of first.
+pub(crate) const RELEASES: u8 = 64;
 
 /// Nesting deeper than this does not cross.
 const DEPTH: usize = 256;
