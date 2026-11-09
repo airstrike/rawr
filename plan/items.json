@@ -1465,6 +1465,8 @@
     {"t":"T1462","issue":1462,"title":"T1462: A crate's value and type of one name (lazy_static's hidden struct beside its static) are refused…","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":"9699e9a6f","release":null},
     {"t":"T1463","issue":1463,"title":"T1463: A crate module is declared below a re-export prefix (bytemuck's `pub use ::core as __core;`)…","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":"7287466d4","release":null},
     {"t":"T1464","issue":1464,"title":"T1464: A marked fn native code calls on another thread has no arena, so its first crate call fails…","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":"1a8e7c312","release":null},
-    {"t":"T1465","issue":1465,"title":"T1465: A marked fn on another thread can't keep a native value past its call, and trait-object calls…","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1465","issue":1465,"title":"T1465: A marked fn on another thread can't keep a native value past its call, and trait-object calls…","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1466","issue":1466,"title":"T1466: Marking inboard's theme.rs fails: a marked type's From impls with native and crate types, and…","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1467","issue":1467,"title":"T1467: A marked module can only be declared from the crate root or a marked module; any file should be…","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

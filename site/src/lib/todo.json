@@ -3245,7 +3245,9 @@
     {"issue":1462,"title":"A crate's value and type of one name (lazy_static's hidden struct beside its static) are refused…","state":"closed","category":"Importer"},
     {"issue":1463,"title":"A crate module is declared below a re-export prefix (bytemuck's `pub use ::core as __core;`)…","state":"closed","category":"Importer"},
     {"issue":1464,"title":"A marked fn native code calls on another thread has no arena, so its first crate call fails…","state":"closed","category":"Divergences from rustc"},
-    {"issue":1465,"title":"A marked fn on another thread can't keep a native value past its call, and trait-object calls…","state":"open","category":"Divergences from rustc"}
+    {"issue":1465,"title":"A marked fn on another thread can't keep a native value past its call, and trait-object calls…","state":"open","category":"Divergences from rustc"},
+    {"issue":1466,"title":"Marking inboard's theme.rs fails: a marked type's From impls with native and crate types, and…","state":"open","category":"Divergences from rustc"},
+    {"issue":1467,"title":"A marked module can only be declared from the crate root or a marked module; any file should be…","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
