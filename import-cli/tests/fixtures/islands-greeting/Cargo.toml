@@ -1,0 +1,13 @@
+[package]
+name = "islands-greeting"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+clock = { path = "clock" }
+dice = { path = "dice" }
+ui = { path = "ui" }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]
