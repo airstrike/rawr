@@ -6,7 +6,7 @@
 //! its open wizard in an `Option`, its tabs in a `Vec` and its panes, a
 //! marked type over a tab, in a `Vec`, none of which can be cloned.
 
-use ui::{common, Action, Content, Element, Task};
+use ui::{common, opaque, stack, Action, Content, Element, Task, Widget};
 
 use super::{inbox, thumbs};
 
@@ -154,8 +154,8 @@ impl State {
     /// ..)`, shows its child's text. It takes a native grid element by value
     /// inside an `Option` and the inbox's updates as a lent slice, which
     /// the free `inbox::view` keeps, and shows its open wizard, a native
-    /// part of `self`, over the catalog and the theme it is given, as
-    /// inboard's does.
+    /// part of `self`, over the catalog and the theme it is given, stacked
+    /// over the page with an `opaque` layer, as inboard's does.
     pub fn view<'a>(
         &'a self,
         inbox: &'a inbox::State,
@@ -165,10 +165,9 @@ impl State {
         theme: &'a crate::Theme,
     ) -> Element<'a, Message> {
         if let Some(grid) = grid {
-            grid.map(Message::Wizard)
-        } else if let Some(wizard) = &self.wizard {
-            wizard.view(catalog, theme).map(Message::Wizard)
-        } else if inbox.unread == 0 {
+            return grid.map(Message::Wizard);
+        }
+        let page: Element<'a, Message> = if inbox.unread == 0 {
             inbox::view(inbox, updates).map(Message::Inbox)
         } else if self.count > 3 {
             ui::section(None, [ui::button(&self.title, Message::Count)])
@@ -176,6 +175,14 @@ impl State {
             inbox.view().map(Message::Inbox)
         } else {
             wizard::view(&self.title, self.count).map(Message::Wizard)
+        };
+        match &self.wizard {
+            Some(wizard) => stack![
+                page,
+                opaque(wizard.view(catalog, theme).map(Message::Wizard))
+            ]
+            .boxed(),
+            None => page,
         }
     }
 

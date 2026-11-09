@@ -1462,7 +1462,10 @@ fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_repl
 /// lends them where they are, `&mut` too, so marked methods open, advance
 /// and close the wizard and push, rename and close tabs, and each closes
 /// once (#1475). Its panes, a `Vec` of a marked type over a native tab,
-/// cross the same way. `rawr check` passes, `rawr run` prints what `cargo
+/// cross the same way. Its `view` stacks its open wizard's element, which
+/// borrows the catalog it takes, over a local page with the crate's
+/// `stack![page, opaque(..)]`, as inboard's does: the page is boxed before
+/// the wizard's view runs, as in Rust. `rawr check` passes, `rawr run` prints what `cargo
 /// run` prints, and body edits of `update` and `view` swap with the state
 /// native code keeps, tabs included.
 #[test]
@@ -1498,9 +1501,11 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
              no wizard over []\npanes [left | middle | right*]\ntab middle closed\n\
              panes [left | right*]\ntab left closed\ntab right closed\npanes []\n\
              grid shows grid Some(Wizard(Step(7)))\n\
+             boxed home\nwizard view at 5\nboxed hello\nboxed hello\nstacked 2\n\
              wizard shows hello Some(Wizard(Step(5)))\nwizard closed at step 5\n\
              no updates show hello Some(Inbox(Read(0)))\n\
              updates show tiles 1.2 Some(Inbox(Read(0)))\n\
+             boxed tiles 1.2\nwizard view at 6\nboxed dark\nboxed dark\nstacked 2\n\
              themed wizard shows dark Some(Wizard(Step(6)))\n\
              wizard closed at step 11\ncommitted at step 11\nbuilt 3 drew 3\n\
              wizard closed at step 6\nbuilt 2 drew 5 no wizard over []\n"
