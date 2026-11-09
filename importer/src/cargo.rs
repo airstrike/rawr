@@ -2014,6 +2014,19 @@ impl Request {
             partitioned,
             limits,
         )?;
+        // The nightly's outputs compare by what its compiles read.
+        #[cfg(feature = "rustc-driver")]
+        let reads = crate::input::bindings::Reads::of(&input, retained_build.build());
+        #[cfg(feature = "rustc-driver")]
+        for settled in &mut settlement {
+            if let crate::bindings::Settled::Extracted {
+                nightly: Some(nightly),
+                ..
+            } = settled
+            {
+                reads.restrict(nightly);
+            }
+        }
         #[cfg(feature = "rustc-driver")]
         if let Some(current) =
             crate::input::bindings::Current::capture(&self.project_root, &self.config, limits)
@@ -2022,15 +2035,19 @@ impl Request {
                 if let crate::bindings::Settled::Extracted {
                     inputs_packages,
                     publish,
+                    unshared,
                     ..
                 } = settled
                 {
-                    publish.meta.inputs = crate::input::bindings::Inputs::capture(
+                    match crate::input::bindings::Inputs::capture(
                         &input,
                         retained_build.build(),
                         inputs_packages,
                         &current,
-                    );
+                    ) {
+                        Ok(inputs) => publish.meta.inputs = Some(inputs),
+                        Err(reason) => *unshared = Some(reason),
+                    }
                 }
             }
             // The next demand of this resolution replays these tables
@@ -2090,7 +2107,10 @@ impl Request {
         // scripts gave, for its entries to be compared with the project's.
         #[cfg(feature = "rustc-driver")]
         let nightly_scripts = if self.inventory && !self.inputs_only {
-            crate::applicability::store::Scripts::observed(retained_build.build())
+            let mut scripts =
+                crate::applicability::store::Scripts::observed(retained_build.build());
+            scripts.read(&reads);
+            scripts
         } else {
             crate::applicability::store::Scripts::default()
         };

@@ -1813,6 +1813,7 @@ impl Capture {
                         externals: externals.clone(),
                     },
                 }),
+                unshared: None,
             });
         }
         settled

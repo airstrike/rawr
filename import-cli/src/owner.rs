@@ -131,6 +131,48 @@ impl From<diagnostic::Report> for Unchecked {
     }
 }
 
+/// The project's `cargo check`, beside `rawr check`.
+pub struct Checked {
+    /// What cargo said.
+    pub status: rawr_cli::cargo::Status,
+    /// Its build scripts' outputs, read as it ended; none when cargo
+    /// itself failed.
+    observed: Option<rawr_import::bindings::Observed>,
+}
+
+/// A `cargo check` that runs while rawr checks, read as soon as it ends:
+/// a build script's files stay in its `OUT_DIR` only until another build
+/// of the same target directory, perhaps on another toolchain, runs it
+/// again.
+pub struct Checking(std::thread::JoinHandle<Checked>);
+
+impl Checking {
+    /// Wait for `pending` on a thread of its own.
+    #[must_use]
+    pub fn start(pending: rawr_cli::cargo::Pending) -> Self {
+        Self(std::thread::spawn(move || {
+            let status = pending.finish();
+            let observed = match &status {
+                rawr_cli::cargo::Status::Finished(outcome) if outcome.failure.is_none() => {
+                    Some(rawr_import::bindings::Observed::read(
+                        outcome.build_scripts.join("\n").as_bytes(),
+                    ))
+                }
+                _ => None,
+            };
+            Checked { status, observed }
+        }))
+    }
+
+    /// What the check came to.
+    #[must_use]
+    pub fn finish(self) -> Checked {
+        self.0
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    }
+}
+
 /// Publish, or refuse, the shared bindings a check used or extracted, once
 /// the project's own `cargo check` has run their build scripts, as a run
 /// does after its runner build (D609.4, #661). A `cargo check` that failed
@@ -142,22 +184,26 @@ impl From<diagnostic::Report> for Unchecked {
 /// report is the whole of it.
 pub fn settle_checked(
     mut checked: Result<(PathBuf, rawr_import::bindings::Settlement), Unchecked>,
-    cargo: Option<&rawr_cli::cargo::Status>,
+    cargo: Option<&Checked>,
     target: &rawr::project::Target,
     profile: &dyn crate::Profile,
 ) -> Result<PathBuf, Option<diagnostic::Report>> {
-    let reported = |unchecked: Unchecked| unchecked.report(cargo);
-    let Some(rawr_cli::cargo::Status::Finished(outcome)) = cargo else {
+    let status = cargo.map(|cargo| &cargo.status);
+    let reported = |unchecked: Unchecked| unchecked.report(status);
+    let Some(Checked {
+        status: rawr_cli::cargo::Status::Finished(outcome),
+        observed: Some(observed),
+    }) = cargo
+    else {
         return checked.map(|(source, _)| source).map_err(reported);
     };
     if outcome.failure.is_some() {
         return checked.map(|(source, _)| source).map_err(reported);
     }
-    let messages = outcome.build_scripts.join("\n");
     let mut restarts = crate::Restarts::default();
     loop {
         let (source, settlement) = checked.map_err(reported)?;
-        match settlement.settle_checked(messages.as_bytes()) {
+        match settlement.settle_checked(observed) {
             Ok(()) => return Ok(source),
             Err(error) if restarts.again(&error) => checked = check(target, None, profile),
             Err(error) => return Err(Some(framework(error, fallback(target).ok()))),
