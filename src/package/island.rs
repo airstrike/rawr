@@ -219,6 +219,10 @@ enum Pass {
     Value,
     /// `&T`: the referenced value is copied.
     Borrow,
+    /// `&str`: the text is copied, with where native code's own text is,
+    /// which what the program makes of the copy borrows instead, as
+    /// iced's `Text<'a>` of `subtitle<'a>(label: &'a str)` borrows `label`.
+    Text,
     /// `&mut T`: the value is copied, and the interpreter's copy comes
     /// back into the reference after the call.
     Mutable,
@@ -941,7 +945,7 @@ impl<'a> Generator<'a> {
             return Err(format!("`{}` can't cross yet", text.trim()));
         }
         if referent == "str" {
-            return Ok(Pass::Borrow);
+            return Ok(Pass::Text);
         }
         match self.crosses(file, target, owner) {
             Ok(()) if self.holds(file, target, owner) => Ok(Pass::LendParts { mutable: *mutable }),
@@ -2160,6 +2164,9 @@ impl<'a> Generator<'a> {
             Pass::Borrow => {
                 let _ = writeln!(text, "    __call.argument({name});");
             }
+            Pass::Text => {
+                let _ = writeln!(text, "    __call.kept_text({name});");
+            }
             Pass::Mutable => {
                 let _ = writeln!(text, "    __call.mutable(&*{name});");
                 changed.push((name.to_owned(), Changed::Copied));
@@ -2335,6 +2342,22 @@ impl<'a> Generator<'a> {
             let _ = writeln!(
                 text,
                 "    let __value: {output} = self.0.keep::<{kept}>(__reply.take());"
+            );
+        } else if let Some(read) = &back
+            && static_lifetimes(output) != output
+        {
+            // A result whose type names a lifetime comes back at `'static`,
+            // as the interpreter moves it, and is the signature's type: an
+            // invariant one, as iced's `Text<'a>`, doesn't coerce.
+            let _ = writeln!(
+                text,
+                "    let __value: {output} = {{\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
+                 let __value = __reply.read(|input| {read});\n        \
+                 // SAFETY: the type is the signature's but for its lifetimes, and what the\n        \
+                 // value borrows lives as long as they say: native code's own text and\n        \
+                 // lends, or what the anchor keeps.\n        \
+                 #[allow(unsafe_code)]\n        \
+                 unsafe {{ {island}::at_lifetimes(__value) }}\n    }};"
             );
         } else if let Some(read) = back {
             // Each native part comes back as the value the interpreter moves:
@@ -3323,6 +3346,7 @@ fn give(pass: &Pass, name: &str, call: &str, island: &str, text: &mut String) {
             );
         }
         Pass::Borrow
+        | Pass::Text
         | Pass::Mutable
         | Pass::Lend { .. }
         | Pass::LendSlice { .. }
@@ -4347,6 +4371,7 @@ pub mod __rawr_island {
     const TEXT_AT: u8 = 25;
     const HASHED_SET: u8 = 26;
     const HASHED_MAP: u8 = 27;
+    const KEPT_TEXT: u8 = 28;
 
     /// A value on its way to the interpreter, the native values it gives
     /// the interpreter, each taken once, and, when a call asks
@@ -4648,6 +4673,20 @@ pub mod __rawr_island {
         pub fn new() -> Self {
             Self(::std::marker::PhantomData)
         }
+    }
+    /// `value`, which came back at `'static` (`S`), at the lifetimes the
+    /// signature names (`T`), as an invariant `Text<'a>` can't be coerced.
+    ///
+    /// # Safety
+    ///
+    /// `T` is `S` but for its lifetimes, and what `value` borrows lives as
+    /// long as `T`'s lifetimes say.
+    pub unsafe fn at_lifetimes<S, T>(value: S) -> T {
+        ::std::assert_eq!(::std::mem::size_of::<S>(), ::std::mem::size_of::<T>());
+        let value = ::std::mem::ManuallyDrop::new(value);
+        // SAFETY: as the caller's; `value` is never dropped, so its bytes
+        // are moved into the result once.
+        unsafe { ::std::mem::transmute_copy(&*value) }
     }
     /// A part lent `&mut` takes back its copy, or the whole new value the
     /// call gave its place, if it gave one (#1469).
@@ -5438,6 +5477,16 @@ pub mod __rawr_island {
         pub fn argument<T: Put + ?Sized>(&mut self, value: &T) {
             value.put(&mut self.values);
             self.count += 1;
+        }
+        /// A `&str` argument, as `label` of `subtitle<'a>(label: &'a str)
+        /// -> Text<'a>`: copied, and where native code's own text is, so
+        /// what the call makes that borrows it borrows that text, which
+        /// native code keeps borrowed as long as rustc says.
+        pub fn kept_text(&mut self, value: &'c str) {
+            self.values.byte(KEPT_TEXT);
+            self.values.count(value.as_ptr().expose_provenance());
+            self.values.count(value.len());
+            self.argument(value);
         }
         /// A stand-in's receiver: the handle of the program value it holds,
         /// which the call takes as the impl's receiver.
