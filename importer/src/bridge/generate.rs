@@ -12874,8 +12874,19 @@ fn render_method_opening(
         } else {
             ""
         };
+        let texts = signature
+            .inputs()
+            .iter()
+            .enumerate()
+            .filter(|(position, input)| {
+                lends_str(input, signature, substitutions)
+                    && u32::try_from(*position)
+                        .is_ok_and(|position| signature.lends().contains(&position))
+            })
+            .map(|(position, _)| position)
+            .collect::<Vec<_>>();
         let lent = lent_opening(
-            receiver, signature, &container, &call, &converted, &frame, &kept, &reached,
+            receiver, signature, &container, &call, &converted, &frame, &kept, &texts, &reached,
         )?;
         return writeln!(
             output,
@@ -12942,7 +12953,9 @@ fn render_method_opening(
 /// result may keep it. Any other is reached through its accessor while the
 /// rest of the scope runs, as a frame holds a receiver of the arena. Each
 /// of `keeps` (`kept_inputs`) is reached beside a kept receiver in its
-/// region, and by `reached` beside another.
+/// region, and by `reached` beside another. Each `&'a str` input at
+/// `texts` is pinned in a kept receiver's region, which outlives the
+/// frame's own copy of it.
 #[allow(clippy::too_many_arguments)]
 fn lent_opening(
     receiver: Receiver,
@@ -12952,6 +12965,7 @@ fn lent_opening(
     converted: &str,
     frame: &str,
     keeps: &[KeptInput],
+    texts: &[usize],
     reached: &str,
 ) -> Result<String, request::Error> {
     let mutable = matches!(receiver, Receiver::Mutable);
@@ -12965,14 +12979,22 @@ fn lent_opening(
         format!("({taken},)")
     };
     // Each `&'a T` the output keeps beside the receiver is reached in the
-    // anchored region as well, or shared with its pins.
-    let kept_reached = if keeps.is_empty() {
+    // anchored region as well, or shared with its pins, and each `&'a str`
+    // is the program's text pinned there (#1503).
+    let kept_reached = if keeps.is_empty() && texts.is_empty() {
         String::new()
     } else {
+        let mut pinned = String::new();
+        for position in texts {
+            pinned.push_str(&format!(
+                "\n                    let argument_{position}: &str = pins.pin(argument_{position}_owned.clone());"
+            ));
+        }
         format!(
             "
                     let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;
-                    let lender = Some(&*region);{}",
+                    let lender = Some(&*region);
+                    let _ = lender;{}{pinned}",
             reach_kept(keeps, "")
         )
     };

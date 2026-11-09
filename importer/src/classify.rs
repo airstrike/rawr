@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 149;
+const CLASSIFIER_VERSION: u32 = 150;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8385,7 +8385,7 @@ impl<P: api::Phase> Context<'_, P> {
                 lends = signature
                     .inputs()
                     .enumerate()
-                    .filter(|(_, input)| shares_at(input, lifetime))
+                    .filter(|(_, input)| shares_at(input, lifetime) || text_at(input, lifetime))
                     .filter_map(|(index, _)| u32::try_from(index).ok())
                     .collect();
             }
@@ -11671,7 +11671,8 @@ fn borrows_receiver(
     // inboard's `wizard::State::view<'a>(&'a self, catalog: View<'a>)`
     // takes a value of borrows by value (#1225): the frame's lifetime, as
     // the output's is. So may a shared reference at that lifetime, as its
-    // `theme: &'a Theme` is.
+    // `theme: &'a Theme` is, or a `&'a str`, as `titled(&'a self, title:
+    // &'a str)` takes (#1503).
     matches!(output, model::Type::Definition { .. })
         && signature.guard().is_none()
         && !signature.async_function()
@@ -11682,8 +11683,19 @@ fn borrows_receiver(
             !names_late_lifetime(input)
                 || naming(input, receiver) == Naming::Argument
                 || shares_at(input, receiver)
+                || text_at(input, receiver)
         })
         && !lends_option_reference(output, receiver, is_option)
+}
+
+/// Whether `ty` is a `&'r str` at `lifetime`, which a frame's output keeps
+/// as the program's text, pinned where the output is (#1503).
+fn text_at(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
+    matches!(ty, model::Type::Reference {
+        lifetime: named,
+        mutability: model::Mutability::Shared,
+        ty,
+    } if named == lifetime && matches!(&**ty, model::Type::Primitive(name) if &**name == "str"))
 }
 
 /// Whether `ty` is a `&'r T` at `lifetime` of a crate's type `T` that

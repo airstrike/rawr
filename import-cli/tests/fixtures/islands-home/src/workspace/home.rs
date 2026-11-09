@@ -257,3 +257,50 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ui::button("wizard", wizard::Message::Step(state.count)).map(Message::Wizard)
     }
 }
+
+/// A banner over the inbox alone, as inboard's `threads::view(threads:
+/// &'a Store)`: its element borrows the program's text and no marked
+/// input, so it is anchored on the native one.
+pub fn banner<'a>(inbox: &'a inbox::State) -> Element<'a, Message> {
+    ui::button("banner", inbox::Message::Read(inbox.unread)).map(Message::Inbox)
+}
+
+/// The inbox's top bar over its updates, which the free `inbox::view`
+/// keeps, with no marked input to anchor on.
+pub fn top_bar<'a>(inbox: &'a inbox::State, updates: &'a [inbox::Update]) -> Element<'a, Message> {
+    inbox::view(inbox, updates).map(Message::Inbox)
+}
+
+/// The top bar's text, read where it is made: its element keeps the lent
+/// inbox and updates for this call alone.
+pub fn top_label(inbox: &inbox::State, updates: &[inbox::Update]) -> String {
+    inbox::view(inbox, updates).label.to_owned()
+}
+
+/// How many wait, through a crate fn that keeps neither the lent inbox nor
+/// the lent updates.
+pub fn pending(inbox: &inbox::State, updates: &[inbox::Update]) -> usize {
+    inbox::pending(inbox, updates)
+}
+
+impl State {
+    /// The inbox's element under the screen's title, through a crate
+    /// method that keeps the `&'a str` as long as the inbox.
+    pub fn titled<'a>(&'a self, inbox: &'a inbox::State) -> Element<'a, Message> {
+        inbox.titled(&self.title).map(Message::Inbox)
+    }
+}
+
+/// The inbox's element under `title`, its text read where it is made.
+pub fn titled_label(inbox: &inbox::State, title: &str) -> String {
+    inbox.titled(title).label.to_owned()
+}
+
+/// The open wizard's label over the theme, read where it is made: the
+/// wizard's `view` keeps the theme, lent for this call alone.
+pub fn wizard_label(state: &State, catalog: wizard::View<'_>, theme: &crate::Theme) -> String {
+    match &state.wizard {
+        Some(wizard) => wizard.view(catalog, theme).label.to_owned(),
+        None => "closed".to_owned(),
+    }
+}

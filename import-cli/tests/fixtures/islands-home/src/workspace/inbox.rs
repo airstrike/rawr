@@ -72,3 +72,22 @@ pub fn view<'a>(state: &'a State, updates: &'a [Update]) -> ui::Element<'a, Mess
         None => ui::button(&state.greeting, Message::Read(state.unread)),
     }
 }
+
+/// How many wait, as a crate fn whose output keeps neither the state nor
+/// the updates it is lent.
+pub fn pending(state: &State, updates: &[Update]) -> usize {
+    state.unread + updates.len()
+}
+
+impl State {
+    /// The inbox's element under `title`, while it has unread mail, which
+    /// it keeps borrowed as long as the inbox.
+    pub fn titled<'a>(&'a self, title: &'a str) -> ui::Element<'a, Message> {
+        let label = if self.unread > 0 {
+            title
+        } else {
+            &self.greeting
+        };
+        ui::button(label, Message::Read(self.unread))
+    }
+}

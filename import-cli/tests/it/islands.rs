@@ -1493,6 +1493,15 @@ fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_repl
 /// in a `RefCell` and each element owns a `dyn` widget, so neither is
 /// `Send` or `Sync`, as inboard's `Document` and iced's `Element` aren't:
 /// the wizard's view and a header row of elements still open their frames.
+/// A marked fn whose element borrows only native inputs is anchored on
+/// them (#1491). One whose result borrows nothing keeps its lends for the
+/// call, so a crate fn's output that keeps them is read where it is made,
+/// a lent theme kept beside a lent wizard included (#1491, #1503), and a
+/// lent slice beside a lent `&T` reaches a crate fn that keeps neither
+/// (#1500). A crate method that borrows its receiver keeps a `&'a str`
+/// at that lifetime, in an anchored result and read where it is made
+/// (#1503). Screens whose elements were held are moved and dropped
+/// (#1492).
 #[test]
 fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     const HOME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-home");
@@ -1533,7 +1542,11 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
              boxed tiles 1.2\nwizard view at 6\nboxed dark\nboxed dark\nstacked 2\n\
              themed wizard shows dark Some(Wizard(Step(6)))\n\
              wizard closed at step 11\ncommitted at step 11\nbuilt 3 drew 3\n\
-             wizard closed at step 6\nbuilt 2 drew 5 no wizard over []\n"
+             wizard closed at step 6\nbuilt 2 drew 5 no wizard over []\n\
+             banner banner Some(Inbox(Read(3))) top tiles 1.2\n\
+             pending 4 top label tiles 1.2\ntitled home label mail\nwizard view at 6\nwizard label dark\n\
+             wizard closed at step 6\nscreen 0 shows wizard\nmoved shows wizard\n\
+             screen 1 shows wizard\nmoved shows wizard\n"
             ),
         "{printed}"
     );
