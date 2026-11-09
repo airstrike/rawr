@@ -925,6 +925,18 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
     host: &Shared<crate::host::Registry>,
     allocation: &mut A,
 ) -> Result<bool, crate::resolve::ImportedFailure> {
+    // A method of an impl of the program's own trait is one too, as the
+    // blanket `impl<'a, T, Message> IntoContent<'a, Message> for T` whose
+    // `into_content` calls a generic compiled per instantiation: rustc
+    // selects its impl at each call's types.
+    let traits = program
+        .items
+        .iter()
+        .filter_map(|shell| match &shell.kind {
+            item::Kind::Trait(declared) => Some(declared.name.text.clone()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     // A function's or method's key, with its index among its kind.
     let mut candidates = program
         .items
@@ -943,10 +955,29 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
                 .enumerate()
                 .filter(|(_, definition)| {
                     !definition.generics().is_empty()
-                        && definition.trait_name().is_none()
+                        && definition
+                            .trait_name()
+                            .is_none_or(|name| traits.contains(name))
                         && definition.builtin_owner().is_none()
                 })
                 .map(|(index, definition)| (definition.key().clone(), Added::Method(index))),
+        )
+        .chain(
+            program
+                .builtin_methods
+                .iter()
+                .filter(|definition| {
+                    definition.owner().builtin_code() == Some(crate::resolve::BLANKET_OWNER)
+                        && definition
+                            .trait_name()
+                            .is_some_and(|name| traits.contains(name))
+                })
+                .map(|definition| {
+                    (
+                        definition.key().clone(),
+                        Added::Method(definition.id().index()),
+                    )
+                }),
         )
         .filter(|(key, _)| !program.instances.templates.contains_key(key))
         .collect::<Vec<_>>();
@@ -968,7 +999,7 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
             let mut allocation_failure = None;
             let source = match *candidate {
                 Added::Function(index) => program.items[index].source,
-                Added::Method(index) => program.methods[index].source(),
+                Added::Method(index) => method_at(program, index).source(),
             };
             let context = ImportedContext {
                 native: None,
@@ -1010,7 +1041,7 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
                     parser.reaches_host
                 }
                 Added::Method(index) => {
-                    let definition = &program.methods[index];
+                    let definition = method_at(program, index);
                     let body_source = source_span(
                         definition
                             .body_text()
@@ -1051,6 +1082,17 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
         candidates.retain(|(key, _)| !promoted.contains(key));
     }
     Ok(!program.instances.templates.is_empty())
+}
+
+/// The method numbered `index` among `program`'s methods, those of impls
+/// for a crate's or a builtin type numbered apart
+/// (`resolve::BUILTIN_METHOD_IDS`).
+#[cfg(feature = "rust-import")]
+fn method_at(program: &Program, index: usize) -> &method::Definition {
+    match index.checked_sub(crate::resolve::BUILTIN_METHOD_IDS) {
+        Some(index) => &program.builtin_methods[index],
+        None => &program.methods[index],
+    }
 }
 
 /// The instance `id` of the method template `definition` at `types`, the
