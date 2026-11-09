@@ -1540,6 +1540,8 @@
     {"t":"T1537","issue":1537,"title":"T1537: A marked fn taking an argument-position impl Trait fails the native build with E0310 when native code calls it","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1538","issue":1538,"title":"T1538: A native build failure in generated code names only the crate root","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1539","issue":1539,"title":"T1539: Native code can't call a marked fn taking impl Fn, impl Iterator, a multi-bound impl or a named generic parameter","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1540","issue":1540,"title":"T1540: A native build failure in a mirror's generated impls still names only the copied file","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1540","issue":1540,"title":"T1540: A native build failure in a mirror's generated impls still names only the copied file","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1541","issue":1541,"title":"T1541: swapped can reach the events after the program has moved on, and a cancelled wait takes events","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1542","issue":1542,"title":"T1542: An abandoned rawr mcp wait takes the events a later wait needed, through one shared given cursor","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

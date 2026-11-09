@@ -7,7 +7,8 @@
     "entries": [
       {"text":"A save near a call to a crate function generic over a const length, as `total([a, b])` is, now swaps into the running program instead of preparing again.","issues":[1536]},
       {"text":"Native code can call a marked function that takes an `impl IntoIterator<Item = T>`, `impl Into<T>`, `impl AsRef<str>` or `impl Display`. The argument may be any value, including one that borrows locals. The program builds as `cargo check` does and runs as `cargo run` does.","issues":[1537]},
-      {"text":"When rawr's native build fails in code it generated for a marked function, the error now points at that function's signature in the marked file and names the generated file and line, not just `src/main.rs`.","issues":[1538]}
+      {"text":"When rawr's native build fails in code it generated for a marked function, the error now points at that function's signature in the marked file and names the generated file and line, not just `src/main.rs`.","issues":[1538]},
+      {"text":"A program under `rawr run` now goes on from the call that admitted a save only once the run's events include `swapped`. A `wait` that the client cancelled no longer takes the events it found, so the next `wait` returns them.","issues":[1541]}
     ]
   },
   "releases": [
