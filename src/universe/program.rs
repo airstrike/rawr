@@ -128,14 +128,11 @@ impl Program {
             on_disk,
         } = sources;
         let snapshot = Snapshot::new(entry.clone(), files.clone())?;
-        let (candidate, ast) = compile(&universe.engine, &snapshot)?;
-        universe
-            .engine
-            .eval_ast::<Dynamic>(&ast)
-            .map(drop)
-            .map_err(Error::Evaluate)?;
+        let candidate = compile(&universe.engine, &snapshot)?;
         let generation = candidate.generation().clone();
-        island::publish(bind(&universe.engine, candidate, universe.bind_runtime())?);
+        let bootstrap = bind(&universe.engine, candidate, universe.bind_runtime())?;
+        bootstrap.evaluate_top_level().map_err(Error::Evaluate)?;
+        island::publish(bootstrap);
         Ok(Self {
             state: Arc::new(State {
                 engine: universe.engine.clone(),
@@ -261,11 +258,8 @@ impl Reloader {
         // The owner takes it at its next call from native code; a newer
         // reload's replaces it first.
         future::offer(move || {
-            let outcome = match bind(&state.engine, candidate, None) {
-                Ok(bootstrap) => {
-                    island::publish(bootstrap);
-                    Outcome::Swapped
-                }
+            let outcome = match swap(&state.engine, candidate) {
+                Ok(()) => Outcome::Swapped,
                 Err(error) => Outcome::Failed {
                     message: error.to_string(),
                 },
@@ -290,14 +284,10 @@ impl State {
         };
         let snapshot = Snapshot::new(self.entry.clone(), files.to_vec())
             .map_err(|error| failed(error.into()))?;
-        let (candidate, ast) = compile(&self.engine, &snapshot).map_err(failed)?;
+        let candidate = compile(&self.engine, &snapshot).map_err(failed)?;
         if let Some(reason) = island::refusal(&current.generation, &candidate) {
             return Err(Outcome::Restarting { reason });
         }
-        self.engine
-            .eval_ast::<Dynamic>(&ast)
-            .map(drop)
-            .map_err(|error| failed(Error::Evaluate(error)))?;
         Ok(candidate)
     }
 
@@ -325,6 +315,16 @@ fn bind(
             .ok_or(Error::Unowned)?,
     };
     candidate.bind(engine, runtime).map_err(Error::Bind)
+}
+
+/// Bind `candidate` to a next generation of the running program's runtime,
+/// evaluate its top level there and publish it: its next calls from native
+/// code run in it.
+fn swap(engine: &Shared<Engine>, candidate: reload::Candidate) -> Result<(), Error> {
+    let bootstrap = bind(engine, candidate, None)?;
+    bootstrap.evaluate_top_level().map_err(Error::Evaluate)?;
+    island::publish(bootstrap);
+    Ok(())
 }
 
 /// Run the published program's `main` to its status, as a generated runner

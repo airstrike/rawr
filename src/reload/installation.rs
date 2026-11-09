@@ -69,6 +69,19 @@ impl Bootstrap {
         self.binding.invoke_root(name, args)
     }
 
+    /// Evaluate the generation's top level with its runtime bound, as its
+    /// functions are called.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error the evaluation stopped at.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn evaluate_top_level(&self) -> Result<(), Box<crate::EvalAltResult>> {
+        self.binding
+            .authority()
+            .evaluate_top_level(self.binding.runtime().clone())
+    }
+
     /// The bound catalog native islands call into.
     #[cfg(feature = "rust-import")]
     pub(crate) fn catalog(&self) -> &reload::BoundCatalog {

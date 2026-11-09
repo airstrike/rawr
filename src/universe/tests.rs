@@ -118,3 +118,33 @@ fn a_program_is_called_reloaded_and_keeps_its_last_good_text() {
     assert_eq!(total(&loaded, 4, 5), -1);
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+/// A snippet's statements outside any function, as ?play runs them, call
+/// std's facade with the runtime bound, as its functions do (#1460).
+#[test]
+fn a_programs_top_level_calls_std_through_the_bound_runtime() {
+    let mut universe = Universe::new(&Plain, Access::none()).unwrap();
+    let printed = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let sink = std::sync::Arc::clone(&printed);
+    assert!(universe.on_output(move |_, text| sink.lock().unwrap().push_str(text)));
+    let source = "// rawr
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+let path = PathBuf::from(\"src\").join(\"main.rs\");
+let after = SystemTime::now().duration_since(UNIX_EPOCH).is_ok();
+println!(\"{} {after}\", path.display());
+
+fn main() {
+    let path = PathBuf::from(\"lib.rs\");
+    println!(\"{:?} {}\", path.extension(), UNIX_EPOCH.elapsed().is_ok());
+}
+";
+    let entry = PathBuf::from("/universe-fixture/src/main.rs");
+    let program = universe.program(entry, source, Vec::new()).unwrap();
+    assert_eq!(program.run(), 0);
+    assert_eq!(
+        *printed.lock().unwrap(),
+        "src/main.rs true\nSome(\"rs\") true\n"
+    );
+}
