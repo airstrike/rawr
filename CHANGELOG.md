@@ -6,6 +6,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A save near a call to a crate function generic over a const length, as `total([a, b])` is, now swaps into the running program instead of preparing again. (#1536)
+- Native code can call a marked function that takes an `impl IntoIterator<Item = T>`, `impl Into<T>`, `impl AsRef<str>` or `impl Display`. The argument may be any value, including one that borrows locals. The program builds as `cargo check` does and runs as `cargo run` does. (#1537)
+- When rawr's native build fails in code it generated for a marked function, the error now points at that function's signature in the marked file and names the generated file and line, not just `src/main.rs`. (#1538)
 
 ## 0.3.174 (2026-11-09)
 

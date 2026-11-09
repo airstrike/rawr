@@ -12,7 +12,9 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A save near a call to a crate function generic over a const length, as `total([a, b])` is, now swaps into the running program instead of preparing again.","issues":[1536]}
+        {"text":"A save near a call to a crate function generic over a const length, as `total([a, b])` is, now swaps into the running program instead of preparing again.","issues":[1536]},
+        {"text":"Native code can call a marked function that takes an `impl IntoIterator<Item = T>`, `impl Into<T>`, `impl AsRef<str>` or `impl Display`. The argument may be any value, including one that borrows locals. The program builds as `cargo check` does and runs as `cargo run` does.","issues":[1537]},
+        {"text":"When rawr's native build fails in code it generated for a marked function, the error now points at that function's signature in the marked file and names the generated file and line, not just `src/main.rs`.","issues":[1538]}
       ]
     },
     "releases": [
@@ -3382,7 +3384,11 @@
     {"issue":1533,"title":"A save that prepares again doesn't say why","state":"closed","category":"Hot reload of a marked `main` (D555)","release":"0.3.174"},
     {"issue":1534,"title":"The first save after rawr run starts takes the full preparation instead of the resident route","state":"closed","category":"Hot reload of a marked `main` (D555)","release":"0.3.174"},
     {"issue":1535,"title":"Assigning a field of a native value lent &mut to a marked fn is refused","state":"closed","category":"No glue (D593)"},
-    {"issue":1536,"title":"A crate use with const-length constants is never in the resident inventory","state":"closed","category":"Hot reload of a marked `main` (D555)"}
+    {"issue":1536,"title":"A crate use with const-length constants is never in the resident inventory","state":"closed","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":1537,"title":"A marked fn taking an argument-position impl Trait fails the native build with E0310 when native code calls it","state":"open","category":"No glue (D593)"},
+    {"issue":1538,"title":"A native build failure in generated code names only the crate root","state":"open","category":"No glue (D593)"},
+    {"issue":1539,"title":"Native code can't call a marked fn taking impl Fn, impl Iterator, a multi-bound impl or a named generic parameter","state":"open","category":"No glue (D593)"},
+    {"issue":1540,"title":"A native build failure in a mirror's generated impls still names only the copied file","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
