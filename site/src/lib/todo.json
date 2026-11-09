@@ -171,7 +171,8 @@
         {"text":"When one definition is read under two names of the same toolchain, as `nightly` and the dated nightly it resolves to, rawr treats it as one definition instead of failing with `conflicting-definition`; that error also names the item and both sources.","issues":[1461]},
         {"text":"A crate whose `lazy_static!` declares a hidden struct beside a static of the same name, as `colored`'s `SHOULD_COLORIZE` does, imports instead of failing as declared twice.","issues":[1462]},
         {"text":"A crate that re-exports `core` under another name, as bytemuck's `pub use ::core as __core;`, registers its bindings instead of failing at a module with no parent.","issues":[1463]},
-        {"text":"A marked function that native code calls on another thread, as an iced app's `Task::perform` output closure runs on a tokio worker, makes and uses crate values as it does on the main thread, instead of failing with `Stale`.","issues":[1464]}
+        {"text":"A marked function that native code calls on another thread, as an iced app's `Task::perform` output closure runs on a tokio worker, makes and uses crate values as it does on the main thread, instead of failing with `Stale`.","issues":[1464]},
+        {"text":"The playground deploys again: the browser's universe ships as a 5 MB brotli-compressed module that the browser decompresses as it downloads, since the 53 MB raw module was over Cloudflare's limit on one file.","issues":[1459]}
       ]
     },
     "releases": [
@@ -3238,7 +3239,7 @@
     {"issue":1456,"title":"`[T]::binary_search` isn't supported in marked code","state":"open","category":"Divergences from rustc"},
     {"issue":1457,"title":"A crate method whose closure takes `&mut` of a type with a lifetime (ratzilla's `draw_web`…","state":"open","category":"No glue (D593)"},
     {"issue":1458,"title":"A capturing closure inside an `if`/`match` value passed to native code reads its captures where…","state":"open","category":"No glue (D593)"},
-    {"issue":1459,"title":"The playground deploy fails: universe_bg.wasm (52.6 MB) exceeds Cloudflare's asset size limit…","state":"open","category":"Platforms"},
+    {"issue":1459,"title":"The playground deploy fails: universe_bg.wasm (52.6 MB) exceeds Cloudflare's asset size limit…","state":"closed","category":"Platforms"},
     {"issue":1460,"title":"The ?play image with #1395's runner fails a docs snippet: missing runtime binding for…","state":"open","category":"Platforms"},
     {"issue":1461,"title":"One definition extracted under two names of one toolchain (`nightly`, the dated nightly)…","state":"closed","category":"Importer"},
     {"issue":1462,"title":"A crate's value and type of one name (lazy_static's hidden struct beside its static) are refused…","state":"closed","category":"Importer"},
