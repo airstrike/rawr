@@ -24,7 +24,7 @@ pub mod opaque;
 mod runner;
 pub mod text;
 
-pub(crate) const SURFACE_SCHEMA: u32 = 3;
+pub(crate) const SURFACE_SCHEMA: u32 = 4;
 
 fn has_unresolved_structural_parameters(
     representability: &crate::classify::representability::Representability,
@@ -1238,9 +1238,8 @@ fn event_projection(
     let widget = widget.ok_or(Error::InstanceMismatch)?;
     let message = identity::converted_type_fingerprint(message);
     let invocation = outcome.identity().selector().fingerprint();
-    let (byte_start, byte_end) = mapper.byte_range();
     let mut digest = Sha256::new();
-    digest.update(b"rawr.import.surface.event-projection/v2");
+    digest.update(b"rawr.import.surface.event-projection/v3");
     digest.update(rules.profile());
     digest.update(rules.version().to_le_bytes());
     digest.update(rules.rules());
@@ -1253,8 +1252,6 @@ fn event_projection(
     digest.update(invocation);
     digest.update(mapper.position().to_le_bytes());
     digest.update(mapper.seal());
-    digest.update(byte_start.to_le_bytes());
-    digest.update(byte_end.to_le_bytes());
     let selector = digest.finalize().into();
     Ok(instance::EventProjection::sealed(
         *rules.profile(),

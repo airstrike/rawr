@@ -1612,6 +1612,51 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
 
+/// A literal edited in a marked screen's private function swaps into the
+/// running program, its state kept, when the screen passes a native
+/// function by name further down, as inboard's `home.rs` passes
+/// `theme::text::base` to `.style`. The runner names that function, never
+/// where the program writes it, so the edit that moves it needs no new
+/// runner and doesn't restart the program.
+#[test]
+fn a_literal_edit_above_a_native_function_passed_by_name_swaps() {
+    const LITERAL: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-literal"
+    );
+    let root = crate::support::scratch().join("islands-literal");
+    let _ = fs::remove_file(root.join("stop"));
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(LITERAL), &root);
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    // `tick n at count says greeting`.
+    let tick = |line: &str| -> Option<(u32, String)> {
+        let (_, rest) = line.strip_prefix("tick ")?.split_once(" at ")?;
+        let (count, says) = rest.split_once(" says ")?;
+        Some((count.parse().ok()?, says.to_owned()))
+    };
+    let first = run.until(|line| tick(line).is_some_and(|(count, _)| count >= 3));
+    let (kept, _) = tick(&first).unwrap();
+    edit(
+        &root.join("src/home.rs"),
+        "\"Ready when you are.\"",
+        "\"Ready when you are, rawr.\"",
+    );
+    let swapped = run.until(|line| {
+        tick(line).is_some_and(|(_, says)| says == "Ready when you are, rawr. at 12")
+    });
+    let (count, _) = tick(&swapped).unwrap();
+    assert!(count > kept, "{}", run.seen.join("\n"));
+    assert!(
+        !run.seen.iter().any(|line| line.contains("restarting")),
+        "{}",
+        run.seen.join("\n")
+    );
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+}
+
 /// A marked home screen with inboard's shapes (`workspace/screen/home.rs`):
 /// a crate's `&mut self` trait method on the generator a call gives by
 /// value (`rand::rng().random_range(0..100)`), a trait method of a clock a

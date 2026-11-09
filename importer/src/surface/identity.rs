@@ -937,17 +937,11 @@ impl Identity {
         for function in &functions {
             framed.0.update(function.position().to_le_bytes());
             framed.bytes(function.identity().as_bytes());
-            let (start, end) = function.byte_range();
-            framed.0.update(start.to_le_bytes());
-            framed.0.update(end.to_le_bytes());
         }
         framed.count(mappers.len());
         for mapper in &mappers {
             framed.0.update(mapper.position().to_le_bytes());
             framed.bytes(mapper.seal());
-            let (start, end) = mapper.byte_range();
-            framed.0.update(start.to_le_bytes());
-            framed.0.update(end.to_le_bytes());
             match mapper.projection() {
                 Some(projection) => {
                     framed.byte(1);

@@ -547,6 +547,29 @@ pub(crate) enum Entry {
     },
 }
 
+impl Entry {
+    /// What this entry proves, as a person names it: a file by its path,
+    /// a package by its id, a variable by its name.
+    fn subject(&self) -> String {
+        match self {
+            Self::Workspace { .. } => "the Cargo workspace".to_owned(),
+            Self::File { path, .. } | Self::Directory { path, .. } | Self::Missing { path, .. } => {
+                format!("`{path}`")
+            }
+            Self::Registry { package_id, .. } | Self::Git { package_id, .. } => {
+                format!("the package `{package_id}`")
+            }
+            Self::Environment { key, .. } | Self::EnvironmentProjection { key, .. } => {
+                format!("the environment variable `{key}`")
+            }
+            Self::Fact { name, .. } => format!("the toolchain's `{name}`"),
+            Self::BuildMessage { package_id, .. } | Self::Directive { package_id, .. } => {
+                format!("the build script output of `{package_id}`")
+            }
+        }
+    }
+}
+
 #[derive(Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ProtectedEntry {
@@ -891,6 +914,21 @@ impl Proof {
 
     pub(super) fn bind_native(&mut self, native: super::native::Inputs) {
         self.native = Some(native);
+    }
+
+    /// The input that changed from `older` to this proof, in one line, as
+    /// "`src/theme/button.rs` changed": the first entry that is new,
+    /// changed or gone. `None` when every entry is the same.
+    pub(crate) fn change_from(&self, older: &Self) -> Option<String> {
+        let changed = |newer: &[Entry], older: &[Entry]| {
+            newer
+                .iter()
+                .find(|entry| !older.contains(entry))
+                .map(Entry::subject)
+        };
+        changed(&self.entries, &older.entries)
+            .or_else(|| changed(&older.entries, &self.entries))
+            .map(|subject| format!("{subject} changed"))
     }
 
     pub(super) fn stored_parts(&self) -> (u32, &[Entry], Fingerprint) {
@@ -2687,5 +2725,48 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(files, ["header.h", "sdk/usr/include/stdio.h"]);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A restart names the native input that changed: an edited file, a
+    /// new one, one gone, or a changed variable.
+    #[test]
+    fn a_changed_proof_names_the_input_that_changed() {
+        let file = |path: &str, digest: u8| Entry::File {
+            role: Role::DependencySource,
+            package_id: None,
+            path: path.into(),
+            bytes: 1,
+            digest: [digest; 32],
+        };
+        let variable = |value: &str| Entry::EnvironmentProjection {
+            schema: 1,
+            key: "CC".into(),
+            value: Some(value.into()),
+        };
+        let proof = |entries: Vec<Entry>| Proof::fixture_stored(entries.into_boxed_slice());
+        let before = proof(vec![file("/p/src/main.rs", 1), variable("cc")]);
+        assert_eq!(before.change_from(&before), None);
+        assert_eq!(
+            proof(vec![file("/p/src/main.rs", 2), variable("cc")])
+                .change_from(&before)
+                .as_deref(),
+            Some("`/p/src/main.rs` changed")
+        );
+        assert_eq!(
+            proof(vec![file("/p/src/main.rs", 1)])
+                .change_from(&before)
+                .as_deref(),
+            Some("the environment variable `CC` changed")
+        );
+        assert_eq!(
+            proof(vec![
+                file("/p/src/main.rs", 1),
+                file("/p/src/new.rs", 1),
+                variable("cc")
+            ])
+            .change_from(&before)
+            .as_deref(),
+            Some("`/p/src/new.rs` changed")
+        );
     }
 }

@@ -58,8 +58,14 @@ impl Manifests {
 
     /// Why a program with native islands restarts when its next
     /// preparation is `next`, in one line. `None` for a program without
-    /// islands, whose host says what a new runner means.
-    pub fn restart_reason(&self, next: &Self) -> Option<String> {
+    /// islands, whose host says what a new runner means. When what native
+    /// code sees of the marked modules is the same, the new runner's own
+    /// reason is `native`'s: the input or native use that changed.
+    pub fn restart_reason(
+        &self,
+        next: &Self,
+        native: impl FnOnce() -> Option<String>,
+    ) -> Option<String> {
         // An async `main` runs on its runtime's own thread: a save restarts
         // it with the new code (D500.1, D513.7).
         if self.1.is_none() && self.2.is_some() {
@@ -78,7 +84,10 @@ impl Manifests {
         Some(
             shape
                 .change(next_shape)
-                .unwrap_or_else(|| "native code changed".to_owned()),
+                .or_else(native)
+                // No runner runs to compare with, or an earlier native
+                // build is still owed.
+                .unwrap_or_else(|| "the program needs a new native build".to_owned()),
         )
     }
 }

@@ -90,6 +90,15 @@ impl<B> Candidate<super::Admitted, B> {
             .watch())
     }
 
+    /// Why `request` needs another runner than this one, in one line;
+    /// `None` when this runner serves it.
+    pub fn native_change(
+        &self,
+        request: &crate::bridge::GenerationRequestKey<B>,
+    ) -> Result<Option<String>, Error> {
+        Ok(request.change_from(&self.inner.as_ref().ok_or(Error::Consumed)?.manifest))
+    }
+
     /// Compile once inside the admitted live process. A terminal nonprepared
     /// reply consumes the original child request and proves no install occurred.
     pub fn prepare_resident(
