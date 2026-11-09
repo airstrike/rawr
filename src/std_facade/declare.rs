@@ -8,21 +8,109 @@
 //! implements for the type, or a free function. A held type's capabilities
 //! are the traits std implements for it that rawr runs. A bound variant is
 //! its enum's, and a served module's type aliases are std's.
+//!
+//! It runs when the std table or a bind changes, and writes the steps a
+//! new engine installs ([`Text`]); its test checks those steps are the
+//! table's.
 
 mod reader;
 mod solve;
+mod text;
 
 use std::collections::BTreeSet;
 
-use crate::host::{self, facade, item, type_ref::Type};
+use crate::capability;
+use crate::host::type_ref::Type;
+use crate::host::{self, facade};
 use crate::std_facade::held::{self, Held};
+use crate::std_facade::step;
 use crate::std_table::{self, Written};
-use crate::{capability, ImmutableString};
 
-/// Declare in `builder` the held types and the items at the facade paths
+pub(super) use text::Text;
+
+/// Where the declarations go: a facade's builder, or the text of
+/// `std_facade::declared` that a new engine installs.
+pub(super) trait Sink {
+    fn module(&mut self, path: &str) -> Result<(), host::Error>;
+
+    fn held(
+        &mut self,
+        value: &held::Value,
+        capabilities: &[capability::Kind],
+    ) -> Result<(), host::Error>;
+
+    fn alias(&mut self, path: &str, target: &str) -> Result<(), host::Error>;
+
+    fn type_alias(
+        &mut self,
+        path: &str,
+        parameters: &[&'static str],
+        target: Type,
+    ) -> Result<(), host::Error>;
+
+    fn item(
+        &mut self,
+        path: &str,
+        kind: step::Kind,
+        inputs: Vec<Type>,
+        output: Type,
+    ) -> Result<(), host::Error>;
+
+    fn std_alias(&mut self, path: &str, std: &str) -> Result<(), host::Error>;
+}
+
+impl Sink for facade::Builder {
+    fn module(&mut self, path: &str) -> Result<(), host::Error> {
+        facade::Builder::module(self, path).map(drop)
+    }
+
+    fn held(
+        &mut self,
+        value: &held::Value,
+        capabilities: &[capability::Kind],
+    ) -> Result<(), host::Error> {
+        (value.register)(self, held::Value::facade(value.std), capabilities)
+    }
+
+    fn alias(&mut self, path: &str, target: &str) -> Result<(), host::Error> {
+        facade::Builder::alias(self, path, target).map(drop)
+    }
+
+    fn type_alias(
+        &mut self,
+        path: &str,
+        parameters: &[&'static str],
+        target: Type,
+    ) -> Result<(), host::Error> {
+        facade::Builder::type_alias(
+            self,
+            path,
+            parameters.iter().map(|name| (*name).into()).collect(),
+            Box::default(),
+            target,
+        )
+        .map(drop)
+    }
+
+    fn item(
+        &mut self,
+        path: &str,
+        kind: step::Kind,
+        inputs: Vec<Type>,
+        output: Type,
+    ) -> Result<(), host::Error> {
+        step::item(self, path, kind, inputs, output)
+    }
+
+    fn std_alias(&mut self, path: &str, std: &str) -> Result<(), host::Error> {
+        facade::Builder::std_alias(self, path, std).map(drop)
+    }
+}
+
+/// Declare in `sink` the held types and the items at the facade paths
 /// `bound` (each relative to the facade's root, as `path::PathBuf::join`).
 pub(super) fn declare(
-    builder: &mut facade::Builder,
+    sink: &mut impl Sink,
     held: &[Held],
     bound: &[String],
 ) -> Result<(), host::Error> {
@@ -42,18 +130,18 @@ pub(super) fn declare(
         .chain(bound.iter().filter_map(|path| module(path)))
         .collect::<BTreeSet<_>>();
     for module in &modules {
-        builder.module(module.as_str())?;
+        sink.module(module.as_str())?;
     }
     for value in &values {
         let path = held::Value::facade(value.std);
-        (value.register)(builder, path, &capabilities(value))?;
+        sink.held(value, &capabilities(value))?;
         for form in value.forms().skip(1) {
-            builder.alias(held::Value::facade(form), path)?;
+            sink.alias(held::Value::facade(form), path)?;
         }
     }
     let mut declared = BTreeSet::new();
     for module in &modules {
-        declared.extend(aliases(builder, &reader, module)?);
+        declared.extend(aliases(sink, &reader, module)?);
     }
     for path in bound {
         if let Some(value) = values.iter().find(|value| {
@@ -62,7 +150,7 @@ pub(super) fn declare(
                 .iter()
                 .any(|constant| held::Value::facade(constant) == path)
         }) {
-            constant(builder, value, path)?;
+            constant(sink, value, path)?;
             continue;
         }
         let (owner, name) = path.rsplit_once("::").unwrap_or(("", path));
@@ -70,8 +158,8 @@ pub(super) fn declare(
             .iter()
             .find(|value| held::Value::facade(value.std) == owner)
         {
-            Some(value) => member(builder, &reader, value, path, name)?,
-            None => function(builder, &reader, path)?,
+            Some(value) => member(sink, &reader, value, path, name)?,
+            None => function(sink, &reader, path)?,
         }
     }
     declared.extend(bound.iter().cloned());
@@ -82,7 +170,7 @@ pub(super) fn declare(
             .map(|form| held::Value::facade(form).to_owned()),
     );
     for module in &modules {
-        reexports(builder, module, &declared)?;
+        reexports(sink, module, &declared)?;
     }
     Ok(())
 }
@@ -91,7 +179,7 @@ pub(super) fn declare(
 /// declare, which Rawr resolves by its std path: after `use std::time;`,
 /// `time::Duration` is rawr's own as `std::time::Duration` is.
 fn reexports(
-    builder: &mut facade::Builder,
+    sink: &mut impl Sink,
     module: &str,
     declared: &BTreeSet<String>,
 ) -> Result<(), host::Error> {
@@ -102,7 +190,7 @@ fn reexports(
         if path.kind == "mod" || declared.contains(&facade) || !named.insert(facade.clone()) {
             continue;
         }
-        builder.std_alias(&facade, path.path)?;
+        sink.std_alias(&facade, path.path)?;
     }
     Ok(())
 }
@@ -142,7 +230,7 @@ fn capabilities(value: &held::Value) -> Vec<capability::Kind> {
 /// std's stable type aliases in `module` whose types rawr represents, as
 /// `io::Result<T>`.
 fn aliases(
-    builder: &mut facade::Builder,
+    sink: &mut impl Sink,
     reader: &reader::Reader<'_>,
     module: &str,
 ) -> Result<Vec<String>, host::Error> {
@@ -167,43 +255,31 @@ fn aliases(
         };
         let name = path.path.rsplit("::").next().unwrap_or(path.path);
         declared.push(format!("{module}::{name}"));
-        builder.type_alias(
-            &format!("{module}::{name}"),
-            parameters
-                .iter()
-                .map(|name| ImmutableString::from(*name))
-                .collect(),
-            Box::default(),
-            target,
-        )?;
+        sink.type_alias(&format!("{module}::{name}"), &parameters, target)?;
     }
     Ok(declared)
 }
 
 /// Declare the constant at `path` of the held type `value`: an associated
 /// one where `path` is under the type's own, else a module's.
-fn constant(
-    builder: &mut facade::Builder,
-    value: &held::Value,
-    path: &str,
-) -> Result<(), host::Error> {
+fn constant(sink: &mut impl Sink, value: &held::Value, path: &str) -> Result<(), host::Error> {
     let own = held::Value::facade(value.std);
     let ty = Type::registered(own)?;
     let associated = path
         .rsplit_once("::")
         .is_some_and(|(owner, _)| owner == own);
-    builder.item(if associated {
-        item::Definition::associated_value(path, ty)?
+    let kind = if associated {
+        step::Kind::AssociatedValue
     } else {
-        item::Definition::value(path, ty)?
-    })?;
-    Ok(())
+        step::Kind::Value
+    };
+    sink.item(path, kind, Vec::new(), ty)
 }
 
 /// Declare the member `name` of a held type at `path`: a variant of its
 /// enum, or each form of the functions its types declare.
 fn member(
-    builder: &mut facade::Builder,
+    sink: &mut impl Sink,
     reader: &reader::Reader<'_>,
     value: &held::Value,
     path: &str,
@@ -213,8 +289,7 @@ fn member(
     let variant = std_table::item(&format!("{}::{name}", solve::definition(value.std)))
         .is_some_and(|item| item.kind == "variant");
     if variant {
-        builder.item(item::Definition::associated_value(path, own)?)?;
-        return Ok(());
+        return sink.item(path, step::Kind::AssociatedValue, Vec::new(), own);
     }
     let mut forms = Vec::<reader::Form>::new();
     for (declaration, scoped) in declarations(reader, value, name) {
@@ -229,10 +304,15 @@ fn member(
         }
     }
     for form in forms {
-        builder.item(match form.receiver {
-            Some(mode) => item::Definition::method(path, mode, form.signature)?,
-            None => item::Definition::associated_function(path, form.signature)?,
-        })?;
+        let kind = form
+            .receiver
+            .map_or(step::Kind::AssociatedFunction, step::Kind::Method);
+        sink.item(
+            path,
+            kind,
+            form.signature.parameters().to_vec(),
+            form.signature.output().clone(),
+        )?;
     }
     Ok(())
 }
@@ -293,7 +373,7 @@ fn declarations<'a>(
 
 /// Declare the free function at `path`, std's `std::{path}`.
 fn function(
-    builder: &mut facade::Builder,
+    sink: &mut impl Sink,
     reader: &reader::Reader<'_>,
     path: &str,
 ) -> Result<(), host::Error> {
@@ -304,7 +384,12 @@ fn function(
         return Ok(());
     };
     for form in reader.forms(item.declaration()) {
-        builder.item(item::Definition::function(path, form.signature)?)?;
+        sink.item(
+            path,
+            step::Kind::Function,
+            form.signature.parameters().to_vec(),
+            form.signature.output().clone(),
+        )?;
     }
     Ok(())
 }

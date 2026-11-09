@@ -12,6 +12,10 @@ pub(crate) type Register =
 
 /// A std type rawr represents.
 #[derive(Clone, Copy)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only `declare` reads it, to write `declared`")
+)]
 pub(crate) enum Held {
     /// A Rust value of its own, as `PathBuf` is std's own `PathBuf`.
     Value(Value),
@@ -22,6 +26,10 @@ pub(crate) enum Held {
 
 /// A std type held as a Rust value of its own.
 #[derive(Clone, Copy)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only `declare` reads it, to write `declared`")
+)]
 pub(crate) struct Value {
     /// Its public path, which is its facade path under `std`:
     /// `std::path::PathBuf` is `path::PathBuf`.
@@ -47,6 +55,7 @@ pub(crate) struct Value {
 
 impl Value {
     /// The public paths of every type it stands for, its own first.
+    #[cfg(test)]
     pub(crate) fn forms(&self) -> impl Iterator<Item = &'static str> {
         std::iter::once(self.std)
             .chain(self.lent.iter().copied())

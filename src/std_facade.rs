@@ -9,10 +9,14 @@
 //! The facade states its binds and nothing else (D711 step 6): each module
 //! binds std items to the Rust code rawr runs for them and says how rawr
 //! holds std's types ([`held`]). Every declaration is std's own, read from
-//! the std table ([`declare`]).
+//! the std table (`declare`) when the table or a bind changes and kept in
+//! its final form ([`declared`]), which a new engine installs as it is
+//! ([`step`]): a start reads nothing of the table (#1526).
 
 mod case;
+#[cfg(test)]
 mod declare;
+mod declared;
 mod env;
 mod fs;
 mod held;
@@ -20,6 +24,7 @@ mod io;
 mod num;
 mod path;
 mod process;
+mod step;
 mod time;
 
 pub(crate) use case::mapped as case_mapped;
@@ -35,8 +40,8 @@ pub(crate) const ROOT: &str = "rawr_std";
 /// What a bind's callback gives.
 type Outcome = Result<Dynamic, Box<EvalAltResult>>;
 
-/// Where the modules' binds go: [`definition`] reads only their paths,
-/// which name the items it declares, and [`runtime`] their callbacks.
+/// Where the modules' binds go: `declare` reads only their paths, which
+/// name the items it declares, and [`runtime`] their callbacks.
 trait Bind {
     /// Run `callback` for the item at `path`, relative to the facade's
     /// root: `path::PathBuf::join`.
@@ -56,6 +61,7 @@ trait Bind {
 }
 
 /// The bound paths.
+#[cfg(test)]
 impl Bind for Vec<String> {
     fn plain(
         &mut self,
@@ -118,11 +124,8 @@ fn build() -> Result<facade::Definition, host::Error> {
     num::register_debug();
     case::register_debug();
     time::register_debug();
-    let mut bound = Vec::new();
-    bind(&mut bound);
-    let held = held();
     let mut builder = facade::Builder::new(ROOT, facade::Abi::new(1)?)?;
-    declare::declare(&mut builder, &held, &bound)?;
+    step::install(&mut builder, &held(), declared::STEPS)?;
     builder.finish()
 }
 
@@ -155,4 +158,36 @@ pub(crate) fn runtime() -> host::runtime::Facade {
     let mut builder = host::runtime::Builder::new(definition());
     bind(&mut builder);
     builder.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::host::facade;
+
+    /// The steps `declared` holds are the declarations the std table and
+    /// the binds give: the facade a new engine installs is the one a
+    /// builder declares straight from the table. `RAWR_STD_FACADE_WRITE=1`
+    /// writes them again.
+    #[test]
+    fn std_facade_declared_is_the_std_tables() {
+        let held = super::held();
+        let mut bound = Vec::new();
+        super::bind(&mut bound);
+        if std::env::var_os("RAWR_STD_FACADE_WRITE").is_some() {
+            let mut text = super::declare::Text::default();
+            super::declare::declare(&mut text, &held, &bound).expect("the std bindings are valid");
+            let file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/std_facade/declared.rs");
+            std::fs::write(file, text.finish()).expect("src/std_facade is writable");
+            return;
+        }
+        let mut builder = facade::Builder::new(super::ROOT, facade::Abi::new(1).unwrap()).unwrap();
+        super::declare::declare(&mut builder, &held, &bound).unwrap();
+        let declared = builder.finish().unwrap();
+        let installed = super::build().unwrap();
+        let stale = "src/std_facade/declared.rs is not what the std table and the binds \
+                     declare; run scripts/std-table.sh, or `RAWR_STD_FACADE_WRITE=1 cargo test \
+                     -p rawr --lib std_facade_declared_is_the_std_tables` and rustfmt it";
+        assert_eq!(declared.fingerprint(), installed.fingerprint(), "{stale}");
+        assert_eq!(format!("{declared:?}"), format!("{installed:?}"), "{stale}");
+    }
 }

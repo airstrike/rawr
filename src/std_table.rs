@@ -775,6 +775,7 @@ impl Impl {
 
     /// The associated types it declares, each with its type: (`Target`,
     /// `str`) of `impl Deref for String`.
+    #[cfg(test)]
     pub(crate) fn associated_types(&self) -> impl Iterator<Item = (&'static str, &'static str)> {
         split_list(self.associated)
             .into_iter()
@@ -843,6 +844,7 @@ pub(crate) fn impls(trait_: &str, key: &str) -> impl Iterator<Item = Impl> {
 }
 
 /// Every impl of the trait `trait_` (its definition), of any self type.
+#[cfg(test)]
 pub(crate) fn trait_impls(trait_: &str) -> impl Iterator<Item = Impl> {
     impl_lines(format!("{trait_}\t"))
 }
