@@ -1,7 +1,9 @@
 //! Native `main`, as an iced app's: it defines its own `Message`, `Kind`
 //! and `Item`, and the marked leaf `badge` gives them back and takes them,
 //! by value, inside an `Option`, a `Vec` and a tuple, and by `&mut`, and
-//! builds a `ui::Element<'a, Message>`.
+//! builds a `ui::Element<'a, Message>`. The marked leaf `avatar` writes a
+//! `ui` picture's pixels, called on the main thread and on another.
+mod avatar;
 mod badge;
 
 /// What the app's widgets send.
@@ -52,6 +54,13 @@ fn main() {
     let mut kind = Kind::Info;
     badge::raise(&mut kind);
     println!("raised {kind:?}");
+    println!(
+        "avatar {:?}",
+        avatar::circle(vec![3, 2, 10, 20, 30, 40, 50, 60])
+    );
+    println!("avatar {:?}", avatar::circle(vec![3, 3]));
+    let worker = std::thread::spawn(|| avatar::circle(vec![2, 3, 1, 2, 3, 4, 5, 6]));
+    println!("avatar on a thread {:?}", worker.join().unwrap());
     let element: ui::Element<'_, Message> = badge::view(7);
     println!("view {}", element.describe());
 }

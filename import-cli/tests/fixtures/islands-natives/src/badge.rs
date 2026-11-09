@@ -13,7 +13,11 @@ pub fn message(count: u32) -> Message {
 
 /// A native struct inside an `Option`.
 pub fn maybe(some: bool) -> Option<Item> {
-    if some { Some(Item::new("one", 1)) } else { None }
+    if some {
+        Some(Item::new("one", 1))
+    } else {
+        None
+    }
 }
 
 /// Native structs inside a `Vec`.
