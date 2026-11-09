@@ -29,7 +29,9 @@
         {"text":"A crate function that takes a `&'static T` of a native type, or a method that takes `&'static self`, now takes a static's own place. It used to fail the runner build with E0597.","issues":[1562],"refs":[1440]},
         {"text":"A marked function that native code calls with its own `&str`, and that returns a crate value borrowing it, now builds and keeps native code's own text. inboard's `subtitle<'a>(label: &'a str) -> Text<'a>` is one. It used to fail the native build with \"lifetime may not live long enough\", because iced's `Text` is invariant in its lifetime. Each `&str` also stops leaking one pinned copy per call.","issues":[1566]},
         {"text":"A marked struct or enum with a lifetime parameter, such as a `Panel<'a>` of `&'a str` and `Element<'a, Message>`s, now crosses to native code. Native code builds one through a chain of marked builder methods, by value and by `&mut`, and keeps it between calls. Its borrows are native code's own.","issues":[1557]},
-        {"text":"A bound naming a generic trait the crate declares, with a lifetime among its arguments, now resolves as rustc resolves it. Examples are `impl IntoContent<'a, Message>` on a method of `impl<'a, Message> Sidebar<'a, Message>`, `C: IntoContent<'a, M>`, and a free fn's `impl IntoContent<'a, Message> + 'a`. When such a bound isn't satisfied, rawr writes the trait as rustc does, with `'_` for each lifetime.","issues":[1568]}
+        {"text":"A bound naming a generic trait the crate declares, with a lifetime among its arguments, now resolves as rustc resolves it. Examples are `impl IntoContent<'a, Message>` on a method of `impl<'a, Message> Sidebar<'a, Message>`, `C: IntoContent<'a, M>`, and a free fn's `impl IntoContent<'a, Message> + 'a`. When such a bound isn't satisfied, rawr writes the trait as rustc does, with `'_` for each lifetime.","issues":[1568]},
+        {"text":"Statics declared in a body that refer to each other, as tracing's `META` and `__CALLSITE` do, now work in marked code. Each points at the other, registration by address works, and a save keeps or replaces them without a restart. A cycle whose type keeps the pointer inside an enum or a union is refused at `rawr check`.","issues":[1547]},
+        {"text":"`concat!` and other compile-time macros now take a std macro named by a path from the crate root, as in `::core::line!()`.","issues":[1569]}
       ]
     },
     "releases": [
@@ -3431,7 +3433,11 @@
     {"issue":1565,"title":"A native body static can't be formatted with {:?}, have its fields read, or be read before the block's first static","state":"open","category":"No glue (D593)"},
     {"issue":1566,"title":"A marked fn returning a crate value that borrows its &str argument fails the native build","state":"open","category":"No glue (D593)"},
     {"issue":1567,"title":"A marked fn's &'a str result borrowed from a native &'a str argument is refused","state":"open","category":"No glue (D593)"},
-    {"issue":1568,"title":"A bound on the crate's own generic trait with a lifetime argument is refused as unsupported syntax","state":"open","category":"Divergences from rustc"}
+    {"issue":1568,"title":"A bound on the crate's own generic trait with a lifetime argument is refused as unsupported syntax","state":"open","category":"Divergences from rustc"},
+    {"issue":1569,"title":"A compile-time macro argument named by a root path such as ::core::line!() is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1570,"title":"A std macro a crate re-exports and names only inside its own macro's expansion is never requested","state":"open","category":"No glue (D593)"},
+    {"issue":1571,"title":"tracing_subscriber::fmt() can't be called from marked code: its default type parameters include a function pointer","state":"open","category":"No glue (D593)"},
+    {"issue":1572,"title":"A cycle of body statics whose pointer is only inside an enum variant or a union needs variant-aware layout","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

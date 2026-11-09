@@ -23,6 +23,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked function that native code calls with its own `&str`, and that returns a crate value borrowing it, now builds and keeps native code's own text. inboard's `subtitle<'a>(label: &'a str) -> Text<'a>` is one. It used to fail the native build with "lifetime may not live long enough", because iced's `Text` is invariant in its lifetime. Each `&str` also stops leaking one pinned copy per call. (#1566)
 - A marked struct or enum with a lifetime parameter, such as a `Panel<'a>` of `&'a str` and `Element<'a, Message>`s, now crosses to native code. Native code builds one through a chain of marked builder methods, by value and by `&mut`, and keeps it between calls. Its borrows are native code's own. (#1557)
 - A bound naming a generic trait the crate declares, with a lifetime among its arguments, now resolves as rustc resolves it. Examples are `impl IntoContent<'a, Message>` on a method of `impl<'a, Message> Sidebar<'a, Message>`, `C: IntoContent<'a, M>`, and a free fn's `impl IntoContent<'a, Message> + 'a`. When such a bound isn't satisfied, rawr writes the trait as rustc does, with `'_` for each lifetime. (#1568)
+- Statics declared in a body that refer to each other, as tracing's `META` and `__CALLSITE` do, now work in marked code. Each points at the other, registration by address works, and a save keeps or replaces them without a restart. A cycle whose type keeps the pointer inside an enum or a union is refused at `rawr check`. (#1547)
+- `concat!` and other compile-time macros now take a std macro named by a path from the crate root, as in `::core::line!()`. (#1569)
 
 ## 0.3.174 (2026-11-09)
 
