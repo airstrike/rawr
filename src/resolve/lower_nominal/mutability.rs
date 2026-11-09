@@ -52,6 +52,13 @@ impl<'a> Parser<'a> {
             };
         }
         let Some(name) = variable_name(receiver.source.as_str()) else {
+            // A temporary, as `rand::rng()` of `rand::rng().random_range(..)`
+            // or a struct literal, is borrowed mutably where it is made and
+            // lives to the end of its statement, as rustc's auto-borrow of
+            // a value expression does.
+            if !self.flow().is_place(receiver.span) {
+                return Ok(());
+            }
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
                 reason: "calling a `&mut self` method on a value that isn't a `let mut` binding \
