@@ -323,6 +323,22 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
             ),
         );
     }
+    // A type path through a module a `use` binds names the module's own
+    // path, as rustc resolves it; rustc writes the module as the source
+    // does.
+    if let resolve::Error::UnknownType {
+        name,
+        reference,
+        path: false,
+    } = error
+        && let Some((module, item)) = name.rsplit_once("::")
+    {
+        return resolution_builder(&resolve::Error::UnknownType {
+            name: format!("{}::{item}", written_type_module(source, primary, module)).into(),
+            reference: *reference,
+            path: false,
+        });
+    }
     let resolve::Error::UnknownMember { owner, member, .. } = error else {
         return resolution_builder(error);
     };
@@ -390,6 +406,34 @@ fn written_module<'a>(source: &'a Source, at: Span, module: &'a str) -> &'a str 
     match &before[begin..] {
         "" => module,
         written => written,
+    }
+}
+
+/// The module of the type path at `at` as the source writes it: before its
+/// last segment where `at` spans the whole path on one line, else before
+/// the name `at` spans ([`written_module`]).
+fn written_type_module<'a>(source: &'a Source, at: Span, module: &'a str) -> &'a str {
+    let (start, end) = (at.start(), at.end());
+    let (Some(line), Some(first), Some(last)) = (start.line(), start.position(), end.position())
+    else {
+        return module;
+    };
+    let text = source
+        .text()
+        .split('\n')
+        .nth(line.saturating_sub(1))
+        .filter(|_| end.line() == Some(line));
+    let index = |text: &str, column: usize| {
+        text.char_indices()
+            .nth(column.saturating_sub(1))
+            .map_or(text.len(), |(index, _)| index)
+    };
+    match text
+        .and_then(|text| text.get(index(text, first)..index(text, last)))
+        .and_then(|written| written.rsplit_once("::"))
+    {
+        Some((written, _)) if !written.is_empty() => written,
+        _ => written_module(source, at, module),
     }
 }
 
@@ -615,9 +659,13 @@ fn primary_label(
         // rustc names the module a qualified type isn't in.
         resolve::Error::UnknownType {
             name, path: false, ..
-        } if let Some((module, _)) = name.rsplit_once("::") => {
-            Some(format!("not found in `{module}`").into())
-        }
+        } if let Some((module, _)) = name.rsplit_once("::") => Some(
+            format!(
+                "not found in `{}`",
+                written_type_module(source, primary, module)
+            )
+            .into(),
+        ),
         resolve::Error::UnknownVariable { .. }
         | resolve::Error::UnknownFunction { .. }
         | resolve::Error::UnknownType { path: false, .. } => Some("not found in this scope".into()),
@@ -1290,6 +1338,48 @@ mod tests {
         );
         assert_eq!(report.labels().len(), 1);
         assert_eq!(report.labels()[0].span(), translated);
+    }
+
+    /// A type path through a module a `use` binds misses at the module's
+    /// own path, which rawr demands; the report writes the module as the
+    /// source does, as rustc's E0425 does, whether the error spans the
+    /// whole path or its last segment (#694, #1202).
+    #[test]
+    fn a_type_missing_from_a_used_module_names_the_module_as_written() {
+        let text = "use model::extension;\n\
+                    fn f(update: extension::registry::Gone) {\n    \
+                    let names: extension::registry::Missing = g();\n}\n";
+        let source = Source::new("src/home.rs", text).expect("test source has a stable identity");
+        for (span, item) in [
+            (
+                Span::new(Position::new(2, 35), Position::new(2, 39)),
+                "Gone",
+            ),
+            (
+                Span::new(Position::new(3, 16), Position::new(3, 44)),
+                "Missing",
+            ),
+        ] {
+            let error = ParseError(
+                Box::new(ParseErrorType::Resolution(resolve::Error::UnknownType {
+                    name: format!("model::extension::registry::{item}").into(),
+                    reference: span,
+                    path: false,
+                })),
+                span.start(),
+                Default::default(),
+            );
+            let report = Report::from_parse_at(source.clone(), &error, span)
+                .expect("the error's span belongs to the source");
+            assert_eq!(
+                report.message(),
+                format!("cannot find type `{item}` in module `extension::registry`")
+            );
+            assert_eq!(
+                report.labels()[0].message(),
+                Some("not found in `extension::registry`")
+            );
+        }
     }
 
     #[test]

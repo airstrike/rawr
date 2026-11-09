@@ -481,8 +481,11 @@ impl<'a> Parser<'a> {
                 ) {
                     return Err(error);
                 }
+                // The path through the module a `use` binds, as rustc
+                // resolves it, which a miss demands from the crate; the
+                // report writes the module as the source does.
                 return Err(Error::UnknownType {
-                    name,
+                    name: path,
                     reference: name_span,
                     path: false,
                 });

@@ -755,7 +755,7 @@ impl<'a> Resolver<'a> {
                 .map_err(|error| Failure {
                     primary: context.source,
                     secondary: None,
-                    error: self.unresolved_type(&context, error),
+                    error: self.unresolved_type(&context, &modules, error),
                 })?;
                 shells.push(shell);
             }
@@ -2295,8 +2295,40 @@ impl<'a> Resolver<'a> {
     /// rustc's error for a type path another crate's module doesn't
     /// resolve, which `error` reports at the whole path: E0433 at its first
     /// segment where that names no crate or module in scope, else E0425 at
-    /// its last.
-    fn unresolved_type(&self, context: &Context, error: Error) -> Error {
+    /// its last. A path through a module the unit's `use`s bind, by
+    /// `modules`, names the module's own path, as rustc resolves it, which
+    /// a miss demands from the crate; the report writes the module as the
+    /// source does.
+    fn unresolved_type(
+        &self,
+        context: &Context,
+        modules: &BTreeMap<ImmutableString, ImmutableString>,
+        error: Error,
+    ) -> Error {
+        let error = self.unresolved_type_written(context, error);
+        let Error::UnknownType {
+            name,
+            reference,
+            path: false,
+        } = &error
+        else {
+            return error;
+        };
+        let Some(qualified) = name
+            .split_once("::")
+            .and_then(|(root, rest)| Some(format!("{}::{rest}", modules.get(root)?)))
+        else {
+            return error;
+        };
+        Error::UnknownType {
+            name: qualified.into(),
+            reference: *reference,
+            path: false,
+        }
+    }
+
+    /// [`Self::unresolved_type`]'s error at the path as it is written.
+    fn unresolved_type_written(&self, context: &Context, error: Error) -> Error {
         let Error::UnknownType {
             name,
             reference,

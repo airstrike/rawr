@@ -445,6 +445,64 @@ fn a_marked_module_names_the_items_of_a_native_module() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A marked module names a workspace crate's aliases through a module its
+/// `use` binds (`use model::extension;`), as inboard's `home` does: an
+/// alias of another crate's type in a re-exported module (`pub type
+/// Update = check::Update;`) in a parameter, a method's parameter and a
+/// `let`, an alias of a `Vec` of that type in a field, and aliases of std
+/// types, a crate's (`type Names = Vec<String>`) and a native module's
+/// (#694, #1202). Nothing names the aliases by their crate's path, so each
+/// is demanded through the module the `use` binds. `rawr check` passes as
+/// `cargo check` does, and `rawr run` prints what `cargo run` prints.
+#[test]
+fn a_marked_module_names_crate_aliases_through_a_used_module() {
+    const ALIASES: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-aliases"
+    );
+    const PRINTED: [&str; 2] = ["mail 2 / 7 of 2 / mail,notes / inbox,home", "4"];
+    let root = crate::support::scratch().join("islands-aliases");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(ALIASES), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        format!("{}\n", PRINTED.join("\n"))
+    );
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(&root, &[]);
+    for line in PRINTED {
+        let seen = run.until(|_| true);
+        assert_eq!(seen, line, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 /// Any file is markable (#1467): a marked module two native modules below
 /// the crate root, as `workspace::screen::home`, names the root's private
 /// `Message`, its parent's private constant and its private sibling's

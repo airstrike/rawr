@@ -355,6 +355,21 @@ impl TypeAlias {
     pub const fn target(&self) -> &Type {
         &self.target
     }
+
+    /// Each crate type its target and defaults name.
+    fn named(&self, named: &mut std::collections::BTreeSet<[u8; 32]>) {
+        for ty in std::iter::once(&self.target).chain(self.defaults.iter().flatten()) {
+            ty.named(named);
+        }
+    }
+
+    /// Whether every crate type its target and defaults name is in
+    /// `declared`.
+    fn declared(&self, declared: &std::collections::BTreeSet<[u8; 32]>) -> bool {
+        std::iter::once(&self.target)
+            .chain(self.defaults.iter().flatten())
+            .all(|ty| ty.declared(declared))
+    }
 }
 
 /// One `macro_rules!` macro a dependency exports: its path below the
@@ -1653,16 +1668,12 @@ impl Plan {
             });
             items.sort_by(|left, right| left.path.cmp(&right.path));
             facade.items = items.into_boxed_slice();
-            // So is a type alias of such a type.
+            // So is a type alias of such a type. An alias naming a type
+            // another facade declares, as `pub type Updates =
+            // Vec<check::Update>;` over another crate's module, resolves
+            // it through that facade, as an item's signature does.
             let mut aliases = std::mem::take(&mut facade.type_aliases).into_vec();
-            aliases.retain(|alias| {
-                alias.target.declared(&declared)
-                    && alias
-                        .defaults
-                        .iter()
-                        .flatten()
-                        .all(|default| default.declared(&declared))
-            });
+            aliases.retain(|alias| alias.declared(&resolved));
             facade.type_aliases = aliases.into_boxed_slice();
         }
         // The trait headers and impl headers each facade's types reach,
@@ -2594,7 +2605,8 @@ impl Resolution {
 }
 
 impl Facade {
-    /// Each crate type its items name, other than those every facade has.
+    /// Each crate type its items and type aliases name, other than those
+    /// every facade has.
     #[must_use]
     pub fn named(&self) -> std::collections::BTreeSet<[u8; 32]> {
         let mut named = std::collections::BTreeSet::new();
@@ -2602,6 +2614,9 @@ impl Facade {
             for signature in std::iter::once(&item.signature).chain(&item.values) {
                 signature.named(&mut named);
             }
+        }
+        for alias in self.type_aliases.iter() {
+            alias.named(&mut named);
         }
         named
     }
@@ -4490,6 +4505,43 @@ mod resolution_tests {
         assert_eq!(resolution.order(), [0, 1]);
         assert!(resolution.through(0).is_empty());
         assert_eq!(resolution.through(1), [([1; 32], 0)]);
+    }
+
+    /// A facade whose only item is a type alias, as `pub type Updates =
+    /// Vec<check::Update>;` naming another crate's type, names that type
+    /// through its target, so it is built after the facade declaring it
+    /// and resolves the type through it (#694).
+    #[test]
+    fn a_type_alias_names_another_facades_type_through_its_target() {
+        let update = super::Type::Nominal {
+            identity: [2; 32],
+            arguments: Box::default(),
+        };
+        let facade = super::Facade {
+            root: "model".into(),
+            types: Box::default(),
+            items: Box::default(),
+            traits: Box::default(),
+            builtins: Box::default(),
+            variants: Box::default(),
+            type_aliases: Box::new([super::TypeAlias {
+                path: "extension::registry::Updates".into(),
+                parameters: Box::default(),
+                defaults: Box::default(),
+                target: super::Type::Array(Box::new(update)),
+            }]),
+            macros: Box::default(),
+            derives: Box::default(),
+            trait_headers: Box::default(),
+            impls: Box::default(),
+            std_reexports: Box::default(),
+        };
+        assert_eq!(facade.named(), set(&[2]));
+        let resolution = Resolution::new(&[set(&[]), set(&[2])], &[facade.named(), set(&[])]);
+        assert_eq!(resolution.order(), [1, 0]);
+        assert_eq!(resolution.through(0), [([2; 32], 1)]);
+        assert!(facade.type_aliases[0].declared(&set(&[2])));
+        assert!(!facade.type_aliases[0].declared(&set(&[])));
     }
 }
 

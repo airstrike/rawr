@@ -1022,6 +1022,47 @@ fn host_type(
             Target::Builtin,
             convert(&[ok.as_ref().clone(), err.as_ref().clone()], owner)?,
         ),
+        // std's types a crate's alias names, as `pub type Names =
+        // Vec<String>;`, as Rawr writes each.
+        Shape::Array { element, sequence } => {
+            let name = match sequence {
+                host::type_ref::Sequence::Vec => "Vec".into(),
+                host::type_ref::Sequence::Slice => item::type_ref::SLICE_TYPE.into(),
+                host::type_ref::Sequence::Array(length) => item::type_ref::array_name(*length),
+                #[cfg(feature = "rust-import")]
+                host::type_ref::Sequence::Length(_) => return None,
+            };
+            path(
+                &name,
+                Target::Builtin,
+                convert(std::slice::from_ref(element.as_ref()), owner)?,
+            )
+        }
+        Shape::Boxed(element) => path(
+            "Box",
+            Target::Builtin,
+            convert(std::slice::from_ref(element.as_ref()), owner)?,
+        ),
+        Shape::Counted(atomic, element) => path(
+            if *atomic { "Arc" } else { "Rc" },
+            Target::Builtin,
+            convert(std::slice::from_ref(element.as_ref()), owner)?,
+        ),
+        Shape::Keyed(name, types) => path(name, Target::Builtin, convert(types, owner)?),
+        Shape::Reference { mutable, target } => Type::Reference {
+            mutable: *mutable,
+            lifetime: None,
+            target: Box::new(host_type(
+                target,
+                parameters,
+                arguments,
+                owner,
+                originating,
+                host,
+                span,
+            )?),
+            span,
+        },
         Shape::Parameter(name) => {
             let name = name.to_string();
             let index = parameters.iter().position(|parameter| *parameter == name)?;
