@@ -1551,6 +1551,7 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
              banner banner Some(Inbox(Read(3))) top tiles 1.2\n\
              pending 4 top label tiles 1.2\ntitled home label mail\nwizard view at 6\nwizard label dark\n\
              wizard closed at step 6\nread one two three four\nid server-7 Some(\"7\") true false\n\
+             read one true server false of 4\nserver true of 6\nmarked Some(\"9\") true of 7\n\
              screen 0 shows wizard\nmoved shows wizard\n\
              screen 1 shows wizard\nmoved shows wizard\n"
             ),
@@ -1682,7 +1683,10 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
 /// local, and an `impl Into<String>` given a `String` and a `&String`. It
 /// reads an id's text through `Id::as_str`, as inboard's workspace reads
 /// `inbox_id.as_str()`: a `&str` into the id native code holds, the same
-/// text at each call, as rustc gives it. The program builds, as `cargo
+/// text at each call, as rustc gives it. The ids read keep their ids in a
+/// native `HashSet`, as inboard's `inbox::State` keeps `read_ids`, which
+/// the marked methods extend, look up and add to with ids the program
+/// made, hashed and compared as Rust does. The program builds, as `cargo
 /// check` does, and `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_native_main_gives_marked_functions_any_value_of_an_impl_trait() {
@@ -1705,7 +1709,10 @@ fn a_native_main_gives_marked_functions_any_value_of_an_impl_trait() {
         String::from_utf8_lossy(&native.stderr)
     );
     assert!(
-        printed.contains("\nread one two three four\nid server-7 Some(\"7\") true false\n"),
+        printed.contains(
+            "\nread one two three four\nid server-7 Some(\"7\") true false\n\
+             read one true server false of 4\nserver true of 6\nmarked Some(\"9\") true of 7\n"
+        ),
         "{printed}"
     );
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))

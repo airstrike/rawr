@@ -836,6 +836,14 @@ impl<'a> Generator<'a> {
                     ("Vec" | "Option" | crate::item::type_ref::SLICE_TYPE, [inner]) if single => {
                         self.crosses(file, inner, owner)
                     }
+                    // A keyed collection crosses as the interpreter keeps
+                    // one, its entries sorted by key, as inboard's
+                    // `read_ids: HashSet<Id>`.
+                    ("HashSet" | "BTreeSet", [inner]) if single => self.crosses(file, inner, owner),
+                    ("HashMap" | "BTreeMap", [key, value]) if single => {
+                        self.crosses(file, key, owner)?;
+                        self.crosses(file, value, owner)
+                    }
                     ("Result", [ok, err]) if single => {
                         self.crosses(file, ok, owner)?;
                         self.crosses(file, err, owner)
@@ -4036,6 +4044,8 @@ pub mod __rawr_island {
     const PINNED: u8 = 23;
     const WHOLE: u8 = 24;
     const TEXT_AT: u8 = 25;
+    const HASHED_SET: u8 = 26;
+    const HASHED_MAP: u8 = 27;
 
     /// A value on its way to the interpreter, the native values it gives
     /// the interpreter, each taken once, and, when a call asks
@@ -4773,6 +4783,78 @@ pub mod __rawr_island {
             }
         }
     }
+    /// A set's keys or a map's `(key, value)` entries, as an array: in a
+    /// B-tree's own order, which is its keys' `Ord`, and for a hashed one
+    /// after `hashed`, [`HASHED_SET`] or [`HASHED_MAP`], which the runner
+    /// sorts by key, as the interpreter keeps every keyed collection.
+    fn put_entries<E: Put>(
+        out: &mut Out,
+        hashed: ::std::option::Option<u8>,
+        entries: impl ExactSizeIterator<Item = E>,
+    ) {
+        if let Some(hashed) = hashed {
+            out.byte(hashed);
+        }
+        out.array(entries.len());
+        for entry in entries {
+            entry.put(out);
+        }
+    }
+    /// Each entry a set's or a map's array holds ([`put_entries`]).
+    fn take_entries<E: Take, C: ::std::iter::FromIterator<E>>(input: &mut In<'_>) -> C {
+        input.expect(ARRAY, "a set or a map");
+        let count = input.count();
+        (0..count).map(|_| E::take(input)).collect()
+    }
+    impl<T: Put, S> Put for ::std::collections::HashSet<T, S> {
+        fn put(&self, out: &mut Out) {
+            put_entries(out, Some(HASHED_SET), self.iter());
+        }
+    }
+    impl<T, S> Take for ::std::collections::HashSet<T, S>
+    where
+        T: Take + ::std::cmp::Eq + ::std::hash::Hash,
+        S: ::std::hash::BuildHasher + ::std::default::Default,
+    {
+        fn take(input: &mut In<'_>) -> Self {
+            take_entries::<T, Self>(input)
+        }
+    }
+    impl<T: Put> Put for ::std::collections::BTreeSet<T> {
+        fn put(&self, out: &mut Out) {
+            put_entries(out, None, self.iter());
+        }
+    }
+    impl<T: Take + ::std::cmp::Ord> Take for ::std::collections::BTreeSet<T> {
+        fn take(input: &mut In<'_>) -> Self {
+            take_entries::<T, Self>(input)
+        }
+    }
+    impl<K: Put, V: Put, S> Put for ::std::collections::HashMap<K, V, S> {
+        fn put(&self, out: &mut Out) {
+            put_entries(out, Some(HASHED_MAP), self.iter());
+        }
+    }
+    impl<K, V, S> Take for ::std::collections::HashMap<K, V, S>
+    where
+        K: Take + ::std::cmp::Eq + ::std::hash::Hash,
+        V: Take,
+        S: ::std::hash::BuildHasher + ::std::default::Default,
+    {
+        fn take(input: &mut In<'_>) -> Self {
+            take_entries::<(K, V), Self>(input)
+        }
+    }
+    impl<K: Put, V: Put> Put for ::std::collections::BTreeMap<K, V> {
+        fn put(&self, out: &mut Out) {
+            put_entries(out, None, self.iter());
+        }
+    }
+    impl<K: Take + ::std::cmp::Ord, V: Take> Take for ::std::collections::BTreeMap<K, V> {
+        fn take(input: &mut In<'_>) -> Self {
+            take_entries::<(K, V), Self>(input)
+        }
+    }
     impl<T: Take> Take for ::std::option::Option<T> {
         fn take(input: &mut In<'_>) -> Self {
             match input.byte() {
@@ -5423,6 +5505,34 @@ mod tests {
             assert!(text.contains(expected), "{expected}\n{text}");
         }
         assert!(!text.contains("panic!"), "{text}");
+    }
+
+    /// A keyed collection of values that cross, as inboard's `read_ids:
+    /// HashSet<Id>`, crosses by copy as a `Vec` does, so the interpreter
+    /// keeps its own collection, never a native part it can't read.
+    #[test]
+    fn a_keyed_collection_of_crossing_values_crosses_by_copy() {
+        let shadow = generate(
+            "// rawr\nuse std::collections::{BTreeMap, HashSet};\n\
+             #[derive(PartialEq, Eq, Hash)]\npub struct Id(String);\n\
+             pub struct Read {\n    read_ids: HashSet<Id>,\n    counts: BTreeMap<String, u32>,\n}\n\
+             impl Read {\n    pub fn is_read(&self, id: &Id) -> bool { self.read_ids.contains(id) }\n    \
+             pub fn mark_read(&mut self, id: &Id) {}\n}\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        for expected in [
+            "    __call.argument(self);\n",
+            "    __call.mutable(&*self);\n",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        assert!(
+            !text.contains("panic!") && !text.contains("Parts for Read"),
+            "{text}"
+        );
     }
 
     /// A borrow of a type the marked crate doesn't declare, as ratatui's

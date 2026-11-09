@@ -57,6 +57,12 @@ pub(crate) const WHOLE: u8 = 24;
 /// the receiver's texts in the order native code wrote them, then the
 /// start and length of the result in it.
 pub(crate) const TEXT_AT: u8 = 25;
+/// Before the [`ARRAY`] of a hashed set's keys in native code's order,
+/// which the runner sorts by key, as the interpreter keeps a set.
+pub(crate) const HASHED_SET: u8 = 26;
+/// A hashed map's `[key, value]` entries in native code's order, as
+/// [`HASHED_SET`] holds a set's keys.
+pub(crate) const HASHED_MAP: u8 = 27;
 
 /// The first byte of a call's header: the function is a member of the
 /// type before its last segment.
@@ -481,7 +487,11 @@ impl Model {
             CHAR => char::from_u32(u32::from_le_bytes(reader.array()?))
                 .ok_or("not a `char`")?
                 .into(),
-            STR => ImmutableString::from(reader.text()?).into(),
+            STR => {
+                let text = ImmutableString::from(reader.text()?);
+                crate::island::read_text(&text);
+                text.into()
+            }
             ARRAY => {
                 let length = reader.members()?;
                 let mut items = crate::Array::with_capacity(length);
@@ -490,6 +500,24 @@ impl Model {
                     items.push(self.island_read(types, lent, given, part, reader, depth)?);
                 }
                 Dynamic::from_array(items)
+            }
+            // A hashed set's keys or map's `[key, value]` entries in native
+            // code's order, sorted by key as the interpreter keeps them.
+            tag @ (HASHED_SET | HASHED_MAP) => {
+                let entries = self.island_read(types, lent, given, part, reader, depth)?;
+                let mut entries = entries
+                    .into_array()
+                    .map_err(|actual| format!("a set or a map is a `{actual}`"))?;
+                let map = tag == HASHED_MAP;
+                let key = |entry: &Dynamic| match entry.as_array_ref() {
+                    Ok(pair) if map => pair.first().cloned().unwrap_or_default(),
+                    _ => entry.clone(),
+                };
+                entries.sort_by(|lhs, rhs| {
+                    self.island_order(&key(lhs), &key(rhs))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                Dynamic::from_array(entries)
             }
             LENT => {
                 let index = reader.count()?;

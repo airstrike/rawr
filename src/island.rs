@@ -53,6 +53,9 @@ thread_local! {
     /// by the first of its parts it lent: the whole's lend.
     static WHOLES: RefCell<Vec<(crate::scope::Nonce, crate::scope::Lent)>> =
         const { RefCell::new(Vec::new()) };
+    /// Each text read from a call's receiver while it is noted
+    /// ([`read_text`]), in the order native code wrote them.
+    static TEXTS: RefCell<Option<Vec<ImmutableString>>> = const { RefCell::new(None) };
 }
 
 /// How the runner keeps a native value native code gives a marked function,
@@ -894,48 +897,15 @@ fn first_lent(value: &Dynamic, depth: usize) -> Option<crate::scope::Nonce> {
     }
 }
 
-/// Each text `value`, a marked value read from a call's arguments, holds,
-/// added to `texts` in the order native code wrote them: field by field,
-/// as the wire format writes a value.
-fn texts_of(value: &Dynamic, texts: &mut Vec<ImmutableString>, depth: usize) {
-    if depth > 64 {
-        return;
-    }
-    let depth = depth + 1;
-    match &value.0 {
-        crate::types::dynamic::Union::Str(text, ..) => texts.push(text.clone()),
-        crate::types::dynamic::Union::Struct(value, ..) => {
-            for field in value.fields() {
-                texts_of(field, texts, depth);
-            }
+/// `text`, read from a call's arguments, is one the receiver holds when
+/// the call notes them: a `&str` its method gives may be in it, as
+/// `&self.0` of an `Id(String)` is.
+pub(crate) fn read_text(text: &ImmutableString) {
+    TEXTS.with_borrow_mut(|texts| {
+        if let Some(texts) = texts {
+            texts.push(text.clone());
         }
-        crate::types::dynamic::Union::Enum(value, ..) => {
-            for item in value.payload() {
-                texts_of(item, texts, depth);
-            }
-        }
-        crate::types::dynamic::Union::Array(items, ..) => {
-            for item in items.iter() {
-                texts_of(item, texts, depth);
-            }
-        }
-        crate::types::dynamic::Union::Shared(cell, ..) => {
-            if let Some(inner) = crate::func::locked_read(cell) {
-                texts_of(&inner, texts, depth);
-            }
-        }
-        crate::types::dynamic::Union::Variant(..) => {
-            if let Some(option) = value.read_lock::<crate::option::Value>() {
-                if let Some(inner) = &*option {
-                    texts_of(inner, texts, depth);
-                }
-            } else if let Some(result) = value.read_lock::<crate::result::Value>() {
-                let (Ok(inner) | Err(inner)) = &*result;
-                texts_of(inner, texts, depth);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 /// Where `text` starts in `held`, when it is a part of that very text, as
@@ -1696,6 +1666,7 @@ impl Calls {
         // A stand-in's receiver is its program value, taken for the call
         // (#1264).
         let mut held = Vec::new();
+        let mut texts = Vec::new();
         for index in 0..count {
             if reader.bytes.first() == Some(&program::model::island::HANDLE) {
                 reader.byte().map_err(malformed)?;
@@ -1716,7 +1687,16 @@ impl Calls {
                 continue;
             }
             let part = inputs.and_then(|inputs| inputs.get(index)?.as_ref());
-            match model.island_read(&self.types, lent, given, part, &mut reader, 0) {
+            // A method's `&str` may be in a text its receiver holds.
+            let noted = index == 0 && matches!(gives, Gives::Text);
+            if noted {
+                TEXTS.set(Some(Vec::new()));
+            }
+            let read = model.island_read(&self.types, lent, given, part, &mut reader, 0);
+            if noted {
+                texts = TEXTS.take().unwrap_or_default();
+            }
+            match read {
                 Ok(value) => values.push(value),
                 Err(error) => {
                     restore(&held, &mut values);
@@ -1760,6 +1740,7 @@ impl Calls {
             mutable,
             gives,
             own: lent.iter().map(crate::scope::Lent::nonce).collect(),
+            texts,
         };
         // A `&self` call on a native trait object's program value runs in a
         // region anchored on the value's pins, so what its result borrows,
@@ -1830,20 +1811,10 @@ impl Calls {
             mutable,
             gives,
             own,
+            texts,
         } = made;
         let path = call.path;
         let model = call.model;
-        // The texts a `&str` that borrows a marked receiver may be in, as
-        // `&self.0` of an `Id(String)` is: each one the receiver native
-        // code wrote holds, found before the call takes it.
-        let mut texts = Vec::new();
-        if matches!(gives, Gives::Text)
-            && anchored.is_none()
-            && matches!(item.kind(), item::Kind::Method)
-            && let Some(receiver) = values.first()
-        {
-            texts_of(receiver, &mut texts, 0);
-        }
         let invoked = (call.invoke)(item, &mut values);
         // The receiver changed in place, as a method's is, goes back.
         restore(&held, &mut values);
@@ -2120,6 +2091,9 @@ struct Made<'i> {
     /// The lends of what native code lent the call, as the parts of a
     /// marked value it lends (#1469).
     own: Vec<crate::scope::Nonce>,
+    /// Each text the receiver of a method whose `&str` borrows it holds,
+    /// in the order native code wrote them ([`read_text`]).
+    texts: Vec<ImmutableString>,
 }
 
 /// The region a `&self` call on a native trait object runs in, and the

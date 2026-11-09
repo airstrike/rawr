@@ -176,6 +176,28 @@ fn main() {
         std::ptr::eq(text, server.as_str()),
         std::ptr::eq(text, twin.as_str())
     );
+    // Ids looked up in, added to and given back through the `HashSet` the
+    // ids read keep, by Rust's hashing and equality: an id made again from
+    // the same text is the same id.
+    println!(
+        "read one {} server {} of {}",
+        read.is_read(&home::Id::new("one")),
+        read.is_read(&server),
+        read.count()
+    );
+    read.mark_read(&twin);
+    read.mark_read(&server);
+    read.mark_all_read(vec![home::Id::new("one"), home::Id::new("five")]);
+    println!("server {} of {}", read.is_read(&server), read.count());
+    match read.update(home::Mark::Read(home::Id::new("server-9"))) {
+        home::Marked::Read(id) => println!(
+            "marked {:?} {} of {}",
+            id.as_str().strip_prefix("server-"),
+            read.is_read(&id),
+            read.count()
+        ),
+        home::Marked::AllRead => println!("marked all"),
+    }
     // Screens whose elements native code held, then moved and dropped.
     for round in 0..2 {
         let screen = home::State::new();

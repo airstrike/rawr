@@ -8,6 +8,8 @@
 
 use ui::{common, opaque, stack, Action, Content, Element, Task, Widget};
 
+use std::collections::HashSet;
+
 use super::{inbox, thumbs};
 
 pub mod tab;
@@ -330,7 +332,7 @@ pub fn wizard_label(state: &State, catalog: wizard::View<'_>, theme: &crate::The
 
 /// A notification's id, as inboard's `inbox::Id`, which native code makes
 /// from any text and reads as the text it holds.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Id(String);
 
 impl Id {
@@ -343,16 +345,58 @@ impl Id {
     }
 }
 
+/// What native code asks of the ids read, as inboard's `inbox::Message`.
+#[derive(Debug, Clone)]
+pub enum Mark {
+    Read(Id),
+    AllRead,
+}
+
+/// What the ids read ask of native code, as inboard's
+/// `inbox::Instruction`, whose id native code reads as text.
+#[derive(Debug)]
+pub enum Marked {
+    Read(Id),
+    AllRead,
+}
+
 /// The ids read, as inboard's `inbox::State`, which native code marks read
-/// from any iterable of ids, one that borrows its locals too.
+/// from any iterable of ids, one that borrows its locals too, and keeps in
+/// a `HashSet`, as inboard's `read_ids`.
 #[derive(Debug, Default)]
 pub struct Read {
     ids: Vec<Id>,
+    read_ids: HashSet<Id>,
 }
 
 impl Read {
     pub fn mark_all_read(&mut self, ids: impl IntoIterator<Item = Id>) {
+        let ids = ids.into_iter().collect::<Vec<_>>();
+        self.read_ids.extend(ids.clone());
         self.ids.extend(ids);
+    }
+
+    pub fn is_read(&self, id: &Id) -> bool {
+        self.read_ids.contains(id)
+    }
+
+    pub fn mark_read(&mut self, id: &Id) {
+        self.read_ids.insert(id.clone());
+    }
+
+    /// How many ids are read, each once.
+    pub fn count(&self) -> usize {
+        self.read_ids.len()
+    }
+
+    pub fn update(&mut self, mark: Mark) -> Marked {
+        match mark {
+            Mark::Read(id) => {
+                self.mark_read(&id);
+                Marked::Read(id)
+            }
+            Mark::AllRead => Marked::AllRead,
+        }
     }
 
     pub fn label(&self) -> String {
