@@ -6,6 +6,7 @@
 //! drops it. Cloning a handle does neither of those things.
 
 mod callback;
+mod cycle;
 mod native;
 pub mod ownership;
 mod projection;

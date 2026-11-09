@@ -387,12 +387,13 @@ pub(super) enum PreludeOp {
     /// the value's handle (`island::object`, #1264).
     NativeObject,
     /// A static declared in a body, of a native type (D862): its place,
-    /// `value(key)`.
+    /// or before its block writes it, its slot: `value(key)`.
     StaticValue,
     /// Whether the static `key` has no value yet: `reserved(key)`.
     StaticReserved,
-    /// Write the static `key`'s value, moved into its place:
-    /// `settle(key, value)`.
+    /// Write the static `key`'s value, moved into its place, with its
+    /// type's layout, `[size, pointer offsets..]` or `()` when the import
+    /// driver gave none (D865): `settle(key, value, layout)`.
     StaticSettle,
 }
 
@@ -796,7 +797,11 @@ impl PreludeOp {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<ImmutableString>()]
             }
             Self::StaticValue | Self::StaticReserved => vec![TypeId::of::<ImmutableString>()],
-            Self::StaticSettle => vec![TypeId::of::<ImmutableString>(), TypeId::of::<Dynamic>()],
+            Self::StaticSettle => vec![
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+            ],
             Self::NativeObject => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<ImmutableString>(),
@@ -872,7 +877,7 @@ impl PreludeOp {
             Self::DropParts => return Ok(drops::parts(args[0], args[1], models)),
             Self::StaticValue => {
                 let key = args[0].clone_cast::<ImmutableString>();
-                return crate::place::statics::slot(&key).value();
+                return Ok(crate::place::statics::slot(&key).value());
             }
             Self::StaticReserved => {
                 let key = args[0].clone_cast::<ImmutableString>();
@@ -880,7 +885,8 @@ impl PreludeOp {
             }
             Self::StaticSettle => {
                 let key = args[0].clone_cast::<ImmutableString>();
-                crate::place::statics::slot(&key).settle(args[1].take())?;
+                let layout = static_layout(args[2]);
+                crate::place::statics::slot(&key).settle(args[1].take(), layout)?;
                 return Ok(Dynamic::UNIT);
             }
             #[cfg(feature = "rust-import")]
@@ -2722,4 +2728,17 @@ pub(super) fn matches_runtime_model(value: &Dynamic, model: &Nominal, models: &M
         .runtime
         .validate_value(value, &identity, expected.schema())
         .is_ok()
+}
+
+/// A static's layout as the lowering writes it, `[size, offsets..]`.
+fn static_layout(layout: &Dynamic) -> Option<(usize, Box<[usize]>)> {
+    let words = layout.read_lock::<crate::Array>()?;
+    let mut words = words.iter().map(|word| {
+        word.as_int()
+            .ok()
+            .and_then(|word| usize::try_from(word).ok())
+    });
+    let size = words.next()??;
+    let offsets = words.collect::<Option<Box<[usize]>>>()?;
+    Some((size, offsets))
 }
