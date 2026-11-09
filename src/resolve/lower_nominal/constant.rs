@@ -258,7 +258,15 @@ impl<'a> Parser<'a> {
             self.next();
         }
         let sign = if negative { "-" } else { "" };
-        let text = self.next();
+        let text = match self.next() {
+            // `$crate::__macro_support::line!()`: std's macro by a path.
+            (Token::Identifier(first), position)
+                if let Some(name) = self.std_macro_path(&first, point_span(position)) =>
+            {
+                (Token::Identifier(Box::new(name.as_str().into())), position)
+            }
+            text => text,
+        };
         // `1u8`: `concat!` writes the number without its suffix.
         if matches!(text.0, Token::IntegerConstant(_) | Token::FloatConstant(_))
             && let Token::Identifier(suffix) = self.peek()

@@ -1973,13 +1973,19 @@ fn checks_and_prints(root: &Path, printed: &str) {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
-/// A marked module compares `tracing`'s and `log`'s levels as their
-/// macros' enabled checks do: a `Level` with a `LevelFilter` through the
-/// crate's `PartialOrd<LevelFilter>` and `PartialEq<LevelFilter>`, as
-/// rustc selects them (#702). `rawr check` passes, and `rawr run` prints
-/// what `cargo run` prints.
+/// A marked module uses the pieces of `log`'s and `tracing`'s macros, and
+/// `rawr check` passes and `rawr run` prints what `cargo run` prints. It
+/// compares their levels as the macros' enabled checks do, a `Level` with a
+/// `LevelFilter` through the crate's `PartialOrd<LevelFilter>` and
+/// `PartialEq<LevelFilter>`, as rustc selects them (#702). It names std's
+/// macros by their paths and through a crate's re-export of them, as
+/// `$crate::__private_api::module_path!()` (#1548). A crate macro's
+/// `line!()`, `column!()`, `file!()` and `module_path!()`, nested or not,
+/// are where its outermost call is, a caller's own `line!()` is where the
+/// caller wrote it, and `module_path!()` in a constant or an inline module's
+/// impl is cargo's.
 #[test]
-fn a_marked_module_compares_a_crate_type_with_another_crate_type() {
+fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
     const LOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-log");
     let root = crate::support::scratch().join("islands-log");
     let _ = fs::remove_dir_all(root.join("src"));
@@ -1988,8 +1994,10 @@ fn a_marked_module_compares_a_crate_type_with_another_crate_type() {
     assert!(
         printed.starts_with(
             "compiled true current false off true filter false equal true unequal true \
-             same true log true\n"
-        ),
+             same true log true\n\
+             ab1 islands_log::workspace::inbox event x34 ab1 2\n\
+             src/workspace/inbox.rs:42:5 in islands_log::workspace::inbox\n"
+        ) && printed.contains("; islands_log::workspace::inbox::folder islands_log::"),
         "{printed}"
     );
     checks_and_prints(&root, &printed);

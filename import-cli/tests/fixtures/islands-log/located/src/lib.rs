@@ -34,3 +34,12 @@ macro_rules! name {
         )
     };
 }
+
+/// Its caller's expression and where it is, through a nested call of
+/// [`here!`], as tracing's `event!` reaches `callsite!` and `valueset!`.
+#[macro_export]
+macro_rules! traced {
+    ($value:expr) => {
+        $crate::__support::format_args!("{} at {}", $value, $crate::here!()).to_string()
+    };
+}

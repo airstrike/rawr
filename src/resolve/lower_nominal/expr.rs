@@ -870,6 +870,17 @@ impl<'a> Parser<'a> {
                 source: name_span,
             });
         }
+        // `std::concat!(..)`, or a crate's re-export of it, as tracing's
+        // `$crate::__macro_support::concat!(..)`: std's macro by its name.
+        let std_macro = std::mem::take(&mut self.std_macro_ahead);
+        if !std_macro && let Some(name) = self.std_macro_path(&name, name_span) {
+            self.std_macro_ahead = true;
+            self.splice_tokens(vec![(
+                Token::Identifier(Box::new(name.as_str().into())),
+                name_span.start(),
+            )]);
+            return self.parse_primary();
+        }
         // `Self::with_text_size(..)` in an impl for a crate's type is the
         // type's own function, by the path the impl writes (#1466).
         if name.as_str() == "Self"
@@ -943,15 +954,20 @@ impl<'a> Parser<'a> {
         }
 
         // The program's own macro: textual scope shadows the prelude's.
-        if matches!(self.peek(), Token::Bang)
+        if !std_macro
+            && matches!(self.peek(), Token::Bang)
             && let Some(rules) = self.program_macro(&name, name_span.start())
         {
             let rules = rules?;
             return self.expand_program_macro(&rules, name_span);
         }
+        // std's macro, by its name or its path.
+        let unbound = std_macro || self.models.import(&name).is_none();
+        // `format_args!(..)` is the text it formats, as rawr holds std's
+        // other `Display` values (`Path::display`).
         if matches!(self.peek(), Token::Bang)
-            && name.as_str() == "format"
-            && self.models.import(&name).is_none()
+            && matches!(name.as_str(), "format" | "format_args")
+            && unbound
         {
             self.next();
             return self.parse_format(name_span, false);
@@ -965,21 +981,18 @@ impl<'a> Parser<'a> {
                 "eprintln" => Some((true, true)),
                 _ => None,
             }
-            && self.models.import(&name).is_none()
+            && unbound
         {
             return self.parse_print(stream, name_span);
         }
-        if matches!(self.peek(), Token::Bang)
-            && name.as_str() == "dbg"
-            && self.models.import(&name).is_none()
-        {
+        if matches!(self.peek(), Token::Bang) && name.as_str() == "dbg" && unbound {
             return self.parse_dbg(name_span);
         }
         // `write!(s, ..)` and `writeln!(&mut s, ..)` into a `String`, through
         // `std::fmt::Write`: the text pushed onto the place, and `Ok(())`.
         if matches!(self.peek(), Token::Bang)
             && matches!(name.as_str(), "write" | "writeln")
-            && self.models.import(&name).is_none()
+            && unbound
             && !self.writes_into_formatter()
         {
             return self.parse_write_string(&name, name_span);
@@ -1025,17 +1038,11 @@ impl<'a> Parser<'a> {
                 expression,
             ));
         }
-        if matches!(self.peek(), Token::Bang)
-            && PANIC_MACROS.contains(&name.as_str())
-            && self.models.import(&name).is_none()
-        {
+        if matches!(self.peek(), Token::Bang) && PANIC_MACROS.contains(&name.as_str()) && unbound {
             self.next();
             return self.parse_panic_macro(&name, name_span);
         }
-        if matches!(self.peek(), Token::Bang)
-            && name.as_str() == "vec"
-            && self.models.import(&name).is_none()
-        {
+        if matches!(self.peek(), Token::Bang) && name.as_str() == "vec" && unbound {
             self.next();
             let (open, close) = match self.next() {
                 (Token::LeftBracket, position) => (position, Token::RightBracket),
@@ -1063,15 +1070,12 @@ impl<'a> Parser<'a> {
                     | "file"
                     | "module_path"
             )
-            && self.models.import(&name).is_none()
+            && unbound
         {
             self.next();
             return self.parse_compile_time_macro(&name, name_span);
         }
-        if matches!(self.peek(), Token::Bang)
-            && name.as_str() == "cfg"
-            && self.models.import(&name).is_none()
-        {
+        if matches!(self.peek(), Token::Bang) && name.as_str() == "cfg" && unbound {
             self.next();
             let open = self.expect(Token::LeftParen, "`(` after `cfg!`")?;
             let value = self.cfg_predicate()?;
@@ -1084,16 +1088,14 @@ impl<'a> Parser<'a> {
             ));
         }
         // `join!`, `try_join!` and `select!` after `use tokio::join;`.
-        if matches!(self.peek(), Token::Bang)
+        if !std_macro
+            && matches!(self.peek(), Token::Bang)
             && let Some(binding) = self.models.import(&name)
             && let Some(name) = crate::resolve::tokio_macro(&binding.qualified, &self.models.host)
         {
             return self.parse_tokio_macro(name, name_span);
         }
-        if matches!(self.peek(), Token::Bang)
-            && name.as_str() == "matches"
-            && self.models.import(&name).is_none()
-        {
+        if matches!(self.peek(), Token::Bang) && name.as_str() == "matches" && unbound {
             self.next();
             return self.parse_matches(name_span);
         }
