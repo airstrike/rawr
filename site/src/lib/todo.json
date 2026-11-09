@@ -190,7 +190,10 @@
         {"text":"A project that links a native library rawr's runtime also links, such as psm through stacker, now reuses the runtime rawr warmed when both take it from one package at Cargo-compatible versions. Its first run after an install no longer compiles rawr in the project: inboard's 11-minute first start goes away.","issues":[1480]},
         {"text":"A marked function can take a native value of borrows by value, as inboard's `catalog: View<'_>`, for the call alone, and a marked method on it works too.","issues":[1225]},
         {"text":"Inside a marked `view<'a>`, a crate method called on a native `&'a T` lent to the view, such as `inbox.view()`, returns an element that lives as long as the view's own. A crate fn with an `Option<&'a str>` parameter that its output keeps, such as inboard's `sidebar::nav_section(None, ..)`, now imports and runs.","issues":[1496],"refs":[1413]},
-        {"text":"An or-pattern whose alternatives differ only in the crate values they test, such as `Message::Floor(_, floor::Message::Up) | Message::Floor(_, floor::Message::Down)`, no longer fails with a false RAWR-RESOLVE-MATCH. A name missing from one alternative is rustc's E0408, and a binding of another type is E0308. elevato.rs's browser universe now checks.","issues":[1497],"refs":[435,1384]}
+        {"text":"An or-pattern whose alternatives differ only in the crate values they test, such as `Message::Floor(_, floor::Message::Up) | Message::Floor(_, floor::Message::Down)`, no longer fails with a false RAWR-RESOLVE-MATCH. A name missing from one alternative is rustc's E0408, and a binding of another type is E0308. elevato.rs's browser universe now checks.","issues":[1497],"refs":[435,1384]},
+        {"text":"A marked function takes native values inside an `Option`, a `Vec`, a `Box` or a tuple by value, such as inboard's `home_grid: Option<Element<'a, grid::Message>>`.","issues":[1224]},
+        {"text":"A marked function takes a `&[T]` of native values, lent where it is, and passes it on to native functions.","issues":[1292]},
+        {"text":"In a marked view, an element from a native function may borrow the view's lent arguments, as inboard's `inbox::view(inbox_state, .., browser_updates, ..)` does. An element that a native part of `self` gives lasts as long as the view's result.","issues":[1413]}
       ]
     },
     "releases": [
@@ -3022,7 +3025,7 @@
     {"issue":1221,"title":"Highlight names inside macro arguments and format-string placeholders","state":"open","category":"Health"},
     {"issue":1222,"title":"A native rebuild's own copy of a marked module starts another save","state":"open","category":"Health"},
     {"issue":1223,"title":"Render the link cards with rawr run","state":"open","category":"Health"},
-    {"issue":1224,"title":"A marked function can't take a native value nested by value in an argument (Option<Kind>, Vec<Item>)","state":"open","category":"Divergences from rustc"},
+    {"issue":1224,"title":"A marked function can't take a native value nested by value in an argument (Option<Kind>, Vec<Item>)","state":"closed","category":"Divergences from rustc"},
     {"issue":1225,"title":"A marked function can't take a native value whose type names a non-'static lifetime by value","state":"closed","category":"Divergences from rustc"},
     {"issue":1226,"title":"A result of a native type in a generic marked impl can't cross","state":"open","category":"Divergences from rustc"},
     {"issue":1227,"title":"`a.b.c += v` through more than one imported struct field","state":"open","category":"Divergences from rustc"},
@@ -3090,7 +3093,7 @@
     {"issue":1289,"title":"A refutable pattern in `let` is RAWR-RESOLVE-UNSUPPORTED-SYNTAX, not rustc's E0005","state":"closed","category":"Divergences from rustc"},
     {"issue":1290,"title":"A variant pattern with the wrong number of fields is RAWR-RESOLVE-MATCH, not rustc's E0023","state":"closed","category":"Divergences from rustc"},
     {"issue":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"closed","category":"Divergences from rustc"},
-    {"issue":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open","category":"Divergences from rustc"},
+    {"issue":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"closed","category":"Divergences from rustc"},
     {"issue":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"open","category":"Divergences from rustc"},
     {"issue":1294,"title":"The remaining refutable binding patterns are rustc's E0005","state":"closed","category":"Divergences from rustc"},
     {"issue":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"closed","category":"Health"},
@@ -3211,7 +3214,7 @@
     {"issue":1410,"title":"A crate's `Cow<str>` nested in an input (`Option<Cow<str>>`, tuples) still reads as String","state":"open","category":"No glue (D593)"},
     {"issue":1411,"title":"A body whose instance-collection pass stops at a later error reports an earlier generic call's…","state":"open","category":"Divergences from rustc"},
     {"issue":1412,"title":"A native `&T` a crate gives a script closure (iced's `.style(|theme: &Theme, status| ..)`) is…","state":"open","category":"No glue (D593)"},
-    {"issue":1413,"title":"A lent `&T` passed to a crate fn whose output keeps the borrow, or inside `Option<&T>`, fails…","state":"open","category":"No glue (D593)"},
+    {"issue":1413,"title":"A lent `&T` passed to a crate fn whose output keeps the borrow, or inside `Option<&T>`, fails…","state":"closed","category":"No glue (D593)"},
     {"issue":1414,"title":"A lent value whose type has lifetimes prints and compares; any lent value hashes, orders and clones","state":"open","category":"No glue (D593)"},
     {"issue":1415,"title":"`rawr mcp`'s `type` tool drops text past 722 characters without an error; take any length or…","state":"open","category":"Health"},
     {"issue":1416,"title":"`rawr mcp`'s `wait` advertises a client timeout it ignores and blocks with no event; honor it or…","state":"open","category":"Health"},
@@ -3296,7 +3299,10 @@
     {"issue":1495,"title":"Check that a static library shared with rawr's runtime defines the same symbols before sharing it","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1496,"title":"A crate method on a lent receiver and a crate fn's Option<&'a str> parameter work in a marked view","state":"open","category":"No glue (D593)"},
     {"issue":1497,"title":"An or-pattern over crate variants below a program variant is refused as binding different names","state":"open","category":"Divergences from rustc"},
-    {"issue":1498,"title":"An or-pattern whose alternatives differ in program structure and test crate values is refused","state":"open","category":"Divergences from rustc"}
+    {"issue":1498,"title":"An or-pattern whose alternatives differ in program structure and test crate values is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1499,"title":"A crate method whose output borrows its receiver can't also take a `&'a T` at the receiver's lifetime","state":"open","category":"No glue (D593)"},
+    {"issue":1500,"title":"A lent `&[T]` beside a lent `&T`, passed to a crate fn whose output doesn't keep them, fails","state":"open","category":"No glue (D593)"},
+    {"issue":1501,"title":"Test a crate fn whose output keeps an `Option<&'a T>` of a value native code lent a marked view","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4119,7 +4125,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters work (#1225). Next: crate fns that keep lent arguments (#1413), Option<Element> parameters (#1224) and lent slices (#1292)",
+          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Next: crate aliases of other crates' types (#694) and a `&'a T` beside a borrowed receiver (#1499)",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
@@ -4163,7 +4169,7 @@
             {"number":1205,"title":"rawr has no timeouts of its own: remove every deadline from the protocol, the owner and the test harness","state":"closed"},
             {"number":1208,"title":"A root package's build script that declares no rerun-if input runs again only when the generated crate changes","state":"open"},
             {"number":1222,"title":"A native rebuild's own copy of a marked module starts another save","state":"open"},
-            {"number":1224,"title":"A marked function can't take a native value nested by value in an argument (Option<Kind>, Vec<Item>)","state":"open"},
+            {"number":1224,"title":"A marked function can't take a native value nested by value in an argument (Option<Kind>, Vec<Item>)","state":"closed"},
             {"number":1225,"title":"A marked function can't take a native value whose type names a non-'static lifetime by value","state":"closed"},
             {"number":1231,"title":"A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"closed"},
             {"number":1240,"title":"Keep Cargo's unit-graph answer across processes","state":"open"},
@@ -4185,7 +4191,7 @@
             {"number":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"closed"},
             {"number":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"closed"},
             {"number":1291,"title":"Marked code that reads its own pub static of native values reads the native item, not a copy built at each read","state":"closed"},
-            {"number":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"open"},
+            {"number":1292,"title":"A marked function takes a `&[T]` of native values from native code","state":"closed"},
             {"number":1295,"title":"#1278's second shape: the type_usage invariant fires at import.rs:4054 on the 1016-package workspace","state":"closed"},
             {"number":1297,"title":"A `&mut` of a native alias of a wire type in a marked signature is lent instead of copied and written back","state":"closed"},
             {"number":1298,"title":"`rawr check` refuses a native alias of a trait-object type in a marked signature","state":"open"},
@@ -4232,7 +4238,11 @@
             {"number":1494,"title":"A runner that builds rawr in the project recompiled the rawr crate on a second run with nothing changed","state":"open"},
             {"number":1495,"title":"Check that a static library shared with rawr's runtime defines the same symbols before sharing it","state":"open"},
             {"number":1496,"title":"A crate method on a lent receiver and a crate fn's Option<&'a str> parameter work in a marked view","state":"open"},
-            {"number":1413,"title":"A lent `&T` passed to a crate fn whose output keeps the borrow, or inside `Option<&T>`, fails…","state":"open"}
+            {"number":1413,"title":"A lent `&T` passed to a crate fn whose output keeps the borrow, or inside `Option<&T>`, fails…","state":"closed"},
+            {"number":1499,"title":"A crate method whose output borrows its receiver can't also take a `&'a T` at the receiver's lifetime","state":"open"},
+            {"number":1500,"title":"A lent `&[T]` beside a lent `&T`, passed to a crate fn whose output doesn't keep them, fails","state":"open"},
+            {"number":1501,"title":"Test a crate fn whose output keeps an `Option<&'a T>` of a value native code lent a marked view","state":"open"},
+            {"number":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open"}
           ]
         }
       ]
