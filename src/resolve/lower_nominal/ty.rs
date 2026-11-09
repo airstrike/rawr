@@ -74,7 +74,7 @@ pub(super) fn lower_mirrors(mirrored: std::sync::Arc<Mirrored>) {
 
 /// The marked type `definition` mirrors in the program being lowered.
 #[cfg(feature = "rust-import")]
-fn mirrored(definition: &crate::host::type_def::Definition) -> Option<type_def::Id> {
+pub(super) fn mirrored(definition: &crate::host::type_def::Definition) -> Option<type_def::Id> {
     let identity = definition.identity().imported()?;
     MIRRORED.with_borrow(|mirrored| mirrored.get(identity).copied())
 }
