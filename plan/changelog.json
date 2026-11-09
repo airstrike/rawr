@@ -14,7 +14,10 @@
       {"text":"A `static` item inside a block or function body now builds, as in `fn place() -> &'static u32 { static PLACE: u32 = 9; &PLACE }`. It is the module's item, as a `static` written there is. A `static` that a macro call expands to is reported as not supported yet, not as a syntax error.","issues":[1546]},
       {"text":"A marked fn taking an `impl` of a trait its own file declares now builds and runs when native code calls it. The trait and its impls are declared natively, and each value is given by the marked impl for its type. Before, the native build failed with E0405.","issues":[1551]},
       {"text":"When the native build fails in the signature of a marked fn that native code can't call yet, the error now names the marked file's line and the word it is at.","issues":[1552]},
-      {"text":"A program's blanket impl over a type parameter, such as `impl<T> Trait for T where T: IntoIterator<Item = X>` beside `impl Trait for Content`, now resolves and runs the way rustc selects it. A call on the concrete type runs its own impl. A call on any type the where-clauses hold for, such as a Vec, an array, an iterator or a Display value, runs the blanket impl, directly or through an `impl Trait` bound.","issues":[1553]}
+      {"text":"A program's blanket impl over a type parameter, such as `impl<T> Trait for T where T: IntoIterator<Item = X>` beside `impl Trait for Content`, now resolves and runs the way rustc selects it. A call on the concrete type runs its own impl. A call on any type the where-clauses hold for, such as a Vec, an array, an iterator or a Display value, runs the blanket impl, directly or through an `impl Trait` bound.","issues":[1553]},
+      {"text":"A crate type now compares with another type through its PartialOrd<Rhs> or PartialEq<Rhs>, as tracing's `Level <= LevelFilter::current()` does.","issues":[702]},
+      {"text":"std's macros now work by their paths and through a crate's re-export, as log's `__private_api::module_path!()` and tracing's `__macro_support::concat!` do. `format_args!` is supported.","issues":[1548]},
+      {"text":"Native code can now format a marked value it is lent as `&dyn Debug`, `&dyn Display` or another std formatting trait. It also takes `format_args!` as `fmt::Arguments`.","issues":[1558]}
     ]
   },
   "releases": [

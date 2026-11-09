@@ -21,7 +21,10 @@
         {"text":"A `static` item inside a block or function body now builds, as in `fn place() -> &'static u32 { static PLACE: u32 = 9; &PLACE }`. It is the module's item, as a `static` written there is. A `static` that a macro call expands to is reported as not supported yet, not as a syntax error.","issues":[1546]},
         {"text":"A marked fn taking an `impl` of a trait its own file declares now builds and runs when native code calls it. The trait and its impls are declared natively, and each value is given by the marked impl for its type. Before, the native build failed with E0405.","issues":[1551]},
         {"text":"When the native build fails in the signature of a marked fn that native code can't call yet, the error now names the marked file's line and the word it is at.","issues":[1552]},
-        {"text":"A program's blanket impl over a type parameter, such as `impl<T> Trait for T where T: IntoIterator<Item = X>` beside `impl Trait for Content`, now resolves and runs the way rustc selects it. A call on the concrete type runs its own impl. A call on any type the where-clauses hold for, such as a Vec, an array, an iterator or a Display value, runs the blanket impl, directly or through an `impl Trait` bound.","issues":[1553]}
+        {"text":"A program's blanket impl over a type parameter, such as `impl<T> Trait for T where T: IntoIterator<Item = X>` beside `impl Trait for Content`, now resolves and runs the way rustc selects it. A call on the concrete type runs its own impl. A call on any type the where-clauses hold for, such as a Vec, an array, an iterator or a Display value, runs the blanket impl, directly or through an `impl Trait` bound.","issues":[1553]},
+        {"text":"A crate type now compares with another type through its PartialOrd<Rhs> or PartialEq<Rhs>, as tracing's `Level <= LevelFilter::current()` does.","issues":[702]},
+        {"text":"std's macros now work by their paths and through a crate's re-export, as log's `__private_api::module_path!()` and tracing's `__macro_support::concat!` do. `format_args!` is supported.","issues":[1548]},
+        {"text":"Native code can now format a marked value it is lent as `&dyn Debug`, `&dyn Display` or another std formatting trait. It also takes `format_args!` as `fmt::Arguments`.","issues":[1558]}
       ]
     },
     "releases": [
@@ -2557,7 +2560,7 @@
     {"issue":699,"title":"`==` and comparisons resolve through PartialEq/PartialOrd impls, including `&String == &str`","state":"closed","category":"Divergences from rustc","release":"0.3.94"},
     {"issue":700,"title":"A program's `impl PartialEq<Rhs> for T` with Rhs other than Self is accepted and chosen by `==`","state":"open","category":"Divergences from rustc"},
     {"issue":701,"title":"`std::borrow::Cow` imports, and `*` works on `&str` and `String` (rustc's `str`)","state":"closed","category":"Divergences from rustc","release":"0.3.116"},
-    {"issue":702,"title":"A crate type's `PartialEq<Rhs>` with a non-number Rhs is chosen by `==`","state":"open","category":"No glue (D593)"},
+    {"issue":702,"title":"A crate type's `PartialEq<Rhs>` with a non-number Rhs is chosen by `==`","state":"closed","category":"No glue (D593)"},
     {"issue":703,"title":"`String < &str` and `[T; N] == Vec<U>` are refused as rustc refuses them","state":"open","category":"Divergences from rustc"},
     {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"closed","category":"Divergences from rustc","release":"0.3.107"},
     {"issue":705,"title":"A program implements any std trait (FromStr, AsRef, Deref, TryFrom, IntoIterator, Borrow…), and parse() uses FromStr","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
@@ -3403,14 +3406,20 @@
     {"issue":1545,"title":"A &self method of a marked type copied whole that returns a non-text &T can't give native code a reference","state":"open","category":"No glue (D593)"},
     {"issue":1546,"title":"A static item inside a block is a syntax error","state":"open","category":"Divergences from rustc"},
     {"issue":1547,"title":"tracing's event macros expand to block statics that refer to each other and register by address","state":"open","category":"No glue (D593)"},
-    {"issue":1548,"title":"A std built-in macro named through a crate's re-export is E0433 cannot find macros in std","state":"open","category":"No glue (D593)"},
+    {"issue":1548,"title":"A std built-in macro named through a crate's re-export is E0433 cannot find macros in std","state":"closed","category":"No glue (D593)"},
     {"issue":1549,"title":"std::sync::atomic::AtomicUsize is refused in marked code","state":"open","category":"No glue (D593)"},
     {"issue":1550,"title":"A marked fn returning an array such as [u32; 4] to native code panics with a malformed answer","state":"open","category":"No glue (D593)"},
     {"issue":1551,"title":"Native code can't pass a value to a marked fn's impl Trait of a trait the marked file declares","state":"open","category":"No glue (D593)"},
     {"issue":1552,"title":"A build error in a marked signature native code can't call yet names only the crate root","state":"open","category":"Divergences from rustc"},
     {"issue":1553,"title":"A program's blanket impl over a type parameter is refused as RAWR-RESOLVE-IMPL-OWNER","state":"closed","category":"Divergences from rustc"},
     {"issue":1554,"title":"Native code can't pass its own type that implements a marked trait to a marked fn's impl Trait","state":"open","category":"No glue (D593)"},
-    {"issue":1555,"title":"A program's blanket impl: associated fns without self, two blanket impls sharing a method name, T::Item","state":"open","category":"Divergences from rustc"}
+    {"issue":1555,"title":"A program's blanket impl: associated fns without self, two blanket impls sharing a method name, T::Item","state":"open","category":"Divergences from rustc"},
+    {"issue":1556,"title":"rawr check doesn't know the types native code instantiates a marked generic fn or type at","state":"open","category":"No glue (D593)"},
+    {"issue":1557,"title":"A marked struct or enum with a lifetime parameter can't cross to native code","state":"open","category":"No glue (D593)"},
+    {"issue":1558,"title":"A marked value lent to native code as &dyn Debug or Display panics","state":"open","category":"No glue (D593)"},
+    {"issue":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"open","category":"No glue (D593)"},
+    {"issue":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"open","category":"No glue (D593)"},
+    {"issue":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

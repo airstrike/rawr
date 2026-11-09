@@ -15,6 +15,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked fn taking an `impl` of a trait its own file declares now builds and runs when native code calls it. The trait and its impls are declared natively, and each value is given by the marked impl for its type. Before, the native build failed with E0405. (#1551)
 - When the native build fails in the signature of a marked fn that native code can't call yet, the error now names the marked file's line and the word it is at. (#1552)
 - A program's blanket impl over a type parameter, such as `impl<T> Trait for T where T: IntoIterator<Item = X>` beside `impl Trait for Content`, now resolves and runs the way rustc selects it. A call on the concrete type runs its own impl. A call on any type the where-clauses hold for, such as a Vec, an array, an iterator or a Display value, runs the blanket impl, directly or through an `impl Trait` bound. (#1553)
+- A crate type now compares with another type through its PartialOrd<Rhs> or PartialEq<Rhs>, as tracing's `Level <= LevelFilter::current()` does. (#702)
+- std's macros now work by their paths and through a crate's re-export, as log's `__private_api::module_path!()` and tracing's `__macro_support::concat!` do. `format_args!` is supported. (#1548)
+- Native code can now format a marked value it is lent as `&dyn Debug`, `&dyn Display` or another std formatting trait. It also takes `format_args!` as `fmt::Arguments`. (#1558)
 
 ## 0.3.174 (2026-11-09)
 
