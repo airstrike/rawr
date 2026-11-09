@@ -25,6 +25,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A bound naming a generic trait the crate declares, with a lifetime among its arguments, now resolves as rustc resolves it. Examples are `impl IntoContent<'a, Message>` on a method of `impl<'a, Message> Sidebar<'a, Message>`, `C: IntoContent<'a, M>`, and a free fn's `impl IntoContent<'a, Message> + 'a`. When such a bound isn't satisfied, rawr writes the trait as rustc does, with `'_` for each lifetime. (#1568)
 - Statics declared in a body that refer to each other, as tracing's `META` and `__CALLSITE` do, now work in marked code. Each points at the other, registration by address works, and a save keeps or replaces them without a restart. A cycle whose type keeps the pointer inside an enum or a union is refused at `rawr check`. (#1547)
 - `concat!` and other compile-time macros now take a std macro named by a path from the crate root, as in `::core::line!()`. (#1569)
+- Native code can call a marked function that is generic over its message, at each type rustc's check saw it called with, directly or through a generic native helper. A body edit to it swaps in place. (#1556; part of #1539)
+- A std macro that a crate re-exports and names only inside its own macros, as tracing does with `line!()` inside `concat!`, now resolves in marked code. (#1570; part of #1547)
+- A `macro_rules` `expr` fragment no longer starts at its own stop token, so a matcher such as tracing's `fieldset!` matches exactly what rustc matches. (#1573; part of #1547)
 
 ## 0.3.174 (2026-11-09)
 

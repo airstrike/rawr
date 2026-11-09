@@ -24,7 +24,10 @@
       {"text":"A marked struct or enum with a lifetime parameter, such as a `Panel<'a>` of `&'a str` and `Element<'a, Message>`s, now crosses to native code. Native code builds one through a chain of marked builder methods, by value and by `&mut`, and keeps it between calls. Its borrows are native code's own.","issues":[1557]},
       {"text":"A bound naming a generic trait the crate declares, with a lifetime among its arguments, now resolves as rustc resolves it. Examples are `impl IntoContent<'a, Message>` on a method of `impl<'a, Message> Sidebar<'a, Message>`, `C: IntoContent<'a, M>`, and a free fn's `impl IntoContent<'a, Message> + 'a`. When such a bound isn't satisfied, rawr writes the trait as rustc does, with `'_` for each lifetime.","issues":[1568]},
       {"text":"Statics declared in a body that refer to each other, as tracing's `META` and `__CALLSITE` do, now work in marked code. Each points at the other, registration by address works, and a save keeps or replaces them without a restart. A cycle whose type keeps the pointer inside an enum or a union is refused at `rawr check`.","issues":[1547]},
-      {"text":"`concat!` and other compile-time macros now take a std macro named by a path from the crate root, as in `::core::line!()`.","issues":[1569]}
+      {"text":"`concat!` and other compile-time macros now take a std macro named by a path from the crate root, as in `::core::line!()`.","issues":[1569]},
+      {"text":"Native code can call a marked function that is generic over its message, at each type rustc's check saw it called with, directly or through a generic native helper. A body edit to it swaps in place.","issues":[1556],"refs":[1539]},
+      {"text":"A std macro that a crate re-exports and names only inside its own macros, as tracing does with `line!()` inside `concat!`, now resolves in marked code.","issues":[1570],"refs":[1547]},
+      {"text":"A `macro_rules` `expr` fragment no longer starts at its own stop token, so a matcher such as tracing's `fieldset!` matches exactly what rustc matches.","issues":[1573],"refs":[1547]}
     ]
   },
   "releases": [
