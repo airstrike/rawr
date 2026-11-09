@@ -44,6 +44,19 @@ pub fn empty<'a>() -> Element<'a, u32> {
     crate::widget::void()
 }
 
+/// What the screen's elements give, as inboard's `home::Message`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Message {
+    Inbox(crate::inbox::Message),
+}
+
+/// The inbox's element over the lent theme, its message mapped into the
+/// screen's, as inboard's `home::State::view` gives `inbox::view(..,
+/// theme).map(Message::Inbox)`.
+pub fn inbox<'a>(theme: &'a theme::Theme) -> Element<'a, Message> {
+    crate::inbox::view(theme).map(Message::Inbox)
+}
+
 /// Where the theme native code lends is, as native code reads it.
 pub fn place(theme: &theme::Theme) -> usize {
     crate::style::place(theme)
