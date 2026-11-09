@@ -167,7 +167,10 @@
         {"text":"?play's universe (iced, tokio and ratatui with their generated bindings) builds for wasm32, and the site can run an iced snippet in your browser on it: each Run gets a fresh instance in a frame of its own, drawn by iced's web shell, answering clicks with no round trip to the server. The landing page keeps its iced counter on the server for now, since the browser draws it at the wrong scale on high-density displays.","issues":[1448],"refs":[1395,1384]},
         {"text":"The landing page's iced counter runs in your browser, in a frame of its own, at any display scale, answering clicks with no round trip to the server.","issues":[1449]},
         {"text":"A method a crate's trait gives another crate's type by a generic impl now resolves, as ratzilla's `WebRenderer` gives ratatui's `Terminal` its `on_key_event`; a block that ends in a closure passed to a crate keeps the closure's parameter types and captures.","issues":[1450]},
-        {"text":"`?` converts a crate's error through the crate's `impl From<Error> for io::Error`, and a crate error with a written or derived (thiserror) `std::error::Error` impl boxes as a `Box<dyn Error>`.","issues":[1451]}
+        {"text":"`?` converts a crate's error through the crate's `impl From<Error> for io::Error`, and a crate error with a written or derived (thiserror) `std::error::Error` impl boxes as a `Box<dyn Error>`.","issues":[1451]},
+        {"text":"When one definition is read under two names of the same toolchain, as `nightly` and the dated nightly it resolves to, rawr treats it as one definition instead of failing with `conflicting-definition`; that error also names the item and both sources.","issues":[1461]},
+        {"text":"A crate whose `lazy_static!` declares a hidden struct beside a static of the same name, as `colored`'s `SHOULD_COLORIZE` does, imports instead of failing as declared twice.","issues":[1462]},
+        {"text":"A crate that re-exports `core` under another name, as bytemuck's `pub use ::core as __core;`, registers its bindings instead of failing at a module with no parent.","issues":[1463]}
       ]
     },
     "releases": [
@@ -3235,7 +3238,10 @@
     {"issue":1457,"title":"A crate method whose closure takes `&mut` of a type with a lifetime (ratzilla's `draw_web`…","state":"open","category":"No glue (D593)"},
     {"issue":1458,"title":"A capturing closure inside an `if`/`match` value passed to native code reads its captures where…","state":"open","category":"No glue (D593)"},
     {"issue":1459,"title":"The playground deploy fails: universe_bg.wasm (52.6 MB) exceeds Cloudflare's asset size limit…","state":"open","category":"Platforms"},
-    {"issue":1460,"title":"The ?play image with #1395's runner fails a docs snippet: missing runtime binding for…","state":"open","category":"Platforms"}
+    {"issue":1460,"title":"The ?play image with #1395's runner fails a docs snippet: missing runtime binding for…","state":"open","category":"Platforms"},
+    {"issue":1461,"title":"One definition extracted under two names of one toolchain (`nightly`, the dated nightly)…","state":"closed","category":"Importer"},
+    {"issue":1462,"title":"A crate's value and type of one name (lazy_static's hidden struct beside its static) are refused…","state":"closed","category":"Importer"},
+    {"issue":1463,"title":"A crate module is declared below a re-export prefix (bytemuck's `pub use ::core as __core;`)…","state":"closed","category":"Importer"}
   ],
   "groups": [
     {

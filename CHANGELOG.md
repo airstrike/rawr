@@ -161,6 +161,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The landing page's iced counter runs in your browser, in a frame of its own, at any display scale, answering clicks with no round trip to the server. (#1449)
 - A method a crate's trait gives another crate's type by a generic impl now resolves, as ratzilla's `WebRenderer` gives ratatui's `Terminal` its `on_key_event`; a block that ends in a closure passed to a crate keeps the closure's parameter types and captures. (#1450)
 - `?` converts a crate's error through the crate's `impl From<Error> for io::Error`, and a crate error with a written or derived (thiserror) `std::error::Error` impl boxes as a `Box<dyn Error>`. (#1451)
+- When one definition is read under two names of the same toolchain, as `nightly` and the dated nightly it resolves to, rawr treats it as one definition instead of failing with `conflicting-definition`; that error also names the item and both sources. (#1461)
+- A crate whose `lazy_static!` declares a hidden struct beside a static of the same name, as `colored`'s `SHOULD_COLORIZE` does, imports instead of failing as declared twice. (#1462)
+- A crate that re-exports `core` under another name, as bytemuck's `pub use ::core as __core;`, registers its bindings instead of failing at a module with no parent. (#1463)
 
 ## 0.3.171 (2026-11-07)
 
