@@ -8,8 +8,9 @@
 //! hear `restarted` with the reason. A connection is written to from a
 //! thread of its own, so a program that connects late, never reads or
 //! never connects holds up nothing. What a connection writes is emitted
-//! in turn: the runner says `swapped` this way when the program's thread
-//! admits a generation.
+//! in turn, and comes back on that connection too: the runner says
+//! `swapped` this way when the program's thread admits a generation, and
+//! goes on once it hears its line back.
 
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -221,9 +222,19 @@ mod tests {
         reader.read_line(&mut line).unwrap();
         assert_eq!(line, "{\"event\":\"queued\"}\n");
 
+        // The runner hears its own line back, as it waits to.
         let mut runner = UnixStream::connect(stream.path()).unwrap();
         runner.write_all(b"{\"event\":\"swapped\"}\n").unwrap();
-        drop(runner);
+        let mut echo = String::new();
+        let mut heard = BufReader::new(runner);
+        loop {
+            echo.clear();
+            assert!(heard.read_line(&mut echo).unwrap() > 0, "the stream closed");
+            if echo == "{\"event\":\"swapped\"}\n" {
+                break;
+            }
+        }
+        drop(heard);
         line.clear();
         reader.read_line(&mut line).unwrap();
         assert_eq!(line, "{\"event\":\"swapped\"}\n");

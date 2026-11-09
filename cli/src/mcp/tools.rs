@@ -506,6 +506,11 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
                 cancel,
                 |stage, percent| progress.send(percent as f64, Some(100.0), stage),
             );
+            // A cancelled call gets no answer, so it gives no events: the
+            // next call without a cursor still returns them.
+            if cancel.is_cancelled() {
+                return content::success(json!({}), "cancelled", Vec::new());
+            }
             let answer = session.answer(
                 arguments.get("cursor").and_then(Value::as_u64),
                 arguments.get("output_cursor").and_then(Value::as_u64),
