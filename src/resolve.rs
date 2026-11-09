@@ -2923,6 +2923,11 @@ fn resolve_methods(
     fill_trait_defaults(items, &traits);
     check_generic_arity(items, &traits)?;
     check_trait_bounds(items, &traits)?;
+    for shell in items.iter_mut() {
+        if let item::Kind::Impl(item) = &mut shell.kind {
+            erase_iterator_owner(item);
+        }
+    }
     let definitions: BTreeMap<_, _> = definitions
         .iter()
         .map(|definition| (definition.id(), definition))
@@ -3337,11 +3342,90 @@ fn foreign_owner(ty: &type_ref::Type) -> Option<ImmutableString> {
     }
 }
 
+/// The witness code of a blanket impl's owner (`impl<T: Bound> Trait for
+/// T`): no runtime type has it, so a dispatcher runs the impl for a value
+/// no other impl is for.
+pub(crate) const BLANKET_OWNER: i64 = -13;
+
+/// The owner of a blanket impl bounded by `IntoIterator<Item = X>` or
+/// `Iterator<Item = X>` (inboard's `impl<'a, T, Message> IntoContent<'a,
+/// Message> for T where T: IntoIterator<Item = Element<'a, Message>>`) is
+/// Rawr's iterator of `X`, as a function's parameter of that bound is
+/// (`parser::item::erase_fn_bounds`): its functions take `self` as the
+/// iterator, and `T` leaves the impl's parameters.
+fn erase_iterator_owner(item: &mut item::Impl) {
+    if !matches!(item.trait_, Some(item::TraitImpl::User { .. })) {
+        return;
+    }
+    let type_ref::Type::Path(owner) = &item.owner else {
+        return;
+    };
+    if owner.target != type_ref::Target::Parameter {
+        return;
+    }
+    let Some(position) = item
+        .generics
+        .iter()
+        .position(|generic| generic.name.text == owner.name)
+    else {
+        return;
+    };
+    let Some(iterator) =
+        item.generics[position]
+            .projections
+            .iter()
+            .find_map(|(trait_name, name, ty)| {
+                let iterator = match trait_name.text.as_str() {
+                    "Iterator" | "DoubleEndedIterator" | "ExactSizeIterator" => {
+                        crate::item::type_ref::ITER_TYPE
+                    }
+                    "IntoIterator" => crate::item::type_ref::INTO_ITER_TYPE,
+                    _ => return None,
+                };
+                (name.text == "Item").then(|| {
+                    type_ref::Type::Path(type_ref::Path {
+                        name: iterator.into(),
+                        target: type_ref::Target::Builtin,
+                        arguments: Box::new([type_ref::Argument::Type(ty.clone())]),
+                        span: owner.span,
+                    })
+                })
+            })
+    else {
+        return;
+    };
+    let parameter = [(owner.name.clone(), iterator.clone())];
+    for function in &mut item.functions {
+        for signature in function.parameters.iter_mut() {
+            signature.ty = substitute_parameters(&signature.ty, &parameter);
+        }
+        if let Some(output) = &mut function.output {
+            *output = substitute_parameters(output, &parameter);
+        }
+    }
+    let mut generics = item.generics.to_vec();
+    generics.remove(position);
+    item.generics = generics.into_boxed_slice();
+    item.owner = iterator;
+}
+
 /// A builtin type as a trait impl owner: its witness code
-/// and name. `Box<T>` is not one: it is `T` at runtime.
+/// and name. `Box<T>` is not one: it is `T` at runtime. A blanket impl's
+/// owner, a parameter or the iterator `erase_iterator_owner` makes of
+/// one, is `BLANKET_OWNER`.
 pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString)> {
     let code = match ty {
         type_ref::Type::Unit(_) => return Some((-9, "()".into())),
+        type_ref::Type::Path(path)
+            if path.target == type_ref::Target::Parameter
+                || path.target == type_ref::Target::Builtin
+                    && matches!(
+                        path.name.as_str(),
+                        crate::item::type_ref::ITER_TYPE | crate::item::type_ref::INTO_ITER_TYPE
+                    ) =>
+        {
+            return Some((BLANKET_OWNER, full_type_name(ty).into()));
+        }
         type_ref::Type::Path(path) if path.target == type_ref::Target::Builtin => {
             match path.name.as_str() {
                 // Every integer is the runtime's one integer, and every

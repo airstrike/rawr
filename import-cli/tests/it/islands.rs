@@ -1614,7 +1614,7 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
              pending 4 top label tiles 1.2\ntitled home label mail\nwizard view at 6\nwizard label dark\n\
              wizard closed at step 6\nread one two three four\nid server-7 Some(\"7\") true false\n\
              read one true server false of 4\nserver true of 6\nmarked Some(\"9\") true of 7\n\
-             panel: -a / listed: -b -c\nlines -d / -bb -cc\n\
+             panel: -a / listed: -b -c / arrayed: -b -c\nlines -d / -bb -cc\n\
              screen 0 shows wizard\nmoved shows wizard\n\
              screen 1 shows wizard\nmoved shows wizard\n"
             ),
@@ -1752,7 +1752,9 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
 /// made, hashed and compared as Rust does. A marked builder method and a
 /// marked free function take an `impl` of a trait the marked file declares,
 /// as inboard's `sidebar::content(impl IntoContent)`, and are given a
-/// marked value and a native `Vec`, each by the marked impl for its type.
+/// marked value by its own impl, and a native `Vec` and array by the
+/// marked blanket impl over `IntoIterator<Item = String>`, as rustc selects
+/// them.
 /// The program builds, as `cargo check` does, and `rawr run` prints what
 /// `cargo run` prints.
 #[test]
@@ -1779,7 +1781,7 @@ fn a_native_main_gives_marked_functions_any_value_of_an_impl_trait() {
         printed.contains(
             "\nread one two three four\nid server-7 Some(\"7\") true false\n\
              read one true server false of 4\nserver true of 6\nmarked Some(\"9\") true of 7\n\
-             panel: -a / listed: -b -c\nlines -d / -bb -cc\n"
+             panel: -a / listed: -b -c / arrayed: -b -c\nlines -d / -bb -cc\n"
         ),
         "{printed}"
     );

@@ -783,8 +783,10 @@ impl<'a> Parser<'a> {
         call: Span,
     ) -> Result<BTreeMap<ImmutableString, Ty>, Error> {
         let substitution = self.fresh_generics(definition.generics(), call);
+        // A blanket impl's owner is a parameter the receiver fixes.
+        let blanket = definition.owner().builtin_code() == Some(crate::resolve::BLANKET_OWNER);
         if let Some(receiver) = receiver
-            && !definition.owner_arguments().is_empty()
+            && (!definition.owner_arguments().is_empty() || blanket)
         {
             let receiver = match self.inference.resolve(receiver) {
                 Ty::Reference { target, .. } => *target,

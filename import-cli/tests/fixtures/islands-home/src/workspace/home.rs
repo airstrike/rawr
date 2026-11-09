@@ -420,7 +420,8 @@ impl Lines {
 }
 
 /// What becomes a panel's lines, as inboard's `sidebar::IntoContent`: the
-/// lines themselves, and text native code holds.
+/// lines themselves, and anything that iterates over text native code
+/// holds, by a blanket impl.
 pub trait IntoLines {
     fn into_lines(self) -> Lines;
 }
@@ -431,7 +432,10 @@ impl IntoLines for Lines {
     }
 }
 
-impl IntoLines for Vec<String> {
+impl<T> IntoLines for T
+where
+    T: IntoIterator<Item = String>,
+{
     fn into_lines(self) -> Lines {
         Lines {
             lines: self.into_iter().map(|line| format!("-{line}")).collect(),
