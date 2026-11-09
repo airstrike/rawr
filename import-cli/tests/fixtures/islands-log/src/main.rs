@@ -13,4 +13,5 @@ fn main() {
     println!("{}", inbox::traced());
     println!("{}", inbox::modules());
     println!("{}", inbox::crossing());
+    println!("{}", inbox::site());
 }

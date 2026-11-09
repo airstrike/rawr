@@ -569,6 +569,35 @@ impl<'a> Parser<'a> {
         Some(name)
     }
 
+    /// The miss of the crate's macro path ahead, from its first segment
+    /// `first` at `position`, which is read: tracing's
+    /// `$crate::__macro_support::file!` inside `concat!` before the
+    /// re-export is known, as an expression's path misses it, so it is
+    /// asked for. `None` for a path that names something or no crate.
+    pub(super) fn macro_path_miss(&mut self, first: &str, position: Position) -> Option<Error> {
+        if !matches!(self.peek(), Token::DoubleColon) || self.bindings.contains_key(first) {
+            return None;
+        }
+        let (path, path_span, next) = self.peek_path(first, point_span(position));
+        if next != Some(Token::Bang) || crate::std_table::is_root(first) {
+            return None;
+        }
+        let qualified = match self.models.import(first) {
+            Some(binding) => format!("{}{}", binding.qualified, &path[first.len()..]),
+            None if self.models.host.entry(first).is_some() => path,
+            None => return None,
+        };
+        if self.models.host_items(&qualified).is_some() {
+            return None;
+        }
+        let (module, item) = qualified.rsplit_once("::")?;
+        Some(Error::NotInModule {
+            module: module.into(),
+            item: item.into(),
+            reference: path_span,
+        })
+    }
+
     /// The std path `name`, whose first segment is `first`, names through a
     /// crate's re-export of it, when it is one.
     pub(super) fn std_alias(&self, first: &ImmutableString, name: &str) -> Option<ImmutableString> {
