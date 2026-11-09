@@ -20,7 +20,8 @@
         {"text":"A marked type's `HashSet`, `HashMap`, `BTreeSet` or `BTreeMap` over values that cross, such as inboard's `read_ids: HashSet<Id>`, now crosses by copy as a `Vec` does. Marked code's `contains`, `insert` and `extend` run on the interpreter's own collection, hashed and compared as Rust does.","issues":[1544]},
         {"text":"A `static` item inside a block or function body now builds, as in `fn place() -> &'static u32 { static PLACE: u32 = 9; &PLACE }`. It is the module's item, as a `static` written there is. A `static` that a macro call expands to is reported as not supported yet, not as a syntax error.","issues":[1546]},
         {"text":"A marked fn taking an `impl` of a trait its own file declares now builds and runs when native code calls it. The trait and its impls are declared natively, and each value is given by the marked impl for its type. Before, the native build failed with E0405.","issues":[1551]},
-        {"text":"When the native build fails in the signature of a marked fn that native code can't call yet, the error now names the marked file's line and the word it is at.","issues":[1552]}
+        {"text":"When the native build fails in the signature of a marked fn that native code can't call yet, the error now names the marked file's line and the word it is at.","issues":[1552]},
+        {"text":"A program's blanket impl over a type parameter, such as `impl<T> Trait for T where T: IntoIterator<Item = X>` beside `impl Trait for Content`, now resolves and runs the way rustc selects it. A call on the concrete type runs its own impl. A call on any type the where-clauses hold for, such as a Vec, an array, an iterator or a Display value, runs the blanket impl, directly or through an `impl Trait` bound.","issues":[1553]}
       ]
     },
     "releases": [
@@ -3407,8 +3408,9 @@
     {"issue":1550,"title":"A marked fn returning an array such as [u32; 4] to native code panics with a malformed answer","state":"open","category":"No glue (D593)"},
     {"issue":1551,"title":"Native code can't pass a value to a marked fn's impl Trait of a trait the marked file declares","state":"open","category":"No glue (D593)"},
     {"issue":1552,"title":"A build error in a marked signature native code can't call yet names only the crate root","state":"open","category":"Divergences from rustc"},
-    {"issue":1553,"title":"A program's blanket impl over a type parameter is refused as RAWR-RESOLVE-IMPL-OWNER","state":"open","category":"Divergences from rustc"},
-    {"issue":1554,"title":"Native code can't pass its own type that implements a marked trait to a marked fn's impl Trait","state":"open","category":"No glue (D593)"}
+    {"issue":1553,"title":"A program's blanket impl over a type parameter is refused as RAWR-RESOLVE-IMPL-OWNER","state":"closed","category":"Divergences from rustc"},
+    {"issue":1554,"title":"Native code can't pass its own type that implements a marked trait to a marked fn's impl Trait","state":"open","category":"No glue (D593)"},
+    {"issue":1555,"title":"A program's blanket impl: associated fns without self, two blanket impls sharing a method name, T::Item","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
