@@ -12416,14 +12416,19 @@ fn render_method_opening(
         } else {
             ""
         };
+        let lent = lent_opening(receiver, signature, &container, &call, &converted, &frame)?;
         return writeln!(
             output,
             "    let scoped = scoped_value(arguments, 0);
-    let handle = match scoped {{
-        Some(_) => None,
-        None => Some(native_handle(arguments, 0, false)?),
+    let lent = lent_value(arguments, 0);
+    let handle = match (scoped, lent) {{
+        (None, None) => Some(native_handle(arguments, 0, false)?),
+        _ => None,
     }};
     {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
+        if let Some(lent) = lent {{
+{lent}
+        }}
         match scoped {{
             {scoped}
             None => {{
@@ -12466,6 +12471,72 @@ fn render_method_opening(
     Ok(Dynamic::from(output))"
     )
     .map_err(encoding)
+}
+
+/// The body of a scope frame's call whose output borrows a receiver native
+/// code lent the program (D558.3), as `inbox.view()` of a lent `&'a
+/// inbox::State` gives an `Element<'a, Message>` (#1413), within an `if
+/// let Some(lent)`. A lend native code keeps as long as an anchored call's
+/// result is borrowed in that call's region, where the output stays, so the
+/// result may keep it. Any other is reached through its accessor while the
+/// rest of the scope runs, as a frame holds a receiver of the arena.
+fn lent_opening(
+    receiver: Receiver,
+    signature: &crate::classify::representability::signature::Signature,
+    container: &str,
+    call: &str,
+    converted: &str,
+    frame: &str,
+) -> Result<String, request::Error> {
+    let mutable = matches!(receiver, Receiver::Mutable);
+    let borrow = if mutable { "&mut " } else { "&" };
+    let mut taken = Vec::new();
+    argument_list(signature.inputs().len(), 1, &mut taken)?;
+    let taken = String::from_utf8(taken).map_err(request::unwritable)?;
+    let taken = if taken.is_empty() {
+        String::from("()")
+    } else {
+        format!("({taken},)")
+    };
+    let kept = if mutable {
+        String::new()
+    } else {
+        format!(
+            "            if let Some(anchor) = __rawr_internal::scope::anchor().filter(|_| lent.is_kept()) {{
+                let value = __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+                    let receiver = region.lent::<{container}>(lent).map_err(|error| Error::Lent(lent.name(), error))?;
+                    let made = {call};
+                    with_arena(|arena| {{
+                        let mut values: [&mut Dynamic; 0] = [];
+                        #[allow(unused_variables)]
+                        let arguments = &mut Arguments {{ values: &mut values, arena }};
+                        {converted}
+                    }})
+                }})
+                .map_err(|error| runtime_error(Error::Lent(lent.name(), error)))?
+                .map_err(runtime_error)?;
+                return rest(value);
+            }}
+"
+        )
+    };
+    Ok(format!(
+        "{kept}            let failed = |error| runtime_error(Error::Lent(lent.name(), error));
+            let access: fn(u64, &mut dyn FnMut({borrow}{container})) -> Result<(), u8> = lent.accessor({mutable}).map_err(failed)?;
+            let mut taken = Some({taken});
+            let mut result = None;
+            access(lent.nonce().bits(), &mut |receiver| {{
+                #[allow(irrefutable_let_patterns, unused_parens)]
+                if let Some({taken}) = taken.take() {{
+                    result = Some((|| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
+                        let made = {call};
+                        {frame}
+                    }})());
+                }}
+            }})
+            .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
+            return result.ok_or_else(|| failed(__rawr_internal::scope::Error::Busy))?;"
+    ))
 }
 
 /// The call of a method whose receiver is a value in a scope frame's
@@ -15995,7 +16066,12 @@ fn render_take_input(
     if let lending
     @ (convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_)) =
         substituted(ty, signature, substitutions)?
-        && let Some(lease) = Lease::of(&lending, future, 1)
+        && let Some(lease) = Lease::of(
+            &lending,
+            future,
+            carries_lifetime(&substituted(signature.output(), signature, substitutions)?),
+            1,
+        )
     {
         writeln!(
             output,
@@ -16107,7 +16183,8 @@ enum LeaseKind {
     Owned,
     /// A `Result` of leases: its variant's.
     Result(Box<Lease>, Box<Lease>),
-    /// Rawr's string: pinned for a future, or held for a call.
+    /// Rawr's string: pinned for a future or an output that keeps it, or
+    /// held for a call.
     Str { pinned: bool },
     /// An `Option` of a lease: `None` lends nothing.
     Option(Box<Lease>),
@@ -16116,7 +16193,10 @@ enum LeaseKind {
 }
 
 impl Lease {
-    fn of(ty: &convert::Type, future: bool, depth: usize) -> Option<Self> {
+    /// `kept` when the call's output may keep what it borrows, as
+    /// `nav_section(heading: Option<&'a str>, ..) -> Element<'a, ..>` does
+    /// (#1413): a string in it is pinned as a `&str` the output keeps is.
+    fn of(ty: &convert::Type, future: bool, kept: bool, depth: usize) -> Option<Self> {
         if depth == 1 && !holds_borrow(ty) {
             return None;
         }
@@ -16185,6 +16265,23 @@ impl Lease {
                 ),
                 kind: LeaseKind::Str { pinned: true },
             }),
+            // In a slot's region, in its pins, which outlive what the region
+            // makes; and else for as long as the runner lives, as the arena
+            // keeps the output at `'static`.
+            convert::Type::Builtin(convert::Builtin::Str) if kept => {
+                let pinned = if REGION_ARGUMENTS.get() {
+                    "match region.pins() { Some(pins) => pins.pin(text), None => static_pins().pin(text) }"
+                } else {
+                    "static_pins().pin(text)"
+                };
+                Some(Self {
+                    held: "&str".to_owned(),
+                    take: format!(
+                        "{{ let text = value_{depth}.try_cast_result::<ImmutableString>().map_err(|_| Error::TypeMismatch)?; {pinned} }}"
+                    ),
+                    kind: LeaseKind::Str { pinned: true },
+                })
+            }
             convert::Type::Builtin(convert::Builtin::Str) => Some(Self {
                 held: "ImmutableString".to_owned(),
                 take: format!(
@@ -16193,7 +16290,7 @@ impl Lease {
                 kind: LeaseKind::Str { pinned: false },
             }),
             convert::Type::Option(element) => {
-                let inner = Self::of(element, future, depth + 1)?;
+                let inner = Self::of(element, future, kept, depth + 1)?;
                 let next = depth + 1;
                 Some(Self {
                     held: format!("Option<{}>", inner.held),
@@ -16206,8 +16303,8 @@ impl Lease {
             }
             convert::Type::Result(ok, err) => {
                 let next = depth + 1;
-                let ok = Self::of(ok, future, next)?;
-                let err = Self::of(err, future, next)?;
+                let ok = Self::of(ok, future, kept, next)?;
+                let err = Self::of(err, future, kept, next)?;
                 Some(Self {
                     held: format!("Result<{}, {}>", ok.held, err.held),
                     take: format!(
@@ -16221,7 +16318,7 @@ impl Lease {
                 let next = depth + 1;
                 let members = members
                     .iter()
-                    .map(|member| Self::of(member, future, next))
+                    .map(|member| Self::of(member, future, kept, next))
                     .collect::<Option<Box<[_]>>>()?;
                 let held = members
                     .iter()
@@ -16278,7 +16375,7 @@ impl Lease {
                     err.borrow(&format!("(*held_{next})"), next)
                 )
             }
-            LeaseKind::Str { pinned: true } => place.to_owned(),
+            LeaseKind::Str { pinned: true } => format!("&*{place}"),
             LeaseKind::Str { pinned: false } => format!("{place}.as_str()"),
             LeaseKind::Tuple(members) => {
                 let borrows = members
@@ -16327,7 +16424,7 @@ fn future_borrows(
         if matches!(
             substituted,
             convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_)
-        ) && let Some(lease) = Lease::of(&substituted, true, 1)
+        ) && let Some(lease) = Lease::of(&substituted, true, false, 1)
         {
             let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
             rebound.push_str(&format!(

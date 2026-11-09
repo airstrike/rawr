@@ -229,6 +229,12 @@ enum Pass {
     /// A value of a type the marked crate doesn't declare, as an app's own
     /// `Message`: moved to the interpreter, which keeps it (#1139).
     Give,
+    /// A value of a type the marked crate doesn't declare whose type names
+    /// a lifetime, written `ty`, as inboard's by-value `View<'a>` of
+    /// borrows (#1225): moved to the interpreter for the call alone, as
+    /// rustc lets the function keep nothing of it past the call but what
+    /// its result borrows, which native code holds at those lifetimes.
+    GiveForCall { ty: String },
     /// A borrow of a marked value that holds native parts ([`Generator::
     /// holding`]): each part lent where it is for the call, mutably for a
     /// `&mut`, and the other fields copied, a `&mut` one's copy taken back
@@ -841,13 +847,14 @@ impl<'a> Generator<'a> {
                 Ok(()) if self.holds(file, ty, owner) => Ok(Pass::GiveParts),
                 Ok(()) => Ok(Pass::Value),
                 // The interpreter keeps it in its arena as long as it
-                // likes, so it can't borrow anything.
+                // likes, unless it borrows something: then for the call
+                // alone (#1225).
                 Err(_) if self.lendable(file, ty, owner) && static_lifetimes(text) == text => {
                     Ok(Pass::Give)
                 }
-                Err(_) if self.lendable(file, ty, owner) => {
-                    Err(format!("`{}` with a lifetime can't cross yet", text.trim()))
-                }
+                Err(_) if self.lendable(file, ty, owner) => Ok(Pass::GiveForCall {
+                    ty: text.trim().to_owned(),
+                }),
                 Err(reason) => Err(reason),
             };
         };
@@ -1782,6 +1789,21 @@ impl<'a> Generator<'a> {
             Pass::Give => {
                 let _ = writeln!(text, "    {island}::give!(__call, {name});");
             }
+            Pass::GiveForCall { ty } => {
+                let _ = writeln!(
+                    text,
+                    "    // SAFETY: only its lifetimes change, which have no layout. The\n    \
+                     // runner drops what is left of it once the call returns, and the\n    \
+                     // function, which rustc checked, keeps nothing of it past the call\n    \
+                     // but what its result borrows, which this signature types.\n    \
+                     #[allow(unsafe_code)]\n    \
+                     let {name} = unsafe {{ ::std::mem::transmute::<{}, {}>({name}) }};\n    \
+                     __call.for_call();\n    \
+                     {island}::give!(__call, {name});",
+                    unnamed_lifetimes(&ty),
+                    static_lifetimes(&ty)
+                );
+            }
             Pass::Object => {
                 let _ = writeln!(text, "    __call.object(&{name}.0);");
             }
@@ -1795,11 +1817,26 @@ impl<'a> Generator<'a> {
         if let Some(pass) = receiver {
             argument("self", pass, &mut text);
         }
+        // A native value lent `&'a`, as `inbox: &'a inbox::State` of
+        // `view<'a>(&'a self, ..)`, is borrowed as long as the anchored
+        // result, which may borrow it (#1413).
+        let lends_kept = if anchor.is_some() {
+            kept_lends(file, function, &passes)
+        } else {
+            Vec::new()
+        };
         if let Some(anchor) = anchor {
             let _ = writeln!(text, "    __call.anchor({anchor});");
         }
         for (index, pass) in passes.into_iter().enumerate() {
-            argument(&format!("__a{index}"), pass, &mut text);
+            let name = format!("__a{index}");
+            if lends_kept.contains(&index) {
+                let _ = writeln!(text, "    let {name}_lends = __call.lends();");
+                argument(&name, pass, &mut text);
+                let _ = writeln!(text, "    __call.keep_lends({name}_lends);");
+            } else {
+                argument(&name, pass, &mut text);
+            }
         }
         text.push_str("    let mut __reply = __call.send();\n");
         // `Self` reads as the impl's own type, at its place in the header.
@@ -2748,7 +2785,33 @@ fn each_lifetime(text: &str, with: &str) -> String {
     out
 }
 
-/// Every identifier in `text`.
+/// The parameters of `function` lent `&` for its call whose type names a
+/// lifetime its result names, as `inbox: &'a inbox::State` of `view<'a>(
+/// &'a self, inbox: &'a inbox::State) -> Element<'a, Message>` (#1413):
+/// native code keeps each borrowed as long as the result.
+fn kept_lends(file: &Source<'_>, function: &item::Function, passes: &[Pass]) -> Vec<usize> {
+    let Some(output) = &function.output else {
+        return Vec::new();
+    };
+    let named = lifetimes(slice(file.text, output.span()))
+        .into_iter()
+        .filter(|name| *name != "_")
+        .collect::<Vec<_>>();
+    function
+        .parameters
+        .iter()
+        .zip(passes)
+        .enumerate()
+        .filter(|(_, (parameter, pass))| {
+            matches!(pass, Pass::Lend { mutable: false, .. })
+                && lifetimes(slice(file.text, parameter.ty.span()))
+                    .iter()
+                    .any(|name| named.contains(name))
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
 /// The name of each lifetime `text` names but `'static`, `_` for `'_`.
 fn lifetimes(text: &str) -> Vec<&str> {
     text.split('\'')
@@ -2763,6 +2826,7 @@ fn lifetimes(text: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Every identifier in `text`.
 fn identifiers(text: &str) -> BTreeSet<&str> {
     text.split(|c: char| !(c == '_' || c.is_alphanumeric()))
         .filter(|word| !word.is_empty())
@@ -4295,6 +4359,10 @@ pub mod __rawr_island {
         mutable: u64,
         anchor: ::std::option::Option<[u64; 2]>,
         releases: ::std::vec::Vec<[u64; 2]>,
+        /// The arguments given for the call alone ([`Call::for_call`]).
+        for_call: u64,
+        /// The lends kept with the call's anchor ([`Call::keep_lends`]).
+        kept: u64,
         values: Out,
         lent: ::std::vec::Vec<(
             ::std::any::TypeId,
@@ -4320,6 +4388,8 @@ pub mod __rawr_island {
                 mutable: 0,
                 anchor: ::std::option::Option::None,
                 releases: ::std::vec::Vec::new(),
+                for_call: 0,
+                kept: 0,
                 values: Out(::std::vec::Vec::new(), ::std::vec::Vec::new()),
                 lent: ::std::vec::Vec::new(),
                 borrows: ::std::marker::PhantomData,
@@ -4432,6 +4502,25 @@ pub mod __rawr_island {
         pub fn anchor<T: ?Sized>(&mut self, value: &'c T) {
             self.anchor = ::std::option::Option::Some(anchor_of(value));
         }
+        /// The next argument is given for the call alone, as a by-value
+        /// `View<'a>` of borrows (#1225): what the call leaves of it drops
+        /// once it returns.
+        pub fn for_call(&mut self) {
+            self.for_call |= 1 << self.count;
+        }
+        /// How many places the call has been lent so far.
+        pub fn lends(&self) -> usize {
+            self.lent.len()
+        }
+        /// Each place lent since there were `from` is kept borrowed as long
+        /// as the call's anchored result (#1413), as `&'a inbox::State` of
+        /// `view<'a>(&'a self, inbox: &'a inbox::State) -> Element<'a,
+        /// Message>` is, so the result may borrow it.
+        pub fn keep_lends(&mut self, from: usize) {
+            for index in from..self.lent.len().min(64) {
+                self.kept |= 1 << index;
+            }
+        }
         /// The function returns `()`, which comes back whatever value its
         /// body's last statement left.
         pub fn unit(&mut self) {
@@ -4448,13 +4537,15 @@ pub mod __rawr_island {
             let mut bytes = ::std::vec::Vec::with_capacity(13 + self.values.0.len());
             let anchored = u8::from(self.anchor.is_some()) << 5;
             let releases = u8::from(!self.releases.is_empty()) << 6;
+            let scopes = u8::from(self.for_call != 0 || self.kept != 0) << 7;
             bytes.push(
                 u8::from(self.owned)
                     | u8::from(self.pinned) << 1
                     | self.in_place
                     | u8::from(self.unit) << 4
                     | anchored
-                    | releases,
+                    | releases
+                    | scopes,
             );
             bytes.extend_from_slice(&self.count.to_le_bytes());
             bytes.extend_from_slice(&self.mutable.to_le_bytes());
@@ -4468,6 +4559,10 @@ pub mod __rawr_island {
                     bytes.extend_from_slice(&address.to_le_bytes());
                     bytes.extend_from_slice(&ty.to_le_bytes());
                 }
+            }
+            if scopes != 0 {
+                bytes.extend_from_slice(&self.for_call.to_le_bytes());
+                bytes.extend_from_slice(&self.kept.to_le_bytes());
             }
             bytes.extend_from_slice(&self.values.0);
             // SAFETY: the runner links `rawr`, which defines the function
@@ -4814,7 +4909,8 @@ mod tests {
     /// on that input, as rustc ties their lifetimes (#1473): `&'a self` of
     /// `view<'a>(&'a self, ..)`, the elided one of a free `view(&State)`,
     /// and not `&self` when the result names another input's lifetime. A
-    /// `&mut` of a marked value lets go of what was borrowed of it.
+    /// `&mut` of a marked value lets go of what was borrowed of it. A
+    /// native input lent at the anchor's lifetime is kept as long (#1413).
     #[test]
     fn a_result_that_borrows_a_marked_input_is_anchored_on_it() {
         let shadow = generate(
@@ -4846,6 +4942,14 @@ mod tests {
         );
         assert!(!body("edit").contains("__call.anchor("), "{text}");
         assert_eq!(lifetimes("Element<'a, &'static str, '_>"), ["a", "_"]);
+        // The native `&'a Inbox` the result may borrow is kept as long as
+        // it (#1413); `other`'s isn't, as its call is anchored on nothing.
+        assert!(
+            body("view").contains("    let __a0_lends = __call.lends();\n")
+                && body("view").contains("    __call.keep_lends(__a0_lends);\n"),
+            "{text}"
+        );
+        assert!(!body("other").contains("keep_lends"), "{text}");
     }
 
     /// A marked type's native parts inside an `Option`, a `Vec`, a `Box`
@@ -4983,8 +5087,8 @@ mod tests {
     /// `Message`, comes back as the native value the interpreter moves, bare
     /// or inside an `Option`, a `Vec`, a tuple or a `Result`, each lifetime
     /// it names read as `'static` (#1203). One taken by value is given to
-    /// the interpreter with what its type has of `Traits` (#1139), unless
-    /// its type names a lifetime.
+    /// the interpreter with what its type has of `Traits` (#1139), for the
+    /// call alone when its type names a lifetime (#1225).
     #[test]
     fn native_values_come_back_part_by_part_and_go_in_by_value() {
         let shadow = generate(
@@ -5044,10 +5148,11 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains(
-                "can't call `physics::lose` yet: parameter `element`: \
-                 `ui::Element<'a, Message>` with a lifetime can't cross yet"
-            ),
+            text.contains(&format!(
+                "    let __a0 = unsafe {{ ::std::mem::transmute::<ui::Element<'_, Message>, \
+                 ui::Element<'static, Message>>(__a0) }};\n    __call.for_call();\n    \
+                 {island}::give!(__call, __a0);\n"
+            )),
             "{text}"
         );
         assert!(

@@ -2,12 +2,32 @@
 //! maps into its own messages, and whose state, which can't be cloned,
 //! `home` keeps in an `Option` while it is open.
 
+use super::super::inbox;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Step(u32),
 }
 
-pub fn start(count: u32) -> ui::Task<Message> {
+/// What the wizard reads, as inboard's `wizard::source::View`: a `Copy`
+/// value of borrows, which the marked `home` takes by value and gives on.
+#[derive(Debug, Clone, Copy)]
+pub struct View<'a> {
+    inbox: &'a inbox::State,
+}
+
+impl<'a> View<'a> {
+    pub fn new(inbox: &'a inbox::State) -> Self {
+        Self { inbox }
+    }
+
+    pub fn unread(&self) -> usize {
+        self.inbox.unread
+    }
+}
+
+pub fn start(count: u32, catalog: View<'_>) -> ui::Task<Message> {
+    println!("started over {} unread", catalog.unread());
     ui::Task::done(Message::Step(count))
 }
 
