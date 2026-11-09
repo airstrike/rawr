@@ -1802,6 +1802,7 @@ impl<'a> Parser<'a> {
                         self.skip_nested_fn()?;
                     }
                     Token::Const => self.parse_binding(false)?,
+                    _ if self.static_ahead() => self.skip_nested_static()?,
                     Token::Fn => self.skip_nested_fn()?,
                     Token::Use => self.skip_nested_use()?,
                     _ if self.macro_definition_ahead() => self.parse_local_macro()?,

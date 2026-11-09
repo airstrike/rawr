@@ -146,6 +146,13 @@ impl Parser<'_> {
         self.parse_primary()
     }
 
+    /// Whether the next token is one a macro call expanded to: some
+    /// expansion's tokens are not all read yet.
+    pub(super) fn in_expansion(&self) -> bool {
+        let remaining = self.input.len();
+        self.expansion_ends.iter().any(|after| remaining > *after)
+    }
+
     /// Whether a call of the program's own macro starts the next statement.
     pub(super) fn macro_statement_ahead(&mut self) -> bool {
         let Token::Identifier(name) = self.peek() else {
