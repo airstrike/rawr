@@ -937,6 +937,25 @@ impl<'r> Region<'r> {
         Ok(unsafe { &*place.cast_const().cast::<T>() })
     }
 
+    /// The slice `lent` lends, of `T`s, borrowed at the region's `'r`, as
+    /// `inbox::view(.., browser_updates)` of a lent `&'a [Update]` borrows
+    /// it for the element it gives (#1292), on the terms of
+    /// [`Region::lent`]. The lend's place is the trampoline's own `&[T]`,
+    /// read here while the call runs: the slice it names outlives it.
+    pub fn lent_slice<T: 'static>(&self, lent: Lent) -> Result<&'r [T], Error> {
+        if !lent.kept || lent.writable() || self.pins.is_none() {
+            return Err(Error::Mismatch);
+        }
+        // The trampoline made this accessor for a `&[T]`'s place.
+        lent.accessor::<fn(u64, &mut dyn FnMut(&[T])) -> Result<(), u8>>(false)?;
+        let place = place(lent.nonce).ok_or(Error::Expired)?;
+        // SAFETY: the accessor proves the place a `&[T]`, which the
+        // trampoline holds while the call runs, as it does now. The slice
+        // it names is borrowed as long as the call's result, on the terms
+        // of `Region::lent`.
+        Ok(unsafe { *place.cast_const().cast::<&'r [T]>() })
+    }
+
     /// Store `value` and give the handle script code holds for it.
     pub fn insert<F: Regional>(&mut self, value: F::Of<'r>) -> Scoped {
         self.slots.push(Some(Box::new(Slot::<'r, F>(value))));
@@ -2488,6 +2507,45 @@ mod tests {
                 assert_eq!(anchored.lent::<String>(kept).err(), Some(Error::Mismatch));
                 let plain = super::Region::new();
                 assert_eq!(plain.lent::<Inbox>(kept).err(), Some(Error::Mismatch));
+            });
+        }
+    }
+
+    /// A kept shared lend of a slice, whose place is the trampoline's own
+    /// `&[T]`, is the slice itself at an anchored region's lifetime
+    /// (#1292); a lend of another element type reaches nothing.
+    #[test]
+    fn a_kept_lend_of_a_slice_is_the_slice_at_an_anchored_regions_lifetime() {
+        struct Update(&'static str);
+        struct Key;
+        type Shared = fn(u64, &mut dyn FnMut(&[Update])) -> Result<(), u8>;
+        fn shared(nonce: u64, visit: &mut dyn FnMut(&[Update])) -> Result<(), u8> {
+            let claim = super::claim(super::nonce(nonce), TypeId::of::<Key>(), true)
+                .map_err(Error::code)?;
+            // SAFETY: only this test's lend uses `Key`, and it lends a
+            // `&[Update]` shared.
+            visit(unsafe { *claim.place().cast_const().cast::<&[Update]>() });
+            Ok(())
+        }
+        static SHARED: Shared = shared;
+        let updates = [Update("tiles"), Update("notes")];
+        let slice: &[Update] = &updates;
+        let place = std::ptr::from_ref(&slice).cast_mut().cast::<()>();
+        let pins = super::Pins::new();
+        // SAFETY: `place` is `slice`, borrowed shared for the lend, and
+        // `shared` reads `Key`'s place as a `&[Update]`.
+        unsafe {
+            super::lend_raw(TypeId::of::<Key>(), place, false, |n| {
+                let kept = Lent::new(n, "[Update]", None, Some(&SHARED)).kept();
+                let anchored = super::Region::anchored(&pins);
+                let names = anchored
+                    .lent_slice::<Update>(kept)
+                    .map(|slice| slice.iter().map(|update| update.0).collect::<Vec<_>>());
+                assert_eq!(names, Ok(vec!["tiles", "notes"]));
+                assert_eq!(
+                    anchored.lent_slice::<String>(kept).err(),
+                    Some(Error::Mismatch)
+                );
             });
         }
     }

@@ -235,6 +235,18 @@ enum Pass {
     /// rustc lets the function keep nothing of it past the call but what
     /// its result borrows, which native code holds at those lifetimes.
     GiveForCall { ty: String },
+    /// A value that holds native parts inside `Option`s, `Vec`s, `Box`es
+    /// and tuples, as inboard's `home_grid: Option<Element<'a,
+    /// grid::Message>>` (#1224): each part moved to the interpreter by
+    /// `give`, which writes the value `__value` part by part, as the
+    /// result's parts come back. When its type, written `ty`, names a
+    /// lifetime, for the call alone, as [`Pass::GiveForCall`].
+    GiveHeld { give: String, ty: Option<String> },
+    /// `&[T]` of a type the marked crate doesn't declare, as inboard's
+    /// `browser_updates: &'a [extension::registry::Update]` (#1292): the
+    /// slice lent where it is for the call, as a `&T` is ([`Pass::Lend`]),
+    /// its element written `element` with each named lifetime as `'_`.
+    LendSlice { element: String },
     /// A borrow of a marked value that holds native parts ([`Generator::
     /// holding`]): each part lent where it is for the call, mutably for a
     /// `&mut`, and the other fields copied, a `&mut` one's copy taken back
@@ -855,7 +867,16 @@ impl<'a> Generator<'a> {
                 Err(_) if self.lendable(file, ty, owner) => Ok(Pass::GiveForCall {
                     ty: text.trim().to_owned(),
                 }),
-                Err(reason) => Err(reason),
+                // Native parts inside an `Option`, a `Vec`, a `Box` or a
+                // tuple move part by part (#1224).
+                Err(reason) => {
+                    let held = self.given(file, ty, owner).ok_or(reason)?;
+                    let text = text.trim();
+                    Ok(Pass::GiveHeld {
+                        give: held.code("__value", Use::Give, 0),
+                        ty: (static_lifetimes(text) != text).then(|| text.to_owned()),
+                    })
+                }
             };
         };
         // `&str` and `&[T]` are borrowed views: copied in, never written back.
@@ -885,7 +906,54 @@ impl<'a> Generator<'a> {
                 mutable: *mutable,
                 referent: unnamed_lifetimes(referent),
             }),
-            Err(reason) => Err(reason),
+            // So is a slice of one, where it is (#1292).
+            Err(reason) => match slice_element(target) {
+                Some(element) if !*mutable && self.lendable(file, element, owner) => {
+                    Ok(Pass::LendSlice {
+                        element: unnamed_lifetimes(slice(file.text, element.span())),
+                    })
+                }
+                _ => Err(reason),
+            },
+        }
+    }
+
+    /// How a by-value parameter of `ty` moves the native parts it holds
+    /// inside `Option`s, `Vec`s, `Box`es and tuples (#1224), as [`Held`]
+    /// with `Use::Give`: each part by its type as written, lifetimes and
+    /// all, as the trampoline gives the whole value at `'static` first.
+    /// `None` for a type that holds none so, or one that can't cross.
+    fn given<'f>(
+        &self,
+        file: &Source<'f>,
+        ty: &type_ref::Type,
+        owner: Owner<'_>,
+    ) -> Option<Held<'f>> {
+        let part = |ty: &type_ref::Type| {
+            if self.holds(file, ty, owner) {
+                Some(Held::Marked)
+            } else if self.crosses(file, ty, owner).is_ok() {
+                Some(Held::Wire)
+            } else if self.lendable(file, ty, owner) {
+                Some(Held::Native(slice(file.text, ty.span())))
+            } else {
+                self.given(file, ty, owner)
+            }
+        };
+        match ty {
+            type_ref::Type::Tuple { members, .. } => Some(Held::Tuple(
+                members.iter().map(part).collect::<Option<_>>()?,
+            )),
+            type_ref::Type::Path(path) => {
+                let (name, inner) = container(path)?;
+                let inner = Box::new(part(inner)?);
+                Some(match name {
+                    Container::Option => Held::Option(inner),
+                    Container::Vec => Held::Vec(inner),
+                    Container::Box => Held::Boxed(inner),
+                })
+            }
+            _ => None,
         }
     }
 
@@ -1804,6 +1872,24 @@ impl<'a> Generator<'a> {
                     static_lifetimes(&ty)
                 );
             }
+            Pass::GiveHeld { give, ty } => {
+                if let Some(ty) = ty {
+                    let _ = writeln!(
+                        text,
+                        "    // SAFETY: as for a value given for the call alone.\n    \
+                         #[allow(unsafe_code)]\n    \
+                         let {name} = unsafe {{ ::std::mem::transmute::<{}, {}>({name}) }};\n    \
+                         __call.for_call();",
+                        unnamed_lifetimes(&ty),
+                        static_lifetimes(&ty)
+                    );
+                }
+                let _ = writeln!(
+                    text,
+                    "    __call.give_parts(|out| {{ let __value = {name}; {give} }});"
+                );
+            }
+            Pass::LendSlice { element } => lend_slice(name, &element, &island, text),
             Pass::Object => {
                 let _ = writeln!(text, "    __call.object(&{name}.0);");
             }
@@ -1814,8 +1900,18 @@ impl<'a> Generator<'a> {
         let anchor = back
             .as_ref()
             .and_then(|_| self.anchor(file, function, receiver.as_ref(), &passes));
-        if let Some(pass) = receiver {
-            argument("self", pass, &mut text);
+        // So are the native parts of a marked `&'a self` the result is
+        // anchored on, as inboard's open `wizard` is (#1413).
+        match receiver {
+            Some(pass @ Pass::LendParts { mutable: false })
+                if anchor.as_deref() == Some("self") =>
+            {
+                text.push_str("    let self_lends = __call.lends();\n");
+                argument("self", pass, &mut text);
+                text.push_str("    __call.keep_lends(self_lends);\n");
+            }
+            Some(pass) => argument("self", pass, &mut text),
+            None => {}
         }
         // A native value lent `&'a`, as `inbox: &'a inbox::State` of
         // `view<'a>(&'a self, ..)`, is borrowed as long as the anchored
@@ -2479,6 +2575,22 @@ enum Container {
     Box,
 }
 
+/// `T` of a slice type `[T]`.
+fn slice_element(ty: &type_ref::Type) -> Option<&type_ref::Type> {
+    let type_ref::Type::Path(path) = ty else {
+        return None;
+    };
+    let last = path.segments.last()?;
+    match &last.arguments[..] {
+        [type_ref::Argument::Type(element)]
+            if path.segments.len() == 1 && last.name.text == crate::item::type_ref::SLICE_TYPE =>
+        {
+            Some(element)
+        }
+        _ => None,
+    }
+}
+
 /// The container `path` names and the type it holds: `Option<T>`,
 /// `Vec<T>` or `Box<T>`, by its own name or its std path.
 fn container(path: &type_ref::Path) -> Option<(Container, &type_ref::Type)> {
@@ -2752,6 +2864,32 @@ fn lend(name: &str, mutable: bool, referent: &str, island: &str, text: &mut Stri
     );
 }
 
+/// Lend `name`, a `&[element]`, to the call where it is (#1292): its place
+/// is the trampoline's own reference, which the accessor reads the slice
+/// through, and which lives while the call runs.
+fn lend_slice(name: &str, element: &str, island: &str, text: &mut String) {
+    let result = "::std::result::Result<(), u8>";
+    let key = "::std::any::TypeId::of::<Key>()";
+    let _ = writeln!(
+        text,
+        "    let {name}_lend = {{
+        struct Key;
+        #[allow(unsafe_code)]
+        fn shared(nonce: u64, visit: &mut dyn FnMut(&[{element}])) -> {result} {{
+            {island}::reach(nonce, {key}, true, |place| {{
+                // SAFETY: `Key`'s lend is this call's `&[{element}]`, claimed shared.
+                visit(unsafe {{ *place.cast_const().cast::<&[{element}]>() }})
+            }})
+        }}
+        static SHARED: fn(u64, &mut dyn FnMut(&[{element}])) -> {result} = shared;
+        {island}::Lend::new({key}, None, &SHARED)
+    }};
+    // SAFETY: the lend's accessor reads its key's place as a `&[{element}]`.
+    #[allow(unsafe_code)]
+    let () = unsafe {{ __call.lend_slice(&{name}, {name}_lend, ::std::any::type_name::<[{element}]>()) }};"
+    );
+}
+
 /// `text` with each named lifetime but `'static` written `'_`, so a type
 /// written in a signature names its `'static` form where it is inferred.
 fn unnamed_lifetimes(text: &str) -> String {
@@ -2787,8 +2925,9 @@ fn each_lifetime(text: &str, with: &str) -> String {
 
 /// The parameters of `function` lent `&` for its call whose type names a
 /// lifetime its result names, as `inbox: &'a inbox::State` of `view<'a>(
-/// &'a self, inbox: &'a inbox::State) -> Element<'a, Message>` (#1413):
-/// native code keeps each borrowed as long as the result.
+/// &'a self, inbox: &'a inbox::State) -> Element<'a, Message>` (#1413), a
+/// slice of native values (#1292) or a marked value's native parts: native
+/// code keeps each borrowed as long as the result.
 fn kept_lends(file: &Source<'_>, function: &item::Function, passes: &[Pass]) -> Vec<usize> {
     let Some(output) = &function.output else {
         return Vec::new();
@@ -2803,10 +2942,14 @@ fn kept_lends(file: &Source<'_>, function: &item::Function, passes: &[Pass]) -> 
         .zip(passes)
         .enumerate()
         .filter(|(_, (parameter, pass))| {
-            matches!(pass, Pass::Lend { mutable: false, .. })
-                && lifetimes(slice(file.text, parameter.ty.span()))
-                    .iter()
-                    .any(|name| named.contains(name))
+            matches!(
+                pass,
+                Pass::Lend { mutable: false, .. }
+                    | Pass::LendSlice { .. }
+                    | Pass::LendParts { mutable: false }
+            ) && lifetimes(slice(file.text, parameter.ty.span()))
+                .iter()
+                .any(|name| named.contains(name))
         })
         .map(|(index, _)| index)
         .collect()
@@ -4464,6 +4607,24 @@ pub mod __rawr_island {
             value.give(&mut self.values);
             self.count += 1;
         }
+        /// An argument that holds native parts inside `Option`s, `Vec`s,
+        /// `Box`es and tuples, which `give` writes part by part, each part
+        /// moved to the interpreter (#1224).
+        pub fn give_parts(&mut self, give: impl FnOnce(&mut Out)) {
+            give(&mut self.values);
+            self.count += 1;
+        }
+        /// A `&[T]` argument lent for the call where it is (#1292): the
+        /// lend's place is `value`, the trampoline's own reference.
+        ///
+        /// # Safety
+        ///
+        /// As for [`Call::lend_ref`], `lend`'s accessor reading its key's
+        /// place as a `&[T]`.
+        pub unsafe fn lend_slice<T: Sync>(&mut self, value: &'c &'c [T], lend: Lend, name: &'static str) {
+            debug_assert!(lend.mutable.is_none());
+            self.lent_value(::std::ptr::from_ref(value).cast_mut().cast(), lend, name);
+        }
         /// An argument moved to the interpreter, which keeps it: a value of
         /// a type the marked crate doesn't declare, with what its type has
         /// of [`Traits`] ([`give!`]).
@@ -4914,10 +5075,11 @@ mod tests {
     #[test]
     fn a_result_that_borrows_a_marked_input_is_anchored_on_it() {
         let shadow = generate(
-            "// rawr\nuse crate::{ui, Inbox};\n\
+            "// rawr\nuse crate::{ui, Inbox, Update};\n\
              pub struct State {\n    content: ui::Content,\n    title: String,\n}\n\
              impl State {\n    \
-             pub fn view<'a>(&'a self, inbox: &'a Inbox) -> ui::Element<'a, u32> { todo!() }\n    \
+             pub fn view<'a>(&'a self, inbox: &'a Inbox, updates: &'a [Update], \
+             grid: Option<ui::Element<'a, u32>>) -> ui::Element<'a, u32> { todo!() }\n    \
              pub fn other<'a>(&self, inbox: &'a Inbox) -> ui::Element<'a, u32> { todo!() }\n    \
              pub fn edit(&mut self) {}\n}\n\
              pub fn show(state: &State) -> ui::Element<'_, u32> { todo!() }\n",
@@ -4950,6 +5112,33 @@ mod tests {
             "{text}"
         );
         assert!(!body("other").contains("keep_lends"), "{text}");
+        // So are the native parts of `self` it is anchored on, and the
+        // lent slice of native values (#1292). The `Option` of a native
+        // value of borrows moves part by part, for the call alone (#1224).
+        assert!(
+            body("view").contains(
+                "let self_lends = __call.lends();\n        __call.lent(self);\n        \
+                 __call.keep_lends(self_lends);\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            body("view").contains("__call.lend_slice(&__a1, __a1_lend, ")
+                && body("view").contains("visit: &mut dyn FnMut(&[Update])")
+                && body("view").contains("    __call.keep_lends(__a1_lends);\n"),
+            "{text}"
+        );
+        assert!(
+            body("view").contains(
+                "::std::mem::transmute::<Option<ui::Element<'_, u32>>, \
+                 Option<ui::Element<'static, u32>>>(__a2) };\n        __call.for_call();\n        \
+                 __call.give_parts(|out| { let __value = __a2; match __value { \
+                 ::std::option::Option::None => out.none(), \
+                 ::std::option::Option::Some(__p0) => { out.some(); \
+                 crate::__rawr_island::give_part!(out, __p0); } } });\n"
+            ),
+            "{text}"
+        );
     }
 
     /// A marked type's native parts inside an `Option`, a `Vec`, a `Box`

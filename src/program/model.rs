@@ -28,10 +28,11 @@ pub(crate) struct Model {
     /// it is attested as (D594).
     members: BTreeMap<String, Box<[Option<crate::host::runtime::type_ref::Type>]>>,
     /// The type of each by-value parameter of a public function or method
-    /// whose type is a native one, by whether the function belongs to a
-    /// type and its path, the receiver first: what a native value native
-    /// code gives a marked function is attested as (#1139).
-    inputs: BTreeMap<(bool, String), Box<[Option<crate::host::runtime::type_ref::Type>]>>,
+    /// that is a native type, or holds one in an `Option`, a `Vec`, a `Box`
+    /// or a tuple, by whether the function belongs to a type and its path,
+    /// the receiver first: what each native value native code gives a
+    /// marked function is attested as (#1139, #1224).
+    inputs: BTreeMap<(bool, String), Box<[Option<type_ref::Type>]>>,
     /// Each associated type of a script's impl of a crate trait, by the
     /// path of the type the runner names it by (`associated_path`): a type
     /// Rust code holds as a script value, as the_matrix's `type State =
@@ -349,17 +350,15 @@ impl Model {
             members.insert(path, types);
         }
         model.members = members;
-        model.inputs = inputs(program, &model);
+        model.inputs = inputs(program);
         model
     }
 
-    /// The types native values a marked function takes by value are
-    /// attested as, by whether it belongs to a type and its path, as
-    /// [`Self::inputs`] keeps them.
+    /// The types of the by-value parameters of marked functions that hold
+    /// native values, by whether each function belongs to a type and its
+    /// path, as [`Self::inputs`] keeps them.
     #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
-    pub(crate) fn island_inputs(
-        &self,
-    ) -> &BTreeMap<(bool, String), Box<[Option<crate::host::runtime::type_ref::Type>]>> {
+    pub(crate) fn island_inputs(&self) -> &BTreeMap<(bool, String), Box<[Option<type_ref::Type>]>> {
         &self.inputs
     }
 
@@ -1258,18 +1257,10 @@ fn identity_name(identity: &type_def::Identity) -> ImmutableString {
     }
 }
 
-/// [`Model::inputs`] of `program`: only the public functions with a native
-/// parameter taken by value, each such parameter's runtime type.
-fn inputs(
-    program: &Program,
-    model: &Model,
-) -> BTreeMap<(bool, String), Box<[Option<crate::host::runtime::type_ref::Type>]>> {
-    let native = |ty: &type_ref::Type| match ty {
-        type_ref::Type::Path(path) if matches!(path.target, type_ref::Target::Host { .. }) => {
-            crate::host::runtime::type_ref::Type::from_resolved_in(ty, model, &[]).ok()
-        }
-        _ => None,
-    };
+/// [`Model::inputs`] of `program`: only the public functions with a by-value
+/// parameter that holds a native value, each such parameter's type.
+fn inputs(program: &Program) -> BTreeMap<(bool, String), Box<[Option<type_ref::Type>]>> {
+    let native = |ty: &type_ref::Type| holds_native(ty).then(|| ty.clone());
     let join = |modules: &[ImmutableString], name: &str| {
         modules
             .iter()
@@ -1326,6 +1317,23 @@ fn inputs(
     }
     inputs
 }
+/// Whether `ty` is a native type, or holds one in an `Option`, a `Vec`, a
+/// `Box` or a tuple, as `island::Part::of` reads it.
+fn holds_native(ty: &type_ref::Type) -> bool {
+    if let Some(inner) = ty
+        .box_element()
+        .or_else(|| ty.option_element())
+        .or_else(|| ty.vec_element())
+    {
+        return holds_native(inner);
+    }
+    match ty {
+        type_ref::Type::Tuple { members, .. } => members.iter().any(holds_native),
+        type_ref::Type::Path(path) => matches!(path.target, type_ref::Target::Host { .. }),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Model;

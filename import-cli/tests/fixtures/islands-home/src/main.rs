@@ -73,6 +73,21 @@ fn main() {
     home.close_pane(0);
     home.close_pane(0);
     println!("panes [{}]", home.panes());
+    // A grid element given by value, the open wizard's element over the
+    // catalog, and the inbox's top bar over its updates or its greeting.
+    let shown = workspace.show_over(Some(ui::button("grid", home::wizard::Message::Step(7))));
+    println!("grid shows {} {:?}", shown.label, shown.on_press);
+    workspace.home.open_wizard();
+    let shown = workspace.show();
+    println!("wizard shows {} {:?}", shown.label, shown.on_press);
+    workspace.home.close_wizard();
+    workspace.inbox.unread = 0;
+    let shown = workspace.show();
+    println!("no updates show {} {:?}", shown.label, shown.on_press);
+    workspace.updates.push(inbox::Update::new("tiles 1.2"));
+    let shown = workspace.show();
+    println!("updates show {} {:?}", shown.label, shown.on_press);
+    workspace.inbox.unread = 3;
     let Some(stop) = std::env::var_os("ISLANDS_STOP") else {
         return;
     };

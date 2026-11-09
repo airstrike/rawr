@@ -24,6 +24,10 @@ impl<'a> View<'a> {
     pub fn unread(&self) -> usize {
         self.inbox.unread
     }
+
+    pub fn greeting(&self) -> &'a str {
+        self.inbox.greeting()
+    }
 }
 
 pub fn start(count: u32, catalog: View<'_>) -> ui::Task<Message> {
@@ -53,6 +57,12 @@ impl State {
 
     pub fn advance(&mut self) {
         self.step += 1;
+    }
+
+    /// The open wizard's element over `catalog`, as inboard's
+    /// `wizard.view(catalog, theme)`: it borrows what the catalog borrows.
+    pub fn view<'a>(&'a self, catalog: View<'a>) -> ui::Element<'a, Message> {
+        ui::button(catalog.greeting(), Message::Step(self.step))
     }
 }
 

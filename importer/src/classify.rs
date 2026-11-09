@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 146;
+const CLASSIFIER_VERSION: u32 = 147;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -11655,14 +11655,20 @@ fn borrows_receiver(
     let output = signature.output();
     // A nominal output, as `QName<'_>`: a borrow guard is read through its
     // target, an async method's future holds its receiver (D513.6), and an
-    // opaque or reference output is held to its own rules.
+    // opaque or reference output is held to its own rules. An input may
+    // name the receiver's lifetime as a crate type's lifetime argument, as
+    // inboard's `wizard::State::view<'a>(&'a self, catalog: View<'a>)`
+    // takes a value of borrows by value (#1225): the frame's lifetime, as
+    // the output's is.
     matches!(output, model::Type::Definition { .. })
         && signature.guard().is_none()
         && !signature.async_function()
         && names_lifetime(output, receiver)
         && !names_opaque(output)
         && signature.binders().len() == 1
-        && !signature.inputs().any(names_late_lifetime)
+        && signature
+            .inputs()
+            .all(|input| !names_late_lifetime(input) || naming(input, receiver) == Naming::Argument)
         && !lends_option_reference(output, receiver, is_option)
 }
 
