@@ -15,7 +15,9 @@
         {"text":"A save near a call to a crate function generic over a const length, as `total([a, b])` is, now swaps into the running program instead of preparing again.","issues":[1536]},
         {"text":"Native code can call a marked function that takes an `impl IntoIterator<Item = T>`, `impl Into<T>`, `impl AsRef<str>` or `impl Display`. The argument may be any value, including one that borrows locals. The program builds as `cargo check` does and runs as `cargo run` does.","issues":[1537]},
         {"text":"When rawr's native build fails in code it generated for a marked function, the error now points at that function's signature in the marked file and names the generated file and line, not just `src/main.rs`.","issues":[1538]},
-        {"text":"A program under `rawr run` now goes on from the call that admitted a save only once the run's events include `swapped`. A `wait` that the client cancelled no longer takes the events it found, so the next `wait` returns them.","issues":[1541]}
+        {"text":"A program under `rawr run` now goes on from the call that admitted a save only once the run's events include `swapped`. A `wait` that the client cancelled no longer takes the events it found, so the next `wait` returns them.","issues":[1541]},
+        {"text":"A `&self` method of a marked type that crosses by copy, such as inboard's `Id::as_str`, now gives native code a `&str` into its own value, as rustc does, instead of panicking. Methods of marked types that hold native parts also return their copied text fields in place.","issues":[1543]},
+        {"text":"A marked type's `HashSet`, `HashMap`, `BTreeSet` or `BTreeMap` over values that cross, such as inboard's `read_ids: HashSet<Id>`, now crosses by copy as a `Vec` does. Marked code's `contains`, `insert` and `extend` run on the interpreter's own collection, hashed and compared as Rust does.","issues":[1544]}
       ]
     },
     "releases": [
@@ -3391,7 +3393,10 @@
     {"issue":1539,"title":"Native code can't call a marked fn taking impl Fn, impl Iterator, a multi-bound impl or a named generic parameter","state":"open","category":"No glue (D593)"},
     {"issue":1540,"title":"A native build failure in a mirror's generated impls still names only the copied file","state":"open","category":"No glue (D593)"},
     {"issue":1541,"title":"swapped can reach the events after the program has moved on, and a cancelled wait takes events","state":"open","category":"Hot reload of a marked `main` (D555)"},
-    {"issue":1542,"title":"An abandoned rawr mcp wait takes the events a later wait needed, through one shared given cursor","state":"open","category":"Hot reload of a marked `main` (D555)"}
+    {"issue":1542,"title":"An abandoned rawr mcp wait takes the events a later wait needed, through one shared given cursor","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":1543,"title":"A &self -> &str method of a marked type that crosses by copy panics when native code calls it","state":"open","category":"No glue (D593)"},
+    {"issue":1544,"title":"A marked type's HashSet or HashMap field over marked values is lent as a native part the interpreter can't read","state":"open","category":"No glue (D593)"},
+    {"issue":1545,"title":"A &self method of a marked type copied whole that returns a non-text &T can't give native code a reference","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
