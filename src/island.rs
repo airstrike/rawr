@@ -49,6 +49,10 @@ thread_local! {
     /// The generation native calls run in, on the thread that owns the
     /// program.
     static CURRENT: RefCell<Option<Rc<Current>>> = const { RefCell::new(None) };
+    /// Each marked value native code lent whole to a running call (#1484),
+    /// by the first of its parts it lent: the whole's lend.
+    static WHOLES: RefCell<Vec<(crate::scope::Nonce, crate::scope::Lent)>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 /// How the runner keeps a native value native code gives a marked function,
@@ -774,6 +778,92 @@ pub fn mirror_in(bytes: &[u8], given: &mut [Option<Given>]) -> Result<Dynamic, S
     with_types(|model, types| model.island_read(types, &[], given, None, &mut Reader { bytes }, 0))
 }
 
+/// Note that native code lent `value`, a marked value read from a call's
+/// arguments, whole by `whole` (#1484), as well as part by part. A value
+/// none of whose parts is lent in place needs no note: it crosses whole by
+/// the wire format.
+pub(crate) fn lent_whole(value: &Dynamic, whole: crate::scope::Lent) {
+    if let Some(part) = first_lent(value, 0) {
+        WHOLES.with_borrow_mut(|wholes| wholes.push((part, whole)));
+    }
+}
+
+/// Whether native code lent `value` whole to a running call, as a value of
+/// some type ([`lent_whole_of`]).
+#[must_use]
+pub fn lends_whole(value: &Dynamic) -> bool {
+    // Most calls run with no whole lent, and search nothing.
+    if WHOLES.with_borrow(Vec::is_empty) {
+        return false;
+    }
+    first_lent(value, 0).is_some_and(|part| {
+        WHOLES.with_borrow(|wholes| wholes.iter().any(|(first, _)| *first == part))
+    })
+}
+
+/// The lend of `value`, a marked value of the mirror `T` native code lent
+/// a running call whole (#1484): native code's own `&T`, which the call
+/// gives back to native code that takes the value by reference, as rustc
+/// reborrows it. `None` when native code lent no such `T`, or its lend has
+/// ended.
+#[must_use]
+pub fn lent_whole_of<T: 'static>(value: &Dynamic) -> Option<crate::scope::Lent> {
+    if WHOLES.with_borrow(Vec::is_empty) {
+        return None;
+    }
+    let part = first_lent(value, 0)?;
+    WHOLES.with_borrow(|wholes| {
+        wholes
+            .iter()
+            .rev()
+            .filter(|(first, _)| *first == part)
+            .map(|(_, whole)| *whole)
+            .find(|whole| {
+                // The trampoline made this accessor for a `T`'s place.
+                whole
+                    .accessor::<fn(u64, &mut dyn FnMut(&T)) -> Result<(), u8>>(false)
+                    .is_ok()
+                    && crate::scope::place(whole.nonce()).is_some()
+            })
+    })
+}
+
+/// The lend of the first native part `value` holds lent in place, searched
+/// field by field.
+fn first_lent(value: &Dynamic, depth: usize) -> Option<crate::scope::Nonce> {
+    if depth > 64 {
+        return None;
+    }
+    let depth = depth + 1;
+    match &value.0 {
+        crate::types::dynamic::Union::Struct(value, ..) => value
+            .fields()
+            .iter()
+            .find_map(|field| first_lent(field, depth)),
+        crate::types::dynamic::Union::Enum(value, ..) => value
+            .payload()
+            .iter()
+            .find_map(|item| first_lent(item, depth)),
+        crate::types::dynamic::Union::Array(items, ..) => {
+            items.iter().find_map(|item| first_lent(item, depth))
+        }
+        crate::types::dynamic::Union::Shared(cell, ..) => {
+            first_lent(&*crate::func::locked_read(cell)?, depth)
+        }
+        crate::types::dynamic::Union::Variant(..) => {
+            if let Some(lent) = value.read_lock::<crate::scope::Lent>() {
+                return Some(lent.nonce());
+            }
+            let option = value.read_lock::<crate::option::Value>()?;
+            match &*option {
+                Some(inner) => first_lent(inner, depth),
+                None => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// `read` of the published generation's model and its crate's script
 /// types: on the thread that owns the program, or the one published last.
 fn with_types<R>(
@@ -1419,10 +1509,13 @@ impl Calls {
         lent: &[Loan],
         natives: &mut Natives,
     ) -> Vec<u8> {
-        lend_all(lent, &mut Vec::with_capacity(lent.len()), &mut |lent| {
+        // What the call notes of its wholes ends with its lends.
+        let wholes = WHOLES.with_borrow(Vec::len);
+        let reply = lend_all(lent, &mut Vec::with_capacity(lent.len()), &mut |lent| {
             self.call(call, given, lent, natives)
-        })
-        .unwrap_or_else(|message| failure(&message))
+        });
+        WHOLES.with_borrow_mut(|noted| noted.truncate(wholes));
+        reply.unwrap_or_else(|message| failure(&message))
     }
 
     fn call(

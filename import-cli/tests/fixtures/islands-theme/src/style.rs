@@ -10,3 +10,14 @@ pub fn text(theme: &Theme) -> u32 {
     let colors = theme.colors();
     colors.text * 2
 }
+
+/// A badge that keeps the theme borrowed, as inboard's `inbox::view(..,
+/// theme)` gives an `Element<'a, Message>` that does.
+pub fn badge<'a>(theme: &'a Theme) -> ui::Badge<'a, Theme> {
+    ui::badge("home", theme)
+}
+
+/// Where the theme it is given is, which shows it is native code's own.
+pub fn place(theme: &Theme) -> usize {
+    std::ptr::from_ref(theme).addr()
+}

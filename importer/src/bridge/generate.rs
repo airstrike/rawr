@@ -3077,6 +3077,11 @@ impl<T: 'static> ViewedArgument<T> {
         if let Some(lent) = value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent) {
             return Ok(Self::Lent(lent));
         }
+        // A marked value native code lent whole, as `theme: &'a Theme` of
+        // a marked `view<'a>`, by that lend (#1484).
+        if let Some(lent) = __rawr_internal::island::lent_whole_of::<T>(&value) {
+            return Ok(Self::Lent(lent));
+        }
         let handle = value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
         arena.share::<T>(handle).map(Self::Shared)
     }
@@ -3229,7 +3234,13 @@ fn reach_lent<T: 'static>(
         return __rawr_internal::scope::with_ref::<LenderF<T>, _>(nonce, |value| visit(Reached::Shared(value)))
             .map_err(|error| Error::Lent(std::any::type_name::<T>(), error));
     }
-    let lent = value.try_cast_result::<__rawr_internal::scope::Lent>().map_err(|_| Error::TypeMismatch)?;
+    // A marked value native code lent whole is reached by that lend, so
+    // native code is given its own reference back, as rustc reborrows it
+    // (#1484).
+    let lent = match value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent) {
+        Some(lent) => lent,
+        None => __rawr_internal::island::lent_whole_of::<T>(&value).ok_or(Error::TypeMismatch)?,
+    };
     let failed = |error| Error::Lent(lent.name(), error);
     let reached = if mutable {
         let access: fn(u64, &mut dyn FnMut(&mut T)) -> Result<(), u8> = lent.accessor(true).map_err(failed)?;
@@ -3547,7 +3558,8 @@ fn with_lent_arguments(
             let value = arguments.values.get(index)?;
             (value.is::<__rawr_internal::scope::Lent>()
                 || __rawr_internal::place::get(value).is_some()
-                || lender_nonce(value).is_some())
+                || lender_nonce(value).is_some()
+                || __rawr_internal::island::lends_whole(value))
                 .then(|| (index, mutable, (**value).clone(), reach))
         })
         .collect();
@@ -10118,6 +10130,15 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
             ));
             continue;
         }
+        // A marked value native code may have lent whole, by its mirror
+        // (#1484).
+        if !*mutable
+            && mirrored(&ty)
+            && let Some(rust) = concrete_type(&ty)
+        {
+            lent.push((index, false, format!("reach_lent::<{rust}>")));
+            continue;
+        }
         if !matches!(ty, convert::Type::Nominal { .. }) || carries_lifetime(&ty) || is_value(&ty) {
             continue;
         }
@@ -10126,6 +10147,19 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
         }
     }
     Ok(lent)
+}
+
+/// Whether `ty` is a marked type held as its mirror in rawr's copy of a
+/// native root's crate (#1249), which native code may lend a marked
+/// function whole (#1484).
+fn mirrored(ty: &convert::Type) -> bool {
+    matches!(
+        ty,
+        convert::Type::Script {
+            holder: convert::Holder::Mirror,
+            ..
+        }
+    )
 }
 
 /// A `&[T]` input of crate values a call takes (`lent_slice_element`),
@@ -16270,6 +16304,23 @@ fn render_take_input(
         && matches!(**target, convert::Type::Script { .. })
     {
         let rust = concrete_type(target).ok_or_else(|| request::drift("a script type's proxy"))?;
+        // Or a marked value native code lent a marked function whole,
+        // reached through that lend's accessor, which the call runs inside:
+        // native code's own reference, as rustc reborrows it (#1484).
+        if LENT_ARGUMENTS.get() && !*mutable && mirrored(target) {
+            return writeln!(
+                output,
+                "    let argument_{local}_proxy;
+    let argument_{local}: &{rust} = match lent_argument(lent, {index}) {{
+        Some(value) => value.shared::<{rust}>().ok_or(Error::Lent({rust:?}, __rawr_internal::scope::Error::Mismatch))?,
+        None => {{
+            argument_{local}_proxy = take_held::<{rust}>(arguments, {index})?;
+            &argument_{local}_proxy
+        }}
+    }};"
+            )
+            .map_err(request::unwritable);
+        }
         let borrow = if *mutable { "&mut " } else { "&" };
         return writeln!(
             output,

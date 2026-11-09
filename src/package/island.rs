@@ -2092,7 +2092,8 @@ impl<'a> Generator<'a> {
         let [lend, lend_mut, give, take_into] = bodies;
         format!(
             "impl {island}::Parts for {name} {{\n    \
-             fn lend<'c>(&'c self, call: &mut {island}::Call<'c>) {{\n{lend}    }}\n    \
+             fn lend<'c>(&'c self, call: &mut {island}::Call<'c>) {{\n        \
+             {island}::lend_whole!(call, self, {name});\n{lend}    }}\n    \
              fn lend_mut<'c>(&'c mut self, call: &mut {island}::Call<'c>) {{\n{lend_mut}    }}\n    \
              fn give(self, out: &mut {island}::Out) {{\n{give}    }}\n    \
              fn take_into(&mut self, input: &mut {island}::In<'_>) {{\n        \
@@ -3456,6 +3457,39 @@ pub mod __rawr_island {
     }
     pub(crate) use lend_part;
 
+    /// Lend `$value`, a `&$ty` of a marked value whose `Parts` impl lends
+    /// its parts, to the call `$call` whole, where it is (#1484): the value
+    /// written next is the one this lend lends, so native code the call
+    /// gives it to by reference is given this reference back.
+    macro_rules! lend_whole {
+        ($call:expr, $value:expr, $ty:ty) => {{
+            // Not `Key`, which a marked type `$ty` may be named.
+            struct WholeKey;
+            fn shared(
+                nonce: u64,
+                visit: &mut dyn FnMut(&$ty),
+            ) -> ::std::result::Result<(), u8> {
+                crate::__rawr_island::reach(nonce, ::std::any::TypeId::of::<WholeKey>(), true, |place| {
+                    // SAFETY: `WholeKey`'s lend is this value, a `$ty`, claimed shared.
+                    visit(unsafe { &*place.cast_const().cast::<$ty>() })
+                })
+            }
+            static SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
+            let lend = crate::__rawr_island::Lend::new(
+                ::std::any::TypeId::of::<WholeKey>(),
+                ::std::option::Option::None,
+                &SHARED,
+            );
+            let value: &$ty = $value;
+            // SAFETY: the lend's accessor reads its key's place as `$ty`.
+            #[allow(unsafe_code)]
+            unsafe {
+                $call.lend_whole(::std::ptr::from_ref(value).cast_mut().cast(), lend, ::std::any::type_name::<$ty>())
+            };
+        }};
+    }
+    pub(crate) use lend_whole;
+
     /// [`lend_part!`] of a `&mut $ty`, lent mutably.
     macro_rules! lend_part_mut {
         ($call:expr, $value:expr, $ty:ty) => {{
@@ -3638,6 +3672,7 @@ pub mod __rawr_island {
     const NATIVE: u8 = 21;
     const HANDLE: u8 = 22;
     const PINNED: u8 = 23;
+    const WHOLE: u8 = 24;
 
     /// A value on its way to the interpreter, and the native values it
     /// gives the interpreter, each taken once.
@@ -4575,6 +4610,19 @@ pub mod __rawr_island {
         /// is, and no other lend uses its key. `name` is the type's name.
         pub unsafe fn lend_part(&mut self, place: *mut (), lend: Lend, name: &'static str) {
             self.values.byte(LENT);
+            self.values.count(self.lent.len());
+            self.lent.push((lend.key, name, place, lend.mutable, lend.shared));
+        }
+        /// A borrow of a marked value lent whole for the call where it is,
+        /// beside its parts (#1484): the value written next is the one it
+        /// lends.
+        ///
+        /// # Safety
+        ///
+        /// As for [`Call::lend_part`], `lend` having no mutable accessor.
+        pub unsafe fn lend_whole(&mut self, place: *mut (), lend: Lend, name: &'static str) {
+            debug_assert!(lend.mutable.is_none());
+            self.values.byte(WHOLE);
             self.values.count(self.lent.len());
             self.lent.push((lend.key, name, place, lend.mutable, lend.shared));
         }

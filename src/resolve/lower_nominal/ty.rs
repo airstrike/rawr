@@ -51,6 +51,34 @@ std::thread_local! {
     static HOST_TY_PROOF_ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Each marked type by its mirror's identity (`Models::mirrored`).
+#[cfg(feature = "rust-import")]
+pub(super) type Mirrored = BTreeMap<crate::host::type_def::import::Identity, type_def::Id>;
+
+#[cfg(feature = "rust-import")]
+std::thread_local! {
+    /// The mirrors of the program whose models this thread made last
+    /// (`Models::new`), which every resolved type names its marked type
+    /// by ([`Ty::from_resolved`], #1484).
+    static MIRRORED: std::cell::RefCell<std::sync::Arc<Mirrored>> = std::cell::RefCell::new(std::sync::Arc::default());
+}
+
+/// Read every resolved type this thread lowers from now on with
+/// `mirrored`'s marked types for their mirrors: a native alias's
+/// `Element<'a, Message>` over the marked `Theme` names that `Theme`, as a
+/// native signature does (#1484).
+#[cfg(feature = "rust-import")]
+pub(super) fn lower_mirrors(mirrored: std::sync::Arc<Mirrored>) {
+    MIRRORED.with_borrow_mut(|current| *current = mirrored);
+}
+
+/// The marked type `definition` mirrors in the program being lowered.
+#[cfg(feature = "rust-import")]
+fn mirrored(definition: &crate::host::type_def::Definition) -> Option<type_def::Id> {
+    let identity = definition.identity().imported()?;
+    MIRRORED.with_borrow(|mirrored| mirrored.get(identity).copied())
+}
+
 impl HostTyProof {
     pub(super) fn new(
         definition: crate::host::type_def::Definition,
@@ -894,17 +922,25 @@ impl Ty {
                         .unwrap_or(Self::Unknown),
                 },
                 type_ref::Target::Host { definition, owner } => {
+                    let arguments: Box<[Self]> = path
+                        .arguments
+                        .iter()
+                        .filter_map(|argument| match argument {
+                            type_ref::Argument::Type(ty) => Some(Self::from_resolved(ty)),
+                            type_ref::Argument::Lifetime(_) => None,
+                        })
+                        .collect();
+                    // A mirror is its marked type, wherever a resolved type
+                    // names it: through a native alias, in a crate type's
+                    // arguments, in an output (#1484).
+                    #[cfg(feature = "rust-import")]
+                    if let Some(marked) = mirrored(definition) {
+                        return Self::Script(marked, arguments);
+                    }
                     let alias = definition.identity().imported().map(|_| definition.clone());
                     Self::Host {
                         proof: HostTyProof::new(definition.clone(), alias, owner.clone()),
-                        arguments: path
-                            .arguments
-                            .iter()
-                            .filter_map(|argument| match argument {
-                                type_ref::Argument::Type(ty) => Some(Self::from_resolved(ty)),
-                                type_ref::Argument::Lifetime(_) => None,
-                            })
-                            .collect(),
+                        arguments,
                     }
                 }
                 type_ref::Target::Script { definition, .. } => Self::Script(

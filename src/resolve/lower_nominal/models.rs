@@ -83,7 +83,7 @@ pub(super) struct Tables {
     /// signatures name it by: `fn base(theme: &Theme)` in a native module
     /// takes the marked `Theme`.
     #[cfg(feature = "rust-import")]
-    pub(super) mirrored: BTreeMap<crate::host::type_def::import::Identity, type_def::Id>,
+    pub(super) mirrored: std::sync::Arc<super::ty::Mirrored>,
     /// The crates the program's paths may start with (`Program::crates`).
     pub(super) crates: Option<crate::resolve::extern_prelude::Prelude>,
     /// The type aliases each source names, resolved once with the headers.
@@ -771,7 +771,11 @@ impl Models {
             inherit_names(&mut aliases, item, expansion);
         }
         #[cfg(feature = "rust-import")]
-        let mirrored = mirrored(&program.mirrors, &by_definition, &host);
+        let mirrored = std::sync::Arc::new(mirrored(&program.mirrors, &by_definition, &host));
+        // Each type this program's lowering reads names a mirror's marked
+        // type, as its native signatures do (#1484).
+        #[cfg(feature = "rust-import")]
+        super::ty::lower_mirrors(std::sync::Arc::clone(&mirrored));
         let tables = Tables {
             runtime,
             host,
