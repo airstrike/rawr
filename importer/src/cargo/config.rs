@@ -1140,6 +1140,38 @@ impl Provenance {
         self.environment.command_values(target_dir, rustc, rustdoc)
     }
 
+    /// [`Self::command_environment`] for the check whose units extraction
+    /// reads, with rawr's own driver as the rustc wrapper when generated
+    /// crates are `recorded` (D866): it records their native instances of
+    /// marked generics and runs rustc itself for every other unit, so no
+    /// other unit's fingerprint or output changes. The user's wrappers are
+    /// refused ([`validate_config_authority`]), so it is the only one.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn recording_environment(
+        &self,
+        target_dir: &Path,
+        native: &impl ToolPaths,
+        recorded: &[PathBuf],
+    ) -> Result<Box<[(OsString, OsString)]>> {
+        let environment = self.command_environment(target_dir, native)?;
+        if recorded.is_empty() {
+            return Ok(environment);
+        }
+        let roots = recorded
+            .iter()
+            .map(|root| fs::canonicalize(root).unwrap_or_else(|_| root.clone()))
+            .map(|root| root.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut environment = environment.into_vec();
+        environment.push((
+            OsString::from("RUSTC_WRAPPER"),
+            native.driver().as_os_str().to_owned(),
+        ));
+        environment.push((OsString::from(crate::record::ROOTS), OsString::from(roots)));
+        Ok(environment.into_boxed_slice())
+    }
+
     pub(crate) fn explicit_configs(&self) -> &[PathBuf] {
         &self.explicit
     }

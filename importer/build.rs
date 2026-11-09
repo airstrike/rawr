@@ -87,10 +87,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 /// The files the driver compiles, relative to the importer's directory, and
 /// the root lockfile, which pins its dependencies.
-const DRIVER_SOURCES: [&str; 8] = [
+const DRIVER_SOURCES: [&str; 9] = [
     "build.rs",
     "src/driver.rs",
     "src/driver",
+    "src/record.rs",
     "src/extract/engine.rs",
     "src/extract/engine",
     "src/extract/protocol/attempt.rs",

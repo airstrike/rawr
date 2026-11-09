@@ -195,6 +195,7 @@ pub struct Builder {
     policy: Option<crate::extract::Policy>,
     universe: Option<universe::Catalog>,
     demand: std::collections::BTreeSet<DemandPath>,
+    recorded: Vec<PathBuf>,
 }
 
 /// One Rust path Rawr names, root alias first.
@@ -221,6 +222,9 @@ pub struct Request {
     /// The Rust paths Rawr names; a dependency they name is
     /// extracted from them instead of from every public path.
     demand: Box<[DemandPath]>,
+    /// The generated crates whose check records the native instances of
+    /// marked generics, by their manifest directories (D866).
+    recorded: Box<[PathBuf]>,
 }
 
 /// A currently validated semantic resolution owner ready for API publication.
@@ -701,6 +705,7 @@ impl Request {
             policy: None,
             universe: None,
             demand: std::collections::BTreeSet::new(),
+            recorded: Vec::new(),
         })
     }
 
@@ -2224,6 +2229,15 @@ impl Builder {
         self
     }
 
+    /// Record the native instances of marked generics when the generated
+    /// crate at `manifest_directory`, a path dependency, is checked
+    /// (D866): rawr's own driver is the check's rustc wrapper, and writes
+    /// the record beside the crate's artifact (`crate::record`).
+    pub fn record(mut self, manifest_directory: &Path) -> Self {
+        self.recorded.push(manifest_directory.to_path_buf());
+        self
+    }
+
     /// Bind the exact Rawr-manifest exclusion policy to this request.
     pub fn policy(mut self, policy: crate::extract::Policy) -> Self {
         self.policy = Some(policy);
@@ -2359,6 +2373,7 @@ impl Builder {
             parallelism,
             internal,
             demand: self.demand.into_iter().collect(),
+            recorded: self.recorded.into_boxed_slice(),
         })
     }
 }
@@ -3649,7 +3664,7 @@ fn cargo_authoritative_environment(
 ) -> Result<Box<[(OsString, OsString)]>> {
     request
         .config
-        .command_environment(plan.target_directory(), native)
+        .recording_environment(plan.target_directory(), native, &request.recorded)
 }
 
 /// Run one Cargo command within the physical capture bounds.

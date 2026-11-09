@@ -85,6 +85,8 @@ pub mod prebuilt;
 pub mod process;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod progress;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod record;
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;

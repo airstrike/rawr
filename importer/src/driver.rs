@@ -14,6 +14,7 @@ extern crate rustc_attr_ir;
 
 extern crate rustc_ast;
 extern crate rustc_ast_pretty;
+extern crate rustc_const_eval;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
@@ -46,6 +47,18 @@ use sha2::{Digest as _, Sha256};
 #[path = "driver/compiler.rs"]
 mod compiler;
 
+/// The native instances a recorded unit writes (D866), which the library
+/// reads.
+#[path = "record.rs"]
+#[allow(
+    dead_code,
+    reason = "shared with the library, which reads; this binary only writes"
+)]
+mod record;
+
+#[path = "driver/wrapper.rs"]
+mod wrapper;
+
 #[path = "extract/protocol/attempt.rs"]
 #[cfg_attr(
     not(test),
@@ -59,7 +72,7 @@ mod attempt_protocol;
 const PLAN_SCHEMA: u32 = 9;
 // One number in four places: `driver/compiler.rs`, `cargo/toolchain.rs`
 // (`SUPPORTED_PROBE_PROTOCOL`) and `extract/protocol.rs` (`SCHEMA`) move with it.
-const PROTOCOL_SCHEMA: u32 = 60;
+const PROTOCOL_SCHEMA: u32 = 61;
 /// The commit of the nightly this driver was built with, which it reads
 /// metadata of and names in its version.
 const COMPILER_COMMIT: &str = env!("RAWR_RUSTC_COMMIT");
@@ -148,6 +161,10 @@ fn main() -> ExitCode {
 fn execute() -> Result<ExitCode, String> {
     let mut budget = compiler::Budget::standard();
     let arguments = bounded_arguments(&mut budget)?;
+    // As rawr's own rustc wrapper, ahead of the driver's own modes (D866).
+    if wrapper::wraps(&arguments) {
+        return wrapper::run(&arguments);
+    }
     if arguments.len() == 2 && arguments[1] == "--version" {
         println!("rawr-import-driver {PLAN_SCHEMA} {PROTOCOL_SCHEMA} {COMPILER_COMMIT}");
         return Ok(ExitCode::SUCCESS);
