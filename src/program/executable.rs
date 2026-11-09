@@ -254,6 +254,10 @@ impl Executable {
         let sources = program.source().table().clone();
         let generation = super::GenerationId::issue();
         let model = super::model::Model::new(generation, &program);
+        // A type that names a marked type's mirror names the marked type,
+        // as the lowering's types do (#1484).
+        #[cfg(feature = "rust-import")]
+        let model = model.mirroring(&program, &engine.host_registry.share());
         let schemas = super::schema::Manifest::from_program(&program);
         let mut callables = collect_callables(&program);
         let (lowering, evidence) = lower(&program, &model)?;

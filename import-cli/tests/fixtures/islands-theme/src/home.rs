@@ -74,6 +74,22 @@ pub fn titled<'a>(title: &'a str, theme: &'a theme::Theme) -> Element<'a, Messag
         .boxed()
 }
 
+/// The screen's page, as inboard's `home::State::view`: the grid native
+/// code builds and gives by value inside an `Option`, whose `Element` names
+/// the marked theme, its message mapped into the screen's.
+pub fn page<'a>(
+    grid: Option<Element<'a, crate::grid::Message>>,
+    theme: &'a theme::Theme,
+) -> Element<'a, Message> {
+    let mut page = crate::inbox::view("inbox", theme)
+        .map(Message::Inbox)
+        .boxed();
+    if let Some(grid) = grid {
+        page = grid.map(Message::Grid).boxed();
+    }
+    page
+}
+
 /// Where the theme native code lends is, as native code reads it.
 pub fn place(theme: &theme::Theme) -> usize {
     crate::style::place(theme)

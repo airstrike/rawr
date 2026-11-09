@@ -87,18 +87,22 @@ fn main() {
     let inbox = home::inbox(&theme);
     println!("inbox {} {:?}", inbox.draw(&theme), inbox.message());
     println!("titled {}", home::titled("mail", &dark).draw(&theme));
+    let page = home::page(grid::home(&theme), &theme);
+    println!("page {} {:?}", page.draw(&theme), page.message());
+    let page = home::page(None, &dark);
+    println!("page {} {:?}", page.draw(&dark), page.message());
     println!(
         "lent in place {}",
         home::place(&theme) == std::ptr::from_ref(&theme).addr()
     );
     let source = home::wizard::Source::new(&["sales", "costs"]);
     let mut screen = home::State::new("welcome");
-    for grid in [None, Some(grid::view(&dark))] {
+    for grid in [None, grid::home(&dark)] {
         let page = pane(&screen, &source, grid, &theme);
         println!("page {} {:?}", page.draw(&theme), page.message());
     }
     screen.open_wizard(3);
-    let page = pane(&screen, &source, Some(grid::view(&theme)), &dark);
+    let page = pane(&screen, &source, grid::home(&theme), &dark);
     println!("page {} {:?}", page.draw(&dark), page.message());
     println!("catalog read {}", source.reads());
     println!("clones {}", theme::clones());

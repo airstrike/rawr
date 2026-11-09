@@ -771,7 +771,12 @@ impl Models {
             inherit_names(&mut aliases, item, expansion);
         }
         #[cfg(feature = "rust-import")]
-        let mirrored = std::sync::Arc::new(mirrored(&program.mirrors, &by_definition, &host));
+        let mirrored = std::sync::Arc::new(
+            program
+                .mirrored(&host)
+                .map(|(identity, definition)| (identity, definition.id()))
+                .collect(),
+        );
         // Each type this program's lowering reads names a mirror's marked
         // type, as its native signatures do (#1484).
         #[cfg(feature = "rust-import")]
@@ -1301,28 +1306,4 @@ impl Nominal {
     pub(super) fn capabilities(&self) -> capability::Set {
         self.definition().capabilities()
     }
-}
-
-/// Each marked type of `by_definition` that rawr's copy of a native root's
-/// crate mirrors, by the identity of the mirror `host` has at its Rust
-/// path (`mirrors`).
-#[cfg(feature = "rust-import")]
-fn mirrored(
-    mirrors: &BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
-    by_definition: &BTreeMap<type_def::Id, Nominal>,
-    host: &crate::host::Registry,
-) -> BTreeMap<crate::host::type_def::import::Identity, type_def::Id> {
-    by_definition
-        .iter()
-        .filter_map(|(id, nominal)| {
-            let key = nominal.definition().key();
-            let path = std::iter::once(ImmutableString::from(key.package()))
-                .chain(key.modules().iter().cloned())
-                .chain([ImmutableString::from(key.name())])
-                .collect::<Box<[_]>>();
-            let rust = mirrors.get(&path)?.join("::");
-            let identity = host.type_(&rust)?.identity().imported()?;
-            Some((*identity, *id))
-        })
-        .collect()
 }
