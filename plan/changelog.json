@@ -186,7 +186,8 @@
       {"text":"An or-pattern whose alternatives differ only in the crate values they test, such as `Message::Floor(_, floor::Message::Up) | Message::Floor(_, floor::Message::Down)`, no longer fails with a false RAWR-RESOLVE-MATCH. A name missing from one alternative is rustc's E0408, and a binding of another type is E0308. elevato.rs's browser universe now checks.","issues":[1497],"refs":[435,1384]},
       {"text":"A marked function takes native values inside an `Option`, a `Vec`, a `Box` or a tuple by value, such as inboard's `home_grid: Option<Element<'a, grid::Message>>`.","issues":[1224]},
       {"text":"A marked function takes a `&[T]` of native values, lent where it is, and passes it on to native functions.","issues":[1292]},
-      {"text":"In a marked view, an element from a native function may borrow the view's lent arguments, as inboard's `inbox::view(inbox_state, .., browser_updates, ..)` does. An element that a native part of `self` gives lasts as long as the view's result.","issues":[1413]}
+      {"text":"In a marked view, an element from a native function may borrow the view's lent arguments, as inboard's `inbox::view(inbox_state, .., browser_updates, ..)` does. An element that a native part of `self` gives lasts as long as the view's result.","issues":[1413]},
+      {"text":"A marked module can name a crate's type alias through a module its `use` binds, such as `extension::registry::Update` after `use model::extension;`. That works in signatures and in `let`s. A crate's or a native module's alias of a std type, such as `type Names = Vec<String>`, now resolves too. Both gave E0425 before.","issues":[694,1202]}
     ]
   },
   "releases": [

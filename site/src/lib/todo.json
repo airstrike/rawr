@@ -193,7 +193,8 @@
         {"text":"An or-pattern whose alternatives differ only in the crate values they test, such as `Message::Floor(_, floor::Message::Up) | Message::Floor(_, floor::Message::Down)`, no longer fails with a false RAWR-RESOLVE-MATCH. A name missing from one alternative is rustc's E0408, and a binding of another type is E0308. elevato.rs's browser universe now checks.","issues":[1497],"refs":[435,1384]},
         {"text":"A marked function takes native values inside an `Option`, a `Vec`, a `Box` or a tuple by value, such as inboard's `home_grid: Option<Element<'a, grid::Message>>`.","issues":[1224]},
         {"text":"A marked function takes a `&[T]` of native values, lent where it is, and passes it on to native functions.","issues":[1292]},
-        {"text":"In a marked view, an element from a native function may borrow the view's lent arguments, as inboard's `inbox::view(inbox_state, .., browser_updates, ..)` does. An element that a native part of `self` gives lasts as long as the view's result.","issues":[1413]}
+        {"text":"In a marked view, an element from a native function may borrow the view's lent arguments, as inboard's `inbox::view(inbox_state, .., browser_updates, ..)` does. An element that a native part of `self` gives lasts as long as the view's result.","issues":[1413]},
+        {"text":"A marked module can name a crate's type alias through a module its `use` binds, such as `extension::registry::Update` after `use model::extension;`. That works in signatures and in `let`s. A crate's or a native module's alias of a std type, such as `type Names = Vec<String>`, now resolves too. Both gave E0425 before.","issues":[694,1202]}
       ]
     },
     "releases": [
@@ -2495,7 +2496,7 @@
     {"issue":691,"title":"Share the nightly check build per machine, per pinned toolchain (D699, D700)","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.95"},
     {"issue":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.120"},
     {"issue":693,"title":"Hold `iter_mut()` in a local and step it with `next()`","state":"closed","category":"Divergences from rustc","release":"0.3.116"},
-    {"issue":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open","category":"No glue (D593)"},
+    {"issue":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"closed","category":"No glue (D593)"},
     {"issue":695,"title":"A move by an imported method points at the method's `self` in the crate's source, as rustc's E0382 note does","state":"open","category":"Health"},
     {"issue":696,"title":"node::tests::native::uncached_scope_owns_installation_… fails","state":"open","category":"Health"},
     {"issue":697,"title":"resident runner test retirement_read_shutdown_… hangs in a parallel run","state":"open","category":"Health"},
@@ -3003,7 +3004,7 @@
     {"issue":1199,"title":"`#{` and binary `**` in user code give rustc errors","state":"open","category":"Divergences from rustc"},
     {"issue":1200,"title":"`Fn(\"name\")` is rustc E0423","state":"open","category":"Divergences from rustc"},
     {"issue":1201,"title":"Drop the old engine binary `in` operator","state":"open","category":"Health"},
-    {"issue":1202,"title":"A crate's type alias of a std type (`type Names = Vec<String>`) can't be named from marked code","state":"open","category":"Divergences from rustc"},
+    {"issue":1202,"title":"A crate's type alias of a std type (`type Names = Vec<String>`) can't be named from marked code","state":"closed","category":"Divergences from rustc"},
     {"issue":1203,"title":"A marked function can't return a native crate value to native code unless it sits in a Result","state":"closed","category":"Divergences from rustc"},
     {"issue":1204,"title":"A marked module can't reach a private field of its native crate root's struct","state":"open","category":"Divergences from rustc"},
     {"issue":1205,"title":"rawr has no timeouts of its own: remove every deadline from the protocol, the owner and the test harness","state":"closed","category":"Health"},
@@ -4125,7 +4126,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Next: crate aliases of other crates' types (#694) and a `&'a T` beside a borrowed receiver (#1499)",
+          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). Next: a `&'a T` beside a borrowed receiver (#1499) and home.rs's update",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
@@ -4163,7 +4164,7 @@
             {"number":1185,"title":"A marked module can't name items of the native crate root it lives in (`crate::Message`)","state":"closed"},
             {"number":1186,"title":"A workspace root bin with member path dependencies fails: 'complete package membership witness is unavailable'","state":"closed"},
             {"number":1194,"title":"A path dependency whose manifest names a file outside its package panics the importer","state":"open"},
-            {"number":1202,"title":"A crate's type alias of a std type (`type Names = Vec<String>`) can't be named from marked code","state":"open"},
+            {"number":1202,"title":"A crate's type alias of a std type (`type Names = Vec<String>`) can't be named from marked code","state":"closed"},
             {"number":1203,"title":"A marked function can't return a native crate value to native code unless it sits in a Result","state":"closed"},
             {"number":1204,"title":"A marked module can't reach a private field of its native crate root's struct","state":"open"},
             {"number":1205,"title":"rawr has no timeouts of its own: remove every deadline from the protocol, the owner and the test harness","state":"closed"},
@@ -4242,7 +4243,7 @@
             {"number":1499,"title":"A crate method whose output borrows its receiver can't also take a `&'a T` at the receiver's lifetime","state":"open"},
             {"number":1500,"title":"A lent `&[T]` beside a lent `&T`, passed to a crate fn whose output doesn't keep them, fails","state":"open"},
             {"number":1501,"title":"Test a crate fn whose output keeps an `Option<&'a T>` of a value native code lent a marked view","state":"open"},
-            {"number":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open"}
+            {"number":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"closed"}
           ]
         }
       ]
