@@ -593,7 +593,8 @@ impl<'a> Parser<'a> {
 
     /// A library type's comparison by the facade method named for
     /// `PartialEq`'s or `PartialOrd`'s (`Degrees::lt`), which iced's
-    /// `impl PartialOrd<f32> for Degrees` and its kin declare. `None` when
+    /// `impl PartialOrd<f32> for Degrees`, log's `impl
+    /// PartialOrd<LevelFilter> for Level` and their kin declare. `None` when
     /// `lhs` is no library type with that method, or when an `eq` would
     /// compare two values of the same library type, which its `PartialEq`
     /// capability does.
@@ -611,22 +612,31 @@ impl<'a> Parser<'a> {
             return Ok(None);
         };
         let path = format!("{}::{method}", proof.definition.path());
+        let mut other = self.inference.resolve(&rhs.ty);
+        while let Ty::Reference { target, .. } = other {
+            other = self.inference.resolve(&target);
+        }
+        // The right operand is another type, so the comparison is the left
+        // type's `PartialEq<Rhs>` or `PartialOrd<Rhs>`, as rustc selects it:
+        // a number, text, or another library type.
+        let across = match &other {
+            Ty::Int(_) | Ty::Float(_) | Ty::Str | Ty::String => true,
+            Ty::Host { .. } => !same_head(&host, &other),
+            _ => false,
+        };
         if !self.models.host_items(&path).is_some_and(|items| {
             items
                 .iter()
                 .any(|item| item.kind() == crate::host::item::Kind::Method)
         }) {
-            // An imported type compared with a number, as clock's
-            // `rotation < 180.0` of `Degrees`: a miss the importer answers
-            // with the type's `PartialOrd<f32>` or `PartialEq<f32>`.
+            // An imported type compared with another type, as clock's
+            // `rotation < 180.0` of `Degrees` or log's `level <=
+            // STATIC_MAX_LEVEL`: a miss the importer answers with the type's
+            // `PartialOrd<Rhs>` or `PartialEq<Rhs>`.
             #[cfg(feature = "rust-import")]
             {
-                let mut other = self.inference.resolve(&rhs.ty);
-                while let Ty::Reference { target, .. } = other {
-                    other = self.inference.resolve(&target);
-                }
                 if proof.definition.identity().imported().is_some()
-                    && matches!(other, Ty::Int(_) | Ty::Float(_))
+                    && across
                     && self.models.host.entry(&path).is_none()
                 {
                     let error = Error::UnknownMember {
@@ -639,14 +649,8 @@ impl<'a> Parser<'a> {
             }
             return Ok(None);
         }
-        if method == "eq" {
-            let mut other = self.inference.resolve(&rhs.ty);
-            while let Ty::Reference { target, .. } = other {
-                other = self.inference.resolve(&target);
-            }
-            if !matches!(other, Ty::Int(_) | Ty::Float(_)) {
-                return Ok(None);
-            }
+        if method == "eq" && !across {
+            return Ok(None);
         }
         let expression = span(lhs.span.start(), rhs.span.end());
         let receiver = self.operator_expr(lhs.rendered_source(), host.clone(), lhs.span);

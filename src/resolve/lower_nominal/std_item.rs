@@ -531,6 +531,44 @@ impl<'a> Parser<'a> {
                 .is_none_or(|crates| crates.reach(root, Span::default()).is_err())
     }
 
+    /// The std macro the path ahead names, from its first segment `first`,
+    /// which is read: `concat` of `std::concat!`, or of a crate's re-export
+    /// of it, as tracing's `$crate::__macro_support::concat!`. The rest of
+    /// the path is taken, so its `!` is next. `None`, and nothing taken, for
+    /// a path that names no std macro.
+    pub(super) fn std_macro_path(
+        &mut self,
+        first: &str,
+        first_span: Span,
+    ) -> Option<ImmutableString> {
+        if !matches!(self.peek(), Token::DoubleColon) {
+            return None;
+        }
+        let (path, _, next) = self.peek_path(first, first_span);
+        if next != Some(Token::Bang) {
+            return None;
+        }
+        let local = self.bindings.contains_key(first)
+            || self.models.get(first).is_some()
+            || self.models.import(first).is_some();
+        // A macro is std's at its crate's root, wherever it is defined:
+        // core's `format_args` is `core::macros::builtin::format_args`.
+        let std = if crate::std_table::is_root(first) && !local {
+            path.clone().into()
+        } else {
+            self.std_alias(&first.into(), &path)?
+        };
+        let name = std.rsplit("::").next()?;
+        if !crate::resolve::std_path::is_macro(&format!("std::{name}")) {
+            return None;
+        }
+        let name = ImmutableString::from(name);
+        for _ in 0..2 * path.matches("::").count() {
+            self.next();
+        }
+        Some(name)
+    }
+
     /// The std path `name`, whose first segment is `first`, names through a
     /// crate's re-export of it, when it is one.
     pub(super) fn std_alias(&self, first: &ImmutableString, name: &str) -> Option<ImmutableString> {

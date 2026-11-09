@@ -1628,6 +1628,7 @@ impl Framed {
                     convert::Builtin::U64 => 13,
                     convert::Builtin::Usize => 14,
                     convert::Builtin::F32 => 15,
+                    convert::Builtin::Arguments => 20,
                 });
             }
             convert::Type::Nominal {

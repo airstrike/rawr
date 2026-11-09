@@ -11993,6 +11993,23 @@ run()"#,
     assert_eq!(value, "(2, 24) None Vec<i32>, x.len(), a + b x1-2 9");
 }
 
+#[test]
+fn language_std_macros_by_their_paths() {
+    // std's macro by its path is std's, though the program's own of its
+    // name shadows the bare name (#1548).
+    let value = run_string(
+        r#"macro_rules! line {
+    () => { 0 };
+}
+pub fn run() -> String {
+    let text = format_args!("{} {}", 1, "a").to_string();
+    format!("{} {} {} {text}", std::concat!("x", core::stringify!(y)), std::line!(), line!())
+}
+run()"#,
+    );
+    assert_eq!(value, "xy 6 0 1 a");
+}
+
 /// The `Noisy` type the drop tests share: its `drop` prints its name.
 const NOISY: &str = r#"
 struct Noisy(&'static str);

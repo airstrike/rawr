@@ -1937,3 +1937,84 @@ fn a_marked_home_screen_with_inboard_s_shapes_runs_as_cargo_runs_it() {
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
+
+/// What `cargo run` prints for the project at `root`, which must succeed.
+fn cargo_prints(root: &Path) -> String {
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    String::from_utf8_lossy(&native.stdout).into_owned()
+}
+
+/// `rawr check` of the project at `root`, which must pass, and its `rawr
+/// run`, which must print `printed`, line by line.
+fn checks_and_prints(root: &Path, printed: &str) {
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(root, &[]);
+    for expected in printed.lines() {
+        let line = run.until(|_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
+/// A marked module uses the pieces of `log`'s and `tracing`'s macros, and
+/// `rawr check` passes and `rawr run` prints what `cargo run` prints. It
+/// compares their levels as the macros' enabled checks do, a `Level` with a
+/// `LevelFilter` through the crate's `PartialOrd<LevelFilter>` and
+/// `PartialEq<LevelFilter>`, as rustc selects them (#702). It names std's
+/// macros by their paths and through a crate's re-export of them, as
+/// `$crate::__private_api::module_path!()` (#1548). A crate macro's
+/// `line!()`, `column!()`, `file!()` and `module_path!()`, nested or not,
+/// are where its outermost call is, a caller's own `line!()` is where the
+/// caller wrote it, and `module_path!()` in a constant or an inline module's
+/// impl is cargo's. A marked value native code is lent as a `&dyn Debug`,
+/// `&dyn Display` or `&dyn LowerHex` is written by its type's own impl,
+/// marked or derived, when native code formats it, and `format_args!` is
+/// the `fmt::Arguments` a crate function takes.
+#[test]
+fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
+    const LOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-log");
+    let root = crate::support::scratch().join("islands-log");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(LOG), &root);
+    let printed = cargo_prints(&root);
+    assert!(
+        printed.starts_with(
+            "compiled true current false off true filter false equal true unequal true \
+             same true log true\n\
+             ab1 islands_log::workspace::inbox event x34 ab1 2\n\
+             src/workspace/inbox.rs:42:5 in islands_log::workspace::inbox\n"
+        ) && printed.contains("; islands_log::workspace::inbox::folder islands_log::")
+            && printed.contains(
+                "Message { subject: \"hello\", unread: true }; [hello*]; count=2 (Some(\"two\")); \
+                 [Some(Ok(Message { subject: \"old\", unread: false })), None]; 0xff; \
+                 <hello has 2>; unread\n"
+            ),
+        "{printed}"
+    );
+    checks_and_prints(&root, &printed);
+}

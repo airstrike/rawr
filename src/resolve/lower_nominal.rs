@@ -394,6 +394,9 @@ struct Parser<'a> {
     /// For each expansion being parsed, how many tokens follow it: those
     /// whose tokens are not all read yet nest the next call.
     expansion_ends: Vec<usize>,
+    /// The next name is std's macro, written by its path (`std::concat!`),
+    /// which no macro or import of the program shadows.
+    std_macro_ahead: bool,
     /// The `macro_rules!` macros the blocks being parsed define so far,
     /// the innermost last.
     local_macros: Vec<(ImmutableString, Shared<crate::resolve::macro_rules::Rules>)>,
@@ -875,6 +878,7 @@ impl<'a> Parser<'a> {
             bound_lifetimes: Vec::new(),
             expansions: 0,
             expansion_ends: Vec::new(),
+            std_macro_ahead: false,
             local_macros: Vec::new(),
             closure_outputs: Vec::new(),
             closure_output: None,

@@ -16311,6 +16311,15 @@ fn render_take_input(
     profile: Option<&crate::profile::Proof>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    // `fmt::Arguments`, as log's `__private_api::log` takes: Rawr's text of
+    // the program's `format_args!`, formatted where the call takes it.
+    if *ty == convert::Type::Builtin(convert::Builtin::Arguments) {
+        return writeln!(
+            output,
+            "    let argument_{local}_text = take_primitive::<ImmutableString>(arguments, {index})?;\n    let argument_{local} = ::core::format_args!(\"{{}}\", argument_{local}_text);"
+        )
+        .map_err(request::unwritable);
+    }
     // `&[T]` of crate values, as iced's `markdown::view(&items, ..)` takes:
     // each value moved out of its slot into one slice, and back once nothing
     // borrows it (`SliceLent`). An output that may borrow it keeps it
@@ -16682,6 +16691,20 @@ fn render_take_input(
             profile,
             output,
         );
+    }
+    // A `&T` the call fills with a program value, as a `&dyn Debug` of a
+    // marked `Option` is: the value itself, lent as `Value`, which the
+    // program formats only when native code does.
+    if let convert::Type::Borrowed { mutable: false, .. } = ty
+        && let convert::Type::Borrowed { ty: lent, .. } = substituted(ty, signature, substitutions)?
+        && matches!(&*lent, convert::Type::Nominal { definition, .. }
+            if *definition == crate::surface::identity::Definition::value())
+    {
+        return writeln!(
+            output,
+            "    let argument_{local}_made = take_value(arguments, {index})?;\n    let argument_{local} = &argument_{local}_made;"
+        )
+        .map_err(request::unwritable);
     }
     if let convert::Type::Borrowed { .. } = ty {
         let future = is_future(&substituted(signature.output(), signature, substitutions)?);
@@ -18229,6 +18252,10 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
         ),
+        // Formatted where the call takes it (`render_take_input`).
+        convert::Type::Builtin(convert::Builtin::Arguments) => {
+            return Err(request::drift("`fmt::Arguments` made from a value"))
+        }
         ty if let Some(rust) = std_value(ty) => write!(
             output,
             "<{rust} as __rawr_internal::crossing::Std>::take({value}).ok_or(Error::TypeMismatch)"
@@ -19145,6 +19172,7 @@ fn is_made_for_call(ty: &convert::Type) -> bool {
                     | convert::Builtin::StaticStr
                     | convert::Builtin::Text
                     | convert::Builtin::InclusiveRange
+                    | convert::Builtin::Arguments
             ))
 }
 
@@ -23215,7 +23243,8 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
             convert::Builtin::String
             | convert::Builtin::Str
             | convert::Builtin::StaticStr
-            | convert::Builtin::Text,
+            | convert::Builtin::Text
+            | convert::Builtin::Arguments,
         ) => "Dynamic::from(\"\")",
         convert::Type::Option(_) => "__rawr_internal::option::none()",
         convert::Type::Range(element)
