@@ -386,6 +386,14 @@ pub(super) enum PreludeOp {
     /// stand-in rawr's copy of the crate declares for the owner, holding
     /// the value's handle (`island::object`, #1264).
     NativeObject,
+    /// A static declared in a body, of a native type (D862): its place,
+    /// `value(key)`.
+    StaticValue,
+    /// Whether the static `key` has no value yet: `reserved(key)`.
+    StaticReserved,
+    /// Write the static `key`'s value, moved into its place:
+    /// `settle(key, value)`.
+    StaticSettle,
 }
 
 impl PreludeOp {
@@ -514,6 +522,9 @@ impl PreludeOp {
             Self::Memory => "place.memory",
             Self::DropParts => "drop.parts",
             Self::NativeObject => "island.object",
+            Self::StaticValue => "static.value",
+            Self::StaticReserved => "static.reserved",
+            Self::StaticSettle => "static.settle",
         }
     }
 
@@ -784,6 +795,8 @@ impl PreludeOp {
             Self::Expect | Self::ExpectOk | Self::ExpectErr => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<ImmutableString>()]
             }
+            Self::StaticValue | Self::StaticReserved => vec![TypeId::of::<ImmutableString>()],
+            Self::StaticSettle => vec![TypeId::of::<ImmutableString>(), TypeId::of::<Dynamic>()],
             Self::NativeObject => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<ImmutableString>(),
@@ -857,6 +870,19 @@ impl PreludeOp {
                 );
             }
             Self::DropParts => return Ok(drops::parts(args[0], args[1], models)),
+            Self::StaticValue => {
+                let key = args[0].clone_cast::<ImmutableString>();
+                return crate::place::statics::slot(&key).value();
+            }
+            Self::StaticReserved => {
+                let key = args[0].clone_cast::<ImmutableString>();
+                return Ok(crate::place::statics::slot(&key).reserved().into());
+            }
+            Self::StaticSettle => {
+                let key = args[0].clone_cast::<ImmutableString>();
+                crate::place::statics::slot(&key).settle(args[1].take())?;
+                return Ok(Dynamic::UNIT);
+            }
             #[cfg(feature = "rust-import")]
             Self::NativeObject => {
                 let owner = args[1].clone_cast::<ImmutableString>();

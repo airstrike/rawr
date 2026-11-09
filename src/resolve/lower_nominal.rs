@@ -2,6 +2,7 @@
 
 mod attributes;
 mod binding;
+mod block_static;
 mod body;
 mod borrows;
 mod branch;
@@ -400,6 +401,10 @@ struct Parser<'a> {
     /// The `macro_rules!` macros the blocks being parsed define so far,
     /// the innermost last.
     local_macros: Vec<(ImmutableString, Shared<crate::resolve::macro_rules::Rules>)>,
+    /// The statics the blocks being parsed declare, the innermost last.
+    block_statics: Vec<block_static::Declared>,
+    /// Where those statics are read: a borrow of one is `'static`.
+    static_reads: HashSet<Span>,
     /// The host type a host callable returns, as iced's `Element`, at each
     /// argument: a closure's body is converted into it, as Rust's `Into`.
     closure_outputs: Vec<Option<closure::Output>>,
@@ -880,6 +885,8 @@ impl<'a> Parser<'a> {
             expansion_ends: Vec::new(),
             std_macro_ahead: false,
             local_macros: Vec::new(),
+            block_statics: Vec::new(),
+            static_reads: HashSet::new(),
             closure_outputs: Vec::new(),
             closure_output: None,
             async_step: None,

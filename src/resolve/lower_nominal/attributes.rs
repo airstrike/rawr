@@ -45,11 +45,6 @@ impl<'a> Parser<'a> {
             && matches!(self.peek_second(), Token::Bang)
     }
 
-    /// Whether a `static` item starts the next statement.
-    pub(super) fn static_ahead(&mut self) -> bool {
-        matches!(self.peek(), Token::Reserved(ref word) if word.as_str() == "static")
-    }
-
     pub(super) fn nested_item_ahead(&mut self) -> bool {
         if self.attribute_ahead() {
             return true;
@@ -347,38 +342,6 @@ impl<'a> Parser<'a> {
                     .cfg(&name, Some(&value), self.models.test))
             }
             _ => Ok(self.models.features.cfg(&name, None, self.models.test)),
-        }
-    }
-
-    /// A `static` item inside a body: the item parser hoisted it to the
-    /// file's items, so its tokens are passed over here, through its `;`.
-    /// One a macro expands to was never hoisted, so it has no item yet.
-    pub(super) fn skip_nested_static(&mut self) -> Result<(), Error> {
-        let (_, start) = self.next();
-        if self.in_expansion() {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "a `static` item that a macro expands to".into(),
-                source: span(start, text_end(start, "static")),
-            });
-        }
-        let mut depth = 0usize;
-        loop {
-            match self.next() {
-                (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
-                    depth += 1;
-                }
-                (Token::RightBrace | Token::RightParen | Token::RightBracket, _) => {
-                    depth = depth.saturating_sub(1);
-                }
-                (Token::SemiColon, _) if depth == 0 => return Ok(()),
-                (Token::EOF, position) => {
-                    return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a `static` item inside a body without its `;`".into(),
-                        source: span(start, position),
-                    });
-                }
-                _ => {}
-            }
         }
     }
 

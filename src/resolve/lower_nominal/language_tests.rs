@@ -7529,6 +7529,33 @@ fn language_items_inside_block_expressions() {
 }
 
 #[test]
+fn language_statics_are_named_in_their_blocks() {
+    // Two blocks' statics of one name are two statics, as two expansions of
+    // a macro that declares one are; a static names a sibling declared
+    // after it; and a static shadows a module item.
+    let value = run_string(
+        r#"
+        const N: u32 = 100;
+        macro_rules! counted {
+            ($value:expr) => {{ static COUNT: u32 = $value; COUNT }};
+        }
+        fn one() -> u32 { static N: u32 = 1; N }
+        fn two() -> u32 { static N: u32 = 2; N }
+        fn siblings() -> u32 {
+            static FIRST: u32 = SECOND + 1;
+            static SECOND: u32 = 20;
+            FIRST
+        }
+        pub fn run() -> String {
+            format!("{} {} {} {} {} {}", one(), two(), counted!(3), counted!(4), siblings(), N)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "1 2 3 4 21 100");
+}
+
+#[test]
 fn language_untyped_integers_are_i32() {
     let error = rejected("pub fn run() -> i64 { let f = (1..=20).fold(1, |a, b| a * b); println!(\"{}\", f); 0 } run()");
     assert!(

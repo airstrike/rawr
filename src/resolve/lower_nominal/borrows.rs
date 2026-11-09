@@ -1066,6 +1066,10 @@ impl Parser<'_> {
     /// time, rather than a constant promoted to `'static`: it reads a local
     /// or calls something, or only a call makes a value of its type.
     fn made_here(&self, span: Span, ty: &Ty) -> bool {
+        // A static a block declares lives as long as the program.
+        if self.static_reads.contains(&span) {
+            return false;
+        }
         if self.flow().part_of_made(span) {
             return true;
         }

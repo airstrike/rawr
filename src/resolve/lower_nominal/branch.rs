@@ -1775,6 +1775,7 @@ impl<'a> Parser<'a> {
             let outer_last_type = self.last_type.clone();
             let outer_last_expression = self.last_expression.take();
             let outer_macros = self.local_macros.len();
+            let outer_statics = self.block_statics.len();
             self.last_type = Ty::Unit;
             self.open_drops();
             self.flow().open_block();
@@ -1802,7 +1803,7 @@ impl<'a> Parser<'a> {
                         self.skip_nested_fn()?;
                     }
                     Token::Const => self.parse_binding(false)?,
-                    _ if self.static_ahead() => self.skip_nested_static()?,
+                    _ if self.static_ahead() => self.parse_block_statics()?,
                     Token::Fn => self.skip_nested_fn()?,
                     Token::Use => self.skip_nested_use()?,
                     _ if self.macro_definition_ahead() => self.parse_local_macro()?,
@@ -1811,8 +1812,9 @@ impl<'a> Parser<'a> {
                     _ => self.parse_statement()?,
                 }
             }
-            // A block's own macros end with it.
+            // A block's own macros and statics end with it.
             self.local_macros.truncate(outer_macros);
+            self.block_statics.truncate(outer_statics);
             let end = self.expect(Token::RightBrace, "'}' after a match arm block")?;
             // The block's own locals end with it.
             let declared: Vec<Span> = self
