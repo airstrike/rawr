@@ -17,7 +17,9 @@
       {"text":"A program's blanket impl over a type parameter, such as `impl<T> Trait for T where T: IntoIterator<Item = X>` beside `impl Trait for Content`, now resolves and runs the way rustc selects it. A call on the concrete type runs its own impl. A call on any type the where-clauses hold for, such as a Vec, an array, an iterator or a Display value, runs the blanket impl, directly or through an `impl Trait` bound.","issues":[1553]},
       {"text":"A crate type now compares with another type through its PartialOrd<Rhs> or PartialEq<Rhs>, as tracing's `Level <= LevelFilter::current()` does.","issues":[702]},
       {"text":"std's macros now work by their paths and through a crate's re-export, as log's `__private_api::module_path!()` and tracing's `__macro_support::concat!` do. `format_args!` is supported.","issues":[1548]},
-      {"text":"Native code can now format a marked value it is lent as `&dyn Debug`, `&dyn Display` or another std formatting trait. It also takes `format_args!` as `fmt::Arguments`.","issues":[1558]}
+      {"text":"Native code can now format a marked value it is lent as `&dyn Debug`, `&dyn Display` or another std formatting trait. It also takes `format_args!` as `fmt::Arguments`.","issues":[1558]},
+      {"text":"A `static` declared in a marked body, or by a crate macro at each call, is named only in its block. One of a native type is a native value with a fixed `'static` address for the program's life, made the first time its block runs. A save that leaves its declaration alone keeps it, and a save that changes it makes a new one without a restart. Statics that refer to each other, as tracing's `META` and `__CALLSITE` do, are refused at `rawr check` for now.","issues":[1547]},
+      {"text":"A crate function that takes a `&'static T` of a native type, or a method that takes `&'static self`, now takes a static's own place. It used to fail the runner build with E0597.","issues":[1562],"refs":[1440]}
     ]
   },
   "releases": [

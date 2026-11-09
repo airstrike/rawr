@@ -18,6 +18,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate type now compares with another type through its PartialOrd<Rhs> or PartialEq<Rhs>, as tracing's `Level <= LevelFilter::current()` does. (#702)
 - std's macros now work by their paths and through a crate's re-export, as log's `__private_api::module_path!()` and tracing's `__macro_support::concat!` do. `format_args!` is supported. (#1548)
 - Native code can now format a marked value it is lent as `&dyn Debug`, `&dyn Display` or another std formatting trait. It also takes `format_args!` as `fmt::Arguments`. (#1558)
+- A `static` declared in a marked body, or by a crate macro at each call, is named only in its block. One of a native type is a native value with a fixed `'static` address for the program's life, made the first time its block runs. A save that leaves its declaration alone keeps it, and a save that changes it makes a new one without a restart. Statics that refer to each other, as tracing's `META` and `__CALLSITE` do, are refused at `rawr check` for now. (#1547)
+- A crate function that takes a `&'static T` of a native type, or a method that takes `&'static self`, now takes a static's own place. It used to fail the runner build with E0597. (#1562; part of #1440)
 
 ## 0.3.174 (2026-11-09)
 

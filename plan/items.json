@@ -1561,6 +1561,10 @@
     {"t":"T1558","issue":1558,"title":"T1558: A marked value lent to native code as &dyn Debug or Display panics","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1559","issue":1559,"title":"T1559: log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1560","issue":1560,"title":"T1560: std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1561","issue":1561,"title":"T1561: format_args! is held as its text, so {:?} of it quotes it","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1561","issue":1561,"title":"T1561: format_args! is held as its text, so {:?} of it quotes it","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1562","issue":1562,"title":"T1562: A crate fn taking a &'static T of a native type fails the runner build with E0597","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1563","issue":1563,"title":"T1563: A body static of a non-Sync native type is accepted; rustc says E0277","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1564","issue":1564,"title":"T1564: A body static's key misses an edit to a marked const or const fn its initializer calls","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1565","issue":1565,"title":"T1565: A native body static can't be formatted with {:?}, have its fields read, or be read before the block's first static","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

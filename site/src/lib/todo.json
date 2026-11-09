@@ -24,7 +24,9 @@
         {"text":"A program's blanket impl over a type parameter, such as `impl<T> Trait for T where T: IntoIterator<Item = X>` beside `impl Trait for Content`, now resolves and runs the way rustc selects it. A call on the concrete type runs its own impl. A call on any type the where-clauses hold for, such as a Vec, an array, an iterator or a Display value, runs the blanket impl, directly or through an `impl Trait` bound.","issues":[1553]},
         {"text":"A crate type now compares with another type through its PartialOrd<Rhs> or PartialEq<Rhs>, as tracing's `Level <= LevelFilter::current()` does.","issues":[702]},
         {"text":"std's macros now work by their paths and through a crate's re-export, as log's `__private_api::module_path!()` and tracing's `__macro_support::concat!` do. `format_args!` is supported.","issues":[1548]},
-        {"text":"Native code can now format a marked value it is lent as `&dyn Debug`, `&dyn Display` or another std formatting trait. It also takes `format_args!` as `fmt::Arguments`.","issues":[1558]}
+        {"text":"Native code can now format a marked value it is lent as `&dyn Debug`, `&dyn Display` or another std formatting trait. It also takes `format_args!` as `fmt::Arguments`.","issues":[1558]},
+        {"text":"A `static` declared in a marked body, or by a crate macro at each call, is named only in its block. One of a native type is a native value with a fixed `'static` address for the program's life, made the first time its block runs. A save that leaves its declaration alone keeps it, and a save that changes it makes a new one without a restart. Statics that refer to each other, as tracing's `META` and `__CALLSITE` do, are refused at `rawr check` for now.","issues":[1547]},
+        {"text":"A crate function that takes a `&'static T` of a native type, or a method that takes `&'static self`, now takes a static's own place. It used to fail the runner build with E0597.","issues":[1562],"refs":[1440]}
       ]
     },
     "releases": [
@@ -3419,7 +3421,11 @@
     {"issue":1558,"title":"A marked value lent to native code as &dyn Debug or Display panics","state":"open","category":"No glue (D593)"},
     {"issue":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"open","category":"No glue (D593)"},
     {"issue":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"open","category":"No glue (D593)"},
-    {"issue":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"open","category":"Divergences from rustc"}
+    {"issue":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"open","category":"Divergences from rustc"},
+    {"issue":1562,"title":"A crate fn taking a &'static T of a native type fails the runner build with E0597","state":"open","category":"No glue (D593)"},
+    {"issue":1563,"title":"A body static of a non-Sync native type is accepted; rustc says E0277","state":"open","category":"Divergences from rustc"},
+    {"issue":1564,"title":"A body static's key misses an edit to a marked const or const fn its initializer calls","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":1565,"title":"A native body static can't be formatted with {:?}, have its fields read, or be read before the block's first static","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
