@@ -227,9 +227,12 @@ pub struct Trampoline {
     file: Box<std::path::Path>,
     /// Its text when the error was read.
     text: Box<str>,
-    /// The signature's line and column in it, from 1.
+    /// The line and column in it, from 1, of what rustc's error is at in
+    /// the signature, as the trait `impl IntoContent` names, or of the
+    /// signature, and its width in characters.
     line: usize,
     column: usize,
+    width: usize,
     /// The generated file and the line of the error in it.
     generated: Box<str>,
 }
@@ -240,7 +243,7 @@ impl Trampoline {
     /// file on disk: `None` for a place in no trampoline.
     fn at(place: &str) -> Option<Self> {
         let mut parts = place.rsplitn(3, ':');
-        let _column = parts.next()?;
+        let column = parts.next()?.parse::<usize>().ok()?;
         let line = parts.next()?.parse::<usize>().ok()?;
         let path = parts.next()?;
         program_path(path)?;
@@ -261,13 +264,28 @@ impl Trampoline {
             .take_while(|line| signature(line).is_none())
             .find_map(|line| called(line))?;
         let text = std::fs::read_to_string(file).ok()?;
-        let (at, column) = declared(&text, item, name)?;
+        let (at, start_column) = declared(&text, item, name)?;
+        // The word rustc's error is at, as the trait an `impl Trait`
+        // names, is at the same word of the marked signature, which
+        // differs from the copy's only in its parameters' names.
+        let (at, column, width) = lines
+            .get(start..line)
+            .and_then(|signature| named(signature, column))
+            .and_then(|(word, seen)| found(&text, at, word, seen))
+            .unwrap_or_else(|| {
+                let width = text
+                    .lines()
+                    .nth(at - 1)
+                    .map_or(1, |line| line.trim().chars().count());
+                (at, start_column, width)
+            });
         Some(Self {
             item: item.into(),
             file: std::path::Path::new(file).into(),
             text: text.into(),
             line: at,
             column,
+            width,
             generated: format!("{path}:{line}").into(),
         })
     }
@@ -284,19 +302,17 @@ impl Trampoline {
         &self.text
     }
 
-    /// The signature's line and column, from 1.
+    /// The line and column, from 1, of what the error is at in the
+    /// signature.
     #[must_use]
     pub const fn place(&self) -> (usize, usize) {
         (self.line, self.column)
     }
 
-    /// The signature's length on its line, in characters.
+    /// The width of what the error is at, in characters.
     #[must_use]
-    pub fn width(&self) -> usize {
-        self.text
-            .lines()
-            .nth(self.line - 1)
-            .map_or(1, |line| line.trim().chars().count())
+    pub const fn width(&self) -> usize {
+        self.width
     }
 
     /// What rustc's error is in, said as a note.
@@ -340,10 +356,82 @@ fn signature(line: &str) -> Option<&str> {
 }
 
 /// The marked function a trampoline's `line` calls, when it starts the
-/// call.
+/// call or says why native code can't call it yet.
 fn called(line: &str) -> Option<&str> {
-    let (_, after) = line.split_once("__rawr_island::Call::new(\"")?;
-    after.split('"').next()
+    let (_, after) = line
+        .split_once("__rawr_island::Call::new(\"")
+        .or_else(|| line.split_once("native code can't call `"))?;
+    after.split(['"', '`']).next()
+}
+
+fn is_identifier(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+/// Each identifier of `text`, with its byte offset.
+fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    text.char_indices()
+        .filter(move |(at, character)| {
+            is_identifier(*character)
+                && text[..*at]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|before| !is_identifier(before))
+        })
+        .map(move |(at, _)| {
+            let end = text[at..]
+                .find(|character: char| !is_identifier(character))
+                .map_or(text.len(), |end| at + end);
+            (at, &text[at..end])
+        })
+}
+
+/// The identifier at `column`, from 1, of `signature`'s last line, and
+/// how many times the signature names it before: `None` when none is
+/// there, it is a parameter the copy renamed (`__a0`), or the place is in
+/// the body, after the first `{`.
+fn named<'s>(signature: &[&'s str], column: usize) -> Option<(&'s str, usize)> {
+    let (last, before) = signature.split_last()?;
+    let at = last.char_indices().nth(column.checked_sub(1)?)?.0;
+    if before.iter().any(|line| line.contains('{')) || last[..at].contains('{') {
+        return None;
+    }
+    let (target, word) =
+        words(last).find(|(start, word)| (*start..start + word.len()).contains(&at))?;
+    if word.starts_with("__") {
+        return None;
+    }
+    let earlier = before
+        .iter()
+        .flat_map(|line| words(line))
+        .chain(words(last).take_while(|(start, _)| *start < target))
+        .filter(|(_, seen)| *seen == word)
+        .count();
+    Some((word, earlier))
+}
+
+/// The line and column, from 1, and the width of the identifier `word` the
+/// signature in `text` starting on `line` names after `seen` others: its
+/// lines up to the body's `{`.
+fn found(text: &str, line: usize, word: &str, seen: usize) -> Option<(usize, usize, usize)> {
+    let mut left = seen;
+    for (index, written) in text.lines().enumerate().skip(line - 1) {
+        let signature = written.split('{').next().unwrap_or(written);
+        for (start, named) in words(signature) {
+            if named != word {
+                continue;
+            }
+            if left == 0 {
+                let column = written[..start].chars().count() + 1;
+                return Some((index + 1, column, word.chars().count()));
+            }
+            left -= 1;
+        }
+        if written.contains('{') {
+            return None;
+        }
+    }
+    None
 }
 
 /// The line and column, from 1, of the declaration of `name` in `text`
@@ -507,6 +595,61 @@ error: could not compile `app` (lib) due to 2 previous errors; 1 warning emitted
                 copied.display()
             )
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An error in the signature of a function native code can't call
+    /// yet, whose copy panics, names the word it is at in the marked
+    /// signature, as rustc's E0405 named inboard's `impl IntoContent`.
+    #[test]
+    fn an_error_in_a_refused_signature_names_its_word_in_the_marked_one() {
+        let root =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
+                .join(format!("rawr-refused-{}", std::process::id()));
+        let marked = root.join("src/workspace/home.rs");
+        let copied = root.join("target/rawr/crate/src/workspace/home.rs");
+        std::fs::create_dir_all(copied.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(marked.parent().unwrap()).unwrap();
+        let signature = "    pub fn lines(mut self, lines: impl IntoLines) -> Self {";
+        std::fs::write(
+            &marked,
+            format!(
+                "// rawr\npub struct Panel;\n\nimpl Panel {{\n{signature}\n        self\n    }}\n}}\n"
+            ),
+        )
+        .unwrap();
+        let generated = "    pub fn lines(mut self, __a0: impl IntoLines) -> Self {";
+        std::fs::write(
+            &copied,
+            format!(
+                "// Generated by Rawr from `{}`, which starts with `// rawr`: what native code\n\
+                 // sees of it. Each function hands its arguments to the interpreter.\n\
+                 impl Panel {{\n{generated}\n        \
+                 ::core::panic!(\"rawr: native code can't call `workspace::home::Panel::lines` \
+                 yet: parameter `lines`: `impl IntoLines` can't cross yet\")\n    }}\n}}\n",
+                marked.display()
+            ),
+        )
+        .unwrap();
+        let column = generated.find("IntoLines").unwrap() + 1;
+        let stderr = format!(
+            "error[E0405]: cannot find trait `IntoLines` in this scope\n --> {}:4:{column}\n  |\n\n\
+             error: could not compile `app` (bin \"app\") due to 1 previous error\n",
+            copied.display()
+        );
+        let error = crate::Error::Process {
+            program: "cargo",
+            status: "exit status: 101".into(),
+            stderr: stderr.into(),
+        };
+        let failure = super::Failure::of(error).unwrap();
+        let trampoline = failure.trampoline().unwrap();
+        assert_eq!(
+            trampoline.place(),
+            (5, signature.find("IntoLines").unwrap() + 1)
+        );
+        assert_eq!(trampoline.width(), "IntoLines".len());
+        assert_eq!(trampoline.file(), marked);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

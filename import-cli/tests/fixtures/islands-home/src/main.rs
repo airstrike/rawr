@@ -198,6 +198,18 @@ fn main() {
         ),
         home::Marked::AllRead => println!("marked all"),
     }
+    // Lines given a builder and a free function as lines and as text, by
+    // the marked trait's impls: text is prefixed and lines are kept.
+    let words = ["b".to_owned(), "c".to_owned()];
+    let panel = home::Panel::new("panel").lines(home::lines(vec!["a".to_owned()]));
+    let listed = home::Panel::new("listed").lines(words.to_vec());
+    println!("{} / {}", panel.label(), listed.label());
+    let doubled = words.iter().map(|word| word.repeat(2)).collect::<Vec<_>>();
+    println!(
+        "lines {} / {}",
+        home::lines(home::lines(vec!["d".to_owned()])).label(),
+        home::lines(doubled).label()
+    );
     // Screens whose elements native code held, then moved and dropped.
     for round in 0..2 {
         let screen = home::State::new();
