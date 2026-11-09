@@ -4,7 +4,11 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A marked view can pass a lent value to a crate fn that also takes a `&str`, as in `inbox::view(title, theme).map(..)`, including when the output keeps both the string and the lent value.","issues":[1509]},
+      {"text":"A lent value reached at the wrong type is reported as a rawr bug, not as a runtime error in the user's program.","issues":[1528]},
+      {"text":"A new engine installs std's declarations as they were written once from the std table, instead of reading the table at every start. That is about 29 ms less per browser instance and 11 ms less per native thread.","issues":[1526],"refs":[1384]}
+    ]
   },
   "releases": [
     {

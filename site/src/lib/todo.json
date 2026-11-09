@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A marked view can pass a lent value to a crate fn that also takes a `&str`, as in `inbox::view(title, theme).map(..)`, including when the output keeps both the string and the lent value.","issues":[1509]},
+        {"text":"A lent value reached at the wrong type is reported as a rawr bug, not as a runtime error in the user's program.","issues":[1528]},
+        {"text":"A new engine installs std's declarations as they were written once from the std table, instead of reading the table at every start. That is about 29 ms less per browser instance and 11 ms less per native thread.","issues":[1526],"refs":[1384]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.173",
@@ -3335,7 +3342,7 @@
     {"issue":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open","category":"Borrow checker (D572)"},
     {"issue":1507,"title":"A block missing after a condition surfaced as a self error in a later method","state":"closed","category":"Divergences from rustc","release":"0.3.173"},
     {"issue":1508,"title":"Body syntax errors are found only when the body is lowered, after item resolution","state":"open","category":"Divergences from rustc"},
-    {"issue":1509,"title":"A crate fn whose output keeps a lent `&'a T` panics when its adapter also pins a `&str` argument","state":"open","category":"No glue (D593)"},
+    {"issue":1509,"title":"A crate fn whose output keeps a lent `&'a T` panics when its adapter also pins a `&str` argument","state":"closed","category":"No glue (D593)"},
     {"issue":1510,"title":"A marked module can't name a native module's type alias by its path (`crate::widget::Element`)","state":"open","category":"Divergences from rustc"},
     {"issue":1511,"title":"The mirror table that Ty::from_resolved reads is a thread-local installed by Models::new; pass it explicitly","state":"open","category":"No glue (D593)"},
     {"issue":1512,"title":"rawr::universe::browser::prepare() takes about 11 s per instance on the page's main thread","state":"closed","category":"Platforms","release":"0.3.173"},
@@ -3352,9 +3359,10 @@
     {"issue":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"closed","category":"Divergences from rustc","release":"0.3.173"},
     {"issue":1524,"title":"Shared bindings compared a build script's whole OUT_DIR and read the project's after extraction","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.173"},
     {"issue":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"open","category":"Platforms"},
+    {"issue":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"closed","category":"Platforms"},
     {"issue":1527,"title":"A marked type spelled through its proxy alias and its mirror's re-exported path gave two scope families","state":"closed","category":"No glue (D593)","release":"0.3.173"},
-    {"issue":1528,"title":"A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"open","category":"No glue (D593)"}
+    {"issue":1528,"title":"A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"closed","category":"No glue (D593)"},
+    {"issue":1529,"title":"A new engine still finishes the generated std facade and binds its callbacks at every start","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -4302,7 +4310,7 @@
             {"number":834,"title":"A by-value read, a nested or self receiver, or a generic struct's crate field still takes the whole struct","state":"open"},
             {"number":1504,"title":"A marked module's path through an imported marked module reaches its native children","state":"closed"},
             {"number":1484,"title":"A marked mirror type passed by `&T` to a crate generic moves its native parts out instead of…","state":"closed"},
-            {"number":1509,"title":"A crate fn whose output keeps a lent `&'a T` panics when its adapter also pins a `&str` argument","state":"open"},
+            {"number":1509,"title":"A crate fn whose output keeps a lent `&'a T` panics when its adapter also pins a `&str` argument","state":"closed"},
             {"number":1510,"title":"A marked module can't name a native module's type alias by its path (`crate::widget::Element`)","state":"open"},
             {"number":1511,"title":"The mirror table that Ty::from_resolved reads is a thread-local installed by Models::new; pass it explicitly","state":"open"},
             {"number":1514,"title":"A crate's &mut self method on a temporary is refused as not a `let mut` binding","state":"closed"},
@@ -4313,7 +4321,7 @@
             {"number":1524,"title":"Shared bindings compared a build script's whole OUT_DIR and read the project's after extraction","state":"closed"},
             {"number":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open"},
             {"number":1527,"title":"A marked type spelled through its proxy alias and its mirror's re-exported path gave two scope families","state":"closed"},
-            {"number":1528,"title":"A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"open"}
+            {"number":1528,"title":"A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"closed"}
           ]
         }
       ]
@@ -4488,7 +4496,7 @@
             {"number":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"closed"},
             {"number":1519,"title":"A runner's registry builds each entry on first lookup from a binary plan, so prepare costs what a program touches","state":"closed"},
             {"number":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open"},
-            {"number":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"open"}
+            {"number":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"closed"}
           ]
         },
         {

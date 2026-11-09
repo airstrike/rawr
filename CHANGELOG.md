@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A marked view can pass a lent value to a crate fn that also takes a `&str`, as in `inbox::view(title, theme).map(..)`, including when the output keeps both the string and the lent value. (#1509)
+- A lent value reached at the wrong type is reported as a rawr bug, not as a runtime error in the user's program. (#1528)
+- A new engine installs std's declarations as they were written once from the std table, instead of reading the table at every start. That is about 29 ms less per browser instance and 11 ms less per native thread. (#1526; part of #1384)
 
 ## 0.3.173 (2026-11-09)
 
