@@ -14,7 +14,9 @@
 //! values (#1466). A borrow of such a value lends the interpreter each
 //! native part where it is, `&mut` too, a value moves its parts, and a
 //! `&self` method's reference into a part comes back where the part is
-//! (#1469, #1468); inside a `Vec` or an `Option` a part goes as a clone.
+//! (#1469, #1468), inside an `Option`, a `Vec`, a `Box` or a tuple too
+//! (#1475): a part a `&mut` call left where it was stays, and an element
+//! that holds one moves where the call put it.
 //! Each part comes back as the value the interpreter moves. A value of a
 //! native type, as the app's own `Message` or the `iced::Error` of an
 //! `iced::Result`, moves itself:
@@ -398,7 +400,7 @@ struct Generator<'a> {
     /// not, by its path: what an impl's owner names when it is marked.
     declared: BTreeSet<String>,
     /// Those of `types` whose every field crosses, by the wire format or as
-    /// a native value ([`Generator::part`]).
+    /// a native value, alone or in a container ([`Generator::held`]).
     crossing: BTreeSet<String>,
     /// Traits declared in marked code: their impls are not mirrored.
     traits: BTreeSet<&'a str>,
@@ -575,7 +577,7 @@ impl<'a> Generator<'a> {
                     let mirrored = &generator.types[path.as_str()];
                     mirrored.fields.iter().any(|field| {
                         generator
-                            .part(mirrored.source, field, Owner::Marked(path))
+                            .held(mirrored.source, field, Owner::Marked(path))
                             .is_err()
                     })
                 })
@@ -599,8 +601,10 @@ impl<'a> Generator<'a> {
                     let mirrored = &generator.types[path.as_str()];
                     let owner = Owner::Marked(path);
                     mirrored.fields.iter().any(|field| {
-                        generator.crosses(mirrored.source, field, owner).is_err()
-                            || generator.holds(mirrored.source, field, owner)
+                        !matches!(
+                            generator.held(mirrored.source, field, owner),
+                            Ok(Held::Wire)
+                        )
                     })
                 })
                 .cloned()
@@ -702,20 +706,57 @@ impl<'a> Generator<'a> {
             .any(|path| path.rsplit("::").next() == Some(name))
     }
 
-    /// Whether a field of `ty` crosses as part of its marked type's value:
-    /// by the wire format, or as a native value of its own, as the
+    /// How a field of `ty` crosses as part of its marked type's value
+    /// ([`Held`]): by the wire format, as a native value of its own, as the
     /// `themedef::Theme` of a marked `enum Theme { Selected(themedef::Theme)
-    /// }` (#1466). Native code gives such a part to the interpreter as a
-    /// clone, and takes it back as the value the interpreter moves.
-    fn part(&self, file: &Source<'_>, ty: &type_ref::Type, owner: Owner<'_>) -> Result<(), String> {
-        let Err(reason) = self.crosses(file, ty, owner) else {
-            return Ok(());
-        };
-        let written = slice(file.text, ty.span());
-        if self.lendable(file, ty, owner) && static_lifetimes(written) == written {
-            Ok(())
-        } else {
-            Err(reason)
+    /// }` (#1466), as a marked type that holds such values, or as an
+    /// `Option`, `Vec`, `Box` or tuple of any of them, as the
+    /// `Option<wizard::State>` of inboard's `home::State` (#1475). `Err`
+    /// says why it can't.
+    fn held<'f>(
+        &self,
+        file: &Source<'f>,
+        ty: &type_ref::Type,
+        owner: Owner<'_>,
+    ) -> Result<Held<'f>, String> {
+        if self.holds(file, ty, owner) {
+            return Ok(Held::Marked);
+        }
+        let crossed = self.crosses(file, ty, owner);
+        match ty {
+            type_ref::Type::Tuple { members, .. } => {
+                let members = members
+                    .iter()
+                    .map(|member| self.held(file, member, owner))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if members.iter().all(|member| matches!(member, Held::Wire)) {
+                    return crossed.map(|()| Held::Wire);
+                }
+                Ok(Held::Tuple(members))
+            }
+            type_ref::Type::Path(path) if let Some((name, inner)) = container(path) => {
+                let inner = self.held(file, inner, owner)?;
+                if matches!(inner, Held::Wire) && crossed.is_ok() {
+                    return Ok(Held::Wire);
+                }
+                let inner = Box::new(inner);
+                Ok(match name {
+                    Container::Option => Held::Option(inner),
+                    Container::Vec => Held::Vec(inner),
+                    Container::Box => Held::Boxed(inner),
+                })
+            }
+            _ => {
+                let Err(reason) = crossed else {
+                    return Ok(Held::Wire);
+                };
+                let written = slice(file.text, ty.span());
+                if self.lendable(file, ty, owner) && static_lifetimes(written) == written {
+                    Ok(Held::Native(written))
+                } else {
+                    Err(reason)
+                }
+            }
         }
     }
 
@@ -1612,6 +1653,11 @@ impl<'a> Generator<'a> {
         if lasting.is_some() || matches!(kept, Some(Borrowed::InPlace)) {
             let _ = writeln!(text, "    __call.in_place({});", lasting.is_some());
         }
+        // A function of `()` gives `()`, whatever its body's last
+        // statement left (#1475).
+        if matches!(function.output, None | Some(type_ref::Type::Unit(_))) {
+            text.push_str("    __call.unit();\n");
+        }
         // Each `&mut` argument in argument order, as its change comes back:
         // a copy, or what a lent place was given.
         let mut changed = Vec::new();
@@ -1763,7 +1809,8 @@ impl<'a> Generator<'a> {
 
     /// How one field of `ty` of the marked type at `path` goes to the
     /// interpreter from `value`, a `&` of it, and how it comes back: by the
-    /// wire format, or as a native value of its own (#1466).
+    /// wire format, or each native part as a value of its own (#1466,
+    /// #1475).
     fn field(
         &self,
         file: &Source<'_>,
@@ -1771,27 +1818,27 @@ impl<'a> Generator<'a> {
         ty: &type_ref::Type,
         value: &str,
     ) -> (String, String) {
-        let island = format!("crate::{MODULE}");
-        if self.crosses(file, ty, Owner::Marked(path)).is_ok() {
-            return (
-                format!("{island}::Put::put({value}, out);"),
-                format!("{island}::Take::take(input)"),
-            );
+        let held = self.field_held(file, path, ty);
+        (held.code(value, Use::Put, 0), held.take())
+    }
+
+    /// [`Generator::held`] of a field of the crossing marked type at
+    /// `path`, which holds what crosses, as [`Generator::crossing`] found.
+    fn field_held<'f>(&self, file: &Source<'f>, path: &str, ty: &type_ref::Type) -> Held<'f> {
+        match self.held(file, ty, Owner::Marked(path)) {
+            Ok(held) => held,
+            // Only a crossing type's fields come here, and each of them is
+            // held.
+            Err(_) => Held::Wire,
         }
-        (
-            format!("{island}::part!(out, {value});"),
-            format!(
-                "(&{island}::Back::<{}>::new()).take(input)",
-                slice(file.text, ty.span())
-            ),
-        )
     }
 
     /// One statement of a field's `use` in its type's `Parts` impl
     /// ([`Generator::parts`]), the field reached by `binding`: a native part
     /// lent or moved where it is, a field of a marked type that holds
-    /// parts by that type's own impl, and any other field by the wire
-    /// format (#1469).
+    /// parts by that type's own impl, either inside an `Option`, a `Vec`,
+    /// a `Box` or a tuple (#1475), and any other field by the wire format
+    /// (#1469).
     fn part_use(
         &self,
         file: &Source<'_>,
@@ -1800,32 +1847,7 @@ impl<'a> Generator<'a> {
         binding: &str,
         purpose: Use,
     ) -> String {
-        let island = format!("crate::{MODULE}");
-        let owner = Owner::Marked(path);
-        if self.crosses(file, ty, owner).is_err() {
-            let written = slice(file.text, ty.span());
-            return match purpose {
-                Use::Lend => format!("{island}::lend_part!(call, {binding}, {written});"),
-                Use::LendMut => format!("{island}::lend_part_mut!(call, {binding}, {written});"),
-                Use::Give => format!("{island}::give_part!(out, {binding});"),
-                Use::TakeInto => {
-                    format!("(&{island}::Back::<{written}>::new()).take_into(input, {binding});")
-                }
-            };
-        }
-        if self.holds(file, ty, owner) {
-            return match purpose {
-                Use::Lend => format!("{island}::Parts::lend({binding}, call);"),
-                Use::LendMut => format!("{island}::Parts::lend_mut({binding}, call);"),
-                Use::Give => format!("{island}::Parts::give({binding}, out);"),
-                Use::TakeInto => format!("{island}::Parts::take_into({binding}, input);"),
-            };
-        }
-        match purpose {
-            Use::Lend | Use::LendMut => format!("call.part(&*{binding});"),
-            Use::Give => format!("{island}::Put::put(&{binding}, out);"),
-            Use::TakeInto => format!("*{binding} = {island}::Take::take(input);"),
-        }
+        self.field_held(file, path, ty).code(binding, purpose, 0)
     }
 
     /// The `Parts` impl of the marked type `name` at `path`, which holds
@@ -2169,6 +2191,176 @@ enum Use {
     /// Take back from `input` what the call made of it, by a `&mut`
     /// binding.
     TakeInto,
+    /// Put it in `out` for its type's `Put`, by a `&` binding: a native
+    /// part as a clone (#1466).
+    Put,
+}
+
+/// How a field of a marked type crosses as part of its value
+/// (`Generator::held`), and so how its `Parts` impl lends, moves and takes
+/// it back (#1475).
+enum Held<'t> {
+    /// By the wire format, as a copy.
+    Wire,
+    /// A marked type that holds native parts, by its own `Parts` impl.
+    Marked,
+    /// A native part, of the type written as this text: lent where it is,
+    /// moved as itself.
+    Native(&'t str),
+    /// An `Option` of what the inner one holds.
+    Option(Box<Held<'t>>),
+    /// A `Vec` of what the inner one holds.
+    Vec(Box<Held<'t>>),
+    /// A `Box` of what the inner one holds, which the interpreter holds as
+    /// its value itself.
+    Boxed(Box<Held<'t>>),
+    /// A tuple of what each member holds.
+    Tuple(Vec<Held<'t>>),
+}
+
+impl Held<'_> {
+    /// One statement that does `purpose` with the field `binding` reaches,
+    /// as [`Use`] says, its own bindings suffixed by `depth`.
+    fn code(&self, binding: &str, purpose: Use, depth: usize) -> String {
+        let island = format!("crate::{MODULE}");
+        let out = match purpose {
+            Use::Lend | Use::LendMut => "call.out()",
+            Use::Give | Use::TakeInto | Use::Put => "out",
+        };
+        let inner = format!("__p{depth}");
+        match self {
+            Self::Wire => match purpose {
+                Use::Lend | Use::LendMut => format!("call.part(&*{binding});"),
+                Use::Give => format!("{island}::Put::put(&{binding}, out);"),
+                Use::TakeInto => format!("*{binding} = {island}::Take::take(input);"),
+                Use::Put => format!("{island}::Put::put({binding}, out);"),
+            },
+            Self::Marked => match purpose {
+                Use::Lend => format!("{island}::Parts::lend({binding}, call);"),
+                Use::LendMut => format!("{island}::Parts::lend_mut({binding}, call);"),
+                Use::Give => format!("{island}::Parts::give({binding}, out);"),
+                Use::TakeInto => format!("{island}::Parts::take_into({binding}, input);"),
+                Use::Put => format!("{island}::Put::put({binding}, out);"),
+            },
+            Self::Native(written) => match purpose {
+                Use::Lend => format!("{island}::lend_part!(call, {binding}, {written});"),
+                Use::LendMut => format!("{island}::lend_part_mut!(call, {binding}, {written});"),
+                Use::Give => format!("{island}::give_part!(out, {binding});"),
+                Use::TakeInto => {
+                    format!("(&{island}::Back::<{written}>::new()).take_into(input, {binding});")
+                }
+                Use::Put => format!("{island}::part!(out, {binding});"),
+            },
+            // A `None` the call left or made drops what was there, and a
+            // `Some` where there was none is new.
+            Self::Option(held) if matches!(purpose, Use::TakeInto) => format!(
+                "if input.some() {{ match {binding} {{ \
+                 ::std::option::Option::Some({inner}) => {{ {} }} \
+                 {inner} => *{inner} = ::std::option::Option::Some({}), }} }} \
+                 else {{ *{binding} = ::std::option::Option::None; }}",
+                held.code(&inner, purpose, depth + 1),
+                held.take(),
+            ),
+            Self::Option(held) => format!(
+                "match {binding} {{ ::std::option::Option::None => {out}.none(), \
+                 ::std::option::Option::Some({inner}) => {{ {out}.some(); {} }} }}",
+                held.code(&inner, purpose, depth + 1)
+            ),
+            // Each element still holding a part it was lent is taken back
+            // into, and moves where the call put it; any other is new.
+            Self::Vec(held) if matches!(purpose, Use::TakeInto) => format!(
+                "{island}::vec_into(input, {binding}, |input, {inner}| {{ {} }}, \
+                 |input| {});",
+                held.code(&inner, purpose, depth + 1),
+                held.take(),
+            ),
+            Self::Vec(held) => format!(
+                "{{ let {inner} = {binding}; {out}.array({inner}.len()); \
+                 for __e{depth} in {inner} {{ {} }} }}",
+                held.code(&format!("__e{depth}"), purpose, depth + 1)
+            ),
+            Self::Boxed(held) => {
+                let unboxed = match purpose {
+                    Use::Lend | Use::Put => format!("&**{binding}"),
+                    Use::LendMut | Use::TakeInto => format!("&mut **{binding}"),
+                    Use::Give => format!("*{binding}"),
+                };
+                held.code(&unboxed, purpose, depth + 1)
+            }
+            Self::Tuple(members) => {
+                let names = (0..members.len())
+                    .map(|index| format!("__t{depth}_{index}"))
+                    .collect::<Vec<_>>();
+                let start = match purpose {
+                    Use::TakeInto => format!("input.tuple({});", members.len()),
+                    _ => format!("{out}.array({});", members.len()),
+                };
+                let each = members
+                    .iter()
+                    .zip(&names)
+                    .map(|(member, name)| member.code(name, purpose, depth + 1))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(
+                    "{{ let ({},) = {binding}; {start} {each} }}",
+                    names.join(", ")
+                )
+            }
+        }
+    }
+
+    /// An expression that reads a whole new value of the field from
+    /// `input`: by the wire format, or each native part as the value the
+    /// interpreter moved.
+    fn take(&self) -> String {
+        let island = format!("crate::{MODULE}");
+        match self {
+            Self::Wire | Self::Marked => format!("{island}::Take::take(input)"),
+            Self::Native(written) => format!("(&{island}::Back::<{written}>::new()).take(input)"),
+            Self::Option(held) => format!("input.option(|input| {})", held.take()),
+            Self::Vec(held) => format!("input.vec(|input| {})", held.take()),
+            Self::Boxed(held) => format!("::std::boxed::Box::new({})", held.take()),
+            Self::Tuple(members) => format!(
+                "{{ input.tuple({}); ({},) }}",
+                members.len(),
+                members
+                    .iter()
+                    .map(|member| member.take())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
+
+/// The std containers a marked type's field may hold native parts in
+/// (`Generator::held`).
+#[derive(Clone, Copy)]
+enum Container {
+    Option,
+    Vec,
+    Box,
+}
+
+/// The container `path` names and the type it holds: `Option<T>`,
+/// `Vec<T>` or `Box<T>`, by its own name or its std path.
+fn container(path: &type_ref::Path) -> Option<(Container, &type_ref::Type)> {
+    let last = path.segments.last()?;
+    let std = path.segments.len() == 1
+        || matches!(
+            path.segments[0].name.text.as_str(),
+            "std" | "core" | "alloc"
+        );
+    let [type_ref::Argument::Type(inner)] = &last.arguments[..] else {
+        return None;
+    };
+    let container = match last.name.text.as_str() {
+        "Option" => Container::Option,
+        "Vec" => Container::Vec,
+        "Box" => Container::Box,
+        _ => return None,
+    };
+    std.then_some((container, inner))
 }
 
 /// How a `&'static` result of a native value comes back
@@ -3163,6 +3355,19 @@ pub mod __rawr_island {
             self.text(variant);
             self.count(fields);
         }
+        /// An `Option`'s `None`.
+        pub fn none(&mut self) {
+            self.byte(NONE);
+        }
+        /// The start of an `Option`'s `Some`, whose value follows.
+        pub fn some(&mut self) {
+            self.byte(SOME);
+        }
+        /// The start of a `Vec` or a tuple of `members`, which follow.
+        pub fn array(&mut self, members: usize) {
+            self.byte(ARRAY);
+            self.count(members);
+        }
     }
 
     /// A value on its way back from the interpreter, and the native values
@@ -3171,6 +3376,10 @@ pub mod __rawr_island {
         bytes: &'a [u8],
         path: &'a str,
         natives: &'a mut [::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>>],
+        /// Where each part the call lent is, by its index among the call's
+        /// lends: a part still where it was lent comes back as its index
+        /// (#1475).
+        places: &'a [*mut ()],
     }
 
     impl<'a> In<'a> {
@@ -3237,10 +3446,53 @@ pub mod __rawr_island {
         }
         /// An `Option` whose value `some` reads.
         pub fn option<T>(&mut self, some: impl FnOnce(&mut Self) -> T) -> ::std::option::Option<T> {
+            if self.some() {
+                Some(some(self))
+            } else {
+                None
+            }
+        }
+        /// Whether an `Option` is a `Some`, whose value follows.
+        pub fn some(&mut self) -> bool {
             match self.byte() {
-                NONE => None,
-                SOME => Some(some(self)),
+                NONE => false,
+                SOME => true,
                 _ => self.fail("expected an `Option`"),
+            }
+        }
+        /// Where the first part the next value holds that is still where
+        /// the call lent it is, without reading the value (#1475).
+        fn first_lent(&self) -> ::std::option::Option<usize> {
+            let mut found = None;
+            let mut bytes = self.bytes;
+            scan(&mut bytes, &mut found)?;
+            Some(self.places.get(found?)?.addr())
+        }
+        /// What a call made of a native part it was lent where it is
+        /// (#1469): `None` when the part is still there, and else the whole
+        /// new value it gave the place, `*place = value`.
+        pub fn changed<T: 'static>(&mut self, place: &T) -> ::std::option::Option<T> {
+            match self.bytes.first() {
+                Some(&UNIT) => {
+                    self.byte();
+                    None
+                }
+                Some(&LENT) => {
+                    self.byte();
+                    let index = self.count();
+                    if self.places.get(index).map(|lent| lent.addr())
+                        != Some(::std::ptr::from_ref(place).addr())
+                    {
+                        ::std::panic!(
+                            "rawr: `{}` moved a `{}` native code lent it to another place, \
+                             which can't come back yet",
+                            self.path,
+                            ::std::any::type_name::<T>()
+                        );
+                    }
+                    None
+                }
+                _ => Some(self.native()),
             }
         }
         /// A `Result`, or an alias of one, whose parts `ok` and `err` read.
@@ -3317,6 +3569,13 @@ pub mod __rawr_island {
         /// `iced::Result`.
         pub fn native<T: 'static>(&mut self) -> T {
             let name = ::std::any::type_name::<T>();
+            if self.bytes.first() == Some(&LENT) {
+                ::std::panic!(
+                    "rawr: `{}` moved a `{name}` native code lent it to another place, \
+                     which can't come back yet",
+                    self.path
+                );
+            }
             self.expect(NATIVE, &::std::format!("a `{name}`"));
             let index = self.count();
             let moved = self.natives.get_mut(index).and_then(::std::option::Option::take);
@@ -3377,10 +3636,117 @@ pub mod __rawr_island {
             input.native()
         }
         fn take_into(&self, input: &mut In<'_>, place: &mut T) {
-            if let Some(new) = input.replaced::<T>() {
+            if let Some(new) = input.changed(&*place) {
                 *place = new;
             }
         }
+    }
+
+    /// Step `bytes` past one value, keeping in `found` the index of the
+    /// first lent part it holds; `None` when the value is malformed.
+    fn scan(bytes: &mut &[u8], found: &mut ::std::option::Option<usize>) -> ::std::option::Option<()> {
+        fn skip(bytes: &mut &[u8], length: usize) -> ::std::option::Option<()> {
+            *bytes = bytes.get(length..)?;
+            Some(())
+        }
+        fn count(bytes: &mut &[u8]) -> ::std::option::Option<usize> {
+            let head = bytes.get(..8)?;
+            let mut eight = [0; 8];
+            eight.copy_from_slice(head);
+            *bytes = &bytes[8..];
+            usize::try_from(u64::from_le_bytes(eight)).ok()
+        }
+        let (&tag, rest) = bytes.split_first()?;
+        *bytes = rest;
+        match tag {
+            UNIT | FALSE | TRUE | NONE => {}
+            INT | FLOAT | HANDLE => skip(bytes, 8)?,
+            CHAR => skip(bytes, 4)?,
+            PINNED => skip(bytes, 16)?,
+            STR => {
+                let length = count(bytes)?;
+                skip(bytes, length)?;
+            }
+            LENT => {
+                let index = count(bytes)?;
+                found.get_or_insert(index);
+            }
+            NATIVE => {
+                count(bytes)?;
+            }
+            SOME | OK | ERR => scan(bytes, found)?,
+            ARRAY | STRUCT | ENUM => {
+                // A struct's path, and an enum's path and variant, come
+                // before its members.
+                let names = match tag {
+                    STRUCT => 1,
+                    ENUM => 2,
+                    _ => 0,
+                };
+                for _ in 0..names {
+                    let length = count(bytes)?;
+                    skip(bytes, length)?;
+                }
+                for _ in 0..count(bytes)? {
+                    scan(bytes, found)?;
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+
+    /// Take back into `place`, a `Vec` whose elements' native parts the
+    /// call lent where they are (#1475), the `Vec` the call made of it: an
+    /// element that holds a part still where it was lent is that part's
+    /// element, taken back into by `into` and moved where the call put it,
+    /// and any other element is new, read by `take`. An element the call
+    /// dropped drops.
+    pub fn vec_into<T>(
+        input: &mut In<'_>,
+        place: &mut ::std::vec::Vec<T>,
+        mut into: impl FnMut(&mut In<'_>, &mut T),
+        mut take: impl FnMut(&mut In<'_>) -> T,
+    ) {
+        input.expect(ARRAY, "a `Vec`");
+        let count = input.count();
+        let size = ::std::mem::size_of::<T>();
+        let start = place.as_ptr().addr();
+        let mut moved = ::std::vec![false; place.len()];
+        let mut order = ::std::vec::Vec::with_capacity(count);
+        for index in 0..count {
+            let element = input.first_lent().and_then(|lent| {
+                // A part inside an element's own bytes names it; one
+                // elsewhere, as in a `Box`, is the element at its index.
+                let at = match lent.checked_sub(start) {
+                    Some(offset) if size > 0 && offset < size * moved.len() => offset / size,
+                    _ => index,
+                };
+                (at < moved.len() && !moved[at]).then_some(at)
+            });
+            match element {
+                Some(at) => {
+                    moved[at] = true;
+                    into(input, &mut place[at]);
+                    order.push(Ok(at));
+                }
+                None => order.push(Err(take(input))),
+            }
+        }
+        let mut old = ::std::mem::take(place)
+            .into_iter()
+            .map(Some)
+            .collect::<::std::vec::Vec<_>>();
+        *place = order
+            .into_iter()
+            .map(|element| match element {
+                Ok(at) => match old[at].take() {
+                    Some(kept) => kept,
+                    None => ::std::unreachable!("each element moves once, as `moved` marks it"),
+                },
+                Err(new) => new,
+            })
+            .collect();
     }
 
     /// How an argument of `T` whose type the marked crate doesn't declare
@@ -3512,6 +3878,7 @@ pub mod __rawr_island {
             bytes,
             path,
             natives: &mut natives,
+            places: &[],
         };
         T::take(&mut input)
     }
@@ -3800,6 +4167,7 @@ pub mod __rawr_island {
         owned: bool,
         pinned: bool,
         in_place: u8,
+        unit: bool,
         count: u32,
         mutable: u64,
         values: Out,
@@ -3822,6 +4190,7 @@ pub mod __rawr_island {
                 owned,
                 pinned: false,
                 in_place: 0,
+                unit: false,
                 count: 0,
                 mutable: 0,
                 values: Out(::std::vec::Vec::new(), ::std::vec::Vec::new()),
@@ -3928,6 +4297,11 @@ pub mod __rawr_island {
         pub fn in_place(&mut self, lasting: bool) {
             self.in_place = 4 | u8::from(lasting) << 3;
         }
+        /// The function returns `()`, which comes back whatever value its
+        /// body's last statement left.
+        pub fn unit(&mut self) {
+            self.unit = true;
+        }
         /// An argument the call may change, which comes back after it.
         pub fn mutable<T: Put + ?Sized>(&mut self, value: &T) {
             self.mutable |= 1 << self.count;
@@ -3936,7 +4310,12 @@ pub mod __rawr_island {
         pub fn send(mut self) -> Reply {
             register();
             let mut bytes = ::std::vec::Vec::with_capacity(13 + self.values.0.len());
-            bytes.push(u8::from(self.owned) | u8::from(self.pinned) << 1 | self.in_place);
+            bytes.push(
+                u8::from(self.owned)
+                    | u8::from(self.pinned) << 1
+                    | self.in_place
+                    | u8::from(self.unit) << 4,
+            );
             bytes.extend_from_slice(&self.count.to_le_bytes());
             bytes.extend_from_slice(&self.mutable.to_le_bytes());
             bytes.extend_from_slice(&self.values.0);
@@ -3954,6 +4333,7 @@ pub mod __rawr_island {
                     at: 1,
                     path: self.path,
                     natives: natives.into_iter().map(Some).collect(),
+                    places: self.lent.iter().map(|lent| lent.2).collect(),
                 },
                 Some(_) => {
                     let message = ::std::string::String::from_utf8_lossy(&reply[1..]).into_owned();
@@ -3971,6 +4351,8 @@ pub mod __rawr_island {
         at: usize,
         path: &'static str,
         natives: ::std::vec::Vec<::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>>>,
+        /// Where each part the call lent is ([`In::changed`]).
+        places: ::std::vec::Vec<*mut ()>,
     }
 
     impl Reply {
@@ -4041,6 +4423,7 @@ pub mod __rawr_island {
                 bytes: &self.bytes[self.at..],
                 path: self.path,
                 natives: &mut self.natives,
+                places: &self.places,
             };
             let value = read(&mut input);
             self.at = self.bytes.len() - input.bytes.len();
@@ -4126,7 +4509,7 @@ mod tests {
             text.contains(
                 "    pub fn advance(&mut self, __a0: (f64, f64)) {\n        \
                  let mut __call = crate::__rawr_island::Call::new(\"physics::Ball::advance\", true);\n        \
-                 __call.mutable(&*self);\n        __call.argument(&__a0);\n"
+                 __call.unit();\n        __call.mutable(&*self);\n        __call.argument(&__a0);\n"
             ),
             "{text}"
         );
@@ -4270,6 +4653,67 @@ mod tests {
             "__reply.read(|input| crate::__rawr_island::Parts::take_into(&mut *self, input));",
             "    __call.given(self);\n",
             "    __call.lent(__a0);\n",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        assert!(!text.contains("panic!"), "{text}");
+    }
+
+    /// A marked type's native parts inside an `Option`, a `Vec`, a `Box`
+    /// or a tuple, or a marked type that holds them inside one, are lent
+    /// where they are, mutably too, moved for a value and taken back after
+    /// a `&mut` call, as inboard's `home::State { wizard:
+    /// Option<wizard::State> }` (#1475): nothing goes as a clone, and every
+    /// method crosses.
+    #[test]
+    fn native_parts_in_an_option_a_vec_a_box_or_a_tuple_are_lent_where_they_are() {
+        let shadow = generate(
+            "// rawr\nuse crate::wizard;\n\
+             pub struct Pane {\n    pub tab: wizard::Tab,\n}\n\
+             pub struct State {\n    \
+             wizard: Option<wizard::State>,\n    \
+             tabs: Vec<wizard::Tab>,\n    \
+             boxed: Box<wizard::Tab>,\n    \
+             pair: (u32, wizard::Tab),\n    \
+             panes: Vec<Option<Pane>>,\n    \
+             count: Option<u32>,\n}\n\
+             impl State {\n    \
+             pub fn open(&mut self) { self.wizard = None; }\n    \
+             pub fn count(&self) -> usize { self.tabs.len() }\n    \
+             pub fn into_tabs(self) -> Vec<wizard::Tab> { self.tabs }\n}\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        for expected in [
+            "impl crate::__rawr_island::Parts for State {",
+            "match &self.wizard { ::std::option::Option::None => call.out().none(), \
+             ::std::option::Option::Some(__p0) => { call.out().some(); \
+             crate::__rawr_island::lend_part!(call, __p0, wizard::State); } }",
+            "match &mut self.wizard { ::std::option::Option::None => call.out().none(), \
+             ::std::option::Option::Some(__p0) => { call.out().some(); \
+             crate::__rawr_island::lend_part_mut!(call, __p0, wizard::State); } }",
+            "if input.some() { match &mut self.wizard { ::std::option::Option::Some(__p0) => \
+             { (&crate::__rawr_island::Back::<wizard::State>::new()).take_into(input, __p0); } \
+             __p0 => *__p0 = ::std::option::Option::Some(\
+             (&crate::__rawr_island::Back::<wizard::State>::new()).take(input)), } } \
+             else { *&mut self.wizard = ::std::option::Option::None; }",
+            "{ let __p0 = &self.tabs; call.out().array(__p0.len()); for __e0 in __p0 \
+             { crate::__rawr_island::lend_part!(call, __e0, wizard::Tab); } }",
+            "crate::__rawr_island::vec_into(input, &mut self.tabs, |input, __p0| \
+             { (&crate::__rawr_island::Back::<wizard::Tab>::new()).take_into(input, __p0); }, \
+             |input| (&crate::__rawr_island::Back::<wizard::Tab>::new()).take(input));",
+            "crate::__rawr_island::lend_part!(call, &**&self.boxed, wizard::Tab);",
+            "crate::__rawr_island::give_part!(out, *__f2);",
+            "{ let (__t0_0, __t0_1,) = &self.pair; call.out().array(2); \
+             call.part(&*__t0_0); crate::__rawr_island::lend_part!(call, __t0_1, wizard::Tab); }",
+            "crate::__rawr_island::Parts::lend(__p1, call);",
+            "crate::__rawr_island::Parts::take_into(__p1, input);",
+            "input.vec(|input| input.option(|input| crate::__rawr_island::Take::take(input)))",
+            "call.part(&*&self.count);",
+            "    __call.lent_mut(&mut *self);\n",
+            "    __call.given(self);\n",
         ] {
             assert!(text.contains(expected), "{expected}\n{text}");
         }
