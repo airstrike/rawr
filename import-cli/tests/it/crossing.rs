@@ -1877,13 +1877,15 @@ fn a_script_function_wraps_an_opaque_widget_in_types_that_declare_a_lifetime() {
 /// it. Rust code can't name their types, so the region holds each boxed,
 /// through a trait of the runner's implemented for the type's shape with a
 /// parameter at the opaque position, whose methods are the calls the
-/// program makes on it. The output is `cargo run`'s.
+/// program makes on it. The container's `style(|_theme| ..)` takes a script
+/// closure, which the trait's method takes boxed, as the crate's `Fn` bound
+/// takes it. The output is `cargo run`'s.
 #[test]
 fn a_script_function_wraps_opaque_widgets_in_types_that_declare_a_lifetime() {
     let (rawr, cargo) = both_printed("modal.rs", "Show,Email,outside,Show,Submit");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("3 view pad 0 container 10 pad 0 [Show] <x Shown:0> opaque area container 2 opaque container 1 pad 0 |me1@rawr| [Submit]")
+        rawr.contains("3 view pad 0 container 10 pad 0 [Show] <x Shown:0> opaque area container 2 shade 80 opaque container 1 pad 0 |me1@rawr| [Submit]")
             && rawr.contains("5 message HideModal")
             && rawr.ends_with("last view container 10 pad 0 [Show] <Shown:0>"),
         "{rawr}"

@@ -1191,6 +1191,7 @@ pub mod widgets {
     pub struct Container<'a, W, Theme = crate::Theme> {
         content: W,
         padding: u16,
+        shade: Option<u16>,
         look: std::marker::PhantomData<fn(&'a Theme) -> &'a Theme>,
     }
 
@@ -1199,6 +1200,7 @@ pub mod widgets {
         Container {
             content,
             padding: 0,
+            shade: None,
             look: std::marker::PhantomData,
         }
     }
@@ -1211,12 +1213,24 @@ pub mod widgets {
         }
     }
 
+    impl<'a, W, Theme: Default> Container<'a, W, Theme> {
+        /// The container shaded as `style` gives for the default theme, as
+        /// iced's `Container::style(impl Fn(&Theme) -> Style + 'a)`.
+        pub fn style(mut self, style: impl Fn(&Theme) -> u16 + 'a) -> Self {
+            self.shade = Some(style(&Theme::default()));
+            self
+        }
+    }
+
     impl<W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Container<'_, W, Theme>
     where
         W: Widget<Message, Theme, Renderer>,
     {
         fn labels(&self, labels: &mut Vec<String>) {
-            labels.push(format!("container {}", self.padding));
+            match self.shade {
+                Some(shade) => labels.push(format!("container {} shade {shade}", self.padding)),
+                None => labels.push(format!("container {}", self.padding)),
+            }
             self.content.labels(labels);
         }
 

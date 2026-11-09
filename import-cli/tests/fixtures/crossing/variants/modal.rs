@@ -5,7 +5,9 @@
 // a container and a mouse area, whose types name that lifetime. The
 // content's field borrows the state's email for the view's lifetime, as
 // `Field<'a, ..>::value(self, &'a str) -> Self` says (#598). A press
-// outside the content hides it again.
+// outside the content hides it again. The container that holds the opaque
+// content takes a style closure, as iced's `center(..).style(|_theme| ..)`
+// does, which the boxed container's method takes boxed.
 
 use events::controls::{application, toggle};
 use events::widgets::{button, column, container, field, mouse_area, opaque, Widget};
@@ -71,7 +73,9 @@ where
 {
     column![
         base,
-        opaque(mouse_area(container(opaque(content)).padding(2)).on_press(on_blur))
+        opaque(
+            mouse_area(container(opaque(content)).padding(2).style(|_theme| 80)).on_press(on_blur)
+        )
     ]
 }
 
