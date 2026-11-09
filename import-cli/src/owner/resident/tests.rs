@@ -6,7 +6,67 @@ use std::time::{Duration, Instant};
 use rawr::reload::{scheduler, source};
 use rawr_import::input::proof::Watch;
 
-use super::{Attempt, Manifests};
+use super::{Attempt, Manifests, Reason};
+
+/// A save that takes the full preparation says why, in the order the
+/// resident route checks: a refresh, then a native change since the
+/// running build was checked, then what native code sees.
+#[test]
+fn a_forced_full_preparation_names_its_reason() {
+    let fixture = Fixture::new();
+    let native = fixture.root.join("native.rs");
+    fs::write(&native, "pub fn value() -> i64 { 1 }\n").unwrap();
+    let inputs = fixture
+        .inputs()
+        .with_imported([Watch::Exact(native.clone())]);
+    let adapter = rawr_watch::Adapter::manual_inputs(inputs, Duration::ZERO).unwrap();
+    let baseline = adapter.native_baseline();
+    let manifests = Manifests::from_graph(&fixture.graph());
+    assert_eq!(
+        Reason::of(
+            false,
+            adapter.resident_change(&baseline),
+            &manifests,
+            &manifests
+        ),
+        None,
+        "nothing changed, so the save stays resident"
+    );
+
+    fixture.write("Cargo.toml", &format!("{}\n# edited\n", Fixture::MANIFEST));
+    let edited = Manifests::from_graph(&fixture.graph());
+    let reason = Reason::of(
+        false,
+        adapter.resident_change(&baseline),
+        &manifests,
+        &edited,
+    );
+    assert_eq!(reason.unwrap().to_string(), "`Cargo.toml` changed");
+
+    adapter.inject_modify(&native);
+    let reason = Reason::of(
+        false,
+        adapter.resident_change(&baseline),
+        &manifests,
+        &edited,
+    );
+    assert_eq!(
+        reason.unwrap().to_string(),
+        format!(
+            "`{}` changed since the running native build was checked",
+            native.display()
+        ),
+        "a native event comes before what native code sees"
+    );
+
+    let reason = Reason::of(
+        true,
+        adapter.resident_change(&baseline),
+        &manifests,
+        &edited,
+    );
+    assert_eq!(reason, Some(Reason::Refresh));
+}
 
 #[test]
 fn resident_manifests_ignore_source_body_edits() {
@@ -61,7 +121,10 @@ fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
         .unwrap()
         .unwrap()
         .complete(());
-    let continuation = Attempt::Prepare(Some(adapter.prepare_inputs(incoming.inputs()).unwrap()));
+    let continuation = Attempt::Prepare(
+        Some(adapter.prepare_inputs(incoming.inputs()).unwrap()),
+        Reason::Uncovered,
+    );
     adapter.inject_modify(&incoming_source);
     assert!(matches!(
         adapter.admit_current(original, |_| panic!(
@@ -71,7 +134,7 @@ fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
     ));
 
     let fallback_inputs = match continuation {
-        Attempt::Prepare(staged) => staged,
+        Attempt::Prepare(staged, _) => staged,
         Attempt::Settled | Attempt::Swapped => {
             panic!("native miss must continue full preparation")
         }
@@ -107,7 +170,10 @@ fn resident_dropped_prepare_continuation_retires_candidate_inputs() {
     let current = Fixture::new();
     let incoming = Fixture::new();
     let adapter = rawr_watch::Adapter::manual_inputs(current.inputs(), Duration::ZERO).unwrap();
-    let continuation = Attempt::Prepare(Some(adapter.prepare_inputs(incoming.inputs()).unwrap()));
+    let continuation = Attempt::Prepare(
+        Some(adapter.prepare_inputs(incoming.inputs()).unwrap()),
+        Reason::Uncovered,
+    );
     drop(continuation);
     adapter.inject_modify(&incoming.root.join("src/main.rs"));
     assert!(adapter.start(Instant::now()).is_none());

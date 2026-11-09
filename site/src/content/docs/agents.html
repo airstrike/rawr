@@ -63,6 +63,7 @@
   <li><code>running</code>: the program runs.</li>
   <li><code>queued</code>: a save reached a program with a marked <code>main</code> in a native loop. The loop takes it at its next call into marked code, and <code>swapped</code> follows. On macOS rawr asks the program's windows to redraw, so an idle window loop draws a frame at once. A frame that calls marked code takes the save. Code that only iced's <code>view</code> calls waits for the next message, and Freya waits for the next event. A terminal program takes the save at its next tick or input.</li>
   <li><code>swapped</code>: a save changed the running program in place, and it kept its state.</li>
+  <li><code>preparing</code>: a save can&rsquo;t compile inside the running program, for the reason given, so rawr prepares it again.</li>
   <li><code>restarting</code>: a save restarts the program, for the reason given.</li>
   <li><code>failed</code>: a start or a save failed, with diagnostics. The last good program keeps running.</li>
   <li><code>ended</code>: the program ended, with its status. The next save runs it again.</li>
