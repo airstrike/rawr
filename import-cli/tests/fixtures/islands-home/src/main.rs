@@ -32,9 +32,40 @@ fn main() {
     println!("pressed {taken}: {}", workspace.home.summary());
     let taken = workspace.press();
     println!("pressed {taken}: {}", workspace.home.summary());
+    let home = &mut workspace.home;
+    println!("{}", home.layout());
+    home.open_wizard();
+    println!("advanced {}", home.advance_wizard());
+    println!("{}", home.layout());
+    for title in ["inbox", "notes", "drafts"] {
+        home.push_tab(title);
+    }
+    home.rename_tab(1, "ideas");
+    println!("{}", home.layout());
+    home.close_tab(0);
+    println!("{}", home.layout());
+    home.open_wizard();
+    println!("{}", home.layout());
+    home.close_wizard();
+    println!("advanced {}", home.advance_wizard());
+    println!("{}", home.layout());
+    home.close_tab(1);
+    home.close_tab(0);
+    println!("{}", home.layout());
+    for title in ["left", "middle", "right"] {
+        home.split(title);
+    }
+    home.pin(2);
+    println!("panes [{}]", home.panes());
+    home.close_pane(1);
+    println!("panes [{}]", home.panes());
+    home.close_pane(0);
+    home.close_pane(0);
+    println!("panes [{}]", home.panes());
     let Some(stop) = std::env::var_os("ISLANDS_STOP") else {
         return;
     };
+    workspace.home.push_tab("kept");
     for tick in 1..3000 {
         if std::path::Path::new(&stop).exists() {
             break;
@@ -42,7 +73,11 @@ fn main() {
         let before = workspace.home.count();
         workspace.update(home::Message::Count);
         let after = workspace.home.count();
-        println!("tick {tick} from {before} by {}", after - before);
+        println!(
+            "tick {tick} from {before} by {} over [{}]",
+            after - before,
+            workspace.home.tabs()
+        );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
