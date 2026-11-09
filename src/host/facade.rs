@@ -1782,24 +1782,15 @@ impl Definition {
     #[cfg(feature = "rust-import")]
     pub(crate) fn registry_usage(&self) -> (Option<usize>, Option<usize>) {
         let item_count = self.items.len();
-        let imported_aliases = self
+        let mut identities = self
             .types
             .iter()
-            .filter(|definition| definition.identity().imported().is_some())
-            .count();
-        let imported_groups = self
-            .types
-            .iter()
-            .enumerate()
-            .filter(|(index, definition)| {
-                let Some(identity) = definition.identity().imported() else {
-                    return false;
-                };
-                !self.types[..*index]
-                    .iter()
-                    .any(|prior| prior.identity().imported() == Some(identity))
-            })
-            .count();
+            .filter_map(|definition| definition.identity().imported())
+            .collect::<Vec<_>>();
+        let imported_aliases = identities.len();
+        identities.sort_unstable();
+        identities.dedup();
+        let imported_groups = identities.len();
         let items = Some(2_usize)
             .and_then(|items| items.checked_add(self.modules.len()))
             .and_then(|items| items.checked_add(self.types.len()))
@@ -2148,20 +2139,38 @@ fn validate_type_parents(
     Ok(())
 }
 
+/// Every type of one identity has one contract: the types of a facade
+/// that share an identity, a type and its re-exports, agree.
+///
+/// The contract is an equality, so a type agrees with all of its identity
+/// once it agrees with the first: each one is compared once, in identity
+/// order, and the conflict named is the first in declaration order.
 fn validate_type_identities(types: &[host::type_def::Definition]) -> Result<(), host::Error> {
-    for (index, definition) in types.iter().enumerate() {
-        for existing in &types[..index] {
-            if existing.identity() == definition.identity()
-                && !existing.same_identity_contract(definition)
-            {
-                return Err(host::Error::ConflictingHostIdentity {
-                    existing: existing.path().into(),
-                    incoming: definition.path().into(),
-                });
-            }
-        }
+    let mut order = Vec::new();
+    order
+        .try_reserve_exact(types.len())
+        .map_err(|_| host::Error::Allocation)?;
+    order.extend(0..types.len());
+    // Stable, so each identity's types stay in declaration order.
+    order.sort_by(|&left, &right| types[left].identity().cmp(types[right].identity()));
+    let conflict = order
+        .chunk_by(|&left, &right| types[left].identity() == types[right].identity())
+        .filter_map(|group| {
+            let (&first, rest) = group.split_first()?;
+            let incoming = rest
+                .iter()
+                .copied()
+                .find(|&index| !types[first].same_identity_contract(&types[index]))?;
+            Some((first, incoming))
+        })
+        .min_by_key(|&(_, incoming)| incoming);
+    match conflict {
+        Some((existing, incoming)) => Err(host::Error::ConflictingHostIdentity {
+            existing: types[existing].path().into(),
+            incoming: types[incoming].path().into(),
+        }),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 fn projection_arguments(
