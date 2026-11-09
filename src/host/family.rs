@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn pending_families_retain_every_selector_and_clone_through_aliases() {
         let (ordinary, families) = fixture();
-        assert_eq!(ordinary.items().len(), 0);
+        assert_eq!(ordinary.items().count(), 0);
         assert_eq!(families.len(), 1);
         let selectors = families[0]
             .methods

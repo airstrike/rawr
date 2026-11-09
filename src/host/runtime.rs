@@ -144,6 +144,10 @@ pub struct Builder {
     structural: BTreeMap<host::structural::Definition, Shared<dyn Callback>>,
     projections: BTreeMap<host::projection::Key, Shared<dyn Callback>>,
     attestations: BTreeMap<ImmutableString, Shared<dyn TypeAttestor>>,
+    /// The attestor every imported type of a held facade shares
+    /// (`bind_imported_type_attestations`).
+    #[cfg(feature = "rust-import")]
+    imported_attestor: Option<(Shared<dyn TypeAttestor>, host::image::Held)>,
 }
 
 /// One finished runtime implementation of an exact compiler facade.
@@ -159,6 +163,8 @@ pub struct Facade {
     structural: BTreeMap<host::structural::Definition, Shared<dyn Callback>>,
     projections: BTreeMap<host::projection::Key, Shared<dyn Callback>>,
     attestations: BTreeMap<ImmutableString, Shared<dyn TypeAttestor>>,
+    #[cfg(feature = "rust-import")]
+    imported_attestor: Option<(Shared<dyn TypeAttestor>, host::image::Held)>,
 }
 
 /// Runtime facade implementations available to one application launch.
@@ -379,16 +385,17 @@ impl Builder {
             structural: BTreeMap::new(),
             projections: BTreeMap::new(),
             attestations: BTreeMap::new(),
+            #[cfg(feature = "rust-import")]
+            imported_attestor: None,
         }
     }
 
-    /// The facade's items and its families' methods, each of which a
-    /// generated runner binds by its own selector.
+    /// The facade's items and its families' methods of the selector
+    /// `selector`, each of which a generated runner binds by its own
+    /// selector.
     #[cfg(feature = "rust-import")]
-    fn imported_items(&self) -> impl Iterator<Item = &host::item::Definition> {
-        self.definition
-            .items()
-            .chain(self.definition.family_methods())
+    fn imported_items(&self, selector: &[u8; 32]) -> Vec<&host::item::Definition> {
+        self.definition.selected(selector)
     }
 
     /// Return whether this exact reconstructed facade retains an imported
@@ -408,7 +415,7 @@ impl Builder {
     #[doc(hidden)]
     #[must_use]
     pub fn accepts_imported_at(&self, selector: &[u8; 32], path: &str) -> bool {
-        self.imported_items().any(|item| {
+        self.imported_items(selector).into_iter().any(|item| {
             item.imported_identity()
                 .is_some_and(|identity| identity.fingerprint() == *selector)
                 && (!self.bindings.contains_key(&item.fingerprint())
@@ -422,7 +429,18 @@ impl Builder {
     #[doc(hidden)]
     #[must_use]
     pub fn has_type_attestation(&self, path: &str) -> bool {
-        self.attestations.contains_key(path)
+        self.attestations.contains_key(path) || self.imported_attestation(path).is_some()
+    }
+
+    /// The attestor every imported type of a held facade shares, when one
+    /// is bound and the facade declares an imported type at `path`.
+    fn imported_attestation(&self, path: &str) -> Option<&Shared<dyn TypeAttestor>> {
+        #[cfg(feature = "rust-import")]
+        if let Some((attestor, held)) = &self.imported_attestor {
+            return held.declares_type(path).then_some(attestor);
+        }
+        let _ = path;
+        None
     }
 
     /// Bind one exact source-owned direct projection to a native conversion.
@@ -436,7 +454,10 @@ impl Builder {
     ) -> Result<&mut Self, Error> {
         let source = source.into();
         let target = target.into();
-        let Some(definition) = self.definition.types().find(|ty| ty.path() == source) else {
+        let Some(definition) = host::path::Path::parse(source.clone())
+            .ok()
+            .and_then(|path| self.definition.type_at(&path))
+        else {
             return Err(Error::UnknownProjection {
                 facade: self.definition.root().into(),
                 source,
@@ -480,7 +501,10 @@ impl Builder {
     ) -> Result<&mut Self, Error> {
         let source = source.into();
         let target = target.into();
-        let Some(definition) = self.definition.types().find(|ty| ty.path() == source) else {
+        let Some(definition) = host::path::Path::parse(source.clone())
+            .ok()
+            .and_then(|path| self.definition.type_at(&path))
+        else {
             return Err(Error::UnknownProjection {
                 facade: self.definition.root().into(),
                 source,
@@ -521,9 +545,10 @@ impl Builder {
         attestor: impl Fn(&Dynamic, &Instantiation<'_>) -> Option<Attested> + SendSync + 'static,
     ) -> Result<&mut Self, Error> {
         let path = path.into();
-        let is_generic = self.definition.types().any(|ty| {
-            ty.path() == path && ty.native_identity().is_some() && !ty.parameters().is_empty()
-        });
+        let is_generic = host::path::Path::parse(path.clone())
+            .ok()
+            .and_then(|qualified| self.definition.type_at(&qualified))
+            .is_some_and(|ty| ty.native_identity().is_some() && !ty.parameters().is_empty());
         if !is_generic {
             return Err(Error::UnknownGenericType {
                 facade: self.definition.root().into(),
@@ -548,16 +573,7 @@ impl Builder {
         selector: [u8; 32],
         attestor: impl Fn(&Dynamic, &Instantiation<'_>) -> Option<Attested> + SendSync + 'static,
     ) -> Result<ImportedTypeAttestation, Error> {
-        let paths = self
-            .definition
-            .types()
-            .filter(|ty| {
-                ty.identity()
-                    .imported()
-                    .is_some_and(|identity| identity.as_bytes() == &selector)
-            })
-            .map(|ty| ImmutableString::from(ty.path()))
-            .collect::<Vec<_>>();
+        let paths = self.definition.imported_paths(&selector);
         // A runner binds only the crate types its own bindings declare.
         assert!(
             !paths.is_empty(),
@@ -589,6 +605,12 @@ impl Builder {
         attestor: impl Fn(&Dynamic, &Instantiation<'_>) -> Option<Attested> + SendSync + 'static,
     ) -> Result<&mut Self, Error> {
         let attestor: Shared<dyn TypeAttestor> = Shared::new(attestor);
+        // A held facade's types are each an imported type: one attestor
+        // serves every path its image holds a type at, unbuilt.
+        if let Some(held) = self.definition.held() {
+            self.imported_attestor = Some((attestor, held.clone()));
+            return Ok(self);
+        }
         for ty in self.definition.types() {
             if ty.identity().imported().is_none() {
                 continue;
@@ -750,7 +772,8 @@ impl Builder {
             + 'static,
     ) -> Result<&mut Self, Error> {
         let definitions = self
-            .imported_items()
+            .imported_items(&selector)
+            .into_iter()
             .filter(|definition| {
                 definition
                     .imported_identity()
@@ -833,7 +856,8 @@ impl Builder {
         // The same Rust item under several paths (`TimeDelta::num_minutes`
         // and its alias `Duration::num_minutes`) is one binding.
         let definitions = self
-            .imported_items()
+            .imported_items(&selector)
+            .into_iter()
             .filter(|definition| {
                 definition
                     .imported_identity()
@@ -922,7 +946,22 @@ impl Builder {
             structural: self.structural,
             projections: self.projections,
             attestations: self.attestations,
+            #[cfg(feature = "rust-import")]
+            imported_attestor: self.imported_attestor,
         }
+    }
+}
+
+impl Facade {
+    /// The attestor of the facade's type at `path`.
+    fn attestation(&self, path: &str) -> Option<&Shared<dyn TypeAttestor>> {
+        let found = self.attestations.get(path);
+        #[cfg(feature = "rust-import")]
+        let found = found.or_else(|| {
+            let (attestor, held) = self.imported_attestor.as_ref()?;
+            held.declares_type(path).then_some(attestor)
+        });
+        found
     }
 }
 
@@ -1190,7 +1229,7 @@ impl Registry {
             .facades
             .get(owner.root())
             .filter(|facade| &facade.dependency == owner)
-            .and_then(|facade| facade.attestations.get(path))
+            .and_then(|facade| facade.attestation(path))
             .ok_or_else(|| type_ref::Error::MissingAttestation { ty: path.into() })?;
         let expected = Instantiation {
             ty,
@@ -1242,7 +1281,7 @@ impl Registry {
                     self.facades
                         .get(owner.root())
                         .filter(|facade| &facade.dependency == owner)
-                        .is_some_and(|facade| facade.attestations.contains_key(path))
+                        .is_some_and(|facade| facade.attestation(path).is_some())
                 });
                 if !available {
                     return Err(Error::MissingTypeAttestation {

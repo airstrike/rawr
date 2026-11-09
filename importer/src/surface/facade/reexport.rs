@@ -278,7 +278,7 @@ mod tests {
     /// and only a runner's plan has them.
     #[test]
     fn a_module_reached_at_three_paths_is_held_once_and_reexported_twice() {
-        let plan = Plan::decode(&crate::test_fixture::runner_reexported_facade_plan()).unwrap();
+        let plan = Plan::decode(&super::super::runner_reexported_fixture()).unwrap();
         let native = plan
             .facades()
             .find(|facade| facade.root() == "native")
@@ -302,7 +302,7 @@ mod tests {
             native.traits().collect::<Vec<_>>(),
             ["renderer", "renderer::wgpu", "wgpu"]
         );
-        let full = Plan::decode(&crate::test_fixture::runner_native_facade_plan()).unwrap();
+        let full = Plan::decode(&super::super::runner_native_fixture()).unwrap();
         assert!(full.facades().all(|facade| facade.reexports().len() == 0));
     }
 

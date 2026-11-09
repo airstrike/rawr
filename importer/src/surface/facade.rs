@@ -8,12 +8,13 @@ use crate::classify::representability::{self, Representability};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
 mod digest;
+pub mod image;
 mod reexport;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 57;
+const SCHEMA: u32 = 58;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -1962,6 +1963,14 @@ impl Plan {
         .map_err(|_| super::Error::Encoding)
     }
 
+    /// The image a generated runner embeds ([`image::Image`]): the
+    /// runner's plan ([`Plan::runner_bytes`]), with every table its
+    /// registry searches sorted and indexed, so a runner reads it where it
+    /// lies.
+    pub fn runner_image(&self) -> Result<Vec<u8>, super::Error> {
+        image::write(&Self::decode(&self.runner_bytes()?)?)
+    }
+
     /// Decode one generated plan under the active importer bounds.
     pub fn decode(bytes: &[u8]) -> Result<Self, super::Error> {
         let plan: Self = serde_json::from_slice(bytes).map_err(|_| super::Error::Encoding)?;
@@ -2426,6 +2435,29 @@ pub(crate) fn runner_reexported_fixture() -> Box<[u8]> {
 #[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) fn runner_foreign_fixture() -> Box<[u8]> {
     runner_fixture(true)
+}
+
+/// The runner's plan of the full plan `plan`, as JSON.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) fn runner_json_fixture(plan: &[u8]) -> Box<[u8]> {
+    Plan::decode(plan)
+        .and_then(|plan| plan.runner_bytes())
+        .expect("a runner fixture writes as a runner's plan")
+        .into_boxed_slice()
+}
+
+/// The image a runner embeds for `plan`, a full plan or, with
+/// `reexported`, one a runner's plan already holds as it re-exports.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) fn runner_image_fixture(plan: &[u8], reexported: bool) -> Box<[u8]> {
+    let plan = Plan::decode(plan).expect("a runner fixture decodes");
+    if reexported {
+        image::write(&plan)
+    } else {
+        plan.runner_image()
+    }
+    .expect("a runner fixture writes as an image")
+    .into_boxed_slice()
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]

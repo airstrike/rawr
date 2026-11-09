@@ -161,8 +161,8 @@ fn native_account_simultaneous_scopes_share_one_latch() {
     assert_eq!(native.first_refusal(), Some(Refusal { axis: Axis::Bytes }));
 }
 
-fn plan() -> Box<[u8]> {
-    rawr_import::test_fixture::runner_native_facade_plan()
+fn plan() -> &'static [u8] {
+    Box::leak(rawr_import::test_fixture::runner_native_facade_plan())
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn retained_install_authenticates_structural_rows() {
     let carrier = carrier_entries(&[([31; 32], [32; 32], 0)]);
     let mut native = Native::transform(carrier);
     let mut engine = Engine::new();
-    let definitions = runner::install_retained(&mut engine, &plan(), &mut native).unwrap();
+    let definitions = runner::install_retained(&mut engine, plan(), &mut native).unwrap();
     let row = runner::StructuralRow::new(
         "native",
         "",
@@ -196,7 +196,7 @@ fn runtime_fixture() -> (
     let carrier = carrier_entries(&[([31; 32], [32; 32], 0)]);
     let mut native = Native::transform(carrier);
     let mut engine = Engine::new();
-    let definitions = runner::install_retained(&mut engine, &plan(), &mut native).unwrap();
+    let definitions = runner::install_retained(&mut engine, plan(), &mut native).unwrap();
     engine.imported_native = Some(native);
     (
         engine,
@@ -240,8 +240,8 @@ fn bind_runtime(
 #[test]
 fn a_path_through_a_reexported_module_finds_what_the_module_holds() {
     let mut engine = Engine::new();
-    let plan = rawr_import::test_fixture::runner_reexported_facade_plan();
-    runner::install(&mut engine, &plan).unwrap();
+    let plan = Box::leak(rawr_import::test_fixture::runner_reexported_facade_plan());
+    runner::install(&mut engine, plan).unwrap();
     let registry = &engine.host_registry;
     let Some(host::Entry::Type(source)) = registry.entry("native::wgpu::Source") else {
         panic!("`wgpu::Source` is the re-exported module's type");
@@ -286,8 +286,8 @@ fn a_path_through_a_reexported_module_finds_what_the_module_holds() {
 #[test]
 fn installed_definitions_come_after_the_facades_whose_types_they_name() {
     let mut engine = Engine::new();
-    let plan = rawr_import::test_fixture::runner_foreign_facade_plan();
-    let definitions = runner::install(&mut engine, &plan).unwrap();
+    let plan = Box::leak(rawr_import::test_fixture::runner_foreign_facade_plan());
+    let definitions = runner::install(&mut engine, plan).unwrap();
     let mut registry = host::runtime::Registry::new();
     for definition in definitions.iter() {
         registry

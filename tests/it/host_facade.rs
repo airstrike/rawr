@@ -8,7 +8,7 @@ fn facade_finish_produces_order_independent_structural_proofs() {
 
     assert_eq!(source_order.fingerprint(), reverse_order.fingerprint());
     assert_eq!(source_order.types().len(), 2);
-    assert_eq!(source_order.items().len(), 2);
+    assert_eq!(source_order.items().count(), 2);
 }
 
 #[test]
