@@ -262,6 +262,21 @@ pub struct FieldSet {
     public: Box<[Field]>,
     public_complete: bool,
     non_exhaustive: bool,
+    /// A struct's layout, as rustc gives it without generics but
+    /// lifetimes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layout: Option<Layout>,
+}
+
+/// rustc's layout of a struct, as far as a cycle of body statics of it
+/// needs (D865): the offsets of its pointers' address words that may hold
+/// a static's address, outside any enum variant or union, and whether
+/// another is inside one.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub struct Layout {
+    size: u64,
+    pointers: Box<[u64]>,
+    varied: bool,
 }
 
 /// One enum variant and optional explicit discriminant.
@@ -855,6 +870,9 @@ impl FieldSet {
         retained.slice(&self.public)?;
         for field in &self.public {
             field.retain(retained)?;
+        }
+        if let Some(layout) = &self.layout {
+            retained.slice(&layout.pointers)?;
         }
         Some(())
     }
@@ -1519,7 +1537,20 @@ impl FieldSet {
             public,
             public_complete,
             non_exhaustive,
+            layout: None,
         }
+    }
+
+    /// The field set of a struct rustc lays out as `layout`.
+    pub(crate) fn with_layout(mut self, layout: Option<Layout>) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    /// The struct's layout, when rustc gives one without generics but
+    /// lifetimes.
+    pub const fn layout(&self) -> Option<&Layout> {
+        self.layout.as_ref()
     }
 
     /// Exact record, tuple, or unit constructor grammar.
@@ -1540,6 +1571,32 @@ impl FieldSet {
     /// Whether Rust forbids external exhaustive construction.
     pub const fn non_exhaustive(&self) -> bool {
         self.non_exhaustive
+    }
+}
+
+impl Layout {
+    pub(crate) const fn new(size: u64, pointers: Box<[u64]>, varied: bool) -> Self {
+        Self {
+            size,
+            pointers,
+            varied,
+        }
+    }
+
+    /// The struct's size in bytes.
+    pub const fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// The offsets of its pointer words outside any enum variant or union.
+    pub const fn pointers(&self) -> &[u64] {
+        &self.pointers
+    }
+
+    /// Whether a pointer that may hold a static's address is inside an
+    /// enum variant or a union.
+    pub const fn varied(&self) -> bool {
+        self.varied
     }
 }
 

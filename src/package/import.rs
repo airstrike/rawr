@@ -2265,6 +2265,7 @@ fn build(
             Box::default(),
             associated,
             shape,
+            None,
             allocation,
         ) {
             Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
@@ -2445,13 +2446,19 @@ fn build(
             std::mem::size_of::<host::type_def::Definition>().checked_add(selector)
         });
         allocation.retain_checked(Some(1), definition_bytes)?;
-        builder.imported_type(
+        let layout = match entry.outcome.representability() {
+            Representability::Struct(plan) => plan.layout().map(runner::layout),
+            _ => None,
+        };
+        builder.imported_opaque_type(
             entry.relative.as_ref(),
             imported_identity(entry.definition),
             &implemented,
             parameters,
             defaults,
+            Box::default(),
             shape,
+            layout,
             allocation,
         )?;
     }

@@ -630,6 +630,10 @@ struct TypeBody {
     /// Opaque`): a call reads `P::State` from the `P` it fills.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     associated: Box<[(representability::signature::Associated, u32)]>,
+    /// rustc's layout of a struct, for a cycle of body statics of it
+    /// (D865).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layout: Option<crate::api::model::Layout>,
     shape: Shape,
 }
 
@@ -1666,6 +1670,7 @@ impl Plan {
                                 iterator,
                                 error: false,
                                 opaque: true,
+                                layout: None,
                                 shape: Shape::Struct {
                                     form: Form::Record,
                                     constructor: None,
@@ -2195,6 +2200,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
                 error: false,
                 opaque: false,
                 associated: Box::default(),
+                layout: None,
                 shape: Shape::Struct {
                     form: Form::Unit,
                     constructor: None,
@@ -2281,6 +2287,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                     error: false,
                     opaque: false,
                     associated: Box::default(),
+                    layout: None,
                     shape: Shape::Struct {
                         form: Form::Unit,
                         constructor: None,
@@ -2333,6 +2340,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
             error: false,
             opaque: false,
             associated: Box::default(),
+            layout: None,
             shape: Shape::Struct {
                 form: Form::Unit,
                 constructor: None,
@@ -2487,6 +2495,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
                     iterator: false,
                     error: false,
                     opaque: false,
+                    layout: None,
                     shape: Shape::Struct {
                         form: Form::Unit,
                         constructible: constructor.is_some(),
@@ -3616,6 +3625,11 @@ impl TypeDefinition {
     pub fn shape(&self) -> &Shape {
         &self.body.shape
     }
+    /// rustc's layout of a struct, when it has one without generics but
+    /// lifetimes.
+    pub fn layout(&self) -> Option<&crate::api::model::Layout> {
+        self.body.layout.as_ref()
+    }
 }
 
 impl Shape {
@@ -3956,6 +3970,10 @@ fn written_type_definition(
         Representability::Enum(plan) => plan.error(),
         _ => false,
     };
+    let layout = match outcome.representability() {
+        Representability::Struct(plan) => plan.layout().cloned(),
+        _ => None,
+    };
     let given = match outcome.representability() {
         Representability::Struct(plan) => plan.given(),
         Representability::Enum(plan) => plan.given(),
@@ -4060,6 +4078,7 @@ fn written_type_definition(
             error,
             opaque: false,
             associated: Box::default(),
+            layout,
             shape,
         },
     )))

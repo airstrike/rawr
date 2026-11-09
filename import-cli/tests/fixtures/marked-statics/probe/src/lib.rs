@@ -1,9 +1,11 @@
 //! tracing's callsite shape, small: a callsite static built with a const fn
 //! from a metadata static, which registers by its `'static` address the
 //! first time it is asked for its interest, as tracing-core's
-//! `DefaultCallsite` does. `counted!` declares the two statics apart;
-//! `event!` declares them as tracing's `event!` does, the metadata pointing
-//! back at the callsite, a cycle rawr refuses.
+//! `DefaultCallsite` does. The metadata points back at its callsite as a
+//! `&dyn` trait object, as tracing's `Identifier` does. `counted!` declares
+//! the two statics apart; `event!` declares them as tracing's `event!`
+//! does, a cycle. `Note` keeps its callsite in an `Option`, a cycle rawr
+//! refuses.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
@@ -13,26 +15,49 @@ static REGISTRY: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 const UNREGISTERED: u8 = 0xFF;
 
+/// What metadata points back at: a callsite, or nowhere.
+trait Site: Sync {}
+
+impl Site for Callsite {}
+
+struct Nowhere;
+
+impl Site for Nowhere {}
+
 pub struct Metadata {
     name: &'static str,
-    callsite: Option<&'static Callsite>,
+    callsite: &'static dyn Site,
 }
 
 impl Metadata {
     /// Metadata that points back at its callsite, as tracing's does.
     pub const fn new(name: &'static str, callsite: &'static Callsite) -> Self {
-        Self {
-            name,
-            callsite: Some(callsite),
-        }
+        Self { name, callsite }
     }
 
     /// Metadata that names no callsite.
     pub const fn named(name: &'static str) -> Self {
         Self {
             name,
-            callsite: None,
+            callsite: &Nowhere,
         }
+    }
+}
+
+/// A note of a callsite, which may name none.
+pub struct Note {
+    callsite: Option<&'static Callsite>,
+}
+
+impl Note {
+    pub const fn new(callsite: &'static Callsite) -> Self {
+        Self {
+            callsite: Some(callsite),
+        }
+    }
+
+    pub fn noted(&self) -> bool {
+        self.callsite.is_some()
     }
 }
 
@@ -82,10 +107,7 @@ pub fn describe(callsite: &'static Callsite) -> String {
     let index = registry
         .iter()
         .position(|registered| *registered == address);
-    let back = callsite
-        .meta
-        .callsite
-        .is_some_and(|back| std::ptr::eq(back, callsite));
+    let back = std::ptr::addr_eq(callsite.meta.callsite, callsite);
     match index {
         Some(index) => format!(
             "{} registered {} of {} back {back}",
@@ -115,8 +137,6 @@ macro_rules! counted {
 
 /// An event at its call site: tracing's `event!`, which names its callsite
 /// static `__CALLSITE` at every call, and whose metadata points back at it.
-/// rawr refuses the cycle: the callsite's place would be referenced before
-/// it is written.
 #[macro_export]
 macro_rules! event {
     ($name:expr) => {{

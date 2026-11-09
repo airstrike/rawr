@@ -14,7 +14,7 @@ std::thread_local! {
 
 /// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 /// `cargo/toolchain.rs`'s `SUPPORTED_PROBE_PROTOCOL` are the same number.
-pub(crate) const SCHEMA: u32 = 60;
+pub(crate) const SCHEMA: u32 = 61;
 
 #[cfg(all(test, feature = "rustc-driver"))]
 #[test]
@@ -308,6 +308,7 @@ pub(crate) enum Shape {
         fields_complete: bool,
         non_exhaustive: bool,
         generics: Generics,
+        layout: Default<Layout>,
     },
     Union {
         field_form: FieldForm,
@@ -380,6 +381,18 @@ pub(crate) struct Field {
     pub(crate) visibility: Visibility,
     pub(crate) ty: Type,
     pub(crate) span: Span,
+}
+
+/// rustc's layout of a struct, as far as a cycle of body statics of it
+/// needs (D865): the offsets of its pointers' address words that may hold
+/// a static's address, outside any enum variant or union, and whether
+/// another is inside one.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Layout {
+    pub(crate) size: u64,
+    pub(crate) pointers: Vec<u64>,
+    pub(crate) varied: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]

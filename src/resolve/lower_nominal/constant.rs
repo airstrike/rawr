@@ -258,6 +258,11 @@ impl<'a> Parser<'a> {
             self.next();
         }
         let sign = if negative { "-" } else { "" };
+        // `::core::line!()`: a path from the crate root, as an expansion's
+        // `$crate` writes one.
+        if !negative && matches!(self.peek(), Token::DoubleColon) {
+            self.next();
+        }
         let text = match self.next() {
             // `$crate::__macro_support::line!()`: std's macro by a path.
             (Token::Identifier(first), position)
