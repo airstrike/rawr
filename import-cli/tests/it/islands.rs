@@ -796,8 +796,15 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// `theme::text::SIZE`, and `theme::text::base` and
 /// `theme::container::base`, whose `&Theme` is the marked theme, passed to
 /// the crate's `style` of a `Label<Theme>`, each its own instance, as each
-/// Rust function is its own type. `rawr check` passes as
-/// `cargo check` does, and `rawr run` prints what `cargo run` prints.
+/// Rust function is its own type. A marked `home::view` native code lends
+/// the theme to gives it on by `&Theme`, as inboard's `inbox::view(..,
+/// theme)` does: to `theme::text::base`, a native `style::button`, the
+/// crate's generic `Label::<Theme>::draw` and `ui::base`, each given native
+/// code's own reference, which no clone or copy stands for, and a marked
+/// `badge<'a>` gives it to a native function whose `Badge<'a, Theme>`
+/// keeps it borrowed as long as native code holds the badge (#1484). `rawr
+/// check` passes as `cargo check` does, and `rawr run` prints what `cargo
+/// run` prints.
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -821,6 +828,14 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         printed.contains(
             "hello at 14 with code at 12\nsettings Settings { text_size: 14.0, code_size: 12.0 }\n"
         ),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("view 21 text styled 21 127 base light\n"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("home badge on dark\nlent in place true\n"),
         "{printed}"
     );
     // The one clone is `theme.clone()` in `main`.

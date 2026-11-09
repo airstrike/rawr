@@ -75,6 +75,26 @@ pub fn base<B: Base>(base: &B) -> String {
     format!("base {}", base.name())
 }
 
+/// A widget that keeps the app's theme borrowed, as an iced `Element<'a>`
+/// keeps what its view borrows.
+pub struct Badge<'a, T> {
+    text: String,
+    theme: &'a T,
+}
+
+pub fn badge<'a, T: Base>(text: &str, theme: &'a T) -> Badge<'a, T> {
+    Badge {
+        text: text.to_owned(),
+        theme,
+    }
+}
+
+impl<T: Base> Badge<'_, T> {
+    pub fn draw(&self) -> String {
+        format!("{} badge on {}", self.text, self.theme.name())
+    }
+}
+
 /// A widget styled by a function of the app's theme, as an iced widget's
 /// `style`.
 pub struct Label<'a, T> {

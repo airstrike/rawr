@@ -17,3 +17,28 @@ pub fn container() -> ui::Label<'static, theme::Theme> {
 pub fn label() -> ui::Label<'static, theme::Theme> {
     ui::label("text").style(theme::text::base)
 }
+
+/// A view native code lends the theme to, as inboard's `home::view` gives
+/// it on to `inbox::view(.., theme)`: a native style function, a crate
+/// widget's `draw` and a native function, each taking `&Theme`, are given
+/// the lent theme itself.
+pub fn view(theme: &theme::Theme) -> String {
+    format!(
+        "{} {} {} {}",
+        theme::text::base(theme),
+        label().draw(theme),
+        crate::style::button(theme),
+        ui::base(theme)
+    )
+}
+
+/// A badge that keeps the lent theme borrowed as long as native code holds
+/// it, as inboard's `view<'a>` gives `inbox::view(.., theme)`'s element.
+pub fn badge<'a>(theme: &'a theme::Theme) -> ui::Badge<'a, theme::Theme> {
+    crate::style::badge(theme)
+}
+
+/// Where the theme native code lends is, as native code reads it.
+pub fn place(theme: &theme::Theme) -> usize {
+    crate::style::place(theme)
+}

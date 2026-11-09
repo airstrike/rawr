@@ -48,6 +48,10 @@ pub(crate) const HANDLE: u8 = 22;
 /// address and length of the program's own text, pinned with the program
 /// value till it is next taken `&mut` (`island::Held::pins`).
 pub(crate) const PINNED: u8 = 23;
+/// A marked value native code lends whole, beside its parts (#1484): the
+/// whole's index among the call's lent values, then the value. Native code
+/// the call gives the value to by reference is given that lend.
+pub(crate) const WHOLE: u8 = 24;
 
 /// The first byte of a call's header: the function is a member of the
 /// type before its last segment.
@@ -489,6 +493,15 @@ impl Model {
                         .get(index)
                         .ok_or("a lent value the call has no place for")?,
                 )
+            }
+            WHOLE => {
+                let index = reader.count()?;
+                let whole = *lent
+                    .get(index)
+                    .ok_or("a lent value the call has no place for")?;
+                let value = self.island_read(types, lent, given, part, reader, depth)?;
+                crate::island::lent_whole(&value, whole);
+                value
             }
             NATIVE => {
                 let index = reader.count()?;

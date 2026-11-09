@@ -55,5 +55,13 @@ fn main() {
     println!("{}", home::heading());
     println!("{}", home::container().draw(&theme));
     println!("{}", home::label().draw(&dark));
+    println!("view {}", home::view(&theme));
+    println!("view {}", home::view(&dark));
+    let badge = home::badge(&dark);
+    println!("{}", badge.draw());
+    println!(
+        "lent in place {}",
+        home::place(&theme) == std::ptr::from_ref(&theme).addr()
+    );
     println!("clones {}", theme::clones());
 }
