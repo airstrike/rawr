@@ -327,3 +327,32 @@ pub fn wizard_label(state: &State, catalog: wizard::View<'_>, theme: &crate::The
         None => "closed".to_owned(),
     }
 }
+
+/// A notification's id, as inboard's `inbox::Id`, which native code makes
+/// from any text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Id(String);
+
+impl Id {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+}
+
+/// The ids read, as inboard's `inbox::State`, which native code marks read
+/// from any iterable of ids, one that borrows its locals too.
+#[derive(Debug, Default)]
+pub struct Read {
+    ids: Vec<Id>,
+}
+
+impl Read {
+    pub fn mark_all_read(&mut self, ids: impl IntoIterator<Item = Id>) {
+        self.ids.extend(ids);
+    }
+
+    pub fn label(&self) -> String {
+        let ids = self.ids.iter().map(|id| id.0.as_str()).collect::<Vec<_>>();
+        ids.join(" ")
+    }
+}

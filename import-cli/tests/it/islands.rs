@@ -1550,7 +1550,8 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
              wizard closed at step 6\nbuilt 2 drew 10 no wizard over []\nredrew 16\n\
              banner banner Some(Inbox(Read(3))) top tiles 1.2\n\
              pending 4 top label tiles 1.2\ntitled home label mail\nwizard view at 6\nwizard label dark\n\
-             wizard closed at step 6\nscreen 0 shows wizard\nmoved shows wizard\n\
+             wizard closed at step 6\nread one two three four\n\
+             screen 0 shows wizard\nmoved shows wizard\n\
              screen 1 shows wizard\nmoved shows wizard\n"
             ),
         "{printed}"
@@ -1673,6 +1674,56 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     fs::write(root.join("stop"), "").unwrap();
     let status = run.wait();
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+}
+
+/// Native code calls marked functions that take an argument-position
+/// `impl Trait`, as inboard's `inbox.mark_all_read(ids)`: an `impl
+/// IntoIterator<Item = Id>` given a `Vec` and an iterator that borrows a
+/// local, and an `impl Into<String>` given a `String` and a `&String`. The
+/// program builds, as `cargo check` does, and `rawr run` prints what
+/// `cargo run` prints.
+#[test]
+fn a_native_main_gives_marked_functions_any_value_of_an_impl_trait() {
+    const HOME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-home");
+    let root = crate::support::scratch().join("islands-home-impl");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(HOME), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("ISLANDS_STOP")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert!(printed.contains("\nread one two three four\n"), "{printed}");
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(&root, &[]);
+    for expected in printed.lines() {
+        let line = run.until(|_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
 /// A literal edited in a marked screen's private function swaps into the

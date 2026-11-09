@@ -89,7 +89,7 @@ impl Unchecked {
     pub fn into_report(self) -> diagnostic::Report {
         match self {
             Self::Report(report) => report,
-            Self::Copy { failure, source } => framework(failure, source),
+            Self::Copy { failure, source } => copied(failure, source),
         }
     }
 
@@ -1205,6 +1205,40 @@ fn import(error: crate::Error, source: diagnostic::Source) -> diagnostic::Report
     match error {
         crate::Error::Rawr(error) => crate::report::package(&error, source),
         error => framework(error, source),
+    }
+}
+
+/// A failed build of rawr's copy of the program, reported at the marked
+/// function's signature when rustc's error is in the code rawr generated
+/// for native code to call it, and else against `source`.
+fn copied(
+    failure: rawr_import::location::copy::Failure,
+    source: diagnostic::Source,
+) -> diagnostic::Report {
+    let Some(trampoline) = failure.trampoline() else {
+        return framework(failure, source);
+    };
+    let report = (|| {
+        let marked = diagnostic::Source::new(
+            trampoline.file().to_string_lossy().into_owned(),
+            trampoline.text(),
+        )
+        .ok()?;
+        let (line, column) = trampoline.place();
+        let line = u16::try_from(line).ok()?;
+        let start = u16::try_from(column).ok()?;
+        let end = u16::try_from(column + trampoline.width()).ok()?;
+        let span = rawr::Span::new(
+            rawr::Position::new(line, start),
+            rawr::Position::new(line, end),
+        );
+        diagnostic::Report::error(diagnostic::code::FRAMEWORK_NATIVE, failure.to_string())
+            .primary(marked, span, None)
+            .ok()
+    })();
+    match report {
+        Some(report) => report.finish(),
+        None => framework(failure, source),
     }
 }
 

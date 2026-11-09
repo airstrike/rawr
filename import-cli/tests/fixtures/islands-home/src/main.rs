@@ -153,6 +153,16 @@ fn main() {
         home::wizard_label(&workspace.home, catalog, &workspace.theme)
     );
     workspace.home.close_wizard();
+    // Ids marked read from a `Vec` and from an iterator over a local's
+    // names, each made from text by value and by reference.
+    let mut read = home::Read::default();
+    read.mark_all_read(vec![
+        home::Id::new("one"),
+        home::Id::new(format!("t{}", "wo")),
+    ]);
+    let names = ["three".to_owned(), "four".to_owned()];
+    read.mark_all_read(names.iter().map(home::Id::new));
+    println!("read {}", read.label());
     // Screens whose elements native code held, then moved and dropped.
     for round in 0..2 {
         let screen = home::State::new();
