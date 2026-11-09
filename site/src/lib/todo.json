@@ -4067,7 +4067,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Two real apps run under rawr run (2026-11-08): the elevato game (after #1405, #1406, #1421, #1432) and icedxdy's browser example (after #1403, #1404, #1422, #1435, #1437, #1442). A 1016-package app passes rawr check; its run is paused. Next: a native root naming marked types (#1249) and the build.rs step for in-process reload (#1425, #1426)",
+          "note": "Three real apps run under rawr run (2026-11-08): the inboard app, a workspace of 1016 packages (after #1461, #1462, #1463, #1464), the elevato game and icedxdy's browser example. Next: a native root naming marked types (#1249) and the build.rs step for in-process reload (#1425, #1426)",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
