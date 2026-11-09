@@ -55,6 +55,45 @@ pub fn caption<'a>(label: &'a str) -> ui::Text<'a> {
     ui::text(label).size(12)
 }
 
+/// A panel native code builds through a chain of marked methods and keeps
+/// between calls, as inboard's `Sidebar<'a, Message>`: it holds native
+/// code's own `&'a str` and the elements native code gives it.
+pub struct Panel<'a> {
+    title: &'a str,
+    items: Vec<Element<'a, Message>>,
+}
+
+impl<'a> Panel<'a> {
+    pub fn new(title: &'a str) -> Self {
+        Self {
+            title,
+            items: Vec::new(),
+        }
+    }
+
+    pub fn item(mut self, item: Element<'a, Message>) -> Self {
+        self.items.push(item);
+        self
+    }
+
+    pub fn push(&mut self, item: Element<'a, Message>) {
+        self.items.push(item);
+    }
+
+    pub fn title(&self) -> &'a str {
+        self.title
+    }
+
+    pub fn draw(&self, theme: &theme::Theme) -> String {
+        let items = self
+            .items
+            .iter()
+            .map(|item| item.draw(theme))
+            .collect::<Vec<_>>();
+        format!("{} [{}]", self.title, items.join(", "))
+    }
+}
+
 /// What the screen's elements give, as inboard's `home::Message`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {

@@ -1330,32 +1330,32 @@ impl<G: 'static + for<'x> Gives<'x, I>, I: Inputs> Regional for Given<G, I> {
 }
 
 thread_local! {
-    /// The `&'a str`s native code gives the marked calls running on this
-    /// thread at a lifetime their results name, innermost last: the
-    /// program's copy of each and where native code's own text is.
-    static NATIVE_TEXTS: RefCell<Vec<(crate::ImmutableString, *const str)>> =
+    /// The `&str`s native code gives the marked calls running on this
+    /// thread, innermost last: the program's copy of each, and the address
+    /// and length of native code's own text.
+    static NATIVE_TEXTS: RefCell<Vec<(crate::ImmutableString, usize, usize)>> =
         const { RefCell::new(Vec::new()) };
 }
 
-/// `text` is the program's copy of native code's `native`, given to a
-/// marked call whose result may borrow it: a crate call the program makes
-/// that borrows `text` for its output borrows `native` instead, so the
-/// result borrows what native code lent, as Rust's would. Kept till the
-/// [`NativeTexts`] the call opened drops.
+/// `text` is the program's copy of native code's text at `address`, of
+/// `length` bytes, given to a marked call: a crate call the program makes
+/// that borrows `text` for its output borrows native code's text instead,
+/// so the result borrows what native code gave, as Rust's would. Kept till
+/// the [`NativeTexts`] the call opened drops.
 #[cfg(feature = "rust-import")]
-pub(crate) fn keep_native_text(text: crate::ImmutableString, native: *const str) {
-    NATIVE_TEXTS.with_borrow_mut(|texts| texts.push((text, native)));
+pub(crate) fn keep_native_text(text: crate::ImmutableString, address: usize, length: usize) {
+    NATIVE_TEXTS.with_borrow_mut(|texts| texts.push((text, address, length)));
 }
 
-/// Native code's own text that `text` is the program's copy of, while the
-/// call it was given to runs.
-fn native_text(text: &crate::ImmutableString) -> Option<*const str> {
+/// The address and length of native code's own text that `text` is the
+/// program's copy of, while the call it was given to runs.
+pub(crate) fn native_text(text: &crate::ImmutableString) -> Option<(usize, usize)> {
     NATIVE_TEXTS.with_borrow(|texts| {
         texts
             .iter()
             .rev()
-            .find(|(copy, _)| copy.ptr_eq(text))
-            .map(|&(_, native)| native)
+            .find(|(copy, ..)| copy.ptr_eq(text))
+            .map(|&(_, address, length)| (address, length))
     })
 }
 
@@ -1633,11 +1633,15 @@ impl Pins {
     /// own text when `text` is the program's copy of one a marked call
     /// keeps ([`keep_native_text`]): nothing is pinned for it.
     pub fn pin(&self, text: crate::ImmutableString) -> &str {
-        if let Some(native) = native_text(&text) {
-            // SAFETY: rustc ties the marked call's result to native code's
-            // `&'a str`, so what the program makes that borrows it outlives
-            // the call only in that result, which native code holds no
-            // longer than its text. The call is still running.
+        if let Some((address, length)) = native_text(&text) {
+            let native = std::ptr::slice_from_raw_parts(
+                std::ptr::with_exposed_provenance::<u8>(address),
+                length,
+            ) as *const str;
+            // SAFETY: native code's `&str`, which the call it was given to
+            // borrows while it runs. Rustc lets what the program makes that
+            // borrows it outlive the call only in the call's result, which
+            // native code holds no longer than its text.
             return unsafe { &*native };
         }
         let mut pinned = self

@@ -687,7 +687,11 @@ impl<'a> Generator<'a> {
         let Some(last) = path.segments.last() else {
             return false;
         };
-        if !last.arguments.is_empty() {
+        if last
+            .arguments
+            .iter()
+            .any(|argument| matches!(argument, type_ref::Argument::Type(_)))
+        {
             return false;
         }
         match (last.name.text.as_str(), owner) {
@@ -807,13 +811,19 @@ impl<'a> Generator<'a> {
                     Container::Box => Held::Boxed(inner),
                 })
             }
+            // A `&'a str` field, as `title` of inboard's `Header<'a,
+            // Message>`: native code's own text (#1557).
+            type_ref::Type::Reference {
+                mutable: false,
+                target,
+                ..
+            } if slice(file.text, target.span()).trim() == "str" => Ok(Held::Text),
             _ => {
                 let Err(reason) = crossed else {
                     return Ok(Held::Wire);
                 };
-                let written = slice(file.text, ty.span());
-                if self.lendable(file, ty, owner) && static_lifetimes(written) == written {
-                    Ok(Held::Native(written))
+                if self.lendable(file, ty, owner) {
+                    Ok(Held::Native(slice(file.text, ty.span())))
                 } else {
                     Err(reason)
                 }
@@ -840,13 +850,16 @@ impl<'a> Generator<'a> {
                     return Err("an empty path".into());
                 };
                 let name = last.name.text.as_str();
+                // A marked type's lifetimes are its fields' own (#1557).
+                let marked = self.marked(file, path).is_some();
                 let arguments = last
                     .arguments
                     .iter()
-                    .map(|argument| match argument {
-                        type_ref::Argument::Type(ty) => Ok(ty),
+                    .filter_map(|argument| match argument {
+                        type_ref::Argument::Type(ty) => Some(Ok(ty)),
+                        type_ref::Argument::Lifetime(_) if marked => None,
                         type_ref::Argument::Lifetime(_) => {
-                            Err(format!("`{name}` with a lifetime can't cross yet"))
+                            Some(Err(format!("`{name}` with a lifetime can't cross yet")))
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1199,9 +1212,20 @@ impl<'a> Generator<'a> {
         };
         // An elided lifetime is the receiver's, as rustc elides it; a named
         // one is the receiver's only when `&'a self` names it.
+        // So is a text at the lifetime of the impl's own type, as `title(
+        // &self) -> &'a str` of a `Panel<'a>`: native code's own text, which
+        // the receiver holds (#1557).
+        let text = matches!(target.as_ref(), type_ref::Type::Path(path)
+            if path.segments.len() == 1 && path.segments[0].name.text == "str");
         if let Some(lifetime) = lifetime
             && lifetime.name.text != "_"
             && !slice(file.text, *receiver).contains(&format!("'{}", lifetime.name.text))
+            && (!text
+                || function
+                    .lifetimes
+                    .params
+                    .iter()
+                    .any(|declared| declared.text == lifetime.name.text))
         {
             return None;
         }
@@ -2349,10 +2373,11 @@ impl<'a> Generator<'a> {
             // A result whose type names a lifetime comes back at `'static`,
             // as the interpreter moves it, and is the signature's type: an
             // invariant one, as iced's `Text<'a>`, doesn't coerce.
+            let lasting = static_lifetimes(output);
             let _ = writeln!(
                 text,
                 "    let __value: {output} = {{\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
-                 let __value = __reply.read(|input| {read});\n        \
+                 let __value: {lasting} = __reply.read(|input| {read});\n        \
                  // SAFETY: the type is the signature's but for its lifetimes, and what the\n        \
                  // value borrows lives as long as they say: native code's own text and\n        \
                  // lends, or what the anchor keeps.\n        \
@@ -2526,7 +2551,10 @@ impl<'a> Generator<'a> {
                 );
             }
         }
-        Self::parts(&declared.name.text, bodies)
+        Self::parts(
+            &with_lifetimes(&declared.name.text, &declared.lifetimes),
+            bodies,
+        )
     }
 
     /// [`Generator::parts`] of the enum `declared` at `path`; `take` reads
@@ -2593,7 +2621,10 @@ impl<'a> Generator<'a> {
              (variant, count) => input.unknown({path:?}, variant, count),\n                \
              }};\n            }}\n        }}"
         );
-        Self::parts(&declared.name.text, bodies)
+        Self::parts(
+            &with_lifetimes(&declared.name.text, &declared.lifetimes),
+            bodies,
+        )
     }
 
     /// Whether the shadow tells the runner when a value of the marked
@@ -2641,6 +2672,7 @@ impl<'a> Generator<'a> {
 
     fn cross_struct(&self, file: &Source<'_>, declared: &item::Struct) -> String {
         let name = declared.name.text.as_str();
+        let ty = with_lifetimes(name, &declared.lifetimes);
         let path = path_of(file.modules, name);
         let island = format!("crate::{MODULE}");
         let count = declared.fields.len();
@@ -2671,21 +2703,22 @@ impl<'a> Generator<'a> {
             item::StructForm::Unit => take.push_str(name),
         }
         let mut text = format!(
-            "impl {island}::Put for {name} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
+            "impl {island}::Put for {ty} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
              out.structure({path:?}, {count});\n{put}    }}\n}}\n\
-             impl {island}::Take for {name} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
+             impl {island}::Take for {ty} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
              #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
              input.structure({path:?}, {count});\n        {take}\n    }}\n}}\n"
         );
         if self.holding.contains(&path) {
             text.push_str(&self.struct_parts(file, declared, &path));
         }
-        text.push_str(&self.mirror_impl(name, &path));
+        text.push_str(&self.mirror_impl(&ty, &path));
         text
     }
 
     fn cross_enum(&self, file: &Source<'_>, declared: &item::Enum) -> String {
         let name = declared.name.text.as_str();
+        let ty = with_lifetimes(name, &declared.lifetimes);
         let path = path_of(file.modules, name);
         let island = format!("crate::{MODULE}");
         let mut put = String::new();
@@ -2712,16 +2745,16 @@ impl<'a> Generator<'a> {
             let _ = writeln!(take, "            ({variant_name:?}, {count}) => {built},");
         }
         let mut text = format!(
-            "impl {island}::Put for {name} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
+            "impl {island}::Put for {ty} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
              match self {{\n{put}        }}\n    }}\n}}\n\
-             impl {island}::Take for {name} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
+             impl {island}::Take for {ty} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
              #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
              match input.variant({path:?}) {{\n{take}            (variant, count) => input.unknown({path:?}, variant, count),\n        }}\n    }}\n}}\n"
         );
         if self.holding.contains(&path) {
             text.push_str(&self.enum_parts(file, declared, &path, &take));
         }
-        text.push_str(&self.mirror_impl(name, &path));
+        text.push_str(&self.mirror_impl(&ty, &path));
         text
     }
 
@@ -2740,6 +2773,16 @@ impl<'a> Generator<'a> {
              {give}\n    }}\n}}\n"
         )
     }
+}
+
+/// The marked type `name` as an impl names it, each of its `lifetimes`
+/// `'_`, as `Panel<'_>` (#1557).
+fn with_lifetimes(name: &str, lifetimes: &item::Lifetimes) -> String {
+    if lifetimes.params.is_empty() {
+        return name.to_owned();
+    }
+    let unnamed = vec!["'_"; lifetimes.params.len()];
+    format!("{name}<{}>", unnamed.join(", "))
 }
 
 /// The pattern of `variant` of `Self` whose payload `parts` bind, or the
@@ -2929,8 +2972,13 @@ enum Held<'t> {
     /// A marked type that holds native parts, by its own `Parts` impl.
     Marked,
     /// A native part, of the type written as this text: lent where it is,
-    /// moved as itself.
+    /// moved as itself. One whose type names a lifetime moves at
+    /// `'static`, as the interpreter keeps it, and comes back at the
+    /// marked type's own.
     Native(&'t str),
+    /// A `&str`: native code's own text, copied with where it is, which
+    /// comes back where the program's is its copy (`In::kept_text`).
+    Text,
     /// An `Option` of what the inner one holds.
     Option(Box<Held<'t>>),
     /// A `Vec` of what the inner one holds.
@@ -2966,6 +3014,31 @@ impl Held<'_> {
                 Use::TakeInto => format!("{island}::Parts::take_into({binding}, input);"),
                 Use::Put => format!("{island}::Put::put({binding}, out);"),
             },
+            Self::Native(written) if static_lifetimes(written) != *written => {
+                let unnamed = unnamed_lifetimes(written);
+                let lasting = static_lifetimes(written);
+                match purpose {
+                    Use::Lend => format!("{island}::lend_part!(call, {binding}, {unnamed});"),
+                    Use::LendMut => {
+                        format!("{island}::lend_part_mut!(call, {binding}, {unnamed});")
+                    }
+                    Use::Give => format!(
+                        "{{ // SAFETY: only its lifetimes change, which have no layout; the \
+                         interpreter keeps it no longer than rustc lets the marked value.\n\
+                         #[allow(unsafe_code)] let {inner} = unsafe {{ \
+                         {island}::at_lifetimes::<_, {lasting}>({binding}) }}; \
+                         {island}::give_part!(out, {inner}); }}"
+                    ),
+                    Use::TakeInto => format!(
+                        "{{ // SAFETY: only its lifetimes change, which have no layout, and \
+                         what the call gives the place borrows what the marked value does.\n\
+                         #[allow(unsafe_code)] let {inner} = unsafe {{ \
+                         &mut *::std::ptr::from_mut({binding}).cast::<{lasting}>() }}; \
+                         (&{island}::Back::<{lasting}>::new()).take_into(input, {inner}); }}"
+                    ),
+                    Use::Put => format!("{island}::part!(out, {binding});"),
+                }
+            }
             Self::Native(written) => match purpose {
                 Use::Lend => format!("{island}::lend_part!(call, {binding}, {written});"),
                 Use::LendMut => format!("{island}::lend_part_mut!(call, {binding}, {written});"),
@@ -2974,6 +3047,11 @@ impl Held<'_> {
                     format!("(&{island}::Back::<{written}>::new()).take_into(input, {binding});")
                 }
                 Use::Put => format!("{island}::part!(out, {binding});"),
+            },
+            Self::Text => match purpose {
+                Use::Lend | Use::LendMut => format!("call.out().kept_text({binding});"),
+                Use::Give | Use::Put => format!("out.kept_text({binding});"),
+                Use::TakeInto => format!("*{binding} = input.kept_text();"),
             },
             // A `None` the call left or made drops what was there, and a
             // `Some` where there was none is new.
@@ -3040,7 +3118,15 @@ impl Held<'_> {
         let island = format!("crate::{MODULE}");
         match self {
             Self::Wire | Self::Marked => format!("{island}::Take::take(input)"),
+            Self::Native(written) if static_lifetimes(written) != *written => format!(
+                "{{ // SAFETY: only its lifetimes change, which have no layout, and it \
+                 borrows what the marked value does.\n\
+                 #[allow(unsafe_code)] let __taken = unsafe {{ {island}::at_lifetimes(\
+                 (&{island}::Back::<{}>::new()).take(input)) }}; __taken }}",
+                static_lifetimes(written)
+            ),
             Self::Native(written) => format!("(&{island}::Back::<{written}>::new()).take(input)"),
+            Self::Text => "input.kept_text()".to_owned(),
             Self::Option(held) => format!("input.option(|input| {})", held.take()),
             Self::Vec(held) => format!("input.vec(|input| {})", held.take()),
             Self::Boxed(held) => format!("::std::boxed::Box::new({})", held.take()),
@@ -4398,6 +4484,14 @@ pub mod __rawr_island {
         fn byte(&mut self, byte: u8) {
             self.0.push(byte);
         }
+        /// A `&str` native code gives: copied, with where native code's own
+        /// text is ([`Call::kept_text`]).
+        pub fn kept_text(&mut self, text: &str) {
+            self.byte(KEPT_TEXT);
+            self.count(text.as_ptr().expose_provenance());
+            self.count(text.len());
+            text.put(self);
+        }
         fn count(&mut self, count: usize) {
             self.0.extend_from_slice(&(count as u64).to_le_bytes());
         }
@@ -4470,6 +4564,29 @@ pub mod __rawr_island {
         }
         fn count(&mut self) -> usize {
             u64::from_le_bytes(self.eight()) as usize
+        }
+        /// The `&str` a marked value's field holds: native code's own text
+        /// when the program's is its copy, and else the program's text,
+        /// which rustc lets be only a `'static` one, as a literal is, kept
+        /// once per text for as long as the program runs.
+        pub fn kept_text(&mut self) -> &'static str {
+            if self.bytes.first() == Some(&KEPT_TEXT) {
+                self.byte();
+                let address = self.count();
+                let length = self.count();
+                self.expect(STR, "a string");
+                self.text();
+                let native = ::std::ptr::slice_from_raw_parts(
+                    ::std::ptr::with_exposed_provenance::<u8>(address),
+                    length,
+                ) as *const str;
+                // SAFETY: native code's own `&str`, which it gave the call
+                // and which outlives what native code takes back holding
+                // it, as the marked type's lifetime says.
+                return unsafe { &*native };
+            }
+            self.expect(STR, "a string");
+            lasting(self.text())
         }
         fn text(&mut self) -> &'a str {
             let length = self.count();
@@ -4665,6 +4782,22 @@ pub mod __rawr_island {
         }
     }
 
+    /// `text`, kept once per text for as long as the program runs, as a
+    /// literal is: a `&'static str` the program gives native code.
+    fn lasting(text: &str) -> &'static str {
+        static TEXTS: ::std::sync::Mutex<::std::collections::BTreeSet<&'static str>> =
+            ::std::sync::Mutex::new(::std::collections::BTreeSet::new());
+        let mut texts = TEXTS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
+        match texts.get(text) {
+            Some(kept) => kept,
+            None => {
+                let kept: &'static str = ::std::boxed::Box::leak(text.into());
+                texts.insert(kept);
+                kept
+            }
+        }
+    }
+
     /// How a value of `T` comes back: by the wire format when `T` crosses
     /// by it ([`ByWire`], found first), and else as the native value the
     /// interpreter moved ([`ByMove`]).
@@ -4738,6 +4871,10 @@ pub mod __rawr_island {
             INT | FLOAT | HANDLE => skip(bytes, 8)?,
             CHAR => skip(bytes, 4)?,
             PINNED => skip(bytes, 16)?,
+            KEPT_TEXT => {
+                skip(bytes, 16)?;
+                scan(bytes, found)?;
+            }
             STR => {
                 let length = count(bytes)?;
                 skip(bytes, length)?;
@@ -5087,6 +5224,12 @@ pub mod __rawr_island {
     }
     impl Take for ::std::string::String {
         fn take(input: &mut In<'_>) -> Self {
+            // A copy of native code's own text is a copy all the same.
+            if input.bytes.first() == Some(&KEPT_TEXT) {
+                input.byte();
+                input.count();
+                input.count();
+            }
             input.expect(STR, "a string");
             input.text().to_owned()
         }
@@ -5483,10 +5626,8 @@ pub mod __rawr_island {
         /// what the call makes that borrows it borrows that text, which
         /// native code keeps borrowed as long as rustc says.
         pub fn kept_text(&mut self, value: &'c str) {
-            self.values.byte(KEPT_TEXT);
-            self.values.count(value.as_ptr().expose_provenance());
-            self.values.count(value.len());
-            self.argument(value);
+            self.values.kept_text(value);
+            self.count += 1;
         }
         /// A stand-in's receiver: the handle of the program value it holds,
         /// which the call takes as the impl's receiver.

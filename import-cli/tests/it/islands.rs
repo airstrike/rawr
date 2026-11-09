@@ -888,8 +888,12 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// `caption<'a>(label: &'a str)`, as inboard's `sidebar::subtitle`, gives
 /// native code the crate's `Text<'a>`, invariant in its lifetime as iced's
 /// is, which borrows native code's own `label` and which native code
-/// keeps. `rawr check` passes as `cargo check` does, and `rawr run` prints
-/// what `cargo run` prints.
+/// keeps. A marked `Panel<'a>` of native code's `&'a str` and `Element<'a,
+/// Message>`s, as inboard's `Sidebar<'a, Message>`, is built by native code
+/// through a chain of marked methods by value and by `&mut`, kept between
+/// calls and drawn, and its title is native code's own text (#1557).
+/// `rawr check` passes as `cargo check` does, and `rawr run` prints what
+/// `cargo run` prints.
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -930,6 +934,12 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     );
     assert!(
         printed.contains("\ncaption at 12 in 7 on native text true\n"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains(
+            "\npanel [inbox styled 120, mail styled 254 idle, inbox styled 250]\npanel on native text true\n"
+        ),
         "{printed}"
     );
     // The one clone is `theme.clone()` in `main`.
