@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A save near a call to a crate function generic over a const length, as `total([a, b])` is, now swaps into the running program instead of preparing again.","issues":[1536]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.174",
@@ -3376,8 +3381,8 @@
     {"issue":1532,"title":"Find what keeps an old generation's literal alive after the generation drops","state":"open","category":"Hot reload of a marked `main` (D555)"},
     {"issue":1533,"title":"A save that prepares again doesn't say why","state":"closed","category":"Hot reload of a marked `main` (D555)","release":"0.3.174"},
     {"issue":1534,"title":"The first save after rawr run starts takes the full preparation instead of the resident route","state":"closed","category":"Hot reload of a marked `main` (D555)","release":"0.3.174"},
-    {"issue":1535,"title":"Assigning a field of a native value lent &mut to a marked fn is refused","state":"open","category":"No glue (D593)"},
-    {"issue":1536,"title":"A crate use with const-length constants is never in the resident inventory","state":"open","category":"Hot reload of a marked `main` (D555)"}
+    {"issue":1535,"title":"Assigning a field of a native value lent &mut to a marked fn is refused","state":"closed","category":"No glue (D593)"},
+    {"issue":1536,"title":"A crate use with const-length constants is never in the resident inventory","state":"closed","category":"Hot reload of a marked `main` (D555)"}
   ],
   "groups": [
     {

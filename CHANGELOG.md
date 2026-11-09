@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A save near a call to a crate function generic over a const length, as `total([a, b])` is, now swaps into the running program instead of preparing again. (#1536)
 
 ## 0.3.174 (2026-11-09)
 
