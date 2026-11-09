@@ -85,6 +85,9 @@ pub(super) struct Method {
     /// How the call reaches the value, as `*self` or `self`.
     reached: &'static str,
     inputs: Vec<(String, String)>,
+    /// What the caller passes for each input, by the adapter's argument
+    /// names: the argument itself, or the box a callable input takes it in.
+    passed: Vec<String>,
     output: String,
     /// The call, of `receiver` and the inputs by their names, boxed when
     /// its output is held boxed too.
@@ -298,7 +301,8 @@ impl Ops {
 
     /// The call of the `consumer`-th call on the opaque type spelled `key`,
     /// on `receiver`, a region's `Box<dyn ..>` of it reached as `receiver`
-    /// says, with `arguments` inputs: its trait's method.
+    /// says, with `arguments` inputs: its trait's method, passed each input
+    /// as the method takes it.
     pub(super) fn call(
         key: &str,
         consumer: usize,
@@ -307,18 +311,19 @@ impl Ops {
     ) -> Option<String> {
         OPS.with_borrow(|ops| {
             let ops = ops.get(key)?;
-            ops.methods
+            let method = ops
+                .methods
                 .iter()
-                .any(|method| method.consumer == consumer)
-                .then(|| {
-                    let mut inputs = vec![receiver.to_owned()];
-                    inputs.extend((0..arguments).map(|position| format!("argument_{position}")));
-                    format!(
-                        "RawrOpaque{}::rawr_{consumer}({})",
-                        ops.index,
-                        inputs.join(", ")
-                    )
-                })
+                .find(|method| method.consumer == consumer)?;
+            (method.passed.len() == arguments).then(|| {
+                let mut inputs = vec![receiver.to_owned()];
+                inputs.extend(method.passed.iter().cloned());
+                format!(
+                    "RawrOpaque{}::rawr_{consumer}({})",
+                    ops.index,
+                    inputs.join(", ")
+                )
+            })
         })
     }
 
@@ -341,11 +346,14 @@ impl Ops {
 impl Method {
     /// The `consumer`-th call on an opaque type, `call`, of the receiver as
     /// `receiver` takes it (`Box<Self>`, `&self` or `&mut self`) and of
-    /// `inputs`, by name and type at `'x`, giving `output`.
+    /// `inputs`, by name and type at `'x`, giving `output`. The caller
+    /// passes each input as its argument of the same name, or as `passed`
+    /// gives it, by its name.
     pub(super) fn new(
         consumer: usize,
         receiver: crate::classify::representability::ownership::Receiver,
         inputs: Vec<(String, String)>,
+        passed: &BTreeMap<String, String>,
         output: String,
         call: String,
     ) -> Self {
@@ -355,11 +363,16 @@ impl Method {
             Receiver::Shared => ("&self", "self"),
             Receiver::Mutable => ("&mut self", "self"),
         };
+        let passed = inputs
+            .iter()
+            .map(|(name, _)| passed.get(name).cloned().unwrap_or_else(|| name.clone()))
+            .collect();
         Self {
             consumer,
             receiver,
             reached,
             inputs,
+            passed,
             output,
             call,
         }
@@ -441,6 +454,7 @@ pub(super) fn rawr_given_{index}<'x>(({names}): ({types})) -> impl {bounds} + us
                     inputs,
                     output: given,
                     call,
+                    ..
                 } = method;
                 let inputs = inputs
                     .iter()
@@ -469,6 +483,8 @@ impl<'x{parameters}> RawrOpaque{index}<'x> for {spelled} {{{implemented}
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{Family, Method, Ops, Reach, Shape};
 
     /// A family struct is reached by its type, and a wrapper's family by
@@ -511,6 +527,7 @@ mod tests {
                 2,
                 crate::classify::representability::ownership::Receiver::Owned,
                 vec![("argument_0".to_owned(), "u16".to_owned())],
+                &BTreeMap::new(),
                 held.clone(),
                 "Box::new(receiver.padding(argument_0))".to_owned(),
             ),
@@ -519,12 +536,30 @@ mod tests {
             Ops::call("container", 2, "receiver", 1).as_deref(),
             Some("RawrOpaque0::rawr_2(receiver, argument_0)")
         );
+        // A script closure the call takes is passed boxed, as the method's
+        // input takes it (#955).
+        let boxed = "Box<dyn Fn(&Theme) -> Style + 'x>";
+        Ops::add(
+            "container",
+            Method::new(
+                3,
+                crate::classify::representability::ownership::Receiver::Owned,
+                vec![("argument_0".to_owned(), boxed.to_owned())],
+                &BTreeMap::from([("argument_0".to_owned(), "Box::new(argument_0)".to_owned())]),
+                held.clone(),
+                "Box::new(receiver.style(argument_0))".to_owned(),
+            ),
+        );
+        assert_eq!(
+            Ops::call("container", 3, "receiver", 1).as_deref(),
+            Some("RawrOpaque0::rawr_3(receiver, Box::new(argument_0))")
+        );
         let mut rendered = String::new();
         super::render(&mut rendered);
         assert!(
             rendered.contains(
                 "impl<'x, RawrHeld0: Widget<Message> + 'x> RawrOpaque0<'x> for Container<'x, RawrHeld0, Theme> {"
-            ),
+            ) && rendered.contains(&format!("fn rawr_3(self: Box<Self>, argument_0: {boxed})")),
             "{rendered}"
         );
         super::clear();

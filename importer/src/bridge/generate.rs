@@ -9721,23 +9721,32 @@ fn region_operand(
     consumer: usize,
     lent: &[(usize, bool, String)],
 ) -> Result<String, request::Error> {
-    let (signature, substitutions, constants, container_parameters) = match plan.operation() {
-        Operation::Method {
-            signature,
-            substitutions,
-            constants,
-            container_parameters,
-            ..
-        }
-        | Operation::Function {
-            signature,
-            substitutions,
-            constants,
-            container_parameters,
-            ..
-        } => (signature, substitutions, constants, *container_parameters),
-        _ => return Ok(String::new()),
-    };
+    let (signature, substitutions, constants, container_parameters, closure) =
+        match plan.operation() {
+            Operation::Method {
+                signature,
+                substitutions,
+                constants,
+                container_parameters,
+                call,
+                ..
+            }
+            | Operation::Function {
+                signature,
+                substitutions,
+                constants,
+                container_parameters,
+                call,
+                ..
+            } => (
+                signature,
+                substitutions,
+                constants,
+                *container_parameters,
+                call.as_ref(),
+            ),
+            _ => return Ok(String::new()),
+        };
     // The receiver a region holds boxed, by its own type, as a container's
     // method takes `Container<'x, impl Widget<..>>`.
     let boxed = first_operand(plan)?
@@ -9779,21 +9788,32 @@ fn region_operand(
         let _region = InRegion::enter();
         let _arguments = RegionArguments::enter();
         let _lent = LentArguments::enter(!lent.is_empty());
-        match plan.operation() {
-            Operation::Function { .. } => {
-                for (position, input) in signature.inputs().iter().enumerate().skip(1) {
-                    render_take_input(
-                        position - 1,
-                        position,
-                        input,
-                        signature,
-                        substitutions,
-                        None,
-                        &mut body,
-                    )?;
-                }
+        // A function takes the region's value first; a method's receiver
+        // is the adapter's first argument.
+        let skip = usize::from(matches!(plan.operation(), Operation::Function { .. }));
+        for (position, input) in signature.inputs().iter().enumerate().skip(skip) {
+            let local = position - skip;
+            let index = local + 1;
+            match closure.filter(|closure| *input == convert::Type::Parameter(closure.parameter()))
+            {
+                Some(closure) => render_take_callable(
+                    local,
+                    index,
+                    closure,
+                    signature,
+                    substitutions,
+                    &mut body,
+                )?,
+                None => render_take_input(
+                    local,
+                    index,
+                    input,
+                    signature,
+                    substitutions,
+                    None,
+                    &mut body,
+                )?,
             }
-            _ => render_arguments_with(signature, substitutions, 1, &mut body)?,
         }
         render_scoped_receiver(
             plan,
@@ -13445,17 +13465,19 @@ fn declare_ops(plans: &[Plan], ty: &convert::Type) -> Result<(), request::Error>
         if operand != key {
             continue;
         }
-        let (signature, substitutions, skip, call) = match plan.operation() {
+        let (signature, substitutions, skip, closure, call) = match plan.operation() {
             Operation::Method {
                 signature,
                 substitutions,
                 constants,
                 container_parameters,
+                call: closure,
                 ..
             } => (
                 signature,
                 substitutions,
                 0,
+                closure.as_ref(),
                 scoped_receiver_call(
                     plan,
                     receiver,
@@ -13468,17 +13490,37 @@ fn declare_ops(plans: &[Plan], ty: &convert::Type) -> Result<(), request::Error>
             Operation::Function {
                 signature,
                 substitutions,
+                call: closure,
                 ..
-            } => (signature, substitutions, 1, scoped_function_call(plan)?),
+            } => (
+                signature,
+                substitutions,
+                1,
+                closure.as_ref(),
+                scoped_function_call(plan)?,
+            ),
             _ => continue,
         };
         // A call with an input of an opaque type, or of no Rust spelling,
         // has no method.
         let mut inputs = Vec::new();
-        for (position, input) in signature.inputs().iter().enumerate().skip(skip) {
-            let input = substituted(input, signature, substitutions)?;
+        let mut passed = std::collections::BTreeMap::new();
+        for (position, declared) in signature.inputs().iter().enumerate().skip(skip) {
+            let name = format!("argument_{}", position - skip);
+            // A script closure, which a trait object's method can't take
+            // by its own type: boxed, as the crate's `Fn*` bound takes it.
+            if let Some(closure) =
+                closure.filter(|closure| *declared == convert::Type::Parameter(closure.parameter()))
+            {
+                if let Some(boxed) = boxed_closure(closure, signature, substitutions)? {
+                    passed.insert(name.clone(), format!("Box::new({name})"));
+                    inputs.push((name, boxed));
+                }
+                continue;
+            }
+            let input = substituted(declared, signature, substitutions)?;
             if let Some(rust) = scoped_type(&input).filter(|_| !holds_opaque(&input)) {
-                inputs.push((format!("argument_{}", position - skip), rust));
+                inputs.push((name, rust));
             }
         }
         if inputs.len() + skip != signature.inputs().len() {
@@ -13494,10 +13536,32 @@ fn declare_ops(plans: &[Plan], ty: &convert::Type) -> Result<(), request::Error>
         };
         family::Ops::add(
             &key,
-            family::Method::new(consumer, receiver, inputs, output, call),
+            family::Method::new(consumer, receiver, inputs, &passed, output, call),
         );
     }
     Ok(())
+}
+
+/// The box a trait object's method takes the script closure `closure`
+/// fills in, `Box<dyn Fn(&Theme) -> Style + 'x>`, which the crate's `Fn*`
+/// bound takes as the closure itself: its inputs as the closure Rawr makes
+/// takes them (`render_callable_closure`), so an elided lifetime stays
+/// higher-ranked. None when one has no Rust spelling.
+fn boxed_closure(
+    closure: &crate::classify::representability::callable::Call,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<Option<String>, request::Error> {
+    let mut inputs = Vec::new();
+    for input in closure.inputs() {
+        let Some(rust) = concrete_type(&substituted(input, signature, substitutions)?) else {
+            return Ok(None);
+        };
+        inputs.push(rust);
+    }
+    let returned = substituted(closure.output(), signature, substitutions)?;
+    Ok(concrete_type(&returned)
+        .map(|output| format!("Box<dyn Fn({}) -> {output} + 'x>", inputs.join(", "))))
 }
 
 /// The call of a method that borrows its receiver, into `output`. The
