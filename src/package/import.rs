@@ -661,8 +661,15 @@ fn crossing_impls(
     fn paths<'a>(ty: &'a representability::convert::Type, found: &mut Vec<&'a str>) {
         use representability::convert::Type;
         match ty {
-            Type::Script { path, arguments } => {
-                found.push(path);
+            // A mirror's impls are rawr's copy of the crate's own (#1249).
+            Type::Script {
+                path,
+                arguments,
+                holder,
+            } => {
+                if holder.is_proxy() {
+                    found.push(path);
+                }
                 arguments.iter().for_each(|argument| paths(argument, found));
             }
             Type::Nominal { arguments, .. } | Type::Tuple(arguments) => {
@@ -3361,8 +3368,12 @@ fn written(
                 format!("{name}<{}>", list(arguments))
             }
         }
-        Type::Script { path, arguments } if arguments.is_empty() => path.to_string(),
-        Type::Script { path, arguments } => format!("{path}<{}>", list(arguments)),
+        Type::Script {
+            path, arguments, ..
+        } if arguments.is_empty() => path.to_string(),
+        Type::Script {
+            path, arguments, ..
+        } => format!("{path}<{}>", list(arguments)),
         Type::Tuple(members) => format!("({})", list(members)),
         Type::Option(element) => format!("Option<{}>", write(element)),
         Type::Result(ok, err) => format!("Result<{}, {}>", write(ok), write(err)),

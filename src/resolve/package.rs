@@ -138,6 +138,10 @@ struct Resolver<'a> {
     enum_variants: BTreeMap<type_def::Id, Box<[ImmutableString]>>,
     /// Each crate derive whose expansion the graph loaded (#593).
     expanded: crate::capability::Expanded,
+    /// The marked types of a native root that rawr's copy of the crate
+    /// mirrors, by their package and path (`Graph::island_mirrors`, #1249).
+    #[cfg(feature = "rust-import")]
+    mirrors: BTreeSet<Box<[ImmutableString]>>,
 }
 
 /// The variants of `std::cmp::Ordering`, which `use` may import by name.
@@ -163,9 +167,16 @@ impl<'a> Resolver<'a> {
         let expanded = graph.expanded();
         let hosted = graph.hosted();
         #[cfg(feature = "rust-import")]
+        let mirrors = graph.island_mirrors();
+        #[cfg(feature = "rust-import")]
         let statics = graph.native_statics();
         let (packages, sources, parsed, entry_package, entry_source) = graph.into_parts();
-        let package = packages[entry_package.index()].name().into();
+        let package: ImmutableString = packages[entry_package.index()].name().into();
+        #[cfg(feature = "rust-import")]
+        let mirrors = mirrors
+            .into_iter()
+            .map(|path| std::iter::once(package.clone()).chain(path).collect())
+            .collect();
         let evidence = sources
             .iter()
             .map(|source| source.diagnostic().clone())
@@ -249,6 +260,8 @@ impl<'a> Resolver<'a> {
             type_declarations: Vec::new(),
             enum_variants: BTreeMap::new(),
             expanded,
+            #[cfg(feature = "rust-import")]
+            mirrors,
         };
         resolver.predeclare()?;
         resolver.predeclare_globs();
@@ -805,6 +818,8 @@ impl<'a> Resolver<'a> {
             qualified_pattern_owners,
             qualified_rust: qualified_calls.rust,
             entry_crate,
+            #[cfg(feature = "rust-import")]
+            mirrors: self.mirrors,
             crates: prelude,
             features,
             aliases,

@@ -1682,6 +1682,7 @@ pub(super) fn native_impl(
                             )
                             .into(),
                             arguments: Box::default(),
+                            holder: rawr_import::classify::representability::convert::Holder::Proxy,
                         },
                     )
                 })

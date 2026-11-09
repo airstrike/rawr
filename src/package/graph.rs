@@ -523,6 +523,26 @@ impl Graph {
         )
     }
 
+    /// The marked types of a native root that the runner holds as their
+    /// mirrors in rawr's copy of the crate where a crate's generic takes
+    /// one (`island::mirrors`, #1249); none when the root is marked.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn island_mirrors(&self) -> Vec<Vec<ImmutableString>> {
+        let entry = self.entry_package();
+        let Some(root) = entry.native_root() else {
+            return Vec::new();
+        };
+        super::island::mirrors(
+            self.parsed_units()
+                .filter(|(source, _)| {
+                    source.package() == entry.name()
+                        && !(source.modules().is_empty() && source.path() == root.path())
+                        && !entry.is_bridge(source.modules())
+                })
+                .map(|(source, unit)| (source.modules(), source.text(), unit.items())),
+        )
+    }
+
     /// Every source with its parse.
     pub(crate) fn parsed_units(&self) -> impl Iterator<Item = (&source::Source, &parse::Unit)> {
         self.units

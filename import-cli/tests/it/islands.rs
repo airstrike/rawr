@@ -756,6 +756,114 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A native workspace keeps a marked screen's `State`, whose editor
+/// content can't be cloned, between calls, as inboard keeps `home::State`
+/// (#44, #1249). It gives the marked `update` messages of the marked
+/// `Message` with native payloads, and polls the crate's `Task<Message>`
+/// that `update` gives, whose work maps a native child's task with
+/// `Message::Wizard` and runs when native code polls it, and the crate's
+/// `Element<Message>` that `view` maps the same way. A `match`
+/// on `Message::Wizard(wizard::Message::Step(..))` is exhaustive where
+/// rustc's is. `rawr check` passes, `rawr run` prints what `cargo run`
+/// prints, and a body edit swaps with the state native code keeps.
+#[test]
+fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
+    const HOME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-home");
+    let root = crate::support::scratch().join("islands-home");
+    let _ = fs::remove_file(root.join("stop"));
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(HOME), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("ISLANDS_STOP")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert!(
+        printed.ends_with("view count\npressed 2: hi! after 3 edits, count 5\n"),
+        "{printed}"
+    );
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    // The guarded arm alone leaves `Wizard(Step(_))` out, as rustc says
+    // (rustc names both `Message`s by their modules).
+    let home = root.join("src/workspace/home.rs");
+    let whole = fs::read_to_string(&home).unwrap();
+    edit(
+        &home,
+        "        Message::Wizard(wizard::Message::Step(step)) => {\n            state.count += step;\n            Task::none()\n        }\n",
+        "",
+    );
+    let refused = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success()
+            && stderr.contains("error[E0004]")
+            && stderr.contains("Message::Wizard(")
+            && stderr.contains("Message::Step(_))` not covered"),
+        "{stderr}"
+    );
+    fs::write(&home, whole).unwrap();
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    for expected in printed.lines() {
+        let line = run.until(|_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    // Each tick adds `STEP` to the count the workspace keeps.
+    let tick = |line: &str| -> Option<(u32, u32, u32)> {
+        let (tick, rest) = line.strip_prefix("tick ")?.split_once(" from ")?;
+        let (from, by) = rest.split_once(" by ")?;
+        Some((tick.parse().ok()?, from.parse().ok()?, by.parse().ok()?))
+    };
+    let first = run.until(|line| tick(line).is_some_and(|(tick, _, _)| tick >= 3));
+    let (_, kept, by) = tick(&first).unwrap();
+    assert_eq!(by, 1, "{}", run.seen.join("\n"));
+    edit(
+        &root.join("src/workspace/home.rs"),
+        "const STEP: u32 = 1;",
+        "const STEP: u32 = 100;",
+    );
+    let swapped = run.until(|line| tick(line).is_some_and(|(_, _, by)| by == 100));
+    let (_, from, _) = tick(&swapped).unwrap();
+    assert!(from > kept, "{}", run.seen.join("\n"));
+    assert!(
+        !run.seen.iter().any(|line| line.contains("restarting")),
+        "{}",
+        run.seen.join("\n")
+    );
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+}
+
 #[test]
 fn a_marked_static_of_native_blocks_is_read_by_native_code() {
     const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");

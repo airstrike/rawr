@@ -437,6 +437,9 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
+                // The arm's coverage holds what its crate parts' tests cover
+                // (`host_coverage`), so only a written guard leaves it out.
+                let guarded = guard.is_some();
                 // Facade tests guard the arm; its bindings read the value.
                 let guard = match (host.condition(), guard) {
                     (None, None) => None,
@@ -458,7 +461,7 @@ impl<'a> Parser<'a> {
                     }
                 };
                 arm_prefix = host_binds;
-                if guard.is_none() {
+                if !guarded {
                     coverage_rows.extend(
                         alternatives
                             .into_iter()

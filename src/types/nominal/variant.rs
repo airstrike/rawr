@@ -19,6 +19,11 @@ impl Id {
         Self(name.text.clone())
     }
 
+    /// The ID of a crate enum's variant, by the name its definition gives.
+    pub(crate) fn from_text(name: &str) -> Self {
+        Self(name.into())
+    }
+
     pub(crate) fn name(&self) -> &str {
         &self.0
     }

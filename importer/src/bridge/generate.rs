@@ -344,14 +344,25 @@ impl<T> DeferNot<T> for &DeferProbe<T> {
     }
 }
 
-/// The script value `proxy` holds, given back to script code by an adapter,
-/// whose arena is borrowed. A value made where it is first used
+/// The script value `value` holds, given back to script code by an
+/// adapter, whose arena is borrowed. A value made where it is first used
 /// (`Proxy::deferred`) is made here, on the owner thread, with the arena
 /// lent to the script function that makes it, as `Task::map`'s value is
-/// read by `Task::value`.
+/// read by `Task::value`. A mirror's native parts go into the arena (#1249).
 #[allow(dead_code)]
-fn give_proxy(arena: &mut Arena, proxy: __rawr_internal::crossing::Proxy) -> Dynamic {
-    lend(arena, || proxy.into_dynamic())
+fn give_held<T: crate::__RawrHeld>(arena: &mut Arena, value: T) -> Dynamic {
+    lend(arena, || crate::__RawrHeld::into_proxy(value).into_dynamic())
+}
+
+/// The script value of argument `index` as the Rust type `T` the runner
+/// holds it as where native generic code takes one (D594): its proxy, which
+/// shares it when script code shares it, or its mirror, whose native parts
+/// move out of the arena (#1249).
+#[allow(dead_code)]
+fn take_held<T: crate::__RawrHeld>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
+    let place = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
+    let proxy = __rawr_internal::crossing::Proxy::from_place(&mut **place);
+    Ok(lend(arguments.arena, || <T as crate::__RawrHeld>::from_proxy(proxy)))
 }
 
 /// A native value out of a call's arena, with what its slot knew of its
@@ -15093,7 +15104,7 @@ fn render_slot(
             // it is first used (`DeferProbe`): its function may make native
             // values, as `Message::Tick(Local::now())` does, which only the
             // owner's arena holds.
-            let deferred = if matches!(returned, convert::Type::Script { .. })
+            let deferred = if is_proxied(&returned)
                 && !inputs
                     .iter()
                     .any(|input| matches!(input, convert::Type::Borrowed { .. }))
@@ -15636,7 +15647,7 @@ fn render_take_input(
         let borrow = if *mutable { "&mut " } else { "&" };
         return writeln!(
             output,
-            "    let mut argument_{local}_proxy = <{rust}>::from_proxy(__rawr_internal::crossing::Proxy::from_place(&mut **arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?));\n    let argument_{local} = {borrow}argument_{local}_proxy;"
+            "    let mut argument_{local}_proxy = take_held::<{rust}>(arguments, {index})?;\n    let argument_{local} = {borrow}argument_{local}_proxy;"
         )
         .map_err(request::unwritable);
     }
@@ -16753,7 +16764,7 @@ fn render_callable_closure(
     // iced's executor runs `Subscription::map`'s closure, is made on the
     // owner thread where it is first used (`DeferProbe`), as a slot's is:
     // its body may make native values, which only the owner's arena holds.
-    let deferred = matches!(returned, convert::Type::Script { .. })
+    let deferred = is_proxied(&returned)
         && regional.is_none()
         && places.is_empty()
         && lends.is_empty()
@@ -16944,7 +16955,7 @@ fn render_take(
             let rust = concrete_type(ty).ok_or_else(|| request::drift("a script type's proxy"))?;
             return writeln!(
                 output,
-                "    let argument_{local} = <{rust}>::from_proxy(__rawr_internal::crossing::Proxy::from_place(&mut **arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?));"
+                "    let argument_{local} = take_held::<{rust}>(arguments, {index})?;"
             )
             .map_err(request::unwritable);
         }
@@ -17144,7 +17155,7 @@ fn render_give(
         }
         ty if is_value(ty) => writeln!(output, "    Ok({value}.into_inner())"),
         convert::Type::Script { .. } => {
-            writeln!(output, "    Ok(give_proxy(arguments.arena, {value}.0))")
+            writeln!(output, "    Ok(give_held(arguments.arena, {value}))")
         }
         // A value that carries the lifetime of the scope frame's region the
         // call runs in stays there (D558 tier 1), when its type has a name:
@@ -17415,7 +17426,7 @@ fn render_from_dynamic(
             let rust = concrete_type(ty).ok_or_else(|| request::drift("a script type's proxy"))?;
             write!(
                 output,
-                "Ok::<{rust}, Error>(<{rust}>::from_proxy(script_proxy({value})))"
+                "Ok::<{rust}, Error>(<{rust} as crate::__RawrHeld>::from_proxy(script_proxy({value})))"
             )
         }
         // The value a table's call takes inside another type, as an
@@ -17688,11 +17699,14 @@ fn render_to_dynamic(
         // A value native code gives a script function has no adapter's
         // arena at hand: it is made where the function uses it.
         convert::Type::Script { .. } if SCRIPT_INPUTS.get() => {
-            write!(output, "Ok::<Dynamic, Error>({value}.0.into_dynamic())")
+            write!(
+                output,
+                "Ok::<Dynamic, Error>(crate::__RawrHeld::into_proxy({value}).into_dynamic())"
+            )
         }
         convert::Type::Script { .. } => write!(
             output,
-            "Ok::<Dynamic, Error>(give_proxy(arguments.arena, {value}.0))"
+            "Ok::<Dynamic, Error>(give_held(arguments.arena, {value}))"
         ),
         // A value that borrows, made in a scope frame: its region holds it
         // (D558 tier 1), when its type has a name: one that leaves an
@@ -18212,7 +18226,9 @@ fn copied_back(
     let mut copied = String::new();
     for (position, element) in &copies {
         if matches!(element, convert::Type::Script { .. }) {
-            copied.push_str(&format!(", argument_{position}_proxy.0.into_dynamic()"));
+            copied.push_str(&format!(
+                ", give_held(arguments.arena, argument_{position}_proxy)"
+            ));
             continue;
         }
         let converted = given_back(*position, element, !LENT_ARGUMENTS.get())?;
@@ -18380,9 +18396,14 @@ fn instantiated(
             parameter: *parameter,
         },
         convert::Type::Tuple(members) => convert::Type::Tuple(all(members)?),
-        convert::Type::Script { path, arguments } => convert::Type::Script {
+        convert::Type::Script {
+            path,
+            arguments,
+            holder,
+        } => convert::Type::Script {
             path: path.clone(),
             arguments: all(arguments)?,
+            holder: *holder,
         },
         convert::Type::FunctionItem { input, output } => convert::Type::FunctionItem {
             input: one(input)?,
@@ -18774,9 +18795,10 @@ thread_local! {
     /// The scope families the adapters name, by their type at `'x`: the
     /// family's name and its type's.
     /// Each script type a generic instance names, by its path from the
-    /// crate root, with its number of type arguments: the runner declares
-    /// its proxy (D594).
-    static PROXIES: std::cell::RefCell<std::collections::BTreeMap<String, usize>> =
+    /// crate root, with its number of type arguments and what the runner
+    /// holds it as: the runner declares its proxy (D594), or names its
+    /// mirror (#1249).
+    static PROXIES: std::cell::RefCell<std::collections::BTreeMap<String, (usize, convert::Holder)>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// The name of the script's crate, which the runner's binary takes, so
     /// a proxy's `type_name` is the script type's (D594).
@@ -20105,18 +20127,38 @@ fn mark_scoped_arguments(rest: &str) -> (String, bool) {
     (text, marked)
 }
 
+/// Whether `ty` is a script type the runner holds by its proxy (D594),
+/// whose value can be made where it is first used (`DeferProbe`); a
+/// mirror's is made where its function runs (#1249).
+fn is_proxied(ty: &convert::Type) -> bool {
+    matches!(
+        ty,
+        convert::Type::Script {
+            holder: convert::Holder::Proxy,
+            ..
+        }
+    )
+}
+
 /// The proxies of the script types the adapters named (D594), each at its
 /// script path from the crate root, so `type_name` and `TypeId` are its
 /// own. A proxy holds the script value by a shared handle; its `Clone`,
 /// `Debug` and `Default` are the script type's own.
 fn render_proxies(output: &mut Vec<u8>) -> Result<(), request::Error> {
     let proxies = PROXIES.with_borrow(Clone::clone);
+    let krate = PROXY_CRATE.with_borrow(Clone::clone);
+    output.extend_from_slice(HELD_SOURCE.as_bytes());
     // Each module path's proxies, nested as the script nests them.
-    let mut tree = std::collections::BTreeMap::<Vec<String>, Vec<(String, String, usize)>>::new();
-    for (path, arity) in proxies {
+    let mut tree = std::collections::BTreeMap::<
+        Vec<String>,
+        Vec<(String, String, usize, convert::Holder)>,
+    >::new();
+    for (path, (arity, holder)) in proxies {
         let mut segments = path.split("::").map(str::to_owned).collect::<Vec<_>>();
         let name = segments.pop().unwrap_or_default();
-        tree.entry(segments).or_default().push((path, name, arity));
+        tree.entry(segments)
+            .or_default()
+            .push((path, name, arity, holder));
     }
     let mut open: Vec<String> = Vec::new();
     for (modules, proxies) in tree {
@@ -20132,7 +20174,11 @@ fn render_proxies(output: &mut Vec<u8>) -> Result<(), request::Error> {
             .map_err(request::unwritable)?;
             open.push(module.clone());
         }
-        for (path, name, arity) in proxies {
+        for (path, name, arity, holder) in proxies {
+            if let (convert::Holder::Mirror, Some(krate)) = (holder, &krate) {
+                render_mirror(&path, &name, krate, output)?;
+                continue;
+            }
             let parameters = (0..arity)
                 .map(|index| format!("T{index}"))
                 .collect::<Vec<_>>();
@@ -20192,6 +20238,16 @@ impl{bounds} ::core::fmt::Display for {name}{generics} {{
         self.0.display(f)
     }}
 }}
+
+impl{bounds} crate::__RawrHeld for {name}{generics} {{
+    fn from_proxy(proxy: __rawr_internal::crossing::Proxy) -> Self {{
+        {name}::from_proxy(proxy)
+    }}
+
+    fn into_proxy(self) -> __rawr_internal::crossing::Proxy {{
+        self.0
+    }}
+}}
 "
             )
             .map_err(request::unwritable)?;
@@ -20201,6 +20257,54 @@ impl{bounds} ::core::fmt::Display for {name}{generics} {{
         output.write_all(b"}\n").map_err(request::unwritable)?;
     }
     Ok(())
+}
+
+/// What the runner holds a script type's values as where native generic
+/// code takes a Rust type (D594), at the runner's crate root.
+const HELD_SOURCE: &str =
+    "/// What the runner holds a script type's values as where native generic code
+/// takes a Rust type: its proxy (D594), or its mirror in rawr's copy of a native
+/// root's crate (#1249).
+#[allow(dead_code)]
+pub(crate) trait __RawrHeld: Sized {
+    fn from_proxy(proxy: __rawr_internal::crossing::Proxy) -> Self;
+    fn into_proxy(self) -> __rawr_internal::crossing::Proxy;
+}
+";
+
+/// The script type `path` held as its mirror in rawr's copy of `krate`,
+/// a native root's crate, as native code names the marked module's type
+/// (#1249): `name` is the mirror, and a value crosses by the island's wire
+/// format, its native parts moved.
+fn render_mirror(
+    path: &str,
+    name: &str,
+    krate: &str,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    writeln!(
+        output,
+        "/// The script type `{path}` as rawr's copy of the crate declares it (#1249).
+pub type {name} = ::{krate}::{path};
+
+impl crate::__RawrHeld for {name} {{
+    fn from_proxy(proxy: __rawr_internal::crossing::Proxy) -> Self {{
+        let (bytes, natives) = __rawr_internal::island::mirror_out(&proxy.into_dynamic())
+            .unwrap_or_else(|error| panic!(\"rawr: a `{path}` can't cross to native code: {{error}}\"));
+        ::{krate}::__rawr_island::mirrored({path:?}, &bytes, natives)
+    }}
+
+    fn into_proxy(self) -> __rawr_internal::crossing::Proxy {{
+        let (bytes, mut given) = ::{krate}::__rawr_island::unmirrored(self);
+        __rawr_internal::crossing::Proxy::new(
+            __rawr_internal::island::mirror_in(&bytes, &mut given)
+                .unwrap_or_else(|error| panic!(\"rawr: a `{path}` can't cross from native code: {{error}}\")),
+        )
+    }}
+}}
+"
+    )
+    .map_err(request::unwritable)
 }
 
 /// `ty` as Rust spells it in a script impl's header and signatures, with
@@ -20246,11 +20350,16 @@ fn impl_type(ty: &convert::Type, generics: &[Box<str>]) -> Option<String> {
             }
             ty => concrete_type(ty)?,
         },
-        convert::Type::Script { path, arguments } => {
+        convert::Type::Script {
+            path,
+            arguments,
+            holder,
+        } => {
             // Registers the proxy, as `concrete_type` does.
             concrete_type(&convert::Type::Script {
                 path: path.clone(),
                 arguments: arguments.iter().map(|_| convert::Type::Unit).collect(),
+                holder: *holder,
             })?;
             let (_, path) = path.split_once("::")?;
             format!("crate::{path}<{}>", all(arguments)?.join(", "))
@@ -21520,7 +21629,11 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         convert::Type::ProfileMessage { payload, .. } => concrete_type(payload)?,
         // A script type's proxy, at the runner's crate root, which is named
         // as the script's crate is (D594).
-        convert::Type::Script { path, arguments } => {
+        convert::Type::Script {
+            path,
+            arguments,
+            holder,
+        } => {
             // An opaque type in an argument has a name of the runner's.
             let arguments = arguments
                 .iter()
@@ -21534,7 +21647,9 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 .collect::<Option<Vec<_>>>()?;
             let (krate, path) = path.split_once("::")?;
             PROXIES.with_borrow_mut(|proxies| {
-                proxies.entry(path.to_owned()).or_insert(arguments.len());
+                proxies
+                    .entry(path.to_owned())
+                    .or_insert((arguments.len(), *holder));
             });
             PROXY_CRATE.with_borrow_mut(|named| {
                 named.get_or_insert_with(|| krate.to_owned());

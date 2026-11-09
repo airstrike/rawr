@@ -94,6 +94,11 @@ pub struct Program {
     /// The app crate's name, when a marked root's `async fn main` names a
     /// runtime's entry, which the shadow crate holds (D513.4).
     entry_crate: Option<ImmutableString>,
+    /// The marked types of a native root that the runner holds as their
+    /// mirrors in rawr's copy of the crate where a crate's generic takes
+    /// one, each by its package and path (#1249).
+    #[cfg(feature = "rust-import")]
+    mirrors: std::collections::BTreeSet<Box<[ImmutableString]>>,
     /// The crates a package's manifest names, which its paths may start
     /// with as rustc's extern prelude has them: none for a lone file.
     /// `None` for a source compiled alone, whose host decides what it
@@ -629,6 +634,8 @@ fn resolve_with_evidence_and_namespace(
         qualified_pattern_owners: BTreeMap::new(),
         qualified_rust: BTreeMap::new(),
         entry_crate: None,
+        #[cfg(feature = "rust-import")]
+        mirrors: std::collections::BTreeSet::new(),
         crates: None,
         features: crate::project::cargo::features::Enabled::default(),
         aliases,

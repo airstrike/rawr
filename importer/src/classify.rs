@@ -12053,9 +12053,14 @@ fn replace_parameter(
             definition,
             arguments: all(arguments),
         },
-        Type::Script { path, arguments } => Type::Script {
+        Type::Script {
+            path,
+            arguments,
+            holder,
+        } => Type::Script {
             path,
             arguments: all(arguments),
+            holder,
         },
         Type::Tuple(members) => Type::Tuple(all(members)),
         Type::Option(element) => Type::Option(one(element)),
