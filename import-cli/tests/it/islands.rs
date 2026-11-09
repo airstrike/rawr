@@ -1467,7 +1467,10 @@ fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_repl
 /// `stack![page, opaque(..)]`, as inboard's does: the page is boxed before
 /// the wizard's view runs, as in Rust. `rawr check` passes, `rawr run` prints what `cargo
 /// run` prints, and body edits of `update` and `view` swap with the state
-/// native code keeps, tabs included.
+/// native code keeps, tabs included. The inbox the catalog borrows caches
+/// in a `RefCell` and each element owns a `dyn` widget, so neither is
+/// `Send` or `Sync`, as inboard's `Document` and iced's `Element` aren't:
+/// the wizard's view and a header row of elements still open their frames.
 #[test]
 fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     const HOME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-home");

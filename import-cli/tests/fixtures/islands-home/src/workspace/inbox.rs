@@ -9,10 +9,13 @@ pub enum Message {
     Read(usize),
 }
 
+/// It caches what it read in a `RefCell`, as inboard's `model::Document`
+/// does, so a `&State` can't cross threads.
 #[derive(Debug)]
 pub struct State {
     pub unread: usize,
     greeting: String,
+    read: std::cell::RefCell<Vec<usize>>,
 }
 
 impl Default for State {
@@ -20,6 +23,7 @@ impl Default for State {
         Self {
             unread: 0,
             greeting: "hello".to_owned(),
+            read: std::cell::RefCell::new(Vec::new()),
         }
     }
 }
@@ -40,6 +44,7 @@ impl State {
     }
 
     pub fn greeting(&self) -> &str {
+        self.read.borrow_mut().push(self.unread);
         &self.greeting
     }
 }

@@ -78,16 +78,28 @@ impl Content {
 }
 
 /// A view of the state, as `iced::Element<'a, Message>`, which an app maps
-/// into its own messages: it borrows the text it shows for `'a`.
+/// into its own messages: it borrows the text it shows for `'a`, and owns
+/// its widget, a `dyn` one, as iced's does, so it can't cross threads.
 pub struct Element<'a, M> {
     pub label: &'a str,
     pub on_press: Option<M>,
+    pub widget: Box<dyn Draw>,
 }
+
+/// What draws an element, as `iced::advanced::Widget`: a trait object that
+/// is neither `Send` nor `Sync`.
+pub trait Draw {}
+
+/// The one widget the stand-in draws.
+struct Drawn;
+
+impl Draw for Drawn {}
 
 pub fn button<'a, M>(label: &'a str, on_press: M) -> Element<'a, M> {
     Element {
         label,
         on_press: Some(on_press),
+        widget: Box::new(Drawn),
     }
 }
 
@@ -104,6 +116,18 @@ pub fn section<'a, M: 'a>(
             .or(first.as_ref().map(|child| child.label))
             .unwrap_or(""),
         on_press: first.and_then(|child| child.on_press),
+        widget: Box::new(Drawn),
+    }
+}
+
+/// A row of `children` under `title`, as inboard's `sidebar::header_row`:
+/// it takes its children's elements by value and borrows the title.
+pub fn header_row<'a, M: 'a>(title: &'a str, children: Vec<Element<'a, M>>) -> Element<'a, M> {
+    let first = children.into_iter().next();
+    Element {
+        label: title,
+        on_press: first.and_then(|child| child.on_press),
+        widget: Box::new(Drawn),
     }
 }
 
@@ -161,6 +185,7 @@ impl<'a, M> Widget<M> for Stack<'a, M> {
         self.children.into_iter().last().unwrap_or(Element {
             label: "",
             on_press: None,
+            widget: Box::new(Drawn),
         })
     }
 }
@@ -186,6 +211,7 @@ impl<'a, M> Element<'a, M> {
         Element {
             label: self.label,
             on_press: self.on_press.map(f),
+            widget: self.widget,
         }
     }
 }

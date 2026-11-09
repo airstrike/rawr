@@ -4160,15 +4160,11 @@ pub mod __rawr_island {
         /// # Safety
         ///
         /// As for [`Call::lend_ref`].
-        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str)
-        where
-            T: Sync;
+        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
         /// # Safety
         ///
         /// As for [`Call::lend`].
-        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str)
-        where
-            T: Send;
+        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
         /// The whole new value the call gave the place [`ByLoan::lend`]
         /// lent, `*place = value`, if it gave one (#1139).
         fn back(&self, reply: &mut Reply, place: &mut T)
@@ -4176,17 +4172,11 @@ pub mod __rawr_island {
             T: 'static;
     }
     impl<T> ByLoan<T> for &Hand<T> {
-        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str)
-        where
-            T: Sync,
-        {
+        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str) {
             // SAFETY: as the caller's.
             unsafe { call.lend_ref(value, lend, name) }
         }
-        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str)
-        where
-            T: Send,
-        {
+        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str) {
             // SAFETY: as the caller's.
             unsafe { call.lend(value, lend, name) }
         }
@@ -4574,23 +4564,23 @@ pub mod __rawr_island {
             }
         }
         /// An argument lent to the interpreter for the call (D558.3), as
-        /// ratatui's `&mut Frame<'_>` is. The interpreter's thread reaches
-        /// it while this one waits for the answer, so it is `Send`.
+        /// ratatui's `&mut Frame<'_>` is. The call runs on this thread
+        /// while it is lent, so it needn't be `Send`.
         ///
         /// # Safety
         ///
         /// `lend`'s accessors read its key's place as a `T`, and no other
         /// lend uses its key. `name` is `T`'s name.
-        pub unsafe fn lend<T: Send>(&mut self, value: &'c mut T, lend: Lend, name: &'static str) {
+        pub unsafe fn lend<T>(&mut self, value: &'c mut T, lend: Lend, name: &'static str) {
             debug_assert!(lend.mutable.is_some());
             self.lent_value(::std::ptr::from_mut(value).cast(), lend, name);
         }
-        /// [`Call::lend`] of a shared borrow, which is `Sync`.
+        /// [`Call::lend`] of a shared borrow, which needn't be `Sync`.
         ///
         /// # Safety
         ///
         /// As for [`Call::lend`], and `lend` has no mutable accessor.
-        pub unsafe fn lend_ref<T: Sync>(&mut self, value: &'c T, lend: Lend, name: &'static str) {
+        pub unsafe fn lend_ref<T>(&mut self, value: &'c T, lend: Lend, name: &'static str) {
             debug_assert!(lend.mutable.is_none());
             self.lent_value(::std::ptr::from_ref(value).cast_mut().cast(), lend, name);
         }
@@ -4669,7 +4659,7 @@ pub mod __rawr_island {
         ///
         /// As for [`Call::lend_ref`], `lend`'s accessor reading its key's
         /// place as a `&[T]`.
-        pub unsafe fn lend_slice<T: Sync>(&mut self, value: &'c &'c [T], lend: Lend, name: &'static str) {
+        pub unsafe fn lend_slice<T>(&mut self, value: &'c &'c [T], lend: Lend, name: &'static str) {
             debug_assert!(lend.mutable.is_none());
             self.lent_value(::std::ptr::from_ref(value).cast_mut().cast(), lend, name);
         }
