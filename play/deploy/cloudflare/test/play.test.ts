@@ -530,4 +530,47 @@ test("a browser that takes brotli gets rawr-web's brotli copy as is", async () =
   assert.equal(await js.text(), "js");
   assert.equal(js.headers.get("content-type"), "text/javascript; charset=utf-8");
   assert.equal((await get("/web/missing.wasm", "br")).status, 404);
+  assert.equal((await get("/web/missing.wasm", "gzip")).status, 404);
+});
+
+test("a module stored only as its brotli copy goes out as that copy to every client", async () => {
+  // The universe's module (#1459): raw, it is over Cloudflare's limit on an asset.
+  const stored: Record<string, string> = { "/web/universe_bg.wasm.br": "packed" };
+  const assets = {
+    fetch: async (request: Request) => {
+      const body = stored[new URL(request.url).pathname];
+      return body ? new Response(body, { headers: { etag: `"${body}"` } }) : new Response("no", { status: 404 });
+    },
+  };
+  for (const encoding of ["gzip, deflate, br, zstd", "gzip", ""]) {
+    const served = await webAsset(new Request("https://rawr.airstrike.fyi/web/universe_bg.wasm", { headers: { "accept-encoding": encoding } }), assets);
+    assert.equal(served.status, 200);
+    assert.equal(await served.text(), "packed");
+    assert.equal(served.headers.get("content-encoding"), "br");
+    assert.equal(served.headers.get("content-type"), "application/wasm");
+    assert.equal(served.headers.get("etag"), "\"packed\"");
+  }
+  // live-web.sh fetches the copy itself by its name, as stored.
+  const copy = await webAsset(new Request("https://rawr.airstrike.fyi/web/universe_bg.wasm.br"), assets);
+  assert.equal(await copy.text(), "packed");
+  assert.equal(copy.headers.get("content-encoding"), null);
+});
+
+test("the build names each asset over Cloudflare's limit", async () => {
+  const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { ASSET_LIMIT, oversized } = await import("../limits.mjs");
+  assert.equal(ASSET_LIMIT, 25 * 1024 * 1024);
+  const dir = mkdtempSync(join(tmpdir(), "rawr-limits-test-"));
+  try {
+    mkdirSync(join(dir, "web"));
+    writeFileSync(join(dir, "web/universe_bg.wasm"), Buffer.alloc(11));
+    writeFileSync(join(dir, "web/universe_bg.wasm.br"), Buffer.alloc(10));
+    writeFileSync(join(dir, "index.html"), Buffer.alloc(3));
+    assert.deepEqual(oversized(dir, 10), [["web/universe_bg.wasm", 11]]);
+    assert.deepEqual(oversized(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

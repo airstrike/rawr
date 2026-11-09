@@ -13,8 +13,11 @@
 #
 # Beside it goes the browser's universe (#1395): ?play's universe built for
 # wasm32 by play/universe/web.sh, with the rawr-import that RAWR_IMPORT names
-# (rawr-import on the PATH by default), as universe.js, universe_bg.wasm and
-# universe.toml, the manifest a snippet compiles beside.
+# (rawr-import on the PATH by default), as universe.js, universe_bg.wasm.br
+# and universe.toml, the manifest a snippet compiles beside. The universe's
+# module ships as its brotli copy only (#1459): raw, it is over Cloudflare's
+# 25 MiB limit on an asset. The Worker serves it as /web/universe_bg.wasm
+# with Content-Encoding: br, which every browser decodes.
 set -eu
 cd "$(dirname "$0")/.."
 out="${1:-target/wasm/site}"
@@ -52,6 +55,7 @@ pack() {
 }
 pack "$out/rawr_web_bg.wasm"
 pack "$out/universe_bg.wasm"
+rm "$out/universe_bg.wasm"
 
 # SHA256SUMS names each file with its hash, as sha256sum writes it. A deploy
 # that keeps the live rawr-web (play/deploy/cloudflare/live-web.sh) reads it

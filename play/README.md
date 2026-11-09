@@ -147,7 +147,12 @@ result. A program that hands its loop to the page, as iced's `run` does,
 keeps running in that module instance after `main` returns.
 
 `web/build.sh` packs it beside rawr-web as `universe.js`,
-`universe_bg.wasm` (with its `.br`) and `universe.toml`. The site
+`universe_bg.wasm.br` and `universe.toml`. The module ships only as its
+brotli copy (about 5 MB): raw it is about 53 MB, over Cloudflare's 25 MiB
+limit on one asset, and `build.mjs` fails a deploy that has a file over it.
+The Worker answers `/web/universe_bg.wasm` with that copy, sent as
+`Content-Encoding: br` and `Content-Type: application/wasm`, so the browser
+decodes it and `WebAssembly.compileStreaming` takes it as is. The site
 (`site/src/scripts/universe.ts`) compiles the module once and gives each
 run an instance of its own in a frame in place of the run strip's output:
 winit allows one event loop per instance.
