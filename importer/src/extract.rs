@@ -5151,6 +5151,7 @@ fn shape(
             fields_complete,
             non_exhaustive,
             generics,
+            layout,
         } => model::Kind::Struct {
             fields: field_set(
                 field_form,
@@ -5160,7 +5161,8 @@ fn shape(
                 catalog,
                 limits,
                 allocation,
-            )?,
+            )?
+            .with_layout(layout_of(layout, allocation)?),
             generics: generics_of(generics, catalog, limits, allocation)?,
         },
         protocol::Shape::Union {
@@ -5303,6 +5305,24 @@ fn field_set(
     };
     allocation.items(1)?;
     Ok(model::FieldSet::new(form, fields, complete, non_exhaustive))
+}
+
+fn layout_of(
+    layout: protocol::Default<protocol::Layout>,
+    allocation: &mut Allocation,
+) -> std::result::Result<Option<model::Layout>, ShapeFailure> {
+    let protocol::Default::Present { value } = layout else {
+        return Ok(None);
+    };
+    allocation.items(1)?;
+    let mut pointers = Vec::new();
+    allocation.reserve(&mut pointers, value.pointers.len())?;
+    pointers.extend(value.pointers);
+    Ok(Some(model::Layout::new(
+        value.size,
+        pointers.into_boxed_slice(),
+        value.varied,
+    )))
 }
 
 fn variant_of(

@@ -86,6 +86,9 @@ pub struct Plan {
     /// The first public field rawr can't hold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     unsupported: Option<Unsupported>,
+    /// rustc's layout of the type, for a cycle of body statics (D865).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layout: Option<crate::api::model::Layout>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -175,7 +178,21 @@ impl Plan {
             ord: false,
             error: false,
             unsupported: None,
+            layout: None,
         }
+    }
+
+    /// The plan, with rustc's layout of the type.
+    pub(crate) fn with_layout(mut self, layout: Option<crate::api::model::Layout>) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    /// rustc's layout of the type, when it has one without generics but
+    /// lifetimes.
+    #[must_use]
+    pub const fn layout(&self) -> Option<&crate::api::model::Layout> {
+        self.layout.as_ref()
     }
 
     /// The plan, with `unsupported` as the first public field rawr can't

@@ -849,6 +849,7 @@ fn build(
                     })
                     .collect(),
                 shape,
+                ty.layout().map(layout),
                 allocation,
             )
             .map_err(|source| entry_error(facade.root(), ty.path(), source.into()))?;
@@ -1178,7 +1179,13 @@ pub(crate) fn imported_type(
         defaults,
         shape,
     )?
-    .with_associated(associated))
+    .with_associated(associated)
+    .with_layout(ty.layout().map(layout)))
+}
+
+/// rustc's layout of a struct, as the importer gives it.
+pub(crate) fn layout(layout: &rawr_import::api::model::Layout) -> host::type_def::layout::Layout {
+    host::type_def::layout::Layout::new(layout.size(), layout.pointers().into(), layout.varied())
 }
 
 fn entry_error(root: &str, path: &str, source: Error) -> Error {

@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 153;
+const CLASSIFIER_VERSION: u32 = 154;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7203,7 +7203,8 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements_for_any(definition, "Iterator"),
         )
         .with_given(given_parameters(generics))
-        .with_unsupported(unsupported))
+        .with_unsupported(unsupported)
+        .with_layout(fields.layout().cloned()))
     }
 
     /// An input native code gives a script closure: a value, a copy of

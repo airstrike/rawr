@@ -857,7 +857,8 @@ impl Builder {
         Ok(self)
     }
 
-    #[cfg(feature = "rust-import")]
+    /// An imported type with no layout, as tests declare one.
+    #[cfg(all(test, feature = "rust-import"))]
     pub(crate) fn imported_type(
         &mut self,
         path: &str,
@@ -876,12 +877,14 @@ impl Builder {
             defaults,
             Box::default(),
             shape,
+            None,
             allocation,
         )
     }
 
     /// [`imported_type`](Self::imported_type) of an opaque `impl Trait`
-    /// type, with the associated types it binds.
+    /// type, with the associated types it binds, or of a struct rustc lays
+    /// out as `layout`.
     #[cfg(feature = "rust-import")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn imported_opaque_type(
@@ -893,6 +896,7 @@ impl Builder {
         defaults: Box<[Option<host::type_ref::Type>]>,
         associated: Box<[host::type_def::Associated]>,
         shape: crate::Shared<host::type_def::Shape>,
+        layout: Option<host::type_def::layout::Layout>,
         allocation: &mut impl host::ImportAllocation,
     ) -> Result<&mut Self, host::Error> {
         let relative = host::path::Path::parse_imported(path, allocation)?;
@@ -906,7 +910,8 @@ impl Builder {
             defaults,
             shape,
         )?
-        .with_associated(associated);
+        .with_associated(associated)
+        .with_layout(layout);
         self.insert_type(definition)?;
         Ok(self)
     }

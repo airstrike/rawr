@@ -36,6 +36,9 @@ mod completion;
 )]
 mod engine;
 
+#[path = "compiler/layout.rs"]
+mod layout;
+
 #[path = "compiler/scope.rs"]
 mod scope;
 
@@ -101,9 +104,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Schema 57 keeps an alias's own type's implementation of a trait whose
 // associated type it passes on from the type's arguments, and reads them
 // for an implementation's bound that fixes a parameter's associated type.
+// Schema 61 gives a struct its layout: its pointers that may hold a
+// static's address, for a cycle of body statics (D865).
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 60;
+const PROTOCOL_SCHEMA: u32 = 61;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -460,6 +465,7 @@ enum Shape {
         fields_complete: bool,
         non_exhaustive: bool,
         generics: Generics,
+        layout: Explicit<Layout>,
     },
     Union {
         field_form: FieldForm,
@@ -539,6 +545,18 @@ enum FieldForm {
     Record,
     Tuple,
     Unit,
+}
+
+/// rustc's layout of a struct, as far as a cycle of body statics of it
+/// needs (D865): the offsets of its pointers' address words that may hold
+/// a static's address, outside any enum variant or union, and whether
+/// another is inside one.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Layout {
+    size: u64,
+    pointers: Vec<u64>,
+    varied: bool,
 }
 
 struct Fields {
@@ -3311,12 +3329,26 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             DefKind::Mod => Shape::Module,
             DefKind::Struct => {
                 let fields = self.fields(def_id, self.tcx.adt_def(def_id).non_enum_variant())?;
+                let layout = match layout::of(self.tcx, def_id) {
+                    Some(pointers) => {
+                        self.budget.items(pointers.offsets.len())?;
+                        Explicit::Present {
+                            value: Layout {
+                                size: pointers.size,
+                                pointers: pointers.offsets,
+                                varied: pointers.varied,
+                            },
+                        }
+                    }
+                    None => Explicit::Absent,
+                };
                 Shape::Struct {
                     field_form: fields.form,
                     fields: fields.public,
                     fields_complete: fields.complete,
                     non_exhaustive: fields.non_exhaustive,
                     generics: self.generics(def_id)?,
+                    layout,
                 }
             }
             DefKind::Union => {

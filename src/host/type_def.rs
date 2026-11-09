@@ -14,6 +14,7 @@ pub type ImportedSelector = rawr_import::surface::identity::Selector;
 pub enum ImportedSelector {}
 
 pub mod import;
+pub mod layout;
 pub mod native;
 
 /// Stable compile identity for a linked or symbolic imported host type.
@@ -43,6 +44,9 @@ pub struct Definition {
     /// binds. Few types have either, so they share one box, and the field
     /// is `None` when a type has neither.
     generics: Option<Box<Generics>>,
+    /// rustc's layout of the type, when the import driver gave one: what a
+    /// cycle of statics of it needs (D865).
+    layout: Option<Shared<layout::Layout>>,
 }
 
 /// The rarely present parts of a [`Definition`]'s parameters.
@@ -303,6 +307,7 @@ impl Definition {
             projections: projections.into_boxed_slice(),
             exact_arity: self.exact_arity,
             generics: self.generics.clone(),
+            layout: self.layout.clone(),
         })
     }
 
@@ -345,6 +350,7 @@ impl Definition {
             projections: Box::default(),
             exact_arity: true,
             generics: None,
+            layout: None,
         })
     }
 
@@ -362,6 +368,7 @@ impl Definition {
             projections: Box::default(),
             exact_arity: false,
             generics: None,
+            layout: None,
         }
     }
 
@@ -413,6 +420,7 @@ impl Definition {
                     associated: Box::default(),
                 })
             }),
+            layout: None,
         })
     }
 
@@ -519,6 +527,18 @@ impl Definition {
             .iter()
             .find(|(identity, known, _)| identity == trait_identity && known.as_str() == name)
             .map(|(_, _, position)| *position)
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn with_layout(mut self, layout: Option<layout::Layout>) -> Self {
+        self.layout = layout.map(Shared::new);
+        self
+    }
+
+    /// rustc's layout of the type, when the import driver gave one.
+    #[must_use]
+    pub fn layout(&self) -> Option<&layout::Layout> {
+        self.layout.as_deref()
     }
 
     pub(crate) fn with_shape(mut self, shape: Shape) -> Self {

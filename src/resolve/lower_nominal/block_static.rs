@@ -6,12 +6,13 @@
 //! constant's is.
 //!
 //! A block's statics are all declared before any is initialized, and they
-//! are initialized in order. A native static's initializer may name one
-//! written before it. One that names a static not written yet, itself or a
-//! sibling after it, is refused: statics that refer to each other, as
-//! tracing's `META` and `__CALLSITE` do, would need a place referenced
-//! before it is written, which Rust's aliasing rules don't allow at run
-//! time (D862's Miri check).
+//! are initialized in order. An initializer may name a static not written
+//! yet, itself or a sibling after it, as tracing's `META` and `__CALLSITE`
+//! refer to each other. The statics written from then on, through the
+//! write of the one named, are a cycle, which the runner builds as
+//! `place::cycle` does (D865). Each needs its type's layout from the
+//! import driver, with no pointer to a static inside an enum variant or a
+//! union, or the cycle is refused.
 
 use super::*;
 use std::hash::{Hash, Hasher};
@@ -24,15 +25,30 @@ pub(super) struct Declared {
 }
 
 enum Kind {
-    /// A native place, by its key, and whether its block wrote it yet.
-    Native { key: ImmutableString, written: bool },
+    /// A native place, by its key, and how far its block has come with it.
+    Native {
+        key: ImmutableString,
+        progress: Progress,
+    },
     /// A value in the interpreter: its initializer's tokens.
     Interpreted { value: Vec<(Token, Position)> },
+}
+
+/// How far a block has come with one of its native statics.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Progress {
+    /// Not written yet, and named by no initializer.
+    Declared,
+    /// Named by an initializer before it is written: the statics written
+    /// from then on, through its own write, are a cycle (D865).
+    Named,
+    Written,
 }
 
 /// A native static's initializer, which runs once its block's statics are
 /// all declared.
 struct Initializer {
+    name: ImmutableString,
     key: ImmutableString,
     ty: Ty,
     declaration: Span,
@@ -109,6 +125,7 @@ impl Parser<'_> {
                 let key: ImmutableString =
                     format!("{file}:{line}:{column}#{ordinal}@{group:016x}").into();
                 initializers.push(Initializer {
+                    name: name.clone(),
                     key: key.clone(),
                     ty: ty.clone(),
                     declaration: span(keyword, name_span.end()),
@@ -116,7 +133,7 @@ impl Parser<'_> {
                 });
                 Kind::Native {
                     key,
-                    written: false,
+                    progress: Progress::Declared,
                 }
             } else {
                 Kind::Interpreted { value }
@@ -126,15 +143,15 @@ impl Parser<'_> {
         for initializer in initializers {
             let key = initializer.key.clone();
             self.initialize_static(initializer)?;
-            let written =
+            let progress =
                 self.block_statics
                     .iter_mut()
                     .find_map(|declared| match &mut declared.kind {
-                        Kind::Native { key: own, written } if *own == key => Some(written),
+                        Kind::Native { key: own, progress } if *own == key => Some(progress),
                         _ => None,
                     });
-            if let Some(written) = written {
-                *written = true;
+            if let Some(progress) = progress {
+                *progress = Progress::Written;
             }
         }
         self.last_type = Ty::Unit;
@@ -169,10 +186,12 @@ impl Parser<'_> {
         }
     }
 
-    /// `if reserved { settle(value) }` for the native static `key`: its
-    /// value made and moved into its place the first time its block runs.
+    /// `if reserved { settle(value, layout) }` for the native static `key`:
+    /// its value made and moved into its place the first time its block
+    /// runs.
     fn initialize_static(&mut self, initializer: Initializer) -> Result<(), Error> {
         let Initializer {
+            name,
             key,
             ty,
             declaration,
@@ -186,9 +205,13 @@ impl Parser<'_> {
         self.splice_tokens(tokens);
         let mut value = self.parse_expr_expecting(Some(&ty))?;
         self.coerce_expr(&ty, &mut value)?;
+        let layout = self.static_layout(&name, &ty, declaration)?;
         let key = origin::Fragment::plain(format!("{key:?}"));
         let reserved = self.prelude_op(PreludeOp::StaticReserved, [key.clone()]);
-        let settle = self.prelude_op(PreludeOp::StaticSettle, [key, value.rendered_source()]);
+        let settle = self.prelude_op(
+            PreludeOp::StaticSettle,
+            [key, value.rendered_source(), layout],
+        );
         let mut statement = origin::Fragment::plain("if ");
         statement.push(reserved);
         statement.push_text(" { ");
@@ -198,9 +221,63 @@ impl Parser<'_> {
         Ok(())
     }
 
+    /// The layout of the static `name`'s type `ty`, as the runner takes it:
+    /// `[size, pointer offsets..]`, or `()` when the import driver gave
+    /// none. A static written while one that was named before its write
+    /// isn't written yet is in a cycle, which needs the layout, with no
+    /// pointer to a static inside an enum variant or a union.
+    fn static_layout(
+        &self,
+        name: &str,
+        ty: &Ty,
+        declaration: Span,
+    ) -> Result<origin::Fragment, Error> {
+        let layout = match ty {
+            Ty::Host { proof, .. } => proof.definition.layout(),
+            _ => None,
+        };
+        let cycle = self.block_statics.iter().any(|declared| {
+            matches!(
+                declared.kind,
+                Kind::Native {
+                    progress: Progress::Named,
+                    ..
+                }
+            )
+        });
+        let refused = match layout {
+            _ if !cycle => None,
+            None => Some("whose type's layout rawr doesn't know,"),
+            Some(layout) if layout.varied() => Some(
+                "whose type keeps a pointer inside an enum variant or a union, as \
+                 `Option<&'static T>` does,",
+            ),
+            Some(_) => None,
+        };
+        if let Some(reason) = refused {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: format!(
+                    "a `static` `{name}` in a cycle of statics, which name each other before \
+                     they are written, {reason}"
+                )
+                .into(),
+                source: declaration,
+            });
+        }
+        let Some(layout) = layout else {
+            return Ok(origin::Fragment::plain("()"));
+        };
+        let words: Vec<String> = std::iter::once(layout.size())
+            .chain(layout.pointers().iter().copied())
+            .map(|word| word.to_string())
+            .collect();
+        Ok(origin::Fragment::plain(format!("[{}]", words.join(", "))))
+    }
+
     /// A read of the static `name` the blocks being parsed declare: its
     /// native place, or its initializer. Either lives as long as the
-    /// program, so a borrow of it is `'static`.
+    /// program, so a borrow of it is `'static`. A native static named
+    /// before its block writes it starts a cycle.
     pub(super) fn block_static(
         &mut self,
         name: &str,
@@ -208,21 +285,16 @@ impl Parser<'_> {
     ) -> Option<Result<ParsedExpr, Error>> {
         let declared = self
             .block_statics
-            .iter()
+            .iter_mut()
             .rev()
             .find(|declared| declared.name.as_str() == name)?;
+        if let Kind::Native { progress, .. } = &mut declared.kind
+            && *progress == Progress::Declared
+        {
+            *progress = Progress::Named;
+        }
         let ty = declared.ty.clone();
         let read = match &declared.kind {
-            Kind::Native { written: false, .. } => {
-                return Some(Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
-                        "a `static` whose initializer names `{name}` before `{name}` is \
-                         written, a cycle of statics such as tracing's `META` and `__CALLSITE`,"
-                    )
-                    .into(),
-                    source: name_span,
-                }));
-            }
             Kind::Native { key, .. } => {
                 let key = origin::Fragment::plain(format!("{key:?}"));
                 let source = self.prelude_op(PreludeOp::StaticValue, [key]);
