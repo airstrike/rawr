@@ -1589,12 +1589,14 @@ impl Calls {
             (0, 0)
         };
         // A lend native code keeps for as long as the result, which only an
-        // anchored call's result can, is reached in its region (#1413).
+        // anchored call's result can, is reached in its region (#1413). A
+        // call anchored on nothing keeps its lends for the call alone, in a
+        // region of its own (#1491).
         let lent = lent
             .iter()
             .enumerate()
             .map(|(index, lent)| {
-                if anchored.is_some() && index < 64 && kept & (1 << index) != 0 {
+                if index < 64 && kept & (1 << index) != 0 && !lent.writable() {
                     lent.kept()
                 } else {
                     *lent
@@ -1691,7 +1693,18 @@ impl Calls {
             .and_then(|&(_, handle, _)| pins_of(handle))
             .or_else(|| anchored.map(pins_at));
         let Some(pins) = shared else {
-            return self.finish(call, made, values, None, natives);
+            if kept == 0 {
+                return self.finish(call, made, values, None, natives);
+            }
+            // Its lends kept for the call alone (#1491): a crate fn's output
+            // that keeps one is made in a region of the call's own, which
+            // ends with it. The result borrows nothing, so it takes nothing
+            // of the region.
+            let pins = crate::scope::Pins::new();
+            let mut region = crate::scope::Region::anchored(&pins);
+            return crate::scope::open_anchored(&mut region, || {
+                self.finish(call, made, values, None, natives)
+            });
         };
         // SAFETY: the pins are boxed in the value's `Held`, which stays in
         // the table while the stand-in is borrowed, as it is for this call,

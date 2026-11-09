@@ -9540,8 +9540,10 @@ fn has_store(plan: &Plan) -> bool {
     let Operation::StructField { field, .. } = plan.operation() else {
         return false;
     };
+    // A type with lifetimes may be in a region. Its family is spelled by
+    // its instance, never its bare path, which names no type arguments.
     let path = rust_path(plan);
-    container_family(&path, &path).is_none()
+    !carries_lifetimes(&path)
         && !may_borrow(field.ty())
         && render_take(0, 1, field.ty(), &mut Vec::new()).is_ok()
 }
@@ -10974,8 +10976,9 @@ fn render_adapter_body(
             let part = field_part(plan, field.name(), facade);
             // A field of a value in a scope frame's region (D558 tier 1), as
             // quick-xml's `Attribute::value`: a copy, which stays in the
-            // region when it carries the region's lifetime.
-            if let Some(family) = container_family(&path, &path) {
+            // region when it carries the region's lifetime. A generic
+            // struct's family is its instance's, as `Element<'x, Message>`.
+            if let Some(family) = container_family(&rust_path(plan), &path) {
                 let reached = family.call(family::Reach::Get, "scoped");
                 let converted = {
                     let _region = InRegion::enter();
