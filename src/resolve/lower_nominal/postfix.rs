@@ -410,22 +410,46 @@ impl<'a> Parser<'a> {
             if matches!(self.peek(), Token::LeftParen | Token::Unit)
                 && matches!(
                     self.inference.resolve(&value.ty),
-                    Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } | Ty::Callable { .. }
+                    Ty::Fn { .. }
+                        | Ty::FnItem { .. }
+                        | Ty::FnChoice { .. }
+                        | Ty::Callable { .. }
+                        | Ty::ImportedFunctionItem { .. }
                 )
-                && let Some(path) = self.scoped_trait_member(&member)
+                && let paths = self.scoped_trait_members(&member)
+                && let Some(path) = paths.first()
             {
-                let items = self
-                    .models
-                    .host_items(&path)
-                    .expect("a scoped trait member has items")
-                    .to_vec();
-                let owner = self.models.item_owner(&path).cloned();
+                // Each trait's method is a candidate, as `Function::with`
+                // and `Ternary::with` are for a function of three inputs:
+                // the call takes the one whose impl holds.
+                let items = paths
+                    .iter()
+                    .flat_map(|path| {
+                        self.models
+                            .host_items(path)
+                            .expect("a scoped trait member has items")
+                            .iter()
+                            .cloned()
+                    })
+                    .collect::<Vec<_>>();
+                let owner = self.models.item_owner(path).cloned();
                 let start = value.span.start();
                 let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
                 // A `fn` pointer, as a tuple variant's constructor is as a
                 // value, is `Fn` through the closure that calls it.
                 if let Ty::Fn { inputs, .. } = self.inference.resolve(&value.ty) {
                     value = self.fn_pointer_closure(value, &inputs)?;
+                }
+                // A crate's or native module's function, as
+                // `theme::mouse_area::muted_tab.with(selected)`, is the
+                // function value that calls it.
+                if let Ty::ImportedFunctionItem {
+                    item: Some(proof), ..
+                } = self.inference.resolve(&value.ty)
+                {
+                    let at = value.span;
+                    value = self.host_function_value(proof.item.clone(), at)?;
+                    value.span = at;
                 }
                 let mut inputs = Vec::with_capacity(arguments.len() + 1);
                 self.move_local(&mut value)?;
