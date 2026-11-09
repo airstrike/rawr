@@ -115,3 +115,10 @@ pub fn crossing() -> String {
 pub fn modules() -> String {
     format!("{TARGET}; {NAMED}; {}", folder::Folder.path())
 }
+
+/// A crate's callsite name, from std's macros it names only inside
+/// `concat!`, and the field names of a message alone.
+pub fn site() -> String {
+    let fields: [&str; 1] = located::fields!("a message");
+    format!("{} {fields:?}", located::site!())
+}

@@ -724,7 +724,9 @@ fn is_literal(token: &Token) -> bool {
 
 /// How many trees at the start of `input` a `fragment` takes, as rustc's
 /// parser reads one. A fragment followed by more of the rule stops where
-/// Rust's follow set allows the next token, so it is read greedily.
+/// Rust's follow set allows the next token, so it is read greedily. None
+/// starts at such a token: an `expr` is never `,`, so `$($e:expr),* $(,)*`
+/// takes `"a", ,` as rustc does, one expression and two commas.
 fn fragment_length(fragment: Fragment, input: &[Tree]) -> Option<usize> {
     let leaf = |index: usize| match input.get(index) {
         Some(Tree::Leaf(token, _)) => Some(token),
@@ -751,7 +753,7 @@ fn fragment_length(fragment: Fragment, input: &[Tree]) -> Option<usize> {
                         _ => {}
                     }
                 }
-                if depth == 0 && index > 0 && stop(token) {
+                if depth == 0 && stop(token) {
                     break;
                 }
             } else if angles
@@ -1222,6 +1224,16 @@ mod tests {
             expand(color, "0xff, hex"),
             "{ let mut __rawr_macro1_hex = 255 as u32 ; packed ( __rawr_macro1_hex , hex ) }"
         );
+    }
+
+    #[test]
+    fn a_fragment_never_starts_at_a_token_that_ends_it() {
+        // tracing's `fieldset!` reaches `@ { "message", , }`: one
+        // expression, then the trailing commas.
+        let list = "macro_rules! list { ($($out:expr),* $(,)*) => { [$($out),*] }; }";
+        assert_eq!(expand(list, "\"message\", ,"), "[ \"message\" ]");
+        let ty = "macro_rules! ty { ($($t:ty),* $(,)*) => { ($($t,)*) }; }";
+        assert_eq!(expand(ty, "u8, , "), "( u8 , )");
     }
 
     #[test]

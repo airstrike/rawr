@@ -37,6 +37,13 @@ pub mod __support {
     pub use core::{column, concat, file, format_args, line, module_path};
 }
 
+/// std's macros a crate's macro names only inside `concat!`, as tracing's
+/// callsite name names `file!()` and `line!()`.
+#[doc(hidden)]
+pub mod __callsite {
+    pub use core::{concat, file, line};
+}
+
 /// Where the call is: its file, line, column and module, joined.
 #[macro_export]
 macro_rules! here {
@@ -72,5 +79,34 @@ macro_rules! name {
 macro_rules! traced {
     ($value:expr) => {
         $crate::__support::format_args!("{} at {}", $value, $crate::here!()).to_string()
+    };
+}
+
+/// The call's file and line as one literal, from std's macros the crate
+/// names only inside `concat!`, as tracing's `event!` names its callsite.
+#[macro_export]
+macro_rules! site {
+    () => {
+        $crate::__callsite::concat!(
+            "event ",
+            $crate::__callsite::file!(),
+            ":",
+            $crate::__callsite::line!()
+        )
+    };
+}
+
+/// The names of a field list, as tracing's `fieldset!` gives them: a
+/// message alone reaches `"message", ,`, one expression and two commas.
+#[macro_export]
+macro_rules! fields {
+    (@ { $(,)* $($out:expr),* $(,)* } $(,)*) => {
+        [ $($out),* ]
+    };
+    (@ { $(,)* $($out:expr),* } $($rest:tt)+) => {
+        $crate::fields!(@ { "message", $($out),*, })
+    };
+    ($($args:tt)*) => {
+        $crate::fields!(@ { } $($args)*,)
     };
 }
