@@ -7406,6 +7406,33 @@ fn language_nested_fn_items() {
 }
 
 #[test]
+fn language_items_inside_block_expressions() {
+    // A `static`, `const` or `fn` item in a block, nested blocks among
+    // them, and a `&'static` borrow of a body's `static`.
+    let value = run_string(
+        r#"
+        fn place() -> &'static u32 {
+            static PLACE: u32 = 9;
+            &PLACE
+        }
+        pub fn run() -> String {
+            let after_static = { static N: u32 = 3; N + 1 };
+            let after_const = { const M: u32 = 4; M * 2 };
+            let after_fn = { fn double(value: u32) -> u32 { value * 2 } double(5) };
+            let nested = {
+                #[allow(dead_code)]
+                static OUTER: u32 = { 1 };
+                { const INNER: u32 = 20; OUTER + INNER }
+            };
+            format!("{after_static} {after_const} {after_fn} {nested} {}", place())
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "4 8 10 21 9");
+}
+
+#[test]
 fn language_untyped_integers_are_i32() {
     let error = rejected("pub fn run() -> i64 { let f = (1..=20).fold(1, |a, b| a * b); println!(\"{}\", f); 0 } run()");
     assert!(

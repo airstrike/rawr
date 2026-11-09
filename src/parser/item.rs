@@ -600,11 +600,13 @@ fn begins_item(token: &Token) -> bool {
 }
 
 /// Whether `token` starts an item that a function body may declare and
-/// Rawr hoists: `struct`, `enum`, `impl`, `trait` or `type`.
+/// Rawr hoists: `struct`, `enum`, `impl`, `trait`, `type` or `static`.
+/// A hoisted `static` is the module's item, as one written there is.
 fn begins_body_item(token: &Token) -> bool {
     match token {
         Token::Struct | Token::Enum | Token::Impl => true,
         Token::Identifier(name) => matches!(name.as_str(), "trait" | "type"),
+        Token::Reserved(word) => word.as_str() == "static",
         _ => false,
     }
 }
@@ -4669,7 +4671,7 @@ fn parse_body_syntax(
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(function)));
             continue;
         }
-        // `struct`, `enum`, `impl`, `trait` and `type` items inside a body,
+        // `struct`, `enum`, `impl`, `trait`, `type` and `static` items inside a body,
         // with their attributes, join the file's items as `fn` items do.
         if boundary
             && let Some((token, position)) = input.peek()
