@@ -4,3 +4,8 @@
 pub fn caption(size: u32) -> u32 {
     size * 2
 }
+
+/// A caption's style that keeps its size.
+pub fn plain(size: u32) -> u32 {
+    size
+}

@@ -35,7 +35,9 @@ fn greeting(index: usize, name: &str) -> String {
     format!("{text} at {}", caption())
 }
 
-/// The caption's size, in the native style.
+/// The caption's size, in the native style, passed to a crate function
+/// and to a crate method.
 fn caption() -> u32 {
-    ui::styled(theme::text_size(), style::caption)
+    let size = ui::styled(theme::text_size(), style::caption);
+    ui::Caption::new(size).style(style::plain).size()
 }

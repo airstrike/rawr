@@ -1676,10 +1676,12 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
 
 /// A literal edited in a marked screen's private function swaps into the
 /// running program, its state kept, when the screen passes a native
-/// function by name further down, as inboard's `home.rs` passes
-/// `theme::text::base` to `.style`. The runner names that function, never
-/// where the program writes it, so the edit that moves it needs no new
-/// runner and doesn't restart the program.
+/// function by name further down, to a crate function and to a crate
+/// method, as inboard's `home.rs` passes `theme::text::base` to `.style`.
+/// The runner names that function, never where the program writes it, so
+/// the edit that moves it needs no new runner and doesn't restart the
+/// program. The first edit after start and the one after it both compile
+/// in the running program: neither prepares again (#1534).
 #[test]
 fn a_literal_edit_above_a_native_function_passed_by_name_swaps() {
     const LITERAL: &str = concat!(
@@ -1687,10 +1689,18 @@ fn a_literal_edit_above_a_native_function_passed_by_name_swaps() {
         "/tests/fixtures/islands-literal"
     );
     let root = crate::support::scratch().join("islands-literal");
+    let events = root.join("events.jsonl");
     let _ = fs::remove_file(root.join("stop"));
+    let _ = fs::remove_file(&events);
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(LITERAL), &root);
-    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", root.join("stop")),
+            ("RAWR_MCP_EVENTS", events.clone()),
+        ],
+    );
     // `tick n at count says greeting`.
     let tick = |line: &str| -> Option<(u32, String)> {
         let (_, rest) = line.strip_prefix("tick ")?.split_once(" at ")?;
@@ -1699,8 +1709,9 @@ fn a_literal_edit_above_a_native_function_passed_by_name_swaps() {
     };
     let first = run.until(|line| tick(line).is_some_and(|(count, _)| count >= 3));
     let (kept, _) = tick(&first).unwrap();
+    let home = root.join("src/home.rs");
     edit(
-        &root.join("src/home.rs"),
+        &home,
         "\"Ready when you are.\"",
         "\"Ready when you are, rawr.\"",
     );
@@ -1709,14 +1720,23 @@ fn a_literal_edit_above_a_native_function_passed_by_name_swaps() {
     });
     let (count, _) = tick(&swapped).unwrap();
     assert!(count > kept, "{}", run.seen.join("\n"));
+    edit(
+        &home,
+        "\"Ready when you are, rawr.\"",
+        "\"Ready when you are.\"",
+    );
+    run.until(|line| tick(line).is_some_and(|(_, says)| says == "Ready when you are. at 12"));
+    let told = run.told(&events, |text| text.matches("\"swapped\"").count() >= 2);
+    assert!(!told.contains("\"preparing\""), "{told}");
     assert!(
         !run.seen.iter().any(|line| line.contains("restarting")),
         "{}",
         run.seen.join("\n")
     );
     fs::write(root.join("stop"), "").unwrap();
-    let status = run.wait();
-    assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":0}")
+    });
 }
 
 /// A marked home screen with inboard's shapes (`workspace/screen/home.rs`):
