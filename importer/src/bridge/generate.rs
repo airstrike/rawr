@@ -10020,65 +10020,77 @@ fn render_adapter(
         Vec::new()
     };
     let _lent = LentArguments::enter(!lent.is_empty());
-    let slices = if lent.is_empty() {
-        slice_inputs(plan)?
-    } else {
-        Vec::new()
-    };
+    let slices = slice_inputs(plan)?;
     let _slices = SliceArguments::enter(slices.iter().map(|slice| slice.index).collect());
-    if lent.is_empty() && slices.is_empty() {
-        writeln!(
-            output,
-            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{"
-        )
-        .map_err(encoding)?;
-    } else if lent.is_empty() {
-        // Each `&[T]` argument a native slice place fills is reached where
-        // it is for the call, and the call runs inside them all (#1291). A
-        // `&'static [T]` one is a slice that lives as long as the runner
-        // (#1437).
+    // Each argument native code lent (D558.3) is reached for the call
+    // through its accessor, and the call runs inside them all. So is each
+    // `&[T]` argument a native slice place fills, inside those (#1291), a
+    // slice native code lent among them (#1500). A `&'static [T]` one is a
+    // slice that lives as long as the runner (#1437).
+    let reach = lent
+        .iter()
+        .map(|(index, mutable, rust)| format!("({index}, {mutable}, {rust} as Reach)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (lent_parameter, lent_argument) = if lent.is_empty() {
+        ("", "")
+    } else {
+        (", lent: &mut LentArguments<'_>", ", lent")
+    };
+    let mut call = None;
+    if !slices.is_empty() {
         let names = slices
             .iter()
-            .map(|slice| format!("slice_{}", slice.index))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let parameters = slices
-            .iter()
-            .map(|slice| format!("slice_{}: {}", slice.index, slice.parameter()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut call = format!("{name}_sliced(arguments, {names})");
+            .map(|slice| format!(", slice_{}", slice.index))
+            .collect::<String>();
+        let mut sliced = format!("{name}_sliced(arguments{lent_argument}{names})");
         for slice in slices.iter().rev() {
-            call = slice.around(&call);
+            sliced = slice.around(&sliced);
         }
-        writeln!(
+        call = Some(sliced);
+    }
+    match (lent.is_empty(), call) {
+        (true, None) => writeln!(
             output,
-            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
-    {call}
-}}
-
-fn {name}_sliced(arguments: &mut Arguments<'_, '_, '_>, {parameters}) -> Result<Dynamic, Error> {{"
-        )
-        .map_err(encoding)?;
-    } else {
-        // Each argument native code lent (D558.3) is reached for the call
-        // through its accessor, and the call runs inside them all.
-        let reach = lent
-            .iter()
-            .map(|(index, mutable, rust)| format!("({index}, {mutable}, {rust} as Reach)"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        writeln!(
+            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{"
+        ),
+        (false, None) => writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
     with_lent_arguments(arguments, &[{reach}], &mut {name}_lent)
 }}
 
-fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>) -> Result<Dynamic, Error> {{
+fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>{lent_parameter}) -> Result<Dynamic, Error> {{
     let _ = &mut *lent;"
-        )
-        .map_err(encoding)?;
+        ),
+        (lent_free, Some(call)) => {
+            let parameters = slices
+                .iter()
+                .map(|slice| format!(", slice_{}: {}", slice.index, slice.parameter()))
+                .collect::<String>();
+            let entry = if lent_free {
+                call
+            } else {
+                format!(
+                    "with_lent_arguments(arguments, &[{reach}], &mut |arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>| {call})"
+                )
+            };
+            let unused = if lent_free {
+                ""
+            } else {
+                "\n    let _ = &mut *lent;"
+            };
+            writeln!(
+                output,
+                "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    {entry}
+}}
+
+fn {name}_sliced(arguments: &mut Arguments<'_, '_, '_>{lent_parameter}{parameters}) -> Result<Dynamic, Error> {{{unused}"
+            )
+        }
     }
+    .map_err(encoding)?;
     output
         .write_all(b"    let _ = &mut *arguments;\n")
         .map_err(encoding)?;
