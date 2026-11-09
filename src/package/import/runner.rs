@@ -591,13 +591,24 @@ fn structural_path<'facade>(
         StructuralKind,
         Option<&host::type_def::import::Identity>,
     )> = None;
+    // An owner below a re-exported module is held below the module it
+    // names.
+    let held = host::path::Path::parse(rust_item(facade.root(), row.owner))
+        .ok()
+        .and_then(|path| facade.through_reexports(&path))
+        .map(|path| path.to_string());
+    let held = held
+        .as_deref()
+        .and_then(|path| path.strip_prefix(facade.root()))
+        .and_then(|path| path.strip_prefix("::"))
+        .unwrap_or(row.owner);
     let owned = |definition: &host::type_def::Definition| {
-        row.owner.is_empty() || {
+        held.is_empty() || {
             let path = definition.path();
             let path = path.as_str();
-            path == row.owner
+            path == held
                 || path
-                    .strip_suffix(row.owner)
+                    .strip_suffix(held)
                     .is_some_and(|prefix| prefix.ends_with("::"))
         }
     };
@@ -678,7 +689,7 @@ fn structural_path<'facade>(
                 // is the one the row names (#954).
                 Some((first_path, _, _)) => {
                     let named = |path: &host::path::Path| {
-                        path.to_string() == format!("{}::{}", row.root, row.owner)
+                        path.to_string() == format!("{}::{held}", row.root)
                     };
                     match (named(first_path), named(definition.path_ref())) {
                         (true, false) => {}
@@ -934,6 +945,13 @@ fn build(
                 Err(error) => return Err(entry_error(facade.root(), module, error.into())),
             }
         }
+    }
+    // A module the facade reaches at several paths is held at one: what
+    // lies below each other path is what lies below that one.
+    for (path, target) in facade.reexports() {
+        builder
+            .imported_reexport(path, target, allocation)
+            .map_err(|source| entry_error(facade.root(), path, source.into()))?;
     }
     // A dependency's `macro_rules!` macros, which Rawr expands, each in its
     // module: `$crate` reads as the defining crate's root through this root.

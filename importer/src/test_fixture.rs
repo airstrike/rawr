@@ -181,6 +181,13 @@ pub fn runner_native_facade_plan() -> Box<[u8]> {
     crate::surface::facade::runner_native_fixture()
 }
 
+/// Return the plan a runner embeds for the native plan whose `Source` and
+/// `produce` lie in one module `native` reaches at `renderer::wgpu`, `wgpu`
+/// and a crate's hidden segment: the two later paths re-export the first.
+pub fn runner_reexported_facade_plan() -> Box<[u8]> {
+    crate::surface::facade::runner_reexported_fixture()
+}
+
 /// Return the runner plan with `Source` declared by `target`, so `native`'s
 /// `produce() -> Source` resolves through a facade after it in root order.
 pub fn runner_foreign_facade_plan() -> Box<[u8]> {
