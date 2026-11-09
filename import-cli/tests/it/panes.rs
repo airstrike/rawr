@@ -6,7 +6,9 @@
 //! structs and struct variants, and `get` and `get_mut`, whose `Option<&T>`
 //! and `Option<&mut T>` a pattern reads and writes back. A method's lent
 //! `&str` is a `&str` (D568), which keeps its value borrowed while it is
-//! used (D572). A type alias of a
+//! used (D572). A `&self` method reads the panes while a widget borrows
+//! them, as pane_grid's `view` reads `self.panes.len()` beside
+//! `PaneGrid::new(&self.panes, ..)`. A type alias of a
 //! builtin, as iced's `markdown::Uri` is `String`, names the builtin
 //! through its module. Build the driver
 //! first, as for `plain`.

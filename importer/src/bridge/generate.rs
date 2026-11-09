@@ -2509,6 +2509,32 @@ impl Arena {
         }
     }
 
+    /// [`Arena::held`] for a `&self` method: a value a view still borrows
+    /// is read in its home, as Rust lets a shared borrow live beside
+    /// another, where `held` would refuse it as a `&mut` (E0502).
+    #[allow(dead_code)]
+    fn held_shared<T: 'static, R>(
+        &mut self,
+        handle: NativeHandle,
+        call: impl FnOnce(&mut Self, &T) -> R,
+    ) -> Result<R, Error> {
+        self.settle(&handle);
+        if self.homed(&handle).is_none() {
+            return self.held(handle, |arena, value: &mut T| call(arena, value));
+        }
+        let homed = self.unhome(&handle)?;
+        let mut call = Some(call);
+        let mut output = None;
+        let result = homed.shared(&mut |value| {
+            if let (Some(call), Some(value)) = (call.take(), value.downcast_ref::<T>()) {
+                output = Some(call(self, value));
+            }
+        });
+        self.rehome(handle, homed);
+        result?;
+        output.ok_or(Error::TypeMismatch)
+    }
+
     /// The value of `handle` kept in its slot's home with the guard `reach`
     /// makes of it (#1325), as a crate method's `&mut` borrows it: a guard
     /// kept before ends here, as its borrow did. A `reach` that gives no
@@ -13686,15 +13712,19 @@ fn render_borrowed_receiver(
     // (D551.6), so the closure's own native calls reach the arena. So does
     // a method of a value generic over a script type, which may call a
     // script function it keeps, as elevato's `Simulation<P, M>::frame`
-    // calls the program's `update` (#1432).
+    // calls the program's `update` (#1432). A `&self` method holds it
+    // shared, so a value a view still borrows stays readable, as
+    // pane_grid's `self.panes.len()` beside `PaneGrid::new(&self.panes,
+    // ..)`.
     let calls_back = signature.inputs().iter().any(|ty| {
         callable_parameter(ty, signature)
             || matches!(ty, convert::Type::Option(inner) if callable_parameter(inner, signature))
     }) || substitutions.iter().any(names_script);
+    let held = if mutable { "held" } else { "held_shared" };
     let (arena_call, lent_call) = if calls_back {
         (
             format!(
-                "arguments.arena.held::<{container}, _>(receiver, |arena, receiver| lend(arena, || {call}))?"
+                "arguments.arena.{held}::<{container}, _>(receiver, |arena, receiver| lend(arena, || {call}))?"
             ),
             format!("lend(arguments.arena, || {call})"),
         )

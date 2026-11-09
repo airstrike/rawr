@@ -118,6 +118,22 @@ pub mod grid {
             self.maximized
         }
     }
+
+    /// A widget that borrows the panes it draws, as iced's
+    /// `PaneGrid::new(&self.panes, ..)` does.
+    pub struct Grid<'a, T> {
+        state: &'a State<T>,
+    }
+
+    impl<'a, T> Grid<'a, T> {
+        pub fn new(state: &'a State<T>) -> Self {
+            Grid { state }
+        }
+
+        pub fn panes(&self) -> usize {
+            self.state.len()
+        }
+    }
 }
 
 /// A value whose methods lend a `&str` from it, as url's `Url::scheme`
