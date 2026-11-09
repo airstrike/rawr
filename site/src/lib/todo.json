@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-09",
-  "version": "0.3.173",
+  "version": "0.3.174",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,21 +9,23 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A marked view can pass a lent value to a crate fn that also takes a `&str`, as in `inbox::view(title, theme).map(..)`, including when the output keeps both the string and the lent value.","issues":[1509]},
-        {"text":"A lent value reached at the wrong type is reported as a rawr bug, not as a runtime error in the user's program.","issues":[1528]},
-        {"text":"A new engine installs std's declarations as they were written once from the std table, instead of reading the table at every start. That is about 29 ms less per browser instance and 11 ms less per native thread.","issues":[1526],"refs":[1384]},
-        {"text":"A marked function that takes `Option<Element<'a, Message>>` by value from native code, as inboard's `home::State::view` takes `home_grid`, can now call `.map` on the element. Before, a value given this way was checked against the marked theme's native mirror, while `.map` expected the marked type itself, so the call failed. A native value whose type doesn't match what a call expects is now reported as a rawr bug, not as an error in the program.","issues":[1530]},
-        {"text":"A marked screen that passes a native function by name, as inboard's `home.rs` passes `theme::text::base` to `.style`, no longer restarts on a body edit above that call; it swaps in place. The runner names the function, not where the program writes it. When a save does need a new native build, `rawr run` says which native input or native use changed instead of \"native code changed\".","issues":[1531]},
-        {"text":"When a save can't compile inside the running program, `rawr run` says why in one line, `rawr: preparing again: <reason>`, and the events stream carries `{\"event\":\"preparing\",\"reason\":…}`. The reason is one of: a refresh, the native input that changed since the running build was checked, `Cargo.toml` or what native code sees of the marked modules, an earlier save's pending native build, or the running program's own miss.","issues":[1533]},
-        {"text":"A marked fn whose element borrows only native inputs now runs, as `fn view<'a>(threads: &'a Store) -> Element<'a, Message>` does. So does a fn that reads a crate call's output right where it makes it, from values native code lent it.","issues":[1491]},
-        {"text":"A lent slice passed beside a lent value to a crate fn that keeps neither now works.","issues":[1500]},
-        {"text":"An edit to a marked file that passes a crate function by name to a crate method, as `.style(theme::text::base)` does, now swaps into the running program. It used to take the full preparation on every save: about 2.5 minutes for the first edit on inboard.","issues":[1534]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.174",
+        "date": "2026-11-09",
+        "entries": [
+          {"text":"A marked view can pass a lent value to a crate fn that also takes a `&str`, as in `inbox::view(title, theme).map(..)`, including when the output keeps both the string and the lent value.","issues":[1509]},
+          {"text":"A lent value reached at the wrong type is reported as a rawr bug, not as a runtime error in the user's program.","issues":[1528]},
+          {"text":"A new engine installs std's declarations as they were written once from the std table, instead of reading the table at every start. That is about 29 ms less per browser instance and 11 ms less per native thread.","issues":[1526],"refs":[1384]},
+          {"text":"A marked function that takes `Option<Element<'a, Message>>` by value from native code, as inboard's `home::State::view` takes `home_grid`, can now call `.map` on the element. Before, a value given this way was checked against the marked theme's native mirror, while `.map` expected the marked type itself, so the call failed. A native value whose type doesn't match what a call expects is now reported as a rawr bug, not as an error in the program.","issues":[1530]},
+          {"text":"A marked screen that passes a native function by name, as inboard's `home.rs` passes `theme::text::base` to `.style`, no longer restarts on a body edit above that call; it swaps in place. The runner names the function, not where the program writes it. When a save does need a new native build, `rawr run` says which native input or native use changed instead of \"native code changed\".","issues":[1531]},
+          {"text":"When a save can't compile inside the running program, `rawr run` says why in one line, `rawr: preparing again: <reason>`, and the events stream carries `{\"event\":\"preparing\",\"reason\":…}`. The reason is one of: a refresh, the native input that changed since the running build was checked, `Cargo.toml` or what native code sees of the marked modules, an earlier save's pending native build, or the running program's own miss.","issues":[1533]},
+          {"text":"A marked fn whose element borrows only native inputs now runs, as `fn view<'a>(threads: &'a Store) -> Element<'a, Message>` does. So does a fn that reads a crate call's output right where it makes it, from values native code lent it.","issues":[1491]},
+          {"text":"A lent slice passed beside a lent value to a crate fn that keeps neither now works.","issues":[1500]},
+          {"text":"An edit to a marked file that passes a crate function by name to a crate method, as `.style(theme::text::base)` does, now swaps into the running program. It used to take the full preparation on every save: about 2.5 minutes for the first edit on inboard.","issues":[1534]}
+        ]
+      },
       {
         "version": "0.3.173",
         "date": "2026-11-09",
@@ -3330,7 +3332,7 @@
     {"issue":1488,"title":"A lent native part replaced in a marked &mut call drops when the call returns","state":"open","category":"Divergences from rustc"},
     {"issue":1489,"title":"A queued swap asks for a redraw only on macOS; Windows and Linux still wait for the next input","state":"open","category":"No glue (D593)"},
     {"issue":1490,"title":"An edit to code only iced's view calls waits for the next message after a swap","state":"open","category":"No glue (D593)"},
-    {"issue":1491,"title":"A marked fn whose result borrows only lent native inputs has no anchor, so a result borrowing program text is E0515","state":"closed","category":"No glue (D593)"},
+    {"issue":1491,"title":"A marked fn whose result borrows only lent native inputs has no anchor, so a result borrowing program text is E0515","state":"closed","category":"No glue (D593)","release":"0.3.174"},
     {"issue":1492,"title":"Pins kept for a marked value's borrowed results leak when the value is dropped or moved","state":"open","category":"No glue (D593)"},
     {"issue":1493,"title":"A project that can't share rawr's runtime rebuilds rawr in-project after every install: its marker names the sources","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1494,"title":"A runner that builds rawr in the project recompiled the rawr crate on a second run with nothing changed","state":"open","category":"Shared dependency cache (D607)"},
@@ -3339,7 +3341,7 @@
     {"issue":1497,"title":"An or-pattern over crate variants below a program variant is refused as binding different names","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1498,"title":"An or-pattern whose alternatives differ in program structure and test crate values is refused","state":"open","category":"Divergences from rustc"},
     {"issue":1499,"title":"A crate method whose output borrows its receiver can't also take a `&'a T` at the receiver's lifetime","state":"closed","category":"No glue (D593)","release":"0.3.172"},
-    {"issue":1500,"title":"A lent `&[T]` beside a lent `&T`, passed to a crate fn whose output doesn't keep them, fails","state":"closed","category":"No glue (D593)"},
+    {"issue":1500,"title":"A lent `&[T]` beside a lent `&T`, passed to a crate fn whose output doesn't keep them, fails","state":"closed","category":"No glue (D593)","release":"0.3.174"},
     {"issue":1501,"title":"Test a crate fn whose output keeps an `Option<&'a T>` of a value native code lent a marked view","state":"open","category":"No glue (D593)"},
     {"issue":1502,"title":"Moving a field out of a crate struct local takes the whole struct","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1503,"title":"A crate method borrowing its receiver can't take a `&'a str`, `&'a [T]` or `&'a mut T` at that lifetime","state":"open","category":"No glue (D593)"},
@@ -3348,7 +3350,7 @@
     {"issue":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open","category":"Borrow checker (D572)"},
     {"issue":1507,"title":"A block missing after a condition surfaced as a self error in a later method","state":"closed","category":"Divergences from rustc","release":"0.3.173"},
     {"issue":1508,"title":"Body syntax errors are found only when the body is lowered, after item resolution","state":"open","category":"Divergences from rustc"},
-    {"issue":1509,"title":"A crate fn whose output keeps a lent `&'a T` panics when its adapter also pins a `&str` argument","state":"closed","category":"No glue (D593)"},
+    {"issue":1509,"title":"A crate fn whose output keeps a lent `&'a T` panics when its adapter also pins a `&str` argument","state":"closed","category":"No glue (D593)","release":"0.3.174"},
     {"issue":1510,"title":"A marked module can't name a native module's type alias by its path (`crate::widget::Element`)","state":"open","category":"Divergences from rustc"},
     {"issue":1511,"title":"The mirror table that Ty::from_resolved reads is a thread-local installed by Models::new; pass it explicitly","state":"open","category":"No glue (D593)"},
     {"issue":1512,"title":"rawr::universe::browser::prepare() takes about 11 s per instance on the page's main thread","state":"closed","category":"Platforms","release":"0.3.173"},
@@ -3365,15 +3367,15 @@
     {"issue":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"closed","category":"Divergences from rustc","release":"0.3.173"},
     {"issue":1524,"title":"Shared bindings compared a build script's whole OUT_DIR and read the project's after extraction","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.173"},
     {"issue":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"closed","category":"Platforms"},
+    {"issue":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"closed","category":"Platforms","release":"0.3.174"},
     {"issue":1527,"title":"A marked type spelled through its proxy alias and its mirror's re-exported path gave two scope families","state":"closed","category":"No glue (D593)","release":"0.3.173"},
-    {"issue":1528,"title":"A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"closed","category":"No glue (D593)"},
+    {"issue":1528,"title":"A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"closed","category":"No glue (D593)","release":"0.3.174"},
     {"issue":1529,"title":"A new engine still finishes the generated std facade and binds its callbacks at every start","state":"open","category":"Platforms"},
-    {"issue":1530,"title":"A given native value inside a by-value parameter was checked against a marked type's mirror, not the marked type","state":"open","category":"No glue (D593)"},
-    {"issue":1531,"title":"A body edit in a marked screen restarts the program when it shifts a native function passed by name","state":"open","category":"No glue (D593)"},
+    {"issue":1530,"title":"A given native value inside a by-value parameter was checked against a marked type's mirror, not the marked type","state":"closed","category":"No glue (D593)","release":"0.3.174"},
+    {"issue":1531,"title":"A body edit in a marked screen restarts the program when it shifts a native function passed by name","state":"closed","category":"No glue (D593)","release":"0.3.174"},
     {"issue":1532,"title":"Find what keeps an old generation's literal alive after the generation drops","state":"open","category":"Hot reload of a marked `main` (D555)"},
-    {"issue":1533,"title":"A save that prepares again doesn't say why","state":"open","category":"Hot reload of a marked `main` (D555)"},
-    {"issue":1534,"title":"The first save after rawr run starts takes the full preparation instead of the resident route","state":"closed","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":1533,"title":"A save that prepares again doesn't say why","state":"closed","category":"Hot reload of a marked `main` (D555)","release":"0.3.174"},
+    {"issue":1534,"title":"The first save after rawr run starts takes the full preparation instead of the resident route","state":"closed","category":"Hot reload of a marked `main` (D555)","release":"0.3.174"},
     {"issue":1535,"title":"Assigning a field of a native value lent &mut to a marked fn is refused","state":"open","category":"No glue (D593)"},
     {"issue":1536,"title":"A crate use with const-length constants is never in the resident inventory","state":"open","category":"Hot reload of a marked `main` (D555)"}
   ],
