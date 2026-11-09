@@ -13,6 +13,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - When a save can't compile inside the running program, `rawr run` says why in one line, `rawr: preparing again: <reason>`, and the events stream carries `{"event":"preparing","reason":…}`. The reason is one of: a refresh, the native input that changed since the running build was checked, `Cargo.toml` or what native code sees of the marked modules, an earlier save's pending native build, or the running program's own miss. (#1533)
 - A marked fn whose element borrows only native inputs now runs, as `fn view<'a>(threads: &'a Store) -> Element<'a, Message>` does. So does a fn that reads a crate call's output right where it makes it, from values native code lent it. (#1491)
 - A lent slice passed beside a lent value to a crate fn that keeps neither now works. (#1500)
+- An edit to a marked file that passes a crate function by name to a crate method, as `.style(theme::text::base)` does, now swaps into the running program. It used to take the full preparation on every save: about 2.5 minutes for the first edit on inboard. (#1534)
 
 ## 0.3.173 (2026-11-09)
 

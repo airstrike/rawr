@@ -1534,7 +1534,8 @@
     {"t":"T1531","issue":1531,"title":"T1531: A body edit in a marked screen restarts the program when it shifts a native function passed by name","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1532","issue":1532,"title":"T1532: Find what keeps an old generation's literal alive after the generation drops","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1533","issue":1533,"title":"T1533: A save that prepares again doesn't say why","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1534","issue":1534,"title":"T1534: The first save after rawr run starts takes the full preparation instead of the resident route","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1535","issue":1535,"title":"T1535: Assigning a field of a native value lent &mut to a marked fn is refused","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1534","issue":1534,"title":"T1534: The first save after rawr run starts takes the full preparation instead of the resident route","state":"closed","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":"3b820e1a0","release":null},
+    {"t":"T1535","issue":1535,"title":"T1535: Assigning a field of a native value lent &mut to a marked fn is refused","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1536","issue":1536,"title":"T1536: A crate use with const-length constants is never in the resident inventory","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
