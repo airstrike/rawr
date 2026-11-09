@@ -184,7 +184,9 @@
         {"text":"A `match` on a marked enum whose variant holds a crate enum (`Message::Wizard(wizard::Message::Step(step))`) is exhaustive where rustc's is, instead of a false E0004.","issues":[1481]},
         {"text":"Native code can keep a marked `State` between calls and poll the `Task<Message>` a marked `update` returns, mapped with a marked variant such as `Message::Wizard`: the task and element types are native code's own.","issues":[1485],"refs":[1249,44]},
         {"text":"A marked type can hold a native value that isn't `Clone` inside an `Option`, a `Vec`, a `Box` or a tuple, as inboard's `home::State` holds `wizard: Option<wizard::State>`. Native code lends the value to marked methods where it is, so `self.wizard = Some(..)`, `self.wizard = None`, `self.tabs.push(..)` and `self.tabs.remove(i)` work as in Rust.","issues":[1475,1482]},
-        {"text":"A marked function that returns `()` gives native code `()` even when its last statement leaves a value, such as the native part `self.tabs.remove(index);` removes. That case used to fail with E0515.","issues":[1486]}
+        {"text":"A marked function that returns `()` gives native code `()` even when its last statement leaves a value, such as the native part `self.tabs.remove(index);` removes. That case used to fail with E0515.","issues":[1486]},
+        {"text":"A save to a program with a native `main` and an idle window loop now shows at once on macOS. rawr asks the program's windows to redraw when it queues a save, so the next frame takes it with no input. Before, the save waited for the next pointer or key event.","issues":[1479]},
+        {"text":"Native code can hold the `Element<'a, Message>` that a marked `view<'a>(&'a self, ..)` or `view(&State) -> Element<'_, Message>` returns while it borrows the state. The element's borrowed text lives as long as Rust says it does, and `.map(Message::Wizard)` on such an element works inside the view.","issues":[1473]}
       ]
     },
     "releases": [
@@ -3265,13 +3267,13 @@
     {"issue":1470,"title":"A marked trait impl for a native type whose method takes a receiver …","state":"open","category":"No glue (D593)"},
     {"issue":1471,"title":"`SystemTime` values don't compare: `SystemTime::now() >= UNIX_EPOCH` is a type mismatch…","state":"open","category":"Divergences from rustc"},
     {"issue":1472,"title":"A marked module declared inside an inline module of a native file, or in a native binary's tree…","state":"open","category":"Divergences from rustc"},
-    {"issue":1473,"title":"A marked `&'a self` view returning a native `Element<'a, M>` with several lent native borrows is…","state":"open","category":"No glue (D593)"},
+    {"issue":1473,"title":"A marked `&'a self` view returning a native `Element<'a, M>` with several lent native borrows is…","state":"closed","category":"No glue (D593)"},
     {"issue":1474,"title":"A marked type's `&self -> &str` into a native part's String comes back as interned program text…","state":"open","category":"No glue (D593)"},
     {"issue":1475,"title":"A marked type holding native parts crosses inside Vec, Option or a tuple by cloning its parts…","state":"closed","category":"No glue (D593)"},
     {"issue":1476,"title":"A marked fn returning a reference into a `&T` parameter's native part …","state":"open","category":"No glue (D593)"},
     {"issue":1477,"title":"A native `&'static [T]` const of numbers is copied at each read and isn't passed through to a…","state":"open","category":"Divergences from rustc"},
     {"issue":1478,"title":"A native const of nested references, as `&[&str]` or `&(u8, u8)`, can't be used from marked code","state":"open","category":"Divergences from rustc"},
-    {"issue":1479,"title":"A queued swap waits for the next input event to apply; it should wake the app's event loop and…","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":1479,"title":"A queued swap waits for the next input event to apply; it should wake the app's event loop and…","state":"closed","category":"Hot reload of a marked `main` (D555)"},
     {"issue":1480,"title":"A project whose native lib (psm) rawr's shared runtime also links rebuilds the runtime…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1481,"title":"Exhaustiveness ignored crate-enum patterns nested in a program pattern, so rawr reported a false…","state":"closed","category":"No glue (D593)"},
     {"issue":1482,"title":"A marked struct with an `Option<native>` field (inboard's `home::State::wizard`) doesn't cross…","state":"closed","category":"No glue (D593)"},
@@ -3280,7 +3282,11 @@
     {"issue":1485,"title":"Native code polls the Task<Message> a marked update returns","state":"open","category":"No glue (D593)"},
     {"issue":1486,"title":"A marked unit function gives native code () whatever its last statement leaves","state":"open","category":"No glue (D593)"},
     {"issue":1487,"title":"A native part a marked &mut call moves to another place comes back","state":"open","category":"No glue (D593)"},
-    {"issue":1488,"title":"A lent native part replaced in a marked &mut call drops when the call returns","state":"open","category":"Divergences from rustc"}
+    {"issue":1488,"title":"A lent native part replaced in a marked &mut call drops when the call returns","state":"open","category":"Divergences from rustc"},
+    {"issue":1489,"title":"A queued swap asks for a redraw only on macOS; Windows and Linux still wait for the next input","state":"open","category":"No glue (D593)"},
+    {"issue":1490,"title":"An edit to code only iced's view calls waits for the next message after a swap","state":"open","category":"No glue (D593)"},
+    {"issue":1491,"title":"A marked fn whose result borrows only lent native inputs has no anchor, so a result borrowing program text is E0515","state":"open","category":"No glue (D593)"},
+    {"issue":1492,"title":"Pins kept for a marked value's borrowed results leak when the value is dropped or moved","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4103,7 +4109,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), and native values sit in its Option and Vec fields (#1475). Next: views that borrow the state (#1473) and by-value lifetime parameters (#1225)",
+          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479). Next: by-value lifetime parameters (#1225) and crate calls on lent receivers (#1413)",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
@@ -4206,7 +4212,11 @@
             {"number":1482,"title":"A marked struct with an `Option<native>` field (inboard's `home::State::wizard`) doesn't cross…","state":"closed"},
             {"number":1486,"title":"A marked unit function gives native code () whatever its last statement leaves","state":"open"},
             {"number":1487,"title":"A native part a marked &mut call moves to another place comes back","state":"open"},
-            {"number":1488,"title":"A lent native part replaced in a marked &mut call drops when the call returns","state":"open"}
+            {"number":1488,"title":"A lent native part replaced in a marked &mut call drops when the call returns","state":"open"},
+            {"number":1479,"title":"A queued swap waits for the next input event to apply; it should wake the app's event loop and…","state":"closed"},
+            {"number":1489,"title":"A queued swap asks for a redraw only on macOS; Windows and Linux still wait for the next input","state":"open"},
+            {"number":1490,"title":"An edit to code only iced's view calls waits for the next message after a swap","state":"open"},
+            {"number":1473,"title":"A marked `&'a self` view returning a native `Element<'a, M>` with several lent native borrows is…","state":"closed"}
           ]
         }
       ]
