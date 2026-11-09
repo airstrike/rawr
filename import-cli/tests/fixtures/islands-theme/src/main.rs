@@ -3,8 +3,10 @@
 //! as the crate's widgets do: through its `From` impls in both directions,
 //! the crate's traits it implements, a `From<&Theme>` for the crate's
 //! settings and a pattern on its variant.
+mod home;
 mod style;
 mod theme;
+mod widget;
 
 use theme::Theme;
 
@@ -50,5 +52,8 @@ fn main() {
         typeface.size(),
         typeface.family()
     );
+    println!("{}", home::heading());
+    println!("{}", home::container().draw(&theme));
+    println!("{}", home::label().draw(&dark));
     println!("clones {}", theme::clones());
 }

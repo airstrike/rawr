@@ -7911,15 +7911,24 @@ fn instance_key(plan: &Plan) -> [u8; 32] {
             substitutions,
             constants,
             slots,
+            functions,
             ..
         }
         | Operation::Method {
             substitutions,
             constants,
             slots,
+            functions,
             ..
         } if !substitutions.is_empty() || !constants.is_empty() || !slots.is_empty() => {
-            crate::surface::instance::key_with_constants(substitutions, constants, slots)
+            let items = functions
+                .iter()
+                .map(|function| {
+                    let selector = function.plan().selector().copied().unwrap_or([0; 32]);
+                    (function.position(), selector)
+                })
+                .collect::<Vec<_>>();
+            crate::surface::instance::key_with_items(substitutions, constants, slots, &items)
         }
         _ => [0; 32],
     }

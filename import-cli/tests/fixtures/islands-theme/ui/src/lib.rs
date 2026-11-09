@@ -74,3 +74,28 @@ pub trait Base {
 pub fn base<B: Base>(base: &B) -> String {
     format!("base {}", base.name())
 }
+
+/// A widget styled by a function of the app's theme, as an iced widget's
+/// `style`.
+pub struct Label<'a, T> {
+    content: String,
+    style: Box<dyn Fn(&T) -> u32 + 'a>,
+}
+
+pub fn label<'a, T>(content: &str) -> Label<'a, T> {
+    Label {
+        content: content.to_owned(),
+        style: Box::new(|_| 0),
+    }
+}
+
+impl<'a, T> Label<'a, T> {
+    pub fn style(mut self, style: impl Fn(&T) -> u32 + 'a) -> Self {
+        self.style = Box::new(style);
+        self
+    }
+
+    pub fn draw(&self, theme: &T) -> String {
+        format!("{} styled {}", self.content, (self.style)(theme))
+    }
+}

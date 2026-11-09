@@ -139,9 +139,10 @@ struct Resolver<'a> {
     /// Each crate derive whose expansion the graph loaded (#593).
     expanded: crate::capability::Expanded,
     /// The marked types of a native root that rawr's copy of the crate
-    /// mirrors, by their package and path (`Graph::island_mirrors`, #1249).
+    /// mirrors, by their package and path, each with its Rust path from
+    /// the crate's name (`Graph::island_mirrors`, #1249).
     #[cfg(feature = "rust-import")]
-    mirrors: BTreeSet<Box<[ImmutableString]>>,
+    mirrors: BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
 }
 
 /// The variants of `std::cmp::Ordering`, which `use` may import by name.
@@ -172,11 +173,23 @@ impl<'a> Resolver<'a> {
         let statics = graph.native_statics();
         let (packages, sources, parsed, entry_package, entry_source) = graph.into_parts();
         let package: ImmutableString = packages[entry_package.index()].name().into();
+        // Each mirror by its package's path, and by its Rust path from the
+        // crate's name, as rawr's copy of the crate declares it.
         #[cfg(feature = "rust-import")]
-        let mirrors = mirrors
-            .into_iter()
-            .map(|path| std::iter::once(package.clone()).chain(path).collect())
-            .collect();
+        let mirrors = {
+            let krate = packages[entry_package.index()]
+                .rust_crate()
+                .map_or_else(|| package.clone(), ImmutableString::from);
+            mirrors
+                .into_iter()
+                .map(|path| {
+                    let rust = std::iter::once(krate.clone())
+                        .chain(path.iter().cloned())
+                        .collect();
+                    (std::iter::once(package.clone()).chain(path).collect(), rust)
+                })
+                .collect()
+        };
         let evidence = sources
             .iter()
             .map(|source| source.diagnostic().clone())
@@ -1835,6 +1848,19 @@ impl<'a> Resolver<'a> {
         } else if self.is_child_module(context, first) {
             absolute.extend_from_slice(modules);
             absolute.extend_from_slice(path);
+        } else if path.len() > 1
+            && let Some(alias) = self.module_alias(context, first)
+        {
+            // `use crate::theme;` then `theme::text::base`: the path goes
+            // on from the module the binding names, in that module's own
+            // namespace, as rustc resolves it.
+            let expanded = alias
+                .path
+                .iter()
+                .chain(&path[1..])
+                .cloned()
+                .collect::<Vec<_>>();
+            return self.rust_spelling(&alias.context, &expanded);
         } else {
             return None;
         }

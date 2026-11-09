@@ -1079,6 +1079,32 @@ pub fn key_with_constants(
     digest.finalize().into()
 }
 
+/// [`key_with_constants`] of an instance whose callable parameters crate
+/// functions fill, each by its input's position and its selector's
+/// fingerprint, as `.style(theme::text::base)` passes one: each function
+/// is an instance of its own, as each Rust function is a type of its own.
+#[must_use]
+pub fn key_with_items(
+    types: &[convert::Type],
+    constants: &[convert::Constant],
+    slots: &[Slot],
+    items: &[(u32, [u8; 32])],
+) -> [u8; 32] {
+    let key = key_with_constants(types, constants, slots);
+    if items.is_empty() {
+        return key;
+    }
+    use sha2::{Digest as _, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(key);
+    digest.update(b"rawr.instance.items/v1");
+    for (position, selector) in items {
+        digest.update(position.to_le_bytes());
+        digest.update(selector);
+    }
+    digest.finalize().into()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::classify::representability::convert;
