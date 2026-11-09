@@ -375,9 +375,13 @@ impl Projection<'_> {
                 mappers,
                 ..
             } => (substitutions.as_ref(), functions.as_ref(), mappers.as_ref()),
-            adapter::Operation::Method { substitutions, .. } => {
-                (substitutions.as_ref(), &[][..], &[][..])
-            }
+            // A method takes crate functions by name as a function does, as
+            // `.style(theme::text::base)` takes one (#1534).
+            adapter::Operation::Method {
+                substitutions,
+                functions,
+                ..
+            } => (substitutions.as_ref(), functions.as_ref(), &[][..]),
             adapter::Operation::Builder { .. } => return None,
             // A generic type's variant or field is bound at the instance its
             // use infers, as `Key<&str>::Named` is: its types are the
