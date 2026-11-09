@@ -53,5 +53,9 @@ if [[ "${1:-}" == "--check" ]]; then
 else
     mkdir -p "$table"
     cp "$out/paths.tsv" "$out/items.tsv" "$out/impls.tsv" "$out/TOOLCHAIN" "$table/"
-    echo "std-table: wrote src/std_table for $channel"
+    # The std facade's declarations are read from the table once, here.
+    RAWR_STD_FACADE_WRITE=1 cargo test --manifest-path "$root/Cargo.toml" -p rawr --lib \
+        std_facade_declared_is_the_std_tables >&2
+    rustfmt +stable --edition 2024 "$root/src/std_facade/declared.rs"
+    echo "std-table: wrote src/std_table and src/std_facade/declared.rs for $channel"
 fi
