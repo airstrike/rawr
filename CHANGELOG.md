@@ -172,6 +172,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Any file in a native crate's module tree can be marked with `// rawr`, not only one declared by the crate root or a marked module. Marked code there reaches its parent's private items, its siblings and its native children as rustc allows, and native code calls into it. (#1467, #1150)
 - A marked type over a native one, as inboard's `enum Theme { Selected(themedef::Theme) }`, lends its native part to the interpreter where it is when native code borrows it, `&mut self` too, and moves it for a value: no clone, and a part that isn't `Clone` crosses. (#1469)
 - A marked type's `&self` method returning a reference into its native part, as `fn colors(&self) -> &Colors`, gives native code that reference where the part is, and marked code can call it as `self.colors().accent`. A `&str` result such as `iced::theme::Base::name` works too. (#1468)
+- Slices and `Vec`s run `binary_search`, `binary_search_by`, `binary_search_by_key` and `partition_point` by std's own loop, so each `Ok` among equal elements and each `Err` insertion point is the one rustc's build gives. (#1456)
 
 ## 0.3.171 (2026-11-07)
 
