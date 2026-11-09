@@ -167,7 +167,8 @@
       {"text":"A marked function that native code calls on another thread, as an iced app's `Task::perform` output closure runs on a tokio worker, makes and uses crate values as it does on the main thread, instead of failing with `Stale`.","issues":[1464]},
       {"text":"The playground deploys again: the browser's universe ships as a 5 MB brotli-compressed module that the browser decompresses as it downloads, since the 53 MB raw module was over Cloudflare's limit on one file.","issues":[1459]},
       {"text":"A marked file can define a type over a native one, as inboard's `theme.rs` does with `enum Theme { Selected(themedef::Theme) }`. Its values cross with their native parts, and every impl native code relies on stays: `From` in both directions with native and crate types, a crate trait's impl, and `impl From<&Theme> for markdown::Settings`.","issues":[1466]},
-      {"text":"In ?play, a snippet's statements outside `fn main` can call std's path, io, time and fs items again, as the std page's `PathBuf` example does.","issues":[1460]}
+      {"text":"In ?play, a snippet's statements outside `fn main` can call std's path, io, time and fs items again, as the std page's `PathBuf` example does.","issues":[1460]},
+      {"text":"rawr checks a project built for another target, such as wasm32, when a dependency's build script uses a build-dependency with host-only dependencies. Before, it stopped with an internal error that a Cargo unit's package was absent from metadata.","issues":[1454]}
     ]
   },
   "releases": [
