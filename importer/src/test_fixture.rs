@@ -178,20 +178,45 @@ pub fn iced_projection_facade_plan() -> Box<[u8]> {
 /// Return an encoded runner plan: a `native` root with a constructible unit
 /// `Source` and `produce() -> Source`, and a `target` root with `Event<Message>`.
 pub fn runner_native_facade_plan() -> Box<[u8]> {
-    crate::surface::facade::runner_native_fixture()
+    crate::surface::facade::runner_image_fixture(
+        &crate::surface::facade::runner_native_fixture(),
+        false,
+    )
 }
 
 /// Return the plan a runner embeds for the native plan whose `Source` and
 /// `produce` lie in one module `native` reaches at `renderer::wgpu`, `wgpu`
 /// and a crate's hidden segment: the two later paths re-export the first.
 pub fn runner_reexported_facade_plan() -> Box<[u8]> {
+    crate::surface::facade::runner_image_fixture(
+        &crate::surface::facade::runner_reexported_fixture(),
+        true,
+    )
+}
+
+/// The runner's plan of [`runner_native_facade_plan`] as JSON, which a
+/// runner built whole before its image held it.
+pub fn runner_native_plan_json() -> Box<[u8]> {
+    crate::surface::facade::runner_json_fixture(&crate::surface::facade::runner_native_fixture())
+}
+
+/// The runner's plan of [`runner_reexported_facade_plan`] as JSON.
+pub fn runner_reexported_plan_json() -> Box<[u8]> {
     crate::surface::facade::runner_reexported_fixture()
+}
+
+/// The runner's plan of [`runner_foreign_facade_plan`] as JSON.
+pub fn runner_foreign_plan_json() -> Box<[u8]> {
+    crate::surface::facade::runner_json_fixture(&crate::surface::facade::runner_foreign_fixture())
 }
 
 /// Return the runner plan with `Source` declared by `target`, so `native`'s
 /// `produce() -> Source` resolves through a facade after it in root order.
 pub fn runner_foreign_facade_plan() -> Box<[u8]> {
-    crate::surface::facade::runner_foreign_fixture()
+    crate::surface::facade::runner_image_fixture(
+        &crate::surface::facade::runner_foreign_fixture(),
+        false,
+    )
 }
 
 fn iced_profile_graph(

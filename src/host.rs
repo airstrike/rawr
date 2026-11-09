@@ -1,12 +1,15 @@
 //! Host metadata consulted while resolving Rawr source.
 
 pub mod debug;
+pub(crate) mod declared;
 pub mod display;
 mod error;
 pub mod export;
 pub mod facade;
 #[cfg(feature = "rust-import")]
 pub(crate) mod family;
+#[cfg(feature = "rust-import")]
+pub(crate) mod image;
 pub mod item;
 pub(crate) mod path;
 pub(crate) mod projection;
@@ -178,6 +181,12 @@ pub struct Registry {
     /// Roots an app exported with `#[rawr::export]`. Their types keep
     /// fields and methods apart, as Rust does.
     exported: Vec<ImmutableString>,
+    /// The facades a runner's image holds (`image`), sorted by root: each
+    /// builds an entry the first time a lookup here reaches it. Each keeps
+    /// where its impl headers go among the others' (`impl_headers`), and
+    /// how many held facades were installed before it.
+    #[cfg(feature = "rust-import")]
+    held: Vec<(image::Held, (usize, usize))>,
 }
 
 /// One proof-backed application's host method, owned by its receiver's facade.
@@ -295,6 +304,8 @@ impl Registry {
             impl_headers: Vec::new(),
             derives: Vec::new(),
             exported: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            held: Vec::new(),
         }
     }
 
@@ -495,6 +506,8 @@ impl Registry {
             clone.derives.push(path.try_clone()?);
         }
         clone.exported.clone_from(&self.exported);
+        // A held facade's entries are built once and shared by every copy.
+        clone.held.clone_from(&self.held);
         Ok(clone)
     }
 
@@ -561,12 +574,15 @@ impl Registry {
             .checked_add(1)
             .ok_or(Error::Allocation)?;
         let type_count = definition.type_map().len();
-        let item_count = definition.items().len();
+        let item_count = definition.item_count();
         #[cfg(feature = "rust-import")]
         let imported_count = definition
-            .types()
+            .type_map()
+            .iter()
             .filter(|ty| ty.identity().imported().is_some())
             .count();
+        #[cfg(feature = "rust-import")]
+        let held = definition.held().cloned();
         self.modules
             .try_reserve(module_count)
             .map_err(|_| Error::Allocation)?;
@@ -649,22 +665,104 @@ impl Registry {
             .expect_err("registration preflight rejects occupied roots");
         self.facades.insert(facade_index, dependency);
         #[cfg(feature = "rust-import")]
+        if let Some(held) = held {
+            let index = self
+                .held
+                .binary_search_by(|(candidate, _)| candidate.root().cmp(held.root()))
+                .expect_err("registration preflight rejects occupied roots");
+            let installed = (self.impl_headers.len(), self.held.len());
+            self.held.insert(index, (held, installed));
+        }
+        #[cfg(feature = "rust-import")]
         self.rebuild_imported_index();
         Ok(self)
+    }
+
+    /// Every path the registry holds a module, type, item, family or
+    /// re-export at, which a held registry's lookups are tested at.
+    #[cfg(all(test, feature = "rust-import"))]
+    pub(crate) fn every_path(&self) -> Vec<String> {
+        let mut paths = self
+            .modules
+            .iter()
+            .chain(self.types.iter().map(type_def::Definition::path_ref))
+            .chain(self.items.iter().map(item::Definition::path_ref))
+            .chain(self.families.iter().map(family::Pending::path))
+            .chain(self.aliases.iter().map(|(alias, _)| alias))
+            .chain(self.trait_headers.iter().map(|header| &header.path))
+            .chain(self.derives.iter())
+            .map(path::Path::to_string)
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
+    /// The crate type identities the registry's types have, and the trait
+    /// identities of its impl headers.
+    #[cfg(all(test, feature = "rust-import"))]
+    pub(crate) fn every_identity(&self) -> (Vec<type_def::import::Identity>, Vec<[u8; 32]>) {
+        let mut types = self
+            .types
+            .iter()
+            .filter_map(|definition| definition.identity().imported().copied())
+            .collect::<Vec<_>>();
+        types.sort();
+        types.dedup();
+        let mut traits = self
+            .impl_headers
+            .iter()
+            .map(|header| header.trait_identity)
+            .collect::<Vec<_>>();
+        traits.sort();
+        traits.dedup();
+        (types, traits)
+    }
+
+    /// The held facade whose root is `path`'s first segment.
+    #[cfg(feature = "rust-import")]
+    fn held(&self, path: &path::Path) -> Option<&image::Held> {
+        let root = path.segments().first()?;
+        self.held
+            .binary_search_by(|(held, _)| held.root().name().cmp(root.as_str()))
+            .ok()
+            .map(|index| &self.held[index].0)
+    }
+
+    /// Whether a facade holds the module at `path`.
+    fn has_module(&self, path: &path::Path) -> bool {
+        if self.modules.binary_search(path).is_ok() {
+            return true;
+        }
+        #[cfg(feature = "rust-import")]
+        if let Some(held) = self.held(path) {
+            return held.module(path);
+        }
+        false
+    }
+
+    /// The type at exactly `path`.
+    fn type_at(&self, path: &path::Path) -> Option<&type_def::Definition> {
+        if let Ok(index) = self
+            .types
+            .binary_search_by(|definition| definition.path_ref().cmp(path))
+        {
+            return Some(&self.types[index]);
+        }
+        #[cfg(feature = "rust-import")]
+        if let Some(held) = self.held(path) {
+            return held.type_index(path).map(|index| held.type_at(index));
+        }
+        None
     }
 
     /// Look up a registered type by its canonical qualified path.
     #[must_use]
     pub fn type_(&self, path: &str) -> Option<&type_def::Definition> {
         let path = path::Path::parse(path).ok()?;
-        let found = |path: &path::Path| {
-            self.types
-                .binary_search_by(|definition| definition.path_ref().cmp(path))
-                .ok()
-                .map(|index| &self.types[index])
-        };
         // Below a re-exported module, the type below the module it names.
-        found(&path).or_else(|| found(&self.through_reexports(&path)?))
+        self.type_at(&path)
+            .or_else(|| self.type_at(&self.through_reexports(&path)?))
     }
 
     #[cfg(feature = "rust-import")]
@@ -767,6 +865,28 @@ impl Registry {
         if &self.facades[facade] != owner {
             return None;
         }
+        if let Some(held) = self.held(&path::Path::parse(owner.root()).ok()?) {
+            let aliases = held.identity_types(identity);
+            let first = *aliases.first()?;
+            let originating =
+                originating.filter(|definition| definition.identity().imported() == Some(identity));
+            let exact = originating.and_then(|originating| {
+                aliases
+                    .iter()
+                    .copied()
+                    .find(|alias| &held.type_path(*alias) == originating.path_ref())
+            });
+            // A type below a re-exported module has its paths below each
+            // module that re-exports it too.
+            let exact_alias = exact.is_some()
+                || aliases.len() == 1 && self.reexported(&held.type_path(first)).is_empty();
+            let definition = held.type_at(exact.unwrap_or(first));
+            return Some(ImportedType {
+                definition,
+                alias: exact_alias.then_some(definition),
+                owner: Some(&self.facades[facade]),
+            });
+        }
         let index = self
             .imported
             .binary_search_by(|candidate| {
@@ -814,6 +934,16 @@ impl Registry {
         if &self.facades[facade] != owner {
             return None;
         }
+        if let Some(held) = self.held(&path::Path::parse(owner.root()).ok()?) {
+            let aliases = held.identity_types(identity);
+            if aliases.is_empty() {
+                return None;
+            }
+            return Some(
+                self.type_paths(aliases.into_iter().map(|alias| held.type_path(alias)))
+                    .into_iter(),
+            );
+        }
         let imported = self
             .imported
             .binary_search_by(|candidate| {
@@ -824,8 +954,12 @@ impl Registry {
             })
             .ok()?;
         Some(
-            self.type_paths(&self.imported_aliases[self.imported[imported].aliases.clone()])
-                .into_iter(),
+            self.type_paths(
+                self.imported_aliases[self.imported[imported].aliases.clone()]
+                    .iter()
+                    .map(|alias| self.types[*alias].path_ref().clone()),
+            )
+            .into_iter(),
         )
     }
 
@@ -833,12 +967,12 @@ impl Registry {
     /// re-exported module gives them, in the order a type's paths take: a
     /// crate's hidden segment after its public paths, then path order.
     #[cfg(feature = "rust-import")]
-    fn type_paths(&self, aliases: &[usize]) -> Vec<String> {
+    fn type_paths(&self, aliases: impl Iterator<Item = path::Path>) -> Vec<String> {
         let mut paths = Vec::new();
-        for alias in aliases {
-            let path = self.types[*alias].path_ref();
-            paths.push(path.clone());
-            paths.extend(self.reexported(path));
+        for path in aliases {
+            let reexported = self.reexported(&path);
+            paths.push(path);
+            paths.extend(reexported);
         }
         let hidden = |path: &path::Path| {
             path.segments()
@@ -864,9 +998,35 @@ impl Registry {
         let end = self
             .imported
             .partition_point(|candidate| candidate.identity <= *identity);
-        self.imported[start..end]
+        let eager = &self.imported[start..end];
+        let identity = *identity;
+        // In facade order: each facade's paths of the type, held or not.
+        self.facades
             .iter()
-            .flat_map(|imported| self.type_paths(&self.imported_aliases[imported.aliases.clone()]))
+            .enumerate()
+            .flat_map(move |(facade, dependency)| {
+                if let Some(held) = path::Path::parse(dependency.root())
+                    .ok()
+                    .and_then(|root| self.held(&root))
+                {
+                    return self.type_paths(
+                        held.identity_types(&identity)
+                            .into_iter()
+                            .map(|alias| held.type_path(alias)),
+                    );
+                }
+                eager
+                    .iter()
+                    .filter(|imported| imported.facade == facade)
+                    .flat_map(|imported| {
+                        self.type_paths(
+                            self.imported_aliases[imported.aliases.clone()]
+                                .iter()
+                                .map(|alias| self.types[*alias].path_ref().clone()),
+                        )
+                    })
+                    .collect()
+            })
     }
 
     /// Look up a registered static item by its canonical qualified path.
@@ -888,7 +1048,9 @@ impl Registry {
         &'a self,
         name: &'a str,
     ) -> impl Iterator<Item = String> + 'a {
-        self.items
+        #[allow(unused_mut)]
+        let mut functions = self
+            .items
             .iter()
             .filter(move |item| {
                 item.path_ref().name() == name
@@ -897,13 +1059,21 @@ impl Registry {
                         item::Kind::Function | item::Kind::IntrinsicFunction
                     )
             })
-            // And at each path a re-exported module gives it.
-            .flat_map(|item| {
-                let path = item.path_ref();
-                std::iter::once(path.to_string())
-                    .chain(self.reexported(path).iter().map(path::Path::to_string))
-                    .collect::<Vec<_>>()
-            })
+            .collect::<Vec<_>>();
+        #[cfg(feature = "rust-import")]
+        {
+            for (held, _) in &self.held {
+                functions.extend(held.functions_named(name));
+            }
+            functions.sort_by(|left, right| left.path_ref().cmp(right.path_ref()));
+        }
+        // And at each path a re-exported module gives it.
+        functions.into_iter().flat_map(|item| {
+            let path = item.path_ref();
+            std::iter::once(path.to_string())
+                .chain(self.reexported(path).iter().map(path::Path::to_string))
+                .collect::<Vec<_>>()
+        })
     }
 
     /// Items declared directly under `owner`, such as a type's methods.
@@ -913,9 +1083,17 @@ impl Registry {
         let owner = path::Path::parse(owner)
             .ok()
             .map(|owner| self.through_reexports(&owner).unwrap_or(owner));
+        #[cfg(feature = "rust-import")]
+        if let Some(held) = owner.as_ref().and_then(|owner| self.held(owner)) {
+            return held
+                .members(owner.as_ref().expect("a held facade's owner parsed"))
+                .into_iter();
+        }
         self.items
             .iter()
             .filter(move |item| owner.is_some() && item.path_ref().parent() == owner)
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     pub(crate) fn overloads(&self, path: &str) -> Option<&[item::Definition]> {
@@ -1003,6 +1181,7 @@ impl Registry {
                 .binary_search_by(|family| family.path().cmp(path))
                 .ok()
                 .map(|index| &self.families[index])
+                .or_else(|| self.held(path)?.family(path))
         };
         find(&path).or_else(|| find(&self.canonical(&path)?))
     }
@@ -1058,7 +1237,7 @@ impl Registry {
     }
 
     fn entry_at(&self, path: &path::Path) -> Option<Entry<'_>> {
-        if self.modules.binary_search(path).is_ok() {
+        if self.has_module(path) {
             Some(match self.item_slice(path) {
                 Some(items) => Entry::ModuleItem(items),
                 None => Entry::Module,
@@ -1102,7 +1281,8 @@ impl Registry {
             path.segments().len() == module.segments().len() + 1
                 && path.segments().starts_with(module.segments())
         };
-        let mut names = self
+        #[allow(unused_mut)]
+        let mut candidates = self
             .modules
             .iter()
             .chain(self.types.iter().map(type_def::Definition::path_ref))
@@ -1122,6 +1302,21 @@ impl Registry {
                     .map(|(alias, _)| alias),
             )
             .filter(|path| inside(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        #[cfg(feature = "rust-import")]
+        if let Some(held) = self.held(module) {
+            let held = held.inside(module);
+            candidates.extend(held.modules);
+            candidates.extend(held.types);
+            candidates.extend(held.items);
+            candidates.extend(held.aliases.into_iter().filter_map(|(alias, kind)| {
+                (kind == image::Kind::Builtin || self.enum_variant(&alias.to_string()).is_some())
+                    .then_some(alias)
+            }));
+        }
+        let mut names = candidates
+            .iter()
             .filter(|path| {
                 let qualified = path.segments().join("::");
                 self.entry(&qualified).is_some() || self.enum_variant(&qualified).is_some()
@@ -1236,15 +1431,11 @@ impl Registry {
     }
 
     fn entry_kind(&self, path: &path::Path) -> Option<&'static str> {
-        if self.modules.binary_search(path).is_ok() {
+        if self.has_module(path) {
             Some("module")
-        } else if self
-            .types
-            .binary_search_by(|definition| definition.path_ref().cmp(path))
-            .is_ok()
-        {
+        } else if self.type_at(path).is_some() {
             Some("type")
-        } else if item_group(&self.items, path).is_some() {
+        } else if self.item_slice(path).is_some() {
             Some("item")
         } else {
             None
@@ -1252,13 +1443,8 @@ impl Registry {
     }
 
     fn type_by_path(&self, path: &path::Path) -> Option<&type_def::Definition> {
-        let found = |path: &path::Path| {
-            self.types
-                .binary_search_by(|definition| definition.path_ref().cmp(path))
-                .ok()
-                .map(|index| &self.types[index])
-        };
-        found(path).or_else(|| found(&self.canonical(path)?))
+        self.type_at(path)
+            .or_else(|| self.type_at(&self.canonical(path)?))
     }
 
     /// The enum whose variant `qualified` names, as `Enum::Variant` or
@@ -1345,7 +1531,12 @@ impl Registry {
         let Ok(path) = path::Path::parse(qualified) else {
             return false;
         };
-        let found = |path: &path::Path| self.derives.binary_search(path).is_ok();
+        let found = |path: &path::Path| {
+            let found = self.derives.binary_search(path).is_ok();
+            #[cfg(feature = "rust-import")]
+            let found = found || self.held(path).is_some_and(|held| held.derive(path));
+            found
+        };
         found(&path) || self.canonical(&path).is_some_and(|path| found(&path))
     }
 
@@ -1358,6 +1549,7 @@ impl Registry {
                 .binary_search_by(|header| header.path.cmp(path))
                 .ok()
                 .map(|index| &self.trait_headers[index])
+                .or_else(|| self.held(path)?.trait_header(path))
         };
         found(path).or_else(|| found(&self.canonical(path)?))
     }
@@ -1368,28 +1560,68 @@ impl Registry {
         &self,
         identity: [u8; 32],
     ) -> impl Iterator<Item = &facade::ImplHeader> {
-        self.impl_headers
-            .iter()
-            .filter(move |header| header.trait_identity == identity)
+        // Each held facade's impls go where its install put them.
+        let mut headers = Vec::new();
+        let mut start = 0;
+        for (held, position) in self.held_by_install() {
+            headers.extend(
+                self.impl_headers[start..position]
+                    .iter()
+                    .filter(|header| header.trait_identity == identity),
+            );
+            headers.extend(held.impl_headers(&identity));
+            start = position;
+        }
+        headers.extend(
+            self.impl_headers[start..]
+                .iter()
+                .filter(|header| header.trait_identity == identity),
+        );
+        headers.into_iter()
+    }
+
+    /// The held facades, each with where its impl headers go, in the order
+    /// they were installed.
+    #[cfg(feature = "rust-import")]
+    fn held_by_install(&self) -> Vec<(&image::Held, usize)> {
+        let mut held = self.held.iter().collect::<Vec<_>>();
+        held.sort_by_key(|(_, installed)| *installed);
+        held.into_iter()
+            .map(|(facade, (position, _))| (facade, *position))
+            .collect()
     }
 
     /// The builtin a facade names at `path` (`Entry::Builtin`).
     pub(crate) fn builtin_alias(&self, path: &path::Path) -> Option<&str> {
-        self.aliases.iter().find_map(|(alias, target)| {
+        let found = self.aliases.iter().find_map(|(alias, target)| {
             (alias == path && is_builtin_alias_target(target))
                 .then(|| target.segments()[0].as_str())
-        })
+        });
+        #[cfg(feature = "rust-import")]
+        let found = found.or_else(|| {
+            let (_, target) = self
+                .held(path)?
+                .alias(path, |kind| kind == image::Kind::Builtin)?;
+            Some(target.segments()[0].as_str())
+        });
+        found
     }
 
     /// The std path `qualified` names through a crate's re-export of a std
     /// item, as `iced::time::Duration` is `std::time::Duration`.
     pub(crate) fn std_alias(&self, qualified: &str) -> Option<ImmutableString> {
         let path = path::Path::parse(qualified).ok()?;
-        self.aliases
+        let found = self
+            .aliases
             .iter()
             .filter(|(_, target)| is_std_alias_target(target))
-            .find_map(|(alias, target)| path.rebase(alias, target))
-            .map(|path| path.to_string().into())
+            .find_map(|(alias, target)| path.rebase(alias, target));
+        #[cfg(feature = "rust-import")]
+        let found = found.or_else(|| {
+            self.held(&path)?
+                .through_alias(&path, |kind| kind == image::Kind::Std)
+        });
+        found.map(|path| path.to_string().into())
     }
 
     /// The canonical spelling of a path through a facade re-export:
@@ -1397,11 +1629,17 @@ impl Registry {
     pub(crate) fn canonical(&self, path: &path::Path) -> Option<path::Path> {
         let through = self.through_reexports(path);
         let path = through.as_ref().unwrap_or(path);
-        self.aliases
+        let found = self
+            .aliases
             .iter()
             .filter(|(_, target)| !is_builtin_alias_target(target))
-            .find_map(|(alias, target)| path.rebase(alias, target))
-            .or(through)
+            .find_map(|(alias, target)| path.rebase(alias, target));
+        #[cfg(feature = "rust-import")]
+        let found = found.or_else(|| {
+            self.held(path)?
+                .through_alias(path, |kind| kind != image::Kind::Builtin)
+        });
+        found.or(through)
     }
 
     /// `path` below the module each re-exported module above it names, as
@@ -1454,16 +1692,19 @@ impl Registry {
     }
 
     fn item_slice(&self, path: &path::Path) -> Option<&[item::Definition]> {
-        item_group(&self.items, path)
+        let found = item_group(&self.items, path);
+        #[cfg(feature = "rust-import")]
+        let found = found.or_else(|| self.held(path)?.items(path));
+        found
     }
 
     fn owner_for_path(&self, path: &path::Path) -> Option<&facade::Dependency> {
-        let exact_facade_entry = self.modules.binary_search(path).is_ok()
+        let exact_facade_entry = self.has_module(path)
             // A module below a re-exported one is the one below the module
             // it names.
             || self
                 .through_reexports(path)
-                .is_some_and(|through| self.modules.binary_search(&through).is_ok())
+                .is_some_and(|through| self.has_module(&through))
             || self
                 .type_by_path(path)
                 .is_some_and(type_def::Definition::exact_arity)
@@ -1501,12 +1742,20 @@ impl Registry {
             let first = self
                 .imported
                 .partition_point(|entry| entry.identity < *imported);
-            return self.imported[first..]
+            let eager = self.imported[first..]
                 .iter()
                 .take_while(|entry| entry.identity == *imported)
                 .map(|entry| self.imported_aliases[entry.aliases.start])
                 .min()
                 .map(|index| &self.types[index]);
+            // The first in path order, among the held facades' too.
+            return eager
+                .into_iter()
+                .chain(self.held.iter().filter_map(|(held, _)| {
+                    let first = held.identity_types(imported).into_iter().min()?;
+                    Some(held.type_at(first))
+                }))
+                .min_by(|left, right| left.path_ref().cmp(right.path_ref()));
         }
         self.types
             .iter()

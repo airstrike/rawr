@@ -569,63 +569,62 @@ impl Type {
     pub(crate) fn resolve(
         &self,
         root: &host::path::Path,
-        types: &[host::type_def::Definition],
+        declared: &dyn host::declared::Declared,
         parameters: &[(host::path::Path, crate::capability::Set)],
-        _imported: &ImportedTypes,
         item: &host::path::Path,
     ) -> Result<Self, host::Error> {
         match &self.0 {
             Shape::Unit => Ok(Self::unit()),
             Shape::Tuple(members) => Ok(Self(Shape::Tuple(resolve_types(
-                members, root, types, parameters, _imported, item,
+                members, root, declared, parameters, item,
             )?))),
             Shape::Keyed(kind, members) => Ok(Self(Shape::Keyed(
                 kind,
-                resolve_types(members, root, types, parameters, _imported, item)?,
+                resolve_types(members, root, declared, parameters, item)?,
             ))),
             Shape::Array { element, sequence } => Ok(Self(Shape::Array {
-                element: Box::new(element.resolve(root, types, parameters, _imported, item)?),
+                element: Box::new(element.resolve(root, declared, parameters, item)?),
                 sequence: sequence.clone(),
             })),
             Shape::Reference { mutable, target } => Ok(Self::reference(
                 *mutable,
-                target.resolve(root, types, parameters, _imported, item)?,
+                target.resolve(root, declared, parameters, item)?,
             )),
             Shape::Option(element) => Ok(Self::option(
-                element.resolve(root, types, parameters, _imported, item)?,
+                element.resolve(root, declared, parameters, item)?,
             )),
             Shape::Iter(element) => Ok(Self::iterator(
-                element.resolve(root, types, parameters, _imported, item)?,
+                element.resolve(root, declared, parameters, item)?,
             )),
             Shape::Boxed(element) => Ok(Self::boxed(
-                element.resolve(root, types, parameters, _imported, item)?,
+                element.resolve(root, declared, parameters, item)?,
             )),
             Shape::Counted(arc, element) => Ok(Self::counted(
                 *arc,
-                element.resolve(root, types, parameters, _imported, item)?,
+                element.resolve(root, declared, parameters, item)?,
             )),
             Shape::JoinHandle(element) => Ok(Self::join_handle(
-                element.resolve(root, types, parameters, _imported, item)?,
+                element.resolve(root, declared, parameters, item)?,
             )),
             Shape::Range(element) => Ok(Self::range(
-                element.resolve(root, types, parameters, _imported, item)?,
+                element.resolve(root, declared, parameters, item)?,
             )),
             Shape::RangeInclusive(element) => Ok(Self::range_inclusive(
-                element.resolve(root, types, parameters, _imported, item)?,
+                element.resolve(root, declared, parameters, item)?,
             )),
             Shape::Result(ok, err) => Ok(Self::result(
-                ok.resolve(root, types, parameters, _imported, item)?,
-                err.resolve(root, types, parameters, _imported, item)?,
+                ok.resolve(root, declared, parameters, item)?,
+                err.resolve(root, declared, parameters, item)?,
             )),
             Shape::Callable { input, output } => Ok(Self(Shape::Callable {
-                input: Box::new(input.resolve(root, types, parameters, _imported, item)?),
-                output: Box::new(output.resolve(root, types, parameters, _imported, item)?),
+                input: Box::new(input.resolve(root, declared, parameters, item)?),
+                output: Box::new(output.resolve(root, declared, parameters, item)?),
             })),
             #[cfg(feature = "rust-import")]
             Shape::ImportedFunctionItem { input, output } => {
                 Ok(Self(Shape::ImportedFunctionItem {
-                    input: Box::new(input.resolve(root, types, parameters, _imported, item)?),
-                    output: Box::new(output.resolve(root, types, parameters, _imported, item)?),
+                    input: Box::new(input.resolve(root, declared, parameters, item)?),
+                    output: Box::new(output.resolve(root, declared, parameters, item)?),
                 }))
             }
             Shape::Builtin(builtin) => Ok(Self::builtin(*builtin)),
@@ -643,11 +642,7 @@ impl Type {
             }
             Shape::Registered { path, arguments } => {
                 let qualified = host::path::Path::qualify(root, path);
-                let Some(definition) = types
-                    .binary_search_by(|definition| definition.path_ref().cmp(&qualified))
-                    .ok()
-                    .map(|index| &types[index])
-                else {
+                let Some(definition) = declared.ty(&qualified) else {
                     return Err(host::Error::UnknownFacadeType {
                         item: item.to_string().into(),
                         ty: qualified.to_string().into(),
@@ -661,7 +656,7 @@ impl Type {
                         actual: arguments.len(),
                     });
                 }
-                let arguments = resolve_types(arguments, root, types, parameters, _imported, item)?;
+                let arguments = resolve_types(arguments, root, declared, parameters, item)?;
                 Ok(Self(Shape::Registered {
                     path: qualified,
                     arguments,
@@ -674,7 +669,7 @@ impl Type {
             } => {
                 // The importer declares each crate type its bindings' items
                 // name.
-                let expected = _imported.parameters(identity).unwrap_or_else(|| {
+                let expected = declared.parameters(identity).unwrap_or_else(|| {
                     panic!("the bindings declare each crate type `{item}`'s signature names")
                 });
                 // The importer writes each of a crate type's uses with its
@@ -683,14 +678,13 @@ impl Type {
                     expected,
                     arguments.len(),
                     "a crate type's use in `{item}` gives `{}` its declared parameters",
-                    types
-                        .iter()
-                        .find(|definition| definition.identity().imported() == Some(identity))
-                        .map_or_else(|| "?".to_owned(), host::type_def::Definition::path)
+                    declared
+                        .type_path(identity)
+                        .unwrap_or_else(|| "?".to_owned())
                 );
                 Ok(Self(Shape::Imported {
                     identity: *identity,
-                    arguments: resolve_types(arguments, root, types, parameters, _imported, item)?,
+                    arguments: resolve_types(arguments, root, declared, parameters, item)?,
                 }))
             }
             Shape::External { export, arguments } => {
@@ -707,7 +701,7 @@ impl Type {
                     export: Box::new(export.try_clone().map_err(|_| host::Error::Allocation)?),
                     #[cfg(not(feature = "rust-import"))]
                     export: export.clone(),
-                    arguments: resolve_types(arguments, root, types, parameters, _imported, item)?,
+                    arguments: resolve_types(arguments, root, declared, parameters, item)?,
                 }))
             }
         }
@@ -717,9 +711,8 @@ impl Type {
     pub(crate) fn resolve_imported<A: host::ImportAllocation + ?Sized>(
         &mut self,
         root: &host::path::Path,
-        types: &[host::type_def::Definition],
+        declared: &dyn host::declared::Declared,
         parameters: &[(host::path::Path, crate::capability::Set)],
-        imported: &ImportedTypes,
         item: &host::path::Path,
         allocation: &mut A,
     ) -> Result<(), host::Error> {
@@ -727,7 +720,7 @@ impl Type {
             Shape::Unit | Shape::Builtin(_) => {}
             Shape::Tuple(members) | Shape::Keyed(_, members) => {
                 for member in members {
-                    member.resolve_imported(root, types, parameters, imported, item, allocation)?;
+                    member.resolve_imported(root, declared, parameters, item, allocation)?;
                 }
             }
             Shape::Array { element, .. }
@@ -741,19 +734,19 @@ impl Type {
             | Shape::JoinHandle(element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => {
-                element.resolve_imported(root, types, parameters, imported, item, allocation)?;
+                element.resolve_imported(root, declared, parameters, item, allocation)?;
             }
             Shape::Result(ok, err) => {
-                ok.resolve_imported(root, types, parameters, imported, item, allocation)?;
-                err.resolve_imported(root, types, parameters, imported, item, allocation)?;
+                ok.resolve_imported(root, declared, parameters, item, allocation)?;
+                err.resolve_imported(root, declared, parameters, item, allocation)?;
             }
             Shape::Callable { input, output } => {
-                input.resolve_imported(root, types, parameters, imported, item, allocation)?;
-                output.resolve_imported(root, types, parameters, imported, item, allocation)?;
+                input.resolve_imported(root, declared, parameters, item, allocation)?;
+                output.resolve_imported(root, declared, parameters, item, allocation)?;
             }
             Shape::ImportedFunctionItem { input, output } => {
-                input.resolve_imported(root, types, parameters, imported, item, allocation)?;
-                output.resolve_imported(root, types, parameters, imported, item, allocation)?;
+                input.resolve_imported(root, declared, parameters, item, allocation)?;
+                output.resolve_imported(root, declared, parameters, item, allocation)?;
             }
             Shape::Parameter(name) => {
                 if parameters
@@ -769,11 +762,7 @@ impl Type {
             Shape::Registered { path, arguments } => {
                 let relative = path.take();
                 let qualified = host::path::Path::qualify_imported(root, relative, allocation)?;
-                let Some(definition) = types
-                    .binary_search_by(|definition| definition.path_ref().cmp(&qualified))
-                    .ok()
-                    .map(|index| &types[index])
-                else {
+                let Some(definition) = declared.ty(&qualified) else {
                     return Err(host::Error::UnknownFacadeType {
                         item: item.to_string().into(),
                         ty: qualified.to_string().into(),
@@ -789,8 +778,7 @@ impl Type {
                 }
                 *path = qualified;
                 for argument in arguments {
-                    argument
-                        .resolve_imported(root, types, parameters, imported, item, allocation)?;
+                    argument.resolve_imported(root, declared, parameters, item, allocation)?;
                 }
             }
             Shape::Imported {
@@ -798,12 +786,11 @@ impl Type {
                 arguments,
             } => {
                 for argument in arguments.iter_mut() {
-                    argument
-                        .resolve_imported(root, types, parameters, imported, item, allocation)?;
+                    argument.resolve_imported(root, declared, parameters, item, allocation)?;
                 }
                 // A type another facade declares is that facade's, as a
                 // path into a dependency is that crate's.
-                if let Some(export) = imported.foreign(identity) {
+                if let Some(export) = declared.foreign(identity) {
                     assert_eq!(
                         export.parameters().len(),
                         arguments.len(),
@@ -820,7 +807,7 @@ impl Type {
                 }
                 // The importer declares each crate type its bindings' items
                 // name, here or in another facade.
-                let expected = imported.parameters(identity).unwrap_or_else(|| {
+                let expected = declared.parameters(identity).unwrap_or_else(|| {
                     panic!("the bindings declare each crate type `{item}`'s signature names")
                 });
                 // The importer writes each of a crate type's uses with its
@@ -829,10 +816,9 @@ impl Type {
                     expected,
                     arguments.len(),
                     "a crate type's use in `{item}` gives `{}` its declared parameters",
-                    types
-                        .iter()
-                        .find(|definition| definition.identity().imported() == Some(identity))
-                        .map_or_else(|| "?".to_owned(), host::type_def::Definition::path)
+                    declared
+                        .type_path(identity)
+                        .unwrap_or_else(|| "?".to_owned())
                 );
             }
             Shape::External { export, arguments } => {
@@ -845,8 +831,7 @@ impl Type {
                     });
                 }
                 for argument in arguments {
-                    argument
-                        .resolve_imported(root, types, parameters, imported, item, allocation)?;
+                    argument.resolve_imported(root, declared, parameters, item, allocation)?;
                 }
             }
         }
@@ -951,9 +936,8 @@ fn collect_types(types: impl IntoIterator<Item = Type>) -> Result<Box<[Type]>, h
 fn resolve_types(
     unresolved: &[Type],
     root: &host::path::Path,
-    types: &[host::type_def::Definition],
+    declared: &dyn host::declared::Declared,
     parameters: &[(host::path::Path, crate::capability::Set)],
-    imported: &ImportedTypes,
     item: &host::path::Path,
 ) -> Result<Box<[Type]>, host::Error> {
     let mut resolved = Vec::new();
@@ -961,7 +945,7 @@ fn resolve_types(
         .try_reserve_exact(unresolved.len())
         .map_err(|_| host::Error::Allocation)?;
     for ty in unresolved {
-        resolved.push(ty.resolve(root, types, parameters, imported, item)?);
+        resolved.push(ty.resolve(root, declared, parameters, item)?);
     }
     Ok(resolved.into_boxed_slice())
 }
@@ -1171,7 +1155,7 @@ impl ImportedTypes {
     }
 
     #[cfg(feature = "rust-import")]
-    fn parameters(&self, identity: &host::type_def::import::Identity) -> Option<usize> {
+    pub(crate) fn parameters(&self, identity: &host::type_def::import::Identity) -> Option<usize> {
         self.declared
             .binary_search_by(|(candidate, _)| candidate.cmp(identity))
             .ok()
@@ -1181,7 +1165,7 @@ impl ImportedTypes {
     /// The export of the facade that declares a type this one names and
     /// doesn't declare.
     #[cfg(feature = "rust-import")]
-    fn foreign(
+    pub(crate) fn foreign(
         &self,
         identity: &host::type_def::import::Identity,
     ) -> Option<&host::type_def::Export> {
@@ -1218,7 +1202,11 @@ mod tests {
         let mut allocation = host::TestImportAllocation::default();
 
         let resolved = subscription_function()
-            .resolve_imported(&root, &[], &types, &[], &imported, &mut allocation)
+            .resolve_imported(
+                &root,
+                &host::declared::Slices::new(&[], &types, &[], &imported),
+                &mut allocation,
+            )
             .expect("registered output resolves inside the imported facade");
 
         assert_eq!(resolved.path(), "iced::listen");
@@ -1238,7 +1226,11 @@ mod tests {
         let mut allocation = host::TestImportAllocation::default();
 
         let error = subscription_function()
-            .resolve_imported(&root, &[], &[], &[], &imported, &mut allocation)
+            .resolve_imported(
+                &root,
+                &host::declared::Slices::new(&[], &[], &[], &imported),
+                &mut allocation,
+            )
             .expect_err("missing registered type must be rejected");
 
         assert_eq!(

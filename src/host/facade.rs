@@ -63,6 +63,11 @@ pub struct Body {
     #[cfg(feature = "rust-import")]
     families: Box<[host::family::Pending]>,
     fingerprint: Fingerprint,
+    /// The facade as its runner's image holds it, which builds each entry
+    /// a lookup reaches (`host::image`): the slices above stay empty but
+    /// for its re-exports.
+    #[cfg(feature = "rust-import")]
+    held: Option<host::image::Held>,
 }
 
 /// A crate's type alias, as `pub type Result = std::result::Result<(),
@@ -79,6 +84,26 @@ pub(crate) struct TypeAlias {
 }
 
 impl TypeAlias {
+    /// The crate's type alias at `path`, qualified, resolved against the
+    /// declarations of its facade at `root`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn imported(
+        root: &host::path::Path,
+        path: host::path::Path,
+        parameters: Box<[ImmutableString]>,
+        defaults: Box<[Option<host::type_ref::Type>]>,
+        target: host::type_ref::Type,
+        declared: &dyn host::declared::Declared,
+    ) -> Result<Self, host::Error> {
+        Self {
+            path,
+            parameters,
+            defaults,
+            target,
+        }
+        .resolve(root, declared)
+    }
+
     pub(crate) const fn path(&self) -> &host::path::Path {
         &self.path
     }
@@ -120,8 +145,7 @@ impl TypeAlias {
     fn resolve(
         &self,
         root: &host::path::Path,
-        types: &[host::type_def::Definition],
-        imported: &host::type_ref::ImportedTypes,
+        declared: &dyn host::declared::Declared,
     ) -> Result<Self, host::Error> {
         let mut parameters = self
             .parameters
@@ -135,7 +159,7 @@ impl TypeAlias {
             .collect::<Result<Vec<_>, host::Error>>()?;
         parameters.sort_by(|(left, _), (right, _)| left.cmp(right));
         let resolve =
-            |ty: &host::type_ref::Type| ty.resolve(root, types, &parameters, imported, &self.path);
+            |ty: &host::type_ref::Type| ty.resolve(root, declared, &parameters, &self.path);
         Ok(Self {
             path: self.path.clone(),
             parameters: self.parameters.clone(),
@@ -271,20 +295,107 @@ impl ImplHeader {
     }
 }
 
+#[cfg(feature = "rust-import")]
+impl TraitHeader {
+    /// This header with its defaults resolved against the declarations of
+    /// the facade at `root`: `None` when one names a type it lacks.
+    pub(crate) fn resolve(
+        &self,
+        root: &host::path::Path,
+        declared: &dyn host::declared::Declared,
+    ) -> Option<Self> {
+        let parameters = header_parameters(&self.parameters)?;
+        let defaults = self
+            .defaults
+            .iter()
+            .map(|default| match default {
+                Some(default) => default
+                    .resolve(root, declared, &parameters, &self.path)
+                    .ok()
+                    .map(Some),
+                None => Some(None),
+            })
+            .collect::<Option<Box<[_]>>>()?;
+        Some(Self {
+            path: self.path.clone(),
+            identity: self.identity,
+            parameters: self.parameters.clone(),
+            defaults,
+        })
+    }
+}
+
+#[cfg(feature = "rust-import")]
+impl ImplHeader {
+    /// This header resolved against the declarations of the facade at
+    /// `root`: `None` when its trait's arguments or self type name a type it
+    /// lacks. A bound or projection that does is left out.
+    pub(crate) fn resolve(
+        &self,
+        root: &host::path::Path,
+        declared: &dyn host::declared::Declared,
+    ) -> Option<Self> {
+        let parameters = header_parameters(&self.parameters)?;
+        let resolve = |types: &[host::type_ref::Type]| {
+            resolve_header_types(types, root, declared, &parameters, root)
+        };
+        let (Some(arguments), Some(self_type)) = (
+            resolve(&self.arguments),
+            resolve(std::slice::from_ref(&self.self_type)),
+        ) else {
+            return None;
+        };
+        let bounds = self
+            .bounds
+            .iter()
+            .filter_map(|bound| {
+                Some(ImplBound {
+                    ty: resolve(std::slice::from_ref(&bound.ty))?.into_vec().pop()?,
+                    trait_identity: bound.trait_identity,
+                    arguments: resolve(&bound.arguments)?,
+                })
+            })
+            .collect::<Box<[_]>>();
+        let one = |ty: &host::type_ref::Type| resolve(std::slice::from_ref(ty))?.into_vec().pop();
+        let projections = self
+            .projections
+            .iter()
+            .filter_map(|projection| {
+                Some(ImplProjection {
+                    ty: one(&projection.ty)?,
+                    value: one(&projection.value)?,
+                    cases: projection
+                        .cases
+                        .iter()
+                        .map(|(this, value)| Some((one(this)?, one(value)?)))
+                        .collect::<Option<_>>()?,
+                })
+            })
+            .collect::<Box<[_]>>();
+        Some(Self {
+            parameters: self.parameters.clone(),
+            trait_identity: self.trait_identity,
+            arguments,
+            self_type: self_type.into_vec().pop()?,
+            bounds,
+            projections,
+        })
+    }
+}
+
 /// `types` resolved against a facade's own types, with `parameters` as
 /// type parameters: `None` when one names a type the facade lacks.
 #[cfg(feature = "rust-import")]
 fn resolve_header_types(
     types: &[host::type_ref::Type],
     root: &host::path::Path,
-    declared: &[host::type_def::Definition],
+    declared: &dyn host::declared::Declared,
     parameters: &[(host::path::Path, crate::capability::Set)],
-    imported: &host::type_ref::ImportedTypes,
     item: &host::path::Path,
 ) -> Option<Box<[host::type_ref::Type]>> {
     types
         .iter()
-        .map(|ty| ty.resolve(root, declared, parameters, imported, item).ok())
+        .map(|ty| ty.resolve(root, declared, parameters, item).ok())
         .collect()
 }
 
@@ -343,6 +454,10 @@ pub struct Fingerprint {
     /// SHA-256 of the contract slices, computed whenever they are set, so
     /// hashing a proof that names this facade does not rewalk it.
     content: [u8; 32],
+    /// Whether `content` is the digest a runner image carries for the
+    /// facade (`host::image`), whose slices stay empty: the image builds
+    /// the contract an entry at a time, and its generator digested it whole.
+    carried: bool,
 }
 
 struct ContentHasher(Sha256);
@@ -506,7 +621,7 @@ impl Builder {
     /// as `pub use iced_wgpu as wgpu;` makes iced_renderer's `wgpu`: what
     /// lies below `path` is what lies below `target`, which holds it
     /// (`Registry::canonical`).
-    #[cfg(feature = "rust-import")]
+    #[cfg(all(test, feature = "rust-import"))]
     pub(crate) fn imported_reexport<A: host::ImportAllocation + ?Sized>(
         &mut self,
         path: &str,
@@ -971,74 +1086,15 @@ impl Builder {
 
     /// Add a locally validated item declaration.
     pub fn item(&mut self, item: host::item::Definition) -> Result<&mut Self, host::Error> {
-        // An item lives in the value namespace and a type in the type
-        // namespace, so one path names both, as `lazy_static!` declares a
-        // hidden `struct NAME` beside its `static NAME: NAME`. rustc has
-        // already refused the crates where they clash (a unit or tuple
-        // struct's constructor beside a value of its name).
         let path = host::path::Path::qualify(&self.root, item.path_ref());
-        // A method whose impl fixes its receiver's type, as `and_then` of
-        // `impl<T> Task<Option<T>>`, is a form the receiver picks. One that
-        // the facade can't hold beside another form of the same name, as
-        // one of another receiver mode or of the same inputs, gives way.
-        #[cfg(feature = "rust-import")]
-        if let Ok(index) = self.item_index(&path) {
-            let conflicts = |existing: &host::item::Definition| -> Result<bool, host::Error> {
-                Ok(same_namespace(existing, &item)
-                    && (!compatible_overload(existing, &item)
-                        || existing.signature().same_inputs(item.signature())?))
-            };
-            if item.signature().instance().is_some() {
-                for existing in &self.items[index].1 {
-                    if conflicts(existing)? {
-                        return Ok(self);
-                    }
-                }
-            } else {
-                let mut kept = Vec::new();
-                kept.try_reserve_exact(self.items[index].1.len())
-                    .map_err(|_| host::Error::Allocation)?;
-                for existing in std::mem::take(&mut self.items[index].1) {
-                    if existing.signature().instance().is_some() && conflicts(&existing)? {
-                        continue;
-                    }
-                    kept.push(existing);
-                }
-                self.items[index].1 = kept;
-            }
-        }
-        if let Ok(index) = self.item_index(&path)
-            && let Some(existing) = self.items[index]
-                .1
-                .iter()
-                .find(|existing| same_namespace(existing, &item))
-            && !compatible_overload(existing, &item)
-        {
-            return Err(host::Error::IncompatibleFacadeOverload {
-                item: path.to_string().into(),
-                existing_kind: existing.kind(),
-                existing_receiver: existing.receiver(),
-                incoming_kind: item.kind(),
-                incoming_receiver: item.receiver(),
-            });
-        }
         match self.item_index(&path) {
-            Ok(index) => {
-                self.items[index]
-                    .1
-                    .try_reserve(1)
-                    .map_err(|_| host::Error::Allocation)?;
-                self.items[index].1.push(item);
-            }
+            Ok(index) => admit(&mut self.items[index].1, item, &path)?,
             Err(index) => {
+                let mut declarations = Vec::new();
+                admit(&mut declarations, item, &path)?;
                 self.items
                     .try_reserve(1)
                     .map_err(|_| host::Error::Allocation)?;
-                let mut declarations = Vec::new();
-                declarations
-                    .try_reserve_exact(1)
-                    .map_err(|_| host::Error::Allocation)?;
-                declarations.push(item);
                 self.items.insert(index, (path, declarations));
             }
         }
@@ -1054,26 +1110,18 @@ impl Builder {
         item: host::item::Definition,
     ) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, item.path_ref());
-        if let Ok(index) = self.item_index(&path)
-            && item.signature().instance().is_none()
-            && self.items[index]
-                .1
-                .iter()
-                .all(|prior| prior.signature().instance().is_none())
-            && self.items[index]
-                .1
-                .iter()
-                .any(|prior| host::family::distinct(prior, &item))
-        {
-            self.items[index]
-                .1
-                .try_reserve(1)
-                .map_err(|_| host::Error::Allocation)?;
-            self.items[index].1.push(item);
-            Ok(self)
-        } else {
-            self.item(item)
+        match self.item_index(&path) {
+            Ok(index) => admit_imported(&mut self.items[index].1, item, &path)?,
+            Err(index) => {
+                let mut declarations = Vec::new();
+                admit_imported(&mut declarations, item, &path)?;
+                self.items
+                    .try_reserve(1)
+                    .map_err(|_| host::Error::Allocation)?;
+                self.items.insert(index, (path, declarations));
+            }
         }
+        Ok(self)
     }
 
     /// Declare one direct projection between types in this facade.
@@ -1161,6 +1209,7 @@ impl Builder {
         validate_type_identities(&self.types)?;
         resolve_projections(&mut self.types, self.projections)?;
         let imported = host::type_ref::ImportedTypes::from_facade(&self.types)?;
+        let declared = host::declared::Slices::new(&self.modules, &self.types, &[], &imported);
 
         let item_count = self
             .items
@@ -1179,7 +1228,7 @@ impl Builder {
                 .try_reserve_exact(declarations.len())
                 .map_err(|_| host::Error::Allocation)?;
             for item in declarations {
-                resolved.push(item.resolve(&self.root, &self.modules, &self.types, &imported)?);
+                resolved.push(item.resolve(&self.root, &declared)?);
             }
             resolved.sort_by_key(host::item::Definition::fingerprint);
             for (index, item) in resolved.iter().enumerate() {
@@ -1229,7 +1278,7 @@ impl Builder {
         let mut type_aliases = self
             .type_aliases
             .iter()
-            .map(|alias| alias.resolve(&self.root, &self.types, &imported))
+            .map(|alias| alias.resolve(&self.root, &declared))
             .collect::<Result<Vec<_>, _>>()?;
         type_aliases.sort_by(|left, right| left.path.cmp(&right.path));
         for alias in &type_aliases {
@@ -1264,6 +1313,8 @@ impl Builder {
             #[cfg(feature = "rust-import")]
             families: Box::default(),
             fingerprint,
+            #[cfg(feature = "rust-import")]
+            held: None,
         })))
     }
 
@@ -1302,6 +1353,8 @@ impl Builder {
             .iter()
             .map(|alias| alias.path.clone())
             .collect::<Vec<_>>();
+        let declared =
+            host::declared::Slices::new(&self.modules, &self.types, &alias_paths, &imported);
         let mut families = Vec::new();
         // Resolving one group temporarily owns its new storage while the
         // declaration and final ordinary-item buffers are still alive.
@@ -1323,14 +1376,7 @@ impl Builder {
                 .try_reserve_exact(declarations.len())
                 .map_err(|_| host::Error::Allocation)?;
             for item in declarations {
-                resolved.push(item.resolve_imported(
-                    &self.root,
-                    &self.modules,
-                    &self.types,
-                    &alias_paths,
-                    &imported,
-                    allocation,
-                )?);
+                resolved.push(item.resolve_imported(&self.root, &declared, allocation)?);
             }
             resolved.sort_by_key(host::item::Definition::fingerprint);
             match host::family::Pending::partition(resolved, allocation)? {
@@ -1379,7 +1425,7 @@ impl Builder {
             .try_reserve_exact(self.type_aliases.len())
             .map_err(|_| host::Error::Allocation)?;
         for alias in &self.type_aliases {
-            type_aliases.push(alias.resolve(&self.root, &self.types, &imported)?);
+            type_aliases.push(alias.resolve(&self.root, &declared)?);
         }
         type_aliases.sort_by(|left, right| left.path.cmp(&right.path));
         let mut modules = Vec::new();
@@ -1398,107 +1444,27 @@ impl Builder {
         // types. A header naming a type the facade lacks is left out.
         let mut trait_headers = Vec::new();
         for header in &self.trait_headers {
-            let Some(parameters) = header_parameters(&header.parameters) else {
-                continue;
-            };
-            let defaults = header
-                .defaults
-                .iter()
-                .map(|default| match default {
-                    Some(default) => default
-                        .resolve(
-                            &self.root,
-                            &self.types,
-                            &parameters,
-                            &imported,
-                            &header.path,
-                        )
-                        .ok()
-                        .map(Some),
-                    None => Some(None),
-                })
-                .collect::<Option<Box<[_]>>>();
-            let Some(defaults) = defaults else {
+            let Some(header) = header.resolve(&self.root, &declared) else {
                 continue;
             };
             modules.push(header_proof_path(
                 &self.root,
                 "trait",
                 &format!(
-                    "{}|{:?}|{:?}|{defaults:?}",
-                    header.path, header.identity, header.parameters
+                    "{}|{:?}|{:?}|{:?}",
+                    header.path, header.identity, header.parameters, header.defaults
                 ),
             )?);
             trait_headers
                 .try_reserve(1)
                 .map_err(|_| host::Error::Allocation)?;
-            trait_headers.push(TraitHeader {
-                path: header.path.clone(),
-                identity: header.identity,
-                parameters: header.parameters.clone(),
-                defaults,
-            });
+            trait_headers.push(header);
         }
         trait_headers.sort_by(|left, right| left.path.cmp(&right.path));
         let mut impl_headers = Vec::new();
         for header in &self.impl_headers {
-            let Some(parameters) = header_parameters(&header.parameters) else {
+            let Some(header) = header.resolve(&self.root, &declared) else {
                 continue;
-            };
-            let resolve = |types: &[host::type_ref::Type]| {
-                resolve_header_types(
-                    types,
-                    &self.root,
-                    &self.types,
-                    &parameters,
-                    &imported,
-                    &self.root,
-                )
-            };
-            let (Some(arguments), Some(self_type)) = (
-                resolve(&header.arguments),
-                resolve(std::slice::from_ref(&header.self_type)),
-            ) else {
-                continue;
-            };
-            let bounds = header
-                .bounds
-                .iter()
-                .filter_map(|bound| {
-                    Some(ImplBound {
-                        ty: resolve(std::slice::from_ref(&bound.ty))?.into_vec().pop()?,
-                        trait_identity: bound.trait_identity,
-                        arguments: resolve(&bound.arguments)?,
-                    })
-                })
-                .collect::<Box<[_]>>();
-            let one =
-                |ty: &host::type_ref::Type| resolve(std::slice::from_ref(ty))?.into_vec().pop();
-            let projections = header
-                .projections
-                .iter()
-                .filter_map(|projection| {
-                    Some(ImplProjection {
-                        ty: one(&projection.ty)?,
-                        value: one(&projection.value)?,
-                        cases: projection
-                            .cases
-                            .iter()
-                            .map(|(this, value)| Some((one(this)?, one(value)?)))
-                            .collect::<Option<_>>()?,
-                    })
-                })
-                .collect::<Box<[_]>>();
-            let Some(self_type) = self_type.into_vec().pop() else {
-                continue;
-            };
-            let header = ImplHeader {
-                parameters: header.parameters.clone(),
-                trait_identity: header.trait_identity,
-                arguments,
-                self_type,
-                bounds,
-                projections,
             };
             modules.push(header_proof_path(
                 &self.root,
@@ -1547,6 +1513,8 @@ impl Builder {
                 },
                 families: families.clone().into_boxed_slice(),
                 fingerprint,
+                #[cfg(feature = "rust-import")]
+                held: None,
             })),
             families,
         ))
@@ -1632,8 +1600,96 @@ impl Builder {
     }
 }
 
+/// Add `item` to the declarations at `path`: the facade's other items
+/// there.
+pub(crate) fn admit(
+    declarations: &mut Vec<host::item::Definition>,
+    item: host::item::Definition,
+    path: &host::path::Path,
+) -> Result<(), host::Error> {
+    // An item lives in the value namespace and a type in the type
+    // namespace, so one path names both, as `lazy_static!` declares a
+    // hidden `struct NAME` beside its `static NAME: NAME`. rustc has
+    // already refused the crates where they clash (a unit or tuple
+    // struct's constructor beside a value of its name).
+    // A method whose impl fixes its receiver's type, as `and_then` of
+    // `impl<T> Task<Option<T>>`, is a form the receiver picks. One that
+    // the facade can't hold beside another form of the same name, as
+    // one of another receiver mode or of the same inputs, gives way.
+    #[cfg(feature = "rust-import")]
+    {
+        let conflicts = |existing: &host::item::Definition| -> Result<bool, host::Error> {
+            Ok(same_namespace(existing, &item)
+                && (!compatible_overload(existing, &item)
+                    || existing.signature().same_inputs(item.signature())?))
+        };
+        if item.signature().instance().is_some() {
+            for existing in declarations.iter() {
+                if conflicts(existing)? {
+                    return Ok(());
+                }
+            }
+        } else {
+            let mut kept = Vec::new();
+            kept.try_reserve_exact(declarations.len())
+                .map_err(|_| host::Error::Allocation)?;
+            for existing in std::mem::take(declarations) {
+                if existing.signature().instance().is_some() && conflicts(&existing)? {
+                    continue;
+                }
+                kept.push(existing);
+            }
+            *declarations = kept;
+        }
+    }
+    if let Some(existing) = declarations
+        .iter()
+        .find(|existing| same_namespace(existing, &item))
+        && !compatible_overload(existing, &item)
+    {
+        return Err(host::Error::IncompatibleFacadeOverload {
+            item: path.to_string().into(),
+            existing_kind: existing.kind(),
+            existing_receiver: existing.receiver(),
+            incoming_kind: item.kind(),
+            incoming_receiver: item.receiver(),
+        });
+    }
+    declarations
+        .try_reserve(1)
+        .map_err(|_| host::Error::Allocation)?;
+    declarations.push(item);
+    Ok(())
+}
+
+/// [`admit`] of an imported item: one of distinct imported methods at its
+/// path joins them as it is, for their resolved signatures to partition.
 #[cfg(feature = "rust-import")]
-fn sort_items(items: &mut [host::item::Definition]) -> Result<(), host::Error> {
+pub(crate) fn admit_imported(
+    declarations: &mut Vec<host::item::Definition>,
+    item: host::item::Definition,
+    path: &host::path::Path,
+) -> Result<(), host::Error> {
+    if item.signature().instance().is_none()
+        && declarations
+            .iter()
+            .all(|prior| prior.signature().instance().is_none())
+        && declarations
+            .iter()
+            .any(|prior| host::family::distinct(prior, &item))
+    {
+        declarations
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        declarations.push(item);
+        Ok(())
+    } else {
+        admit(declarations, item, path)
+    }
+}
+
+#[cfg(feature = "rust-import")]
+pub(crate) fn sort_items(items: &mut [host::item::Definition]) -> Result<(), host::Error> {
     items.sort_by(|left, right| {
         left.path_ref()
             .cmp(right.path_ref())
@@ -1722,6 +1778,28 @@ pub(super) fn compatible_overload(
 }
 
 impl Definition {
+    /// The facade `held` in its runner's image, which builds each entry the
+    /// first time a lookup reaches it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn from_held(held: host::image::Held, type_aliases: Box<[TypeAlias]>) -> Self {
+        Self(Shared::new(Body {
+            root: held.root().clone(),
+            abi: held.fingerprint().abi,
+            modules: Box::default(),
+            types: Box::default(),
+            items: Box::default(),
+            aliases: Box::default(),
+            reexports: held.reexports().into(),
+            type_aliases,
+            trait_headers: Box::default(),
+            impl_headers: Box::default(),
+            derives: Box::default(),
+            families: Box::default(),
+            fingerprint: held.fingerprint().clone(),
+            held: Some(held),
+        }))
+    }
+
     /// Return the script-visible root namespace.
     #[must_use]
     pub fn root(&self) -> &str {
@@ -1741,26 +1819,106 @@ impl Definition {
     }
 
     /// Iterate over the facade's registered types in canonical path order.
-    pub fn types(&self) -> impl ExactSizeIterator<Item = &host::type_def::Definition> {
-        self.types.iter()
+    /// A facade held in its runner's image builds each of them.
+    pub fn types(&self) -> Box<dyn ExactSizeIterator<Item = &host::type_def::Definition> + '_> {
+        #[cfg(feature = "rust-import")]
+        if let Some(held) = &self.held {
+            return Box::new((0..held.type_count()).map(|index| held.type_at(index)));
+        }
+        Box::new(self.types.iter())
+    }
+
+    /// The facade's generic types of a linked native identity, which a
+    /// generated runner attests one by one: a held facade's types are each
+    /// an imported crate type, so it has none.
+    #[doc(hidden)]
+    pub fn native_generic_types(&self) -> impl Iterator<Item = &host::type_def::Definition> {
+        self.types
+            .iter()
+            .filter(|ty| ty.identity().native().is_some() && !ty.parameters().is_empty())
     }
 
     /// Iterate over the facade's registered items in canonical path order.
-    pub fn items(&self) -> impl ExactSizeIterator<Item = &host::item::Definition> {
-        self.items.iter()
+    /// A facade held in its runner's image builds each of them.
+    pub fn items(&self) -> Box<dyn Iterator<Item = &host::item::Definition> + '_> {
+        #[cfg(feature = "rust-import")]
+        if let Some(held) = &self.held {
+            return Box::new(
+                (0..held.group_count()).flat_map(|index| held.group_at(index).items()),
+            );
+        }
+        Box::new(self.items.iter())
     }
 
     /// Iterate over the methods of the facade's families, which share a
     /// path and inputs and so are not among its items.
     #[cfg(feature = "rust-import")]
-    pub(crate) fn family_methods(&self) -> impl Iterator<Item = &host::item::Definition> {
-        self.families
-            .iter()
-            .flat_map(host::family::Pending::methods)
+    pub(crate) fn family_methods(&self) -> Box<dyn Iterator<Item = &host::item::Definition> + '_> {
+        if let Some(held) = &self.held {
+            return Box::new(
+                (0..held.group_count())
+                    .filter_map(|index| held.group_at(index).family())
+                    .flat_map(host::family::Pending::methods),
+            );
+        }
+        Box::new(
+            self.families
+                .iter()
+                .flat_map(host::family::Pending::methods),
+        )
+    }
+
+    /// The facade's items and its families' methods of the imported
+    /// selector `fingerprint`: the items in path order, then the methods.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn selected(&self, fingerprint: &[u8; 32]) -> Vec<&host::item::Definition> {
+        if let Some(held) = &self.held {
+            return held.selected(fingerprint);
+        }
+        self.items()
+            .chain(self.family_methods())
+            .filter(|item| {
+                item.imported_identity()
+                    .is_some_and(|identity| identity.fingerprint() == *fingerprint)
+            })
+            .collect()
+    }
+
+    /// The paths of the facade's types of the crate type `identity`, in
+    /// path order.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn imported_paths(&self, identity: &[u8; 32]) -> Vec<ImmutableString> {
+        if let Some(held) = &self.held {
+            let mut indices =
+                held.identity_types(&host::type_def::import::Identity::new(*identity));
+            indices.sort_unstable();
+            return indices
+                .into_iter()
+                .map(|index| held.type_path(index).to_string().into())
+                .collect();
+        }
+        self.types()
+            .filter(|ty| {
+                ty.identity()
+                    .imported()
+                    .is_some_and(|imported| imported.as_bytes() == identity)
+            })
+            .map(|ty| ImmutableString::from(ty.path()))
+            .collect()
+    }
+
+    /// The facade held in its runner's image, when it is one.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn held(&self) -> Option<&host::image::Held> {
+        self.held.as_ref()
     }
 
     pub(crate) fn overloads(&self, path: &str) -> Option<&[host::item::Definition]> {
         let path = host::path::Path::parse(path).ok()?;
+        #[cfg(feature = "rust-import")]
+        if let Some(held) = &self.held {
+            return held.items(&path);
+        }
         item_group(&self.items, &path)
     }
 
@@ -1773,10 +1931,7 @@ impl Definition {
         // Rawr exports only the types its own facades declare, as
         // `future::Future`.
         let definition = self
-            .types
-            .binary_search_by(|definition| definition.path_ref().cmp(&path))
-            .ok()
-            .map(|index| &self.types[index])
+            .type_at(&path)
             .unwrap_or_else(|| panic!("bindings export only a type they declare, not `{path}`"));
         Ok(host::type_def::Export::new(
             self.root.clone(),
@@ -1792,6 +1947,9 @@ impl Definition {
         &self,
         identity: &host::type_def::import::Identity,
     ) -> Option<host::type_def::Export> {
+        if let Some(held) = &self.held {
+            return held.export(identity);
+        }
         let definition = self
             .types
             .iter()
@@ -1805,6 +1963,18 @@ impl Definition {
 
     pub(crate) fn root_path(&self) -> &host::path::Path {
         &self.root
+    }
+
+    /// The facade's type at the qualified `path`.
+    pub(crate) fn type_at(&self, path: &host::path::Path) -> Option<&host::type_def::Definition> {
+        #[cfg(feature = "rust-import")]
+        if let Some(held) = &self.held {
+            return held.type_index(path).map(|index| held.type_at(index));
+        }
+        self.types
+            .binary_search_by(|definition| definition.path_ref().cmp(path))
+            .ok()
+            .map(|index| &self.types[index])
     }
 
     /// `path` below the module each re-exported module above it names, as
@@ -1888,6 +2058,11 @@ impl Definition {
         &self.types
     }
 
+    /// How many items the facade holds apart from its runner's image.
+    pub(crate) fn item_count(&self) -> usize {
+        self.items.len()
+    }
+
     pub(crate) fn item_sets(
         &self,
     ) -> impl Iterator<Item = (&host::path::Path, &[host::item::Definition])> {
@@ -1909,6 +2084,10 @@ impl Definition {
     }
 
     pub(crate) fn dependencies(&self) -> BTreeSet<Dependency> {
+        #[cfg(feature = "rust-import")]
+        if let Some(held) = &self.held {
+            return held.dependencies();
+        }
         let mut dependencies = BTreeSet::new();
         for definition in &self.types {
             dependencies.extend(
@@ -2029,6 +2208,21 @@ impl Fingerprint {
 }
 
 impl Fingerprint {
+    /// The proof of the facade at `root` a runner image holds, which its
+    /// generator digested as `content` (`host::image`).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn carried(root: &host::path::Path, abi: Abi, content: [u8; 32]) -> Self {
+        Self {
+            root: root.to_string().into(),
+            abi,
+            modules: Shared::from([]),
+            types: Shared::from([]),
+            items: Shared::from([]),
+            content,
+            carried: true,
+        }
+    }
+
     /// Recompute the content digest after the slices are set.
     fn seal(&mut self) {
         let mut content = ContentHasher(Sha256::new());
@@ -2055,6 +2249,15 @@ impl Ord for Fingerprint {
         // walks their complete shapes even when the facade is unchanged.
         if self == other {
             return std::cmp::Ordering::Equal;
+        }
+        // A carried digest has no slices to walk: its content orders it.
+        if self.carried || other.carried {
+            return (&self.root, &self.abi, self.carried, &self.content).cmp(&(
+                &other.root,
+                &other.abi,
+                other.carried,
+                &other.content,
+            ));
         }
         (
             &self.root,
@@ -2115,6 +2318,12 @@ impl crate::digest::Write for Fingerprint {
         writer.text(&self.root);
         writer.tag(0x2902);
         writer.u32(self.abi.get());
+        // A carried digest stands for the contract its image holds.
+        if self.carried {
+            writer.tag(0x2908);
+            writer.bytes(&self.content);
+            return Ok(());
+        }
         writer.tag(0x2903);
         writer.count(self.modules.len());
         for module in self.modules.iter() {
@@ -2722,6 +2931,7 @@ fn fingerprint(
     }
     let mut fingerprint = Fingerprint {
         content: [0; 32],
+        carried: false,
         root: root.to_string().into(),
         abi,
         modules: module_proofs.into_boxed_slice().into(),

@@ -566,8 +566,7 @@ impl Definition {
     pub(crate) fn resolve(
         &self,
         root: &host::path::Path,
-        types: &[host::type_def::Definition],
-        imported: &host::type_ref::ImportedTypes,
+        declared: &dyn host::declared::Declared,
         item: &host::path::Path,
     ) -> Result<Self, host::Error> {
         let mut parameters = Vec::new();
@@ -575,11 +574,11 @@ impl Definition {
             .try_reserve_exact(self.parameters.len())
             .map_err(|_| host::Error::Allocation)?;
         for ty in &self.parameters {
-            parameters.push(ty.resolve(root, types, &self.type_parameters, imported, item)?);
+            parameters.push(ty.resolve(root, declared, &self.type_parameters, item)?);
         }
         let output = self
             .output
-            .resolve(root, types, &self.type_parameters, imported, item)?;
+            .resolve(root, declared, &self.type_parameters, item)?;
         #[cfg(feature = "rust-import")]
         let type_parameters = {
             let mut parameters = Vec::new();
@@ -600,7 +599,7 @@ impl Definition {
             .instance
             .as_ref()
             .map(|ty| {
-                ty.resolve(root, types, &self.type_parameters, imported, item)
+                ty.resolve(root, declared, &self.type_parameters, item)
                     .map(Box::new)
             })
             .transpose()?;
@@ -620,38 +619,17 @@ impl Definition {
     pub(crate) fn resolve_imported<A: host::ImportAllocation + ?Sized>(
         mut self,
         root: &host::path::Path,
-        types: &[host::type_def::Definition],
-        imported: &host::type_ref::ImportedTypes,
+        declared: &dyn host::declared::Declared,
         item: &host::path::Path,
         allocation: &mut A,
     ) -> Result<Self, host::Error> {
         for ty in &mut self.parameters {
-            ty.resolve_imported(
-                root,
-                types,
-                &self.type_parameters,
-                imported,
-                item,
-                allocation,
-            )?;
+            ty.resolve_imported(root, declared, &self.type_parameters, item, allocation)?;
         }
-        self.output.resolve_imported(
-            root,
-            types,
-            &self.type_parameters,
-            imported,
-            item,
-            allocation,
-        )?;
+        self.output
+            .resolve_imported(root, declared, &self.type_parameters, item, allocation)?;
         if let Some(instance) = &mut self.instance {
-            instance.resolve_imported(
-                root,
-                types,
-                &self.type_parameters,
-                imported,
-                item,
-                allocation,
-            )?;
+            instance.resolve_imported(root, declared, &self.type_parameters, item, allocation)?;
         }
         Ok(self)
     }

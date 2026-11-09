@@ -4414,9 +4414,7 @@ fn imported_runtime(
     bind_profile_projections(definitions, &mut builders)?;
     for (definition, mut builder) in definitions.iter().zip(builders) {
         builder.bind_imported_type_attestations(native_attestation)?;
-        for ty in definition.types().filter(|ty| {
-            ty.identity().imported().is_none() && !ty.parameters().is_empty()
-        }) {
+        for ty in definition.native_generic_types() {
             let path = ty.path();
             if !builder.has_type_attestation(&path) {
                 builder.bind_type_attestation(path, native_attestation)?;
@@ -7578,7 +7576,7 @@ fn render_source(
         )
         .map_err(request::unwritable)?;
     let embedded = match &facade {
-        Some(plan) => plan.runner_bytes().map_err(request::unwritable)?,
+        Some(plan) => plan.runner_image().map_err(request::unwritable)?,
         None => Vec::new(),
     };
     sources.push((BINDINGS_PATH.into(), embedded));
@@ -24071,9 +24069,7 @@ mod tests {
         assert!(source.contains("builder.bind_imported_type_attestations(native_attestation)?"));
         assert!(!source.contains("for selector in imported_identities"));
         assert!(source.contains("builder.bind_type_attestation(path, native_attestation)?"));
-        assert!(
-            source.contains("ty.identity().imported().is_none() && !ty.parameters().is_empty()")
-        );
+        assert!(source.contains("for ty in definition.native_generic_types()"));
         assert!(!source.contains("if let Some(identity) = ty.identity().imported()"));
         assert!(!source.contains("gallery_ui"));
     }

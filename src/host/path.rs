@@ -107,6 +107,12 @@ impl Path {
         Ok(Self(segments.into_boxed_slice()))
     }
 
+    /// The path of `segments`, each a segment of a path already parsed.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn from_segments(segments: &[ImmutableString]) -> Self {
+        Self(segments.into())
+    }
+
     /// This path with its leading `from` segments replaced by `to`, when it
     /// starts with them: a re-exported path's canonical spelling.
     pub(crate) fn rebase(&self, from: &Self, to: &Self) -> Option<Self> {
