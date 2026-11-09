@@ -1832,10 +1832,53 @@ impl std::fmt::Debug for Scoped {
 /// the frame passes on as they are.
 pub type Rest<'a> = dyn FnMut(crate::Dynamic) -> crate::RawrResult + 'a;
 
-#[cfg(feature = "sync")]
-type Open = Box<dyn FnOnce(&mut Rest<'_>) -> crate::RawrResult + Send + Sync>;
-#[cfg(not(feature = "sync"))]
+/// What a frame runs as it opens. It owns what the call took, which may be
+/// neither `Send` nor `Sync`, as a `View<'_>` of `&` borrows of a type
+/// with a `RefCell` cache or an iced `Element` is.
 type Open = Box<dyn FnOnce(&mut Rest<'_>) -> crate::RawrResult>;
+
+thread_local! {
+    /// The frames calls on this thread made that have not opened, each by
+    /// the nonce of its [`Pending`]. A frame runs on the thread whose call
+    /// made it, inside the statement that binds or drops its value, so what
+    /// it owns never leaves that thread.
+    static PENDING: RefCell<Vec<(Nonce, Open)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// One frame's place in [`PENDING`]. Its last copy takes the frame out
+/// unopened, dropping what it owns on its own thread; a copy dropped on
+/// another thread leaves it there until its thread ends.
+struct Pending(Nonce);
+
+impl Pending {
+    /// Keep `open` on this thread until the frame opens.
+    fn new(open: Open) -> Self {
+        let nonce = fresh();
+        PENDING.with_borrow_mut(|pending| pending.push((nonce, open)));
+        Self(nonce)
+    }
+
+    /// The frame, taken out to open; `None` once it has opened, or on a
+    /// thread other than its own.
+    fn take(&self) -> Option<Open> {
+        PENDING
+            .try_with(|pending| {
+                let mut pending = pending.borrow_mut();
+                let at = pending.iter().position(|(nonce, _)| *nonce == self.0)?;
+                Some(pending.swap_remove(at).1)
+            })
+            .ok()
+            .flatten()
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        // Dropped once `PENDING` lets go of it, since what it owns may hold
+        // frames of its own.
+        drop(self.take());
+    }
+}
 
 /// A scope frame a call made but has not opened (D558 tier 1): what a call
 /// whose output borrows its inputs gives. A `let` that binds it opens it
@@ -1844,7 +1887,7 @@ type Open = Box<dyn FnOnce(&mut Rest<'_>) -> crate::RawrResult>;
 #[derive(Clone)]
 pub struct Opening {
     name: &'static str,
-    open: crate::Shared<crate::Locked<Option<Open>>>,
+    open: crate::Shared<Pending>,
     copies: Copies,
 }
 
@@ -1888,11 +1931,11 @@ impl Opening {
     /// and runs the rest of the scope with it.
     pub fn new(
         name: &'static str,
-        open: impl FnOnce(&mut Rest<'_>) -> crate::RawrResult + crate::func::SendSync + 'static,
+        open: impl FnOnce(&mut Rest<'_>) -> crate::RawrResult + 'static,
     ) -> Self {
         Self {
             name,
-            open: crate::Shared::new(crate::Locked::new(Some(Box::new(open)))),
+            open: crate::Shared::new(Pending::new(Box::new(open))),
             copies: Copies::new(),
         }
     }
@@ -1918,14 +1961,16 @@ impl Opening {
 
     /// Open the frame and run `rest` inside it.
     pub fn open(&self, rest: &mut Rest<'_>) -> crate::RawrResult {
-        let open = crate::func::locked_write(&self.open)
-            .and_then(|mut open| open.take())
-            .ok_or_else(|| {
-                crate::EvalAltResult::ErrorRuntime(
-                    format!("the scope `{}` made is already open", self.name).into(),
-                    crate::Position::NONE,
+        let open = self.open.take().ok_or_else(|| {
+            crate::EvalAltResult::ErrorRuntime(
+                format!(
+                    "the scope `{}` made is already open, or was made on another thread",
+                    self.name
                 )
-            })?;
+                .into(),
+                crate::Position::NONE,
+            )
+        })?;
         open(rest)
     }
 }
@@ -2410,6 +2455,46 @@ mod tests {
         assert_eq!(
             super::settle(crate::Dynamic::from(3_i64)).unwrap().as_int(),
             Ok(3)
+        );
+    }
+
+    /// A frame owns what is neither `Send` nor `Sync`, as a view of `&`
+    /// borrows of a `RefCell` cache or an iced `Element` is: it keeps it on
+    /// its own thread and drops it there when it never opens.
+    #[test]
+    fn an_opening_keeps_what_is_not_send_on_its_thread() {
+        use super::Opening;
+        let cache = std::rc::Rc::new(std::cell::RefCell::new(vec![1_i64]));
+        let held = std::rc::Rc::clone(&cache);
+        let opening = Opening::new("view", move |rest| {
+            let first = held.borrow()[0];
+            rest(crate::Dynamic::from(first))
+        });
+        let made = opening.open(&mut |value| Ok(value)).unwrap();
+        assert_eq!(made.as_int(), Ok(1));
+        assert_eq!(std::rc::Rc::strong_count(&cache), 1);
+        let held = std::rc::Rc::clone(&cache);
+        let unopened = Opening::new("view", move |rest| {
+            rest(crate::Dynamic::from(held.borrow()[0]))
+        });
+        drop(unopened);
+        assert_eq!(std::rc::Rc::strong_count(&cache), 1);
+    }
+
+    /// A frame a value carried to another thread doesn't open there.
+    #[cfg(feature = "sync")]
+    #[test]
+    fn an_opening_opens_only_on_its_own_thread() {
+        use super::Opening;
+        let opening = Opening::new("view", |rest| rest(crate::Dynamic::from(1_i64)));
+        let carried = opening.clone();
+        let elsewhere = std::thread::spawn(move || carried.open(&mut |value| Ok(value)).is_err())
+            .join()
+            .expect("the thread only opens a frame, which gives an error");
+        assert!(elsewhere);
+        assert_eq!(
+            opening.open(&mut |value| Ok(value)).unwrap().as_int(),
+            Ok(1)
         );
     }
 

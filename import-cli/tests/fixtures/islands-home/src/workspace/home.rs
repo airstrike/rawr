@@ -244,9 +244,12 @@ pub fn update(
     }
 }
 
-/// The screen's button: a section headed by its text past a count of 3.
+/// The screen's button: a section headed by its text past a count of 3,
+/// under a header row of no actions, whose elements it takes by value as
+/// inboard's `sidebar::header_row("Home", std::iter::empty())` does.
 pub fn view(state: &State) -> Element<'_, Message> {
     if state.count > 3 {
+        let _header = ui::header_row("count", Vec::<Element<'_, Message>>::new());
         ui::section(Some("count"), [ui::button(&state.title, Message::Count)])
     } else if state.count > 1 {
         ui::button(&state.greeting, wizard::Message::Step(state.count)).map(Message::Wizard)
