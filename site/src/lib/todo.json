@@ -194,7 +194,9 @@
         {"text":"A marked function takes native values inside an `Option`, a `Vec`, a `Box` or a tuple by value, such as inboard's `home_grid: Option<Element<'a, grid::Message>>`.","issues":[1224]},
         {"text":"A marked function takes a `&[T]` of native values, lent where it is, and passes it on to native functions.","issues":[1292]},
         {"text":"In a marked view, an element from a native function may borrow the view's lent arguments, as inboard's `inbox::view(inbox_state, .., browser_updates, ..)` does. An element that a native part of `self` gives lasts as long as the view's result.","issues":[1413]},
-        {"text":"A marked module can name a crate's type alias through a module its `use` binds, such as `extension::registry::Update` after `use model::extension;`. That works in signatures and in `let`s. A crate's or a native module's alias of a std type, such as `type Names = Vec<String>`, now resolves too. Both gave E0425 before.","issues":[694,1202]}
+        {"text":"A marked module can name a crate's type alias through a module its `use` binds, such as `extension::registry::Update` after `use model::extension;`. That works in signatures and in `let`s. A crate's or a native module's alias of a std type, such as `type Names = Vec<String>`, now resolves too. Both gave E0425 before.","issues":[694,1202]},
+        {"text":"A crate method whose output borrows its receiver can also take a `&'a T` at that lifetime, as inboard's `wizard.view(catalog, theme)` does from a marked view.","issues":[1499]},
+        {"text":"Moving a field out of a crate struct held in a local, as `let task = action.task;`, leaves the struct's other fields for later reads and moves, as rustc does. So `match action.instruction` afterwards works, and so does a destructuring `let Action { instruction, task } = ..` of a crate value.","issues":[1502],"refs":[834]}
       ]
     },
     "releases": [
@@ -3301,9 +3303,11 @@
     {"issue":1496,"title":"A crate method on a lent receiver and a crate fn's Option<&'a str> parameter work in a marked view","state":"open","category":"No glue (D593)"},
     {"issue":1497,"title":"An or-pattern over crate variants below a program variant is refused as binding different names","state":"open","category":"Divergences from rustc"},
     {"issue":1498,"title":"An or-pattern whose alternatives differ in program structure and test crate values is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":1499,"title":"A crate method whose output borrows its receiver can't also take a `&'a T` at the receiver's lifetime","state":"open","category":"No glue (D593)"},
+    {"issue":1499,"title":"A crate method whose output borrows its receiver can't also take a `&'a T` at the receiver's lifetime","state":"closed","category":"No glue (D593)"},
     {"issue":1500,"title":"A lent `&[T]` beside a lent `&T`, passed to a crate fn whose output doesn't keep them, fails","state":"open","category":"No glue (D593)"},
-    {"issue":1501,"title":"Test a crate fn whose output keeps an `Option<&'a T>` of a value native code lent a marked view","state":"open","category":"No glue (D593)"}
+    {"issue":1501,"title":"Test a crate fn whose output keeps an `Option<&'a T>` of a value native code lent a marked view","state":"open","category":"No glue (D593)"},
+    {"issue":1502,"title":"Moving a field out of a crate struct local takes the whole struct","state":"open","category":"Divergences from rustc"},
+    {"issue":1503,"title":"A crate method borrowing its receiver can't take a `&'a str`, `&'a [T]` or `&'a mut T` at that lifetime","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4126,7 +4130,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). Next: a `&'a T` beside a borrowed receiver (#1499) and home.rs's update",
+          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). A `&'a T` beside a borrowed receiver (#1499) and partial moves out of crate structs (#834) work. Next: inboard's own check of home.rs",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
@@ -4240,10 +4244,13 @@
             {"number":1495,"title":"Check that a static library shared with rawr's runtime defines the same symbols before sharing it","state":"open"},
             {"number":1496,"title":"A crate method on a lent receiver and a crate fn's Option<&'a str> parameter work in a marked view","state":"open"},
             {"number":1413,"title":"A lent `&T` passed to a crate fn whose output keeps the borrow, or inside `Option<&T>`, fails…","state":"closed"},
-            {"number":1499,"title":"A crate method whose output borrows its receiver can't also take a `&'a T` at the receiver's lifetime","state":"open"},
+            {"number":1499,"title":"A crate method whose output borrows its receiver can't also take a `&'a T` at the receiver's lifetime","state":"closed"},
             {"number":1500,"title":"A lent `&[T]` beside a lent `&T`, passed to a crate fn whose output doesn't keep them, fails","state":"open"},
             {"number":1501,"title":"Test a crate fn whose output keeps an `Option<&'a T>` of a value native code lent a marked view","state":"open"},
-            {"number":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"closed"}
+            {"number":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"closed"},
+            {"number":1502,"title":"Moving a field out of a crate struct local takes the whole struct","state":"open"},
+            {"number":1503,"title":"A crate method borrowing its receiver can't take a `&'a str`, `&'a [T]` or `&'a mut T` at that lifetime","state":"open"},
+            {"number":834,"title":"A by-value read, a nested or self receiver, or a generic struct's crate field still takes the whole struct","state":"open"}
           ]
         }
       ]

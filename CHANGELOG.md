@@ -188,6 +188,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked function takes a `&[T]` of native values, lent where it is, and passes it on to native functions. (#1292)
 - In a marked view, an element from a native function may borrow the view's lent arguments, as inboard's `inbox::view(inbox_state, .., browser_updates, ..)` does. An element that a native part of `self` gives lasts as long as the view's result. (#1413)
 - A marked module can name a crate's type alias through a module its `use` binds, such as `extension::registry::Update` after `use model::extension;`. That works in signatures and in `let`s. A crate's or a native module's alias of a std type, such as `type Names = Vec<String>`, now resolves too. Both gave E0425 before. (#694, #1202)
+- A crate method whose output borrows its receiver can also take a `&'a T` at that lifetime, as inboard's `wizard.view(catalog, theme)` does from a marked view. (#1499)
+- Moving a field out of a crate struct held in a local, as `let task = action.task;`, leaves the struct's other fields for later reads and moves, as rustc does. So `match action.instruction` afterwards works, and so does a destructuring `let Action { instruction, task } = ..` of a crate value. (#1502; part of #834)
 
 ## 0.3.171 (2026-11-07)
 
