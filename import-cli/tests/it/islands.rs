@@ -2014,7 +2014,10 @@ fn checks_and_prints(root: &Path, printed: &str) {
 /// impl is cargo's. A marked value native code is lent as a `&dyn Debug`,
 /// `&dyn Display` or `&dyn LowerHex` is written by its type's own impl,
 /// marked or derived, when native code formats it, and `format_args!` is
-/// the `fmt::Arguments` a crate function takes.
+/// the `fmt::Arguments` a crate function takes. A re-export of std's macro
+/// a crate's macro names only inside `concat!` is asked for as any other
+/// path, and `$($e:expr),* $(,)*` reads `"message", ,` as rustc does, as
+/// tracing's callsite name and `fieldset!` need.
 #[test]
 fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
     const LOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-log");
@@ -2032,7 +2035,8 @@ fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
             && printed.contains(
                 "Message { subject: \"hello\", unread: true }; [hello*]; count=2 (Some(\"two\")); \
                  [Some(Ok(Message { subject: \"old\", unread: false })), None]; 0xff; \
-                 <hello has 2>; unread\n"
+                 <hello has 2>; unread\n\
+                 event src/workspace/inbox.rs:123 [\"message\"]\n"
             ),
         "{printed}"
     );

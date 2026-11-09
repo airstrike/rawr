@@ -305,6 +305,13 @@ impl<'a> Parser<'a> {
                 let name_span = point_span(name_position);
                 self.compile_time_text(name.as_str(), name_span)?.0
             }
+            // `$crate::__macro_support::file!()` before the crate's
+            // re-export is known: the path missed, so it is asked for.
+            (Token::Identifier(first), position)
+                if !negative && let Some(miss) = self.macro_path_miss(&first, position) =>
+            {
+                return Err(miss);
+            }
             (_, position) => {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: "a compile-time macro argument other than a literal".into(),
