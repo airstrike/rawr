@@ -24,7 +24,8 @@
         {"text":"A call inside a crate macro's arguments now runs in Rust's order around a call whose value borrows a local, as in inboard's `stack![page, opaque(wizard.view(catalog, theme).map(..))]`. It used to be refused as \"a call or assignment run before a call whose value borrows a local\".","issues":[1521]},
         {"text":"A marked view whose scope frame captures values that aren't `Send` or `Sync` now builds under `rawr run`. Examples are a native view of borrows into a type with `RefCell` or `OnceCell` caches, and an owned iced `Element`, as in inboard's `wizard.view(catalog, ..)` and `sidebar::header_row`. Before, the generated runner failed with E0277. A frame's opener stays on the thread that made it. A native value lent to a marked call by `&` or `&mut` no longer has to be `Send` or `Sync`.","issues":[1523]},
         {"text":"Projects now share generated bindings for crates whose build scripts leave native build files, such as openpnp_capture_sys's CMake tree and aws-lc-sys's stray objects. rawr compares only the OUT_DIR files a compile read. `rawr check` reads the project's build-script outputs when its cargo check ends, before another toolchain's build can rerun them. Not sharing names its real reason, and each note prints once. In a fixture, a second project's check went from 10.5 s, not shared, to 4.0 s, shared.","issues":[1524]},
-        {"text":"A runner's bindings now load in about a millisecond. Each binding is built the first time a program looks it up, from a binary image the generator writes. elevato's page prepares in under 30 ms in Chrome instead of about 0.7 s, and native runners start the same way.","issues":[1518,1519]}
+        {"text":"A runner's bindings now load in about a millisecond. Each binding is built the first time a program looks it up, from a binary image the generator writes. elevato's page prepares in under 30 ms in Chrome instead of about 0.7 s, and native runners start the same way.","issues":[1518,1519]},
+        {"text":"A marked view can now map the element that a native function returns over a lent marked type, as inboard's `home::State::view` does with `inbox::view(.., theme).map(Message::Inbox)`. It used to fail with \"the lent value is not of the type this call takes\". A marked type now has one spelling in the runner, so the returned element and the receiver of `map` are the same type.","issues":[1527]}
       ]
     },
     "releases": [
@@ -3349,7 +3350,9 @@
     {"issue":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"open","category":"Divergences from rustc"},
     {"issue":1524,"title":"Shared bindings compared a build script's whole OUT_DIR and read the project's after extraction","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"open","category":"Platforms"}
+    {"issue":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"open","category":"Platforms"},
+    {"issue":1527,"title":"A marked type spelled through its proxy alias and its mirror's re-exported path gave two scope families","state":"open","category":"No glue (D593)"},
+    {"issue":1528,"title":"A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4174,7 +4177,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). A `&'a T` beside a borrowed receiver (#1499) and partial moves out of crate structs (#834) work. Paths through an imported marked module (#1504) resolve. A lent marked theme passes back to native fns, and native aliases over it are the marked type (#1484). `&mut self` on temporaries (#1514) and methods on lent slice elements (#1515) work, and a fixture mirrors the rest of home.rs. inboard's rawr check passes with home.rs marked (2026-11-09), and its runner builds with non-Send captures (#1523). Next: inboard's run of home.rs and the swap time",
+          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). A `&'a T` beside a borrowed receiver (#1499) and partial moves out of crate structs (#834) work. Paths through an imported marked module (#1504) resolve. A lent marked theme passes back to native fns, and native aliases over it are the marked type (#1484). `&mut self` on temporaries (#1514) and methods on lent slice elements (#1515) work, and a fixture mirrors the rest of home.rs. inboard's rawr check passes with home.rs marked (2026-11-09), and its runner builds with non-Send captures (#1523). inboard's runner builds and starts with home.rs marked. A marked type now has one spelling in the runner, so its first view maps a native element. Next: the run's first view, then the swap time",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
@@ -4306,7 +4309,9 @@
             {"number":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired"},
             {"number":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"open"},
             {"number":1524,"title":"Shared bindings compared a build script's whole OUT_DIR and read the project's after extraction","state":"open"},
-            {"number":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open"}
+            {"number":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open"},
+            {"number":1527,"title":"A marked type spelled through its proxy alias and its mirror's re-exported path gave two scope families","state":"open"},
+            {"number":1528,"title":"A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"open"}
           ]
         }
       ]
