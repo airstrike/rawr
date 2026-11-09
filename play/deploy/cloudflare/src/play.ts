@@ -343,24 +343,35 @@ export function webHeaders(path: string, from: Headers): Headers | null {
 
 /**
  * Serve a file under /web. web/build.sh writes a brotli copy (.br, at
- * quality 11) of the module: a browser that takes brotli gets
+ * quality 11) of each module: a browser that takes brotli gets
  * it as is, about a quarter smaller than the edge's own compression makes
  * it. Anything else goes out as stored, which the edge compresses by its
- * content type.
+ * content type. A module stored only as its brotli copy (the universe's,
+ * #1459: raw, it is over the 25 MiB limit on an asset) goes out as that
+ * copy to every client.
  */
 export async function webAsset(request: Request, assets: { fetch(request: Request): Promise<Response> }): Promise<Response> {
   const path = new URL(request.url).pathname;
+  const module = !path.endsWith(".js") && webHeaders(path, new Headers()) !== null;
   const brotli = /\bbr\b/.test(request.headers.get("accept-encoding") ?? "");
-  if (brotli && !path.endsWith(".js") && webHeaders(path, new Headers())) {
-    const packed = await assets.fetch(new Request(request.url + ".br", request));
-    if (packed.ok || packed.status === 304) {
-      const headers = webHeaders(path, packed.headers)!;
-      headers.set("content-encoding", "br");
-      headers.set("vary", "accept-encoding");
-      return new Response(packed.body, { status: packed.status, headers, encodeBody: "manual" } as ResponseInit);
-    }
+  const packed = () => assets.fetch(new Request(request.url + ".br", request));
+  if (module && brotli) {
+    const copy = await packed();
+    if (copy.ok || copy.status === 304) return encoded(path, copy);
   }
   const response = await assets.fetch(request);
+  if (module && response.status === 404) {
+    const copy = await packed();
+    if (copy.ok || copy.status === 304) return encoded(path, copy);
+  }
   const headers = response.ok ? webHeaders(path, response.headers) : null;
   return headers ? new Response(response.body, { status: response.status, headers }) : response;
+}
+
+/** A module's brotli copy, sent as is with its encoding. */
+function encoded(path: string, copy: Response): Response {
+  const headers = webHeaders(path, copy.headers)!;
+  headers.set("content-encoding", "br");
+  headers.set("vary", "accept-encoding");
+  return new Response(copy.body, { status: copy.status, headers, encodeBody: "manual" } as ResponseInit);
 }

@@ -1,7 +1,8 @@
 // Builds the site (site/, an Astro package: `npm run build` writes
 // site/dist) and merges its pages with the bot's files (public/) into dist/,
 // the one assets directory the Worker serves. Wrangler runs it before every
-// deploy and dev (`build` in wrangler.jsonc). A path in both fails.
+// deploy and dev (`build` in wrangler.jsonc). A path in both fails, and so
+// does a file over Cloudflare's 25 MiB limit on an asset (limits.mjs).
 // It also writes src/runnable.gen.ts, the hashes of the sources /play/run
 // accepts: every <code data-run> block in the built pages (allowlist.mjs),
 // src/cards.gen.ts, each link card's URL with its content hash (below),
@@ -16,6 +17,7 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { allowList, module, sitePages } from "./allowlist.mjs";
+import { ASSET_LIMIT, mib, oversized } from "./limits.mjs";
 
 const here = import.meta.dirname;
 const site = join(here, "../../../site");
@@ -74,6 +76,13 @@ console.log(`build: ${runnable.blocks.length} run blocks, ${runnable.hashes.leng
 rmSync(dist, { recursive: true, force: true });
 for (const source of sources) cpSync(source, dist, { recursive: true });
 console.log(`build: ${seen.size} files in dist/`);
+
+const large = oversized(dist);
+if (large.length > 0) {
+  console.error(`build: Cloudflare takes no asset over ${mib(ASSET_LIMIT)}; ship a large module as its brotli copy only (web/build.sh):`);
+  for (const [file, size] of large) console.error(`  ${file}: ${mib(size)} (${size} bytes)`);
+  process.exit(1);
+}
 
 // The bot's static page in the site's look.
 const look = await import("./src/look.ts");

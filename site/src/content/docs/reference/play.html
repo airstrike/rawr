@@ -75,6 +75,7 @@
 
 <h3 id="browser-universe">The universe in the browser</h3>
 <p>The universe also runs in the browser, built for wasm32 with the same program, so a snippet makes the same calls there. On this site an iced snippet&rsquo;s Run uses it. Its window is drawn in the page, in place of the snippet&rsquo;s output, and its buttons answer clicks there with no round trip to the server. Before Run, the output is the picture the server drew. Each Run gets a fresh copy of the universe, compiled once for the page, because a page runs one event loop per copy.</p>
+<p>The universe is a WebAssembly module of about 53 MB. The site sends it brotli-compressed, at about 5 MB, and the browser decompresses it as it downloads. A page downloads it once, at its first Run that uses it.</p>
 <p>iced draws with WebGPU where the browser has it, and with WebGL2 elsewhere. On Safari and on every browser on iOS it draws with WebGL2, because WebKit&rsquo;s WebGPU fails the way iced uploads its shapes and text.</p>
 <p>A snippet&rsquo;s keys reach its window only while that window has focus. A click or Tab gives it focus, and the window shows an outline while it has it.</p>
 
