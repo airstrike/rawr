@@ -8,19 +8,16 @@
 //! the place and never runs its initializer again. A changed declaration
 //! has a new key, so it gets a new place.
 //!
-//! A block's statics are reserved before any of them is initialized, so an
-//! initializer may take a sibling's `&'static` address while the sibling
-//! has no value yet, as tracing's `META` and `__CALLSITE` refer to each
-//! other. The address is memory for the sibling's type, which the sibling's
-//! value moves into once it is made.
+//! A static is written before anything takes its address: the lowering
+//! refuses an initializer that names a sibling not written yet, so statics
+//! that refer to each other, as tracing's `META` and `__CALLSITE` do, are
+//! refused at `rawr check`.
 
 use super::{failure, Access, Operation, Place, Storage};
 use crate::host::runtime::Witness;
 use crate::{Dynamic, RawrResult, RawrResultOf, Shared};
-use std::any::{Any, TypeId};
+use std::any::Any;
 use std::collections::HashMap;
-use std::mem::MaybeUninit;
-use std::ptr::NonNull;
 use std::sync::{Mutex, PoisonError};
 
 /// One static's place, shared by every generation that declares it alike.
@@ -28,35 +25,10 @@ use std::sync::{Mutex, PoisonError};
 pub struct Slot(Shared<Mutex<State>>);
 
 enum State {
-    /// Not written yet. `memory` is where its value will be, once a
-    /// sibling's initializer took its address.
-    Reserved { memory: Option<Memory> },
+    /// Not written yet: its initializer runs.
+    Reserved,
     /// Written: its place, which marked code reads.
     Settled(Place),
-}
-
-/// Leaked memory for one value of the type `ty`, not written yet.
-struct Memory {
-    pointer: NonNull<u8>,
-    ty: TypeId,
-    /// The memory as a `*const dyn Any` of its type, once written.
-    view: fn(NonNull<u8>) -> *const dyn Any,
-}
-
-// SAFETY: `Memory` is an address of leaked memory and no value. It is only
-// written by `Slot::settle` and read through the references `Slot::address`
-// gives, as a static's value is.
-unsafe impl Send for Memory {}
-
-impl Memory {
-    fn of<T: 'static>() -> Self {
-        let memory: &'static mut MaybeUninit<T> = Box::leak(Box::new(MaybeUninit::uninit()));
-        Self {
-            pointer: NonNull::from(memory).cast(),
-            ty: TypeId::of::<T>(),
-            view: |pointer| pointer.cast::<T>().as_ptr().cast_const(),
-        }
-    }
 }
 
 /// A written static: its value, leaked, reached where it is and never
@@ -119,7 +91,7 @@ impl Storage for Leaked {
 /// yet.
 #[must_use]
 pub fn slot(key: &str) -> Slot {
-    let reserve = || Slot(Shared::new(Mutex::new(State::Reserved { memory: None })));
+    let reserve = || Slot(Shared::new(Mutex::new(State::Reserved)));
     #[cfg(feature = "sync")]
     {
         static SLOTS: std::sync::OnceLock<Mutex<HashMap<Box<str>, Slot>>> =
@@ -150,56 +122,31 @@ impl Slot {
     /// Whether the static has no value yet, so its initializer runs.
     #[must_use]
     pub fn reserved(&self) -> bool {
-        matches!(*self.state(), State::Reserved { .. })
+        matches!(*self.state(), State::Reserved)
     }
 
-    /// The static as marked code reads it: its place once written. Before,
-    /// the slot itself, whose address a `&'static` parameter takes.
-    pub fn value(&self) -> Dynamic {
+    /// The static as marked code reads it: its place, once its block wrote
+    /// it.
+    pub fn value(&self) -> RawrResult {
         match &*self.state() {
-            State::Settled(place) => Dynamic::from(place.clone()),
-            State::Reserved { .. } => Dynamic::from(self.clone()),
+            State::Settled(place) => Ok(Dynamic::from(place.clone())),
+            State::Reserved => Err(failure(
+                "a static read before its block initialized it is not supported in Rawr yet",
+            )),
         }
     }
 
     /// Write the static's value, the native value `value` holds, which
-    /// moves out of the runner's arena into the static's memory: the memory
-    /// a sibling took the address of, or a new allocation, leaked.
+    /// moves out of the runner's arena into a leaked allocation of its own.
     pub fn settle(&self, value: Dynamic) -> RawrResultOf<()> {
         let (value, witness) = taken(&value)?;
         let witness =
             witness.ok_or_else(|| failure("a static's native value has no type witness"))?;
         let mut state = self.state();
-        let State::Reserved { memory } = &mut *state else {
+        if !matches!(*state, State::Reserved) {
             return Err(failure("a static is written once"));
-        };
-        let value: &'static dyn Any = match memory.take() {
-            None => Box::leak(value),
-            Some(memory) => {
-                if (*value).type_id() != memory.ty {
-                    return Err(failure("mismatched types (E0308)"));
-                }
-                let layout = std::alloc::Layout::for_value(&*value);
-                let source: *mut dyn Any = Box::into_raw(value);
-                // SAFETY: `memory` was allocated for a value of this very
-                // type, so of its layout, and nothing has written it. The
-                // value's bytes move there, and its box is freed without
-                // dropping it, as a move does.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        source.cast::<u8>(),
-                        memory.pointer.as_ptr(),
-                        layout.size(),
-                    );
-                    if layout.size() != 0 {
-                        std::alloc::dealloc(source.cast(), layout);
-                    }
-                }
-                // SAFETY: the memory now holds the value, and it is never
-                // freed, moved or written again.
-                unsafe { &*(memory.view)(memory.pointer) }
-            }
-        };
+        }
+        let value: &'static dyn Any = Box::leak(value);
         *state = State::Settled(Place {
             witness,
             storage: Shared::new(Leaked(value)),
@@ -207,44 +154,13 @@ impl Slot {
         });
         Ok(())
     }
-
-    /// The static's `&'static T`: its value once written, or else the
-    /// memory its value will be in, which nothing reads before it is.
-    fn address<T: 'static>(&self) -> Option<&'static T> {
-        let mut state = self.state();
-        match &mut *state {
-            State::Settled(place) => {
-                let place = place.clone();
-                drop(state);
-                lasting_place(&place)
-            }
-            State::Reserved { memory } => {
-                let memory = memory.get_or_insert_with(Memory::of::<T>);
-                if memory.ty != TypeId::of::<T>() {
-                    return None;
-                }
-                // SAFETY: the memory is leaked, so it lives as long as the
-                // program, and it is for a `T`. It holds no value yet: the
-                // reference only names where the sibling's value will be,
-                // and the block's initializers don't read it before
-                // `settle` writes it. Miri's aliasing models reject the
-                // write after this reference exists (D862's check), as they
-                // reject any cycle of statics built at run time.
-                Some(unsafe { memory.pointer.cast::<T>().as_ref() })
-            }
-        }
-    }
 }
 
 /// The `&'static T` a value marked code passes for a `&'static T`
-/// parameter is: a static's, of a body or of native code, or the slot of a
-/// sibling static not written yet. `None` for a value that doesn't live as
-/// long as the program.
+/// parameter is: a static's, of a body or of native code. `None` for a
+/// value that doesn't live as long as the program.
 #[must_use]
 pub fn lasting<T: 'static>(value: &Dynamic) -> Option<&'static T> {
-    if let Some(slot) = value.read_lock::<Slot>().map(|slot| slot.clone()) {
-        return slot.address::<T>();
-    }
     lasting_place(&super::get(value)?)
 }
 

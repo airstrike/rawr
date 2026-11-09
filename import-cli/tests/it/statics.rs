@@ -1,11 +1,12 @@
 //! Statics declared inside marked bodies, of native types (D862): two
-//! written in one block that refer to each other, and tracing's event shape,
-//! which a crate's macro expands at each call to a `__CALLSITE` static whose
-//! initializer declares a `META` static pointing back at it, built with
-//! const fns and registered by address through `interest(&'static self)`.
-//! Each is one native place for the program's life: a save that leaves its
-//! declaration alone keeps it, and one that changes it makes a new one
-//! without a restart. Build the driver first, as for `islands`.
+//! written in one block, a callsite built with a const fn from the metadata
+//! before it and registered by address through `interest(&'static self)`,
+//! and the same pair a crate's macro expands at each call. Each is one
+//! native place for the program's life: a save that leaves its declaration
+//! alone keeps it, and one that changes it makes a new one without a
+//! restart. tracing's own shape, whose metadata points back at its
+//! callsite, is a cycle `rawr check` refuses. Build the driver first, as
+//! for `islands`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -69,12 +70,12 @@ fn statics_declared_in_bodies_check_and_run_as_cargo_runs_them() {
     assert!(native.status.success(), "{}", text(&native.stderr));
     assert_eq!(
         text(&native.stdout),
-        "written registered 1 of 1 back true\n\
-         written registered 1 of 1 back true\n\
-         first registered 2 of 2 back true\n\
-         1 value 1 tick registered 3 of 3 back true\n\
-         2 value 2 tick registered 3 of 3 back true\n\
-         3 value 3 tick registered 3 of 3 back true\n"
+        "written registered 1 of 1 back false\n\
+         written registered 1 of 1 back false\n\
+         first registered 2 of 2 back false\n\
+         1 value 1 tick registered 3 of 3 back false\n\
+         2 value 2 tick registered 3 of 3 back false\n\
+         3 value 3 tick registered 3 of 3 back false\n"
     );
 
     let run = rawr_import("run", &root);
@@ -96,7 +97,7 @@ fn a_body_static_keeps_its_place_across_a_save_and_moves_when_its_declaration_ch
     assert!(
         run.seen
             .iter()
-            .any(|line| line == "1 value 1 tick registered 3 of 3 back true"),
+            .any(|line| line == "1 value 1 tick registered 3 of 3 back false"),
         "{}",
         run.seen.join("\n")
     );
@@ -106,17 +107,21 @@ fn a_body_static_keeps_its_place_across_a_save_and_moves_when_its_declaration_ch
     edit(&main, "let scale = 1;", "let scale = 100;");
     let swapped = run.until(|line| line.contains("00 tick registered"));
     assert!(
-        swapped.ends_with(" tick registered 3 of 3 back true"),
+        swapped.ends_with(" tick registered 3 of 3 back false"),
         "{}",
         run.seen.join("\n")
     );
 
     // A changed initializer: a new callsite, which registers at its own
     // address, in the same process.
-    edit(&main, "probe::event!(\"tick\")", "probe::event!(\"tock\")");
+    edit(
+        &main,
+        "probe::counted!(\"tick\")",
+        "probe::counted!(\"tock\")",
+    );
     let moved = run.until(|line| line.contains(" tock "));
     assert!(
-        moved.ends_with(" tock registered 4 of 4 back true"),
+        moved.ends_with(" tock registered 4 of 4 back false"),
         "{}",
         run.seen.join("\n")
     );
@@ -134,4 +139,24 @@ fn a_body_static_keeps_its_place_across_a_save_and_moves_when_its_declaration_ch
     fs::write(root.join("stop"), "").unwrap();
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
+#[test]
+fn statics_that_refer_to_each_other_are_refused_at_check() {
+    let root = fixture("marked-statics-cycle");
+    edit(
+        &root.join("src/main.rs"),
+        "probe::counted!(\"tick\")",
+        "probe::event!(\"tick\")",
+    );
+    let check = rawr_import("check", &root);
+    let stderr = text(&check.stderr);
+    assert!(!check.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(
+            "a `static` whose initializer names `__CALLSITE` before `__CALLSITE` is written, \
+             a cycle of statics such as tracing's `META` and `__CALLSITE`, is not supported"
+        ),
+        "{stderr}"
+    );
 }

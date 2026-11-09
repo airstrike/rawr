@@ -2601,8 +2601,7 @@ fn settled(value: &Dynamic) -> Option<Result<__rawr_internal::island::Settled, S
 }
 
 /// The `&'static T` marked code passes for a `&'static T` parameter or
-/// receiver: a static's, which lives as long as the program, or a sibling
-/// static's place not written yet (D862).
+/// receiver: a static's, which lives as long as the program (D862).
 #[allow(dead_code)]
 fn lasting_argument<T: 'static>(arguments: &Arguments<'_, '_, '_>, index: usize) -> Result<&'static T, Error> {
     let value = arguments.values.get(index).ok_or(Error::MissingArgument)?;
@@ -16428,8 +16427,8 @@ fn render_take_input(
         return writeln!(output, "    let {name} = {take};{borrow}").map_err(request::unwritable);
     }
     // A `&'static T` of a crate value, as tracing's `Metadata::new` takes
-    // its callsite: a static's own place, of a body or of native code, or
-    // the memory of a sibling static not written yet (D862).
+    // its callsite: a static's own place, of a body or of native code
+    // (D862).
     if let convert::Type::Borrowed {
         mutable: false,
         ty: target,

@@ -5,9 +5,13 @@
 //! its value in the interpreter: each read is its initializer, as a
 //! constant's is.
 //!
-//! A block's statics are all declared before any is initialized, so an
-//! initializer names a sibling declared after it, and takes its address
-//! before it holds a value, as tracing's `META` and `__CALLSITE` do.
+//! A block's statics are all declared before any is initialized, and they
+//! are initialized in order. A native static's initializer may name one
+//! written before it. One that names a static not written yet, itself or a
+//! sibling after it, is refused: statics that refer to each other, as
+//! tracing's `META` and `__CALLSITE` do, would need a place referenced
+//! before it is written, which Rust's aliasing rules don't allow at run
+//! time (D862's Miri check).
 
 use super::*;
 use std::hash::{Hash, Hasher};
@@ -20,8 +24,8 @@ pub(super) struct Declared {
 }
 
 enum Kind {
-    /// A native place, by its key.
-    Native { key: ImmutableString },
+    /// A native place, by its key, and whether its block wrote it yet.
+    Native { key: ImmutableString, written: bool },
     /// A value in the interpreter: its initializer's tokens.
     Interpreted { value: Vec<(Token, Position)> },
 }
@@ -110,14 +114,28 @@ impl Parser<'_> {
                     declaration: span(keyword, name_span.end()),
                     value,
                 });
-                Kind::Native { key }
+                Kind::Native {
+                    key,
+                    written: false,
+                }
             } else {
                 Kind::Interpreted { value }
             };
             self.block_statics.push(Declared { name, ty, kind });
         }
         for initializer in initializers {
+            let key = initializer.key.clone();
             self.initialize_static(initializer)?;
+            let written =
+                self.block_statics
+                    .iter_mut()
+                    .find_map(|declared| match &mut declared.kind {
+                        Kind::Native { key: own, written } if *own == key => Some(written),
+                        _ => None,
+                    });
+            if let Some(written) = written {
+                *written = true;
+            }
         }
         self.last_type = Ty::Unit;
         self.last_expression = None;
@@ -195,7 +213,17 @@ impl Parser<'_> {
             .find(|declared| declared.name.as_str() == name)?;
         let ty = declared.ty.clone();
         let read = match &declared.kind {
-            Kind::Native { key } => {
+            Kind::Native { written: false, .. } => {
+                return Some(Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "a `static` whose initializer names `{name}` before `{name}` is \
+                         written, a cycle of statics such as tracing's `META` and `__CALLSITE`,"
+                    )
+                    .into(),
+                    source: name_span,
+                }));
+            }
+            Kind::Native { key, .. } => {
                 let key = origin::Fragment::plain(format!("{key:?}"));
                 let source = self.prelude_op(PreludeOp::StaticValue, [key]);
                 Ok(self.operator_expr(source, ty.clone(), name_span))
@@ -273,7 +301,7 @@ impl Parser<'_> {
     fn fingerprint(&self, declarations: &[Declaration]) -> u64 {
         let mut hasher = std::hash::DefaultHasher::new();
         for declared in &self.block_statics {
-            if let Kind::Native { key } = &declared.kind {
+            if let Kind::Native { key, .. } = &declared.kind {
                 key.as_str().hash(&mut hasher);
             }
         }

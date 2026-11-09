@@ -386,8 +386,8 @@ pub(super) enum PreludeOp {
     /// stand-in rawr's copy of the crate declares for the owner, holding
     /// the value's handle (`island::object`, #1264).
     NativeObject,
-    /// A static declared in a body, of a native type (D862): its place, or
-    /// before its block writes it, its slot: `value(key)`.
+    /// A static declared in a body, of a native type (D862): its place,
+    /// `value(key)`.
     StaticValue,
     /// Whether the static `key` has no value yet: `reserved(key)`.
     StaticReserved,
@@ -872,7 +872,7 @@ impl PreludeOp {
             Self::DropParts => return Ok(drops::parts(args[0], args[1], models)),
             Self::StaticValue => {
                 let key = args[0].clone_cast::<ImmutableString>();
-                return Ok(crate::place::statics::slot(&key).value());
+                return crate::place::statics::slot(&key).value();
             }
             Self::StaticReserved => {
                 let key = args[0].clone_cast::<ImmutableString>();
