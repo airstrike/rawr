@@ -13,6 +13,27 @@ mod widget;
 pub use theme::Theme;
 pub use widget::Element;
 
+/// The workspace's messages, as inboard's, which map the home screen's.
+#[derive(Debug, Clone, PartialEq)]
+enum Message {
+    Home(home::Message),
+}
+
+/// The workspace's pane, as inboard's: the marked home screen's element
+/// over the theme, mapped into the workspace's messages.
+fn pane<'a>(
+    screen: &'a home::State,
+    source: &'a home::wizard::Source,
+    grid: Option<Element<'a, grid::Message>>,
+    theme: &'a Theme,
+) -> Element<'a, Message> {
+    use ui::Widget;
+    screen
+        .view(source.view(), grid, theme)
+        .map(Message::Home)
+        .boxed()
+}
+
 fn main() {
     let theme = Theme::default();
     println!("default {theme:?}");
@@ -56,7 +77,7 @@ fn main() {
         typeface.family()
     );
     println!("{}", home::heading());
-    println!("{}", home::container().draw(&theme));
+    println!("{}", home::framed().draw(&theme));
     println!("{}", home::label().draw(&dark));
     println!("view {}", home::view(&theme));
     println!("view {}", home::view(&dark));
@@ -74,5 +95,15 @@ fn main() {
         "lent in place {}",
         home::place(&theme) == std::ptr::from_ref(&theme).addr()
     );
+    let source = home::wizard::Source::new(&["sales", "costs"]);
+    let mut screen = home::State::new("welcome");
+    for grid in [None, grid::home(&dark)] {
+        let page = pane(&screen, &source, grid, &theme);
+        println!("page {} {:?}", page.draw(&theme), page.message());
+    }
+    screen.open_wizard(3);
+    let page = pane(&screen, &source, grid::home(&theme), &dark);
+    println!("page {} {:?}", page.draw(&dark), page.message());
+    println!("catalog read {}", source.reads());
     println!("clones {}", theme::clones());
 }

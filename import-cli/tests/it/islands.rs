@@ -814,7 +814,15 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// fn both a lent `&'a str` and the lent theme, which its element keeps
 /// (#1509). A marked `page<'a>` maps the grid element native code builds
 /// and gives it by value inside an `Option`, as inboard's
-/// `home::State::view` maps its `home_grid`. `rawr
+/// `home::State::view` maps its `home_grid`. A marked `home::State::view`,
+/// kept by native code, follows
+/// inboard's: a native grid element mapped through the crate's generic
+/// `Widget::map` and boxed into a `Column<Element>`, the crate's generic
+/// `scrollable` and `container` over the marked theme reached through the
+/// app's `widget` re-exports, a native style function as a container's
+/// style, and, with its wizard open, the wizard's element over the
+/// catalog native code gives for the call, stacked over the page with
+/// `opaque`; native code maps the element it returns. `rawr
 /// check` passes as `cargo check` does, and `rawr run` prints what `cargo
 /// run` prints.
 #[test]
@@ -848,6 +856,11 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     );
     assert!(
         printed.contains("void styled 0 idle\nhome badge on dark\ninbox inbox styled 120 Some(Inbox(Opened(120)))\ntitled mail styled 254 idle\npage grid styled 121 Some(Grid(Tile(120)))\n"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("[welcome styled 120, void styled 0, grid styled 251]]))) Some(Home(Inbox(Opened(120))))\n")
+            && printed.contains("over opaque sales styled 253] Some(Home(Wizard(Step(3))))\ncatalog read 1\n"),
         "{printed}"
     );
     // The one clone is `theme.clone()` in `main`.

@@ -18,6 +18,7 @@ pub fn view<'a>(title: &str, theme: &'a Theme) -> Element<'a, Message> {
 /// A view that keeps its `title` borrowed as long as its element, beside
 /// the theme.
 pub fn titled<'a>(title: &'a str, theme: &'a Theme) -> Element<'a, Message> {
+    use ui::Widget;
     ui::label(title)
         .style(move |_: &Theme| theme.accent() + title.len() as u32)
         .boxed()
