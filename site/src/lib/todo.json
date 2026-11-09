@@ -3366,7 +3366,8 @@
     {"issue":1528,"title":"A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"closed","category":"No glue (D593)"},
     {"issue":1529,"title":"A new engine still finishes the generated std facade and binds its callbacks at every start","state":"open","category":"Platforms"},
     {"issue":1530,"title":"A given native value inside a by-value parameter was checked against a marked type's mirror, not the marked type","state":"open","category":"No glue (D593)"},
-    {"issue":1531,"title":"A body edit in a marked screen restarts the program when it shifts a native function passed by name","state":"open","category":"No glue (D593)"}
+    {"issue":1531,"title":"A body edit in a marked screen restarts the program when it shifts a native function passed by name","state":"open","category":"No glue (D593)"},
+    {"issue":1532,"title":"Find what keeps an old generation's literal alive after the generation drops","state":"open","category":"Hot reload of a marked `main` (D555)"}
   ],
   "groups": [
     {
