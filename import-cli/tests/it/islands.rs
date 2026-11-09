@@ -1594,3 +1594,65 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     let status = run.wait();
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
+
+/// A marked home screen with inboard's shapes (`workspace/screen/home.rs`):
+/// a crate's `&mut self` trait method on the generator a call gives by
+/// value (`rand::rng().random_range(0..100)`), a trait method of a clock a
+/// call gives (`chrono::Local::now().hour()`), `&self` methods of the
+/// elements of a slice a native method lends, through a `Vec<&Entry>`
+/// sorted by `Reverse`, a drop-down built by value, a boxed field moved
+/// out of a native struct variant, a native tuple of a value and a task,
+/// an `impl Into<I>` the screen's own enum fills, a text editor's content
+/// read and replaced, or-patterns of native payloads, the `&str` of a
+/// chain of a lent config's borrows, and a native tuple of counts.
+/// `rawr check` passes and `rawr run` prints what `cargo run` prints.
+#[test]
+fn a_marked_home_screen_with_inboard_s_shapes_runs_as_cargo_runs_it() {
+    const GREETING: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-greeting"
+    );
+    let root = crate::support::scratch().join("islands-greeting");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(GREETING), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert!(
+        printed.starts_with("Afternoon, Ada. How can I help?\n")
+            && printed.contains("[team (30m ago) on right opens Leave] [notes (60m ago)")
+            && printed.contains("Some(Commit { target: Replace(2), infolet: Infolet"),
+        "{printed}"
+    );
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(&root, &[]);
+    for expected in printed.lines() {
+        let line = run.until(|_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}

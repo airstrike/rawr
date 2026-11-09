@@ -13789,10 +13789,24 @@ fn render_borrowed_receiver(
         )
         .map_err(encoding);
     }
+    // An element a native place names, as `entry` of `for entry in
+    // registry.entries()`, is reached where it is, inside one claim of
+    // the place, with the arena lent so the claim can reach the slice's
+    // owner, as a field read of it is (#687).
+    let place_call = if mutable {
+        format!("|mut receiver| {{ let receiver = receiver.write()?; Ok({call}) }}")
+    } else {
+        format!("|receiver| {{ let receiver = receiver.read(); Ok({call}) }}")
+    };
     writeln!(
         output,
-        "    let output = match lent_value(arguments, 0) {{
-        Some(lent) => {{
+        "    let place = arguments.values.first().and_then(|value| __rawr_internal::place::get(value));
+    let output = match (lent_value(arguments, 0), place) {{
+        (None, Some(place)) => {{
+            lend(arguments.arena, || __rawr_internal::place::reach_as::<{container}, _>(&place, {mutable}, {place_call}))
+                .map_err(|error| Error::Value(error.to_string()))?
+        }}
+        (Some(lent), _) => {{
             let access: fn(u64, &mut dyn FnMut({borrow}{container})) -> Result<(), u8> = lent
                 .accessor({mutable})
                 .map_err(|error| Error::Lent(lent.name(), error))?;
@@ -13807,7 +13821,7 @@ fn render_borrowed_receiver(
             .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
             output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?
         }}
-        None => {{
+        (None, None) => {{
             let receiver = native_handle(arguments, 0, false)?;
             {arena_call}
         }}
