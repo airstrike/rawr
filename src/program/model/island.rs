@@ -52,6 +52,11 @@ pub(crate) const PINNED: u8 = 23;
 /// whole's index among the call's lent values, then the value. Native code
 /// the call gives the value to by reference is given that lend.
 pub(crate) const WHOLE: u8 = 24;
+/// A `&str` result in a text the call's receiver copied from native code's
+/// value, as `&self.0` of a marked `Id(String)`: the text's index among
+/// the receiver's texts in the order native code wrote them, then the
+/// start and length of the result in it.
+pub(crate) const TEXT_AT: u8 = 25;
 
 /// The first byte of a call's header: the function is a member of the
 /// type before its last segment.

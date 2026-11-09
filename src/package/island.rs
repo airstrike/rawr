@@ -1828,7 +1828,10 @@ impl<'a> Generator<'a> {
         // them where they are, so a reference its result gives into them
         // is one into the receiver, as `&self.0.colors` is (#1468).
         let holding = matches!(owner, Owner::Marked(owner) if self.holding.contains(owner));
-        let lent = holding && matches!(function.receiver, Some(item::Receiver::Shared(_)));
+        // So does one of a marked type copied whole, as inboard's
+        // `Id::as_str` gives `&self.0`: its text is in native code's value.
+        let crossing = matches!(owner, Owner::Marked(owner) if self.crossing.contains(owner));
+        let lent = crossing && matches!(function.receiver, Some(item::Receiver::Shared(_)));
         let kept = match self.kept_result(file, function).filter(|_| object || lent) {
             Some(Ok(Borrowed::Kept(_))) if !object => {
                 reasons.push(
@@ -2156,11 +2159,12 @@ impl<'a> Generator<'a> {
                 "    let __value: {output} = self.0.pinned(&mut __reply);"
             );
         } else if let Some(Borrowed::Pinned) = kept {
-            // The text the receiver's lent parts hold (#1468).
+            // The text the receiver holds, copied first or in its lent parts
+            // (#1468).
             let _ = writeln!(
                 text,
-                "    // SAFETY: the text is in a part of `self`, which stays borrowed for as\n    \
-                 // long as the result is, or pinned for as long as the runner lives.\n    \
+                "    // SAFETY: the text is in `self`, written first, which stays borrowed for\n    \
+                 // as long as the result is, or pinned for as long as the runner lives.\n    \
                  #[allow(unsafe_code)]\n    \
                  let __value: {output} = unsafe {{ __reply.pinned() }};"
             );
@@ -4031,10 +4035,17 @@ pub mod __rawr_island {
     const HANDLE: u8 = 22;
     const PINNED: u8 = 23;
     const WHOLE: u8 = 24;
+    const TEXT_AT: u8 = 25;
 
-    /// A value on its way to the interpreter, and the native values it
-    /// gives the interpreter, each taken once.
-    pub struct Out(::std::vec::Vec<u8>, ::std::vec::Vec<::std::option::Option<Given>>);
+    /// A value on its way to the interpreter, the native values it gives
+    /// the interpreter, each taken once, and, when a call asks
+    /// ([`Call::pinned`]), where each text it copies is, in the order it
+    /// writes them.
+    pub struct Out(
+        ::std::vec::Vec<u8>,
+        ::std::vec::Vec<::std::option::Option<Given>>,
+        ::std::option::Option<::std::vec::Vec<*const str>>,
+    );
 
     impl Out {
         /// `value`, which the interpreter keeps, with what its type has of
@@ -4593,7 +4604,7 @@ pub mod __rawr_island {
     pub fn unmirrored<T: Mirror>(
         value: T,
     ) -> (::std::vec::Vec<u8>, ::std::vec::Vec<::std::option::Option<Given>>) {
-        let mut out = Out(::std::vec::Vec::new(), ::std::vec::Vec::new());
+        let mut out = Out(::std::vec::Vec::new(), ::std::vec::Vec::new(), None);
         value.give(&mut out);
         (out.0, out.1)
     }
@@ -4712,6 +4723,9 @@ pub mod __rawr_island {
     }
     impl Put for str {
         fn put(&self, out: &mut Out) {
+            if let Some(texts) = &mut out.2 {
+                texts.push(::std::ptr::from_ref(self));
+            }
             out.byte(STR);
             out.text(self);
         }
@@ -4926,7 +4940,7 @@ pub mod __rawr_island {
                 releases: ::std::vec::Vec::new(),
                 for_call: 0,
                 kept: 0,
-                values: Out(::std::vec::Vec::new(), ::std::vec::Vec::new()),
+                values: Out(::std::vec::Vec::new(), ::std::vec::Vec::new(), None),
                 lent: ::std::vec::Vec::new(),
                 borrows: ::std::marker::PhantomData,
             }
@@ -5049,11 +5063,14 @@ pub mod __rawr_island {
             self.values.0.extend_from_slice(&object.0.to_le_bytes());
             self.count += 1;
         }
-        /// The call's result is a `&str` that borrows its stand-in's
-        /// receiver, which comes back as the program's own text, pinned
-        /// with the value ([`Object::pinned`]).
+        /// The call's result is a `&str` that borrows its receiver: a
+        /// stand-in's comes back as the program's own text, pinned with the
+        /// value ([`Object::pinned`]), and a marked value's as text it
+        /// holds ([`Reply::pinned`]), so where each text the call copies
+        /// is gets noted.
         pub fn pinned(&mut self) {
             self.pinned = true;
+            self.values.2 = Some(::std::vec::Vec::new());
         }
         /// The call's result is a reference to a native value, which
         /// comes back where the value is: with `lasting`, a `&'static`
@@ -5153,6 +5170,7 @@ pub mod __rawr_island {
                     path: self.path,
                     natives: natives.into_iter().map(Some).collect(),
                     places: self.lent.iter().map(|lent| lent.2).collect(),
+                    texts: self.values.2.take().unwrap_or_default(),
                 },
                 Some(_) => {
                     let message = ::std::string::String::from_utf8_lossy(&reply[1..]).into_owned();
@@ -5172,6 +5190,9 @@ pub mod __rawr_island {
         natives: ::std::vec::Vec<::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>>>,
         /// Where each part the call lent is ([`In::changed`]).
         places: ::std::vec::Vec<*mut ()>,
+        /// Where each text the call copied is, in the order it wrote them
+        /// ([`Call::pinned`]).
+        texts: ::std::vec::Vec<*const str>,
     }
 
     impl Reply {
@@ -5215,25 +5236,42 @@ pub mod __rawr_island {
             // place is in `receiver`, which is borrowed for `'r`.
             unsafe { &*place.cast::<T>() }
         }
-        /// A `&str` the call's receiver holds (#1468): the text where it
-        /// is in a part the call lent, or the program's own text, pinned
+        /// A `&str` the call's receiver holds (#1468): text in native
+        /// code's own value, in a text the call copied from it, as `&self.0`
+        /// of a marked `Id(String)` is, or the program's own text, pinned
         /// for as long as the runner lives.
         ///
         /// # Safety
         ///
-        /// The receiver stays borrowed for `'r`.
+        /// The receiver stays borrowed for `'r`, and the call copied its
+        /// texts from it before any other.
         pub unsafe fn pinned<'r>(&mut self) -> &'r str {
-            let (address, length) = self.read(|input| {
-                input.expect(PINNED, "a `&str`");
-                (input.count(), input.count())
+            let texts = ::std::mem::take(&mut self.texts);
+            let found = self.read(|input| match input.byte() {
+                PINNED => Err((input.count(), input.count())),
+                TEXT_AT => {
+                    let (index, start, length) = (input.count(), input.count(), input.count());
+                    texts
+                        .get(index)
+                        // SAFETY: the receiver, which holds the text, is
+                        // borrowed for `'r`.
+                        .map(|text| unsafe { &**text })
+                        .and_then(|text| text.get(start..start.checked_add(length)?))
+                        .map(Ok)
+                        .unwrap_or_else(|| input.fail("a text the call didn't copy"))
+                }
+                _ => input.fail("expected a `&str`"),
             });
-            // SAFETY: the runner gave valid UTF-8 that lives at least as
-            // long as the receiver is borrowed, which is `'r`.
-            unsafe {
-                ::std::str::from_utf8_unchecked(::std::slice::from_raw_parts(
-                    ::std::ptr::with_exposed_provenance::<u8>(address),
-                    length,
-                ))
+            match found {
+                Ok(text) => text,
+                // SAFETY: the runner gave valid UTF-8 that lives at least as
+                // long as the receiver is borrowed, which is `'r`.
+                Err((address, length)) => unsafe {
+                    ::std::str::from_utf8_unchecked(::std::slice::from_raw_parts(
+                        ::std::ptr::with_exposed_provenance::<u8>(address),
+                        length,
+                    ))
+                },
             }
         }
         /// The next value, as `read` reads it.
@@ -5362,6 +5400,29 @@ mod tests {
                 "physics::scale",
             ]
         );
+    }
+
+    /// A `&self` method of a marked type copied whole, as inboard's
+    /// `Id::as_str`, gives a `&str` in native code's own value: the call
+    /// notes where each text it copies is, and the reply names one.
+    #[test]
+    fn a_copied_marked_value_gives_text_it_holds_in_place() {
+        let shadow = generate(
+            "// rawr\npub struct Id(String);\n\
+             impl Id {\n    pub fn as_str(&self) -> &str { &self.0 }\n}\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        for expected in [
+            "    __call.pinned();\n",
+            "    __call.argument(self);\n",
+            "let __value: &str = unsafe { __reply.pinned() };",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        assert!(!text.contains("panic!"), "{text}");
     }
 
     /// A borrow of a type the marked crate doesn't declare, as ratatui's

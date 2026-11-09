@@ -894,6 +894,59 @@ fn first_lent(value: &Dynamic, depth: usize) -> Option<crate::scope::Nonce> {
     }
 }
 
+/// Each text `value`, a marked value read from a call's arguments, holds,
+/// added to `texts` in the order native code wrote them: field by field,
+/// as the wire format writes a value.
+fn texts_of(value: &Dynamic, texts: &mut Vec<ImmutableString>, depth: usize) {
+    if depth > 64 {
+        return;
+    }
+    let depth = depth + 1;
+    match &value.0 {
+        crate::types::dynamic::Union::Str(text, ..) => texts.push(text.clone()),
+        crate::types::dynamic::Union::Struct(value, ..) => {
+            for field in value.fields() {
+                texts_of(field, texts, depth);
+            }
+        }
+        crate::types::dynamic::Union::Enum(value, ..) => {
+            for item in value.payload() {
+                texts_of(item, texts, depth);
+            }
+        }
+        crate::types::dynamic::Union::Array(items, ..) => {
+            for item in items.iter() {
+                texts_of(item, texts, depth);
+            }
+        }
+        crate::types::dynamic::Union::Shared(cell, ..) => {
+            if let Some(inner) = crate::func::locked_read(cell) {
+                texts_of(&inner, texts, depth);
+            }
+        }
+        crate::types::dynamic::Union::Variant(..) => {
+            if let Some(option) = value.read_lock::<crate::option::Value>() {
+                if let Some(inner) = &*option {
+                    texts_of(inner, texts, depth);
+                }
+            } else if let Some(result) = value.read_lock::<crate::result::Value>() {
+                let (Ok(inner) | Err(inner)) = &*result;
+                texts_of(inner, texts, depth);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Where `text` starts in `held`, when it is a part of that very text, as
+/// `&self.0` is of the receiver's: by address, never by what it reads.
+fn start_in(held: &str, text: &str) -> Option<usize> {
+    let start = held.as_ptr().addr();
+    let at = text.as_ptr().addr();
+    let offset = at.checked_sub(start)?;
+    (offset + text.len() <= held.len()).then_some(offset)
+}
+
 /// `read` of the published generation's model and its crate's script
 /// types: on the thread that owns the program, or the one published last.
 fn with_types<R>(
@@ -1780,6 +1833,17 @@ impl Calls {
         } = made;
         let path = call.path;
         let model = call.model;
+        // The texts a `&str` that borrows a marked receiver may be in, as
+        // `&self.0` of an `Id(String)` is: each one the receiver native
+        // code wrote holds, found before the call takes it.
+        let mut texts = Vec::new();
+        if matches!(gives, Gives::Text)
+            && anchored.is_none()
+            && matches!(item.kind(), item::Kind::Method)
+            && let Some(receiver) = values.first()
+        {
+            texts_of(receiver, &mut texts, 0);
+        }
         let invoked = (call.invoke)(item, &mut values);
         // The receiver changed in place, as a method's is, goes back.
         restore(&held, &mut values);
@@ -1823,18 +1887,32 @@ impl Calls {
                 reply.extend_from_slice(&(text.as_ptr().expose_provenance() as u64).to_le_bytes());
                 reply.extend_from_slice(&(text.len() as u64).to_le_bytes());
             }
-            // A `&str` a method of a marked value whose parts native code
-            // lent gives back (#1468): the program's own text, pinned for
-            // as long as the runner lives, once per text.
+            // A `&str` a method of a marked value native code holds gives
+            // back: in a text native code's value holds, where native code
+            // finds it in that value, or else the program's own text, pinned
+            // for as long as the runner lives, once per text (#1468).
             (Gives::Text, None) => {
                 let text = result
                     .flatten_clone()
                     .into_immutable_string()
                     .map_err(|actual| unsent(format!("a `{actual}` is no `&str`")))?;
-                let text = lasting_text(text);
-                reply.push(program::model::island::PINNED);
-                reply.extend_from_slice(&(text.as_ptr().expose_provenance() as u64).to_le_bytes());
-                reply.extend_from_slice(&(text.len() as u64).to_le_bytes());
+                if let Some((index, start)) = texts
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, held)| Some((index, start_in(held, &text)?)))
+                {
+                    reply.push(program::model::island::TEXT_AT);
+                    for count in [index, start, text.len()] {
+                        reply.extend_from_slice(&(count as u64).to_le_bytes());
+                    }
+                } else {
+                    let text = lasting_text(text);
+                    reply.push(program::model::island::PINNED);
+                    reply.extend_from_slice(
+                        &(text.as_ptr().expose_provenance() as u64).to_le_bytes(),
+                    );
+                    reply.extend_from_slice(&(text.len() as u64).to_le_bytes());
+                }
             }
             // A reference into a part native code lent the call where it
             // is, as `&self.0.colors` of a marked `Theme` (#1468).

@@ -163,6 +163,19 @@ fn main() {
     let names = ["three".to_owned(), "four".to_owned()];
     read.mark_all_read(names.iter().map(home::Id::new));
     println!("read {}", read.label());
+    // An id's text, borrowed where native code holds the id: twice while
+    // the first borrow is held, the same text, and never the text of
+    // another id that reads the same.
+    let server = home::Id::new("server-7");
+    let twin = home::Id::new("server-7");
+    let text = server.as_str();
+    println!(
+        "id {} {:?} {} {}",
+        text,
+        server.as_str().strip_prefix("server-"),
+        std::ptr::eq(text, server.as_str()),
+        std::ptr::eq(text, twin.as_str())
+    );
     // Screens whose elements native code held, then moved and dropped.
     for round in 0..2 {
         let screen = home::State::new();

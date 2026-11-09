@@ -329,13 +329,17 @@ pub fn wizard_label(state: &State, catalog: wizard::View<'_>, theme: &crate::The
 }
 
 /// A notification's id, as inboard's `inbox::Id`, which native code makes
-/// from any text.
+/// from any text and reads as the text it holds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Id(String);
 
 impl Id {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
