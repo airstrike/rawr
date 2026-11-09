@@ -7,6 +7,7 @@ pub mod inbox;
 pub struct Workspace {
     pub home: home::State,
     pub inbox: inbox::State,
+    pub updates: Vec<inbox::Update>,
 }
 
 impl Workspace {
@@ -14,6 +15,7 @@ impl Workspace {
         Self {
             home: home::State::new(),
             inbox: inbox::State::default(),
+            updates: Vec::new(),
         }
     }
 
@@ -30,10 +32,21 @@ impl Workspace {
         taken
     }
 
-    /// The home screen's element, which borrows the screen and the inbox
-    /// for as long as native code holds it, as iced's `view` does.
+    /// The home screen's element, which borrows the screen, the inbox and
+    /// its updates for as long as native code holds it, as iced's `view`
+    /// does.
     pub fn show(&self) -> ui::Element<'_, home::Message> {
-        self.home.view(&self.inbox)
+        self.show_over(None)
+    }
+
+    /// The home screen's element over `grid`, an element of its own, as
+    /// inboard's workspace gives `home_grid`.
+    pub fn show_over<'a>(
+        &'a self,
+        grid: Option<ui::Element<'a, home::wizard::Message>>,
+    ) -> ui::Element<'a, home::Message> {
+        let catalog = home::wizard::View::new(&self.inbox);
+        self.home.view(&self.inbox, &self.updates, catalog, grid)
     }
 
     pub fn press(&mut self) -> usize {

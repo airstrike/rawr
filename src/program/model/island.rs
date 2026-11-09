@@ -425,6 +425,27 @@ impl Model {
         }
     }
 
+    /// What the native values each marked function's by-value parameters
+    /// hold are attested as, by whether it belongs to a type and its path:
+    /// a bare native one's own type, or each one inside an `Option`, a
+    /// `Vec`, a `Box` or a tuple, as `home_grid: Option<Element<'a,
+    /// grid::Message>>` holds one (#1224).
+    pub(crate) fn island_input_parts(
+        &self,
+        witness: impl Fn(&crate::host::runtime::type_ref::Type) -> crate::host::runtime::Witness,
+    ) -> std::collections::HashMap<(bool, String), Box<[Option<Part>]>> {
+        self.island_inputs()
+            .iter()
+            .map(|(key, types)| {
+                let parts = types
+                    .iter()
+                    .map(|ty| ty.as_ref().and_then(|ty| Part::of(ty, self, &witness)))
+                    .collect();
+                (key.clone(), parts)
+            })
+            .collect()
+    }
+
     /// One value from `reader`, built in this model. `lent` holds the
     /// script values of what the call's trampoline lends, and `given` the
     /// native values it gives, each taken once; `part` proves the type of

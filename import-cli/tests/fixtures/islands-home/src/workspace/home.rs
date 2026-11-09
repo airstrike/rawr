@@ -144,9 +144,24 @@ impl State {
     /// borrows its own text for `'a`, the element of the native inbox it is
     /// lent, which borrows the inbox, or a child's, each mapped into its
     /// messages. A section with no heading, as inboard's `nav_section(None,
-    /// ..)`, shows its child's text.
-    pub fn view<'a>(&'a self, inbox: &'a inbox::State) -> Element<'a, Message> {
-        if self.count > 3 {
+    /// ..)`, shows its child's text. It takes a native grid element by value
+    /// inside an `Option` and the inbox's updates as a lent slice, which
+    /// the free `inbox::view` keeps, and shows its open wizard, a native
+    /// part of `self`, over the catalog it is given, as inboard's does.
+    pub fn view<'a>(
+        &'a self,
+        inbox: &'a inbox::State,
+        updates: &'a [inbox::Update],
+        catalog: wizard::View<'a>,
+        grid: Option<Element<'a, wizard::Message>>,
+    ) -> Element<'a, Message> {
+        if let Some(grid) = grid {
+            grid.map(Message::Wizard)
+        } else if let Some(wizard) = &self.wizard {
+            wizard.view(catalog).map(Message::Wizard)
+        } else if inbox.unread == 0 {
+            inbox::view(inbox, updates).map(Message::Inbox)
+        } else if self.count > 3 {
             ui::section(None, [ui::button(&self.title, Message::Count)])
         } else if inbox.unread > 3 {
             inbox.view().map(Message::Inbox)

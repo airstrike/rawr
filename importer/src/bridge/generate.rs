@@ -2470,12 +2470,18 @@ impl Arena {
 }
 
 /// The native value `value` holds, moved out of this thread's arena for
-/// native code that called a marked function (#1118).
+/// native code that called a marked function (#1118). One a call already
+/// moved on, as `grid.map(..)` moves a given `Element` (#1224), is gone.
 fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     let handle = value.read_lock::<NativeHandle>()?;
     Some(
-        arena_access(|arena| arena.take_any(&handle).map_err(|error| format!("{:?}", error.reported())))
-            .unwrap_or_else(|| Err("a native value can't move from another thread's arena".to_owned())),
+        arena_access(|arena| {
+            arena.take_any(&handle).map_err(|error| match error {
+                Error::StaleHandle => "its value was moved".to_owned(),
+                error => format!("{:?}", error.reported()),
+            })
+        })
+        .unwrap_or_else(|| Err("a native value can't move from another thread's arena".to_owned())),
     )
 }
 
@@ -2961,6 +2967,89 @@ fn lent_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_
         .and_then(|value| value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent))
 }
 
+/// A crate value a call's output keeps borrowed (D568): shared from its
+/// slot, or lent by native code to a marked function, which keeps it as
+/// long as the anchored call's result (#1413).
+#[allow(dead_code)]
+enum ViewedArgument<T: 'static> {
+    Shared(std::rc::Rc<T>),
+    Lent(__rawr_internal::scope::Lent),
+}
+
+#[allow(dead_code)]
+impl<T: 'static> ViewedArgument<T> {
+    /// The value `value` names: one native code lent, or one its slot
+    /// shares.
+    fn of(arena: &mut Arena, value: Dynamic) -> Result<Self, Error> {
+        if let Some(lent) = value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent) {
+            return Ok(Self::Lent(lent));
+        }
+        let handle = value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
+        arena.share::<T>(handle).map(Self::Shared)
+    }
+
+    /// The value borrowed as long as `pins`, which hold a shared one. A
+    /// lent one is reached in `lender`, the anchored region of the call
+    /// native code lent it to, and only one native code keeps so long.
+    fn reach<'p>(
+        self,
+        pins: &'p __rawr_internal::scope::Pins,
+        lender: Option<&__rawr_internal::scope::Region<'p>>,
+    ) -> Result<&'p T, Error> {
+        match self {
+            Self::Shared(value) => Ok(pins.hold(value)),
+            Self::Lent(lent) => lender
+                .ok_or(__rawr_internal::scope::Error::Mismatch)
+                .and_then(|region| region.lent::<T>(lent))
+                .map_err(|error| Error::Lent(lent.name(), error)),
+        }
+    }
+}
+
+/// A slice of crate values a call's output keeps borrowed (D568): the
+/// values moved out of their slots into one slice, or a slice native code
+/// lent a marked function, which keeps it as long as the anchored call's
+/// result (#1292, #1413).
+#[allow(dead_code)]
+enum ViewedSlice<T: 'static> {
+    Shared(SliceLent<T>),
+    Lent(__rawr_internal::scope::Lent),
+}
+
+#[allow(dead_code)]
+impl<T: 'static> ViewedSlice<T> {
+    /// The slice `value` names: one native code lent, or an array of
+    /// values in their slots.
+    fn of(arena: &mut Arena, value: Dynamic) -> Result<Self, Error> {
+        if let Some(lent) = value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent) {
+            return Ok(Self::Lent(lent));
+        }
+        let handles = value
+            .into_array()
+            .map_err(|_| Error::TypeMismatch)?
+            .into_iter()
+            .map(|item| item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch))
+            .collect::<Result<Vec<_>, Error>>()?;
+        lend_slice::<T>(arena, handles).map(Self::Shared)
+    }
+
+    /// The slice borrowed as long as `pins`, as [`ViewedArgument::reach`]
+    /// reaches a value.
+    fn reach<'p>(
+        self,
+        pins: &'p __rawr_internal::scope::Pins,
+        lender: Option<&__rawr_internal::scope::Region<'p>>,
+    ) -> Result<&'p [T], Error> {
+        match self {
+            Self::Shared(slice) => Ok(&pins.hold(std::rc::Rc::new(slice))[..]),
+            Self::Lent(lent) => lender
+                .ok_or(__rawr_internal::scope::Error::Mismatch)
+                .and_then(|region| region.lent_slice::<T>(lent))
+                .map_err(|error| Error::Lent(lent.name(), error)),
+        }
+    }
+}
+
 /// The value in a scope frame's region at argument `index` (D558 tier 1),
 /// if that argument is one.
 #[allow(dead_code)]
@@ -3382,6 +3471,16 @@ fn with_slice_argument<E: __rawr_internal::place::Policy>(
     index: usize,
     body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, Option<&[E::Value]>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, Error> {
+    // A slice native code lent a marked function, reached where it is
+    // through its accessor while the call runs (#1292).
+    if let Some(lent) = lent_value(arguments, index) {
+        let failed = |error| Error::Lent(lent.name(), error);
+        let access: fn(u64, &mut dyn FnMut(&[E::Value])) -> Result<(), u8> = lent.accessor(false).map_err(failed)?;
+        let mut result = None;
+        access(lent.nonce().bits(), &mut |slice| result = Some(body(&mut *arguments, Some(slice))))
+            .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
+        return result.ok_or_else(|| failed(__rawr_internal::scope::Error::Busy))?;
+    }
     let Some(place) = arguments.values.get(index).and_then(|value| __rawr_internal::place::get(value)) else {
         return body(arguments, None);
     };
@@ -10586,6 +10685,7 @@ fn render_adapter_body(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     REGIONAL_CLOSURES.with_borrow_mut(Vec::clear);
+    KEPT_REACHES.with_borrow_mut(Vec::clear);
     let path = rust_path(plan);
     let continuation = method_message(plan, cohort, profile, facade)?;
     let replay = match continuation {
@@ -10844,8 +10944,18 @@ fn render_adapter_body(
             let _pins = PinnedStrings::enter(pins);
             // A crate value the output borrows past the call, as
             // `qr_code(&self.data)` gives a `QRCode<'a>` (D568).
-            let _viewed = ViewedArguments::enter(
-                !opens && replay.is_none() && views_natives(signature, substitutions)?,
+            let viewed = !opens && replay.is_none() && views_natives(signature, substitutions)?;
+            let _viewed = ViewedArguments::enter(viewed);
+            // Or one native code lent a marked function and keeps as long
+            // as its anchored result, as inboard's `inbox::view(inbox_state,
+            // ..)` takes (#1413), which a plain output's call reaches in
+            // that result's region. An opaque output owns what it borrows
+            // (`lent_cell`), and a future borrows nothing past its call.
+            let _kept = KeptLends::enter(
+                viewed
+                    && !pins
+                    && !is_future(&substituted(signature.output(), signature, substitutions)?)
+                    && lent_cell(signature, substitutions)?.is_none(),
             );
             // An opening that returns on every path, as a call pinned for
             // the runner's life out of any region does, ends the adapter:
@@ -11016,10 +11126,14 @@ fn render_adapter_body(
                     render_lent_cell(owned, &entries, &call, output)
                 } else if VIEWED_ARGUMENTS.get() {
                     // Out of any view's region, the output is at
-                    // `'static`, and so is what it borrows.
+                    // `'static`, and so is what it borrows: no lend native
+                    // code keeps is so long.
+                    let reaches = kept_reaches(
+                        "None::<&__rawr_internal::scope::Region<'static>>",
+                    );
                     writeln!(
                         output,
-                        "    let pins = static_pins();\n    let output = lend(arguments.arena, || {call});"
+                        "    let pins = static_pins();{reaches}\n    let output = lend(arguments.arena, || {call});"
                     )
                 } else {
                     writeln!(output, "    let output = lend(arguments.arena, || {call});")
@@ -12185,8 +12299,13 @@ fn render_anchored_output(
     let inserted = format!("insert::<{family}>(made)");
     // The crate values the output borrows are shared with the region's
     // pins, which live as long as the view's borrow (`views_natives`).
+    // A lend native code keeps as long as the anchored call's result is
+    // reached in the region (#1413).
     let mut pins = if VIEWED_ARGUMENTS.get() {
-        "\n            let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;".to_owned()
+        format!(
+            "\n            let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;{}",
+            kept_reaches("Some(&*region)")
+        )
     } else {
         String::new()
     };
@@ -15465,6 +15584,14 @@ fn function_argument_list(
             {
                 write!(output, "argument_{position}").map_err(request::unwritable)?;
             }
+            // A viewed argument already reached at the lifetime of `pins`
+            // (`KEPT_REACHES`).
+            _ if VIEWED_ARGUMENTS.get()
+                && KEPT_LENDS.get()
+                && viewed_input(signature, substitutions, position, ty)? =>
+            {
+                write!(output, "argument_{position}").map_err(request::unwritable)?;
+            }
             // In the builder of the value that owns them (`LENT_CELL`), a
             // lent argument is the builder's borrow of it.
             _ if VIEWED_ARGUMENTS.get()
@@ -15676,13 +15803,27 @@ fn render_take_input(
     // each value moved out of its slot into one slice, and back once nothing
     // borrows it (`SliceLent`). An output that may borrow it keeps it
     // (`views_natives`): an opaque one owns it (`lent_cell`), and another
-    // has the call's pins hold it. Else it goes back after the call.
+    // has the call's pins hold it. Else it goes back after the call. So it
+    // does beside a `&T` native code lent (`LENT_ARGUMENTS`), whose values
+    // a copy would take out of their slots for good.
     let lent = substituted(ty, signature, substitutions)?;
-    if let Some(element) = lent_slice_element(ty, &lent)
-        && !LENT_ARGUMENTS.get()
-    {
+    if let Some(element) = lent_slice_element(ty, &lent) {
         let item =
             concrete_type(element).ok_or_else(|| request::drift("a lent slice's element type"))?;
+        // Or the slice native code lent a marked function, which a call's
+        // output keeps as long as the anchored result (#1292, #1413).
+        if KEPT_LENDS.get() {
+            KEPT_REACHES.with_borrow_mut(|reaches| {
+                reaches.push(format!(
+                    "let argument_{local} = argument_{local}.reach(pins, lender)?;"
+                ));
+            });
+            return writeln!(
+                output,
+                "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); ViewedSlice::<{item}>::of(arguments.arena, value)? }};"
+            )
+            .map_err(request::unwritable);
+        }
         let take = format!(
             "{{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let handles = value.into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|item| item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)).collect::<Result<Vec<_>, Error>>()?; lend_slice::<{item}>(arguments.arena, handles)? }}"
         );
@@ -15756,10 +15897,36 @@ fn render_take_input(
         if let Some(target) = viewed_native(&substituted) {
             let rust = concrete_type(target)
                 .ok_or_else(|| request::drift("a viewed native input's type"))?;
+            let option = matches!(substituted, convert::Type::Option(_));
+            // Or a value native code lent a marked function, which a call's
+            // output keeps as long as the anchored result (#1413).
+            if KEPT_LENDS.get() {
+                let reach = if option {
+                    format!(
+                        "let argument_{local} = match argument_{local} {{ Some(value) => Some(value.reach(pins, lender)?), None => None }};"
+                    )
+                } else {
+                    format!("let argument_{local} = argument_{local}.reach(pins, lender)?;")
+                };
+                KEPT_REACHES.with_borrow_mut(|reaches| reaches.push(reach));
+                let viewed = format!("ViewedArgument::<{rust}>::of(arguments.arena, inner)?");
+                return if option {
+                    writeln!(
+                        output,
+                        "    let argument_{local} = {{ let mut value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); match __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)? {{ None => None, Some(inner) => Some({viewed}) }} }};"
+                    )
+                } else {
+                    writeln!(
+                        output,
+                        "    let argument_{local} = {{ let inner = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {viewed} }};"
+                    )
+                }
+                .map_err(request::unwritable);
+            }
             let share = format!(
                 "inner.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.share::<{rust}>(handle))"
             );
-            return if matches!(substituted, convert::Type::Option(_)) {
+            return if option {
                 writeln!(
                     output,
                     "    let argument_{local} = {{ let mut value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); match __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)? {{ None => None, Some(inner) => Some({share}?) }} }};"
@@ -18960,6 +19127,46 @@ thread_local! {
     /// takes from the one value that owns them (`lent_cell`): each such
     /// argument is named in the builder of that value.
     static LENT_CELL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether an adapter's viewed arguments (`VIEWED_ARGUMENTS`) may be
+    /// lends native code keeps as long as an anchored call's result
+    /// (#1413): each is taken as a `Viewed` and reached once `pins` and
+    /// `lender` are, by the statements in `KEPT_REACHES`.
+    static KEPT_LENDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The statement that reaches each `Viewed` argument an adapter took
+    /// (`KEPT_LENDS`), written where its call's `pins` and `lender` are.
+    static KEPT_REACHES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Takes an adapter's viewed arguments as `Viewed`s while it lives, when
+/// `kept` (`KEPT_LENDS`).
+struct KeptLends(bool);
+
+impl KeptLends {
+    fn enter(kept: bool) -> Self {
+        Self(KEPT_LENDS.replace(kept))
+    }
+}
+
+impl Drop for KeptLends {
+    fn drop(&mut self) {
+        KEPT_LENDS.set(self.0);
+    }
+}
+
+/// The statements that reach an adapter's `Viewed` arguments, at the
+/// lifetime of `pins`, with `lender` the region a kept lend is reached in
+/// (`KEPT_REACHES`), after `pins`, as the adapter's body writes them.
+fn kept_reaches(lender: &str) -> String {
+    KEPT_REACHES.with_borrow(|reaches| {
+        let mut written = String::new();
+        if !reaches.is_empty() {
+            written.push_str(&format!("\n            let lender = {lender};"));
+        }
+        for reach in reaches {
+            written.push_str(&format!("\n            {reach}"));
+        }
+        written
+    })
 }
 
 /// Names an adapter's lent arguments in the builder of the value that owns
@@ -19596,6 +19803,20 @@ fn keeps_borrow(
 ) -> bool {
     !matches!(declared, convert::Type::Borrowed { .. })
         || u32::try_from(position).is_ok_and(|position| signature.lends().contains(&position))
+}
+
+/// Whether the input at `position`, declared `declared`, is one a viewed
+/// call shares with its pins (`views_natives`): a `&[T]` of crate values,
+/// or a `&T` of one, or an `Option` of one, the output keeps.
+fn viewed_input(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    position: usize,
+    declared: &convert::Type,
+) -> Result<bool, request::Error> {
+    let input = substituted(declared, signature, substitutions)?;
+    Ok(lent_slice_element(declared, &input).is_some()
+        || (keeps_borrow(signature, position, declared) && viewed_native(&input).is_some()))
 }
 
 /// The crate type of the elements of a `&[T]` a call takes, as iced's

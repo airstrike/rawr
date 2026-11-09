@@ -72,6 +72,29 @@ pub(crate) fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     MOVE.get()?(value)
 }
 
+/// Drop what a call left of an argument given for it alone: the native
+/// value it is, as a by-value `View<'a>` of borrows (#1225), or each one
+/// inside its `Option`s, arrays and tuples, as an `Option<Element<'a,
+/// Message>>` (#1224). One the call moved on, as into a native function
+/// that took it, has nothing left to drop.
+fn drop_left(value: &Dynamic) {
+    if let Some(inner) = crate::option::read(value) {
+        if let Some(inner) = inner {
+            drop_left(&inner);
+        }
+        return;
+    }
+    if let Some(items) = value.read_lock::<crate::Array>() {
+        for item in items.iter() {
+            drop_left(item);
+        }
+        return;
+    }
+    if let Some(Ok(left)) = moved(value) {
+        drop(left);
+    }
+}
+
 /// An arena of one call's own, on a thread that doesn't own the program, as
 /// a tokio worker that runs a `Task::perform`'s output closure: the native
 /// values the call's marked function makes, takes and gives back live there
@@ -1381,19 +1404,7 @@ impl Calls {
         }
         let inputs = authority
             .model()
-            .island_inputs()
-            .iter()
-            .map(|(key, types)| {
-                let witnesses = types
-                    .iter()
-                    .map(|ty| {
-                        ty.as_ref()
-                            .map(|ty| program::model::island::Part::Native(runtime.witness_for(ty)))
-                    })
-                    .collect();
-                (key.clone(), witnesses)
-            })
-            .collect();
+            .island_input_parts(|ty| runtime.witness_for(ty));
         Self {
             items,
             types: authority.model().island_types(|ty| runtime.witness_for(ty)),
@@ -1424,11 +1435,7 @@ impl Calls {
         let mut scoped = Vec::new();
         let reply = self.call_with(call, given, lent, natives, &mut scoped);
         for value in &scoped {
-            // One the call moved on, as into a native function that took
-            // it, has nothing left to drop.
-            if let Some(Ok(left)) = moved(value) {
-                drop(left);
-            }
+            drop_left(value);
         }
         reply
     }

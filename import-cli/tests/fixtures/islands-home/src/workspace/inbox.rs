@@ -1,6 +1,8 @@
 //! Native: the workspace's inbox, whose state can't be cloned, which the
 //! marked home screen updates through a `&mut` and whose element it shows
-//! from the `&` it is lent, as inboard's `inbox.view()`.
+//! from the `&` it is lent, as inboard's `inbox.view()`, or through the
+//! free `view`, which keeps the borrows it is given, as inboard's
+//! `inbox::view(inbox_state, .., browser_updates, ..)`.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
@@ -35,5 +37,33 @@ impl State {
     /// The inbox's element, which borrows its greeting.
     pub fn view(&self) -> ui::Element<'_, Message> {
         ui::button(&self.greeting, Message::Read(self.unread))
+    }
+
+    pub fn greeting(&self) -> &str {
+        &self.greeting
+    }
+}
+
+/// An extension's update, as inboard's `extension::registry::Update`: it
+/// can't be cloned.
+#[derive(Debug)]
+pub struct Update {
+    name: String,
+}
+
+impl Update {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+        }
+    }
+}
+
+/// The inbox's top bar, as inboard's free `inbox::view`: it borrows the
+/// first update's name, or the state's greeting when there is none.
+pub fn view<'a>(state: &'a State, updates: &'a [Update]) -> ui::Element<'a, Message> {
+    match updates.first() {
+        Some(update) => ui::button(&update.name, Message::Read(state.unread)),
+        None => ui::button(&state.greeting, Message::Read(state.unread)),
     }
 }

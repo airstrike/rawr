@@ -1415,7 +1415,11 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
              wizard at 5 over [ideas, drafts]\nwizard closed at step 5\nadvanced false\n\
              no wizard over [ideas, drafts]\ntab drafts closed\ntab ideas closed\n\
              no wizard over []\npanes [left | middle | right*]\ntab middle closed\n\
-             panes [left | right*]\ntab left closed\ntab right closed\npanes []\n"
+             panes [left | right*]\ntab left closed\ntab right closed\npanes []\n\
+             grid shows grid Some(Wizard(Step(7)))\n\
+             wizard shows hello Some(Wizard(Step(5)))\nwizard closed at step 5\n\
+             no updates show hello Some(Inbox(Read(0)))\n\
+             updates show tiles 1.2 Some(Inbox(Read(0)))\n"
             ),
         "{printed}"
     );
