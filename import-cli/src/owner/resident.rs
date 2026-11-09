@@ -40,6 +40,24 @@ impl Manifests {
         self.1.is_none() && self.2.is_some()
     }
 
+    /// What changed from these manifests to `next`, in one line; `None`
+    /// when nothing did.
+    fn change(&self, next: &Self) -> Option<String> {
+        if self.0 != next.0 {
+            return Some("`Cargo.toml` changed".to_owned());
+        }
+        match (&self.1, &next.1) {
+            (Some(shape), Some(next_shape)) => {
+                if let Some(change) = shape.change(next_shape) {
+                    return Some(change);
+                }
+            }
+            (None, None) => {}
+            _ => return Some("whether the crate root is native changed".to_owned()),
+        }
+        (self.2 != next.2).then(|| "`main`'s async entry changed".to_owned())
+    }
+
     /// The reason a marked `main` restarts when its next preparation is
     /// `next`, as `rawr run` says it in one line.
     pub fn restart_line(&self, next: &Self) -> String {
@@ -92,6 +110,60 @@ impl Manifests {
     }
 }
 
+/// Why a save takes the full preparation instead of compiling in the
+/// running program, as `rawr run` says it in one line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum Reason {
+    /// The running program asked for a refresh.
+    Refresh,
+    /// The native build the running program was checked against may no
+    /// longer stand.
+    Native(rawr_watch::native::Change),
+    /// What native code sees of the program changed, as this line says.
+    Manifests(String),
+    /// An earlier save's new native build is still owed.
+    Owed,
+    /// The running program's compiler found a native use its build doesn't
+    /// cover.
+    Uncovered,
+    /// The running program compiles no save in place yet.
+    Unstarted,
+}
+
+impl std::fmt::Display for Reason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refresh => formatter.write_str("the program asked for a refresh"),
+            Self::Native(change) => write!(formatter, "{change}"),
+            Self::Manifests(change) => formatter.write_str(change),
+            Self::Owed => formatter.write_str("an earlier save's native build is still owed"),
+            Self::Uncovered => formatter.write_str(
+                "the running program's native build doesn't cover this save's native uses",
+            ),
+            Self::Unstarted => formatter.write_str("the running program can't compile a save yet"),
+        }
+    }
+}
+
+impl Reason {
+    /// The first reason, in the order `attempt` checks them, that a save
+    /// can't take the resident route; `None` when it can.
+    fn of(
+        refresh_required: bool,
+        native: Option<rawr_watch::native::Change>,
+        baseline: &Manifests,
+        next: &Manifests,
+    ) -> Option<Self> {
+        if refresh_required {
+            return Some(Self::Refresh);
+        }
+        if let Some(change) = native {
+            return Some(Self::Native(change));
+        }
+        baseline.change(next).map(Self::Manifests)
+    }
+}
+
 /// One native generation's watched identities and their derived inputs.
 pub(super) type NativeInputs = (Box<[rawr_import::input::proof::Watch]>, source::Inputs);
 
@@ -99,7 +171,8 @@ pub(super) enum Attempt {
     Settled,
     /// The runner committed the new generation compiled against it.
     Swapped,
-    Prepare(Option<rawr_watch::StagedInputs>),
+    /// The save takes the full preparation, for this reason.
+    Prepare(Option<rawr_watch::StagedInputs>, Reason),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -117,7 +190,8 @@ pub(super) fn attempt(
     scope: &Scope,
     diagnostic: &rawr::diagnostic::Source,
 ) -> Result<Attempt, rawr::diagnostic::Report> {
-    let native_current = adapter.resident_eligible(native_baseline);
+    let native_change = adapter.resident_change(native_baseline);
+    let native_current = native_change.is_none();
     let capture = (|| {
         let load = || {
             rawr::package::Graph::load(&rawr::Engine::new(), target)
@@ -133,8 +207,12 @@ pub(super) fn attempt(
         }
         // The resident route uses the same limits profile.
         let limits = graph.rust_limits();
-        let eligible =
-            !refresh_required && native_current && Manifests::from_graph(&graph) == *baseline;
+        let reason = Reason::of(
+            refresh_required,
+            native_change,
+            baseline,
+            &Manifests::from_graph(&graph),
+        );
         let project = graph.entry_package().root().to_path_buf();
         let graph = source::Graph::from_package(&graph);
         let snapshot = source::Snapshot::from_graph(&graph);
@@ -170,7 +248,7 @@ pub(super) fn attempt(
         let freshness = scope
             .observe(&bytes)
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
-        Ok((bytes, freshness, observation, staged, eligible))
+        Ok((bytes, freshness, observation, staged, reason))
     })();
     let captured = match capture {
         Ok(captured) => captured,
@@ -183,21 +261,26 @@ pub(super) fn attempt(
             return Err(error);
         }
     };
-    let (bytes, freshness, observation, staged, eligible) = captured;
+    let (bytes, freshness, observation, staged, reason) = captured;
     if !adapter.gate().request_is_current(watch_request) {
         lane.cancel_compile(started)
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
         return Ok(Attempt::Settled);
     }
-    if !eligible || started.is_none() {
-        // A previous failed native replacement can suppress HotBegin while the
-        // last-good child remains live. Its next cold attempt still needs the
-        // newly discovered Rawr roots observed throughout full preparation.
-        lane.cancel_compile(started)
-            .map_err(|error| super::framework(error, diagnostic.clone()))?;
-        return Ok(Attempt::Prepare(Some(staged)));
-    }
-    let started = started.expect("eligible resident attempts retain the original HotBegin");
+    // A previous failed native replacement can suppress HotBegin while the
+    // last-good child remains live. Its next cold attempt still needs the
+    // newly discovered Rawr roots observed throughout full preparation.
+    let started = match (reason, started) {
+        (None, Some(started)) => started,
+        (reason, started) => {
+            lane.cancel_compile(started)
+                .map_err(|error| super::framework(error, diagnostic.clone()))?;
+            return Ok(Attempt::Prepare(
+                Some(staged),
+                reason.unwrap_or(Reason::Owed),
+            ));
+        }
+    };
     let outcome = match lane.prepare_resident(started, revision, bytes, freshness, &observation) {
         Ok(outcome) => outcome,
         Err(error) => return failed(error, adapter, watch_request, diagnostic),
@@ -223,9 +306,12 @@ pub(super) fn attempt(
             Ok(Attempt::Swapped)
         }
         resident::Outcome::NeedsPreparation if adapter.gate().request_is_current(watch_request) => {
-            Ok(Attempt::Prepare(Some(staged)))
+            Ok(Attempt::Prepare(Some(staged), Reason::Uncovered))
         }
-        resident::Outcome::NeedsPreparation => Ok(Attempt::Settled),
+        resident::Outcome::Unstarted if adapter.gate().request_is_current(watch_request) => {
+            Ok(Attempt::Prepare(Some(staged), Reason::Unstarted))
+        }
+        resident::Outcome::NeedsPreparation | resident::Outcome::Unstarted => Ok(Attempt::Settled),
         resident::Outcome::Obsolete => obsolete(adapter, watch_request, diagnostic),
         resident::Outcome::Source(reason) | resident::Outcome::Resource(reason) => {
             if !adapter.gate().request_is_current(watch_request) {

@@ -566,7 +566,11 @@ fn session(
                         rawr_cli::events::swapped();
                         continue;
                     }
-                    Ok(resident::Attempt::Prepare(staged)) => staged,
+                    Ok(resident::Attempt::Prepare(staged, reason)) => {
+                        rawr_import::process::say(format_args!("rawr: preparing again: {reason}"));
+                        rawr_cli::events::preparing(&reason.to_string());
+                        staged
+                    }
                     Err(report) => {
                         settle_failure(&mut lane, &adapter, report)?;
                         continue;

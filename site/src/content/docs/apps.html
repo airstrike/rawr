@@ -304,6 +304,7 @@ fn main() {
   <tr><td><code>{"event":"queued"}</code></td><td>A save compiled. The program takes it at its next call into marked code. On macOS rawr asks its windows to redraw, so a frame that calls marked code takes it without waiting for input.</td></tr>
   <tr><td><code>{"event":"swapped"}</code></td><td>The program runs the saved code now. It kept its state.</td></tr>
   <tr><td><code>{"event":"failed","message":"no field `missing` on type `Scale`","file":"/app/src/main.rs","line":11,"column":45,…}</code></td><td>A save failed. The program keeps running the last good code. <code>file</code>, <code>line</code> and <code>column</code> are the error&rsquo;s position, or <code>null</code> when it has none. Columns count from 1.</td></tr>
+  <tr><td><code>{"event":"preparing","reason":"`Cargo.toml` changed"}</code></td><td>A save can&rsquo;t compile inside this process against the native build it runs, for that reason. rawr prepares the program again, and <code>queued</code> or <code>restarting</code> follows.</td></tr>
   <tr><td><code>{"event":"restarting","reason":"`Scale` changed its fields"}</code></td><td>A save can&rsquo;t swap into this process. rawr ends it and starts the program again.</td></tr>
 </table>
 <p>These are the lines <a href="/docs/agents">rawr mcp</a> reads. Other events such as <code>running</code> can also appear on the stream. A reader skips any event it does not know.</p>

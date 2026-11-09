@@ -104,6 +104,12 @@ pub fn queued() {
     emit(&json!({ "event": "queued" }));
 }
 
+/// A save takes the full preparation instead of compiling in the running
+/// program, for `reason`.
+pub fn preparing(reason: &str) {
+    emit(&json!({ "event": "preparing", "reason": reason }));
+}
+
 /// A save restarts the program, for `reason`.
 pub fn restarting(reason: &str) {
     emit(&json!({ "event": "restarting", "reason": reason }));

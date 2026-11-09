@@ -5,7 +5,12 @@
 #[allow(clippy::large_enum_variant)]
 pub enum Outcome {
     Prepared(Prepared),
+    /// The running program's compiler found a native use its build doesn't
+    /// cover.
     NeedsPreparation,
+    /// The running program compiles no save in place: it hasn't started, or
+    /// its owner never sent the inputs it watches.
+    Unstarted,
     Source(Box<str>),
     Obsolete,
     Resource(Box<str>),

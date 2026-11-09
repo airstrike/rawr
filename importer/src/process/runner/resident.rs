@@ -115,7 +115,7 @@ impl<B> Candidate<super::Admitted, B> {
         }
         if !started.live || !inner.observed {
             super::cancel_started(inner, &started)?;
-            return Ok(resident::Outcome::NeedsPreparation);
+            return Ok(resident::Outcome::Unstarted);
         }
         let attempt = protocol::resident::Attempt::bind(started.identity(), revision, &snapshot);
         // No request bytes have gone to the child yet; local failures must

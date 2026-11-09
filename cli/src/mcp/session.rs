@@ -650,8 +650,8 @@ fn summary(structured: &Value) -> String {
     for event in structured["events"].as_array().into_iter().flatten() {
         let name = event["event"].as_str().unwrap_or_default();
         match name {
-            "restarting" => text.push_str(&format!(
-                "#{} restarting: {}\n",
+            "restarting" | "preparing" => text.push_str(&format!(
+                "#{} {name}: {}\n",
                 event["seq"],
                 event["reason"].as_str().unwrap_or_default()
             )),

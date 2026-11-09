@@ -390,7 +390,17 @@ impl Adapter {
     /// subsequent events still revoke the request through the shared gate.
     #[must_use]
     pub fn resident_eligible(&self, baseline: &native::Baseline) -> bool {
-        self.gate.checkpoint().is_ok() && self.history.unchanged(baseline)
+        self.resident_change(baseline).is_none()
+    }
+
+    /// Why a save can't take the resident route against `baseline`, `None`
+    /// when it can (see [`Self::resident_eligible`]).
+    #[must_use]
+    pub fn resident_change(&self, baseline: &native::Baseline) -> Option<native::Change> {
+        if self.gate.checkpoint().is_err() {
+            return Some(native::Change::Suspended);
+        }
+        self.history.change(baseline)
     }
 
     /// Capture the exact watcher event sequence before off-lock process work.
@@ -548,6 +558,9 @@ impl Watch {
         self.roots = desired;
         self.registered = registered;
         drop(retired);
+        if let Some(handler) = &self.handler {
+            handler.history.registered();
+        }
         Ok(())
     }
 }
@@ -1004,7 +1017,12 @@ impl Handler {
                 if matches!(change, input::Change::Rescan) {
                     self.history.rescan();
                 } else if relevant && !source_only {
-                    self.history.invalidate();
+                    self.history.invalidate(
+                        change
+                            .known_paths()
+                            .and_then(<[_]>::first)
+                            .map(PathBuf::as_path),
+                    );
                 }
                 relevant
             }) {
