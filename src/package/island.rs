@@ -10,12 +10,16 @@
 //! arguments to the interpreter and takes the result back. Values cross by
 //! the small wire format of [`crate::island`], which both sides speak:
 //! numbers, `bool`, `char`, strings, `Vec`, `Option`, `Result`, tuples and
-//! the marked crate's own structs and enums made of them. A value of a
-//! native type, as the app's own `Message` or the `iced::Error` of an
-//! `iced::Result`, moves itself: back from the interpreter, bare or as a
-//! part of any of those, and in by value, which the interpreter keeps. A
-//! borrow of one is lent for the call. A function whose values can't cross
-//! gets a trampoline that panics with a message naming it.
+//! the marked crate's own structs and enums made of them or of native
+//! values, each native part given as a clone and taken back as the value
+//! the interpreter moves (#1466). A value of a native type, as the app's
+//! own `Message` or the `iced::Error` of an `iced::Result`, moves itself:
+//! back from the interpreter, bare or as a part of any of those, and in by
+//! value, which the interpreter keeps. A borrow of one is lent for the
+//! call. Every impl native code may rely on is there too: a marked type's,
+//! and a trait's for a native type, as `impl From<&Theme> for Settings`. A
+//! function whose values can't cross gets a trampoline that panics with a
+//! message naming it.
 //!
 //! The generated files are the island's shape: a save that changes them
 //! (a signature, a struct's fields, a constant native code reads) needs a
@@ -189,11 +193,24 @@ enum Pass {
     Object,
 }
 
-/// The crate's own struct or enum that native code sees, by name.
-struct Mirrored {
-    path: String,
+/// The crate's own struct or enum that native code sees.
+struct Mirrored<'a> {
     generic: bool,
     fields: Vec<type_ref::Type>,
+    /// The source that declares it, which its fields' types are written in.
+    source: &'a Source<'a>,
+}
+
+/// What `Self` names in a signature.
+#[derive(Clone, Copy)]
+enum Owner<'o> {
+    /// Nothing: a free function, or a stand-in's, whose `Self` doesn't cross.
+    None,
+    /// The marked type at this path.
+    Marked(&'o str),
+    /// A native type, as the crate's `Settings` of a marked `impl From<&Theme>
+    /// for Settings` (#1466): its values move as native ones do.
+    Native,
 }
 
 /// Each marked `pub static` whose type names none of the marked crate's
@@ -232,7 +249,7 @@ pub(crate) fn native_statics<'a>(
             };
             let marked = identifiers(slice(source.text, ty.span()))
                 .into_iter()
-                .any(|name| name == "Self" || generator.types.contains_key(name));
+                .any(|name| name == "Self" || generator.names_type(name));
             if declared.constant
                 && declared.header.visibility.is_some()
                 && keyword.split_whitespace().last() == Some("static")
@@ -301,9 +318,14 @@ pub(crate) fn shadow<'a>(
 }
 
 struct Generator<'a> {
-    /// The marked crate's structs and enums native code sees, by name.
-    types: BTreeMap<&'a str, Mirrored>,
-    /// Those whose every field crosses.
+    /// The marked crate's structs and enums native code sees, by their path
+    /// from the crate root.
+    types: BTreeMap<String, Mirrored<'a>>,
+    /// Every struct, enum and alias the marked crate declares, visible or
+    /// not, by its path: what an impl's owner names when it is marked.
+    declared: BTreeSet<String>,
+    /// Those of `types` whose every field crosses, by the wire format or as
+    /// a native value ([`Generator::part`]).
     crossing: BTreeSet<String>,
     /// Traits declared in marked code: their impls are not mirrored.
     traits: BTreeSet<&'a str>,
@@ -398,12 +420,19 @@ impl Std {
 impl<'a> Generator<'a> {
     fn new(sources: &'a [Source<'a>]) -> Self {
         let mut types = BTreeMap::new();
+        let mut named = BTreeSet::new();
         let mut traits = BTreeSet::new();
         let mut implemented = BTreeMap::<&str, BTreeSet<Std>>::new();
         for source in sources {
             for item in source.items {
                 for (name, std) in std_impls(item) {
                     implemented.entry(name).or_default().insert(std);
+                }
+                if let item::Parsed::Struct(item::Struct { name, .. })
+                | item::Parsed::Enum(item::Enum { name, .. })
+                | item::Parsed::TypeAlias(item::TypeAlias { name, .. }) = item
+                {
+                    named.insert(path_of(source.modules, &name.text));
                 }
                 let (name, generics, fields) = match item {
                     item::Parsed::Struct(declared) if declared.header.visibility.is_some() => (
@@ -431,11 +460,11 @@ impl<'a> Generator<'a> {
                     _ => continue,
                 };
                 types.insert(
-                    name,
+                    path_of(source.modules, name),
                     Mirrored {
-                        path: path_of(source.modules, name),
                         generic: generics,
                         fields,
+                        source,
                     },
                 );
             }
@@ -448,6 +477,7 @@ impl<'a> Generator<'a> {
         // those with a field that doesn't, until none drops.
         let mut generator = Self {
             types,
+            declared: named,
             crossing: BTreeSet::new(),
             traits,
             implemented,
@@ -456,38 +486,129 @@ impl<'a> Generator<'a> {
             .types
             .iter()
             .filter(|(_, mirrored)| !mirrored.generic)
-            .map(|(name, _)| (*name).to_owned())
+            .map(|(path, _)| path.clone())
             .collect();
         loop {
             let dropped = generator
                 .crossing
                 .iter()
-                .filter(|name| {
-                    generator.types[name.as_str()]
-                        .fields
-                        .iter()
-                        .any(|field| generator.crosses(field, None).is_err())
+                .filter(|path| {
+                    let mirrored = &generator.types[path.as_str()];
+                    mirrored.fields.iter().any(|field| {
+                        generator
+                            .part(mirrored.source, field, Owner::Marked(path))
+                            .is_err()
+                    })
                 })
                 .cloned()
                 .collect::<Vec<_>>();
             if dropped.is_empty() {
                 break;
             }
-            for name in dropped {
-                generator.crossing.remove(&name);
+            for path in dropped {
+                generator.crossing.remove(&path);
             }
         }
         generator
     }
 
+    /// The path from the crate root of the marked type `path` names, written
+    /// in `file` (#1466): by its name in its own module or through a `use`,
+    /// or by a path through `crate`, `self`, `super` or a child module. A
+    /// type of a native module or of a dependency of the same name, as
+    /// `themedef::Theme` or `iced::Theme` beside a marked `Theme`, is not
+    /// it.
+    fn marked(&self, file: &Source<'_>, path: &type_ref::Path) -> Option<&str> {
+        if path.global {
+            return None;
+        }
+        let names = path
+            .segments
+            .iter()
+            .map(|segment| segment.name.text.as_str())
+            .collect::<Vec<_>>();
+        let found = |absolute: Vec<String>| {
+            self.types
+                .get_key_value(absolute.join("::").as_str())
+                .map(|(path, _)| path.as_str())
+        };
+        if let Some(found) = absolute(file, &names, 0).and_then(found) {
+            return Some(found);
+        }
+        // A bare name a glob brings in, `use crate::theme::*;`.
+        let [name] = names[..] else {
+            return None;
+        };
+        file.items.iter().find_map(|item| match item {
+            item::Parsed::Use(used) if !used.global() && used.scope.is_none() => {
+                let item::UseTree::Glob { prefix, .. } = &used.tree else {
+                    return None;
+                };
+                let prefix = prefix
+                    .segments
+                    .iter()
+                    .map(|segment| segment.name.text.as_str())
+                    .collect::<Vec<_>>();
+                let mut module = absolute(file, &prefix, 0)?;
+                module.push(name.to_owned());
+                found(module)
+            }
+            _ => None,
+        })
+    }
+
+    /// Whether `path`, written in `file`, names a struct, enum or alias the
+    /// marked crate declares, visible to native code or not.
+    fn declares(&self, file: &Source<'_>, path: &type_ref::Path) -> bool {
+        let names = path
+            .segments
+            .iter()
+            .map(|segment| segment.name.text.as_str())
+            .collect::<Vec<_>>();
+        !path.global
+            && absolute(file, &names, 0)
+                .is_some_and(|absolute| self.declared.contains(&absolute.join("::")))
+    }
+
+    /// Whether a marked type is named `name` in some module, as a word of
+    /// a signature's text may name it.
+    #[cfg(feature = "rust-import")]
+    fn names_type(&self, name: &str) -> bool {
+        self.types
+            .keys()
+            .any(|path| path.rsplit("::").next() == Some(name))
+    }
+
+    /// Whether a field of `ty` crosses as part of its marked type's value:
+    /// by the wire format, or as a native value of its own, as the
+    /// `themedef::Theme` of a marked `enum Theme { Selected(themedef::Theme)
+    /// }` (#1466). Native code gives such a part to the interpreter as a
+    /// clone, and takes it back as the value the interpreter moves.
+    fn part(&self, file: &Source<'_>, ty: &type_ref::Type, owner: Owner<'_>) -> Result<(), String> {
+        let Err(reason) = self.crosses(file, ty, owner) else {
+            return Ok(());
+        };
+        let written = slice(file.text, ty.span());
+        if self.lendable(file, ty, owner) && static_lifetimes(written) == written {
+            Ok(())
+        } else {
+            Err(reason)
+        }
+    }
+
     /// Whether a value of `ty` crosses by the wire format; `Err` says why
     /// not. `owner` is what `Self` names.
-    fn crosses(&self, ty: &type_ref::Type, owner: Option<&str>) -> Result<(), String> {
+    fn crosses(
+        &self,
+        file: &Source<'_>,
+        ty: &type_ref::Type,
+        owner: Owner<'_>,
+    ) -> Result<(), String> {
         match ty {
             type_ref::Type::Unit(_) => Ok(()),
             type_ref::Type::Tuple { members, .. } => members
                 .iter()
-                .try_for_each(|member| self.crosses(member, owner)),
+                .try_for_each(|member| self.crosses(file, member, owner)),
             type_ref::Type::Reference { .. } => Err("a reference can only be a parameter".into()),
             type_ref::Type::Path(path) => {
                 let Some(last) = path.segments.last() else {
@@ -504,45 +625,62 @@ impl<'a> Generator<'a> {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                // A std type by its own name or by its path, as
+                // `std::string::String`.
+                let single = path.segments.len() == 1
+                    || matches!(
+                        path.segments[0].name.text.as_str(),
+                        "std" | "core" | "alloc"
+                    );
                 match (name, arguments.as_slice()) {
                     (
                         "bool" | "char" | "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16"
                         | "u32" | "u64" | "usize" | "f32" | "f64" | "String",
                         [],
-                    ) => Ok(()),
-                    ("Vec" | "Option" | crate::item::type_ref::SLICE_TYPE, [inner]) => {
-                        self.crosses(inner, owner)
+                    ) if single => Ok(()),
+                    ("Vec" | "Option" | crate::item::type_ref::SLICE_TYPE, [inner]) if single => {
+                        self.crosses(file, inner, owner)
                     }
-                    ("Result", [ok, err]) => {
-                        self.crosses(ok, owner)?;
-                        self.crosses(err, owner)
+                    ("Result", [ok, err]) if single => {
+                        self.crosses(file, ok, owner)?;
+                        self.crosses(file, err, owner)
                     }
-                    ("Self", []) => match owner {
-                        Some(owner) if self.crossing.contains(owner) => Ok(()),
+                    ("Self", []) if path.segments.len() == 1 => match owner {
+                        Owner::Marked(owner) if self.crossing.contains(owner) => Ok(()),
                         _ => Err("`Self` can't cross here".into()),
                     },
-                    (name, []) if self.crossing.contains(name) => Ok(()),
-                    (name, _) if self.types.contains_key(name) => {
-                        Err(format!("`{name}` has a field that can't cross yet"))
-                    }
-                    (name, _) => Err(format!("a `{name}` can't cross yet")),
+                    _ => match self.marked(file, path) {
+                        Some(marked) if arguments.is_empty() && self.crossing.contains(marked) => {
+                            Ok(())
+                        }
+                        Some(_) => Err(format!("`{name}` has a field that can't cross yet")),
+                        None => Err(format!("a `{name}` can't cross yet")),
+                    },
                 }
             }
         }
     }
 
     /// How a parameter of `ty` crosses, written as `text` in the source.
-    fn pass(&self, ty: &type_ref::Type, text: &str, owner: Option<&str>) -> Result<Pass, String> {
+    fn pass(
+        &self,
+        file: &Source<'_>,
+        ty: &type_ref::Type,
+        text: &str,
+        owner: Owner<'_>,
+    ) -> Result<Pass, String> {
         let type_ref::Type::Reference {
             mutable, target, ..
         } = ty
         else {
-            return match self.crosses(ty, owner) {
+            return match self.crosses(file, ty, owner) {
                 Ok(()) => Ok(Pass::Value),
                 // The interpreter keeps it in its arena as long as it
                 // likes, so it can't borrow anything.
-                Err(_) if self.lendable(ty) && static_lifetimes(text) == text => Ok(Pass::Give),
-                Err(_) if self.lendable(ty) => {
+                Err(_) if self.lendable(file, ty, owner) && static_lifetimes(text) == text => {
+                    Ok(Pass::Give)
+                }
+                Err(_) if self.lendable(file, ty, owner) => {
                     Err(format!("`{}` with a lifetime can't cross yet", text.trim()))
                 }
                 Err(reason) => Err(reason),
@@ -565,12 +703,12 @@ impl<'a> Generator<'a> {
         if referent == "str" {
             return Ok(Pass::Borrow);
         }
-        match self.crosses(target, owner) {
+        match self.crosses(file, target, owner) {
             Ok(()) if *mutable => Ok(Pass::Mutable),
             Ok(()) => Ok(Pass::Borrow),
             // A type the marked crate doesn't declare, as ratatui's `Frame`,
             // is lent for the call (D558.3).
-            Err(_) if self.lendable(target) => Ok(Pass::Lend {
+            Err(_) if self.lendable(file, target, owner) => Ok(Pass::Lend {
                 mutable: *mutable,
                 referent: unnamed_lifetimes(referent),
             }),
@@ -591,10 +729,10 @@ impl<'a> Generator<'a> {
         &self,
         file: &Source<'_>,
         ty: &type_ref::Type,
-        owner: Option<&str>,
+        owner: Owner<'_>,
     ) -> Result<String, String> {
         let island = format!("crate::{MODULE}");
-        let Err(reason) = self.crosses(ty, owner) else {
+        let Err(reason) = self.crosses(file, ty, owner) else {
             return Ok(format!("{island}::Take::take(input)"));
         };
         let path = match ty {
@@ -630,8 +768,8 @@ impl<'a> Generator<'a> {
                 .map(|part| self.back(file, part, owner))
                 .collect::<Result<Vec<_>, _>>()
         };
-        let generic =
-            owner.is_some_and(|owner| self.types.get(owner).is_some_and(|owner| owner.generic));
+        let generic = matches!(owner, Owner::Marked(owner)
+            if self.types.get(owner).is_some_and(|owner| owner.generic));
         match (name, types.len()) {
             ("Vec" | "Option", 1) => {
                 let inner = parts()?.concat();
@@ -643,7 +781,7 @@ impl<'a> Generator<'a> {
                 };
                 Ok(format!("input.result(|input| {ok}, |input| {err})"))
             }
-            _ if name != "Result" && !self.lendable(ty) => Err(reason),
+            _ if name != "Result" && !self.lendable(file, ty, owner) => Err(reason),
             // Outside a generic impl, each native part's way back is decided
             // by its type alone.
             _ if generic => Err(format!("a `{name}` of a generic type can't cross yet")),
@@ -663,20 +801,21 @@ impl<'a> Generator<'a> {
         }
     }
 
-    /// Whether a borrow of `ty` is lent for a call: a path to a type the
-    /// marked crate doesn't declare.
-    fn lendable(&self, ty: &type_ref::Type) -> bool {
+    /// Whether a borrow of `ty`, written in `file`, is lent for a call: a
+    /// path to a type the marked crate doesn't declare, or `Self` in an
+    /// impl for a native type.
+    fn lendable(&self, file: &Source<'_>, ty: &type_ref::Type, owner: Owner<'_>) -> bool {
         let type_ref::Type::Path(path) = ty else {
             return false;
         };
-        path.segments.last().is_some_and(|last| {
-            let name = last.name.text.as_str();
-            !self.types.contains_key(name)
-                && !matches!(
-                    name,
-                    "Self" | "Vec" | "Option" | crate::item::type_ref::SLICE_TYPE
-                )
-        })
+        let Some(last) = path.segments.last() else {
+            return false;
+        };
+        match last.name.text.as_str() {
+            "Self" if path.segments.len() == 1 => matches!(owner, Owner::Native),
+            "Vec" | "Option" | crate::item::type_ref::SLICE_TYPE => false,
+            _ => self.marked(file, path).is_none(),
+        }
     }
 
     /// For a stand-in's `&self` function whose result is a shared borrow of
@@ -727,17 +866,20 @@ impl<'a> Generator<'a> {
                         [type_ref::Argument::Type(element)] => Some(element),
                         _ => None,
                     })?;
-                if let Err(reason) = self.crosses(element, None) {
+                if let Err(reason) = self.crosses(file, element, Owner::None) {
                     return Some(Err(reason));
                 }
                 format!("::std::vec::Vec<{}>", slice(file.text, element.span()))
             }
             // A native value the receiver holds is lent where it is.
-            target if self.crosses(target, None).is_err() && self.lendable(target) => {
+            target
+                if self.crosses(file, target, Owner::None).is_err()
+                    && self.lendable(file, target, Owner::None) =>
+            {
                 return Some(Ok(Borrowed::InPlace));
             }
             target => {
-                if let Err(reason) = self.crosses(target, None) {
+                if let Err(reason) = self.crosses(file, target, Owner::None) {
                     return Some(Err(reason));
                 }
                 slice(file.text, target.span()).to_owned()
@@ -748,7 +890,12 @@ impl<'a> Generator<'a> {
 
     /// How a `&'static` result of a native value comes back (#1442): `None`
     /// when `function`'s result is no such reference.
-    fn lasting_result(&self, function: &item::Function) -> Option<Lasting> {
+    fn lasting_result(
+        &self,
+        file: &Source<'_>,
+        function: &item::Function,
+        owner: Owner<'_>,
+    ) -> Option<Lasting> {
         let Some(type_ref::Type::Reference {
             mutable: false,
             lifetime: Some(lifetime),
@@ -772,9 +919,12 @@ impl<'a> Generator<'a> {
             let [type_ref::Argument::Type(element)] = &last.arguments[..] else {
                 return None;
             };
-            return self.lendable(element).then_some(Lasting::Slice);
+            return self
+                .lendable(file, element, owner)
+                .then_some(Lasting::Slice);
         }
-        (self.crosses(target, None).is_err() && self.lendable(target)).then_some(Lasting::Value)
+        (self.crosses(file, target, owner).is_err() && self.lendable(file, target, owner))
+            .then_some(Lasting::Value)
     }
 
     /// The generated text of `file` with its inline modules `group`, and
@@ -820,7 +970,10 @@ impl<'a> Generator<'a> {
                 }
                 item::Parsed::Struct(declared) if declared.header.visibility.is_some() => {
                     self.mirror(file, &declared.name, declared.span, None, &mut items, shape);
-                    if self.crossing.contains(declared.name.text.as_str()) {
+                    if self
+                        .crossing
+                        .contains(&path_of(file.modules, &declared.name.text))
+                    {
                         let text = self.cross_struct(file, declared);
                         items.push_str(&text);
                         append(shape, &path_of(file.modules, &declared.name.text), &text);
@@ -828,7 +981,10 @@ impl<'a> Generator<'a> {
                 }
                 item::Parsed::Enum(declared) if declared.header.visibility.is_some() => {
                     self.mirror(file, &declared.name, declared.span, None, &mut items, shape);
-                    if self.crossing.contains(declared.name.text.as_str()) {
+                    if self
+                        .crossing
+                        .contains(&path_of(file.modules, &declared.name.text))
+                    {
                         let text = self.cross_enum(file, declared);
                         items.push_str(&text);
                         append(shape, &path_of(file.modules, &declared.name.text), &text);
@@ -857,7 +1013,7 @@ impl<'a> Generator<'a> {
                         continue;
                     }
                     let path = path_of(file.modules, &declared.name.text);
-                    match self.stub(file, declared, None, false, &path) {
+                    match self.stub(file, declared, Owner::None, false, &path) {
                         Ok(text) => {
                             items.push_str(&text);
                             shape.insert(
@@ -953,6 +1109,12 @@ impl<'a> Generator<'a> {
         );
     }
 
+    /// The marked impl `declared` as native code sees it: an impl of a
+    /// visible marked type, or a trait's impl for a native type, as `impl
+    /// From<&Theme> for Settings` (#1466), with a trampoline for each of its
+    /// functions native code can call. An impl of a marked trait is the
+    /// interpreter's alone, and one of a type native code doesn't see has
+    /// nothing to stand for.
     fn implementation(
         &self,
         file: &Source<'_>,
@@ -961,27 +1123,21 @@ impl<'a> Generator<'a> {
         shape: &mut BTreeMap<String, Entry>,
         refused: &mut Vec<String>,
     ) {
-        let type_ref::Type::Path(owner) = &declared.owner else {
+        let type_ref::Type::Path(written) = &declared.owner else {
             return;
         };
-        let Some(owner) = owner
-            .segments
-            .last()
-            .map(|segment| segment.name.text.as_str())
-        else {
-            return;
-        };
-        let Some(mirrored) = self.types.get(owner) else {
-            return;
-        };
-        let trait_ = declared
-            .trait_
-            .as_ref()
+        let trait_ = declared.trait_.as_ref();
+        if trait_
             .and_then(|path| path.segments.last())
-            .map(|segment| segment.name.text.as_str());
-        if trait_.is_some_and(|name| self.traits.contains(name)) {
+            .is_some_and(|last| self.traits.contains(last.name.text.as_str()))
+        {
             return;
         }
+        let (owner, path) = match self.marked(file, written) {
+            Some(path) => (Owner::Marked(path), path.to_owned()),
+            None if self.declares(file, written) || trait_.is_none() => return,
+            None => (Owner::Native, native_owner(written)),
+        };
         // A trait's functions are all public; an inherent impl shows only
         // its visible ones.
         let functions = declared
@@ -989,7 +1145,7 @@ impl<'a> Generator<'a> {
             .iter()
             .filter(|function| trait_.is_some() || function.header.visibility.is_some())
             .collect::<Vec<_>>();
-        if functions.is_empty() {
+        if functions.is_empty() && trait_.is_none() {
             return;
         }
         let header = slice(
@@ -1006,19 +1162,32 @@ impl<'a> Generator<'a> {
                 slice(file.text, ty.span())
             );
         }
-        let prefix = match trait_ {
-            Some(name) => format!("{} as {name}", mirrored.path),
-            None => mirrored.path.clone(),
+        // Each function is its owner's member, a trait's by the trait's
+        // instance, `From<palette::Theme>::from`, as the interpreter keys
+        // it.
+        let instance = trait_.map(instance);
+        let prefix = match &instance {
+            Some(instance) => format!("{path}::{instance}"),
+            None => path.clone(),
         };
+        if functions.is_empty() {
+            shape.insert(
+                prefix.clone(),
+                Entry {
+                    kind: Kind::Other,
+                    text: format!("{header} {{}}"),
+                },
+            );
+        }
         for function in functions {
-            let path = format!("{}::{}", mirrored.path, function.name.text);
-            match self.stub(file, function, Some(owner), false, &path) {
+            let member = format!("{prefix}::{}", function.name.text);
+            match self.stub(file, function, owner, false, &member) {
                 Ok(stub) => {
                     for line in stub.lines() {
                         let _ = writeln!(text, "    {line}");
                     }
                     shape.insert(
-                        format!("{prefix}::{}", function.name.text),
+                        member,
                         Entry {
                             kind: Kind::Function,
                             text: format!("{header}\n{stub}"),
@@ -1040,11 +1209,11 @@ impl<'a> Generator<'a> {
     /// call runs in. Its maker, which the interpreter makes the object
     /// with, goes in the place's `objects`.
     fn stand_in(&self, file: &Source<'_>, declared: &item::Impl, place: Place<'_>) {
-        let (Some(trait_), type_ref::Type::Path(owner)) = (&declared.trait_, &declared.owner)
+        let (Some(trait_), type_ref::Type::Path(written)) = (&declared.trait_, &declared.owner)
         else {
             return;
         };
-        let (Some(last), Some(owner)) = (trait_.segments.last(), owner.segments.last()) else {
+        let (Some(last), Some(owner)) = (trait_.segments.last(), written.segments.last()) else {
             return;
         };
         // A trait of the crate's own native modules, as `page::Page` after
@@ -1073,9 +1242,9 @@ impl<'a> Generator<'a> {
             return;
         }
         let name = owner.name.text.as_str();
-        let path = match self.types.get(name) {
-            Some(mirrored) if mirrored.generic => return,
-            Some(mirrored) => mirrored.path.clone(),
+        let path = match self.marked(file, written) {
+            Some(marked) if self.types[marked].generic => return,
+            Some(marked) => marked.to_owned(),
             None => path_of(file.modules, name),
         };
         let stand_in = format!("__Rawr{name}");
@@ -1109,7 +1278,7 @@ impl<'a> Generator<'a> {
         for function in &declared.functions {
             // The impl's function is the owner's member `Page::title`.
             let member = format!("{path}::{}::{}", last.name.text, function.name.text);
-            match self.stub(file, function, None, true, &member) {
+            match self.stub(file, function, Owner::None, true, &member) {
                 Ok(stub) => {
                     for line in stub.lines() {
                         let _ = writeln!(text, "    {line}");
@@ -1147,7 +1316,7 @@ impl<'a> Generator<'a> {
         &self,
         file: &Source<'_>,
         function: &item::Function,
-        owner: Option<&str>,
+        owner: Owner<'_>,
         object: bool,
         path: &str,
     ) -> Result<String, String> {
@@ -1185,7 +1354,7 @@ impl<'a> Generator<'a> {
             let written = slice(file.text, parameter.ty.span());
             let _ = write!(signature, "__a{index}: {written}");
             cursor = parameter.span.end();
-            match self.pass(&parameter.ty, written, owner) {
+            match self.pass(file, &parameter.ty, written, owner) {
                 Ok(pass) => passes.push(pass),
                 Err(reason) => {
                     reasons.push(format!("parameter `{}`: {reason}", parameter.name.text))
@@ -1210,7 +1379,7 @@ impl<'a> Generator<'a> {
         // A result that doesn't cross by the wire format may still come
         // back part by part, its native parts moved.
         let mut back = None;
-        let lasting = self.lasting_result(function);
+        let lasting = self.lasting_result(file, function, owner);
         let kept = match self.kept_result(file, function).filter(|_| object) {
             Some(Ok(owned)) => Some(owned),
             Some(Err(reason)) => {
@@ -1222,7 +1391,7 @@ impl<'a> Generator<'a> {
         if let Some(output) = &function.output
             && kept.is_none()
             && lasting.is_none()
-            && self.crosses(output, owner).is_err()
+            && self.crosses(file, output, owner).is_err()
         {
             match self.back(file, output, owner) {
                 Ok(read) => back = Some(read),
@@ -1242,7 +1411,7 @@ impl<'a> Generator<'a> {
             reasons.push("a trait object's function takes `&self` or `&mut self`".to_owned());
         } else if !object
             && receiver.is_some()
-            && owner.is_none_or(|owner| !self.crossing.contains(owner))
+            && !matches!(owner, Owner::Marked(owner) if self.crossing.contains(owner))
         {
             reasons.push("its receiver can't cross yet".to_owned());
         }
@@ -1288,7 +1457,7 @@ impl<'a> Generator<'a> {
         if object && matches!(function.receiver, Some(item::Receiver::Mutable(_))) {
             text.push_str("    self.0.release();\n");
         }
-        let owned = owner.is_some() || object;
+        let owned = !matches!(owner, Owner::None) || object;
         let _ = writeln!(
             text,
             "    let mut __call = {island}::Call::new({path:?}, {owned});"
@@ -1410,36 +1579,58 @@ impl<'a> Generator<'a> {
         Ok(text)
     }
 
+    /// How one field of `ty` of the marked type at `path` goes to the
+    /// interpreter from `value`, a `&` of it, and how it comes back: by the
+    /// wire format, or as a native value of its own (#1466).
+    fn field(
+        &self,
+        file: &Source<'_>,
+        path: &str,
+        ty: &type_ref::Type,
+        value: &str,
+    ) -> (String, String) {
+        let island = format!("crate::{MODULE}");
+        if self.crosses(file, ty, Owner::Marked(path)).is_ok() {
+            return (
+                format!("{island}::Put::put({value}, out);"),
+                format!("{island}::Take::take(input)"),
+            );
+        }
+        (
+            format!("{island}::part!(out, {value});"),
+            format!(
+                "(&{island}::Back::<{}>::new()).take(input)",
+                slice(file.text, ty.span())
+            ),
+        )
+    }
+
     fn cross_struct(&self, file: &Source<'_>, declared: &item::Struct) -> String {
         let name = declared.name.text.as_str();
         let path = path_of(file.modules, name);
         let island = format!("crate::{MODULE}");
         let count = declared.fields.len();
         let mut put = String::new();
-        let mut take = String::new();
+        let mut taken = Vec::new();
         for field in &declared.fields {
-            let _ = writeln!(
-                put,
-                "        {island}::Put::put(&self.{}, out);",
-                field.name.text
-            );
+            let value = format!("&self.{}", field.name.text);
+            let (one, back) = self.field(file, &path, &field.ty, &value);
+            let _ = writeln!(put, "        {one}");
+            taken.push(back);
         }
+        let mut take = String::new();
         match declared.form {
             item::StructForm::Named => {
                 take.push_str(&format!("{name} {{\n"));
-                for field in &declared.fields {
-                    let _ = writeln!(
-                        take,
-                        "            {}: {island}::Take::take(input),",
-                        field.name.text
-                    );
+                for (field, back) in declared.fields.iter().zip(&taken) {
+                    let _ = writeln!(take, "            {}: {back},", field.name.text);
                 }
                 take.push_str("        }");
             }
             item::StructForm::Tuple => {
                 take.push_str(&format!("{name}(\n"));
-                for _ in &declared.fields {
-                    let _ = writeln!(take, "            {island}::Take::take(input),");
+                for back in &taken {
+                    let _ = writeln!(take, "            {back},");
                 }
                 take.push_str("        )");
             }
@@ -1449,6 +1640,7 @@ impl<'a> Generator<'a> {
             "impl {island}::Put for {name} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
              out.structure({path:?}, {count});\n{put}    }}\n}}\n\
              impl {island}::Take for {name} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
+             #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
              input.structure({path:?}, {count});\n        {take}\n    }}\n}}\n"
         )
     }
@@ -1482,25 +1674,25 @@ impl<'a> Generator<'a> {
                 put,
                 "            {pattern} => {{\n                out.variant({path:?}, {variant_name:?}, {count});"
             );
-            for binding in &bindings {
-                let _ = writeln!(put, "                {island}::Put::put({binding}, out);");
+            let mut taken = Vec::new();
+            for (binding, ty) in bindings.iter().zip(&variant.payload) {
+                let (one, back) = self.field(file, &path, ty, binding);
+                let _ = writeln!(put, "                {one}");
+                taken.push(back);
             }
             put.push_str("            }\n");
-            let value = |()| format!("{island}::Take::take(input)");
             let built = match &variant.fields {
                 Some(fields) => format!(
                     "Self::{variant_name} {{ {} }}",
                     fields
                         .iter()
-                        .map(|field| format!("{}: {}", field.text, value(())))
+                        .zip(&taken)
+                        .map(|(field, back)| format!("{}: {back}", field.text))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
                 None if count == 0 => format!("Self::{variant_name}"),
-                None => format!(
-                    "Self::{variant_name}({})",
-                    (0..count).map(|_| value(())).collect::<Vec<_>>().join(", ")
-                ),
+                None => format!("Self::{variant_name}({})", taken.join(", ")),
             };
             let _ = writeln!(take, "            ({variant_name:?}, {count}) => {built},");
         }
@@ -1508,6 +1700,7 @@ impl<'a> Generator<'a> {
             "impl {island}::Put for {name} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
              match self {{\n{put}        }}\n    }}\n}}\n\
              impl {island}::Take for {name} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
+             #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
              match input.variant({path:?}) {{\n{take}            (variant, count) => input.unknown({path:?}, variant, count),\n        }}\n    }}\n}}\n"
         )
     }
@@ -1619,6 +1812,127 @@ fn path_of(modules: &[ImmutableString], name: &str) -> String {
         .chain((!name.is_empty()).then_some(name))
         .collect::<Vec<_>>()
         .join("::")
+}
+
+/// The path from the crate root that `names`, written in `file`, names:
+/// through `crate`, `self` or `super`, through a `use` of its first name,
+/// and else from `file`'s module, as a child module or an item of it. A
+/// `use` path is read the same way, `depth` deep. `None` for a path that
+/// leaves the crate.
+fn absolute(file: &Source<'_>, names: &[&str], depth: usize) -> Option<Vec<String>> {
+    let mut at = file
+        .modules
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let owned = |names: &[&str]| names.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let (first, rest) = names.split_first()?;
+    match *first {
+        "crate" => {
+            at.clear();
+            at.extend(owned(rest));
+        }
+        "self" => at.extend(owned(rest)),
+        "super" => {
+            let mut rest = names;
+            while let Some((&"super", after)) = rest.split_first() {
+                at.pop()?;
+                rest = after;
+            }
+            at.extend(owned(rest));
+        }
+        first => {
+            let used = file.items.iter().find_map(|item| match item {
+                item::Parsed::Use(used) if used.scope.is_none() && depth < 8 => used
+                    .bindings()
+                    .into_iter()
+                    .find(|(name, _)| name.text == first)
+                    .map(|(_, path)| (used.global(), path)),
+                _ => None,
+            });
+            match used {
+                Some((true, _)) => return None,
+                Some((false, path)) => {
+                    let path = path.iter().map(ImmutableString::as_str).collect::<Vec<_>>();
+                    let mut used = absolute(file, &path, depth + 1)?;
+                    used.extend(owned(rest));
+                    return Some(used);
+                }
+                None => at.extend(owned(names)),
+            }
+        }
+    }
+    Some(at)
+}
+
+/// The trait `trait_` an impl names, as the interpreter keys its
+/// functions: its name, and each type argument as the impl writes it,
+/// `From<palette::Theme>` or `From<&Theme>` (`resolve::full_type_name`).
+fn instance(trait_: &type_ref::Path) -> String {
+    let Some(last) = trait_.segments.last() else {
+        return String::new();
+    };
+    let arguments = type_arguments(&last.arguments);
+    if arguments.is_empty() {
+        last.name.text.to_string()
+    } else {
+        format!("{}<{arguments}>", last.name.text)
+    }
+}
+
+/// The owner of a marked impl for the native type `written`, as the
+/// interpreter keys its functions: `::` and the type's name, as
+/// `::Settings` for `impl From<&Theme> for markdown::Settings` (#1466).
+fn native_owner(written: &type_ref::Path) -> String {
+    let name = written
+        .segments
+        .last()
+        .map_or("", |last| last.name.text.as_str());
+    format!("::{name}")
+}
+
+/// `arguments`' types as the interpreter names them in a trait's instance
+/// (`resolve::full_type_name`): each path's segments, each reference's
+/// referent after `&` or `&mut `, lifetimes left out.
+fn type_arguments(arguments: &[type_ref::Argument]) -> String {
+    fn name(ty: &type_ref::Type) -> String {
+        match ty {
+            type_ref::Type::Unit(_) => "()".to_owned(),
+            type_ref::Type::Tuple { members, .. } => format!(
+                "({})",
+                members.iter().map(name).collect::<Vec<_>>().join(", ")
+            ),
+            type_ref::Type::Reference {
+                mutable, target, ..
+            } => format!("&{}{}", if *mutable { "mut " } else { "" }, name(target)),
+            type_ref::Type::Path(path) => {
+                let written = path
+                    .segments
+                    .iter()
+                    .map(|segment| segment.name.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                let arguments = path
+                    .segments
+                    .last()
+                    .map(|last| type_arguments(&last.arguments))
+                    .unwrap_or_default();
+                if arguments.is_empty() {
+                    written
+                } else {
+                    format!("{written}<{arguments}>")
+                }
+            }
+        }
+    }
+    arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            type_ref::Argument::Type(ty) => Some(name(ty)),
+            type_ref::Argument::Lifetime(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The text `span` covers.
@@ -2127,6 +2441,67 @@ pub mod __rawr_island {
     }
     pub(crate) use give;
 
+    /// Put `$value`, a `&` of a native part of a marked type's value, as
+    /// the `themedef::Theme` of `Theme::Selected(themedef::Theme)`, in
+    /// `$out` (#1466): by the wire format when its type crosses by it, as
+    /// an alias of `usize` does, and else as a clone the interpreter keeps,
+    /// with what its type has of [`Traits`].
+    macro_rules! part {
+        ($out:expr, $value:expr) => {{
+            #[allow(unused_imports)]
+            use crate::__rawr_island::{
+                HasClone as _, HasDebug as _, HasDisplay as _, HasEqual as _, HasHash as _,
+                HasOrder as _, LacksClone as _, LacksDebug as _, LacksDisplay as _,
+                LacksEqual as _, LacksHash as _, LacksOrder as _, PartByClone as _,
+                PartByWire as _, PartUncloned as _,
+            };
+            let value = $value;
+            let probe = &crate::__rawr_island::probe(value);
+            let traits = (
+                probe.debug_of(),
+                probe.display_of(),
+                probe.clone_of(),
+                probe.equal_of(),
+                probe.hash_of(),
+                probe.order_of(),
+            );
+            (&&crate::__rawr_island::Part(value)).put($out, traits);
+        }};
+    }
+    pub(crate) use part;
+
+    /// A native part of a marked type's value on its way to the
+    /// interpreter ([`part!`]): [`PartByWire`] is found first, then
+    /// [`PartByClone`], then [`PartUncloned`].
+    pub struct Part<'v, T>(pub &'v T);
+    pub trait PartByWire {
+        fn put(&self, out: &mut Out, traits: Traits);
+    }
+    impl<T: Put> PartByWire for &Part<'_, T> {
+        fn put(&self, out: &mut Out, _: Traits) {
+            self.0.put(out);
+        }
+    }
+    pub trait PartByClone {
+        fn put(&self, out: &mut Out, traits: Traits);
+    }
+    impl<T: ::std::clone::Clone + 'static> PartByClone for &&Part<'_, T> {
+        fn put(&self, out: &mut Out, traits: Traits) {
+            out.give(self.0.clone(), traits);
+        }
+    }
+    pub trait PartUncloned {
+        fn put(&self, out: &mut Out, traits: Traits);
+    }
+    impl<T> PartUncloned for Part<'_, T> {
+        fn put(&self, _: &mut Out, _: Traits) {
+            ::std::panic!(
+                "rawr: native code can't give marked code a copy of its `{}`, which is not `Clone`",
+                ::std::any::type_name::<T>()
+            )
+        }
+    }
+
     /// Start the program: the runner calls the native `main` once this
     /// returns, on a thread of its own.
     pub fn main() {
@@ -2178,10 +2553,22 @@ pub mod __rawr_island {
     const HANDLE: u8 = 22;
     const PINNED: u8 = 23;
 
-    /// A value on its way to the interpreter.
-    pub struct Out(::std::vec::Vec<u8>);
+    /// A value on its way to the interpreter, and the native values it
+    /// gives the interpreter, each taken once.
+    pub struct Out(::std::vec::Vec<u8>, ::std::vec::Vec<::std::option::Option<Given>>);
 
     impl Out {
+        /// `value`, which the interpreter keeps, with what its type has of
+        /// [`Traits`].
+        pub fn give<T: 'static>(&mut self, value: T, traits: Traits) {
+            self.byte(NATIVE);
+            self.count(self.1.len());
+            self.1.push(Some((
+                ::std::boxed::Box::new(value),
+                ::std::any::type_name::<T>(),
+                traits,
+            )));
+        }
         fn byte(&mut self, byte: u8) {
             self.0.push(byte);
         }
@@ -2799,7 +3186,6 @@ pub mod __rawr_island {
             ::std::option::Option<Accessor>,
             Accessor,
         )>,
-        given: ::std::vec::Vec<::std::option::Option<Given>>,
         borrows: ::std::marker::PhantomData<&'c mut ()>,
     }
 
@@ -2814,9 +3200,8 @@ pub mod __rawr_island {
                 in_place: 0,
                 count: 0,
                 mutable: 0,
-                values: Out(::std::vec::Vec::new()),
+                values: Out(::std::vec::Vec::new(), ::std::vec::Vec::new()),
                 lent: ::std::vec::Vec::new(),
-                given: ::std::vec::Vec::new(),
                 borrows: ::std::marker::PhantomData,
             }
         }
@@ -2851,13 +3236,7 @@ pub mod __rawr_island {
         /// a type the marked crate doesn't declare, with what its type has
         /// of [`Traits`] ([`give!`]).
         pub fn give<T: 'static>(&mut self, value: T, traits: Traits) {
-            self.values.byte(NATIVE);
-            self.values.count(self.given.len());
-            self.given.push(Some((
-                ::std::boxed::Box::new(value),
-                ::std::any::type_name::<T>(),
-                traits,
-            )));
+            self.values.give(value, traits);
             self.count += 1;
         }
         pub fn argument<T: Put + ?Sized>(&mut self, value: &T) {
@@ -2902,7 +3281,7 @@ pub mod __rawr_island {
             // call runs.
             let mut natives = ::std::vec::Vec::new();
             let reply = unsafe {
-                __rawr_island_call_v4(self.path, &bytes, &mut self.given, &self.lent, &mut natives)
+                __rawr_island_call_v4(self.path, &bytes, &mut self.values.1, &self.lent, &mut natives)
             };
             match reply.first() {
                 Some(0) => Reply {
@@ -3484,6 +3863,82 @@ mod tests {
             shadow.refused[0].starts_with("`physics::points` returns `impl Iterator<Item = i64>`"),
             "{:?}",
             shadow.refused
+        );
+    }
+
+    /// Inboard's `theme.rs` (#1466): a marked `Theme` over a native
+    /// module's `Theme` crosses with that part given and taken as a native
+    /// value, a dependency's `Theme` is no marked one either, and every
+    /// impl native code relies on is there, each function keyed by its
+    /// trait's instance as the interpreter keys it.
+    #[test]
+    fn a_marked_type_over_a_native_one_crosses_and_keeps_its_impls() {
+        let shadow = generate(
+            "// rawr\nmod themedef;\nuse iced::widget::markdown::Settings;\n\
+             #[derive(Debug, Clone, PartialEq)]\n\
+             pub enum Theme {\n    Selected(themedef::Theme),\n}\n\
+             impl Default for Theme {\n    fn default() -> Self { Theme::Selected(themedef::Theme::default()) }\n}\n\
+             impl From<themedef::Theme> for Theme {\n    fn from(theme: themedef::Theme) -> Self { Theme::Selected(theme) }\n}\n\
+             impl From<Theme> for iced::Theme {\n    fn from(theme: Theme) -> Self { iced::Theme::Light }\n}\n\
+             impl From<&Theme> for Settings {\n    fn from(theme: &Theme) -> Self { Self::with_text_size(14.0) }\n}\n\
+             impl Eq for Theme {}\n\
+             pub fn named(theme: &Theme) -> String { String::new() }\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let text = &shadow.files[0].1;
+        assert!(!text.contains("panic!"), "{text}");
+        assert!(text.contains("pub mod themedef;"), "{text}");
+        assert!(
+            text.contains("crate::__rawr_island::part!(out, __f0);"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "(\"Selected\", 1) => Self::Selected((&crate::__rawr_island::Back::<themedef::Theme>::new()).take(input)),"
+            ),
+            "{text}"
+        );
+        for (header, path) in [
+            (
+                "impl Default for Theme {",
+                "physics::Theme::Default::default",
+            ),
+            (
+                "impl From<themedef::Theme> for Theme {",
+                "physics::Theme::From<themedef::Theme>::from",
+            ),
+            (
+                "impl From<Theme> for iced::Theme {",
+                "::Theme::From<Theme>::from",
+            ),
+            (
+                "impl From<&Theme> for Settings {",
+                "::Settings::From<&Theme>::from",
+            ),
+        ] {
+            let at = text
+                .find(header)
+                .unwrap_or_else(|| panic!("{header}: {text}"));
+            assert!(
+                text[at..].contains(&format!("Call::new({path:?}, true)")),
+                "{path}: {text}"
+            );
+        }
+        // The native theme goes in by value; the marked one by the wire.
+        assert!(
+            text.contains("crate::__rawr_island::give!(__call, __a0);"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "__reply.read(|input| (&crate::__rawr_island::Back::<Settings>::new()).take(input))"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("impl Eq for Theme {\n}\n"), "{text}");
+        assert!(
+            text.contains("use iced::widget::markdown::Settings;"),
+            "{text}"
         );
     }
 }

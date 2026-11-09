@@ -2930,8 +2930,13 @@ fn resolve_methods(
             // Rust's orphan rule allows; a std trait is E0117.
             // A std trait is allowed when one of its type arguments is a
             // crate type (`impl From<Celsius> for f64`), as Rust's rule has
-            // it.
+            // it. A reference is fundamental, so `&Celsius` is a crate type
+            // too (`impl From<&Theme> for Settings`, #1466).
             let local_argument = arguments.iter().any(|argument| {
+                let mut argument = argument;
+                while let type_ref::Type::Reference { target, .. } = argument {
+                    argument = target;
+                }
                 matches!(
                     argument,
                     type_ref::Type::Path(path)
