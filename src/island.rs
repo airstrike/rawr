@@ -111,15 +111,7 @@ fn in_place(value: &Dynamic, pins: Option<&crate::scope::Pins>) -> Result<Box<dy
     // A `&'static str` is the program's own text, pinned for as long as
     // the runner lives, once per text.
     if let Ok(text) = value.flatten_clone().into_immutable_string() {
-        // Per thread, since without the `sync` feature the text is an `Rc`
-        // and pins of it can't be shared; the interpreter's thread is one.
-        thread_local! {
-            static TEXTS: &'static crate::scope::Pins =
-                Box::leak(Box::new(crate::scope::Pins::constant()));
-        }
-        let pins: &'static crate::scope::Pins = TEXTS.with(|pins| *pins);
-        let text: &'static str = pins.pin(text);
-        return Ok(Box::new(text));
+        return Ok(Box::new(lasting_text(text)));
     }
     if let Some(slice) =
         crate::place::get(value).and_then(|place| crate::place::lasting_reference(&place))
@@ -134,6 +126,54 @@ fn in_place(value: &Dynamic, pins: Option<&crate::scope::Pins>) -> Result<Box<dy
             value.type_name()
         )),
     }
+}
+
+/// `text`, pinned for as long as the runner lives, once per text.
+fn lasting_text(text: ImmutableString) -> &'static str {
+    // Per thread, since without the `sync` feature the text is an `Rc` and
+    // pins of it can't be shared; the interpreter's thread is one.
+    thread_local! {
+        static TEXTS: &'static crate::scope::Pins =
+            Box::leak(Box::new(crate::scope::Pins::constant()));
+    }
+    let pins: &'static crate::scope::Pins = TEXTS.with(|pins| *pins);
+    pins.pin(text)
+}
+
+/// The reference a call gives native code into a part native code lent it
+/// where it is (#1468), boxed for its trampoline: the place `value` reaches,
+/// a part the call was lent or a field borrowed of one (`&theme.colors`, a
+/// projection through the part), and the accessor of its lend, which
+/// proves the place's type to the trampoline. The trampoline checks that
+/// the place is in its receiver, which native code keeps borrowed for as
+/// long as the reference.
+fn lent_place(value: &Dynamic) -> Result<Box<dyn Any>, String> {
+    let refused = || {
+        format!(
+            "a `{}` is no reference into what native code lent it",
+            value.type_name()
+        )
+    };
+    let found = if let Some(lent) = value.read_lock::<crate::scope::Lent>().map(|lent| *lent) {
+        crate::scope::place(lent.nonce()).zip(lent.shared())
+    } else if let Some(projected) = value
+        .read_lock::<crate::scope::Projected>()
+        .map(|projected| projected.clone())
+    {
+        let mut found = None;
+        projected
+            .open(&mut |lent| {
+                found = crate::scope::place(lent.nonce()).zip(lent.shared());
+                Ok(Dynamic::UNIT)
+            })
+            .map(drop)
+            .map_err(|error| error.to_string())?;
+        found
+    } else {
+        None
+    };
+    let (place, accessor) = found.ok_or_else(refused)?;
+    Ok(Box::new((place.cast_const(), accessor)))
 }
 
 /// What a trampoline finds of a value's type, for the runner to keep it as
@@ -1385,6 +1425,7 @@ impl Calls {
             references,
             mutable,
             gives,
+            own: lent.iter().map(crate::scope::Lent::nonce).collect(),
         };
         // A `&self` call on a native trait object's program value runs in a
         // region anchored on the value's pins, so what its result borrows,
@@ -1435,6 +1476,7 @@ impl Calls {
             references,
             mutable,
             gives,
+            own,
         } = made;
         let path = call.path;
         let model = call.model;
@@ -1481,6 +1523,27 @@ impl Calls {
                 reply.extend_from_slice(&(text.as_ptr().expose_provenance() as u64).to_le_bytes());
                 reply.extend_from_slice(&(text.len() as u64).to_le_bytes());
             }
+            // A `&str` a method of a marked value whose parts native code
+            // lent gives back (#1468): the program's own text, pinned for
+            // as long as the runner lives, once per text.
+            (Gives::Text, None) => {
+                let text = result
+                    .flatten_clone()
+                    .into_immutable_string()
+                    .map_err(|actual| unsent(format!("a `{actual}` is no `&str`")))?;
+                let text = lasting_text(text);
+                reply.push(program::model::island::PINNED);
+                reply.extend_from_slice(&(text.as_ptr().expose_provenance() as u64).to_le_bytes());
+                reply.extend_from_slice(&(text.len() as u64).to_le_bytes());
+            }
+            // A reference into a part native code lent the call where it
+            // is, as `&self.0.colors` of a marked `Theme` (#1468).
+            (Gives::InPlace { lasting: false }, None) => {
+                let lent = lent_place(&result).map_err(unsent)?;
+                reply.push(program::model::island::NATIVE);
+                reply.extend_from_slice(&(natives.len() as u64).to_le_bytes());
+                natives.push(lent);
+            }
             // A reference to a native value is the value where it is: a
             // static's, or one the receiver holds, lent for as long as
             // `&self` is borrowed (#1442).
@@ -1497,7 +1560,7 @@ impl Calls {
                 reply.extend_from_slice(&(natives.len() as u64).to_le_bytes());
                 natives.push(lent);
             }
-            (Gives::Text | Gives::Value, _) => model
+            (Gives::Value, _) => model
                 .island_write_in(
                     &result,
                     anchored.map(|anchored| anchored.region),
@@ -1518,7 +1581,7 @@ impl Calls {
                 reply.push(program::model::island::UNIT);
             } else {
                 model
-                    .island_write(value, &mut reply, natives, 0)
+                    .island_write_back(value, &own, &mut reply, natives)
                     .map_err(unsent)?;
             }
         }
@@ -1675,6 +1738,9 @@ struct Made<'i> {
     references: Vec<usize>,
     mutable: u64,
     gives: Gives,
+    /// The lends of what native code lent the call, as the parts of a
+    /// marked value it lends (#1469).
+    own: Vec<crate::scope::Nonce>,
 }
 
 /// The region a `&self` call on a native trait object runs in, and the
@@ -1757,7 +1823,7 @@ mod tests {
         ] {
             let error = authority
                 .model()
-                .island_write(&value, &mut Vec::new(), &mut Vec::new(), 0)
+                .island_write_in(&value, None, &mut Vec::new(), &mut Vec::new(), 0)
                 .unwrap_err();
             assert!(
                 error.contains("keeps the `ratatui::Frame` native code lent it")
@@ -1792,7 +1858,7 @@ mod tests {
         let mut out = Vec::new();
         let error = crate::result::err(Dynamic::from(crate::ImmutableString::from("no")));
         model
-            .island_write(&error, &mut out, &mut natives, 0)
+            .island_write_in(&error, None, &mut out, &mut natives, 0)
             .unwrap();
         let mut expected = vec![ERR, STR];
         expected.extend_from_slice(&2_u64.to_le_bytes());
@@ -1802,9 +1868,11 @@ mod tests {
         let mut out = Vec::new();
         let ok = crate::result::ok(Dynamic::UNIT);
         let failed = crate::result::err(Dynamic::from(Handle(7)));
-        model.island_write(&ok, &mut out, &mut natives, 0).unwrap();
         model
-            .island_write(&failed, &mut out, &mut natives, 0)
+            .island_write_in(&ok, None, &mut out, &mut natives, 0)
+            .unwrap();
+        model
+            .island_write_in(&failed, None, &mut out, &mut natives, 0)
             .unwrap();
         let mut expected = vec![OK, crate::program::model::island::UNIT, ERR, NATIVE];
         expected.extend_from_slice(&0_u64.to_le_bytes());

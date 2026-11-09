@@ -2969,6 +2969,12 @@ impl<'a> Parser<'a> {
         }
         if shared {
             self.shared_field_reads.insert(operation);
+            // `&theme.name` borrows the field where it is, as Rust's place
+            // `theme.name` is, not a copy of it: a `fn name(&self) -> &str`
+            // may return it (#1468).
+            if receiver.lvalue.is_some() || self.flow().is_place(receiver.span) {
+                self.flow().mark_place(operation);
+            }
         } else {
             self.consume_imported_value(&receiver, &path, operation)?;
         }

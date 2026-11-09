@@ -65,3 +65,12 @@ pub trait Catalog {
 pub fn catalog<C: Catalog>(catalog: &C) -> String {
     format!("catalog {}", catalog.id())
 }
+
+/// What the app's theme names itself by, as `iced::theme::Base`.
+pub trait Base {
+    fn name(&self) -> &str;
+}
+
+pub fn base<B: Base>(base: &B) -> String {
+    format!("base {}", base.name())
+}

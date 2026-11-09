@@ -65,6 +65,16 @@ pub(crate) const LASTING: u8 = 8;
 /// Nesting deeper than this does not cross.
 const DEPTH: usize = 256;
 
+/// How a value is written for native code ([`Model::island_write_in`]):
+/// the region a call's result was made in, whose values move to native
+/// code, and the call's own lends, a part still lent by one of which goes
+/// back as `()` ([`Model::island_write_back`]).
+#[derive(Clone, Copy)]
+struct Writing<'a> {
+    region: Option<crate::scope::Nonce>,
+    own: &'a [crate::scope::Nonce],
+}
+
 /// The crate's script types by their path from the crate root, found once
 /// per generation.
 pub(crate) struct Types {
@@ -453,22 +463,12 @@ impl Model {
     }
 
     /// Write `value` for native code, moving each native value it holds
-    /// to `natives`; `Err` names what can't cross.
-    pub(crate) fn island_write(
-        &self,
-        value: &Dynamic,
-        out: &mut Vec<u8>,
-        natives: &mut Natives,
-        depth: usize,
-    ) -> Result<(), String> {
-        self.island_write_in(value, None, out, natives, depth)
-    }
-
-    /// [`Model::island_write`] of a call's result made in the region
-    /// `region`, which the caller keeps for as long as native code holds
-    /// what it takes (`island::Calls::call`): a value of that region, as a
-    /// `view(&self)`'s `Element<'_, Message>`, moves to native code as a
-    /// native value does (#1321). A value of any other region ends with it.
+    /// to `natives`; `Err` names what can't cross. A call's result made in
+    /// the region `region`, which the caller keeps for as long as native
+    /// code holds what it takes (`island::Calls::call`): a value of that
+    /// region, as a `view(&self)`'s `Element<'_, Message>`, moves to native
+    /// code as a native value does (#1321). A value of any other region
+    /// ends with it.
     pub(crate) fn island_write_in(
         &self,
         value: &Dynamic,
@@ -477,6 +477,35 @@ impl Model {
         natives: &mut Natives,
         depth: usize,
     ) -> Result<(), String> {
+        let writing = Writing { region, own: &[] };
+        self.island_write_with(value, writing, out, natives, depth)
+    }
+
+    /// [`Model::island_write_in`] of a `&mut` argument native code takes back
+    /// after the call, whose parts it lent the call where they are (#1469):
+    /// a part still lent by one of `own`, the call's own lends, is still
+    /// where it was, and goes back as `()`, as an unchanged lent `&mut`
+    /// does.
+    pub(crate) fn island_write_back(
+        &self,
+        value: &Dynamic,
+        own: &[crate::scope::Nonce],
+        out: &mut Vec<u8>,
+        natives: &mut Natives,
+    ) -> Result<(), String> {
+        let writing = Writing { region: None, own };
+        self.island_write_with(value, writing, out, natives, 0)
+    }
+
+    fn island_write_with(
+        &self,
+        value: &Dynamic,
+        writing: Writing<'_>,
+        out: &mut Vec<u8>,
+        natives: &mut Natives,
+        depth: usize,
+    ) -> Result<(), String> {
+        let region = writing.region;
         if depth > DEPTH {
             return Err("a value is nested too deeply".into());
         }
@@ -504,7 +533,7 @@ impl Model {
                 out.push(ARRAY);
                 count(items.len(), out);
                 for item in items.iter() {
-                    self.island_write_in(item, region, out, natives, depth)?;
+                    self.island_write_with(item, writing, out, natives, depth)?;
                 }
             }
             Union::Struct(value, ..) => {
@@ -515,7 +544,7 @@ impl Model {
                 );
                 count(value.fields().len(), out);
                 for field in value.fields() {
-                    self.island_write_in(field, region, out, natives, depth)?;
+                    self.island_write_with(field, writing, out, natives, depth)?;
                 }
             }
             Union::Enum(value, ..) => {
@@ -527,16 +556,20 @@ impl Model {
                 text(value.variant().name(), out);
                 count(value.payload().len(), out);
                 for item in value.payload() {
-                    self.island_write_in(item, region, out, natives, depth)?;
+                    self.island_write_with(item, writing, out, natives, depth)?;
                 }
             }
             Union::Shared(..) => {
-                self.island_write_in(&value.flatten_clone(), region, out, natives, depth)?
+                self.island_write_with(&value.flatten_clone(), writing, out, natives, depth)?
             }
             Union::Variant(..) => {
                 // A lent value can't leave the call it was lent for, in its
                 // result or in an argument native code takes back.
                 if let Some(lent) = value.read_lock::<crate::scope::Lent>() {
+                    if writing.own.contains(&lent.nonce()) {
+                        out.push(UNIT);
+                        return Ok(());
+                    }
                     return Err(format!(
                         "it keeps the `{}` native code lent it, which is borrowed for that call \
                          only and can't be returned or stored where native code takes it back \
@@ -567,7 +600,7 @@ impl Model {
                         None => out.push(NONE),
                         Some(inner) => {
                             out.push(SOME);
-                            self.island_write_in(inner, region, out, natives, depth)?;
+                            self.island_write_with(inner, writing, out, natives, depth)?;
                         }
                     }
                 } else if let Some(result) = value.read_lock::<crate::result::Value>() {
@@ -576,7 +609,7 @@ impl Model {
                         Err(inner) => (ERR, inner),
                     };
                     out.push(tag);
-                    self.island_write_in(inner, region, out, natives, depth)?;
+                    self.island_write_with(inner, writing, out, natives, depth)?;
                 } else {
                     let native = crate::island::moved(value)
                         .ok_or_else(|| format!("a `{}` can't cross yet", value.type_name()))??;
