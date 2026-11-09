@@ -330,6 +330,25 @@ thread_local! {
     static KEPT: RefCell<Option<Kept>> = const { RefCell::new(None) };
 }
 
+/// `change` of the kept program values, or `None` while they are busy, as
+/// they are when a value a change drops drops a marked value (#1492).
+fn try_kept<R>(change: impl FnOnce(&mut Kept) -> R) -> Option<R> {
+    #[cfg(feature = "sync")]
+    {
+        let mut kept = match KEPT.try_lock() {
+            Ok(kept) => kept,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        Some(change(kept.get_or_insert_with(Kept::default)))
+    }
+    #[cfg(not(feature = "sync"))]
+    KEPT.with(|kept| {
+        let mut kept = kept.try_borrow_mut().ok()?;
+        Some(change(kept.get_or_insert_with(Kept::default)))
+    })
+}
+
 /// `change` of the kept program values.
 fn kept<R>(change: impl FnOnce(&mut Kept) -> R) -> R {
     #[cfg(feature = "sync")]
@@ -655,6 +674,17 @@ pub fn __rawr_scope_claim_v1(
     crate::scope::claim(crate::scope::nonce(nonce), key, shared)
         .map(crate::scope::Claim::keep)
         .map_err(crate::scope::Error::code)
+}
+
+/// Let go of what native code borrowed of the marked value at `address`
+/// whose type's name hashes to `ty`, which drops or moves out for good, so
+/// rustc has ended every borrow of it (#1492). A drop while the kept values
+/// are busy, inside a change of them, lets go of nothing.
+#[unsafe(no_mangle)]
+pub fn __rawr_island_unanchor_v1(address: u64, ty: u64) {
+    // Dropped once the table is free again.
+    let released = try_kept(|kept| kept.borrowed.remove(&Anchor { address, ty }));
+    drop(released);
 }
 
 /// End an access [`__rawr_scope_claim_v1`] began.
@@ -1589,12 +1619,14 @@ impl Calls {
             (0, 0)
         };
         // A lend native code keeps for as long as the result, which only an
-        // anchored call's result can, is reached in its region (#1413).
+        // anchored call's result can, is reached in its region (#1413). A
+        // call anchored on nothing keeps its lends for the call alone, in a
+        // region of its own (#1491).
         let lent = lent
             .iter()
             .enumerate()
             .map(|(index, lent)| {
-                if anchored.is_some() && index < 64 && kept & (1 << index) != 0 {
+                if index < 64 && kept & (1 << index) != 0 && !lent.writable() {
                     lent.kept()
                 } else {
                     *lent
@@ -1691,7 +1723,18 @@ impl Calls {
             .and_then(|&(_, handle, _)| pins_of(handle))
             .or_else(|| anchored.map(pins_at));
         let Some(pins) = shared else {
-            return self.finish(call, made, values, None, natives);
+            if kept == 0 {
+                return self.finish(call, made, values, None, natives);
+            }
+            // Its lends kept for the call alone (#1491): a crate fn's output
+            // that keeps one is made in a region of the call's own, which
+            // ends with it. The result borrows nothing, so it takes nothing
+            // of the region.
+            let pins = crate::scope::Pins::new();
+            let mut region = crate::scope::Region::anchored(&pins);
+            return crate::scope::open_anchored(&mut region, || {
+                self.finish(call, made, values, None, natives)
+            });
         };
         // SAFETY: the pins are boxed in the value's `Held`, which stays in
         // the table while the stand-in is borrowed, as it is for this call,
@@ -2066,6 +2109,27 @@ fn restore(held: &[(usize, u64, Borrow)], values: &mut [Dynamic]) {
 #[cfg(all(test, feature = "sync"))]
 mod tests {
     use crate::{host, Dynamic, Engine, Shared};
+
+    /// What native code borrowed of a marked value through anchored results
+    /// goes when the value drops or moves out (#1492), and a drop while the
+    /// kept values are busy, inside a change of them, waits for nothing.
+    #[test]
+    fn a_dropped_anchor_lets_go_of_what_was_borrowed_of_it() {
+        let anchor = super::Anchor {
+            address: 1492,
+            ty: 7,
+        };
+        let pins = super::pins_at(anchor);
+        // SAFETY: the table keeps the pins boxed until they are let go,
+        // which nothing does before this read.
+        let text = unsafe { pins.as_ref() }.pin(crate::ImmutableString::from("kept"));
+        assert_eq!(text, "kept");
+        let held = || super::kept(|kept| kept.borrowed.contains_key(&anchor));
+        super::kept(|_| super::__rawr_island_unanchor_v1(1492, 7));
+        assert!(held(), "a busy table lets go of nothing");
+        super::__rawr_island_unanchor_v1(1492, 7);
+        assert!(!held(), "the drop let go of the pins");
+    }
 
     /// A value native code lent a call can't go back to native code in the
     /// result or in an argument it takes back, which would keep the borrow

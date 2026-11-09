@@ -125,6 +125,40 @@ fn main() {
         workspace.home.layout()
     );
     workspace.inbox.unread = 3;
+    // Elements over native inputs alone, two held at once, and what their
+    // crate calls make read where it is made.
+    let banner = home::banner(&workspace.inbox);
+    let top = home::top_bar(&workspace.inbox, &workspace.updates);
+    println!(
+        "banner {} {:?} top {}",
+        banner.label, banner.on_press, top.label
+    );
+    println!(
+        "pending {} top label {}",
+        home::pending(&workspace.inbox, &workspace.updates),
+        home::top_label(&workspace.inbox, &workspace.updates)
+    );
+    let titled = workspace.home.titled(&workspace.inbox);
+    println!(
+        "titled {} label {}",
+        titled.label,
+        home::titled_label(&workspace.inbox, "mail")
+    );
+    workspace.home.open_wizard();
+    workspace.home.advance_wizard();
+    let catalog = home::wizard::View::new(&workspace.sources);
+    println!(
+        "wizard label {}",
+        home::wizard_label(&workspace.home, catalog, &workspace.theme)
+    );
+    workspace.home.close_wizard();
+    // Screens whose elements native code held, then moved and dropped.
+    for round in 0..2 {
+        let screen = home::State::new();
+        println!("screen {round} shows {}", home::view(&screen).label);
+        let moved = Box::new(screen);
+        println!("moved shows {}", home::view(&moved).label);
+    }
     let Some(stop) = std::env::var_os("ISLANDS_STOP") else {
         return;
     };

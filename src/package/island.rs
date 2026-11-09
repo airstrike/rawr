@@ -1133,16 +1133,17 @@ impl<'a> Generator<'a> {
     /// ties their lifetimes, by its name in the trampoline (#1473): an
     /// input whose type names a lifetime the result names, as `&'a self` of
     /// `view<'a>(&'a self, ..) -> Element<'a, Message>`, and else, as rustc
-    /// elides it, `&self` or the one input that borrows. Only a marked
-    /// value native code holds is an anchor: one lent by its parts or
-    /// copied, `receiver` and `passes` say. `None` when there is none.
+    /// elides it, `&self` or the one input that borrows. A marked value
+    /// native code holds, lent by its parts or copied as `receiver` and
+    /// `passes` say, is the anchor, and else a native value lent `&`.
+    /// `None` when there is none.
     fn anchor(
         &self,
         file: &Source<'_>,
         function: &item::Function,
         receiver: Option<&Pass>,
         passes: &[Pass],
-    ) -> Option<String> {
+    ) -> Option<Anchor> {
         let output = function.output.as_ref()?;
         if matches!(output, type_ref::Type::Reference { .. }) {
             return None;
@@ -1213,11 +1214,23 @@ impl<'a> Generator<'a> {
         if let Some((_, pass)) = tied_receiver
             && (marked(pass) || matches!(pass, Pass::Borrow))
         {
-            return Some("self".to_owned());
+            return Some(Anchor::Receiver);
         }
-        tied.into_iter()
-            .find(|index| held(*index, &function.parameters[*index].ty))
-            .map(|index| format!("__a{index}"))
+        // With no marked input to anchor on, as `view<'a>(threads: &'a
+        // Store) -> Element<'a, Message>`, the native value lent at the
+        // result's lifetime is the anchor: rustc ends every borrow of the
+        // result before native code moves, drops or takes that value
+        // `&mut` (#1491).
+        let lent = |index: &usize| {
+            matches!(
+                passes[*index],
+                Pass::Lend { mutable: false, .. } | Pass::LendSlice { .. }
+            )
+        };
+        tied.iter()
+            .find(|index| held(**index, &function.parameters[**index].ty))
+            .or_else(|| tied.iter().find(|index| lent(index)))
+            .map(|index| Anchor::Argument(*index))
     }
 
     /// How a `&'static` result of a native value comes back (#1442): `None`
@@ -1307,6 +1320,15 @@ impl<'a> Generator<'a> {
                         .contains(&path_of(file.modules, &declared.name.text))
                     {
                         let text = self.cross_struct(file, declared);
+                        items.push_str(&text);
+                        append(shape, &path_of(file.modules, &declared.name.text), &text);
+                    }
+                    if self.tracks_drop(file, declared) {
+                        let text = format!(
+                            "impl ::std::ops::Drop for {} {{\n    fn drop(&mut self) {{\n        \
+                             crate::{MODULE}::ended(self);\n    }}\n}}\n",
+                            declared.name.text
+                        );
                         items.push_str(&text);
                         append(shape, &path_of(file.modules, &declared.name.text), &text);
                     }
@@ -1839,6 +1861,11 @@ impl<'a> Generator<'a> {
                 changed.push((name.to_owned(), Changed::Copied));
             }
             Pass::Lend { mutable, referent } => {
+                // A `&mut` ends every borrow of the value, so what native
+                // code borrowed of it as an anchor goes (#1491).
+                if mutable {
+                    let _ = writeln!(text, "    __call.release(&*{name});");
+                }
                 lend(name, mutable, &referent, &island, text);
                 if mutable {
                     changed.push((name.to_owned(), Changed::Lent(referent)));
@@ -1852,6 +1879,8 @@ impl<'a> Generator<'a> {
                 changed.push((name.to_owned(), Changed::Parts));
             }
             Pass::GiveParts => {
+                // A move ends every borrow of the value (#1492).
+                let _ = writeln!(text, "    __call.release(&{name});");
                 let _ = writeln!(text, "    __call.given({name});");
             }
             Pass::Give => {
@@ -1900,32 +1929,81 @@ impl<'a> Generator<'a> {
         let anchor = back
             .as_ref()
             .and_then(|_| self.anchor(file, function, receiver.as_ref(), &passes));
+        // A call anchored on nothing whose result borrows nothing, as
+        // `label(inbox: &inbox::State, updates: &[Update]) -> String`, and
+        // that is lent a native value, keeps each shared lend for the call
+        // alone: the runner runs it in
+        // a region of its own that ends with it, where a crate fn's output
+        // that keeps a lend lives as long as rustc lets the program hold it
+        // (#1491, #1503).
+        let for_call = anchor.is_none()
+            && borrows_nothing(file, function)
+            && passes.iter().any(|pass| {
+                matches!(
+                    pass,
+                    Pass::Lend { mutable: false, .. } | Pass::LendSlice { .. }
+                )
+            });
         // So are the native parts of a marked `&'a self` the result is
         // anchored on, as inboard's open `wizard` is (#1413).
         match receiver {
             Some(pass @ Pass::LendParts { mutable: false })
-                if anchor.as_deref() == Some("self") =>
+                if anchor == Some(Anchor::Receiver) || for_call =>
             {
                 text.push_str("    let self_lends = __call.lends();\n");
                 argument("self", pass, &mut text);
                 text.push_str("    __call.keep_lends(self_lends);\n");
             }
-            Some(pass) => argument("self", pass, &mut text),
+            Some(pass) => {
+                // A marked value moved in ends every borrow of it (#1492).
+                if matches!(pass, Pass::Value) && matches!(owner, Owner::Marked(_)) {
+                    text.push_str("    __call.release(&self);\n");
+                }
+                argument("self", pass, &mut text);
+            }
             None => {}
         }
         // A native value lent `&'a`, as `inbox: &'a inbox::State` of
         // `view<'a>(&'a self, ..)`, is borrowed as long as the anchored
         // result, which may borrow it (#1413).
-        let lends_kept = if anchor.is_some() {
+        let mut lends_kept = if anchor.is_some() {
             kept_lends(file, function, &passes)
         } else {
             Vec::new()
         };
+        // So is a native anchor the result's elided lifetime names, as
+        // `view(threads: &Store) -> Element<'_, Message>` names `threads`.
+        if let Some(Anchor::Argument(index)) = anchor
+            && matches!(
+                passes[index],
+                Pass::Lend { mutable: false, .. } | Pass::LendSlice { .. }
+            )
+            && !lends_kept.contains(&index)
+        {
+            lends_kept.push(index);
+        }
+        if for_call {
+            lends_kept.extend(passes.iter().enumerate().filter_map(|(index, pass)| {
+                matches!(
+                    pass,
+                    Pass::Lend { mutable: false, .. }
+                        | Pass::LendSlice { .. }
+                        | Pass::LendParts { mutable: false }
+                )
+                .then_some(index)
+            }));
+        }
         if let Some(anchor) = anchor {
-            let _ = writeln!(text, "    __call.anchor({anchor});");
+            let _ = writeln!(text, "    __call.anchor({});", anchor.name());
         }
         for (index, pass) in passes.into_iter().enumerate() {
             let name = format!("__a{index}");
+            if matches!(pass, Pass::Value)
+                && let type_ref::Type::Path(path) = &function.parameters[index].ty
+                && self.marked(file, path).is_some()
+            {
+                let _ = writeln!(text, "    __call.release(&{name});");
+            }
             if lends_kept.contains(&index) {
                 let _ = writeln!(text, "    let {name}_lends = __call.lends();");
                 argument(&name, pass, &mut text);
@@ -2115,17 +2193,36 @@ impl<'a> Generator<'a> {
         let bindings = (0..count)
             .map(|index| format!("__f{index}"))
             .collect::<Vec<_>>();
-        let _ = writeln!(
-            bodies[2],
-            "        let Self {{ {} }} = self;",
-            declared
-                .fields
-                .iter()
-                .zip(&bindings)
-                .map(|(field, binding)| format!("{}: {binding}", field.name.text))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        if self.tracks_drop(file, declared) {
+            // Its `Drop` forbids moving its fields out by a pattern: each
+            // is read out once, and the value, moved for good, never drops.
+            let _ = writeln!(
+                bodies[2],
+                "        crate::{MODULE}::ended(&self);\n        \
+                 let __value = ::std::mem::ManuallyDrop::new(self);"
+            );
+            for (field, binding) in declared.fields.iter().zip(&bindings) {
+                let _ = writeln!(
+                    bodies[2],
+                    "        // SAFETY: each field is read once, from a value that never drops.\n        \
+                     #[allow(unsafe_code)]\n        \
+                     let {binding} = unsafe {{ ::std::ptr::read(&__value.{}) }};",
+                    field.name.text
+                );
+            }
+        } else {
+            let _ = writeln!(
+                bodies[2],
+                "        let Self {{ {} }} = self;",
+                declared
+                    .fields
+                    .iter()
+                    .zip(&bindings)
+                    .map(|(field, binding)| format!("{}: {binding}", field.name.text))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         for (field, binding) in declared.fields.iter().zip(&bindings) {
             let name = &field.name.text;
             for (body, (binding, purpose)) in bodies.iter_mut().zip([
@@ -2209,6 +2306,49 @@ impl<'a> Generator<'a> {
              }};\n            }}\n        }}"
         );
         Self::parts(&declared.name.text, bodies)
+    }
+
+    /// Whether the shadow tells the runner when a value of the marked
+    /// struct `declared` drops (#1492), so what results anchored on it
+    /// borrowed goes with it: an `impl Drop` native code can't tell from
+    /// the declared struct. Only for a crossing struct, which a call can
+    /// anchor on, with no field native code sees, no parameters, no `Copy`
+    /// and no `Drop` of the program's own.
+    fn tracks_drop(&self, file: &Source<'_>, declared: &item::Struct) -> bool {
+        let name = declared.name.text.as_str();
+        if !self.crossing.contains(&path_of(file.modules, name))
+            || declared.fields.is_empty()
+            || !declared.generics.is_empty()
+            || !declared.lifetimes.params.is_empty()
+        {
+            return false;
+        }
+        let copied = declared.header.attributes.iter().any(|attribute| {
+            matches!(attribute.path.segments.as_ref(), [only] if only.name.text == "derive")
+                && attribute.arguments.iter().any(|derived| {
+                    derived
+                        .segments
+                        .last()
+                        .is_some_and(|last| last.name.text == "Copy")
+                })
+        });
+        // A field's span starts at its name, after any `pub` or `pub(..)`.
+        let visible = declared.fields.iter().any(|field| {
+            let before = slice(
+                file.text,
+                Span::new(declared.span.start(), field.span.start()),
+            )
+            .trim_end();
+            before.ends_with("pub") || before.ends_with(')')
+        });
+        let dropped = file.items.iter().any(|item| {
+            matches!(item, item::Parsed::Impl(declared)
+                if declared.trait_.as_ref().and_then(|path| path.segments.last())
+                    .is_some_and(|last| last.name.text == "Drop")
+                    && matches!(&declared.owner, type_ref::Type::Path(owner)
+                        if owner.segments.last().is_some_and(|last| last.name.text == name)))
+        });
+        !copied && !visible && !dropped
     }
 
     fn cross_struct(&self, file: &Source<'_>, declared: &item::Struct) -> String {
@@ -2381,6 +2521,25 @@ fn std_impls(item: &item::Parsed) -> Vec<(&str, Std)> {
             }
         }
         _ => Vec::new(),
+    }
+}
+
+/// The input a call's result borrows, which the runner keeps what the
+/// result borrows with (`Generator::anchor`, #1473).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Anchor {
+    Receiver,
+    /// The parameter at this index.
+    Argument(usize),
+}
+
+impl Anchor {
+    /// Its name in the trampoline.
+    fn name(self) -> String {
+        match self {
+            Self::Receiver => "self".to_owned(),
+            Self::Argument(index) => format!("__a{index}"),
+        }
     }
 }
 
@@ -2956,6 +3115,39 @@ fn kept_lends(file: &Source<'_>, function: &item::Function, passes: &[Pass]) -> 
         .collect()
 }
 
+/// Whether `function`'s result can borrow nothing, so nothing of its call
+/// outlives it: no result, or one that names no lifetime and to which
+/// rustc can't elide one, as it would to `Element<Message>` from the one
+/// input that borrows.
+fn borrows_nothing(file: &Source<'_>, function: &item::Function) -> bool {
+    let Some(output) = &function.output else {
+        return true;
+    };
+    if matches!(output, type_ref::Type::Reference { .. }) {
+        return false;
+    }
+    let written = slice(file.text, output.span());
+    if written.contains('\'') {
+        return false;
+    }
+    if !written.contains('<') {
+        return true;
+    }
+    // Elision ties a borrowing receiver's lifetime to the result, or the
+    // lifetime of the one input that borrows.
+    if matches!(
+        function.receiver,
+        Some(item::Receiver::Shared(_) | item::Receiver::Mutable(_))
+    ) {
+        return false;
+    }
+    let borrowing = function.parameters.iter().filter(|parameter| {
+        matches!(parameter.ty, type_ref::Type::Reference { .. })
+            || slice(file.text, parameter.ty.span()).contains('\'')
+    });
+    borrowing.count() != 1
+}
+
 /// The name of each lifetime `text` names but `'static`, `_` for `'_`.
 fn lifetimes(text: &str) -> Vec<&str> {
     text.split('\'')
@@ -3030,6 +3222,7 @@ pub mod __rawr_island {
         fn __rawr_island_start_v1(entry: fn() -> i32);
         fn __rawr_island_objects_v1(makers: &[(&'static str, Maker)]);
         fn __rawr_island_release_v1(handle: u64);
+        fn __rawr_island_unanchor_v1(address: u64, ty: u64);
         fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> ::std::vec::Vec<u8>;
     }
 
@@ -4515,6 +4708,16 @@ pub mod __rawr_island {
         [::std::ptr::from_ref(value).cast::<()>().addr() as u64, hasher.finish()]
     }
 
+    /// `value` drops, or moves into the interpreter, where it is (#1492):
+    /// rustc has ended every borrow of it, so the runner lets go of what
+    /// results anchored on it borrowed.
+    pub fn ended<T: ?Sized>(value: &T) {
+        let [address, ty] = anchor_of(value);
+        // SAFETY: the runner links `rawr`, which defines the function with
+        // this exact signature.
+        unsafe { __rawr_island_unanchor_v1(address, ty) }
+    }
+
     /// One call of a marked function. `'c` is what its lent arguments
     /// borrow: they stay borrowed until the call is sent and answered.
     pub struct Call<'c> {
@@ -4634,7 +4837,7 @@ pub mod __rawr_island {
         /// mutably for the call, which comes back after it
         /// ([`Parts::take_into`]).
         pub fn lent_mut<T: Parts>(&mut self, value: &'c mut T) {
-            self.releases.push(anchor_of(&*value));
+            self.release(&*value);
             self.mutable |= 1 << self.count;
             value.lend_mut(self);
             self.count += 1;
@@ -4701,6 +4904,12 @@ pub mod __rawr_island {
         pub fn anchor<T: ?Sized>(&mut self, value: &'c T) {
             self.anchor = ::std::option::Option::Some(anchor_of(value));
         }
+        /// Native code ended every borrow of `value`, which the call takes
+        /// `&mut` or by value: the runner lets go of what results anchored
+        /// on it borrowed (#1473).
+        pub fn release<T: ?Sized>(&mut self, value: &T) {
+            self.releases.push(anchor_of(value));
+        }
         /// The next argument is given for the call alone, as a by-value
         /// `View<'a>` of borrows (#1225): what the call leaves of it drops
         /// once it returns.
@@ -4727,7 +4936,7 @@ pub mod __rawr_island {
         }
         /// An argument the call may change, which comes back after it.
         pub fn mutable<T: Put + ?Sized>(&mut self, value: &T) {
-            self.releases.push(anchor_of(value));
+            self.release(value);
             self.mutable |= 1 << self.count;
             self.argument(value);
         }
@@ -5107,9 +5316,10 @@ mod tests {
     /// A result read part by part that borrows a marked input is anchored
     /// on that input, as rustc ties their lifetimes (#1473): `&'a self` of
     /// `view<'a>(&'a self, ..)`, the elided one of a free `view(&State)`,
-    /// and not `&self` when the result names another input's lifetime. A
-    /// `&mut` of a marked value lets go of what was borrowed of it. A
-    /// native input lent at the anchor's lifetime is kept as long (#1413).
+    /// and not `&self` when the result names another input's lifetime,
+    /// whose native input is the anchor then (#1491). A `&mut` of a marked
+    /// value lets go of what was borrowed of it. A native input lent at the
+    /// anchor's lifetime is kept as long (#1413).
     #[test]
     fn a_result_that_borrows_a_marked_input_is_anchored_on_it() {
         let shadow = generate(
@@ -5135,7 +5345,6 @@ mod tests {
             body("view").contains("    __call.anchor(self);\n"),
             "{text}"
         );
-        assert!(!body("other").contains("__call.anchor("), "{text}");
         assert!(
             body("show").contains("    __call.anchor(__a0);\n"),
             "{text}"
@@ -5143,13 +5352,18 @@ mod tests {
         assert!(!body("edit").contains("__call.anchor("), "{text}");
         assert_eq!(lifetimes("Element<'a, &'static str, '_>"), ["a", "_"]);
         // The native `&'a Inbox` the result may borrow is kept as long as
-        // it (#1413); `other`'s isn't, as its call is anchored on nothing.
+        // it (#1413). With no marked input at the result's lifetime, as
+        // `other`'s, the native one is the anchor, kept too (#1491).
         assert!(
             body("view").contains("    let __a0_lends = __call.lends();\n")
                 && body("view").contains("    __call.keep_lends(__a0_lends);\n"),
             "{text}"
         );
-        assert!(!body("other").contains("keep_lends"), "{text}");
+        assert!(
+            body("other").contains("    __call.anchor(__a0);\n")
+                && body("other").contains("    __call.keep_lends(__a0_lends);\n"),
+            "{text}"
+        );
         // So are the native parts of `self` it is anchored on, and the
         // lent slice of native values (#1292). The `Option` of a native
         // value of borrows moves part by part, for the call alone (#1224).
@@ -5177,6 +5391,68 @@ mod tests {
             ),
             "{text}"
         );
+    }
+
+    /// A call anchored on nothing whose result borrows nothing keeps its
+    /// shared lends for the call alone when it is lent a native value
+    /// (#1491, #1503), and one whose result may borrow by elision doesn't. A `&mut` of a native value and a
+    /// marked value moved in let go of what was borrowed of them, and a
+    /// marked struct native code can't take apart says when it drops
+    /// (#1492): moved in, its fields are read out of a value that never
+    /// drops.
+    #[test]
+    fn lends_are_kept_for_the_call_and_ended_borrows_let_go() {
+        let shadow = generate(
+            "// rawr\nuse crate::{ui, Inbox, Update};\n\
+             pub struct State {\n    content: ui::Content,\n    title: String,\n}\n\
+             pub struct Open {\n    pub content: ui::Content,\n}\n\
+             pub fn label(inbox: &Inbox, updates: &[Update]) -> String { todo!() }\n\
+             pub fn elided(inbox: &Inbox) -> ui::Element<u32> { todo!() }\n\
+             pub fn draw(state: &State, inbox: &Inbox, out: &mut Inbox) -> usize { todo!() }\n\
+             pub fn close(state: State) {}\n\
+             pub fn count(state: &State) -> usize { todo!() }\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        let body = |name: &str| {
+            let at = text.find(&format!("fn {name}")).unwrap();
+            let end = text[at..].find("\n}\n").map_or(text.len(), |end| at + end);
+            &text[at..end]
+        };
+        assert!(
+            !body("label").contains("__call.anchor(")
+                && body("label").contains("    __call.keep_lends(__a0_lends);\n")
+                && body("label").contains("    __call.keep_lends(__a1_lends);\n"),
+            "{text}"
+        );
+        assert!(
+            body("elided").contains("    __call.anchor(__a0);\n"),
+            "{text}"
+        );
+        // Lent no native value, a call keeps nothing for itself.
+        assert!(!body("count").contains("keep_lends"), "{text}");
+        assert!(
+            body("draw").contains("    __call.keep_lends(__a0_lends);\n")
+                && body("draw").contains("    __call.keep_lends(__a1_lends);\n")
+                && body("draw").contains("    __call.release(&*__a2);\n")
+                && !body("draw").contains("__call.keep_lends(__a2_lends)"),
+            "{text}"
+        );
+        assert!(
+            body("close").contains("    __call.release(&__a0);\n    __call.given(__a0);\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "impl ::std::ops::Drop for State {\n    fn drop(&mut self) {\n        \
+                 crate::__rawr_island::ended(self);\n    }\n}\n"
+            ) && text.contains("let __value = ::std::mem::ManuallyDrop::new(self);")
+                && text.contains("let __f1 = unsafe { ::std::ptr::read(&__value.title) };"),
+            "{text}"
+        );
+        assert!(!text.contains("Drop for Open"), "{text}");
     }
 
     /// A marked type's native parts inside an `Option`, a `Vec`, a `Box`

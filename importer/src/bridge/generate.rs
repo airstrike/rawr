@@ -9540,8 +9540,10 @@ fn has_store(plan: &Plan) -> bool {
     let Operation::StructField { field, .. } = plan.operation() else {
         return false;
     };
+    // A type with lifetimes may be in a region. Its family is spelled by
+    // its instance, never its bare path, which names no type arguments.
     let path = rust_path(plan);
-    container_family(&path, &path).is_none()
+    !carries_lifetimes(&path)
         && !may_borrow(field.ty())
         && render_take(0, 1, field.ty(), &mut Vec::new()).is_ok()
 }
@@ -10020,65 +10022,77 @@ fn render_adapter(
         Vec::new()
     };
     let _lent = LentArguments::enter(!lent.is_empty());
-    let slices = if lent.is_empty() {
-        slice_inputs(plan)?
-    } else {
-        Vec::new()
-    };
+    let slices = slice_inputs(plan)?;
     let _slices = SliceArguments::enter(slices.iter().map(|slice| slice.index).collect());
-    if lent.is_empty() && slices.is_empty() {
-        writeln!(
-            output,
-            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{"
-        )
-        .map_err(encoding)?;
-    } else if lent.is_empty() {
-        // Each `&[T]` argument a native slice place fills is reached where
-        // it is for the call, and the call runs inside them all (#1291). A
-        // `&'static [T]` one is a slice that lives as long as the runner
-        // (#1437).
+    // Each argument native code lent (D558.3) is reached for the call
+    // through its accessor, and the call runs inside them all. So is each
+    // `&[T]` argument a native slice place fills, inside those (#1291), a
+    // slice native code lent among them (#1500). A `&'static [T]` one is a
+    // slice that lives as long as the runner (#1437).
+    let reach = lent
+        .iter()
+        .map(|(index, mutable, rust)| format!("({index}, {mutable}, {rust} as Reach)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (lent_parameter, lent_argument) = if lent.is_empty() {
+        ("", "")
+    } else {
+        (", lent: &mut LentArguments<'_>", ", lent")
+    };
+    let mut call = None;
+    if !slices.is_empty() {
         let names = slices
             .iter()
-            .map(|slice| format!("slice_{}", slice.index))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let parameters = slices
-            .iter()
-            .map(|slice| format!("slice_{}: {}", slice.index, slice.parameter()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut call = format!("{name}_sliced(arguments, {names})");
+            .map(|slice| format!(", slice_{}", slice.index))
+            .collect::<String>();
+        let mut sliced = format!("{name}_sliced(arguments{lent_argument}{names})");
         for slice in slices.iter().rev() {
-            call = slice.around(&call);
+            sliced = slice.around(&sliced);
         }
-        writeln!(
+        call = Some(sliced);
+    }
+    match (lent.is_empty(), call) {
+        (true, None) => writeln!(
             output,
-            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
-    {call}
-}}
-
-fn {name}_sliced(arguments: &mut Arguments<'_, '_, '_>, {parameters}) -> Result<Dynamic, Error> {{"
-        )
-        .map_err(encoding)?;
-    } else {
-        // Each argument native code lent (D558.3) is reached for the call
-        // through its accessor, and the call runs inside them all.
-        let reach = lent
-            .iter()
-            .map(|(index, mutable, rust)| format!("({index}, {mutable}, {rust} as Reach)"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        writeln!(
+            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{"
+        ),
+        (false, None) => writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
     with_lent_arguments(arguments, &[{reach}], &mut {name}_lent)
 }}
 
-fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>) -> Result<Dynamic, Error> {{
+fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>{lent_parameter}) -> Result<Dynamic, Error> {{
     let _ = &mut *lent;"
-        )
-        .map_err(encoding)?;
+        ),
+        (lent_free, Some(call)) => {
+            let parameters = slices
+                .iter()
+                .map(|slice| format!(", slice_{}: {}", slice.index, slice.parameter()))
+                .collect::<String>();
+            let entry = if lent_free {
+                call
+            } else {
+                format!(
+                    "with_lent_arguments(arguments, &[{reach}], &mut |arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>| {call})"
+                )
+            };
+            let unused = if lent_free {
+                ""
+            } else {
+                "\n    let _ = &mut *lent;"
+            };
+            writeln!(
+                output,
+                "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    {entry}
+}}
+
+fn {name}_sliced(arguments: &mut Arguments<'_, '_, '_>{lent_parameter}{parameters}) -> Result<Dynamic, Error> {{{unused}"
+            )
+        }
     }
+    .map_err(encoding)?;
     output
         .write_all(b"    let _ = &mut *arguments;\n")
         .map_err(encoding)?;
@@ -10962,8 +10976,9 @@ fn render_adapter_body(
             let part = field_part(plan, field.name(), facade);
             // A field of a value in a scope frame's region (D558 tier 1), as
             // quick-xml's `Attribute::value`: a copy, which stays in the
-            // region when it carries the region's lifetime.
-            if let Some(family) = container_family(&path, &path) {
+            // region when it carries the region's lifetime. A generic
+            // struct's family is its instance's, as `Element<'x, Message>`.
+            if let Some(family) = container_family(&rust_path(plan), &path) {
                 let reached = family.call(family::Reach::Get, "scoped");
                 let converted = {
                     let _region = InRegion::enter();
@@ -12859,8 +12874,19 @@ fn render_method_opening(
         } else {
             ""
         };
+        let texts = signature
+            .inputs()
+            .iter()
+            .enumerate()
+            .filter(|(position, input)| {
+                lends_str(input, signature, substitutions)
+                    && u32::try_from(*position)
+                        .is_ok_and(|position| signature.lends().contains(&position))
+            })
+            .map(|(position, _)| position)
+            .collect::<Vec<_>>();
         let lent = lent_opening(
-            receiver, signature, &container, &call, &converted, &frame, &kept, &reached,
+            receiver, signature, &container, &call, &converted, &frame, &kept, &texts, &reached,
         )?;
         return writeln!(
             output,
@@ -12927,7 +12953,9 @@ fn render_method_opening(
 /// result may keep it. Any other is reached through its accessor while the
 /// rest of the scope runs, as a frame holds a receiver of the arena. Each
 /// of `keeps` (`kept_inputs`) is reached beside a kept receiver in its
-/// region, and by `reached` beside another.
+/// region, and by `reached` beside another. Each `&'a str` input at
+/// `texts` is pinned in a kept receiver's region, which outlives the
+/// frame's own copy of it.
 #[allow(clippy::too_many_arguments)]
 fn lent_opening(
     receiver: Receiver,
@@ -12937,6 +12965,7 @@ fn lent_opening(
     converted: &str,
     frame: &str,
     keeps: &[KeptInput],
+    texts: &[usize],
     reached: &str,
 ) -> Result<String, request::Error> {
     let mutable = matches!(receiver, Receiver::Mutable);
@@ -12950,14 +12979,22 @@ fn lent_opening(
         format!("({taken},)")
     };
     // Each `&'a T` the output keeps beside the receiver is reached in the
-    // anchored region as well, or shared with its pins.
-    let kept_reached = if keeps.is_empty() {
+    // anchored region as well, or shared with its pins, and each `&'a str`
+    // is the program's text pinned there (#1503).
+    let kept_reached = if keeps.is_empty() && texts.is_empty() {
         String::new()
     } else {
+        let mut pinned = String::new();
+        for position in texts {
+            pinned.push_str(&format!(
+                "\n                    let argument_{position}: &str = pins.pin(argument_{position}_owned.clone());"
+            ));
+        }
         format!(
             "
                     let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;
-                    let lender = Some(&*region);{}",
+                    let lender = Some(&*region);
+                    let _ = lender;{}{pinned}",
             reach_kept(keeps, "")
         )
     };
