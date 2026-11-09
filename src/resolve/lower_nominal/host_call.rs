@@ -2573,6 +2573,40 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// `local.field` by value of a crate struct whose every field the
+    /// program can name, as inboard's `action.task` of a `common::Action`:
+    /// only the field moves, as rustc moves it, and the struct's other
+    /// fields stay for the program (#834), apart in the runner's slot. A
+    /// struct behind a reference, or with fields the program can't name,
+    /// still moves whole.
+    #[cfg(feature = "rust-import")]
+    fn moves_field_out(
+        &mut self,
+        receiver: &ParsedExpr,
+        definition: &crate::host::type_def::Definition,
+    ) -> bool {
+        let crate::host::type_def::Shape::Struct {
+            constructible: true,
+            ..
+        } = definition.shape()
+        else {
+            return false;
+        };
+        if receiver.lvalue.is_none()
+            || !receiver.prelude.is_empty()
+            || matches!(self.inference.resolve(&receiver.ty), Ty::Reference { .. })
+        {
+            return false;
+        }
+        let local = variable_name(receiver.source.as_str())
+            .and_then(|name| self.bindings.get(name.as_str()))
+            .is_some_and(|binding| matches!(binding.kind, BindingKind::Local));
+        if local {
+            self.flow().moved(receiver.span.start());
+        }
+        local
+    }
+
     /// `value.field` of an imported struct: a read, or, before `=`, the
     /// field's store (`store_imported_field`).
     #[cfg(feature = "rust-import")]
@@ -2975,7 +3009,7 @@ impl<'a> Parser<'a> {
             if receiver.lvalue.is_some() || self.flow().is_place(receiver.span) {
                 self.flow().mark_place(operation);
             }
-        } else {
+        } else if !self.moves_field_out(&receiver, &definition) {
             self.consume_imported_value(&receiver, &path, operation)?;
         }
         let imported = ImportedOperation {

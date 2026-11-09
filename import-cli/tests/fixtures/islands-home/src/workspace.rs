@@ -3,11 +3,16 @@
 //! `update` gives and feeds their messages back.
 pub mod home;
 pub mod inbox;
+pub mod thumbs;
 
 pub struct Workspace {
     pub home: home::State,
     pub inbox: inbox::State,
     pub updates: Vec<inbox::Update>,
+    /// What the wizard's catalog reads, as inboard's source pool.
+    pub sources: inbox::State,
+    pub thumbs: thumbs::Renderer,
+    pub theme: crate::Theme,
 }
 
 impl Workspace {
@@ -16,18 +21,32 @@ impl Workspace {
             home: home::State::new(),
             inbox: inbox::State::default(),
             updates: Vec::new(),
+            sources: inbox::State::default(),
+            thumbs: thumbs::Renderer::default(),
+            theme: crate::Theme::new("dark"),
         }
     }
 
     /// Give `message` to the home screen, and every message its tasks give
-    /// after it, as iced's runtime does. How many messages it took.
+    /// after it, as iced's runtime does, and say where its wizard
+    /// commits. How many messages it took.
     pub fn update(&mut self, message: home::Message) -> usize {
         let mut pending = vec![message];
         let mut taken = 0;
         while let Some(message) = pending.pop() {
             taken += 1;
-            let task = home::update(&mut self.home, message, &mut self.inbox);
-            pending.extend(task.poll());
+            let catalog = home::wizard::View::new(&self.sources);
+            let action = home::update(
+                &mut self.home,
+                message,
+                &mut self.inbox,
+                catalog,
+                &mut self.thumbs,
+            );
+            if let Some(home::Instruction::Commit(step)) = action.instruction {
+                println!("committed at step {step}");
+            }
+            pending.extend(action.task.poll());
         }
         taken
     }
@@ -46,7 +65,8 @@ impl Workspace {
         grid: Option<ui::Element<'a, home::wizard::Message>>,
     ) -> ui::Element<'a, home::Message> {
         let catalog = home::wizard::View::new(&self.inbox);
-        self.home.view(&self.inbox, &self.updates, catalog, grid)
+        self.home
+            .view(&self.inbox, &self.updates, catalog, grid, &self.theme)
     }
 
     pub fn press(&mut self) -> usize {

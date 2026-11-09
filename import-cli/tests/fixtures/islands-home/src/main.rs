@@ -8,6 +8,25 @@ mod workspace;
 use ui::Action;
 use workspace::{home, inbox};
 
+/// The app's theme, as inboard's `crate::Theme`: the marked home screen is
+/// lent it and lends it on to its open wizard's element.
+#[derive(Debug)]
+pub struct Theme {
+    name: String,
+}
+
+impl Theme {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 fn main() {
     let mut workspace = workspace::Workspace::new();
     workspace.inbox.unread = 5;
@@ -87,6 +106,24 @@ fn main() {
     workspace.updates.push(inbox::Update::new("tiles 1.2"));
     let shown = workspace.show();
     println!("updates show {} {:?}", shown.label, shown.on_press);
+    // The open wizard past step 5 shows the theme's name. Its steps run
+    // through the screen's `update`: it commits past step 9, and closes
+    // on a catalog with nothing unread.
+    workspace.home.open_wizard();
+    workspace.home.advance_wizard();
+    let shown = workspace.show();
+    println!("themed wizard shows {} {:?}", shown.label, shown.on_press);
+    workspace.sources.unread = 2;
+    let taken = workspace.update(home::Message::Built(home::wizard::Message::Step(1)));
+    println!("built {taken} drew {}", workspace.thumbs.drawn);
+    workspace.home.open_wizard();
+    workspace.sources.unread = 0;
+    let taken = workspace.update(home::Message::Built(home::wizard::Message::Step(1)));
+    println!(
+        "built {taken} drew {} {}",
+        workspace.thumbs.drawn,
+        workspace.home.layout()
+    );
     workspace.inbox.unread = 3;
     let Some(stop) = std::env::var_os("ISLANDS_STOP") else {
         return;

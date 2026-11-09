@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 147;
+const CLASSIFIER_VERSION: u32 = 148;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8378,6 +8378,17 @@ impl<P: api::Phase> Context<'_, P> {
         }
         let mut lends = Vec::new();
         let scope = if borrows_receiver {
+            // The frame's output keeps a `&'a T` it takes as long as it
+            // keeps the receiver, as inboard's `wizard.view(catalog, theme)`
+            // keeps `theme`.
+            if let model::Receiver::Reference { lifetime, .. } = signature.receiver() {
+                lends = signature
+                    .inputs()
+                    .enumerate()
+                    .filter(|(_, input)| shares_at(input, lifetime))
+                    .filter_map(|(index, _)| u32::try_from(index).ok())
+                    .collect();
+            }
             Some(representability::signature::Scope::Borrows)
         } else if opens_copies {
             Some(representability::signature::Scope::Opens)
@@ -11659,17 +11670,32 @@ fn borrows_receiver(
     // name the receiver's lifetime as a crate type's lifetime argument, as
     // inboard's `wizard::State::view<'a>(&'a self, catalog: View<'a>)`
     // takes a value of borrows by value (#1225): the frame's lifetime, as
-    // the output's is.
+    // the output's is. So may a shared reference at that lifetime, as its
+    // `theme: &'a Theme` is.
     matches!(output, model::Type::Definition { .. })
         && signature.guard().is_none()
         && !signature.async_function()
         && names_lifetime(output, receiver)
         && !names_opaque(output)
         && signature.binders().len() == 1
-        && signature
-            .inputs()
-            .all(|input| !names_late_lifetime(input) || naming(input, receiver) == Naming::Argument)
+        && signature.inputs().all(|input| {
+            !names_late_lifetime(input)
+                || naming(input, receiver) == Naming::Argument
+                || shares_at(input, receiver)
+        })
         && !lends_option_reference(output, receiver, is_option)
+}
+
+/// Whether `ty` is a `&'r T` at `lifetime` of a crate's type `T` that
+/// borrows nothing else, as inboard's `theme: &'a Theme` is.
+fn shares_at(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
+    matches!(ty, model::Type::Reference {
+        lifetime: named,
+        mutability: model::Mutability::Shared,
+        ty,
+    } if named == lifetime
+        && matches!(**ty, model::Type::Definition { .. })
+        && !names_late_lifetime(ty))
 }
 
 /// Whether `output` is an `Option<&'r T>` of the receiver's lifetime `'r`,
@@ -14103,6 +14129,63 @@ mod tests {
             model::Mutability::Mutable,
         );
         assert!(!super::receiver_binder_is_exact(&wrong_receiver));
+    }
+
+    /// inboard's `wizard::State::view<'a>(&'a self, catalog: View<'a>,
+    /// theme: &'a Theme) -> Element<'a, Message>`: a frame over its receiver
+    /// that keeps the shared `&'a Theme` too, but not a `&'a mut` one.
+    #[test]
+    fn a_frame_over_its_receiver_takes_a_shared_reference_at_its_lifetime() {
+        use crate::api::model;
+
+        let id = crate::test_fixture::graph()
+            .definitions()
+            .next()
+            .expect("fixture definition exists")
+            .id()
+            .clone();
+        let binder = model::Binder::new(id.clone(), 0, 0, "'#0".into());
+        let lifetime = model::Lifetime::Late {
+            binder: binder.clone(),
+            index: 0,
+        };
+        let borrowing = model::Type::Definition {
+            id: id.clone(),
+            arguments: Box::from([model::Argument::Lifetime(lifetime.clone())]),
+        };
+        let plain = model::Type::Definition {
+            id: id.clone(),
+            arguments: Box::default(),
+        };
+        let reference = |mutability| model::Type::Reference {
+            lifetime: lifetime.clone(),
+            mutability,
+            ty: Box::new(plain.clone()),
+        };
+        let signature = |inputs: Box<[model::Type]>| {
+            model::Signature::new(
+                model::Safety::Safe,
+                false,
+                false,
+                "\"Rust\"".into(),
+                false,
+                Box::from([binder.clone()]),
+                model::Receiver::Reference {
+                    lifetime: lifetime.clone(),
+                    mutability: model::Mutability::Shared,
+                    ty: model::Type::SelfType(id.clone()),
+                },
+                inputs,
+                borrowing.clone(),
+            )
+        };
+        let shared = signature(Box::from([
+            borrowing.clone(),
+            reference(model::Mutability::Shared),
+        ]));
+        assert!(super::borrows_receiver(&shared, |_| false));
+        let mutable = signature(Box::from([reference(model::Mutability::Mutable)]));
+        assert!(!super::borrows_receiver(&mutable, |_| false));
     }
 
     #[test]
