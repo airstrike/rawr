@@ -3266,7 +3266,9 @@
     {"issue":1475,"title":"A marked type holding native parts crosses inside Vec, Option or a tuple by cloning its parts…","state":"open","category":"No glue (D593)"},
     {"issue":1476,"title":"A marked fn returning a reference into a `&T` parameter's native part …","state":"open","category":"No glue (D593)"},
     {"issue":1477,"title":"A native `&'static [T]` const of numbers is copied at each read and isn't passed through to a…","state":"open","category":"Divergences from rustc"},
-    {"issue":1478,"title":"A native const of nested references, as `&[&str]` or `&(u8, u8)`, can't be used from marked code","state":"open","category":"Divergences from rustc"}
+    {"issue":1478,"title":"A native const of nested references, as `&[&str]` or `&(u8, u8)`, can't be used from marked code","state":"open","category":"Divergences from rustc"},
+    {"issue":1479,"title":"A queued swap waits for the next input event to apply; it should wake the app's event loop and…","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":1480,"title":"A project whose native lib (psm) rawr's shared runtime also links rebuilds the runtime…","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4089,7 +4091,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Three real apps run under rawr run (2026-11-08): the inboard app, a workspace of 1016 packages (after #1461, #1462, #1463, #1464), the elevato game and icedxdy's browser example. Next: a native root naming marked types (#1249) and the build.rs step for in-process reload (#1425, #1426)",
+          "note": "Three real apps run under rawr run (2026-11-08): the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. Next: a native root holding marked types (#44, #1249) for inboard's home.rs, and the build.rs step for in-process reload (#1425, #1426)",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},

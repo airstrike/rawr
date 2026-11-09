@@ -1478,6 +1478,8 @@
     {"t":"T1475","issue":1475,"title":"T1475: A marked type holding native parts crosses inside Vec, Option or a tuple by cloning its parts…","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1476","issue":1476,"title":"T1476: A marked fn returning a reference into a `&T` parameter's native part …","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1477","issue":1477,"title":"T1477: A native `&'static [T]` const of numbers is copied at each read and isn't passed through to a…","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1478","issue":1478,"title":"T1478: A native const of nested references, as `&[&str]` or `&(u8, u8)`, can't be used from marked code","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1478","issue":1478,"title":"T1478: A native const of nested references, as `&[&str]` or `&(u8, u8)`, can't be used from marked code","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1479","issue":1479,"title":"T1479: A queued swap waits for the next input event to apply; it should wake the app's event loop and…","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1480","issue":1480,"title":"T1480: A project whose native lib (psm) rawr's shared runtime also links rebuilds the runtime…","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
