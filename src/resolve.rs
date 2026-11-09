@@ -2429,6 +2429,7 @@ fn resolve_item(
                     .any(crate::parser::item::is_sized_trait),
                 reference_forwards: Box::default(),
                 generics: trait_generics,
+                lifetimes: parsed.lifetimes.params.len(),
                 declaration: None,
                 std: None,
             })
@@ -4877,7 +4878,10 @@ fn resolve_bounds_with_arguments(
                 traits.push(segment.name.clone());
                 continue;
             }
-            // `Convert<i64>`: a generic user trait and its arguments.
+            // `Convert<i64>` or `IntoContent<'a, Message>`: a generic user
+            // trait and its type arguments. Its lifetimes are the enclosing
+            // impl's or fn's, which rawr erases as rustc's borrow check
+            // has already judged them.
             if let [segment] = &bound.segments[..]
                 && !matches!(
                     segment.name.text.as_str(),
@@ -4886,23 +4890,12 @@ fn resolve_bounds_with_arguments(
                         | crate::item::type_ref::FN_TYPE
                         | crate::item::type_ref::FN_MUT_TYPE
                 )
-                && segment
-                    .arguments
-                    .iter()
-                    .all(|argument| matches!(argument, crate::item::type_ref::Argument::Type(_)))
             {
                 traits.push(segment.name.clone());
-                trait_arguments.push((
-                    segment.name.clone(),
-                    segment
-                        .arguments
-                        .iter()
-                        .filter_map(|argument| match argument {
-                            crate::item::type_ref::Argument::Type(ty) => Some(ty.clone()),
-                            crate::item::type_ref::Argument::Lifetime(_) => None,
-                        })
-                        .collect(),
-                ));
+                let arguments = type_arguments(segment);
+                if !arguments.is_empty() {
+                    trait_arguments.push((segment.name.clone(), arguments));
+                }
                 continue;
             }
             if let Some(name) = std_path::trait_path(&bound.segments)
@@ -4919,14 +4912,7 @@ fn resolve_bounds_with_arguments(
                 && prefix.iter().all(|module| module.arguments.is_empty())
             {
                 traits.push(last.name.clone());
-                let arguments = last
-                    .arguments
-                    .iter()
-                    .filter_map(|argument| match argument {
-                        crate::item::type_ref::Argument::Type(ty) => Some(ty.clone()),
-                        crate::item::type_ref::Argument::Lifetime(_) => None,
-                    })
-                    .collect::<Vec<_>>();
+                let arguments = type_arguments(last);
                 if !arguments.is_empty() {
                     trait_arguments.push((last.name.clone(), arguments));
                 }
@@ -4952,6 +4938,19 @@ fn resolve_bounds_with_arguments(
         traits.into_boxed_slice(),
         trait_arguments,
     ))
+}
+
+/// A bound segment's type arguments, without its lifetimes: `[Message]` of
+/// `IntoContent<'a, Message>`.
+fn type_arguments(segment: &crate::item::type_ref::Segment) -> Vec<crate::item::type_ref::Type> {
+    segment
+        .arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            crate::item::type_ref::Argument::Type(ty) => Some(ty.clone()),
+            crate::item::type_ref::Argument::Lifetime(_) => None,
+        })
+        .collect()
 }
 
 /// rustc's E0405 for a trait name nothing in scope declares.

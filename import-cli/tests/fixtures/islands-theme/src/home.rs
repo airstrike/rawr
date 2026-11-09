@@ -97,6 +97,63 @@ pub fn page<'a>(
     page
 }
 
+/// A sidebar's sections, as inboard's `widget::sidebar::Content`.
+pub struct Content<'a, Message> {
+    items: Vec<Element<'a, Message>>,
+}
+
+/// What a sidebar takes as its content, as inboard's `IntoContent`: a
+/// trait of the crate's own, generic in a lifetime and a message.
+pub trait IntoContent<'a, Message> {
+    fn into_content(self) -> Content<'a, Message>;
+}
+
+impl<'a, Message> IntoContent<'a, Message> for Content<'a, Message> {
+    fn into_content(self) -> Content<'a, Message> {
+        self
+    }
+}
+
+/// A sidebar, as inboard's `widget::Sidebar`, whose generic impl's
+/// methods bound their arguments by `IntoContent` over the impl's own
+/// lifetime and message.
+pub struct Sidebar<'a, Message> {
+    content: Option<Content<'a, Message>>,
+}
+
+impl<'a, Message> Sidebar<'a, Message> {
+    pub fn new() -> Self {
+        Self { content: None }
+    }
+
+    pub fn content(mut self, content: impl IntoContent<'a, Message>) -> Self {
+        self.content = Some(content.into_content());
+        self
+    }
+
+    pub fn sections(&self) -> usize {
+        self.content
+            .as_ref()
+            .map_or(0, |content| content.items.len())
+    }
+}
+
+/// A sidebar's content, as inboard's free `sidebar::content`.
+pub fn content<'a, Message: 'a>(
+    content: impl IntoContent<'a, Message> + 'a,
+) -> Content<'a, Message> {
+    content.into_content()
+}
+
+/// A sidebar of the screen's elements, which native code calls: the
+/// generic sidebar's methods at the screen's `Message`.
+pub fn sidebar() -> usize {
+    let items: Vec<Element<'static, Message>> = vec![crate::widget::void(), crate::widget::void()];
+    Sidebar::new()
+        .content(content(Content { items }))
+        .sections()
+}
+
 /// Where the theme native code lends is, as native code reads it.
 pub fn place(theme: &theme::Theme) -> usize {
     crate::style::place(theme)

@@ -3784,6 +3784,79 @@ fn language_a_blanket_impl_of_a_generic_trait_or_over_a_bound() {
     assert_eq!(printed, "3 a 2 1 5! hey!");
 }
 
+/// A bound naming a crate's generic trait whose arguments are the enclosing
+/// impl's or fn's own lifetime and type parameters, in argument position
+/// (`impl IntoContent<'a, Message>`) or as a parameter's bound, on a method
+/// of a generic impl and in a free fn, as inboard's sidebar writes them.
+#[test]
+fn language_a_bound_on_a_generic_trait_takes_the_impls_lifetime_and_parameters() {
+    let printed = Engine::new()
+        .eval::<String>(
+            r#"
+            pub struct Content<'a, M> { items: Vec<&'a str>, tags: Vec<M> }
+            pub trait IntoContent<'a, M> { fn into_content(self) -> Content<'a, M>; }
+            impl<'a, M> IntoContent<'a, M> for Content<'a, M> {
+                fn into_content(self) -> Content<'a, M> { self }
+            }
+            pub struct Sidebar<'a, M> { content: Option<Content<'a, M>> }
+            impl<'a, M> Sidebar<'a, M> {
+                pub fn new() -> Self { Sidebar { content: None } }
+                pub fn content(mut self, content: impl IntoContent<'a, M>) -> Self {
+                    self.content = Some(content.into_content());
+                    self
+                }
+                pub fn with<C: IntoContent<'a, M>>(self, content: C) -> Self {
+                    self.content(content)
+                }
+                pub fn count(&self) -> usize {
+                    self.content
+                        .as_ref()
+                        .map_or(0, |content| content.items.len() + content.tags.len())
+                }
+            }
+            pub fn content<'a, M: 'a>(content: impl IntoContent<'a, M> + 'a) -> Content<'a, M> {
+                content.into_content()
+            }
+            fn wrap<'a, M, C>(content: C) -> Content<'a, M>
+            where
+                C: IntoContent<'a, M>,
+            {
+                content.into_content()
+            }
+            pub fn run() -> String {
+                let words = String::from("inbox");
+                let first = Content { items: vec![words.as_str(), "sent"], tags: vec![1] };
+                let second = content(Content { items: vec![words.as_str()], tags: vec![2, 3] });
+                let third = wrap(Content { items: Vec::new(), tags: vec![true] });
+                let sidebar = Sidebar::new().content(first);
+                let other = Sidebar::new().with(second);
+                format!("{} {} {}", sidebar.count(), other.count(), third.tags.len())
+            }
+            run()
+            "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(printed, "3 3 1");
+    let wrong = rejected(
+        r#"
+        pub struct Content<'a, M> { items: Vec<&'a str>, tags: Vec<M> }
+        pub trait IntoContent<'a, M> { fn into_content(self) -> Content<'a, M>; }
+        impl<'a, M> IntoContent<'a, M> for Content<'a, M> {
+            fn into_content(self) -> Content<'a, M> { self }
+        }
+        fn count<'a>(content: impl IntoContent<'a, i64>) -> i64 {
+            content.into_content().items.len() as i64
+        }
+        pub fn run() -> i64 { count(5) }
+        run()
+        "#,
+    );
+    assert!(
+        wrong.contains("the trait bound `{integer}: IntoContent<'_, i64>` is not satisfied"),
+        "{wrong}"
+    );
+}
+
 #[test]
 fn language_generic_trait_functions_by_instance() {
     let value = run(r#"

@@ -113,5 +113,6 @@ fn main() {
         caption.draw(&crate_theme),
         std::ptr::eq(caption.content(), label.as_str())
     );
+    println!("sidebar {}", home::sidebar());
     println!("clones {}", theme::clones());
 }

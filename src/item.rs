@@ -776,6 +776,8 @@ pub struct Trait {
     pub supertraits: Box<[type_ref::Path]>,
     /// Type parameters: `T` of `trait Convert<T>`.
     pub generics: Box<[GenericParam]>,
+    /// Lifetime parameters: `'a` of `trait IntoContent<'a, Message>`.
+    pub lifetimes: Lifetimes,
     /// Complete item span.
     pub span: Span,
 }

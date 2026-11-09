@@ -224,6 +224,10 @@ pub(crate) struct Trait {
     pub reference_forwards: Box<[ReferenceForward]>,
     /// The trait's own type parameters: `T` of `trait Convert<T>`.
     pub generics: Box<[Generic]>,
+    /// How many lifetime parameters the trait declares: one of `trait
+    /// IntoContent<'a, Message>`, which rustc writes `'_` in a bound's
+    /// name.
+    pub lifetimes: usize,
     /// The declaration of a facade trait (iced's `canvas::Program`), whose
     /// text its default bodies span.
     pub declaration: Option<crate::ImmutableString>,

@@ -216,16 +216,23 @@ impl<'a> Parser<'a> {
                     .map_or(ty, |(inner, _)| inner),
                     _ => ty,
                 };
-                // rustc writes the trait with its arguments: `AsRef<str>`.
-                let capability = if arguments.is_empty() {
+                // rustc writes the trait with its arguments, each of its
+                // lifetimes as `'_`: `AsRef<str>`, `IntoContent<'_, i64>`.
+                let lifetimes = self
+                    .models
+                    .traits
+                    .get(&trait_name)
+                    .map_or(0, |(_, declared)| declared.lifetimes);
+                let capability = if arguments.is_empty() && lifetimes == 0 {
                     trait_name
                 } else {
-                    let written = arguments
-                        .iter()
-                        .map(|argument| match self.inference.resolve(argument) {
-                            Ty::Str => "str".into(),
-                            argument => argument.name(&self.models),
-                        })
+                    let written = std::iter::repeat_n(ImmutableString::from("'_"), lifetimes)
+                        .chain(arguments.iter().map(|argument| {
+                            match self.inference.resolve(argument) {
+                                Ty::Str => "str".into(),
+                                argument => argument.name(&self.models),
+                            }
+                        }))
                         .collect::<Vec<_>>()
                         .join(", ");
                     format!("{trait_name}<{written}>").into()

@@ -2326,8 +2326,8 @@ fn parse_trait(
 ) -> ParseResult<crate::item::Trait> {
     input.next();
     let name = parse_name(input, "after 'trait'")?;
-    // `trait Convert<T>`.
-    let generics = parse_generic_params(input)?;
+    // `trait Convert<T>`, `trait IntoContent<'a, Message>`.
+    let (generics, lifetimes) = parse_generics(input)?;
     // `trait Named: Shape + Clone`.
     let supertraits = if matches!(input.peek(), Some((Token::Colon, _))) {
         input.next();
@@ -2437,6 +2437,7 @@ fn parse_trait(
         associated_projections: associated_projections.into_boxed_slice(),
         supertraits: supertraits.into_boxed_slice(),
         generics: generics.into_boxed_slice(),
+        lifetimes,
         span: Span::new(start, end),
     })
 }
