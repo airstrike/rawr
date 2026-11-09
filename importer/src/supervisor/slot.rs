@@ -64,6 +64,17 @@ impl<B> Slot<B> {
             .native_watch()
     }
 
+    /// Why `request` needs another runner than the current one, in one
+    /// line; `None` when the current one serves it, or none runs.
+    pub fn native_change(
+        &self,
+        request: &crate::bridge::GenerationRequestKey<B>,
+    ) -> Option<String> {
+        self.current
+            .as_ref()
+            .and_then(|current| current.native_change(request).ok().flatten())
+    }
+
     pub fn prepare_resident(
         &mut self,
         started: crate::process::hot::Started,

@@ -434,47 +434,40 @@ impl crate::Engine {
                         selector: function.selector.clone(),
                     })
                 })?;
-                let (function_start, function_end) = range(function.span);
-                // A generic function, at the types its use infers.
+                // A generic function, at the types its use infers. Where the
+                // program names it is no part of the runner it needs.
                 let item = if function.types.is_empty() {
                     rawr_import::surface::instance::FunctionItem::selected(
                         function.position,
                         selected,
-                        function_start,
-                        function_end,
                     )
                 } else {
-                    rawr_import::surface::instance::Arguments::new(
+                    let instance = rawr_import::surface::instance::Arguments::new(
                         function.types,
                         Box::default(),
                         Box::default(),
                         None,
                         limits,
                     )
-                    .and_then(|instance| {
-                        rawr_import::surface::instance::FunctionItem::instantiated(
-                            function.position,
-                            selected,
-                            instance,
-                            function_start,
-                            function_end,
-                        )
-                    })
+                    .map_err(Error::from)
+                    .map_err(super::Error::import)?;
+                    rawr_import::surface::instance::FunctionItem::instantiated(
+                        function.position,
+                        selected,
+                        instance,
+                    )
                 };
-                functions.push(item.map_err(Error::from).map_err(super::Error::import)?);
+                functions.push(item);
             }
             let mut mappers = Vec::new();
             mappers
                 .try_reserve_exact(used.mappers.len())
                 .map_err(|_| super::Error::import(Error::Allocation))?;
             for mapper in used.mappers {
-                let (mapper_start, mapper_end) = range(mapper.span);
                 mappers.push(
                     rawr_import::surface::instance::EventMapper::selected(
                         mapper.position,
                         mapper.seal,
-                        mapper_start,
-                        mapper_end,
                     )
                     .map_err(Error::from)
                     .map_err(super::Error::import)?,

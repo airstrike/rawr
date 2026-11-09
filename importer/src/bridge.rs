@@ -185,6 +185,50 @@ impl<B> GenerationRequestKey<B> {
         self.profile.value().application_semantic()
     }
 
+    /// Why the runner this request needs is not `built`, in one line, as
+    /// `rawr run` says why it restarts; `None` when it is. Each part of
+    /// [`build_request_key`] is named in its order: a native input, the
+    /// crates' API, then the native items the program uses.
+    pub(crate) fn change_from<P>(&self, built: &crate::runner::Manifest<P, B>) -> Option<String> {
+        if self.build == built.generated.build_request_key() {
+            return None;
+        }
+        let native = |proof: &crate::input::proof::Proof| {
+            proof.native().ok().map(|inputs| *inputs.as_bytes())
+        };
+        if native(&self.native) != native(&built.native) {
+            return Some(
+                self.native
+                    .change_from(&built.native)
+                    .unwrap_or_else(|| "a native input changed".to_owned()),
+            );
+        }
+        if self.request.contract != built.request.contract {
+            return Some("the API of a crate the program uses changed".to_owned());
+        }
+        // Only a restart asks, so a scan of each plan list is cheap enough.
+        let (now, before) = (&self.request.plans, &built.request.plans);
+        let missing = |plans: &[crate::surface::adapter::Plan],
+                       plan: &crate::surface::adapter::Plan| {
+            plans
+                .iter()
+                .all(|other| other.identity() != plan.identity())
+        };
+        if let Some(plan) = now.iter().find(|plan| missing(before, plan)) {
+            return Some(format!(
+                "the program now uses `{}`",
+                generate::facade_item_path(plan)
+            ));
+        }
+        if let Some(plan) = before.iter().find(|plan| missing(now, plan)) {
+            return Some(format!(
+                "the program no longer uses `{}`",
+                generate::facade_item_path(plan)
+            ));
+        }
+        Some("the native build's settings changed".to_owned())
+    }
+
     /// Materialize normalized runner files once and seal their manifest.
     pub fn generate(
         self,

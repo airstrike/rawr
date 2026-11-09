@@ -7949,7 +7949,7 @@ fn hidden_segments(source: &[u8]) -> std::collections::BTreeSet<String> {
 /// names it: from the crate's root, with a method after the type it is on,
 /// as `events::widgets::Row::boxed`. A trait's method has one selector on every type,
 /// so the runtime binds the instance of each type's item by this path.
-fn facade_item_path(plan: &Plan) -> String {
+pub(crate) fn facade_item_path(plan: &Plan) -> String {
     let mut segments = std::iter::once(plan.export().root_alias())
         .chain(plan.export().path())
         .collect::<Vec<_>>();

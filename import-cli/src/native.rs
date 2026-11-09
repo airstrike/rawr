@@ -30,6 +30,14 @@ impl<B> Lane<B> {
         self.slot.native_watch().map_err(Error::Process)
     }
 
+    /// Why `miss` needs another runner than the running one, in one line.
+    pub(crate) fn native_change(
+        &self,
+        miss: &rawr_import::process::hot::Miss<B>,
+    ) -> Option<String> {
+        self.slot.native_change(miss.request())
+    }
+
     pub(crate) fn prepare_resident(
         &mut self,
         started: rawr_import::process::hot::Started,

@@ -686,7 +686,8 @@ fn session(
                         // says why in one line, once for each new build.
                         if (announced.as_ref() != Some(&next_manifests)
                             || manifests.restarts_on_save())
-                            && let Some(reason) = manifests.restart_reason(&next_manifests)
+                            && let Some(reason) = manifests
+                                .restart_reason(&next_manifests, || lane.native_change(&miss))
                         {
                             rawr_import::process::say(format_args!(
                                 "rawr: {reason}; restarting the program"

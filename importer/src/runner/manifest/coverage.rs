@@ -994,10 +994,7 @@ mod tests {
             let function = instance::FunctionItem::selected(
                 0,
                 contract.accept(selected, selected.selector()).unwrap(),
-                start + 1,
-                start + 2,
-            )
-            .unwrap();
+            );
             let arguments = instance::Arguments::new(
                 Box::default(),
                 Box::default(),
@@ -1024,13 +1021,11 @@ mod tests {
         };
         let original = compile(0, callback.identity());
         let moved = compile(100, callback.identity());
-        assert_ne!(
+        // A moved operand names the same item: the same runner covers it.
+        assert_eq!(
             original.entries[0].identity().as_bytes(),
             moved.entries[0].identity().as_bytes()
         );
-        let original_operand = original.entries[0].identity().function_items()[0].byte_range();
-        let moved_operand = moved.entries[0].identity().function_items()[0].byte_range();
-        assert_ne!(original_operand, moved_operand);
         let carrier = projected_carrier(original);
         let used = Use {
             path: "fixture::item_2",

@@ -442,21 +442,20 @@ impl ScriptImplFunction {
 }
 
 /// One exact public imported function item consumed at a direct formal.
+/// It names the item and the formal, never where the program writes it:
+/// an edit that moves the use builds the same runner (D553).
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct FunctionItem {
     position: u32,
     identity: Box<super::identity::Identity>,
-    byte_start: u32,
-    byte_end: u32,
 }
 
-/// One exact script mapper accepted only by the authenticated profile event lane.
+/// One exact script mapper accepted only by the authenticated profile event
+/// lane. Its seal names the mapper, never where the program writes it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct EventMapper {
     position: u32,
     seal: [u8; 16],
-    byte_start: u32,
-    byte_end: u32,
     projection: Option<EventProjection>,
 }
 
@@ -785,48 +784,29 @@ impl Arguments {
 }
 
 impl FunctionItem {
-    /// Transform one exact classified selector and positioned source item into
-    /// a compile-time-only operand proof.
+    /// Transform one exact classified selector at the formal `position`
+    /// into a compile-time-only operand proof.
     #[doc(hidden)]
-    pub fn selected(
-        position: u32,
-        accepted: super::Accepted<'_>,
-        byte_start: u32,
-        byte_end: u32,
-    ) -> Result<Self, super::Error> {
-        if byte_start >= byte_end {
-            return Err(super::Error::InstanceMismatch);
-        }
+    #[must_use]
+    pub fn selected(position: u32, accepted: super::Accepted<'_>) -> Self {
         let (outcome, selector) = accepted.into_parts();
-        Ok(Self {
+        Self {
             position,
             identity: Box::new(outcome.identity().selected(selector)),
-            byte_start,
-            byte_end,
-        })
+        }
     }
 
     /// [`Self::selected`] of a generic function at the types `instance`
     /// gives its parameters, as iced's `window::close::<Message>` passed
     /// as `and_then(window::close)`.
     #[doc(hidden)]
-    pub fn instantiated(
-        position: u32,
-        accepted: super::Accepted<'_>,
-        instance: Arguments,
-        byte_start: u32,
-        byte_end: u32,
-    ) -> Result<Self, super::Error> {
-        if byte_start >= byte_end {
-            return Err(super::Error::InstanceMismatch);
-        }
+    #[must_use]
+    pub fn instantiated(position: u32, accepted: super::Accepted<'_>, instance: Arguments) -> Self {
         let (outcome, selector) = accepted.into_parts();
-        Ok(Self {
+        Self {
             position,
             identity: Box::new(outcome.identity().instantiated(selector, instance)),
-            byte_start,
-            byte_end,
-        })
+        }
     }
 
     #[must_use]
@@ -838,31 +818,19 @@ impl FunctionItem {
     pub const fn identity(&self) -> &super::identity::Identity {
         &self.identity
     }
-
-    #[must_use]
-    pub const fn byte_range(&self) -> (u32, u32) {
-        (self.byte_start, self.byte_end)
-    }
 }
 
 impl EventMapper {
-    /// Transform one checked symbolic mapper position and bounded source range
-    /// into a non-authoritative instance proof.
+    /// Transform one checked symbolic mapper at the formal `position` into
+    /// a non-authoritative instance proof.
     #[doc(hidden)]
-    pub fn selected(
-        position: u32,
-        seal: [u8; 16],
-        byte_start: u32,
-        byte_end: u32,
-    ) -> Result<Self, super::Error> {
-        if seal == [0; 16] || byte_start >= byte_end {
+    pub fn selected(position: u32, seal: [u8; 16]) -> Result<Self, super::Error> {
+        if seal == [0; 16] {
             return Err(super::Error::InstanceMismatch);
         }
         Ok(Self {
             position,
             seal,
-            byte_start,
-            byte_end,
             projection: None,
         })
     }
@@ -875,11 +843,6 @@ impl EventMapper {
     #[must_use]
     pub const fn seal(&self) -> &[u8; 16] {
         &self.seal
-    }
-
-    #[must_use]
-    pub const fn byte_range(&self) -> (u32, u32) {
-        (self.byte_start, self.byte_end)
     }
 
     pub(crate) const fn projection(&self) -> Option<&EventProjection> {

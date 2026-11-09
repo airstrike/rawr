@@ -119,6 +119,11 @@ impl<B> Miss<B> {
         Self { request, snapshot }
     }
 
+    /// The request the miss builds a new runner for.
+    pub const fn request(&self) -> &crate::bridge::GenerationRequestKey<B> {
+        &self.request
+    }
+
     /// Recover the exact owned inputs for one serialized cold generation.
     pub fn into_parts(
         self,
