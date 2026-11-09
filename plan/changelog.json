@@ -11,7 +11,9 @@
       {"text":"A program under `rawr run` now goes on from the call that admitted a save only once the run's events include `swapped`. A `wait` that the client cancelled no longer takes the events it found, so the next `wait` returns them.","issues":[1541]},
       {"text":"A `&self` method of a marked type that crosses by copy, such as inboard's `Id::as_str`, now gives native code a `&str` into its own value, as rustc does, instead of panicking. Methods of marked types that hold native parts also return their copied text fields in place.","issues":[1543]},
       {"text":"A marked type's `HashSet`, `HashMap`, `BTreeSet` or `BTreeMap` over values that cross, such as inboard's `read_ids: HashSet<Id>`, now crosses by copy as a `Vec` does. Marked code's `contains`, `insert` and `extend` run on the interpreter's own collection, hashed and compared as Rust does.","issues":[1544]},
-      {"text":"A `static` item inside a block or function body now builds, as in `fn place() -> &'static u32 { static PLACE: u32 = 9; &PLACE }`. It is the module's item, as a `static` written there is. A `static` that a macro call expands to is reported as not supported yet, not as a syntax error.","issues":[1546]}
+      {"text":"A `static` item inside a block or function body now builds, as in `fn place() -> &'static u32 { static PLACE: u32 = 9; &PLACE }`. It is the module's item, as a `static` written there is. A `static` that a macro call expands to is reported as not supported yet, not as a syntax error.","issues":[1546]},
+      {"text":"A marked fn taking an `impl` of a trait its own file declares now builds and runs when native code calls it. The trait and its impls are declared natively, and each value is given by the marked impl for its type. Before, the native build failed with E0405.","issues":[1551]},
+      {"text":"When the native build fails in the signature of a marked fn that native code can't call yet, the error now names the marked file's line and the word it is at.","issues":[1552]}
     ]
   },
   "releases": [

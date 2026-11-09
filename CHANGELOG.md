@@ -12,6 +12,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A `&self` method of a marked type that crosses by copy, such as inboard's `Id::as_str`, now gives native code a `&str` into its own value, as rustc does, instead of panicking. Methods of marked types that hold native parts also return their copied text fields in place. (#1543)
 - A marked type's `HashSet`, `HashMap`, `BTreeSet` or `BTreeMap` over values that cross, such as inboard's `read_ids: HashSet<Id>`, now crosses by copy as a `Vec` does. Marked code's `contains`, `insert` and `extend` run on the interpreter's own collection, hashed and compared as Rust does. (#1544)
 - A `static` item inside a block or function body now builds, as in `fn place() -> &'static u32 { static PLACE: u32 = 9; &PLACE }`. It is the module's item, as a `static` written there is. A `static` that a macro call expands to is reported as not supported yet, not as a syntax error. (#1546)
+- A marked fn taking an `impl` of a trait its own file declares now builds and runs when native code calls it. The trait and its impls are declared natively, and each value is given by the marked impl for its type. Before, the native build failed with E0405. (#1551)
+- When the native build fails in the signature of a marked fn that native code can't call yet, the error now names the marked file's line and the word it is at. (#1552)
 
 ## 0.3.174 (2026-11-09)
 
