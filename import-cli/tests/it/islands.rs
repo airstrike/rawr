@@ -1676,12 +1676,15 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
 
 /// A literal edited in a marked screen's private function swaps into the
 /// running program, its state kept, when the screen passes a native
-/// function by name further down, to a crate function and to a crate
-/// method, as inboard's `home.rs` passes `theme::text::base` to `.style`.
-/// The runner names that function, never where the program writes it, so
-/// the edit that moves it needs no new runner and doesn't restart the
-/// program. The first edit after start and the one after it both compile
-/// in the running program: neither prepares again (#1534).
+/// function by name further down, to a crate function, to a crate method
+/// and to the last step of a builder chain, as inboard's `home.rs` passes
+/// `theme::text::base` to `.style` and tooltip's chain passes
+/// `container::rounded_box`, and calls a crate function generic over a
+/// const length. The runner names that function, never where the program
+/// writes it, so the edit that moves it needs no new runner and doesn't
+/// restart the program. The first edit after start and the one after it
+/// both compile in the running program: neither prepares again (#1534,
+/// #1536, #1029).
 #[test]
 fn a_literal_edit_above_a_native_function_passed_by_name_swaps() {
     const LITERAL: &str = concat!(
