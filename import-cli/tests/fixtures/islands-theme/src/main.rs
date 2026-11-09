@@ -9,6 +9,7 @@ mod theme;
 mod widget;
 
 use theme::Theme;
+pub use widget::Element;
 
 fn main() {
     let theme = Theme::default();
@@ -57,6 +58,7 @@ fn main() {
     println!("{}", home::label().draw(&dark));
     println!("view {}", home::view(&theme));
     println!("view {}", home::view(&dark));
+    println!("{}", home::empty().draw(&theme));
     let badge = home::badge(&dark);
     println!("{}", badge.draw());
     println!(

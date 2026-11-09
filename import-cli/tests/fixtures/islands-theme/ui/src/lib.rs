@@ -75,6 +75,19 @@ pub fn base<B: Base>(base: &B) -> String {
     format!("base {}", base.name())
 }
 
+/// A widget of any kind, as `iced::Element<'a, Message, Theme, Renderer>`.
+pub struct Element<'a, Message, T> {
+    label: Label<'a, T>,
+    message: Option<Message>,
+}
+
+impl<M, T> Element<'_, M, T> {
+    pub fn draw(&self, theme: &T) -> String {
+        let pressable = if self.message.is_some() { "" } else { " idle" };
+        format!("{}{pressable}", self.label.draw(theme))
+    }
+}
+
 /// A widget that keeps the app's theme borrowed, as an iced `Element<'a>`
 /// keeps what its view borrows.
 pub struct Badge<'a, T> {
@@ -117,5 +130,12 @@ impl<'a, T> Label<'a, T> {
 
     pub fn draw(&self, theme: &T) -> String {
         format!("{} styled {}", self.content, (self.style)(theme))
+    }
+
+    pub fn boxed<M>(self) -> Element<'a, M, T> {
+        Element {
+            label: self,
+            message: None,
+        }
     }
 }

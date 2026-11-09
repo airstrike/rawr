@@ -802,7 +802,10 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// crate's generic `Label::<Theme>::draw` and `ui::base`, each given native
 /// code's own reference, which no clone or copy stands for, and a marked
 /// `badge<'a>` gives it to a native function whose `Badge<'a, Theme>`
-/// keeps it borrowed as long as native code holds the badge (#1484). `rawr
+/// keeps it borrowed as long as native code holds the badge. A native alias
+/// `Element<'a, Message>` over the marked `Theme`, re-exported at the crate
+/// root as inboard's is, names the marked type in a marked fn's output and
+/// in the native `void()` it returns (#1484). `rawr
 /// check` passes as `cargo check` does, and `rawr run` prints what `cargo
 /// run` prints.
 #[test]
@@ -835,7 +838,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         "{printed}"
     );
     assert!(
-        printed.contains("home badge on dark\nlent in place true\n"),
+        printed.contains("void styled 0 idle\nhome badge on dark\nlent in place true\n"),
         "{printed}"
     );
     // The one clone is `theme.clone()` in `main`.
