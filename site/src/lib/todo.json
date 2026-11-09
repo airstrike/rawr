@@ -179,7 +179,8 @@
         {"text":"Any file in a native crate's module tree can be marked with `// rawr`, not only one declared by the crate root or a marked module. Marked code there reaches its parent's private items, its siblings and its native children as rustc allows, and native code calls into it.","issues":[1467,1150]},
         {"text":"A marked type over a native one, as inboard's `enum Theme { Selected(themedef::Theme) }`, lends its native part to the interpreter where it is when native code borrows it, `&mut self` too, and moves it for a value: no clone, and a part that isn't `Clone` crosses.","issues":[1469]},
         {"text":"A marked type's `&self` method returning a reference into its native part, as `fn colors(&self) -> &Colors`, gives native code that reference where the part is, and marked code can call it as `self.colors().accent`. A `&str` result such as `iced::theme::Base::name` works too.","issues":[1468]},
-        {"text":"Slices and `Vec`s run `binary_search`, `binary_search_by`, `binary_search_by_key` and `partition_point` by std's own loop, so each `Ok` among equal elements and each `Err` insertion point is the one rustc's build gives.","issues":[1456]}
+        {"text":"Slices and `Vec`s run `binary_search`, `binary_search_by`, `binary_search_by_key` and `partition_point` by std's own loop, so each `Ok` among equal elements and each `Err` insertion point is the one rustc's build gives.","issues":[1456]},
+        {"text":"A marked module reads a native crate's `const` or `static` of `&str` as `&'static str` and passes it to a crate function that takes one, such as `Font::new(fonts::UI_FAMILY)`, keeping one string for the program's life. A constant of a slice of numbers reads as `&[T]`, as in Rust. An item a module can't give yet is now rustc's E0425 for the module.","issues":[1146]}
       ]
     },
     "releases": [
@@ -2933,7 +2934,7 @@
     {"issue":1143,"title":"A build script outside the package root that declares modules resolves them beside rawr's copy","state":"closed","category":"Divergences from rustc"},
     {"issue":1144,"title":"The generated crate for marked modules drops the package's [features]","state":"closed","category":"Divergences from rustc"},
     {"issue":1145,"title":"A build script not named build.rs panics rawr-import with a lost build input","state":"closed","category":"Health","release":"0.3.171"},
-    {"issue":1146,"title":"A dependency whose only public item is a `pub const` &str can't be named from a marked main","state":"open","category":"Divergences from rustc"},
+    {"issue":1146,"title":"A dependency whose only public item is a `pub const` &str can't be named from a marked main","state":"closed","category":"Divergences from rustc"},
     {"issue":1147,"title":"A build script not named build.rs loses its dep-info when its run is copied into rawr's store","state":"closed","category":"Health"},
     {"issue":1148,"title":"rawr run and rawr check take no --features, --no-default-features or --all-features","state":"open","category":"Divergences from rustc"},
     {"issue":1149,"title":"Remove the crate-name special cases left in the checker and generator","state":"closed","category":"Health"},
@@ -3263,7 +3264,9 @@
     {"issue":1473,"title":"A marked `&'a self` view returning a native `Element<'a, M>` with several lent native borrows is…","state":"open","category":"No glue (D593)"},
     {"issue":1474,"title":"A marked type's `&self -> &str` into a native part's String comes back as interned program text…","state":"open","category":"No glue (D593)"},
     {"issue":1475,"title":"A marked type holding native parts crosses inside Vec, Option or a tuple by cloning its parts…","state":"open","category":"No glue (D593)"},
-    {"issue":1476,"title":"A marked fn returning a reference into a `&T` parameter's native part …","state":"open","category":"No glue (D593)"}
+    {"issue":1476,"title":"A marked fn returning a reference into a `&T` parameter's native part …","state":"open","category":"No glue (D593)"},
+    {"issue":1477,"title":"A native `&'static [T]` const of numbers is copied at each read and isn't passed through to a…","state":"open","category":"Divergences from rustc"},
+    {"issue":1478,"title":"A native const of nested references, as `&[&str]` or `&(u8, u8)`, can't be used from marked code","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
