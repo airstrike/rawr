@@ -151,6 +151,15 @@ impl Graph {
                 );
             }
         }
+        // Each type of the crate's own an instance native code calls a
+        // marked generic at names, which the resolver reads (D869).
+        if let Some(app) = app {
+            for instance in self.native_instances() {
+                for ty in &instance.types {
+                    paths.extend(crate_paths(ty).map(|path| format!("{app}::{path}")));
+                }
+            }
+        }
         paths.sort_unstable();
         paths.dedup();
         let qualifies = |short: &str, long: &str| {
@@ -183,6 +192,17 @@ impl Graph {
         names.dedup();
         names
     }
+}
+
+/// The paths below `crate::` that `ty`, a type rustc wrote from the
+/// crate's root, names: `grid::Message` of `Option<crate::grid::Message>`.
+fn crate_paths(ty: &str) -> impl Iterator<Item = String> + '_ {
+    ty.split(|character: char| {
+        !(character.is_alphanumeric() || character == '_' || character == ':')
+    })
+    .filter_map(|path| path.strip_prefix("crate::"))
+    .filter(|path| !path.is_empty())
+    .map(str::to_owned)
 }
 
 /// A script path (`crate::model::Thing`, `super::model::Thing`, or
@@ -305,6 +325,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
                 shape: super::island::Shape::default(),
                 refused: Vec::new(),
                 objects: Vec::new(),
+                generic: std::collections::BTreeSet::new(),
             });
         if !shadow.refused.is_empty() {
             return Err(rawr_import::Error::Request {
@@ -322,7 +343,13 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
             ),
             (
                 copies.join(relative),
-                native_root(root, package, !entry.is_library(), &shadow.objects),
+                native_root(
+                    root,
+                    package,
+                    !entry.is_library(),
+                    &shadow.objects,
+                    &graph.instance_entries(&shadow.generic),
+                ),
             ),
         ];
         files.extend(
@@ -403,7 +430,7 @@ fn bin_crate(
         (directory.join("Cargo.toml"), bin_manifest(cargo, library)),
         (
             copies.join("main.rs"),
-            native_root(bin.root(), package, true, &[]),
+            native_root(bin.root(), package, true, &[], &[]),
         ),
     ];
     // The binary's modules are beside its root, wherever Cargo finds it.
@@ -600,11 +627,15 @@ fn native_root(
     package: &Path,
     main: bool,
     objects: &[(String, String)],
+    instances: &[super::instances::Entry],
 ) -> String {
     let text = super::polyglot::widened(root.text(), false, root.path(), package);
     let public = super::polyglot::root_items_public(&text);
     let public = public.replace("#![forbid(unsafe_code)]", "#![deny(unsafe_code)]");
-    format!("{public}\n{}", super::island::support(main, objects))
+    format!(
+        "{public}\n{}",
+        super::island::support(main, objects, instances)
+    )
 }
 
 pub(super) fn app_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path) -> String {

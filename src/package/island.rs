@@ -146,6 +146,10 @@ pub(crate) struct Shadow {
     /// register.
     #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
     pub(crate) objects: Vec<(String, String)>,
+    /// The path of each generic function native code calls through an
+    /// instance entry (D869), for [`support`]'s table.
+    #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+    pub(crate) generic: BTreeSet<String>,
 }
 
 /// What native code sees of a crate's marked modules: each item's path
@@ -440,6 +444,8 @@ pub(crate) fn shadow<'a>(
         refused,
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
         objects,
+        #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+        generic: generator.generic.take(),
     }
 }
 
@@ -468,6 +474,9 @@ struct Generator<'a> {
     /// borrow of one lends the interpreter its parts where they are, and a
     /// value moves them (#1469).
     holding: BTreeSet<String>,
+    /// The path of each generic function a trampoline stands for, which has
+    /// an instance entry ([`generic_trampoline`], D869).
+    generic: std::cell::RefCell<BTreeSet<String>>,
 }
 
 /// A std trait a stand-in implements for the marked type it holds, as a
@@ -623,6 +632,7 @@ impl<'a> Generator<'a> {
             shown,
             implemented,
             holding: BTreeSet::new(),
+            generic: std::cell::RefCell::default(),
         };
         generator.crossing = generator
             .types
@@ -2001,9 +2011,33 @@ impl<'a> Generator<'a> {
                     && slice(file.text, path.span).trim_start().starts_with("impl"))
             })
         };
-        if !function.generics.iter().all(lifted) {
-            reasons.push("generic functions can't cross yet".to_owned());
+        // A function generic over named types has one trampoline for them
+        // all, which hands its call to the instance native code's types
+        // select (D869); an `impl Trait` beside them has no name an
+        // instance could be keyed by.
+        let named = function
+            .generics
+            .iter()
+            .filter(|generic| !lifted(generic))
+            .map(|generic| generic.name.text.as_str())
+            .collect::<Vec<_>>();
+        let generic = !named.is_empty();
+        if generic && named.len() != function.generics.len() {
+            reasons.push(
+                "a generic function with an `impl Trait` parameter can't cross yet".to_owned(),
+            );
+        } else if generic
+            && (!matches!(owner, Owner::None) || object || function.receiver.is_some())
+        {
+            reasons.push("a generic method can't cross yet".to_owned());
         }
+        let tuple = format!(
+            "({})",
+            named
+                .iter()
+                .map(|name| format!("{name},"))
+                .collect::<String>()
+        );
         if matches!(owner, Owner::Generic) {
             reasons
                 .push("a function of an impl for every type of a bound can't cross yet".to_owned());
@@ -2156,10 +2190,19 @@ impl<'a> Generator<'a> {
             text.push_str("    self.0.release();\n");
         }
         let owned = !matches!(owner, Owner::None) || object;
-        let _ = writeln!(
-            text,
-            "    let mut __call = {island}::Call::new({path:?}, {owned});"
-        );
+        if generic {
+            // The instance's own function, keyed by its types' names.
+            let _ = writeln!(
+                text,
+                "    let mut __call = {island}::Call::new({island}::keyed({path:?}, \
+                 ::std::any::type_name::<{tuple}>()), {owned});"
+            );
+        } else {
+            let _ = writeln!(
+                text,
+                "    let mut __call = {island}::Call::new({path:?}, {owned});"
+            );
+        }
         if matches!(kept, Some(Borrowed::Pinned)) {
             text.push_str("    __call.pinned();\n");
         }
@@ -2428,6 +2471,12 @@ impl<'a> Generator<'a> {
             }
         }
         text.push_str("    __value\n}\n");
+        if generic {
+            self.generic.borrow_mut().insert(path.to_owned());
+            return Ok(generic_trampoline(
+                file, function, path, &signature, &text, &tuple, &named,
+            ));
+        }
         Ok(text)
     }
 
@@ -3386,6 +3435,144 @@ fn without_rawr_attributes(text: &str) -> String {
 /// The statements that give the parameter `name` to the call by value,
 /// as `pass`, a by-value pass, says: `call` is the call as `give!` takes
 /// it, `__call` or, through a `&mut`, `*__call`.
+/// The trampoline of a function generic over the types `named`, from
+/// `concrete`, the trampoline its body would be at concrete types (D869):
+/// a public one with the signature as written, which adds no bound and
+/// hands its arguments and result place to the instance its types' names
+/// select, and that instance's entry, `concrete`'s body with each type
+/// `'static`, which only the support table instantiates, at the types
+/// native code calls the function with.
+fn generic_trampoline(
+    file: &Source<'_>,
+    function: &item::Function,
+    path: &str,
+    signature: &str,
+    concrete: &str,
+    tuple: &str,
+    named: &[&str],
+) -> String {
+    let island = format!("crate::{MODULE}");
+    let output = function
+        .output
+        .as_ref()
+        .map_or("()", |ty| slice(file.text, ty.span()));
+    let names = (0..function.parameters.len())
+        .map(|index| format!("__a{index},"))
+        .collect::<String>();
+    let types = function
+        .parameters
+        .iter()
+        .map(|parameter| format!("{},", slice(file.text, parameter.ty.span())))
+        .collect::<String>();
+    let mut text = format!(
+        "{signature} {{\n    \
+         let mut __arguments = ::std::mem::ManuallyDrop::new(({names}));\n    \
+         let mut __value = ::std::mem::MaybeUninit::<{output}>::uninit();\n    \
+         // SAFETY: the instance reads the arguments once, as the values they\n    \
+         // are, and writes the result in its place.\n    \
+         #[allow(unsafe_code)]\n    \
+         unsafe {{\n        \
+         {island}::instance(\n            {path:?},\n            \
+         ::std::any::type_name::<{tuple}>(),\n            \
+         ::std::ptr::from_mut(&mut *__arguments).cast(),\n            \
+         __value.as_mut_ptr().cast(),\n        );\n        \
+         __value.assume_init()\n    }}\n}}\n"
+    );
+    let header = instance_header(function, file, signature, named);
+    let body = concrete[signature.len()..].trim();
+    let _ = write!(
+        text,
+        "#[doc(hidden)]\n#[allow(unsafe_code, non_snake_case)]\n{header} {{\n    \
+         // SAFETY: the trampoline moved its arguments into the tuple this reads\n    \
+         // once, and keeps them from dropping.\n    \
+         let ({names}): ({types}) = unsafe {{ ::std::ptr::read(__arguments.cast::<({types})>()) }};\n    \
+         let __result: {output} = {body};\n    \
+         // SAFETY: `__out` is the trampoline's place for a value of this type.\n    \
+         unsafe {{ ::std::ptr::write(__out.cast::<{output}>(), __result) }};\n}}\n"
+    );
+    text
+}
+
+/// The header of a generic function's instance entry: its generics as
+/// written, each named type `'static`, taking the trampoline's argument
+/// tuple and result place.
+fn instance_header(
+    function: &item::Function,
+    file: &Source<'_>,
+    signature: &str,
+    named: &[&str],
+) -> String {
+    let name = &function.name.text;
+    let after = slice(
+        file.text,
+        Span::new(function.name.span.end(), function.body_span.start()),
+    );
+    let generics = generics_written(after);
+    // The `where` clause after the signature's parameters, as written.
+    let written = where_clause(signature).map(|clause| clause.trim_end_matches(',').to_owned());
+    let mut predicates = named
+        .iter()
+        .map(|name| format!("{name}: 'static"))
+        .collect::<Vec<_>>();
+    predicates.extend(written);
+    format!(
+        "pub(crate) unsafe fn {INSTANCE_PREFIX}{name}{generics}(__arguments: *mut (), __out: *mut ())\nwhere\n    {},",
+        predicates.join(",\n    ")
+    )
+}
+
+/// The generic parameter list `after`, the text after a function's name,
+/// starts with, as written: empty when it has none.
+fn generics_written(after: &str) -> &str {
+    let trimmed = after.trim_start();
+    if !trimmed.starts_with('<') {
+        return "";
+    }
+    let mut depth = 0_usize;
+    let mut previous = ' ';
+    for (index, character) in trimmed.char_indices() {
+        match character {
+            '<' => depth += 1,
+            // `->` of a bound's `Fn(..) -> T` closes nothing.
+            '>' if previous != '-' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &trimmed[..=index];
+                }
+            }
+            _ => {}
+        }
+        previous = character;
+    }
+    ""
+}
+
+/// The predicates of the `where` clause `signature` ends with, outside any
+/// brackets.
+fn where_clause(signature: &str) -> Option<&str> {
+    let mut depth = 0_i32;
+    let bytes = signature.as_bytes();
+    for (index, character) in signature.char_indices() {
+        match character {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            'w' if depth == 0
+                && signature[index..].starts_with("where")
+                && index > 0
+                && bytes[index - 1].is_ascii_whitespace()
+                && signature[index + 5..].starts_with(char::is_whitespace) =>
+            {
+                return Some(signature[index + 5..].trim());
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The prefix of a generic function's instance entry, beside it (D869).
+pub(crate) const INSTANCE_PREFIX: &str = "__rawr_instance_";
+
 fn give(pass: &Pass, name: &str, call: &str, island: &str, text: &mut String) {
     match pass {
         Pass::Value => {
@@ -3762,7 +3949,11 @@ fn identifiers(text: &str) -> BTreeSet<&str> {
 /// `fn main` to start; `objects` are the crate's stand-ins' makers, each by
 /// its type's path ([`Shadow::objects`]).
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
-pub(crate) fn support(main: bool, objects: &[(String, String)]) -> String {
+pub(crate) fn support(
+    main: bool,
+    objects: &[(String, String)],
+    instances: &[crate::package::instances::Entry],
+) -> String {
     let entry = if main {
         "Exit::code(super::main())"
     } else {
@@ -3773,9 +3964,38 @@ pub(crate) fn support(main: bool, objects: &[(String, String)]) -> String {
         .map(|(owner, maker)| format!("({owner:?}, {maker} as Maker)"))
         .collect::<Vec<_>>()
         .join(", ");
+    // Each instance native code calls a generic function at, by the
+    // function's path and the name of the tuple of its types (D869).
+    let instances = instances
+        .iter()
+        .map(|instance| {
+            let (module, name) = instance
+                .path
+                .rsplit_once("::")
+                .map_or(("", instance.path.as_str()), |(module, name)| {
+                    (module, name)
+                });
+            let module = if module.is_empty() {
+                "crate".to_owned()
+            } else {
+                format!("crate::{module}")
+            };
+            let types = instance.types.join(", ");
+            format!(
+                "({:?}, ::std::any::type_name::<({types},)> as fn() -> &'static str, \
+                 {module}::{INSTANCE_PREFIX}{name}::<{types}> as Instance)",
+                instance.path
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n        ");
     SUPPORT
         .replace("ENTRY", entry)
         .replace("__MAKER_LIST__", &format!("[{makers}]"))
+        .replace(
+            "__INSTANCE_LIST__",
+            &format!("[\n        {instances}\n    ]"),
+        )
 }
 
 /// The wire format matches [`crate::island`]'s.
@@ -3822,6 +4042,57 @@ pub mod __rawr_island {
 
     /// Each stand-in's maker, by its type's path from the crate's root.
     static MAKERS: &[(&str, Maker)] = &__MAKER_LIST__;
+
+    /// A generic function's instance entry: it reads the call's arguments
+    /// as the tuple of the types they are and writes the result in place.
+    pub type Instance = unsafe fn(*mut (), *mut ());
+
+    /// Each instance native code calls a generic function at, as the
+    /// record of the crate's last check found them (D869): the function's
+    /// path, the name of the tuple of its types and its entry there.
+    static INSTANCES: &[(&str, fn() -> &'static str, Instance)] = &__INSTANCE_LIST__;
+
+    /// Run the instance of the generic function at `path` whose types'
+    /// tuple is named `name`, with the arguments at `arguments` and the
+    /// result's place at `out`.
+    ///
+    /// # Safety
+    ///
+    /// `arguments` holds the function's arguments, as a tuple in order,
+    /// which the instance moves out; `out` is a place for its result.
+    pub unsafe fn instance(path: &'static str, name: &'static str, arguments: *mut (), out: *mut ()) {
+        for (instance, named, entry) in INSTANCES {
+            if *instance == path && named() == name {
+                // SAFETY: as the caller's.
+                return unsafe { entry(arguments, out) };
+            }
+        }
+        ::std::panic!(
+            "rawr: native code called `{path}` at `{name}`, which the last check didn't see; \
+             this is a rawr bug"
+        )
+    }
+
+    /// The path a generic function's instance is found by: its own, with
+    /// the hash of its types' tuple's name, as rawr names the instance
+    /// (`package::instances::key`), interned for the program's life.
+    pub fn keyed(path: &'static str, name: &'static str) -> &'static str {
+        static KEYS: ::std::sync::Mutex<::std::vec::Vec<(&'static str, &'static str, &'static str)>> =
+            ::std::sync::Mutex::new(::std::vec::Vec::new());
+        let mut keys = KEYS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
+        if let Some((_, _, key)) = keys.iter().find(|(known, named, _)| *known == path && *named == name) {
+            return key;
+        }
+        // FNV-1a, as `package::instances::key` hashes it.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in name.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        let key: &'static str = ::std::boxed::Box::leak(::std::format!("{path}#{hash:016x}").into_boxed_str());
+        keys.push((path, name, key));
+        key
+    }
 
     /// Register [`MAKERS`] once, before the first call into marked code,
     /// which is where a program value becomes a trait object.
@@ -6055,11 +6326,19 @@ mod tests {
              ::std::string::String::from(::std::convert::AsRef::<str>::as_ref(&__value)) };\n    \
              let mut __call = crate::__rawr_island::Call::new(\"physics::mark\", false);\n",
             "can't call `physics::each` yet: parameter `visit`: `impl Fn(i64)` can't cross yet",
-            "can't call `physics::generic` yet: generic functions can't cross yet",
+            // A named generic hands its call to the instance its types'
+            // names select (D869).
+            "        crate::__rawr_island::instance(\n            \"physics::generic\",\n            \
+             ::std::any::type_name::<(T,)>(),\n",
+            "pub(crate) unsafe fn __rawr_instance_generic<T: Into<String>>\
+             (__arguments: *mut (), __out: *mut ())\nwhere\n    T: 'static, {\n",
+            "Call::new(crate::__rawr_island::keyed(\"physics::generic\", \
+             ::std::any::type_name::<(T,)>()), false);",
         ] {
             assert!(text.contains(expected), "{expected}\n{text}");
         }
-        assert!(!text.contains("give!(__call, __a0)"), "{text}");
+        let concrete = &text[..text.find("pub fn generic").unwrap_or(text.len())];
+        assert!(!concrete.contains("give!(__call, __a0)"), "{text}");
     }
 
     /// A marked trait is declared for native code with its impls, as

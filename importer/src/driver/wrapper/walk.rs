@@ -232,7 +232,9 @@ impl<'tcx> Walk<'tcx, '_> {
 
     /// A call or reference of `def_id` at concrete `args`.
     fn reach(&mut self, def_id: DefId, args: GenericArgsRef<'tcx>) {
-        if args.has_param() {
+        // A path type check left without its arguments, as a trait's
+        // function named as a value, names no instance.
+        if args.has_param() || args.len() != self.tcx.generics_of(def_id).count() {
             return;
         }
         let typing_env = ty::TypingEnv::fully_monomorphized();

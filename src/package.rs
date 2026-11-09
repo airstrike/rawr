@@ -7,6 +7,8 @@ mod error;
 pub(crate) mod graph;
 #[cfg(feature = "rust-import")]
 pub mod import;
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+pub mod instances;
 pub(crate) mod island;
 mod manifest;
 pub(crate) mod polyglot;

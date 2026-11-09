@@ -258,6 +258,28 @@ impl Prepared {
         }
     }
 
+    /// The instances native code calls marked generics at, as this run's
+    /// check recorded them beside each selected crate's artifact (D866):
+    /// only a generated crate's check records any. `None` when shared
+    /// bindings replayed and no check ran.
+    ///
+    /// # Errors
+    ///
+    /// A record can't be read.
+    pub fn recorded_instances(&self) -> std::io::Result<Option<crate::record::Record>> {
+        let resolution::owner::Resolved::Owner(owner) = &self.owner else {
+            return Ok(None);
+        };
+        let basis = crate::expand::Basis::of(owner.expansion());
+        let mut instances = Vec::new();
+        for (_, artifact, _) in basis.externs.iter() {
+            if let Some(record) = crate::record::Record::read(Path::new(&**artifact))? {
+                instances.extend_from_slice(record.instances());
+            }
+        }
+        Ok(Some(crate::record::Record::new(instances)))
+    }
+
     /// Whether every selected crate replayed shared bindings, so no nightly
     /// build or probe ran.
     pub fn is_shared(&self) -> bool {

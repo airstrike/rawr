@@ -1678,6 +1678,14 @@ impl Calls {
             })
             .collect::<Vec<_>>();
         let lent = lent.as_slice();
+        // An instance native code calls a generic function at is keyed by
+        // its types (D869); a generic rawr compiles once, erased, is the
+        // function itself.
+        let path = if self.items.contains_key(&(owned, path.to_owned())) {
+            path
+        } else {
+            path.split_once('#').map_or(path, |(function, _)| function)
+        };
         let item = self.items.get(&(owned, path.to_owned())).ok_or_else(|| {
             format!("rawr: the running program has no function `{path}`; restart `rawr run`")
         })?;

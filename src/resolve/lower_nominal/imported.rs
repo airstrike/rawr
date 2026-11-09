@@ -1215,6 +1215,35 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
             }
         }
         let mut added = Vec::<(crate::item::Key, Vec<ImmutableString>, Vec<Ty>)>::new();
+        // Each instance native code calls a template at, named by the key
+        // its trampoline calls it by, ahead of marked callers', which then
+        // share it (D869).
+        let mut keyed =
+            BTreeMap::<(crate::item::Key, Vec<ImmutableString>), ImmutableString>::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        for native in &program.instances.natives {
+            let Some(instances) = program.instances.templates.get(&native.template) else {
+                continue;
+            };
+            let types = native
+                .types
+                .iter()
+                .map(Ty::from_resolved)
+                .collect::<Vec<_>>();
+            let Some(names) = instance_names(&types, &models) else {
+                continue;
+            };
+            let known = instances
+                .iter()
+                .any(|(written, _)| written.as_ref() == names.as_slice())
+                || added
+                    .iter()
+                    .any(|(key, written, _)| *key == native.template && *written == names);
+            if !known {
+                keyed.insert((native.template.clone(), names.clone()), native.key.clone());
+                added.push((native.template.clone(), names, types));
+            }
+        }
         // Two calls a macro gives one span may take two instances: neither
         // is known by its span.
         let mut calls = BTreeMap::<(crate::item::Key, Span), Option<Box<[ImmutableString]>>>::new();
@@ -1378,8 +1407,10 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .templates
                 .get_mut(&template)
                 .expect("each template is listed");
-            let name: ImmutableString =
-                format!("{}#{}", definition.name.text, instances.len() + 1).into();
+            let name: ImmutableString = match keyed.get(&(template.clone(), names.clone())) {
+                Some(key) => format!("{}#{key}", definition.name.text).into(),
+                None => format!("{}#{}", definition.name.text, instances.len() + 1).into(),
+            };
             let key = crate::item::Key::new(
                 template.package().into(),
                 template.modules().to_vec().into_boxed_slice(),

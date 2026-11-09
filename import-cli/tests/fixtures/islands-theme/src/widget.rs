@@ -4,6 +4,8 @@
 //! crate's generic builders over that theme.
 use crate::Theme;
 
+pub mod sidebar;
+
 pub use ui::vertical_space;
 
 pub type Renderer = ui::Renderer;
