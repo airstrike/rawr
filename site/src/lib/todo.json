@@ -19,7 +19,8 @@
         {"text":"A marked view that native code lends a marked value to, as inboard's `home::view` gets `theme: &Theme`, can pass it on by `&Theme` to native functions, crate generics and `'a` parameters that its result keeps. Native code gets its own reference back, where it used to panic. A native type alias over a marked type, such as inboard's `Element<'a, Message>`, names the marked type wherever marked code uses it. That removes a false E0308 on `return crate::widget::void();`.","issues":[1484]},
         {"text":"A universe in a browser, such as elevato.rs's page, prepares its bindings about eight times faster: 10.8 s down to about 1.4 s, measured natively. Installing a crate's items now sorts once, instead of shifting the registry for each item. Each item and type that re-exports reach at many paths is stored and converted once. The embedded bindings plan shrinks from 97.6 MB to about 26 MB.","issues":[1512],"refs":[1360,1362,435,1384]},
         {"text":"A crate's `&mut self` method now works on a temporary, as in inboard's `rand::rng().random_range(0..100)`. The call's value is borrowed where it is made and lives to the end of its statement, as rustc does. This replaces a RAWR-RESOLVE-HOST-OPERATION \"not supported yet\" error.","issues":[1514],"refs":[143,870]},
-        {"text":"A crate's `&self` or `&mut self` method now reaches an element of a slice that a native method lends where it is. Examples are `entry.is_shared()` in `for entry in registry.entries()`, and on a `Vec<&Entry>` collected from it. It used to panic at run time with \"a value reached an adapter as a type its signature doesn't take\".","issues":[1515]}
+        {"text":"A crate's `&self` or `&mut self` method now reaches an element of a slice that a native method lends where it is. Examples are `entry.is_shared()` in `for entry in registry.entries()`, and on a `Vec<&Entry>` collected from it. It used to panic at run time with \"a value reached an adapter as a type its signature doesn't take\".","issues":[1515]},
+        {"text":"A browser universe prepares about four times faster: elevato's `prepare()` goes from 1.25 s to about 0.29 s, measured natively. A whole-crate or whole-module re-export is now one alias that the runner's registry follows, not a copy of its entries. The facade plan also writes identities as hex. elevato's plan drops from 25.8 MB to 14.8 MB, and its wasm from 51.9 MB to 41.0 MB.","issues":[1516],"refs":[1360,1384,435]}
       ]
     },
     "releases": [
@@ -3333,7 +3334,10 @@
     {"issue":1512,"title":"rawr::universe::browser::prepare() takes about 11 s per instance on the page's main thread","state":"open","category":"Platforms"},
     {"issue":1513,"title":"A runner installs each re-export path of a crate's item as its own registry entry, so prepare stays above a second","state":"open","category":"Platforms"},
     {"issue":1514,"title":"A crate's &mut self method on a temporary is refused as not a `let mut` binding","state":"open","category":"No glue (D593)"},
-    {"issue":1515,"title":"A method on an element of a slice a native method returns panics as a rawr bug","state":"open","category":"No glue (D593)"}
+    {"issue":1515,"title":"A method on an element of a slice a native method returns panics as a rawr bug","state":"open","category":"No glue (D593)"},
+    {"issue":1516,"title":"A runner installs each re-export path of a crate's subtree as its own entries","state":"open","category":"Platforms"},
+    {"issue":1517,"title":"A facade whose crate depends on another holds that crate's surface again under its hidden segment","state":"open","category":"Platforms"},
+    {"issue":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -4440,7 +4444,7 @@
           "start": 58,
           "size": 6,
           "state": "now",
-          "note": "The universe's generated bindings, built for wasm32 and loaded by rawr-web, give the playground, the landing page and an embedding site iced, ratatui and any declared crate. elevato.rs's universe checks and runs in Chrome (0.3.172). prepare went from 11 s to about 1.4 s (#1512). Next: whole re-exports as one alias, to cut prepare below a frame and the wasm below 25 MiB (#1513), then in-place reload (#1455)",
+          "note": "The universe's generated bindings, built for wasm32 and loaded by rawr-web, give the playground, the landing page and an embedding site iced, ratatui and any declared crate. elevato.rs's universe checks and runs in Chrome (0.3.172). Its prepare went from 11 s to about 0.3 s (#1512, #1516), and its wasm is 41 MB raw and 5.5 MB as brotli. Next: per-start prepare work (#1518), duplicated facades (#1517), then in-place reload (#1455)",
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"},
             {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open"},
@@ -4454,7 +4458,10 @@
             {"number":1507,"title":"A block missing after a condition surfaced as a self error in a later method","state":"open"},
             {"number":1508,"title":"Body syntax errors are found only when the body is lowered, after item resolution","state":"open"},
             {"number":1512,"title":"rawr::universe::browser::prepare() takes about 11 s per instance on the page's main thread","state":"open"},
-            {"number":1513,"title":"A runner installs each re-export path of a crate's item as its own registry entry, so prepare stays above a second","state":"open"}
+            {"number":1513,"title":"A runner installs each re-export path of a crate's item as its own registry entry, so prepare stays above a second","state":"open"},
+            {"number":1516,"title":"A runner installs each re-export path of a crate's subtree as its own entries","state":"open"},
+            {"number":1517,"title":"A facade whose crate depends on another holds that crate's surface again under its hidden segment","state":"open"},
+            {"number":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"open"}
           ]
         },
         {
