@@ -181,6 +181,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A save to a program with a native `main` and an idle window loop now shows at once on macOS. rawr asks the program's windows to redraw when it queues a save, so the next frame takes it with no input. Before, the save waited for the next pointer or key event. (#1479)
 - Native code can hold the `Element<'a, Message>` that a marked `view<'a>(&'a self, ..)` or `view(&State) -> Element<'_, Message>` returns while it borrows the state. The element's borrowed text lives as long as Rust says it does, and `.map(Message::Wizard)` on such an element works inside the view. (#1473)
 - A project that links a native library rawr's runtime also links, such as psm through stacker, now reuses the runtime rawr warmed when both take it from one package at Cargo-compatible versions. Its first run after an install no longer compiles rawr in the project: inboard's 11-minute first start goes away. (#1480)
+- A marked function can take a native value of borrows by value, as inboard's `catalog: View<'_>`, for the call alone, and a marked method on it works too. (#1225)
+- Inside a marked `view<'a>`, a crate method called on a native `&'a T` lent to the view, such as `inbox.view()`, returns an element that lives as long as the view's own. A crate fn with an `Option<&'a str>` parameter that its output keeps, such as inboard's `sidebar::nav_section(None, ..)`, now imports and runs. (#1496; part of #1413)
 
 ## 0.3.171 (2026-11-07)
 
