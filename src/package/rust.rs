@@ -337,10 +337,17 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
             continue;
         };
         let declared_by_rawr = !declared_by_rust(entry, module.modules());
-        files.push((
-            copies.join(relative),
-            super::polyglot::widened(module.text(), declared_by_rawr, module.path(), package),
-        ));
+        let widened =
+            super::polyglot::widened(module.text(), declared_by_rawr, module.path(), package);
+        // A native module on the way to a marked one is the marked one's
+        // ancestor, whose every item rustc lets it name, as the root's
+        // (#1467).
+        let copy = if entry.is_bridge(module.modules()) {
+            super::polyglot::root_items_public(&widened)
+        } else {
+            widened
+        };
+        files.push((copies.join(relative), copy));
     }
     if !entry.is_script() {
         files.extend(build_script(cargo, &directory, entry.features())?);
@@ -725,13 +732,17 @@ fn dependency_lines(dependencies: &[super::manifest::rust::Dependency]) -> Strin
 }
 
 /// A `.rs` module some other `.rs` module declares: a proper prefix of its
-/// path is itself a `.rs` module.
+/// path is itself a `.rs` module, and not one on the way to a marked module
+/// (#1467), whose children's `pub(super)` items marked code sees as rustc
+/// lets the marked module's ancestors' descendants see them.
 fn declared_by_rust(entry: &super::graph::Package, path: &[crate::ImmutableString]) -> bool {
     (1..path.len()).any(|length| {
-        entry
-            .rust_modules()
-            .iter()
-            .any(|other| other.modules() == &path[..length])
+        let parent = &path[..length];
+        !entry.is_bridge(parent)
+            && entry
+                .rust_modules()
+                .iter()
+                .any(|other| other.modules() == parent)
     })
 }
 

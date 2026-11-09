@@ -416,6 +416,93 @@ fn a_marked_module_names_the_items_of_a_native_module() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// Any file is markable (#1467): a marked module two native modules below
+/// the crate root, as `workspace::screen::home`, names the root's private
+/// `Message`, its parent's private constant and its private sibling's
+/// function and `pub(super)` constant through `super::`, and its native
+/// child's function through `self::`. Native code calls its functions from
+/// its native sibling, its native grandparent, its native child and the
+/// root, and builds its `State` by a struct literal. `cargo run`, `rawr
+/// check` and `rawr run` agree, and a body edit swaps at its next call.
+#[test]
+fn a_marked_module_below_native_modules_runs_and_swaps_a_body_edit() {
+    const NESTED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-nested");
+    const PRINTED: [&str; 7] = [
+        "home 2 20",
+        "Opened(20)",
+        "Closed",
+        "about home 2 20",
+        "summary home 3 30",
+        "wizard home 2 20",
+        "7",
+    ];
+    let root = crate::support::scratch().join("islands-nested");
+    let _ = fs::remove_file(root.join("stop"));
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(NESTED), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("ISLANDS_STOP")
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        format!("{}\n", PRINTED.join("\n"))
+    );
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    for line in PRINTED {
+        let seen = run.until(|_| true);
+        assert_eq!(seen, line, "{}", run.seen.join("\n"));
+    }
+    let tick = |line: &str| -> Option<(usize, usize)> {
+        let (tick, value) = line.strip_prefix("tick ")?.split_once(" value ")?;
+        Some((tick.parse().ok()?, value.parse().ok()?))
+    };
+    let first = run.until(|line| tick(line).is_some_and(|(tick, _)| tick >= 3));
+    assert_eq!(tick(&first), Some((3, 3)));
+    edit(
+        &root.join("src/workspace/screen/home.rs"),
+        "const FACTOR: usize = 1;",
+        "const FACTOR: usize = 100;",
+    );
+    let swapped = run.until(|line| tick(line).is_some_and(|(tick, value)| value == tick * 100));
+    assert!(
+        tick(&swapped).is_some_and(|(tick, _)| tick > 3),
+        "{}",
+        run.seen.join("\n")
+    );
+    assert!(
+        !run.seen.iter().any(|line| line.contains("restarting")),
+        "{}",
+        run.seen.join("\n")
+    );
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+}
+
 /// A native root's `mod` declarations are read under the `cfg`s Cargo
 /// builds the package with, from `rustc --print cfg` (#1337): the marked
 /// module under this host's `target_os` loads, the one under its `not`,
