@@ -170,7 +170,8 @@
         {"text":"`?` converts a crate's error through the crate's `impl From<Error> for io::Error`, and a crate error with a written or derived (thiserror) `std::error::Error` impl boxes as a `Box<dyn Error>`.","issues":[1451]},
         {"text":"When one definition is read under two names of the same toolchain, as `nightly` and the dated nightly it resolves to, rawr treats it as one definition instead of failing with `conflicting-definition`; that error also names the item and both sources.","issues":[1461]},
         {"text":"A crate whose `lazy_static!` declares a hidden struct beside a static of the same name, as `colored`'s `SHOULD_COLORIZE` does, imports instead of failing as declared twice.","issues":[1462]},
-        {"text":"A crate that re-exports `core` under another name, as bytemuck's `pub use ::core as __core;`, registers its bindings instead of failing at a module with no parent.","issues":[1463]}
+        {"text":"A crate that re-exports `core` under another name, as bytemuck's `pub use ::core as __core;`, registers its bindings instead of failing at a module with no parent.","issues":[1463]},
+        {"text":"A marked function that native code calls on another thread, as an iced app's `Task::perform` output closure runs on a tokio worker, makes and uses crate values as it does on the main thread, instead of failing with `Stale`.","issues":[1464]}
       ]
     },
     "releases": [
@@ -3241,7 +3242,9 @@
     {"issue":1460,"title":"The ?play image with #1395's runner fails a docs snippet: missing runtime binding for…","state":"open","category":"Platforms"},
     {"issue":1461,"title":"One definition extracted under two names of one toolchain (`nightly`, the dated nightly)…","state":"closed","category":"Importer"},
     {"issue":1462,"title":"A crate's value and type of one name (lazy_static's hidden struct beside its static) are refused…","state":"closed","category":"Importer"},
-    {"issue":1463,"title":"A crate module is declared below a re-export prefix (bytemuck's `pub use ::core as __core;`)…","state":"closed","category":"Importer"}
+    {"issue":1463,"title":"A crate module is declared below a re-export prefix (bytemuck's `pub use ::core as __core;`)…","state":"closed","category":"Importer"},
+    {"issue":1464,"title":"A marked fn native code calls on another thread has no arena, so its first crate call fails…","state":"closed","category":"Divergences from rustc"},
+    {"issue":1465,"title":"A marked fn on another thread can't keep a native value past its call, and trait-object calls…","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
