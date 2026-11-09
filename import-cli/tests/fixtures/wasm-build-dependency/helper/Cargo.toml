@@ -1,0 +1,9 @@
+[package]
+name = "helper"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A dependency the host has and wasm32 lacks: built for the build script.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+hostonly = { path = "../hostonly" }
