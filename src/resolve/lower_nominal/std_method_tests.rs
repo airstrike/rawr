@@ -644,3 +644,91 @@ main();
         refused("fn main() { let s = \"ab\"; let it = s.chars().rev(); it.as_str(); }\nmain();\n");
     assert!(report.starts_with("error[E0599]"), "{report}");
 }
+
+#[test]
+fn language_slice_binary_search_family_matches_std() {
+    // std's `binary_search_by` loop (#1456): the `Ok` it picks among equal
+    // elements and each `Err`'s insertion point are what rustc's build
+    // prints, as is an inconsistent comparator's answer.
+    let source = r#"
+#[derive(Debug)]
+struct Stop {
+    floor: usize,
+    name: &'static str,
+}
+
+struct Queue {
+    calls: Vec<usize>,
+}
+
+impl Queue {
+    fn call(&mut self, floor: usize) {
+        if let Err(index) = self.calls.binary_search(&floor) {
+            self.calls.insert(index, floor);
+        }
+    }
+}
+
+fn main() {
+    let mut calls: Vec<usize> = vec![1, 3, 5, 7];
+    for floor in [5, 4, 0, 9] {
+        match calls.binary_search(&floor) {
+            Ok(index) => println!("{floor} at {index}"),
+            Err(index) => {
+                calls.insert(index, floor);
+                println!("{floor} in at {index}");
+            }
+        }
+    }
+    println!("{:?}", calls);
+    let same = [1, 1, 1, 1, 1, 2, 2, 3];
+    println!("{:?} {:?} {:?}", same.binary_search(&1), same.binary_search(&2), same.binary_search(&4));
+    let empty: Vec<i32> = Vec::new();
+    println!("{:?}", empty.binary_search(&3));
+    let ascending = vec![10i64, 20, 30, 40, 50];
+    let by = ascending.binary_search_by(|probe| probe.cmp(&35));
+    let reversed = ascending.binary_search_by(|probe| 30.cmp(probe));
+    println!("{:?} {:?} {:?}", by, reversed, ascending.binary_search_by(|p| p.cmp(&40)));
+    let pairs = [(0, 0), (2, 1), (4, 1), (5, 1), (3, 1), (1, 2), (2, 3), (4, 5), (5, 8), (3, 13)];
+    println!(
+        "{:?} {:?} {:?} {:?}",
+        pairs.binary_search_by_key(&13, |&(_, b)| b),
+        pairs.binary_search_by_key(&4, |&(_, b)| b),
+        pairs.binary_search_by_key(&1, |&(_, b)| b),
+        pairs.binary_search_by_key(&100, |&(_, b)| b)
+    );
+    let v = [1, 2, 3, 3, 5, 6, 7];
+    println!("{} {} {}", v.partition_point(|&x| x < 5), v.partition_point(|x| *x < 0), v.partition_point(|x| *x < 100));
+    let stops = vec![
+        Stop { floor: 2, name: "lobby" },
+        Stop { floor: 4, name: "gym" },
+        Stop { floor: 4, name: "pool" },
+        Stop { floor: 8, name: "roof" },
+    ];
+    let at = stops.binary_search_by_key(&4, |stop| stop.floor);
+    let missing = stops.binary_search_by(|stop| stop.floor.cmp(&6));
+    let split = stops.partition_point(|stop| stop.floor < 5);
+    println!("{:?} {:?} {} {}", at, missing, split, stops[split].name);
+    let window = &v[1..5];
+    println!("{:?} {:?}", window.binary_search(&3), window.binary_search(&4));
+    let mut queue = Queue { calls: Vec::new() };
+    for floor in [6, 2, 6, 9, 0] {
+        queue.call(floor);
+    }
+    println!("{:?}", queue.calls);
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "5 at 2\n4 in at 2\n0 in at 0\n9 in at 6\n[0, 1, 3, 4, 5, 7, 9]\n\
+         Ok(4) Ok(6) Err(8)\nErr(0)\nErr(3) Err(5) Ok(3)\nOk(9) Err(7) Ok(4) Err(10)\n\
+         4 0 7\nOk(2) Err(3) 3 roof\nOk(2) Err(3)\n[0, 2, 6, 9]\n"
+    );
+    // `binary_search` needs `T: Ord`, as its declaration says: rustc's
+    // E0277 for an `f64`.
+    let report = refused(
+        "fn main() { let v = vec![1.0f64, 2.0]; let _ = v.binary_search(&1.0); }\nmain();\n",
+    );
+    assert!(report.starts_with("error[E0277]"), "{report}");
+}

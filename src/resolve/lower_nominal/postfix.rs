@@ -2830,6 +2830,19 @@ impl<'a> Parser<'a> {
                     Ty::Bool,
                 )
             }
+            // The slice search family: a `Result<usize, usize>`, or
+            // `partition_point`'s `usize`.
+            ("binary_search" | "binary_search_by" | "partition_point", [_])
+            | ("binary_search_by_key", [_, _]) => {
+                let found =
+                    self.binary_search(receiver, &element, &member, &mut arguments, member_span)?;
+                let ty = if member.as_str() == "partition_point" {
+                    Ty::Int(Int::Usize)
+                } else {
+                    Ty::Result(Box::new(Ty::Int(Int::Usize)), Box::new(Ty::Int(Int::Usize)))
+                };
+                (found, ty)
+            }
             // `v.iter().min()`, `max`, `min_by_key`, `max_by_key`, `min_by`
             // and `max_by`: Rust's first minimum and last maximum.
             ("min" | "max", []) | ("min_by_key" | "max_by_key" | "min_by" | "max_by", [_])
@@ -3045,6 +3058,140 @@ impl<'a> Parser<'a> {
         routed.push_text("; } else ");
         routed.push(source);
         Ok(Some(routed))
+    }
+
+    /// `binary_search(&x)`, `binary_search_by(f)`,
+    /// `binary_search_by_key(&b, f)` and `partition_point(p)` of the slice
+    /// `values`: std's `binary_search_by` loop, which probes the same
+    /// elements in the same order, so an `Ok` among equal elements and an
+    /// `Err`'s insertion point are std's. `partition_point` is its
+    /// `unwrap_or_else(|i| i)` of `p`'s `Less` or `Greater`.
+    fn binary_search(
+        &mut self,
+        values: origin::Fragment,
+        element: &Ty,
+        member: &str,
+        arguments: &mut [ParsedExpr],
+        member_span: Span,
+    ) -> Result<origin::Fragment, Error> {
+        let reference = |target: &Ty| Ty::Reference {
+            mutable: false,
+            target: Box::new(target.clone()),
+        };
+        let names = [
+            self.temporary("values"),
+            self.temporary("by"),
+            self.temporary("sought"),
+            self.temporary("size"),
+            self.temporary("base"),
+            self.temporary("order"),
+        ];
+        let [all, function, sought, size, base, order] = &names;
+        let mut source = origin::Fragment::plain(format!("{{ let {all} = "));
+        source.push(values);
+        source.push_text("; ");
+        // What the search compares, by the probed element's `key` and the
+        // sought value: `None` where the closure's own value is the order.
+        let key = match (member, arguments) {
+            ("binary_search", [x]) => {
+                self.coerce_expr(&reference(element), x)?;
+                source.push_text(format!("let {sought} = "));
+                source.push(x.rendered_source());
+                source.push_text("; ");
+                Some(element.clone())
+            }
+            ("binary_search_by_key", [b, f]) => {
+                let key = self.inference.fresh();
+                let expected = Ty::Fn {
+                    inputs: Box::new([reference(element)]),
+                    output: Box::new(key.clone()),
+                };
+                self.coerce_expr(&expected, f)?;
+                self.coerce_expr(&reference(&key), b)?;
+                source.push_text(format!("let {sought} = "));
+                source.push(b.rendered_source());
+                source.push_text(format!("; let {function} = "));
+                source.push(f.rendered_source());
+                source.push_text("; ");
+                Some(key)
+            }
+            (_, [f]) => {
+                let output = if member == "partition_point" {
+                    Ty::Bool
+                } else {
+                    Ty::Ordering
+                };
+                let expected = Ty::Fn {
+                    inputs: Box::new([reference(element)]),
+                    output: Box::new(output),
+                };
+                self.coerce_expr(&expected, f)?;
+                source.push_text(format!("let {function} = "));
+                source.push(f.rendered_source());
+                source.push_text("; ");
+                None
+            }
+            _ => return Err(self.unsupported("a slice search's arguments")),
+        };
+        // The order of the element at `at` against what is sought, as
+        // std's closure for `member` gives it.
+        let probe = |this: &mut Self, at: &str| -> Result<origin::Fragment, Error> {
+            let item = format!("{all}[{at}]");
+            let Some(key) = &key else {
+                let call = format!("{function}.__rawr_call({item})");
+                return Ok(origin::Fragment::plain(if member == "partition_point" {
+                    format!("if {call} {{ -1 }} else {{ 1 }}")
+                } else {
+                    call
+                }));
+            };
+            let probed = if member == "binary_search" {
+                item
+            } else {
+                format!("{function}.__rawr_call({item})")
+            };
+            this.ord_compare(
+                key,
+                origin::Fragment::plain(probed),
+                origin::Fragment::plain(sought.clone()),
+            )
+            .ok_or_else(|| Error::MissingCapability {
+                owner: key.name(&this.models),
+                capability: "Ord".into(),
+                operation: member_span,
+                derive: matches!(key, Ty::Script(..)),
+                required_by: None,
+            })
+        };
+        let (half, mid) = (self.temporary("half"), self.temporary("mid"));
+        let inside = probe(self, &mid)?;
+        let last = probe(self, base)?;
+        // std narrows to one element without stopping at an equal one,
+        // keeping `base` only where the probe compares `Greater`.
+        source.push_text(format!(
+            "let {size} = {all}.len(); let {base} = 0; \
+             while {size} > 1 {{ let {half} = {size} / 2; let {mid} = {base} + {half}; if "
+        ));
+        source.push(inside);
+        source.push_text(format!(
+            " <= 0 {{ {base} = {mid}; }} {size} -= {half}; }} let {order} = if {size} == 0 {{ 1 }} else {{ "
+        ));
+        source.push(last);
+        source.push_text(format!(
+            " }}; let {base} = if {order} < 0 {{ {base} + 1 }} else {{ {base} }}; "
+        ));
+        if member == "partition_point" {
+            source.push_text(format!("{base} }}"));
+        } else {
+            let ok = self.prelude_op(PreludeOp::Ok, [origin::Fragment::plain(base.clone())]);
+            let err = self.prelude_op(PreludeOp::Err, [origin::Fragment::plain(base.clone())]);
+            source.push_text(format!("if {order} == 0 {{ "));
+            source.push(ok);
+            source.push_text(" } else { ");
+            source.push(err);
+            source.push_text(" } }");
+        }
+        Ok(source.surrounded("(", ")"))
     }
 
     /// The element `iter().min()` and its kin pick from `values`, an
