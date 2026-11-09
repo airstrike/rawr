@@ -12,7 +12,9 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A call that passes a closure to a widget held boxed in a view builds, as when iced's modal styles its `center(..)` container. iced's modal runs.","issues":[955]}
+        {"text":"A call that passes a closure to a widget held boxed in a view builds, as when iced's modal styles its `center(..)` container. iced's modal runs.","issues":[955]},
+        {"text":"A marked module's path through a `use` that binds a marked module now reaches that module's native children, as rustc does. inboard's `use crate::theme;` followed by `theme::text::base` is an example. A native signature's `&Theme` of a marked theme is now the marked type itself, not a different one. Each crate function item passed to a generic, as in `.style(theme::text::base)` beside `.style(theme::container::base)`, calls its own function. Before, they could share one adapter.","issues":[1504]},
+        {"text":"iced's `pane_grid` example runs again. A `&self` method on a crate value generic over the program's own type, such as `self.panes.len()` on a `pane_grid::State<Pane>`, can read it while a view still borrows it, as rustc allows. It no longer stops with a false E0502 before the window opens. This had regressed in #1432.","issues":[1505]}
       ]
     },
     "releases": [
@@ -3314,7 +3316,10 @@
     {"issue":1500,"title":"A lent `&[T]` beside a lent `&T`, passed to a crate fn whose output doesn't keep them, fails","state":"open","category":"No glue (D593)"},
     {"issue":1501,"title":"Test a crate fn whose output keeps an `Option<&'a T>` of a value native code lent a marked view","state":"open","category":"No glue (D593)"},
     {"issue":1502,"title":"Moving a field out of a crate struct local takes the whole struct","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1503,"title":"A crate method borrowing its receiver can't take a `&'a str`, `&'a [T]` or `&'a mut T` at that lifetime","state":"open","category":"No glue (D593)"}
+    {"issue":1503,"title":"A crate method borrowing its receiver can't take a `&'a str`, `&'a [T]` or `&'a mut T` at that lifetime","state":"open","category":"No glue (D593)"},
+    {"issue":1504,"title":"A marked module's path through an imported marked module reaches its native children","state":"open","category":"No glue (D593)"},
+    {"issue":1505,"title":"pane_grid panics with E0502 in view: a &self method on a value generic over a script type asks for &mut","state":"open","category":"No glue (D593)"},
+    {"issue":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open","category":"Borrow checker (D572)"}
   ],
   "groups": [
     {
@@ -3765,7 +3770,7 @@
           "start": 45,
           "size": 3,
           "state": "now",
-          "note": "modal builds and runs (#955). pane_grid builds but panics in its first view, a regression being bisected. #951 and #957 remain",
+          "note": "modal builds and runs (#955), and pane_grid runs again after a #1432 regression was fixed. #951 and #957 remain",
           "issues": [
             {"number":335,"title":"events: `rawr check` passes, but the runner build fails on…","state":"closed"},
             {"number":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
@@ -3778,7 +3783,9 @@
             {"number":957,"title":"Generated adapter bounds the program doesn't need: geometry's Shell: Clone, progress_bar's f64, the_matrix's ThreadRng","state":"closed"},
             {"number":1081,"title":"A region family writes a closure-filled type argument at the region's lifetime, not 'static (lazy, pane_grid)","state":"closed"},
             {"number":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"closed"},
-            {"number":1191,"title":"A capturing closure whose output carries the region lifetime gives it in a region of its own (pane_grid)","state":"closed"}
+            {"number":1191,"title":"A capturing closure whose output carries the region lifetime gives it in a region of its own (pane_grid)","state":"closed"},
+            {"number":1505,"title":"pane_grid panics with E0502 in view: a &self method on a value generic over a script type asks for &mut","state":"open"},
+            {"number":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -4137,7 +4144,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). A `&'a T` beside a borrowed receiver (#1499) and partial moves out of crate structs (#834) work. Next: inboard's own check of home.rs",
+          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). A `&'a T` beside a borrowed receiver (#1499) and partial moves out of crate structs (#834) work. Paths through an imported marked module (#1504) resolve. Next: a lent marked theme passed back to native fns (#1484)",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
@@ -4257,7 +4264,9 @@
             {"number":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"closed"},
             {"number":1502,"title":"Moving a field out of a crate struct local takes the whole struct","state":"closed"},
             {"number":1503,"title":"A crate method borrowing its receiver can't take a `&'a str`, `&'a [T]` or `&'a mut T` at that lifetime","state":"open"},
-            {"number":834,"title":"A by-value read, a nested or self receiver, or a generic struct's crate field still takes the whole struct","state":"open"}
+            {"number":834,"title":"A by-value read, a nested or self receiver, or a generic struct's crate field still takes the whole struct","state":"open"},
+            {"number":1504,"title":"A marked module's path through an imported marked module reaches its native children","state":"open"},
+            {"number":1484,"title":"A marked mirror type passed by `&T` to a crate generic moves its native parts out instead of…","state":"open"}
           ]
         }
       ]
