@@ -15,7 +15,8 @@
         {"text":"A call that passes a closure to a widget held boxed in a view builds, as when iced's modal styles its `center(..)` container. iced's modal runs.","issues":[955]},
         {"text":"A marked module's path through a `use` that binds a marked module now reaches that module's native children, as rustc does. inboard's `use crate::theme;` followed by `theme::text::base` is an example. A native signature's `&Theme` of a marked theme is now the marked type itself, not a different one. Each crate function item passed to a generic, as in `.style(theme::text::base)` beside `.style(theme::container::base)`, calls its own function. Before, they could share one adapter.","issues":[1504]},
         {"text":"iced's `pane_grid` example runs again. A `&self` method on a crate value generic over the program's own type, such as `self.panes.len()` on a `pane_grid::State<Pane>`, can read it while a view still borrows it, as rustc allows. It no longer stops with a false E0502 before the window opens. This had regressed in #1432.","issues":[1505]},
-        {"text":"An `if`, `while`, `for` or `match` missing its `{` now reads as rustc's \"expected `{`, found `2`\", and nothing follows it. Before, it shifted the braces and surfaced as a `self` error in a later method. A free function's `self` parameter reads as rustc's \"`self` parameter is only allowed in associated functions\". A `self` value outside a method reads as E0424, replacing RAWR-RESOLVE-SELF.","issues":[1507]}
+        {"text":"An `if`, `while`, `for` or `match` missing its `{` now reads as rustc's \"expected `{`, found `2`\", and nothing follows it. Before, it shifted the braces and surfaced as a `self` error in a later method. A free function's `self` parameter reads as rustc's \"`self` parameter is only allowed in associated functions\". A `self` value outside a method reads as E0424, replacing RAWR-RESOLVE-SELF.","issues":[1507]},
+        {"text":"A marked view that native code lends a marked value to, as inboard's `home::view` gets `theme: &Theme`, can pass it on by `&Theme` to native functions, crate generics and `'a` parameters that its result keeps. Native code gets its own reference back, where it used to panic. A native type alias over a marked type, such as inboard's `Element<'a, Message>`, names the marked type wherever marked code uses it. That removes a false E0308 on `return crate::widget::void();`.","issues":[1484]}
       ]
     },
     "releases": [
@@ -3298,7 +3299,7 @@
     {"issue":1481,"title":"Exhaustiveness ignored crate-enum patterns nested in a program pattern, so rawr reported a false…","state":"closed","category":"No glue (D593)","release":"0.3.172"},
     {"issue":1482,"title":"A marked struct with an `Option<native>` field (inboard's `home::State::wizard`) doesn't cross…","state":"closed","category":"No glue (D593)","release":"0.3.172"},
     {"issue":1483,"title":"A script fn a crate calls at once inside a lifetime-carrying receiver's call …","state":"open","category":"No glue (D593)"},
-    {"issue":1484,"title":"A marked mirror type passed by `&T` to a crate generic moves its native parts out instead of…","state":"open","category":"No glue (D593)"},
+    {"issue":1484,"title":"A marked mirror type passed by `&T` to a crate generic moves its native parts out instead of…","state":"closed","category":"No glue (D593)"},
     {"issue":1485,"title":"Native code polls the Task<Message> a marked update returns","state":"closed","category":"No glue (D593)","release":"0.3.172"},
     {"issue":1486,"title":"A marked unit function gives native code () whatever its last statement leaves","state":"closed","category":"No glue (D593)","release":"0.3.172"},
     {"issue":1487,"title":"A native part a marked &mut call moves to another place comes back","state":"open","category":"No glue (D593)"},
@@ -3322,7 +3323,10 @@
     {"issue":1505,"title":"pane_grid panics with E0502 in view: a &self method on a value generic over a script type asks for &mut","state":"open","category":"No glue (D593)"},
     {"issue":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open","category":"Borrow checker (D572)"},
     {"issue":1507,"title":"A block missing after a condition surfaced as a self error in a later method","state":"open","category":"Divergences from rustc"},
-    {"issue":1508,"title":"Body syntax errors are found only when the body is lowered, after item resolution","state":"open","category":"Divergences from rustc"}
+    {"issue":1508,"title":"Body syntax errors are found only when the body is lowered, after item resolution","state":"open","category":"Divergences from rustc"},
+    {"issue":1509,"title":"A crate fn whose output keeps a lent `&'a T` panics when its adapter also pins a `&str` argument","state":"open","category":"No glue (D593)"},
+    {"issue":1510,"title":"A marked module can't name a native module's type alias by its path (`crate::widget::Element`)","state":"open","category":"Divergences from rustc"},
+    {"issue":1511,"title":"The mirror table that Ty::from_resolved reads is a thread-local installed by Models::new; pass it explicitly","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4147,7 +4151,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). A `&'a T` beside a borrowed receiver (#1499) and partial moves out of crate structs (#834) work. Paths through an imported marked module (#1504) resolve. Next: a lent marked theme passed back to native fns (#1484)",
+          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). A `&'a T` beside a borrowed receiver (#1499) and partial moves out of crate structs (#834) work. Paths through an imported marked module (#1504) resolve. A lent marked theme passes back to native fns, and native aliases over it are the marked type (#1484). Next: inboard's run of home.rs",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
@@ -4269,7 +4273,10 @@
             {"number":1503,"title":"A crate method borrowing its receiver can't take a `&'a str`, `&'a [T]` or `&'a mut T` at that lifetime","state":"open"},
             {"number":834,"title":"A by-value read, a nested or self receiver, or a generic struct's crate field still takes the whole struct","state":"open"},
             {"number":1504,"title":"A marked module's path through an imported marked module reaches its native children","state":"open"},
-            {"number":1484,"title":"A marked mirror type passed by `&T` to a crate generic moves its native parts out instead of…","state":"open"}
+            {"number":1484,"title":"A marked mirror type passed by `&T` to a crate generic moves its native parts out instead of…","state":"closed"},
+            {"number":1509,"title":"A crate fn whose output keeps a lent `&'a T` panics when its adapter also pins a `&str` argument","state":"open"},
+            {"number":1510,"title":"A marked module can't name a native module's type alias by its path (`crate::widget::Element`)","state":"open"},
+            {"number":1511,"title":"The mirror table that Ty::from_resolved reads is a thread-local installed by Models::new; pass it explicitly","state":"open"}
           ]
         }
       ]
