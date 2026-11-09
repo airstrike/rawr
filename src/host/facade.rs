@@ -49,6 +49,9 @@ pub struct Body {
     types: Box<[host::type_def::Definition]>,
     items: Box<[host::item::Definition]>,
     aliases: Box<[(host::path::Path, host::path::Path)]>,
+    /// The modules reached at another path, sorted: each path and the
+    /// module's path its entries are below (`Builder::imported_reexport`).
+    reexports: Box<[(host::path::Path, host::path::Path)]>,
     type_aliases: Box<[TypeAlias]>,
     trait_headers: Box<[TraitHeader]>,
     impl_headers: Box<[ImplHeader]>,
@@ -321,6 +324,7 @@ pub(crate) struct RegistryParts {
     pub(crate) types: Box<[host::type_def::Definition]>,
     pub(crate) items: Box<[host::item::Definition]>,
     pub(crate) aliases: Box<[(host::path::Path, host::path::Path)]>,
+    pub(crate) reexports: Box<[(host::path::Path, host::path::Path)]>,
     pub(crate) type_aliases: Box<[TypeAlias]>,
     pub(crate) trait_headers: Box<[TraitHeader]>,
     pub(crate) impl_headers: Box<[ImplHeader]>,
@@ -380,6 +384,7 @@ pub struct Builder {
     items: Vec<(host::path::Path, Vec<host::item::Definition>)>,
     projections: Vec<ProjectionDeclaration>,
     aliases: Vec<(host::path::Path, host::path::Path)>,
+    reexports: Vec<(host::path::Path, host::path::Path)>,
     type_aliases: Vec<TypeAlias>,
     #[cfg(feature = "rust-import")]
     trait_headers: Vec<TraitHeader>,
@@ -419,6 +424,7 @@ impl Builder {
             items: Vec::new(),
             projections: Vec::new(),
             aliases: Vec::new(),
+            reexports: Vec::new(),
             type_aliases: Vec::new(),
             #[cfg(feature = "rust-import")]
             trait_headers: Vec::new(),
@@ -446,6 +452,7 @@ impl Builder {
             items: Vec::new(),
             projections: Vec::new(),
             aliases: Vec::new(),
+            reexports: Vec::new(),
             type_aliases: Vec::new(),
             #[cfg(feature = "rust-import")]
             trait_headers: Vec::new(),
@@ -492,6 +499,41 @@ impl Builder {
             .try_reserve(1)
             .map_err(|_| host::Error::Allocation)?;
         self.modules.insert(index, path);
+        Ok(self)
+    }
+
+    /// Declare the module at `path` the one at `target`, both relative,
+    /// as `pub use iced_wgpu as wgpu;` makes iced_renderer's `wgpu`: what
+    /// lies below `path` is what lies below `target`, which holds it
+    /// (`Registry::canonical`).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn imported_reexport<A: host::ImportAllocation + ?Sized>(
+        &mut self,
+        path: &str,
+        target: &str,
+        allocation: &mut A,
+    ) -> Result<&mut Self, host::Error> {
+        match self.imported_module(path, allocation) {
+            Ok(_)
+            | Err(host::Error::DuplicateFacadeEntry {
+                existing: "module", ..
+            }) => {}
+            Err(error) => return Err(error),
+        }
+        let path = host::path::Path::qualify_imported(
+            &self.root,
+            host::path::Path::parse_imported(path, allocation)?,
+            allocation,
+        )?;
+        let target = host::path::Path::qualify_imported(
+            &self.root,
+            host::path::Path::parse_imported(target, allocation)?,
+            allocation,
+        )?;
+        self.reexports
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.reexports.push((path, target));
         Ok(self)
     }
 
@@ -1209,6 +1251,7 @@ impl Builder {
             types: self.types.into_boxed_slice(),
             items,
             aliases: self.aliases.into_boxed_slice(),
+            reexports: self.reexports.into_boxed_slice(),
             type_aliases: type_aliases.into_boxed_slice(),
             trait_headers: Box::default(),
             impl_headers: Box::default(),
@@ -1467,6 +1510,15 @@ impl Builder {
                 .map_err(|_| host::Error::Allocation)?;
             impl_headers.push(header);
         }
+        // A re-exported module joins the proof as a header does.
+        self.reexports.sort();
+        for (path, target) in &self.reexports {
+            modules.push(header_proof_path(
+                &self.root,
+                "reexport",
+                &format!("{path}|{target}"),
+            )?);
+        }
         // A derive joins the proof as a header does.
         for derive in &self.derives {
             modules.push(header_proof_path(
@@ -1484,6 +1536,7 @@ impl Builder {
                 types: self.types.into_boxed_slice(),
                 items,
                 aliases: self.aliases.into_boxed_slice(),
+                reexports: self.reexports.into_boxed_slice(),
                 type_aliases: type_aliases.into_boxed_slice(),
                 trait_headers: trait_headers.into_boxed_slice(),
                 impl_headers: impl_headers.into_boxed_slice(),
@@ -1555,8 +1608,15 @@ impl Builder {
     }
 
     fn item_index(&self, path: &host::path::Path) -> Result<usize, usize> {
-        self.items
-            .binary_search_by(|(candidate, _)| candidate.cmp(path))
+        // A plan's items come in path order, so each is at the end or
+        // after it.
+        match self.items.last().map(|(last, _)| last.cmp(path)) {
+            None | Some(std::cmp::Ordering::Less) => Err(self.items.len()),
+            Some(std::cmp::Ordering::Equal) => Ok(self.items.len() - 1),
+            Some(std::cmp::Ordering::Greater) => self
+                .items
+                .binary_search_by(|(candidate, _)| candidate.cmp(path)),
+        }
     }
 
     fn insert_type(&mut self, definition: host::type_def::Definition) -> Result<(), host::Error> {
@@ -1747,6 +1807,13 @@ impl Definition {
         &self.root
     }
 
+    /// `path` below the module each re-exported module above it names, as
+    /// the registry reads it (`host::through_reexports`).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn through_reexports(&self, path: &host::path::Path) -> Option<host::path::Path> {
+        host::through_reexports(&self.reexports, path)
+    }
+
     /// The parts the compiler's registry keeps: this contract's own when
     /// nothing else shares it, and else a copy.
     pub(crate) fn into_registry_parts(self) -> RegistryParts {
@@ -1757,6 +1824,7 @@ impl Definition {
             types: body.types,
             items: body.items,
             aliases: body.aliases,
+            reexports: body.reexports,
             type_aliases: body.type_aliases,
             trait_headers: body.trait_headers,
             impl_headers: body.impl_headers,

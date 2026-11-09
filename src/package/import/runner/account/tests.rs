@@ -234,6 +234,52 @@ fn bind_runtime(
     registry
 }
 
+/// A path through a module the plan holds at another path finds what that
+/// path holds, as rustc resolves a path through `pub use wgpu;`: the type,
+/// the function, the module's names for a glob, and each path of the type.
+#[test]
+fn a_path_through_a_reexported_module_finds_what_the_module_holds() {
+    let mut engine = Engine::new();
+    let plan = rawr_import::test_fixture::runner_reexported_facade_plan();
+    runner::install(&mut engine, &plan).unwrap();
+    let registry = &engine.host_registry;
+    let Some(host::Entry::Type(source)) = registry.entry("native::wgpu::Source") else {
+        panic!("`wgpu::Source` is the re-exported module's type");
+    };
+    assert_eq!(source.path(), "native::renderer::wgpu::Source");
+    assert!(matches!(
+        registry.entry("native::wgpu"),
+        Some(host::Entry::Module)
+    ));
+    assert!(registry
+        .item("native::__rawr_crate_wgpu_0123456789abcdef::produce")
+        .is_some());
+    assert_eq!(registry.children("native::wgpu"), ["Source", "produce"]);
+    let owner = registry.type_owner("native::wgpu::Source").unwrap();
+    let identity = source.identity().imported().unwrap();
+    assert_eq!(
+        registry
+            .imported_type_paths(identity, owner)
+            .unwrap()
+            .collect::<Vec<_>>(),
+        [
+            "native::renderer::wgpu::Source",
+            "native::wgpu::Source",
+            "native::__rawr_crate_wgpu_0123456789abcdef::Source",
+        ]
+    );
+    let mut functions = registry.functions_named("produce").collect::<Vec<_>>();
+    functions.sort();
+    assert_eq!(
+        functions,
+        [
+            "native::__rawr_crate_wgpu_0123456789abcdef::produce",
+            "native::renderer::wgpu::produce",
+            "native::wgpu::produce",
+        ]
+    );
+}
+
 /// A generated runner installs the definitions in the order `install` gives
 /// them. `native`'s `produce() -> Source` names `target`'s type, so `target`
 /// comes first, as cargo builds a dependency before its user.

@@ -7,11 +7,13 @@ use crate::classify::representability::{self, Representability};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
+mod digest;
+mod reexport;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 56;
+const SCHEMA: u32 = 57;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -182,6 +184,14 @@ pub struct Facade {
     /// (`std::time::Duration`), in path order (`std_reexports`).
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     std_reexports: Box<[(Box<str>, Box<str>)]>,
+    /// The modules a runner reaches through another of the root's paths,
+    /// as iced_renderer's `pub use iced_wgpu as wgpu;` reaches iced_wgpu:
+    /// each path, relative to the root, and the path it re-exports, in
+    /// path order. Only a runner's plan has them (`Plan::runner_bytes`),
+    /// which holds the types and items below each such path once, below
+    /// the path it re-exports.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    reexports: Box<[(Box<str>, Box<str>)]>,
 }
 
 /// A trait Rawr code names (D604): its path, relative to the root, its
@@ -191,6 +201,7 @@ pub struct Facade {
 #[derive(Deserialize, Serialize)]
 pub struct TraitHeader {
     path: Box<str>,
+    #[serde(with = "digest")]
     identity: [u8; 32],
     parameters: Box<[Box<str>]>,
     defaults: Box<[Option<Type>]>,
@@ -226,6 +237,7 @@ impl TraitHeader {
 #[derive(Deserialize, Serialize)]
 pub struct ImplHeader {
     parameters: Box<[Box<str>]>,
+    #[serde(with = "digest")]
     trait_identity: [u8; 32],
     arguments: Box<[Type]>,
     self_type: Type,
@@ -266,6 +278,7 @@ impl ImplProjection {
 #[derive(Deserialize, Serialize)]
 pub struct ImplBound {
     ty: Type,
+    #[serde(with = "digest")]
     trait_identity: [u8; 32],
     arguments: Box<[Type]>,
 }
@@ -565,6 +578,7 @@ pub struct TypeDefinition {
 /// A type definition apart from its path.
 #[derive(Deserialize, Serialize)]
 struct TypeBody {
+    #[serde(with = "digest")]
     identity: [u8; 32],
     parameters: Box<[Box<str>]>,
     /// Each parameter's default type, by position.
@@ -918,6 +932,7 @@ pub enum Type {
     Primitive(Box<str>),
     /// Imported nominal type with exact semantic identity.
     Nominal {
+        #[serde(with = "digest")]
         identity: [u8; 32],
         arguments: Box<[Type]>,
     },
@@ -1178,6 +1193,7 @@ impl Plan {
                             trait_headers: Box::default(),
                             impls: Box::default(),
                             std_reexports: Box::default(),
+                            reexports: Box::default(),
                         },
                     );
                     index
@@ -1458,6 +1474,7 @@ impl Plan {
                             trait_headers: Box::default(),
                             impls: Box::default(),
                             std_reexports: Box::default(),
+                            reexports: Box::default(),
                         },
                     );
                     index
@@ -1493,6 +1510,7 @@ impl Plan {
                             trait_headers: Box::default(),
                             impls: Box::default(),
                             std_reexports: Box::default(),
+                            reexports: Box::default(),
                         },
                     );
                     index
@@ -1528,6 +1546,7 @@ impl Plan {
                             trait_headers: Box::default(),
                             impls: Box::default(),
                             std_reexports: Box::default(),
+                            reexports: Box::default(),
                         },
                     );
                     index
@@ -1914,7 +1933,9 @@ impl Plan {
     /// The plan a generated runner embeds: its facades alone. A runner
     /// installs facades at every start; the alias, source, ABI and
     /// operation sites serve generation, so a runner never decodes them or
-    /// rehashes their selectors.
+    /// rehashes their selectors. A module a facade reaches at several
+    /// paths is held at one of them, which the others re-export
+    /// (`reexport::Runner`).
     pub(crate) fn runner_bytes(&self) -> Result<Vec<u8>, super::Error> {
         #[derive(Serialize)]
         struct Runner<'a> {
@@ -1923,7 +1944,7 @@ impl Plan {
             sources: &'a [ProjectionSourceSite],
             abis: &'a [AbiSite],
             operations: &'a [OperationSite],
-            facades: &'a [Facade],
+            facades: Vec<reexport::Runner<'a>>,
         }
         serde_json::to_vec(&Runner {
             schema: self.schema,
@@ -1931,7 +1952,12 @@ impl Plan {
             sources: &[],
             abis: &[],
             operations: &[],
-            facades: &self.facades,
+            facades: self
+                .facades
+                .iter()
+                .map(reexport::Runner::new)
+                .collect::<Result<_, _>>()
+                .map_err(|_| super::Error::Encoding)?,
         })
         .map_err(|_| super::Error::Encoding)
     }
@@ -2036,6 +2062,7 @@ impl Plan {
                     .items
                     .windows(2)
                     .all(|pair| pair[0].path <= pair[1].path)
+                || !reexport::canonical(&facade.reexports)
             {
                 return Err(super::Error::Canonical);
             }
@@ -2200,6 +2227,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             trait_headers: Box::default(),
             impls: Box::default(),
             std_reexports: Box::default(),
+            reexports: Box::default(),
         }]),
     })
     .expect("the static iced semantic fixture encodes")
@@ -2339,6 +2367,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
                 trait_headers: Box::default(),
                 impls: Box::default(),
                 std_reexports: Box::default(),
+                reexports: Box::default(),
             },
             iced,
         ]),
@@ -2353,6 +2382,43 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
 #[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) fn runner_native_fixture() -> Box<[u8]> {
     runner_fixture(false)
+}
+
+/// The runner plan a runner embeds for the native fixture whose `Source`
+/// and `produce` lie in one module the root reaches at three paths:
+/// `renderer::wgpu`, `wgpu` and `__rawr_crate_wgpu_0123456789abcdef`, as
+/// `pub use wgpu;` and a macro's `$crate` reach a crate.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) fn runner_reexported_fixture() -> Box<[u8]> {
+    let mut plan = Plan::decode(&runner_native_fixture()).expect("the runner fixture decodes");
+    let native = &mut plan.facades[0];
+    let modules = [
+        "renderer::wgpu",
+        "wgpu",
+        "__rawr_crate_wgpu_0123456789abcdef",
+    ];
+    let mut types = Vec::new();
+    let mut items = Vec::new();
+    for module in modules {
+        types.extend(native.types.iter().map(|ty| TypeDefinition {
+            path: format!("{module}::{}", ty.path).into(),
+            body: std::sync::Arc::clone(&ty.body),
+        }));
+        items.extend(native.items.iter().map(|item| Item {
+            path: format!("{module}::{}", item.path).into(),
+            body: std::sync::Arc::clone(&item.body),
+        }));
+    }
+    types.sort_by(|left, right| left.path.cmp(&right.path));
+    items.sort_by(|left, right| left.path.cmp(&right.path));
+    native.types = types.into_boxed_slice();
+    native.items = items.into_boxed_slice();
+    native.traits = Box::from(["renderer".into(), "renderer::wgpu".into(), "wgpu".into()]);
+    plan.validate()
+        .expect("the re-exported fixture is canonical");
+    plan.runner_bytes()
+        .expect("the re-exported fixture encodes")
+        .into_boxed_slice()
 }
 
 /// The runner fixture with `Source` declared by `target`, so `native`'s
@@ -2412,6 +2478,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
         trait_headers: Box::default(),
         impls: Box::default(),
         std_reexports: Box::default(),
+        reexports: Box::default(),
     };
     let source = [11; 32];
     let produce = Item {
@@ -2663,7 +2730,9 @@ impl Facade {
     #[must_use]
     pub fn named(&self) -> std::collections::BTreeSet<[u8; 32]> {
         let mut named = std::collections::BTreeSet::new();
-        for item in self.items.iter() {
+        // An item's paths share its body, which names its types once.
+        let mut seen = std::collections::HashSet::new();
+        for item in self.items.iter().filter(|item| seen.insert(item.body())) {
             for signature in std::iter::once(&item.body.signature).chain(&item.body.values) {
                 signature.named(&mut named);
             }
@@ -2741,6 +2810,15 @@ impl Facade {
     /// Iterate the crate's trait impls whose types the facade names (D604).
     pub fn impls(&self) -> impl ExactSizeIterator<Item = &ImplHeader> {
         self.impls.iter()
+    }
+
+    /// Iterate the modules reached through another path (`reexports`):
+    /// each path, relative to the root, and the path it re-exports, in
+    /// path order.
+    pub fn reexports(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.reexports
+            .iter()
+            .map(|(path, target)| (path.as_ref(), target.as_ref()))
     }
 }
 
@@ -3687,12 +3765,28 @@ mod table {
         entries: &Box<[E]>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
+        write(entries.iter(), serializer)
+    }
+
+    /// [`serialize`] of the entries a runner's plan keeps
+    /// (`reexport::Runner`).
+    pub(super) fn serialize_kept<E: Entry, S: Serializer>(
+        entries: &[&E],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        write(entries.iter().copied(), serializer)
+    }
+
+    fn write<'entry, E: Entry + 'entry, S: Serializer>(
+        entries: impl ExactSizeIterator<Item = &'entry E>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         // Bodies are the same when they are written the same, though the
         // generator made them apart.
         let mut index = HashMap::<String, u32>::new();
         let mut bodies = Vec::new();
         let mut paths = Vec::with_capacity(entries.len());
-        for entry in entries.iter() {
+        for entry in entries {
             let body = serde_json::to_string(entry.body()).map_err(S::Error::custom)?;
             let next = u32::try_from(bodies.len()).map_err(S::Error::custom)?;
             let position = match index.get(&body) {
@@ -4717,6 +4811,7 @@ mod resolution_tests {
             trait_headers: Box::default(),
             impls: Box::default(),
             std_reexports: Box::default(),
+            reexports: Box::default(),
         };
         assert_eq!(facade.named(), set(&[2]));
         let resolution = Resolution::new(&[set(&[]), set(&[2])], &[facade.named(), set(&[])]);

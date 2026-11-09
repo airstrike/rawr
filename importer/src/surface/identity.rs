@@ -30,6 +30,79 @@ const CALLABLE_DOMAIN: &[u8] = b"rawr.identity.callable/v1";
 const ITERATOR_DOMAIN: &[u8] = b"rawr.identity.iterator/v1";
 const STD_DOMAIN: &[u8] = b"rawr.identity.std/v1";
 
+/// The identities rawr declares for Rust values no imported crate declares
+/// (`Definition::is_projected`), each digested once: a runner asks for
+/// them for each type it installs.
+static PROJECTED: std::sync::LazyLock<Projected> = std::sync::LazyLock::new(Projected::new);
+
+struct Projected {
+    future: [u8; 32],
+    callable: [u8; 32],
+    iterator: [u8; 32],
+    duration: [u8; 32],
+    range_inclusive: [u8; 32],
+    boxed: [u8; 32],
+    /// `Rc`'s, then `Arc`'s.
+    counted: [[u8; 32]; 2],
+    join_handle: [u8; 32],
+    /// Each of [`KEYED`]'s, in its order.
+    keyed: [[u8; 32]; 4],
+    instant: [u8; 32],
+    infallible: [u8; 32],
+    value: [u8; 32],
+    /// std's held types (`classify::std_binding`): each identity, its path
+    /// under `std` and whether it is `Clone`, sorted by identity.
+    held: Box<[([u8; 32], &'static str, bool)]>,
+}
+
+impl Projected {
+    fn new() -> Self {
+        let digest = |domain: &[u8]| Framed::new(domain).finish();
+        let named = |domain: &[u8], name: &str| {
+            let mut framed = Framed::new(domain);
+            framed.strings([name].into_iter());
+            framed.finish()
+        };
+        let mut held = crate::classify::std_binding::held()
+            .map(|(path, clone)| (named(STD_DOMAIN, path), path, clone))
+            .collect::<Vec<_>>();
+        held.sort_by_key(|(identity, _, _)| *identity);
+        // A path the binding holds under two keys is one type, `Clone` when
+        // either says so.
+        held.dedup_by(|later, kept| {
+            let same = later.0 == kept.0;
+            if same {
+                kept.2 |= later.2;
+            }
+            same
+        });
+        Self {
+            future: digest(FUTURE_DOMAIN),
+            callable: digest(CALLABLE_DOMAIN),
+            iterator: digest(ITERATOR_DOMAIN),
+            duration: digest(DURATION_DOMAIN),
+            range_inclusive: digest(RANGE_INCLUSIVE_DOMAIN),
+            boxed: digest(BOX_DOMAIN),
+            counted: [digest(RC_DOMAIN), digest(ARC_DOMAIN)],
+            join_handle: digest(JOIN_HANDLE_DOMAIN),
+            keyed: KEYED.map(|name| named(KEYED_DOMAIN, name)),
+            instant: digest(INSTANT_DOMAIN),
+            infallible: digest(INFALLIBLE_DOMAIN),
+            value: digest(VALUE_DOMAIN),
+            held: held.into_boxed_slice(),
+        }
+    }
+
+    /// The path under `std` of the held type `bytes` names, and whether
+    /// it is `Clone`.
+    fn held(&self, bytes: &[u8; 32]) -> Option<(&'static str, bool)> {
+        self.held
+            .binary_search_by_key(bytes, |(identity, _, _)| *identity)
+            .ok()
+            .map(|index| (self.held[index].1, self.held[index].2))
+    }
+}
+
 /// Canonical generic extension slot; Phase 2 has no constructor.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Hook {}
@@ -251,7 +324,7 @@ impl Definition {
     /// crate may return one, so no crate's own types declare it.
     #[must_use]
     pub fn future() -> Self {
-        Self(Framed::new(FUTURE_DOMAIN).finish())
+        Self(PROJECTED.future)
     }
 
     /// The type a script closure has where a crate's signature names the
@@ -261,7 +334,7 @@ impl Definition {
     /// output (T417).
     #[must_use]
     pub fn callable() -> Self {
-        Self(Framed::new(CALLABLE_DOMAIN).finish())
+        Self(PROJECTED.callable)
     }
 
     /// The type a program's iterator has where a crate's signature takes
@@ -271,14 +344,14 @@ impl Definition {
     /// iterator on each `next()`.
     #[must_use]
     pub fn iterator() -> Self {
-        Self(Framed::new(ITERATOR_DOMAIN).finish())
+        Self(PROJECTED.iterator)
     }
 
     /// Rust's `std::time::Duration`, which crosses by value as Rawr's own
     /// `Duration`. It lives in `core`, which no crate's facade declares.
     #[must_use]
     pub fn duration() -> Self {
-        Self(Framed::new(DURATION_DOMAIN).finish())
+        Self(PROJECTED.duration)
     }
 
     /// Rust's `std::ops::RangeInclusive<T>` of a float or of a type
@@ -288,7 +361,7 @@ impl Definition {
     /// lives in `core`, which no crate's facade declares.
     #[must_use]
     pub fn range_inclusive() -> Self {
-        Self(Framed::new(RANGE_INCLUSIVE_DOMAIN).finish())
+        Self(PROJECTED.range_inclusive)
     }
 
     /// Rust's `Box<T>`, which crosses as rawr's `Box`, a value it holds as
@@ -296,7 +369,7 @@ impl Definition {
     /// declares.
     #[must_use]
     pub fn boxed() -> Self {
-        Self(Framed::new(BOX_DOMAIN).finish())
+        Self(PROJECTED.boxed)
     }
 
     /// Rust's `Rc<T>` (`arc` false) or `Arc<T>` of a crate's `T`, which
@@ -305,16 +378,18 @@ impl Definition {
     /// crate's facade declares.
     #[must_use]
     pub fn counted(arc: bool) -> Self {
-        Self(Framed::new(if arc { ARC_DOMAIN } else { RC_DOMAIN }).finish())
+        Self(PROJECTED.counted[usize::from(arc)])
     }
 
     /// Whether these bytes name Rust's `Arc` (`Some(true)`) or `Rc`
     /// (`Some(false)`), as [`Self::counted`] names them.
     #[must_use]
     pub fn counter(bytes: &[u8; 32]) -> Option<bool> {
-        [false, true]
-            .into_iter()
-            .find(|arc| Self::counted(*arc).0 == *bytes)
+        PROJECTED
+            .counted
+            .iter()
+            .position(|counted| counted == bytes)
+            .map(|arc| arc == 1)
     }
 
     /// Rust's `std::thread::JoinHandle<T>` a crate's function gives, of a
@@ -323,7 +398,7 @@ impl Definition {
     /// (#1266). It lives in `std`, which no crate's facade declares.
     #[must_use]
     pub fn join_handle() -> Self {
-        Self(Framed::new(JOIN_HANDLE_DOMAIN).finish())
+        Self(PROJECTED.join_handle)
     }
 
     /// std's keyed collection `name` (`HashMap`, `HashSet`, `BTreeMap` or
@@ -339,14 +414,18 @@ impl Definition {
     /// The keyed collection these bytes name, as [`Self::keyed`] names it.
     #[must_use]
     pub fn keyed_kind(bytes: &[u8; 32]) -> Option<&'static str> {
-        KEYED.into_iter().find(|name| Self::keyed(name).0 == *bytes)
+        PROJECTED
+            .keyed
+            .iter()
+            .position(|keyed| keyed == bytes)
+            .map(|index| KEYED[index])
     }
 
     /// Rust's `std::time::Instant`, which crosses by value as Rawr's own
     /// `Instant`. It lives in `std`, which no crate's facade declares.
     #[must_use]
     pub fn instant() -> Self {
-        Self(Framed::new(INSTANT_DOMAIN).finish())
+        Self(PROJECTED.instant)
     }
 
     /// Rust's `std::convert::Infallible`, which iced re-exports as `Never`:
@@ -355,7 +434,7 @@ impl Definition {
     /// facade declares.
     #[must_use]
     pub fn infallible() -> Self {
-        Self(Framed::new(INFALLIBLE_DOMAIN).finish())
+        Self(PROJECTED.infallible)
     }
 
     /// A script value where a generic item is instantiated at a script type
@@ -363,7 +442,7 @@ impl Definition {
     /// that comes back is checked against the script type it stands for.
     #[must_use]
     pub fn value() -> Self {
-        Self(Framed::new(VALUE_DOMAIN).finish())
+        Self(PROJECTED.value)
     }
 
     /// A value of the facade type at `path`, as `iced::Length`, which a
@@ -396,17 +475,14 @@ impl Definition {
     /// The path under `std` of the std type these bytes name.
     #[must_use]
     pub fn std_path(bytes: &[u8; 32]) -> Option<&'static str> {
-        crate::classify::std_binding::held()
-            .map(|(path, _)| path)
-            .find(|path| Self::std(path).0 == *bytes)
+        PROJECTED.held(bytes).map(|(path, _)| path)
     }
 
     /// Whether these bytes name one of std's held types that is `Clone`,
     /// which Rawr holds as its own value as it holds a `String`.
     #[must_use]
     pub fn std_clone(bytes: &[u8; 32]) -> bool {
-        crate::classify::std_binding::held()
-            .any(|(path, clone)| clone && Self::std(path).0 == *bytes)
+        PROJECTED.held(bytes).is_some_and(|(_, clone)| clone)
     }
 
     /// Whether these bytes name a type rawr declares for a Rust value no
