@@ -1929,3 +1929,68 @@ fn a_marked_home_screen_with_inboard_s_shapes_runs_as_cargo_runs_it() {
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
+
+/// What `cargo run` prints for the project at `root`, which must succeed.
+fn cargo_prints(root: &Path) -> String {
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    String::from_utf8_lossy(&native.stdout).into_owned()
+}
+
+/// `rawr check` of the project at `root`, which must pass, and its `rawr
+/// run`, which must print `printed`, line by line.
+fn checks_and_prints(root: &Path, printed: &str) {
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(root, &[]);
+    for expected in printed.lines() {
+        let line = run.until(|_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
+/// A marked module compares `tracing`'s and `log`'s levels as their
+/// macros' enabled checks do: a `Level` with a `LevelFilter` through the
+/// crate's `PartialOrd<LevelFilter>` and `PartialEq<LevelFilter>`, as
+/// rustc selects them (#702). `rawr check` passes, and `rawr run` prints
+/// what `cargo run` prints.
+#[test]
+fn a_marked_module_compares_a_crate_type_with_another_crate_type() {
+    const LOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-log");
+    let root = crate::support::scratch().join("islands-log");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(LOG), &root);
+    let printed = cargo_prints(&root);
+    assert!(
+        printed.starts_with(
+            "compiled true current false off true filter false equal true unequal true \
+             same true log true\n"
+        ),
+        "{printed}"
+    );
+    checks_and_prints(&root, &printed);
+}
