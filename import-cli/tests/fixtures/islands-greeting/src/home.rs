@@ -10,6 +10,7 @@ use dice::Rng;
 use ui::common::Action;
 use ui::{Element, Widget};
 
+use crate::config::{Config, Pending};
 use crate::registry::{Entry, Id, Registry};
 
 pub mod wizard;
@@ -72,8 +73,12 @@ impl State {
         self.wizard = Some(wizard::State::new());
     }
 
-    pub fn greeting(&self, name: &str) -> String {
-        greeting(self.greeting_index, name)
+    pub fn greeting(&self, config: &Config) -> String {
+        greeting(self.greeting_index, config.user().display_name())
+    }
+
+    pub fn view<'a>(&'a self, pending: &'a Pending) -> Element<'a, Message> {
+        pending_bar(pending)
     }
 
     pub fn update(&mut self, message: Message) -> Action<Instruction, Message> {
@@ -179,4 +184,27 @@ fn recent_context_menu<'a>(entry: &'a Entry) -> Element<'a, Message> {
     } else {
         ui::button("Open", Message::OpenProject(id))
     }
+}
+
+/// A summary of the pending edits, or nothing when there are none.
+fn pending_bar<'a>(pending: &Pending) -> Element<'a, Message> {
+    if !pending.has_pending() {
+        return ui::empty("");
+    }
+    let file_count = pending.file_count();
+    let (adds, removes) = pending.diff_counts();
+    let file_label = if file_count == 1 { "file" } else { "files" };
+    let mut rows = vec![ui::empty("pending")];
+    rows.push(ui::item(
+        "files",
+        format!("{file_count} {file_label}"),
+        Message::NoOp,
+    ));
+    if adds > 0 {
+        rows.push(ui::item("adds", format!("+{adds}"), Message::NoOp));
+    }
+    if removes > 0 {
+        rows.push(ui::item("removes", format!("-{removes}"), Message::NoOp));
+    }
+    ui::section(None, rows)
 }

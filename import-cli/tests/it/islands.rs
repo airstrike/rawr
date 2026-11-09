@@ -1602,8 +1602,10 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
 /// elements of a slice a native method lends, through a `Vec<&Entry>`
 /// sorted by `Reverse`, a drop-down built by value, a boxed field moved
 /// out of a native struct variant, a native tuple of a value and a task,
-/// and an `impl Into<I>` the screen's own enum fills. `rawr check` passes
-/// and `rawr run` prints what `cargo run` prints.
+/// an `impl Into<I>` the screen's own enum fills, a text editor's content
+/// read and replaced, or-patterns of native payloads, the `&str` of a
+/// chain of a lent config's borrows, and a native tuple of counts.
+/// `rawr check` passes and `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_marked_home_screen_with_inboard_s_shapes_runs_as_cargo_runs_it() {
     const GREETING: &str = concat!(

@@ -1,6 +1,7 @@
 //! Native `main`, as inboard's workspace: it makes the marked home screen,
 //! prints its greeting and its recent list, gives it messages, and polls
 //! the tasks its wizard gives back.
+mod config;
 mod home;
 mod registry;
 
@@ -8,7 +9,14 @@ use home::Message;
 
 fn main() {
     let mut state = home::State::new();
-    println!("{}", state.greeting("Ada"));
+    let config = config::Config::new("Ada");
+    println!("{}", state.greeting(&config));
+    let mut pending = config::Pending::default();
+    println!("{}", state.view(&pending).describe());
+    pending.files.push((3, 0));
+    println!("{}", state.view(&pending).describe());
+    pending.files.push((2, 4));
+    println!("{}", state.view(&pending).describe());
     let mut registry = registry::Registry::default();
     println!("{}", state.sidebar(&registry).describe());
     registry.add("notes", 40, false, false);
