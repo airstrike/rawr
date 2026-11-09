@@ -733,6 +733,9 @@ pub enum Error {
     SelfOutsideImpl {
         /// Exact `self` reference.
         reference: Span,
+        /// Whether `self` is a parameter of a function outside an `impl`
+        /// or a `trait`, rather than a value read where no receiver is.
+        parameter: bool,
     },
     /// A mutation is attempted through an `&self` receiver.
     ImmutableReceiver {
@@ -1246,7 +1249,7 @@ impl Error {
             Self::InvalidHostOperation { operation, .. }
             | Self::ImportedApplicationRequired { operation, .. } => *operation,
             Self::UnusedValue { expression, .. } => *expression,
-            Self::SelfOutsideImpl { reference } => *reference,
+            Self::SelfOutsideImpl { reference, .. } => *reference,
             Self::ImmutableReceiver { mutation, .. } => *mutation,
             Self::InvalidMethodSignature { signature, .. } => *signature,
             Self::MissingCapability { operation, .. } => *operation,
@@ -1350,6 +1353,32 @@ impl Error {
             | Self::SelfOutsideImpl { .. }
             | Self::InvalidMethodSignature { .. } => None,
         }
+    }
+}
+
+/// rustc's message for `self` where no method's receiver is: a parameter of
+/// a function outside an `impl` or a `trait` (`true`), which rustc reports
+/// without a code, or a value read where no `self` parameter is (E0424).
+pub(crate) struct SelfOutside(pub(crate) bool);
+
+impl SelfOutside {
+    /// rustc's label on `self`.
+    pub(crate) fn label(&self) -> &'static str {
+        if self.0 {
+            "not semantically valid as function parameter"
+        } else {
+            "`self` value is a keyword only available in methods with a `self` parameter"
+        }
+    }
+}
+
+impl fmt::Display for SelfOutside {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(if self.0 {
+            "`self` parameter is only allowed in associated functions"
+        } else {
+            "expected value, found module `self`"
+        })
     }
 }
 
@@ -2023,9 +2052,10 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "unused required value `{value}` at {expression}; return, bind, or explicitly consume it"
             ),
-            Error::SelfOutsideImpl { reference } => {
-                write!(formatter, "`self` is only available inside an impl method at {reference}")
-            }
+            Error::SelfOutsideImpl {
+                reference,
+                parameter,
+            } => write!(formatter, "{} at {reference}", SelfOutside(*parameter)),
             Error::ImmutableReceiver {
                 owner,
                 mutation,

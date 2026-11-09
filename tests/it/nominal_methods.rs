@@ -216,7 +216,7 @@ fn impl_owners_duplicate_methods_and_self_scope_are_compile_checked() {
     );
     assert!(duplicate.secondary_span().is_some());
 
-    assert_resolution(&Engine::new(), "struct Counter { value: i64 } self", Category::SelfOutsideImpl, "only available inside an impl method");
+    assert_resolution(&Engine::new(), "struct Counter { value: i64 } self", Category::SelfOutsideImpl, "expected value, found module `self`");
 }
 
 #[test]

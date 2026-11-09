@@ -468,8 +468,8 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnusedValue { value, .. } => {
                     write!(f, "Unused required value '{value}'")
                 }
-                crate::resolve::Error::SelfOutsideImpl { .. } => {
-                    f.write_str("'self' is only available inside an impl method")
+                crate::resolve::Error::SelfOutsideImpl { parameter, .. } => {
+                    write!(f, "{}", crate::resolve::SelfOutside(*parameter))
                 }
                 crate::resolve::Error::ImmutableReceiver { owner, .. } => {
                     write!(f, "Cannot mutate '{owner}' through shared receiver '&self'")

@@ -694,6 +694,9 @@ fn primary_label(
             Some(format!("expected {}, found `()`", resolve::Described(expected)).into())
         }
         resolve::Error::ReturnWithoutValue { .. } => Some("return type is not `()`".into()),
+        resolve::Error::SelfOutsideImpl { parameter, .. } => {
+            Some(resolve::SelfOutside(*parameter).label().into())
+        }
         resolve::Error::WrongKind { expected, .. } => Some(format!("not a {expected}").into()),
         resolve::Error::Unimplemented { label, .. } => Some(label.clone()),
         resolve::Error::ImmutableBinding { .. } => {
@@ -796,7 +799,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::InvalidMethodCall => code::RESOLVE_METHOD_CALL,
         resolve::Category::InvalidHostOperation => code::RESOLVE_HOST_OPERATION,
         resolve::Category::UnusedValue => code::RESOLVE_UNUSED_VALUE,
-        resolve::Category::SelfOutsideImpl => code::RESOLVE_SELF,
+        resolve::Category::SelfOutsideImpl => match error {
+            resolve::Error::SelfOutsideImpl {
+                parameter: true, ..
+            } => code::RESOLVE_SELF_PARAMETER,
+            _ => code::RESOLVE_SELF,
+        },
         resolve::Category::ImmutableReceiver => code::RESOLVE_RECEIVER_MUTATION,
         resolve::Category::InvalidMethodSignature => code::RESOLVE_METHOD_SIGNATURE,
         resolve::Category::MissingCapability => code::RESOLVE_CAPABILITY,
@@ -928,6 +936,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::ReturnWithoutValue { .. } => {
             builder.help("give the `return` a value of the expected type")
         }
+        resolve::Error::SelfOutsideImpl {
+            parameter: true, ..
+        } => builder.note("associated functions are those in `impl` or `trait` definitions"),
         resolve::Error::WrongKind { found: "macro", .. } => {
             builder.help("use `!` to invoke the macro")
         }
@@ -1210,8 +1221,8 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::UnusedValue { value, .. } => {
             format!("unused `{value}` must be returned, bound, or explicitly consumed")
         }
-        resolve::Error::SelfOutsideImpl { .. } => {
-            "`self` is only available inside an impl method".into()
+        resolve::Error::SelfOutsideImpl { parameter, .. } => {
+            resolve::SelfOutside(*parameter).to_string()
         }
         resolve::Error::ImmutableReceiver { owner, .. } => {
             format!("cannot mutate `{owner}` through shared receiver `&self`")

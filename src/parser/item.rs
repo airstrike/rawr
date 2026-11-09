@@ -4632,10 +4632,14 @@ fn parse_body_syntax(
     // `S { x: 1 }`, which ends an expression as `1` does.
     let mut literals: Vec<usize> = Vec::new();
     // The heads of `if`, `while`, `for`, `match` and `->` whose block has
-    // not opened yet, at their depth: there `x {` opens the block, as in
-    // Rust. `pattern` holds after `let` until `=` and after `for` until
-    // `in`, where `S { x }` is a pattern.
-    let mut heads: Vec<(usize, bool)> = Vec::new();
+    // not opened yet: there `x {` opens the block, as in Rust.
+    let mut heads: Vec<Head> = Vec::new();
+    // The delimiter depths inside the arguments of open macro invocations,
+    // as `m!(..)`, whose tokens need not be Rust expressions.
+    let mut macros: Vec<usize> = Vec::new();
+    // Whether the last tokens are a macro's name and `!`, and its own name
+    // after `macro_rules!`: a delimiter here opens the macro's tokens.
+    let mut invocation = false;
     // Whether the last token is a name that a struct literal's `{` may
     // follow.
     let mut after_name = false;
@@ -4765,6 +4769,24 @@ fn parse_body_syntax(
             )
             .into_err(*position));
         }
+        // `if x == 0 2`: a condition, then a token that neither continues
+        // it nor opens its block, as rustc reports it.
+        if ends_expression
+            && macros.is_empty()
+            && heads.last().is_some_and(|head| {
+                head.condition && !head.pattern && head.depth == scan.delimiter_depth
+            })
+            && let Some((token, position)) = input.peek()
+            && begins_operand(token)
+        {
+            return Err(unexpected(
+                format!("expected `{{`, found {}", found(token)),
+                "expected `{`",
+                None,
+                token,
+                *position,
+            ));
+        }
         const_start = match input.peek() {
             Some((Token::Const, position)) if boundary => Some(*position),
             _ => None,
@@ -4804,33 +4826,55 @@ fn parse_body_syntax(
             after_extern = matches!(token, Token::Identifier(name) if name.as_str() == "extern");
             let depth = scan.delimiter_depth;
             match token {
-                Token::If | Token::While | Token::ThinArrow => {
-                    heads.push((depth, false));
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace if invocation => {
+                    macros.push(depth + 1);
                 }
-                Token::For => heads.push((depth, true)),
-                Token::Reserved(word) if word.as_str() == "match" => heads.push((depth, false)),
+                Token::RightParen | Token::RightBracket | Token::RightBrace
+                    if macros.last() == Some(&depth) =>
+                {
+                    macros.pop();
+                }
+                _ => {}
+            }
+            invocation = match token {
+                Token::Bang => after_name,
+                Token::Identifier(_) => invocation,
+                _ => false,
+            };
+            match token {
+                Token::If | Token::While => heads.push(Head::condition(depth, false)),
+                Token::ThinArrow => heads.push(Head {
+                    depth,
+                    pattern: false,
+                    condition: false,
+                }),
+                Token::For => heads.push(Head::condition(depth, true)),
+                Token::Reserved(word) if word.as_str() == "match" => {
+                    heads.push(Head::condition(depth, false));
+                }
                 Token::Let => {
-                    if let Some((head, pattern)) = heads.last_mut()
-                        && *head == depth
+                    if let Some(head) = heads.last_mut()
+                        && head.depth == depth
                     {
-                        *pattern = true;
+                        head.pattern = true;
                     }
                 }
                 Token::Equals | Token::In => {
-                    if let Some((head, pattern)) = heads.last_mut()
-                        && *head == depth
+                    if let Some(head) = heads.last_mut()
+                        && head.depth == depth
                     {
-                        *pattern = false;
+                        head.pattern = false;
                     }
                 }
-                Token::SemiColon => {
-                    while heads.last().is_some_and(|(head, _)| *head >= depth) {
+                // A match arm's guard ends at its `=>`, with no block.
+                Token::SemiColon | Token::DoubleArrow => {
+                    while heads.last().is_some_and(|head| head.depth >= depth) {
                         heads.pop();
                     }
                 }
                 Token::LeftBrace => match heads.last() {
-                    Some(&(head, pattern)) if head == depth => {
-                        if !pattern {
+                    Some(head) if head.depth == depth => {
+                        if !head.pattern {
                             heads.pop();
                         }
                     }
@@ -4892,6 +4936,45 @@ fn parse_body_syntax(
                 tokens.push(body_token(token, position));
             }
         }
+    }
+}
+
+/// The head of an `if`, `while`, `for`, `match` or `->` in a body, whose
+/// block has not opened yet.
+struct Head {
+    /// The delimiter depth the head is at.
+    depth: usize,
+    /// Whether a pattern is being read: after `let` until `=`, and after
+    /// `for` until `in`, where `S { x }` is a pattern.
+    pattern: bool,
+    /// Whether the head is a condition or a scrutinee, which an expression
+    /// ends and a block follows: all but a closure's `->`.
+    condition: bool,
+}
+
+impl Head {
+    fn condition(depth: usize, pattern: bool) -> Self {
+        Self {
+            depth,
+            pattern,
+            condition: true,
+        }
+    }
+}
+
+/// Whether `token` starts an operand and nothing else: a literal or a name,
+/// which never continues the expression before it.
+fn begins_operand(token: &Token) -> bool {
+    match token {
+        Token::IntegerConstant(_)
+        | Token::FloatConstant(_)
+        | Token::StringConstant(_)
+        | Token::ByteConstant(_)
+        | Token::CharConstant(_)
+        | Token::True
+        | Token::False => true,
+        Token::Identifier(name) => !matches!(name.as_str(), "as" | "else" | "in"),
+        _ => false,
     }
 }
 
@@ -5521,6 +5604,46 @@ answer
             )
             .unwrap();
         assert_eq!(unit.items().len(), 11);
+    }
+
+    /// A condition without its block is rustc's syntax error at the token
+    /// after it, before the braces it shifts can close the `impl` early and
+    /// leave a later method a free function with `self`.
+    #[test]
+    fn a_condition_without_its_block_is_the_first_error() {
+        let source = "pub struct App;\n\nimpl App {\n    pub fn update(&mut self, x: i32) -> i32 {\n        \
+                      match x {\n            _ => {\n                let next = if x == 0 2\n                    \
+                      1\n                } else {\n                    0\n                };\n                \
+                      next\n            }\n        }\n    }\n\n    pub fn view(&self) -> i32 {\n        \
+                      0\n    }\n}\n";
+        let error = Engine::new().parse_unit(source).unwrap_err();
+        assert!(
+            error.to_string().contains("expected `{`, found `2`"),
+            "{error}"
+        );
+        assert_eq!(error.position(), Position::new(7, 38));
+
+        for (source, found) in [
+            ("fn f(x: bool) {\n    while x y {}\n}", "`y`"),
+            ("fn f(v: Vec<i32>) {\n    for x in v 3 {}\n}", "`3`"),
+            ("fn f(x: i32) {\n    match x \"a\" {}\n}", "`\"a\"`"),
+        ] {
+            let error = Engine::new().parse_unit(source).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("expected `{{`, found {found}")),
+                "{source}: {error}"
+            );
+        }
+
+        Engine::new()
+            .parse_unit(
+                "fn f(v: Option<i32>, c: bool) -> i32 {\n    let n = match v {\n        \
+                 Some(x) if c => x,\n        ref y => 0,\n    };\n    \
+                 m!(if c 2 else 3);\n    if let ref z = v { 1 } else { n }\n}",
+            )
+            .unwrap();
     }
 
     #[test]
