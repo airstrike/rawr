@@ -252,8 +252,11 @@ fn a_native_main_calls_marked_modules_named_as_old_engine_keywords() {
 /// as an iced app gets its `Message` (#1203): bare, inside an `Option`, a
 /// `Vec` and a tuple, and a `ui::Element<'a, Message>` of a local crate
 /// whose lifetime the signature names. It passes them in by value and by
-/// `&mut`, which writes back (#1139). `rawr run` prints what `cargo run`
-/// prints.
+/// `&mut`, which writes back (#1139). A marked function makes a crate's
+/// value and lends it `&mut` to another, which writes it through the
+/// crate's `&mut` method, called from the main thread and from another,
+/// whose call has an arena of its own, as inboard's avatar is made on a
+/// tokio worker. `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_native_main_takes_and_gives_its_own_values_to_a_marked_leaf() {
     const NATIVES: &str = concat!(

@@ -72,6 +72,21 @@ pub(crate) fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     MOVE.get()?(value)
 }
 
+/// An arena of one call's own, on a thread that doesn't own the program, as
+/// a tokio worker that runs a `Task::perform`'s output closure: the native
+/// values the call's marked function makes, takes and gives back live there
+/// until what this gives drops.
+pub type Arena = fn() -> Box<dyn Any>;
+
+/// How the runner gives a call an arena of its own, which [`arenas`] names.
+static ARENA: OnceLock<Arena> = OnceLock::new();
+
+/// Name how the runner gives a call from a thread that doesn't own the
+/// program an arena of the call's own. Set once.
+pub fn arenas(arena: Arena) {
+    let _ = ARENA.set(arena);
+}
+
 /// Where the native value a script value holds is, lent to native code in
 /// place for as long as `pins` are kept; `None` when it holds none, and
 /// `Err` when it can't be lent so long. Without pins, only a value that
@@ -493,6 +508,9 @@ pub fn __rawr_island_call_v4(
     #[cfg(feature = "sync")]
     if let Some((calls, shared)) = elsewhere() {
         let _entry = crate::future::entry();
+        // The call's native values live in an arena of its own, which
+        // ends once its reply holds what it gives back.
+        let _arena = ARENA.get().map(|arena| arena());
         let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
             shared
                 .authority

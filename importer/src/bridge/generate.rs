@@ -2522,6 +2522,7 @@ fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::island::moves(moved);
     __rawr_internal::island::lends(lent_in_place);
     __rawr_internal::island::lodges(lodge);
+    __rawr_internal::island::arenas(|| Box::new(CallArena::enter()));
     __rawr_internal::host::debug::register::<NativeHandle>();
     __rawr_internal::host::display::register::<NativeHandle>();
     __rawr_internal::host::debug::register::<__rawr_internal::scope::Scoped>();
