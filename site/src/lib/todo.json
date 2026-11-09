@@ -14,7 +14,8 @@
       "entries": [
         {"text":"A call that passes a closure to a widget held boxed in a view builds, as when iced's modal styles its `center(..)` container. iced's modal runs.","issues":[955]},
         {"text":"A marked module's path through a `use` that binds a marked module now reaches that module's native children, as rustc does. inboard's `use crate::theme;` followed by `theme::text::base` is an example. A native signature's `&Theme` of a marked theme is now the marked type itself, not a different one. Each crate function item passed to a generic, as in `.style(theme::text::base)` beside `.style(theme::container::base)`, calls its own function. Before, they could share one adapter.","issues":[1504]},
-        {"text":"iced's `pane_grid` example runs again. A `&self` method on a crate value generic over the program's own type, such as `self.panes.len()` on a `pane_grid::State<Pane>`, can read it while a view still borrows it, as rustc allows. It no longer stops with a false E0502 before the window opens. This had regressed in #1432.","issues":[1505]}
+        {"text":"iced's `pane_grid` example runs again. A `&self` method on a crate value generic over the program's own type, such as `self.panes.len()` on a `pane_grid::State<Pane>`, can read it while a view still borrows it, as rustc allows. It no longer stops with a false E0502 before the window opens. This had regressed in #1432.","issues":[1505]},
+        {"text":"An `if`, `while`, `for` or `match` missing its `{` now reads as rustc's \"expected `{`, found `2`\", and nothing follows it. Before, it shifted the braces and surfaced as a `self` error in a later method. A free function's `self` parameter reads as rustc's \"`self` parameter is only allowed in associated functions\". A `self` value outside a method reads as E0424, replacing RAWR-RESOLVE-SELF.","issues":[1507]}
       ]
     },
     "releases": [
@@ -3319,7 +3320,9 @@
     {"issue":1503,"title":"A crate method borrowing its receiver can't take a `&'a str`, `&'a [T]` or `&'a mut T` at that lifetime","state":"open","category":"No glue (D593)"},
     {"issue":1504,"title":"A marked module's path through an imported marked module reaches its native children","state":"open","category":"No glue (D593)"},
     {"issue":1505,"title":"pane_grid panics with E0502 in view: a &self method on a value generic over a script type asks for &mut","state":"open","category":"No glue (D593)"},
-    {"issue":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open","category":"Borrow checker (D572)"}
+    {"issue":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open","category":"Borrow checker (D572)"},
+    {"issue":1507,"title":"A block missing after a condition surfaced as a self error in a later method","state":"open","category":"Divergences from rustc"},
+    {"issue":1508,"title":"Body syntax errors are found only when the body is lowered, after item resolution","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4431,7 +4434,9 @@
             {"number":1454,"title":"A universe depending on a crate with a build-dependency panics: unit package absent from…","state":"closed"},
             {"number":1456,"title":"`[T]::binary_search` isn't supported in marked code","state":"closed"},
             {"number":1497,"title":"An or-pattern over crate variants below a program variant is refused as binding different names","state":"closed"},
-            {"number":1498,"title":"An or-pattern whose alternatives differ in program structure and test crate values is refused","state":"open"}
+            {"number":1498,"title":"An or-pattern whose alternatives differ in program structure and test crate values is refused","state":"open"},
+            {"number":1507,"title":"A block missing after a condition surfaced as a self error in a later method","state":"open"},
+            {"number":1508,"title":"Body syntax errors are found only when the body is lowered, after item resolution","state":"open"}
           ]
         },
         {
