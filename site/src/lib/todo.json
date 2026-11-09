@@ -3342,7 +3342,7 @@
     {"issue":1519,"title":"A runner's registry builds each entry on first lookup from a binary plan, so prepare costs what a program touches","state":"open","category":"Platforms"},
     {"issue":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open","category":"Platforms"},
     {"issue":1521,"title":"A call in a crate macro's arguments ahead of a call that borrows a local was refused as run before it","state":"open","category":"No glue (D593)"},
-    {"issue":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"open","category":"No glue (D593)"}
+    {"issue":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4296,7 +4296,7 @@
             {"number":1514,"title":"A crate's &mut self method on a temporary is refused as not a `let mut` binding","state":"open"},
             {"number":1515,"title":"A method on an element of a slice a native method returns panics as a rawr bug","state":"open"},
             {"number":1521,"title":"A call in a crate macro's arguments ahead of a call that borrows a local was refused as run before it","state":"open"},
-            {"number":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"open"}
+            {"number":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired"}
           ]
         }
       ]
