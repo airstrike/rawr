@@ -67,6 +67,27 @@ fn a_native_module_declaring_a_marked_module_is_an_error() {
     assert!(report.labels()[0].source().identity().ends_with("src/model.rs"));
 }
 
+/// Under a native root, a native module may declare a marked one at any
+/// depth (#1467): the native modules on the way are native, and Rawr reads
+/// their `mod` declarations, as the root's, to reach the marked module.
+#[test]
+fn a_native_root_s_native_module_declares_a_marked_module() {
+    let project = Project::new("bridge");
+    project.write("src/main.rs", "mod workspace;\nfn main() {}\n");
+    project.write("src/workspace.rs", "pub mod screen;\npub fn summary() {}\n");
+    project.write("src/workspace/screen.rs", "pub mod home;\nmod other;\nconst PREFIX: &str = \"home\";\n");
+    project.write("src/workspace/screen/other.rs", "pub fn helper() {}\n");
+    project.write("src/workspace/screen/home.rs", "// rawr\npub fn view() {}\n");
+    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let marked = graph.sources().iter().map(|source| source.modules().join("::")).collect::<Vec<_>>();
+    assert_eq!(marked, ["", "workspace", "workspace::screen", "workspace::screen::home"]);
+    let native = graph.entry_package().rust_modules().iter().map(|module| module.modules().join("::")).collect::<Vec<_>>();
+    assert_eq!(native, ["workspace::screen::other", "workspace::screen", "workspace"]);
+    let screen = graph.sources().iter().find(|source| source.modules().len() == 2).unwrap();
+    assert_eq!(screen.text().lines().map(str::trim_end).collect::<Vec<_>>(), ["pub mod home;", "mod other;", ""]);
+}
+
 struct Project {
     root: PathBuf,
 }

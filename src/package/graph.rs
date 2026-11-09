@@ -59,13 +59,21 @@ pub struct RustModule {
     text: String,
 }
 
-/// A native crate root (D501) and the marked modules it declares. Every
+/// A native crate root (D501) and the marked modules of its tree. Every
 /// other name at the root is native: a native module or one of the root's
 /// own items, which marked code reaches through the app crate (#1185).
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NativeRoot {
     module: RustModule,
-    marked: Box<[ImmutableString]>,
+    /// Each marked module's path from the crate root, at any depth.
+    marked: Box<[Box<[ImmutableString]>]>,
+    /// The native modules on the way from the root to a marked module
+    /// (#1467), as `["workspace", "screen"]` for a marked
+    /// `workspace::screen::home`: native, and also Rawr sources of their
+    /// `mod` declarations alone, as the root is ([`island::module_text`]).
+    ///
+    /// [`island::module_text`]: super::island::module_text
+    bridges: Vec<Box<[ImmutableString]>>,
 }
 
 /// A package's binary crate when the program runs from its library: an
@@ -86,6 +94,17 @@ enum Tree {
     Crate,
     /// The tree of a native binary beside it ([`Bin`]).
     Bin,
+}
+
+/// Which `mod` declarations of a native module Rust's rules are followed
+/// for.
+#[derive(Clone, Copy)]
+enum Declared {
+    /// Every one.
+    All,
+    /// Those inside its inline modules: a bridge's own are a Rawr source's
+    /// (#1467).
+    Inline,
 }
 
 /// The file a `mod name;` declaration resolves to under Rust's rules.
@@ -242,37 +261,48 @@ impl Package {
         self.entry.as_deref()
     }
 
-    /// Whether `path`, from the crate root, lands in native code: below a
-    /// native module, in the island module a native root's shadow crate
-    /// adds (`__rawr_island`), or at or below an item of a native root
-    /// (`["Message", "Page"]`), which is any name there but a marked
-    /// module's and the `main` Rawr gives the root.
+    /// Whether `path`, from the crate root, lands in native code: its
+    /// innermost module is native. That is a native module it is below, or
+    /// a native root for any name there but the `main` Rawr gives it and the
+    /// island module its shadow crate adds (`__rawr_island`), whose items
+    /// are native, unless a marked module holds the path more closely: a
+    /// marked module's items are Rawr's at any depth, below a native module
+    /// too (#1467), and those of the native modules it declares are native.
     pub(crate) fn is_native_path<S: AsRef<str>>(&self, path: &[S]) -> bool {
-        let below = |modules: &[ImmutableString]| {
-            path.len() > modules.len()
+        let starts = |modules: &[ImmutableString]| {
+            path.len() >= modules.len()
                 && modules
                     .iter()
                     .zip(path)
                     .all(|(module, segment)| module.as_str() == segment.as_ref())
         };
-        self.rust_modules
+        let root = self.native_root.as_ref().and_then(|_| {
+            let first = path.first()?.as_ref();
+            let rawr = first == "main" || (first == super::island::MODULE && path.len() == 1);
+            (!rawr).then_some(0)
+        });
+        let native = self
+            .rust_modules
             .iter()
-            .any(|module| below(&module.modules))
-            || self.native_root.as_ref().is_some_and(|root| {
-                path.first().is_some_and(|first| {
-                    let first = first.as_ref();
-                    (first == super::island::MODULE && path.len() > 1)
-                        || (first != "main"
-                            && first != super::island::MODULE
-                            && !root.marked.iter().any(|marked| marked.as_str() == first))
-                })
-            })
+            .filter(|module| path.len() > module.modules.len() && starts(&module.modules))
+            .map(|module| module.modules.len())
+            .chain(root)
+            .max();
+        let marked = self.native_root.as_ref().and_then(|root| {
+            root.marked
+                .iter()
+                .filter(|modules| starts(modules))
+                .map(|modules| modules.len())
+                .max()
+        });
+        native.is_some_and(|native| marked.is_none_or(|marked| native > marked))
             || (self.entry.is_some() && path.len() > 1 && path[0].as_ref() == super::entry::MODULE)
     }
 
     /// Whether `path`, from the crate root, names native code: a native
     /// module itself (`["units"]`, which `use crate::units;` binds) or a
-    /// path below one.
+    /// path below one. A native module on the way to a marked one is Rawr's
+    /// module too, whose `mod` declarations lead Rawr to the marked one.
     pub(crate) fn names_native<S: AsRef<str>>(&self, path: &[S]) -> bool {
         self.is_native_path(path)
             || self.rust_modules.iter().any(|module| {
@@ -282,7 +312,16 @@ impl Package {
                         .iter()
                         .zip(path)
                         .all(|(module, segment)| module.as_str() == segment.as_ref())
+                    && !self.is_bridge(&module.modules)
             })
+    }
+
+    /// Whether the native module `modules` is on the way from a native
+    /// root to a marked module (#1467).
+    pub(crate) fn is_bridge(&self, modules: &[ImmutableString]) -> bool {
+        self.native_root
+            .as_ref()
+            .is_some_and(|root| root.bridges.iter().any(|bridge| **bridge == *modules))
     }
 
     /// The root `Cargo.toml` path and exact text, when it declares a `[package]`.
@@ -454,6 +493,7 @@ impl Graph {
         let sources = self.parsed_units().filter(|(source, _)| {
             source.package() == entry.name()
                 && !(source.modules().is_empty() && source.path() == root.path())
+                && !entry.is_bridge(source.modules())
         });
         Some(super::island::shadow(
             module_root,
@@ -477,6 +517,7 @@ impl Graph {
                 .filter(|(source, _)| {
                     source.package() == entry.name()
                         && !(source.modules().is_empty() && source.path() == root.path())
+                        && !entry.is_bridge(source.modules())
                 })
                 .map(|(source, unit)| (source.modules(), source.text(), unit.items())),
         )
@@ -823,6 +864,7 @@ impl<'a> Builder<'a> {
                     text,
                 },
                 marked: Box::default(),
+                bridges: Vec::new(),
             });
             declarations
         } else {
@@ -841,13 +883,18 @@ impl<'a> Builder<'a> {
             Some(read),
         )?;
         self.packages[package.0].source = root_source;
-        if self.packages[package.0].native_root.is_some() {
+        if let Some(root) = &self.packages[package.0].native_root {
             let marked = self.sources[root_source.index()..]
                 .iter()
-                .filter_map(|source| match source.modules() {
-                    [module] if source.package() == name.as_str() => Some(module.clone()),
-                    _ => None,
+                .filter(|source| {
+                    source.package() == name.as_str()
+                        && !source.modules().is_empty()
+                        && !root
+                            .bridges
+                            .iter()
+                            .any(|bridge| **bridge == *source.modules())
                 })
+                .map(|source| Box::from(source.modules()))
                 .collect();
             if let Some(root) = &mut self.packages[package.0].native_root {
                 root.marked = marked;
@@ -872,7 +919,16 @@ impl<'a> Builder<'a> {
             // A binary's modules are beside its root, as `src/bin/` holds
             // a binary's there.
             let bin_root = path.parent().unwrap_or(&module_root).to_path_buf();
-            self.load_rust_children(package, Tree::Bin, &root, &bin_root, &[], &path, &text)?;
+            self.load_rust_children(
+                package,
+                Tree::Bin,
+                &root,
+                &bin_root,
+                &[],
+                &path,
+                &text,
+                Declared::All,
+            )?;
         }
         if let Some(cargo) = cargo {
             // A binary reaches its package's library by the library's crate
@@ -1005,7 +1061,19 @@ impl<'a> Builder<'a> {
     /// declares, as project discovery decides, its `cfg`s read under the
     /// features and target options of `package`.
     fn reaches_marked(&self, package: Id, module_root: &Path, text: &str) -> Option<PathBuf> {
-        let mut pending = vec![(Vec::<ImmutableString>::new(), text.to_owned())];
+        self.reaches_marked_from(package, module_root, &[], text)
+    }
+
+    /// The first marked module the native module `modules`, whose text is
+    /// `text`, reaches as [`Builder::reaches_marked`] has the root reach one.
+    fn reaches_marked_from(
+        &self,
+        package: Id,
+        module_root: &Path,
+        modules: &[ImmutableString],
+        text: &str,
+    ) -> Option<PathBuf> {
+        let mut pending = vec![(modules.to_vec(), text.to_owned())];
         let mut seen = std::collections::BTreeSet::new();
         while let Some((modules, text)) = pending.pop() {
             for declaration in
@@ -1244,9 +1312,9 @@ impl<'a> Builder<'a> {
                         Some(text),
                     )?;
                 }
-                ModuleFile::Rust(child_path) => self.load_rust_module(
+                ModuleFile::Rust(child_path) => self.load_declared_rust_module(
                     package,
-                    Tree::Crate,
+                    package_name,
                     package_root,
                     module_root,
                     child_modules.into_boxed_slice(),
@@ -1493,11 +1561,95 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// A native module that the crate root or a marked module declares. In
+    /// a native root's crate, one whose tree reaches a marked module is a
+    /// bridge (#1467): native, as any other, and a Rawr source of its own
+    /// `mod` declarations alone, as the root is, so Rawr reaches the marked
+    /// modules below it through the modules rustc does, and the paths of
+    /// marked code into and out of them resolve as rustc resolves them.
+    /// Its declarations inside inline modules are Rust's to follow.
+    #[allow(clippy::too_many_arguments)]
+    fn load_declared_rust_module(
+        &mut self,
+        package: Id,
+        package_name: &str,
+        package_root: &Path,
+        module_root: &Path,
+        modules: Box<[ImmutableString]>,
+        path: PathBuf,
+        declaration: error::Label,
+    ) -> Result<(), Error> {
+        let canonical = self.canonical_source(path, package_root, Some(declaration))?;
+        let text = self.read_rust_module(&canonical, declaration)?;
+        if self.packages[package.0].native_root.is_none()
+            || self
+                .reaches_marked_from(package, module_root, &modules, &text)
+                .is_none()
+        {
+            return self.record_rust_module(
+                package,
+                Tree::Crate,
+                package_root,
+                module_root,
+                modules,
+                canonical,
+                text,
+                declaration,
+                Declared::All,
+            );
+        }
+        let rawr = super::island::module_text(&text, &self.packages[package.0].features);
+        if let Some(root) = &mut self.packages[package.0].native_root {
+            root.bridges.push(modules.clone());
+        }
+        self.load_module(
+            package,
+            package_name,
+            package_root,
+            module_root,
+            modules.clone(),
+            canonical.clone(),
+            Some(declaration),
+            Some(rawr),
+        )?;
+        self.load_rust_children(
+            package,
+            Tree::Crate,
+            package_root,
+            module_root,
+            &modules,
+            &canonical,
+            &text,
+            Declared::Inline,
+        )?;
+        self.packages[package.0].rust_modules.push(RustModule {
+            modules,
+            path: canonical,
+            text,
+        });
+        Ok(())
+    }
+
+    /// The text of the native module at `canonical`, which `declaration`
+    /// declares.
+    fn read_rust_module(
+        &self,
+        canonical: &Path,
+        declaration: error::Label,
+    ) -> Result<String, Error> {
+        self.read_to_string(canonical).map_err(|source| {
+            Error::resource(
+                self.evidence.clone(),
+                error::resource_message("read Rust module", canonical.to_path_buf(), &source),
+                source,
+                Some(declaration),
+            )
+        })
+    }
+
     /// Record one native module of `tree` and, under Rust's rules, the
-    /// modules it declares. A marked module declared by a native one, other
-    /// than the crate root, is an error at load: Rawr reaches marked modules
-    /// from the root through marked modules only. A binary's tree is a crate
-    /// of its own, which may declare a file the library's tree declares too.
+    /// modules it declares. A binary's tree is a crate of its own, which
+    /// may declare a file the library's tree declares too.
     #[allow(clippy::too_many_arguments)]
     fn load_rust_module(
         &mut self,
@@ -1510,6 +1662,35 @@ impl<'a> Builder<'a> {
         declaration: error::Label,
     ) -> Result<(), Error> {
         let canonical = self.canonical_source(path, package_root, Some(declaration))?;
+        let text = self.read_rust_module(&canonical, declaration)?;
+        self.record_rust_module(
+            package,
+            tree,
+            package_root,
+            module_root,
+            modules,
+            canonical,
+            text,
+            declaration,
+            Declared::All,
+        )
+    }
+
+    /// Record the native module `modules` of `tree`, read from `canonical`
+    /// as `text`, and the modules it declares that `declared` names.
+    #[allow(clippy::too_many_arguments)]
+    fn record_rust_module(
+        &mut self,
+        package: Id,
+        tree: Tree,
+        package_root: &Path,
+        module_root: &Path,
+        modules: Box<[ImmutableString]>,
+        canonical: PathBuf,
+        text: String,
+        declaration: error::Label,
+        declared: Declared,
+    ) -> Result<(), Error> {
         if let Tree::Crate = tree
             && let Some(previous) = self.module_targets.get(&canonical).copied()
         {
@@ -1527,14 +1708,6 @@ impl<'a> Builder<'a> {
         if let Tree::Crate = tree {
             self.module_targets.insert(canonical.clone(), declaration);
         }
-        let text = self.read_to_string(&canonical).map_err(|source| {
-            Error::resource(
-                self.evidence.clone(),
-                error::resource_message("read Rust module", canonical.clone(), &source),
-                source,
-                Some(declaration),
-            )
-        })?;
         self.load_rust_children(
             package,
             tree,
@@ -1543,6 +1716,7 @@ impl<'a> Builder<'a> {
             &modules,
             &canonical,
             &text,
+            declared,
         )?;
         let module = RustModule {
             modules,
@@ -1558,7 +1732,10 @@ impl<'a> Builder<'a> {
     }
 
     /// Record the native modules that the native module `modules` of
-    /// `tree`, read from `canonical` as `text`, declares.
+    /// `tree`, read from `canonical` as `text`, declares, those `declared`
+    /// names. A marked one is an error at load: Rawr reaches a marked
+    /// module through the crate root's, a marked module's or a bridge's own
+    /// `mod` declarations ([`Builder::load_declared_rust_module`]).
     #[allow(clippy::too_many_arguments)]
     fn load_rust_children(
         &mut self,
@@ -1569,13 +1746,17 @@ impl<'a> Builder<'a> {
         modules: &[ImmutableString],
         canonical: &Path,
         text: &str,
+        declared: Declared,
     ) -> Result<(), Error> {
         let declarations = super::polyglot::declarations(text, &self.packages[package.0].features);
         let mut evidence = None;
         for child in declarations {
             // `#[path]` is Rust's choice; a `#[cfg]`-disabled one is
             // never loaded by Rust.
-            if child.explicit_path || child.disabled {
+            if child.explicit_path
+                || child.disabled
+                || matches!(declared, Declared::Inline) && child.path.len() == 1
+            {
                 continue;
             }
             let mut child_modules = modules.to_vec();

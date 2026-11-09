@@ -50,13 +50,25 @@ fn start(bin: bool) -> String {
     format!("\nfn main() {{\n    {owner}::{MODULE}::main();\n}}\n")
 }
 
-/// The Rawr text of a native crate root: its `mod name;` declarations that
-/// Cargo compiles under `features` at their places, everything else
-/// blanked (line breaks kept, so positions stay the file's), and a `main`
+/// The Rawr text of a native crate root: its [`module_text`] and a `main`
 /// that starts the native program, the binary's with `bin`.
 pub(crate) fn root_text(
     text: &str,
     bin: bool,
+    features: &crate::project::cargo::features::Enabled,
+) -> String {
+    let mut declarations = module_text(text, features);
+    declarations.push_str(&start(bin));
+    declarations
+}
+
+/// The Rawr text of a native module that declares marked modules, the crate
+/// root or a native module on the way to a marked one (#1467): its `mod
+/// name;` declarations that Cargo compiles under `features`, each with its
+/// visibility, at their places, and everything else blanked (line breaks
+/// kept, so positions stay the file's).
+pub(crate) fn module_text(
+    text: &str,
     features: &crate::project::cargo::features::Enabled,
 ) -> String {
     let mut kept: Vec<std::ops::Range<usize>> = Vec::new();
@@ -73,7 +85,7 @@ pub(crate) fn root_text(
         let Some(semicolon) = text[declaration.range.end..].find(';') else {
             continue;
         };
-        kept.push(keyword.len()..declaration.range.end + semicolon + 1);
+        kept.push(visibility_start(keyword)..declaration.range.end + semicolon + 1);
     }
     let mut blanked = String::with_capacity(text.len() + 64);
     for (index, character) in text.char_indices() {
@@ -83,8 +95,31 @@ pub(crate) fn root_text(
             blanked.push(' ');
         }
     }
-    blanked.push_str(&start(bin));
     blanked
+}
+
+/// Where the visibility that `before`, the text up to a `mod` keyword, ends
+/// with starts (`pub`, `pub(crate)`, `pub(in crate::a)`): `before`'s end
+/// when it ends with none.
+fn visibility_start(before: &str) -> usize {
+    let end = before.len();
+    let trimmed = before.trim_end();
+    let written = match trimmed.strip_suffix(')') {
+        Some(inside) => match inside.rfind('(') {
+            Some(open) => before[..open].trim_end(),
+            None => return end,
+        },
+        None => trimmed,
+    };
+    match written.strip_suffix("pub") {
+        Some(rest)
+            if !rest
+                .ends_with(|character: char| character == '_' || character.is_alphanumeric()) =>
+        {
+            rest.len()
+        }
+        _ => end,
+    }
 }
 
 /// The generated files of a native root's shadow crate, and their shape.
@@ -3357,7 +3392,7 @@ mod tests {
         let lines = rawr.lines().collect::<Vec<_>>();
         assert_eq!(lines[0].trim(), "");
         assert_eq!(lines[1], "mod physics;");
-        assert_eq!(lines[2], "    mod util;");
+        assert_eq!(lines[2], "pub mod util;");
         assert!(
             lines[3..6].iter().all(|line| line.trim().is_empty()),
             "{rawr}"
