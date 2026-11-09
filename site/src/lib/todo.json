@@ -176,7 +176,9 @@
         {"text":"A marked file can define a type over a native one, as inboard's `theme.rs` does with `enum Theme { Selected(themedef::Theme) }`. Its values cross with their native parts, and every impl native code relies on stays: `From` in both directions with native and crate types, a crate trait's impl, and `impl From<&Theme> for markdown::Settings`.","issues":[1466]},
         {"text":"In ?play, a snippet's statements outside `fn main` can call std's path, io, time and fs items again, as the std page's `PathBuf` example does.","issues":[1460]},
         {"text":"rawr checks a project built for another target, such as wasm32, when a dependency's build script uses a build-dependency with host-only dependencies. Before, it stopped with an internal error that a Cargo unit's package was absent from metadata.","issues":[1454]},
-        {"text":"Any file in a native crate's module tree can be marked with `// rawr`, not only one declared by the crate root or a marked module. Marked code there reaches its parent's private items, its siblings and its native children as rustc allows, and native code calls into it.","issues":[1467,1150]}
+        {"text":"Any file in a native crate's module tree can be marked with `// rawr`, not only one declared by the crate root or a marked module. Marked code there reaches its parent's private items, its siblings and its native children as rustc allows, and native code calls into it.","issues":[1467,1150]},
+        {"text":"A marked type over a native one, as inboard's `enum Theme { Selected(themedef::Theme) }`, lends its native part to the interpreter where it is when native code borrows it, `&mut self` too, and moves it for a value: no clone, and a part that isn't `Clone` crosses.","issues":[1469]},
+        {"text":"A marked type's `&self` method returning a reference into its native part, as `fn colors(&self) -> &Colors`, gives native code that reference where the part is, and marked code can call it as `self.colors().accent`. A `&str` result such as `iced::theme::Base::name` works too.","issues":[1468]}
       ]
     },
     "releases": [
@@ -3252,12 +3254,15 @@
     {"issue":1465,"title":"A marked fn on another thread can't keep a native value past its call, and trait-object calls…","state":"open","category":"Divergences from rustc"},
     {"issue":1466,"title":"Marking inboard's theme.rs fails: a marked type's From impls with native and crate types, and…","state":"closed","category":"Divergences from rustc"},
     {"issue":1467,"title":"A marked module can only be declared from the crate root or a marked module; any file should be…","state":"closed","category":"Divergences from rustc"},
-    {"issue":1468,"title":"A marked type's `&self` method returning a reference into the value …","state":"open","category":"No glue (D593)"},
-    {"issue":1469,"title":"A marked type's native part goes to the interpreter as a clone at every call, even for `&self`…","state":"open","category":"No glue (D593)"},
+    {"issue":1468,"title":"A marked type's `&self` method returning a reference into the value …","state":"closed","category":"No glue (D593)"},
+    {"issue":1469,"title":"A marked type's native part goes to the interpreter as a clone at every call, even for `&self`…","state":"closed","category":"No glue (D593)"},
     {"issue":1470,"title":"A marked trait impl for a native type whose method takes a receiver …","state":"open","category":"No glue (D593)"},
     {"issue":1471,"title":"`SystemTime` values don't compare: `SystemTime::now() >= UNIX_EPOCH` is a type mismatch…","state":"open","category":"Divergences from rustc"},
     {"issue":1472,"title":"A marked module declared inside an inline module of a native file, or in a native binary's tree…","state":"open","category":"Divergences from rustc"},
-    {"issue":1473,"title":"A marked `&'a self` view returning a native `Element<'a, M>` with several lent native borrows is…","state":"open","category":"No glue (D593)"}
+    {"issue":1473,"title":"A marked `&'a self` view returning a native `Element<'a, M>` with several lent native borrows is…","state":"open","category":"No glue (D593)"},
+    {"issue":1474,"title":"A marked type's `&self -> &str` into a native part's String comes back as interned program text…","state":"open","category":"No glue (D593)"},
+    {"issue":1475,"title":"A marked type holding native parts crosses inside Vec, Option or a tuple by cloning its parts…","state":"open","category":"No glue (D593)"},
+    {"issue":1476,"title":"A marked fn returning a reference into a `&T` parameter's native part …","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
