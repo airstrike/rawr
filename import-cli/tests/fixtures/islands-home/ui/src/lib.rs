@@ -77,22 +77,24 @@ impl Content {
     }
 }
 
-/// A view of the state, as `iced::Element`, which an app maps into its
-/// own messages.
-pub struct Element<M> {
-    pub label: String,
+/// A view of the state, as `iced::Element<'a, Message>`, which an app maps
+/// into its own messages: it borrows the text it shows for `'a`.
+pub struct Element<'a, M> {
+    pub label: &'a str,
     pub on_press: Option<M>,
 }
 
-pub fn button<M>(label: &str, on_press: M) -> Element<M> {
+pub fn button<'a, M>(label: &'a str, on_press: M) -> Element<'a, M> {
     Element {
-        label: label.to_owned(),
+        label,
         on_press: Some(on_press),
     }
 }
 
-impl<M> Element<M> {
-    pub fn map<N>(self, f: impl Fn(M) -> N) -> Element<N> {
+impl<'a, M> Element<'a, M> {
+    /// The element over `N`, `f` called at once on its message, as
+    /// iced's `Element::map` wraps each message its widgets give.
+    pub fn map<N>(self, f: impl Fn(M) -> N) -> Element<'a, N> {
         Element {
             label: self.label,
             on_press: self.on_press.map(f),

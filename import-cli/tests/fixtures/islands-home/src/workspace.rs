@@ -30,6 +30,12 @@ impl Workspace {
         taken
     }
 
+    /// The home screen's element, which borrows the screen and the inbox
+    /// for as long as native code holds it, as iced's `view` does.
+    pub fn show(&self) -> ui::Element<'_, home::Message> {
+        self.home.view(&self.inbox)
+    }
+
     pub fn press(&mut self) -> usize {
         let element = home::view(&self.home);
         println!("view {}", element.label);

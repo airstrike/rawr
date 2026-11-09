@@ -231,6 +231,42 @@ static MAKERS: Mutex<Vec<(&'static str, Maker)>> = Mutex::new(Vec::new());
 struct Kept {
     next: u64,
     values: HashMap<u64, Held>,
+    /// What native code borrows of a marked value it holds through the
+    /// results of calls that borrow it (#1473), as `view<'a>(&'a self) ->
+    /// Element<'a, Message>` of a marked `State` gives: the program's
+    /// strings the result reads and the regions the calls ran in, by the
+    /// value's [`Anchor`]. They are let go when native code next takes the
+    /// value `&mut`, as rustc has ended every such borrow by then. Boxed,
+    /// so a region kept in them can name them while the table moves.
+    borrowed: HashMap<Anchor, Box<crate::scope::Pins>>,
+}
+
+/// A marked value native code holds, as a call's header names it (#1473):
+/// its address and a hash of its type's name, so a value of another type
+/// at the same address, as a field at its start, is another anchor.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Anchor {
+    address: u64,
+    ty: u64,
+}
+
+/// The pins of the marked value at `anchor`, made at its first borrow, while
+/// a call that borrows it runs.
+fn pins_at(anchor: Anchor) -> std::ptr::NonNull<crate::scope::Pins> {
+    kept(|kept| std::ptr::NonNull::from(&**kept.borrowed.entry(anchor).or_default()))
+}
+
+/// Let go of what native code borrowed of the marked values at `anchors`,
+/// each taken `&mut` by the call about to run (#1473).
+fn release_anchors(anchors: &[Anchor]) {
+    // Dropped once the table is free again.
+    let released = kept(|kept| {
+        anchors
+            .iter()
+            .filter_map(|anchor| kept.borrowed.remove(anchor))
+            .collect::<Vec<_>>()
+    });
+    drop(released);
 }
 
 /// One program value native code holds as a native trait's object.
@@ -1400,6 +1436,23 @@ impl Calls {
         };
         let count = u32::from_le_bytes(reader.array().map_err(malformed)?) as usize;
         let mutable = u64::from_le_bytes(reader.array().map_err(malformed)?);
+        let anchor = |reader: &mut Reader<'_>| -> Result<Anchor, String> {
+            let address = u64::from_le_bytes(reader.array().map_err(malformed)?);
+            let ty = u64::from_le_bytes(reader.array().map_err(malformed)?);
+            Ok(Anchor { address, ty })
+        };
+        let anchored = if flags & program::model::island::ANCHORED != 0 {
+            Some(anchor(&mut reader)?)
+        } else {
+            None
+        };
+        if flags & program::model::island::RELEASES != 0 {
+            let released = u32::from_le_bytes(reader.array().map_err(malformed)?) as usize;
+            let released = (0..released)
+                .map(|_| anchor(&mut reader))
+                .collect::<Result<Vec<_>, _>>()?;
+            release_anchors(&released);
+        }
         let item = self.items.get(&(owned, path.to_owned())).ok_or_else(|| {
             format!("rawr: the running program has no function `{path}`; restart `rawr run`")
         })?;
@@ -1468,11 +1521,16 @@ impl Calls {
         // region anchored on the value's pins, so what its result borrows,
         // as `view(&self)`'s `Element<'_, Message>` borrows the value's
         // strings, lives till the value is next taken `&mut` (#1321, D772).
+        // A call whose result borrows a marked value native code holds, as
+        // `view<'a>(&'a self, ..) -> Element<'a, Message>` borrows its
+        // `State`, runs the same way, anchored on that value's pins
+        // (#1473).
         let shared = made
             .held
             .iter()
             .find(|(_, _, borrow)| matches!(borrow, Borrow::Shared))
-            .and_then(|&(_, handle, _)| pins_of(handle));
+            .and_then(|&(_, handle, _)| pins_of(handle))
+            .or_else(|| anchored.map(pins_at));
         let Some(pins) = shared else {
             return self.finish(call, made, values, None, natives);
         };
@@ -1480,7 +1538,10 @@ impl Calls {
         // the table while the stand-in is borrowed, as it is for this call,
         // and they are let go only by a `&mut self` call (`take_kept`) or
         // the stand-in's drop, which rustc allows only once every borrow of
-        // the stand-in, and so of what this call gives back, has ended.
+        // the stand-in, and so of what this call gives back, has ended. A
+        // marked value's pins (`Kept::borrowed`) are let go only by a call
+        // that takes the value `&mut`, which rustc allows only once every
+        // borrow of it, and so of what this call gives back, has ended.
         let pins = unsafe { pins.as_ref() };
         let mut region = crate::scope::Region::anchored(pins);
         let anchored = Anchored {

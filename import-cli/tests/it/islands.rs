@@ -1339,10 +1339,17 @@ fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_repl
 /// `Message` with native payloads, and polls the crate's `Task<Message>`
 /// that `update` gives, whose work maps a native child's task with
 /// `Message::Wizard` and runs when native code polls it, and the crate's
-/// `Element<Message>` that `view` maps the same way. A `match`
+/// `Element<'a, Message>` that `view` maps the same way. A marked
+/// `view<'a>(&'a self, inbox: &'a inbox::State) -> Element<'a, Message>`
+/// and a free `view(&State) -> Element<'_, Message>` borrow the screen's
+/// text, the method reading the native inbox it is lent and mapping a
+/// native child's element whose message `Message::Wizard` wraps at once,
+/// and native code holds two of their elements at once and shows one each
+/// frame (#1473). A `match`
 /// on `Message::Wizard(wizard::Message::Step(..))` is exhaustive where
 /// rustc's is. `rawr check` passes, `rawr run` prints what `cargo run`
-/// prints, and a body edit swaps with the state native code keeps.
+/// prints, and body edits of `update` and `view` swap with the state
+/// native code keeps.
 #[test]
 fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     const HOME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-home");
@@ -1365,7 +1372,9 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
         String::from_utf8_lossy(&native.stderr)
     );
     assert!(
-        printed.ends_with("view count\npressed 2: hi! after 3 edits, count 5\n"),
+        printed.contains("shown hello Some(Inbox(Read(5))) and wizard\n")
+            && printed.contains("shown home Some(Wizard(Step(2)))\nview hello\n")
+            && printed.ends_with("view count\npressed 2: hi! after 3 edits, count 5\n"),
         "{printed}"
     );
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
@@ -1414,23 +1423,37 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
         let line = run.until(|_| true);
         assert_eq!(line, expected, "{}", run.seen.join("\n"));
     }
-    // Each tick adds `STEP` to the count the workspace keeps.
-    let tick = |line: &str| -> Option<(u32, u32, u32)> {
+    // Each tick adds `STEP` to the count the workspace keeps, and shows
+    // the screen's element.
+    let tick = |line: &str| -> Option<(u32, u32, u32, String)> {
         let (tick, rest) = line.strip_prefix("tick ")?.split_once(" from ")?;
-        let (from, by) = rest.split_once(" by ")?;
-        Some((tick.parse().ok()?, from.parse().ok()?, by.parse().ok()?))
+        let (from, rest) = rest.split_once(" by ")?;
+        let (by, shows) = rest.split_once(" shows ")?;
+        Some((
+            tick.parse().ok()?,
+            from.parse().ok()?,
+            by.parse().ok()?,
+            shows.to_owned(),
+        ))
     };
-    let first = run.until(|line| tick(line).is_some_and(|(tick, _, _)| tick >= 3));
-    let (_, kept, by) = tick(&first).unwrap();
-    assert_eq!(by, 1, "{}", run.seen.join("\n"));
+    let first = run.until(|line| tick(line).is_some_and(|(tick, ..)| tick >= 3));
+    let (_, kept, by, shows) = tick(&first).unwrap();
+    assert_eq!((by, shows.as_str()), (1, "home"), "{}", run.seen.join("\n"));
     edit(
         &root.join("src/workspace/home.rs"),
         "const STEP: u32 = 1;",
         "const STEP: u32 = 100;",
     );
-    let swapped = run.until(|line| tick(line).is_some_and(|(_, _, by)| by == 100));
-    let (_, from, _) = tick(&swapped).unwrap();
+    let swapped = run.until(|line| tick(line).is_some_and(|(_, _, by, _)| by == 100));
+    let (_, from, ..) = tick(&swapped).unwrap();
     assert!(from > kept, "{}", run.seen.join("\n"));
+    // The method's body swaps too: its element borrows other text.
+    edit(
+        &root.join("src/workspace/home.rs"),
+        "ui::button(&self.title, Message::Count)",
+        "ui::button(&self.greeting, Message::Count)",
+    );
+    run.until(|line| tick(line).is_some_and(|(.., shows)| shows == "hello"));
     assert!(
         !run.seen.iter().any(|line| line.contains("restarting")),
         "{}",
