@@ -48,6 +48,7 @@ pub fn empty<'a>() -> Element<'a, u32> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Inbox(crate::inbox::Message),
+    Grid(crate::grid::Message),
 }
 
 /// The inbox's element over the lent theme, its message mapped into the
@@ -62,6 +63,20 @@ pub fn inbox<'a>(theme: &'a theme::Theme) -> Element<'a, Message> {
 /// (#1509).
 pub fn titled<'a>(title: &'a str, theme: &'a theme::Theme) -> Element<'a, Message> {
     crate::inbox::titled(title, theme).map(Message::Inbox)
+}
+
+/// The screen's page, as inboard's `home::State::view`: the grid native
+/// code builds and gives by value inside an `Option`, whose `Element` names
+/// the marked theme, its message mapped into the screen's.
+pub fn page<'a>(
+    grid: Option<Element<'a, crate::grid::Message>>,
+    theme: &'a theme::Theme,
+) -> Element<'a, Message> {
+    let mut page = crate::inbox::view("inbox", theme).map(Message::Inbox);
+    if let Some(grid) = grid {
+        page = grid.map(Message::Grid);
+    }
+    page
 }
 
 /// Where the theme native code lends is, as native code reads it.

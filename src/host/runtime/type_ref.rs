@@ -831,34 +831,15 @@ impl Type {
                 })
             }
             Target::Script { identity, .. } => {
-                let schema = model.schema(identity).ok_or_else(|| {
-                    Error::Nominal(program::construction::Error::UnknownTarget {
-                        target: identity.clone(),
-                    })
-                })?;
-                Ok(Self::script(
-                    identity.clone(),
-                    schema.clone(),
-                    model.kind(identity).ok_or_else(|| {
-                        Error::Nominal(program::construction::Error::UnknownTarget {
-                            target: identity.clone(),
-                        })
-                    })?,
-                    model.runtime(identity).ok_or_else(|| {
-                        Error::Nominal(program::construction::Error::UnknownTarget {
-                            target: identity.clone(),
-                        })
-                    })?,
-                    path.arguments
-                        .iter()
-                        .filter_map(|argument| match argument {
-                            Argument::Type(ty) => {
-                                Some(Self::from_resolved_in(ty, model, parameters))
-                            }
-                            Argument::Lifetime(_) => None,
-                        })
-                        .collect::<Result<Box<[_]>, _>>()?,
-                ))
+                Self::script_in(identity, &path.arguments, model, parameters)
+            }
+            // A mirror is its marked type, as every type the lowering reads
+            // names it (#1484): a native value given in an `Element<'a,
+            // Message>` over the marked `Theme` is attested as the type the
+            // calls that take it expect.
+            #[cfg(feature = "rust-import")]
+            Target::Host { definition, .. } if let Some(identity) = model.mirrored(definition) => {
+                Self::script_in(identity, &path.arguments, model, parameters)
             }
             Target::Host { definition, owner } => {
                 let arguments = path
@@ -906,6 +887,36 @@ impl Type {
                 }
             }
         }
+    }
+
+    /// The marked type `identity` with `arguments`, as
+    /// [`Self::from_resolved_in`] reads each.
+    fn script_in(
+        identity: &type_def::Identity,
+        arguments: &[crate::resolve::type_ref::Argument],
+        model: &program::model::Model,
+        parameters: &[(ImmutableString, Self)],
+    ) -> Result<Self, Error> {
+        let unknown = || {
+            Error::Nominal(program::construction::Error::UnknownTarget {
+                target: identity.clone(),
+            })
+        };
+        Ok(Self::script(
+            identity.clone(),
+            model.schema(identity).ok_or_else(unknown)?.clone(),
+            model.kind(identity).ok_or_else(unknown)?,
+            model.runtime(identity).ok_or_else(unknown)?,
+            arguments
+                .iter()
+                .filter_map(|argument| match argument {
+                    crate::resolve::type_ref::Argument::Type(ty) => {
+                        Some(Self::from_resolved_in(ty, model, parameters))
+                    }
+                    crate::resolve::type_ref::Argument::Lifetime(_) => None,
+                })
+                .collect::<Result<Box<[_]>, _>>()?,
+        ))
     }
 }
 
@@ -1105,6 +1116,24 @@ impl fmt::Display for Type {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+        }
+    }
+}
+
+impl Error {
+    /// Whether a native value, or one a value holds, is not the type the
+    /// runner's own witness of it names. Imported types don't change while
+    /// a runner lives, and rustc has checked every operand's type, so no
+    /// program causes it: it is a rawr bug (D664).
+    pub(crate) fn is_invariant(&self) -> bool {
+        match self {
+            Self::AttestationMismatch { .. } => true,
+            Self::Member { source, .. } => source.is_invariant(),
+            Self::Representation { .. }
+            | Self::SymbolicCallable { .. }
+            | Self::Nominal(_)
+            | Self::MissingAttestation { .. }
+            | Self::Unsupported { .. } => false,
         }
     }
 }

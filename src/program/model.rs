@@ -46,6 +46,13 @@ pub(crate) struct Model {
     /// elsewhere.
     #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
     crossing: Box<[Crossed]>,
+    /// Each marked type by the identity of its mirror in rawr's copy of a
+    /// native root's crate (`resolve::Program::mirrored`): a type that
+    /// names the mirror, as a native alias's `Element<'a, Message>` over
+    /// the marked `Theme` does, names the marked type, as the lowering's
+    /// types do (#1484).
+    #[cfg(feature = "rust-import")]
+    mirrored: BTreeMap<crate::host::type_def::import::Identity, type_def::Identity>,
 }
 
 /// A script type as a universe runner names it.
@@ -318,40 +325,39 @@ impl Model {
             inputs: BTreeMap::new(),
             associated,
             crossing: crossing.clone(),
+            #[cfg(feature = "rust-import")]
+            mirrored: BTreeMap::new(),
         };
-        let mut members = BTreeMap::new();
-        for method in program.methods().iter().chain(program.builtin_methods()) {
-            if method.trait_name().is_none() {
-                continue;
-            }
-            let Some(type_def::Identity::Script(owner)) = method.key().owner() else {
-                continue;
-            };
-            let owner = owner
-                .modules()
-                .iter()
-                .map(ImmutableString::as_str)
-                .chain([owner.name()])
-                .collect::<Vec<_>>()
-                .join("::");
-            let path = format!("{}::{}", crossed(&owner), method.key().name());
-            let types = method
-                .parameters()
-                .iter()
-                .map(|parameter| {
-                    // A borrow's value is its referent's.
-                    let ty = match &parameter.ty {
-                        type_ref::Type::Reference { target, .. } => target,
-                        ty => ty,
-                    };
-                    crate::host::runtime::type_ref::Type::from_resolved_in(ty, &model, &[]).ok()
-                })
-                .collect();
-            members.insert(path, types);
-        }
-        model.members = members;
+        model.members = members(program, &model);
         model.inputs = inputs(program);
         model
+    }
+
+    /// This model with each marked type `host` has a mirror of named by
+    /// that mirror's identity (`resolve::Program::mirrored`).
+    #[cfg(feature = "rust-import")]
+    #[must_use]
+    pub(crate) fn mirroring(mut self, program: &Program, host: &crate::host::Registry) -> Self {
+        self.mirrored = program
+            .mirrored(host)
+            .map(|(identity, definition)| {
+                (
+                    identity,
+                    type_def::Identity::Script(definition.key().clone()),
+                )
+            })
+            .collect();
+        self.members = members(program, &self);
+        self
+    }
+
+    /// The marked type whose mirror `definition` is.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn mirrored(
+        &self,
+        definition: &crate::host::type_def::Definition,
+    ) -> Option<&type_def::Identity> {
+        self.mirrored.get(definition.identity().imported()?)
     }
 
     /// The types of the by-value parameters of marked functions that hold
@@ -1255,6 +1261,44 @@ fn identity_name(identity: &type_def::Identity) -> ImmutableString {
         type_def::Identity::Host(identity) => format!("host::{identity:?}").into(),
         type_def::Identity::Script(key) => key.to_string().into(),
     }
+}
+
+/// [`Model::members`] of `program`, each type as `model` reads it.
+fn members(
+    program: &Program,
+    model: &Model,
+) -> BTreeMap<String, Box<[Option<crate::host::runtime::type_ref::Type>]>> {
+    let mut members = BTreeMap::new();
+    for method in program.methods().iter().chain(program.builtin_methods()) {
+        if method.trait_name().is_none() {
+            continue;
+        }
+        let Some(type_def::Identity::Script(owner)) = method.key().owner() else {
+            continue;
+        };
+        let owner = owner
+            .modules()
+            .iter()
+            .map(ImmutableString::as_str)
+            .chain([owner.name()])
+            .collect::<Vec<_>>()
+            .join("::");
+        let path = format!("{}::{}", model.crossing_path(&owner), method.key().name());
+        let types = method
+            .parameters()
+            .iter()
+            .map(|parameter| {
+                // A borrow's value is its referent's.
+                let ty = match &parameter.ty {
+                    type_ref::Type::Reference { target, .. } => target,
+                    ty => ty,
+                };
+                crate::host::runtime::type_ref::Type::from_resolved_in(ty, model, &[]).ok()
+            })
+            .collect();
+        members.insert(path, types);
+    }
+    members
 }
 
 /// [`Model::inputs`] of `program`: only the public functions with a by-value

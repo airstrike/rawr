@@ -355,6 +355,33 @@ impl Program {
         &self.types
     }
 
+    /// Each marked type rawr's copy of a native root's crate mirrors
+    /// (#1249), with the identity of the mirror `host` has at its Rust
+    /// path. A type that names the mirror names the marked type: through a
+    /// native alias, in a crate type's arguments, in a given value's type
+    /// (#1484).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn mirrored<'p>(
+        &'p self,
+        host: &'p crate::host::Registry,
+    ) -> impl Iterator<
+        Item = (
+            crate::host::type_def::import::Identity,
+            &'p type_def::Definition,
+        ),
+    > + 'p {
+        self.types.iter().filter_map(move |definition| {
+            let key = definition.key();
+            let path = std::iter::once(ImmutableString::from(key.package()))
+                .chain(key.modules().iter().cloned())
+                .chain([ImmutableString::from(key.name())])
+                .collect::<Box<[_]>>();
+            let rust = self.mirrors.get(&path)?.join("::");
+            let identity = host.type_(&rust)?.identity().imported()?;
+            Some((*identity, definition))
+        })
+    }
+
     #[allow(dead_code)]
     pub(crate) const fn methods(&self) -> &[method::Definition] {
         &self.methods
