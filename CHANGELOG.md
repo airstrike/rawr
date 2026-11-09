@@ -11,6 +11,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked function that takes `Option<Element<'a, Message>>` by value from native code, as inboard's `home::State::view` takes `home_grid`, can now call `.map` on the element. Before, a value given this way was checked against the marked theme's native mirror, while `.map` expected the marked type itself, so the call failed. A native value whose type doesn't match what a call expects is now reported as a rawr bug, not as an error in the program. (#1530)
 - A marked screen that passes a native function by name, as inboard's `home.rs` passes `theme::text::base` to `.style`, no longer restarts on a body edit above that call; it swaps in place. The runner names the function, not where the program writes it. When a save does need a new native build, `rawr run` says which native input or native use changed instead of "native code changed". (#1531)
 - When a save can't compile inside the running program, `rawr run` says why in one line, `rawr: preparing again: <reason>`, and the events stream carries `{"event":"preparing","reason":…}`. The reason is one of: a refresh, the native input that changed since the running build was checked, `Cargo.toml` or what native code sees of the marked modules, an earlier save's pending native build, or the running program's own miss. (#1533)
+- A marked fn whose element borrows only native inputs now runs, as `fn view<'a>(threads: &'a Store) -> Element<'a, Message>` does. So does a fn that reads a crate call's output right where it makes it, from values native code lent it. (#1491)
+- A lent slice passed beside a lent value to a crate fn that keeps neither now works. (#1500)
 
 ## 0.3.173 (2026-11-09)
 
