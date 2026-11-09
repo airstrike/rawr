@@ -53,6 +53,9 @@ thread_local! {
     /// by the first of its parts it lent: the whole's lend.
     static WHOLES: RefCell<Vec<(crate::scope::Nonce, crate::scope::Lent)>> =
         const { RefCell::new(Vec::new()) };
+    /// Each text read from a call's receiver while it is noted
+    /// ([`read_text`]), in the order native code wrote them.
+    static TEXTS: RefCell<Option<Vec<ImmutableString>>> = const { RefCell::new(None) };
 }
 
 /// How the runner keeps a native value native code gives a marked function,
@@ -894,6 +897,26 @@ fn first_lent(value: &Dynamic, depth: usize) -> Option<crate::scope::Nonce> {
     }
 }
 
+/// `text`, read from a call's arguments, is one the receiver holds when
+/// the call notes them: a `&str` its method gives may be in it, as
+/// `&self.0` of an `Id(String)` is.
+pub(crate) fn read_text(text: &ImmutableString) {
+    TEXTS.with_borrow_mut(|texts| {
+        if let Some(texts) = texts {
+            texts.push(text.clone());
+        }
+    });
+}
+
+/// Where `text` starts in `held`, when it is a part of that very text, as
+/// `&self.0` is of the receiver's: by address, never by what it reads.
+fn start_in(held: &str, text: &str) -> Option<usize> {
+    let start = held.as_ptr().addr();
+    let at = text.as_ptr().addr();
+    let offset = at.checked_sub(start)?;
+    (offset + text.len() <= held.len()).then_some(offset)
+}
+
 /// `read` of the published generation's model and its crate's script
 /// types: on the thread that owns the program, or the one published last.
 fn with_types<R>(
@@ -1643,6 +1666,7 @@ impl Calls {
         // A stand-in's receiver is its program value, taken for the call
         // (#1264).
         let mut held = Vec::new();
+        let mut texts = Vec::new();
         for index in 0..count {
             if reader.bytes.first() == Some(&program::model::island::HANDLE) {
                 reader.byte().map_err(malformed)?;
@@ -1663,7 +1687,16 @@ impl Calls {
                 continue;
             }
             let part = inputs.and_then(|inputs| inputs.get(index)?.as_ref());
-            match model.island_read(&self.types, lent, given, part, &mut reader, 0) {
+            // A method's `&str` may be in a text its receiver holds.
+            let noted = index == 0 && matches!(gives, Gives::Text);
+            if noted {
+                TEXTS.set(Some(Vec::new()));
+            }
+            let read = model.island_read(&self.types, lent, given, part, &mut reader, 0);
+            if noted {
+                texts = TEXTS.take().unwrap_or_default();
+            }
+            match read {
                 Ok(value) => values.push(value),
                 Err(error) => {
                     restore(&held, &mut values);
@@ -1707,6 +1740,7 @@ impl Calls {
             mutable,
             gives,
             own: lent.iter().map(crate::scope::Lent::nonce).collect(),
+            texts,
         };
         // A `&self` call on a native trait object's program value runs in a
         // region anchored on the value's pins, so what its result borrows,
@@ -1777,6 +1811,7 @@ impl Calls {
             mutable,
             gives,
             own,
+            texts,
         } = made;
         let path = call.path;
         let model = call.model;
@@ -1823,18 +1858,32 @@ impl Calls {
                 reply.extend_from_slice(&(text.as_ptr().expose_provenance() as u64).to_le_bytes());
                 reply.extend_from_slice(&(text.len() as u64).to_le_bytes());
             }
-            // A `&str` a method of a marked value whose parts native code
-            // lent gives back (#1468): the program's own text, pinned for
-            // as long as the runner lives, once per text.
+            // A `&str` a method of a marked value native code holds gives
+            // back: in a text native code's value holds, where native code
+            // finds it in that value, or else the program's own text, pinned
+            // for as long as the runner lives, once per text (#1468).
             (Gives::Text, None) => {
                 let text = result
                     .flatten_clone()
                     .into_immutable_string()
                     .map_err(|actual| unsent(format!("a `{actual}` is no `&str`")))?;
-                let text = lasting_text(text);
-                reply.push(program::model::island::PINNED);
-                reply.extend_from_slice(&(text.as_ptr().expose_provenance() as u64).to_le_bytes());
-                reply.extend_from_slice(&(text.len() as u64).to_le_bytes());
+                if let Some((index, start)) = texts
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, held)| Some((index, start_in(held, &text)?)))
+                {
+                    reply.push(program::model::island::TEXT_AT);
+                    for count in [index, start, text.len()] {
+                        reply.extend_from_slice(&(count as u64).to_le_bytes());
+                    }
+                } else {
+                    let text = lasting_text(text);
+                    reply.push(program::model::island::PINNED);
+                    reply.extend_from_slice(
+                        &(text.as_ptr().expose_provenance() as u64).to_le_bytes(),
+                    );
+                    reply.extend_from_slice(&(text.len() as u64).to_le_bytes());
+                }
             }
             // A reference into a part native code lent the call where it
             // is, as `&self.0.colors` of a marked `Theme` (#1468).
@@ -2042,6 +2091,9 @@ struct Made<'i> {
     /// The lends of what native code lent the call, as the parts of a
     /// marked value it lends (#1469).
     own: Vec<crate::scope::Nonce>,
+    /// Each text the receiver of a method whose `&str` borrows it holds,
+    /// in the order native code wrote them ([`read_text`]).
+    texts: Vec<ImmutableString>,
 }
 
 /// The region a `&self` call on a native trait object runs in, and the

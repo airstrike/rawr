@@ -163,6 +163,41 @@ fn main() {
     let names = ["three".to_owned(), "four".to_owned()];
     read.mark_all_read(names.iter().map(home::Id::new));
     println!("read {}", read.label());
+    // An id's text, borrowed where native code holds the id: twice while
+    // the first borrow is held, the same text, and never the text of
+    // another id that reads the same.
+    let server = home::Id::new("server-7");
+    let twin = home::Id::new("server-7");
+    let text = server.as_str();
+    println!(
+        "id {} {:?} {} {}",
+        text,
+        server.as_str().strip_prefix("server-"),
+        std::ptr::eq(text, server.as_str()),
+        std::ptr::eq(text, twin.as_str())
+    );
+    // Ids looked up in, added to and given back through the `HashSet` the
+    // ids read keep, by Rust's hashing and equality: an id made again from
+    // the same text is the same id.
+    println!(
+        "read one {} server {} of {}",
+        read.is_read(&home::Id::new("one")),
+        read.is_read(&server),
+        read.count()
+    );
+    read.mark_read(&twin);
+    read.mark_read(&server);
+    read.mark_all_read(vec![home::Id::new("one"), home::Id::new("five")]);
+    println!("server {} of {}", read.is_read(&server), read.count());
+    match read.update(home::Mark::Read(home::Id::new("server-9"))) {
+        home::Marked::Read(id) => println!(
+            "marked {:?} {} of {}",
+            id.as_str().strip_prefix("server-"),
+            read.is_read(&id),
+            read.count()
+        ),
+        home::Marked::AllRead => println!("marked all"),
+    }
     // Screens whose elements native code held, then moved and dropped.
     for round in 0..2 {
         let screen = home::State::new();
