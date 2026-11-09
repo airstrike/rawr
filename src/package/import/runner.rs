@@ -908,7 +908,14 @@ fn build(
         let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
         for module in prefixes.chain(std::iter::once(path)) {
             match builder.imported_module(module, allocation) {
-                Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+                Ok(_)
+                | Err(host::Error::DuplicateFacadeEntry {
+                    existing: "module", ..
+                }) => {}
+                // A prefix that is a type or a re-export, as bytemuck's
+                // `pub use ::core as __core;`, holds no modules of the
+                // crate's: what lies under it is reached through it.
+                Err(host::Error::DuplicateFacadeEntry { .. }) => break,
                 Err(error) => return Err(entry_error(facade.root(), module, error.into())),
             }
         }
@@ -920,7 +927,14 @@ fn build(
         let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
         for module in prefixes {
             match builder.imported_module(module, allocation) {
-                Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+                Ok(_)
+                | Err(host::Error::DuplicateFacadeEntry {
+                    existing: "module", ..
+                }) => {}
+                // A prefix that is a type or a re-export, as bytemuck's
+                // `pub use ::core as __core;`, holds no modules of the
+                // crate's: what lies under it is reached through it.
+                Err(host::Error::DuplicateFacadeEntry { .. }) => break,
                 Err(error) => return Err(entry_error(facade.root(), module, error.into())),
             }
         }
@@ -941,7 +955,14 @@ fn build(
         let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
         for module in prefixes {
             match builder.imported_module(module, allocation) {
-                Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+                Ok(_)
+                | Err(host::Error::DuplicateFacadeEntry {
+                    existing: "module", ..
+                }) => {}
+                // A prefix that is a type or a re-export, as bytemuck's
+                // `pub use ::core as __core;`, holds no modules of the
+                // crate's: what lies under it is reached through it.
+                Err(host::Error::DuplicateFacadeEntry { .. }) => break,
                 Err(error) => return Err(entry_error(facade.root(), module, error.into())),
             }
         }
