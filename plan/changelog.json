@@ -175,7 +175,9 @@
       {"text":"Slices and `Vec`s run `binary_search`, `binary_search_by`, `binary_search_by_key` and `partition_point` by std's own loop, so each `Ok` among equal elements and each `Err` insertion point is the one rustc's build gives.","issues":[1456]},
       {"text":"A marked module reads a native crate's `const` or `static` of `&str` as `&'static str` and passes it to a crate function that takes one, such as `Font::new(fonts::UI_FAMILY)`, keeping one string for the program's life. A constant of a slice of numbers reads as `&[T]`, as in Rust. An item a module can't give yet is now rustc's E0425 for the module.","issues":[1146]},
       {"text":"A `match` on a marked enum whose variant holds a crate enum (`Message::Wizard(wizard::Message::Step(step))`) is exhaustive where rustc's is, instead of a false E0004.","issues":[1481]},
-      {"text":"Native code can keep a marked `State` between calls and poll the `Task<Message>` a marked `update` returns, mapped with a marked variant such as `Message::Wizard`: the task and element types are native code's own.","issues":[1485],"refs":[1249,44]}
+      {"text":"Native code can keep a marked `State` between calls and poll the `Task<Message>` a marked `update` returns, mapped with a marked variant such as `Message::Wizard`: the task and element types are native code's own.","issues":[1485],"refs":[1249,44]},
+      {"text":"A marked type can hold a native value that isn't `Clone` inside an `Option`, a `Vec`, a `Box` or a tuple, as inboard's `home::State` holds `wizard: Option<wizard::State>`. Native code lends the value to marked methods where it is, so `self.wizard = Some(..)`, `self.wizard = None`, `self.tabs.push(..)` and `self.tabs.remove(i)` work as in Rust.","issues":[1475,1482]},
+      {"text":"A marked function that returns `()` gives native code `()` even when its last statement leaves a value, such as the native part `self.tabs.remove(index);` removes. That case used to fail with E0515.","issues":[1486]}
     ]
   },
   "releases": [

@@ -1,6 +1,6 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-08",
+  "updated": "2026-11-09",
   "version": "0.3.171",
   "examples": {
     "running": 34,
@@ -182,7 +182,9 @@
         {"text":"Slices and `Vec`s run `binary_search`, `binary_search_by`, `binary_search_by_key` and `partition_point` by std's own loop, so each `Ok` among equal elements and each `Err` insertion point is the one rustc's build gives.","issues":[1456]},
         {"text":"A marked module reads a native crate's `const` or `static` of `&str` as `&'static str` and passes it to a crate function that takes one, such as `Font::new(fonts::UI_FAMILY)`, keeping one string for the program's life. A constant of a slice of numbers reads as `&[T]`, as in Rust. An item a module can't give yet is now rustc's E0425 for the module.","issues":[1146]},
         {"text":"A `match` on a marked enum whose variant holds a crate enum (`Message::Wizard(wizard::Message::Step(step))`) is exhaustive where rustc's is, instead of a false E0004.","issues":[1481]},
-        {"text":"Native code can keep a marked `State` between calls and poll the `Task<Message>` a marked `update` returns, mapped with a marked variant such as `Message::Wizard`: the task and element types are native code's own.","issues":[1485],"refs":[1249,44]}
+        {"text":"Native code can keep a marked `State` between calls and poll the `Task<Message>` a marked `update` returns, mapped with a marked variant such as `Message::Wizard`: the task and element types are native code's own.","issues":[1485],"refs":[1249,44]},
+        {"text":"A marked type can hold a native value that isn't `Clone` inside an `Option`, a `Vec`, a `Box` or a tuple, as inboard's `home::State` holds `wizard: Option<wizard::State>`. Native code lends the value to marked methods where it is, so `self.wizard = Some(..)`, `self.wizard = None`, `self.tabs.push(..)` and `self.tabs.remove(i)` work as in Rust.","issues":[1475,1482]},
+        {"text":"A marked function that returns `()` gives native code `()` even when its last statement leaves a value, such as the native part `self.tabs.remove(index);` removes. That case used to fail with E0515.","issues":[1486]}
       ]
     },
     "releases": [
@@ -3265,17 +3267,20 @@
     {"issue":1472,"title":"A marked module declared inside an inline module of a native file, or in a native binary's tree…","state":"open","category":"Divergences from rustc"},
     {"issue":1473,"title":"A marked `&'a self` view returning a native `Element<'a, M>` with several lent native borrows is…","state":"open","category":"No glue (D593)"},
     {"issue":1474,"title":"A marked type's `&self -> &str` into a native part's String comes back as interned program text…","state":"open","category":"No glue (D593)"},
-    {"issue":1475,"title":"A marked type holding native parts crosses inside Vec, Option or a tuple by cloning its parts…","state":"open","category":"No glue (D593)"},
+    {"issue":1475,"title":"A marked type holding native parts crosses inside Vec, Option or a tuple by cloning its parts…","state":"closed","category":"No glue (D593)"},
     {"issue":1476,"title":"A marked fn returning a reference into a `&T` parameter's native part …","state":"open","category":"No glue (D593)"},
     {"issue":1477,"title":"A native `&'static [T]` const of numbers is copied at each read and isn't passed through to a…","state":"open","category":"Divergences from rustc"},
     {"issue":1478,"title":"A native const of nested references, as `&[&str]` or `&(u8, u8)`, can't be used from marked code","state":"open","category":"Divergences from rustc"},
     {"issue":1479,"title":"A queued swap waits for the next input event to apply; it should wake the app's event loop and…","state":"open","category":"Hot reload of a marked `main` (D555)"},
     {"issue":1480,"title":"A project whose native lib (psm) rawr's shared runtime also links rebuilds the runtime…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1481,"title":"Exhaustiveness ignored crate-enum patterns nested in a program pattern, so rawr reported a false…","state":"closed","category":"No glue (D593)"},
-    {"issue":1482,"title":"A marked struct with an `Option<native>` field (inboard's `home::State::wizard`) doesn't cross…","state":"open","category":"No glue (D593)"},
+    {"issue":1482,"title":"A marked struct with an `Option<native>` field (inboard's `home::State::wizard`) doesn't cross…","state":"closed","category":"No glue (D593)"},
     {"issue":1483,"title":"A script fn a crate calls at once inside a lifetime-carrying receiver's call …","state":"open","category":"No glue (D593)"},
     {"issue":1484,"title":"A marked mirror type passed by `&T` to a crate generic moves its native parts out instead of…","state":"open","category":"No glue (D593)"},
-    {"issue":1485,"title":"Native code polls the Task<Message> a marked update returns","state":"open","category":"No glue (D593)"}
+    {"issue":1485,"title":"Native code polls the Task<Message> a marked update returns","state":"open","category":"No glue (D593)"},
+    {"issue":1486,"title":"A marked unit function gives native code () whatever its last statement leaves","state":"open","category":"No glue (D593)"},
+    {"issue":1487,"title":"A native part a marked &mut call moves to another place comes back","state":"open","category":"No glue (D593)"},
+    {"issue":1488,"title":"A lent native part replaced in a marked &mut call drops when the call returns","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4098,7 +4103,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Three real apps run under rawr run (2026-11-08): the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. Next: a native root holding marked types (#44, #1249) for inboard's home.rs, and the build.rs step for in-process reload (#1425, #1426)",
+          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), and native values sit in its Option and Vec fields (#1475). Next: views that borrow the state (#1473) and by-value lifetime parameters (#1225)",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
@@ -4196,7 +4201,12 @@
             {"number":1351,"title":"A watched package tree covers its .git and nested packages","state":"open"},
             {"number":1364,"title":"A native trait object's `&[T]`/`&T` result that borrows the receiver comes back as a copy per call","state":"open"},
             {"number":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open"},
-            {"number":1375,"title":"The watcher hands every input file to FSEvents (13,847 for a real app); watch roots and filter in rawr","state":"closed"}
+            {"number":1375,"title":"The watcher hands every input file to FSEvents (13,847 for a real app); watch roots and filter in rawr","state":"closed"},
+            {"number":1475,"title":"A marked type holding native parts crosses inside Vec, Option or a tuple by cloning its parts…","state":"closed"},
+            {"number":1482,"title":"A marked struct with an `Option<native>` field (inboard's `home::State::wizard`) doesn't cross…","state":"closed"},
+            {"number":1486,"title":"A marked unit function gives native code () whatever its last statement leaves","state":"open"},
+            {"number":1487,"title":"A native part a marked &mut call moves to another place comes back","state":"open"},
+            {"number":1488,"title":"A lent native part replaced in a marked &mut call drops when the call returns","state":"open"}
           ]
         }
       ]

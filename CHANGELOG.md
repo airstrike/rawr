@@ -176,6 +176,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked module reads a native crate's `const` or `static` of `&str` as `&'static str` and passes it to a crate function that takes one, such as `Font::new(fonts::UI_FAMILY)`, keeping one string for the program's life. A constant of a slice of numbers reads as `&[T]`, as in Rust. An item a module can't give yet is now rustc's E0425 for the module. (#1146)
 - A `match` on a marked enum whose variant holds a crate enum (`Message::Wizard(wizard::Message::Step(step))`) is exhaustive where rustc's is, instead of a false E0004. (#1481)
 - Native code can keep a marked `State` between calls and poll the `Task<Message>` a marked `update` returns, mapped with a marked variant such as `Message::Wizard`: the task and element types are native code's own. (#1485; part of #1249, #44)
+- A marked type can hold a native value that isn't `Clone` inside an `Option`, a `Vec`, a `Box` or a tuple, as inboard's `home::State` holds `wizard: Option<wizard::State>`. Native code lends the value to marked methods where it is, so `self.wizard = Some(..)`, `self.wizard = None`, `self.tabs.push(..)` and `self.tabs.remove(i)` work as in Rust. (#1475, #1482)
+- A marked function that returns `()` gives native code `()` even when its last statement leaves a value, such as the native part `self.tabs.remove(index);` removes. That case used to fail with E0515. (#1486)
 
 ## 0.3.171 (2026-11-07)
 
