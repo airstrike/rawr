@@ -260,6 +260,19 @@ enum Pass {
     Object,
 }
 
+/// What a trampoline makes of an argument-position `impl Trait`, as
+/// inboard's `ids: impl IntoIterator<Item = Id>`, whose value may be of
+/// any type and borrow anything: an owned value of `ty`, written
+/// `written`, which implements the trait and which the body can use only
+/// as the trait allows, made by `make` from the argument, named
+/// `__value`. The argument's own value never reaches the interpreter, so
+/// nothing of it outlives the call.
+struct Stand {
+    ty: type_ref::Type,
+    written: String,
+    make: String,
+}
+
 /// The crate's own struct or enum that native code sees.
 struct Mirrored<'a> {
     generic: bool,
@@ -916,6 +929,63 @@ impl<'a> Generator<'a> {
                 _ => Err(reason),
             },
         }
+    }
+
+    /// How `parameter` of `function` crosses when its type is an
+    /// argument-position `impl Trait`: `None` for any other type. Rustc
+    /// lets the body use the value only as the trait allows, and keep
+    /// nothing of it past the call unless the trait says so, so an owned
+    /// value of a type that implements the trait, made in the trampoline,
+    /// stands in for it: an `impl IntoIterator<Item = T>`'s items drained
+    /// into a `Vec<T>`, an `impl Into<T>`'s `T`.
+    fn owned(
+        &self,
+        file: &Source<'_>,
+        function: &item::Function,
+        parameter: &item::Parameter,
+        owner: Owner<'_>,
+    ) -> Option<Result<(Stand, Pass), String>> {
+        let written = slice(file.text, parameter.ty.span()).trim();
+        if !written.starts_with("impl") {
+            return None;
+        }
+        let type_ref::Type::Path(path) = &parameter.ty else {
+            return None;
+        };
+        let [segment] = &path.segments[..] else {
+            return None;
+        };
+        let name = segment.name.text.as_str();
+        let stand = if name == type_ref::INTO_ITER_TYPE {
+            let [type_ref::Argument::Type(item)] = &segment.arguments[..] else {
+                return None;
+            };
+            let item_written = slice(file.text, item.span());
+            Ok(Stand {
+                ty: std_path(
+                    "Vec",
+                    vec![type_ref::Argument::Type(item.clone())],
+                    path.span,
+                ),
+                written: format!("::std::vec::Vec<{item_written}>"),
+                make: format!(
+                    "::std::iter::Iterator::collect::<::std::vec::Vec<{item_written}>>(\
+                     ::std::iter::IntoIterator::into_iter(__value))"
+                ),
+            })
+        } else if name == type_ref::ITER_TYPE || type_ref::is_fn_type(name) {
+            Err(format!("`{written}` can't cross yet"))
+        } else {
+            let generic = function
+                .generics
+                .iter()
+                .find(|generic| generic.name.text == segment.name.text)?;
+            stand_for(file, generic, written)
+        };
+        Some(stand.and_then(|stand| {
+            let pass = self.pass(file, &stand.ty, &stand.written, owner)?;
+            Ok((stand, pass))
+        }))
     }
 
     /// How a by-value parameter of `ty` moves the native parts it holds
@@ -1699,8 +1769,19 @@ impl<'a> Generator<'a> {
         let mut signature = String::new();
         let mut cursor = start;
         let mut passes = Vec::new();
+        let mut stands = Vec::new();
         let mut reasons = Vec::new();
-        if !function.generics.is_empty() {
+        // An argument-position `impl Trait` is a generic the parser lifted,
+        // which the trampoline keeps as written.
+        let lifted = |generic: &item::GenericParam| {
+            function.parameters.iter().any(|parameter| {
+                matches!(&parameter.ty, type_ref::Type::Path(path)
+                    if matches!(&path.segments[..], [segment]
+                        if segment.name.text == generic.name.text)
+                    && slice(file.text, path.span).trim_start().starts_with("impl"))
+            })
+        };
+        if !function.generics.iter().all(lifted) {
             reasons.push("generic functions can't cross yet".to_owned());
         }
         for (index, parameter) in function.parameters.iter().enumerate() {
@@ -1708,8 +1789,17 @@ impl<'a> Generator<'a> {
             let written = slice(file.text, parameter.ty.span());
             let _ = write!(signature, "__a{index}: {written}");
             cursor = parameter.span.end();
-            match self.pass(file, &parameter.ty, written, owner) {
-                Ok(pass) => passes.push(pass),
+            let pass = match self.owned(file, function, parameter, owner) {
+                Some(owned) => owned.map(|(stand, pass)| (Some(stand), pass)),
+                None => self
+                    .pass(file, &parameter.ty, written, owner)
+                    .map(|pass| (None, pass)),
+            };
+            match pass {
+                Ok((stand, pass)) => {
+                    stands.push(stand);
+                    passes.push(pass);
+                }
                 Err(reason) => {
                     reasons.push(format!("parameter `{}`: {reason}", parameter.name.text))
                 }
@@ -1821,6 +1911,16 @@ impl<'a> Generator<'a> {
                 )
             );
             return Ok(text);
+        }
+        // Each `impl Trait`'s owned stand-in, made before the call starts,
+        // as making it may run native code that calls marked code too.
+        for (index, stand) in stands.iter().enumerate() {
+            if let Some(Stand { written, make, .. }) = stand {
+                let _ = writeln!(
+                    text,
+                    "    let __a{index}: {written} = {{ let __value = __a{index}; {make} }};"
+                );
+            }
         }
         // A `&mut self` call ends every borrow of the receiver, as rustc
         // allows it only once none is left: what the stand-in kept for
@@ -3048,6 +3148,71 @@ fn lend_slice(name: &str, element: &str, island: &str, text: &mut String) {
     #[allow(unsafe_code)]
     let () = unsafe {{ __call.lend_slice(&{name}, {name}_lend, ::std::any::type_name::<[{element}]>()) }};"
     );
+}
+
+/// The owned value that stands in for an argument-position `impl Trait`
+/// written `written`, which the parser lifted to `generic`: of the one
+/// trait it is bounded by besides auto traits, a type that implements it.
+fn stand_for(
+    file: &Source<'_>,
+    generic: &item::GenericParam,
+    written: &str,
+) -> Result<Stand, String> {
+    let refused = || format!("`{written}` can't cross yet");
+    let mut bounds = generic.bounds.iter().filter(|bound| {
+        bound.segments.last().is_none_or(|last| {
+            !matches!(last.name.text.as_str(), "Send" | "Sync" | "Unpin" | "Sized")
+        })
+    });
+    let (Some(bound), None) = (bounds.next(), bounds.next()) else {
+        return Err(refused());
+    };
+    let Some(last) = bound.segments.last() else {
+        return Err(refused());
+    };
+    let string = || std_path("String", Vec::new(), bound.span);
+    match (last.name.text.as_str(), &last.arguments[..]) {
+        ("Into", [type_ref::Argument::Type(target)]) => {
+            let target_written = slice(file.text, target.span()).to_owned();
+            Ok(Stand {
+                ty: target.clone(),
+                make: format!("::std::convert::Into::<{target_written}>::into(__value)"),
+                written: target_written,
+            })
+        }
+        ("AsRef", [type_ref::Argument::Type(target)])
+            if slice(file.text, target.span()).trim() == "str" =>
+        {
+            Ok(Stand {
+                ty: string(),
+                written: "::std::string::String".to_owned(),
+                make: "::std::string::String::from(::std::convert::AsRef::<str>::as_ref(&__value))"
+                    .to_owned(),
+            })
+        }
+        ("ToString" | "Display", []) => Ok(Stand {
+            ty: string(),
+            written: "::std::string::String".to_owned(),
+            make: "::std::string::ToString::to_string(&__value)".to_owned(),
+        }),
+        _ => Err(refused()),
+    }
+}
+
+/// The std type `name` of `arguments`, by its own name, at `span`.
+fn std_path(name: &str, arguments: Vec<type_ref::Argument>, span: Span) -> type_ref::Type {
+    type_ref::Type::Path(type_ref::Path {
+        segments: Box::new([type_ref::Segment {
+            name: item::Name {
+                text: name.into(),
+                span,
+            },
+            arguments: arguments.into_boxed_slice(),
+            span,
+        }]),
+        span,
+        global: false,
+    })
 }
 
 /// `text` with each named lifetime but `'static` written `'_`, so a type
@@ -5202,6 +5367,39 @@ mod tests {
     /// A borrow of a type the marked crate doesn't declare, as ratatui's
     /// `&mut Frame<'_>`, is lent for the call with accessors of its own
     /// (D558.3); a `&` one is lent shared.
+    #[test]
+    fn an_impl_trait_argument_crosses_as_an_owned_value_made_before_the_call() {
+        let shadow = generate(
+            "// rawr\n#[derive(Debug, Clone)]\npub struct Id(String);\n\
+             impl Id {\n    pub fn new(value: impl Into<String>) -> Self { Self(value.into()) }\n}\n\
+             pub fn mark(ids: impl IntoIterator<Item = Id>, label: impl AsRef<str>) {}\n\
+             pub fn each(visit: impl Fn(i64)) {}\n\
+             pub fn generic<T: Into<String>>(value: T) {}\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        for expected in [
+            "    pub fn new(__a0: impl Into<String>) -> Self {\n        \
+             let __a0: String = { let __value = __a0; ::std::convert::Into::<String>::into(__value) };\n        \
+             let mut __call = crate::__rawr_island::Call::new(\"physics::Id::new\", true);\n        \
+             __call.argument(&__a0);\n",
+            "pub fn mark(__a0: impl IntoIterator<Item = Id>, __a1: impl AsRef<str>) {\n    \
+             let __a0: ::std::vec::Vec<Id> = { let __value = __a0; \
+             ::std::iter::Iterator::collect::<::std::vec::Vec<Id>>(\
+             ::std::iter::IntoIterator::into_iter(__value)) };\n    \
+             let __a1: ::std::string::String = { let __value = __a1; \
+             ::std::string::String::from(::std::convert::AsRef::<str>::as_ref(&__value)) };\n    \
+             let mut __call = crate::__rawr_island::Call::new(\"physics::mark\", false);\n",
+            "can't call `physics::each` yet: parameter `visit`: `impl Fn(i64)` can't cross yet",
+            "can't call `physics::generic` yet: generic functions can't cross yet",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        assert!(!text.contains("give!(__call, __a0)"), "{text}");
+    }
+
     #[test]
     fn a_borrow_of_another_crates_type_is_lent_with_its_accessors() {
         let shadow = generate(
